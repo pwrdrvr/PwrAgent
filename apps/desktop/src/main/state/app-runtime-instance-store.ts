@@ -6,53 +6,29 @@ const MESSAGING_LEASE_KEY = "profile-messaging";
 const FEDERATION_LEASE_KEY = "profile-federation";
 const MCP_CONNECTIONS_LEASE_KEY = "profile-mcp-connections";
 const PID_OWNED_LEASE_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
-export const RUNTIME_LEASE_DEAD_OWNER_GRACE_MS = 60_000;
-
-export type AppRuntimeMessagingDisabledReason =
-  | "explicit_override"
-  | "lease_held"
-  | "no_runnable_adapters"
-  | "runtime_stopped"
-  | "startup_error";
-
-export type AppRuntimeInstanceRecord = {
-  instanceId: string;
-  profileName: string;
-  processId: number;
-  cwdHint?: string;
-  cwdHash?: string;
-  startedAt: number;
-  heartbeatAt: number;
-  exitedAt?: number;
-  desiredMessagingEnabled: boolean;
-  effectiveMessagingEnabled: boolean;
-  disabledReason?: AppRuntimeMessagingDisabledReason;
-};
-
-export type MessagingRuntimeLeaseRecord = {
-  ownerInstanceId: string;
-  acquiredAt: number;
-  heartbeatAt: number;
-  expiresAt: number;
-  releasedAt?: number;
-  status: "active" | "released" | "expired";
-};
-
-export type MessagingLeaseAcquireResult =
-  | { acquired: true; lease: MessagingRuntimeLeaseRecord }
-  | {
-      acquired: false;
-      reason: "held";
-      holder: MessagingRuntimeLeaseRecord;
-    };
-
-// The federation lease shares the messaging lease table (keyed by lease_key)
-// and record shape; only the lease key and the per-instance side effects
-// differ.
-export type FederationRuntimeLeaseRecord = MessagingRuntimeLeaseRecord;
-export type FederationLeaseAcquireResult = MessagingLeaseAcquireResult;
-export type McpConnectionsRuntimeLeaseRecord = MessagingRuntimeLeaseRecord;
-export type McpConnectionsLeaseAcquireResult = MessagingLeaseAcquireResult;
+export { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
+import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
+import type {
+  AppRuntimeInstanceRecord,
+  AppRuntimeMessagingDisabledReason,
+  FederationLeaseAcquireResult,
+  FederationRuntimeLeaseRecord,
+  McpConnectionsLeaseAcquireResult,
+  McpConnectionsRuntimeLeaseRecord,
+  MessagingLeaseAcquireResult,
+  MessagingRuntimeLeaseRecord,
+  RuntimeLeaseStorage,
+} from "@pwragent/owner-core/runtime-lease-storage";
+export type {
+  AppRuntimeInstanceRecord,
+  AppRuntimeMessagingDisabledReason,
+  FederationLeaseAcquireResult,
+  FederationRuntimeLeaseRecord,
+  McpConnectionsLeaseAcquireResult,
+  McpConnectionsRuntimeLeaseRecord,
+  MessagingLeaseAcquireResult,
+  MessagingRuntimeLeaseRecord,
+} from "@pwragent/owner-core/runtime-lease-storage";
 
 type InstanceRow = {
   instance_id: string;
@@ -77,7 +53,7 @@ type LeaseRow = {
   status: "active" | "released" | "expired";
 };
 
-export class AppRuntimeInstanceStore {
+export class AppRuntimeInstanceStore implements RuntimeLeaseStorage {
   constructor(private readonly stateDb: StateDb) {}
 
   recordInstanceStart(params: {

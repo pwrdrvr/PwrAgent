@@ -1,8 +1,9 @@
 import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
 import { join } from "node:path";
-import type { StateDb } from "./state/state-db";
+import type { StorageMaintenanceStorage } from "@pwragent/owner-core/storage-maintenance-storage";
 import { findLiveProfileRuntimeMarkers, resolveActiveProfileName, resolveActiveProfilePath } from "./profile";
-import { readStorageMaintenance, setStorageHistoryPreference, storageHistoryPolicy, storageMaintenanceDue, storageProcessAlive, writeStorageMaintenance, type StorageThreadIdentity } from "./state/storage-maintenance";
+import { storageHistoryPolicy, storageMaintenanceDue, type StorageThreadIdentity } from "@pwragent/owner-core/storage-maintenance-storage";
+import { storageProcessAlive } from "./storage/desktop-storage-maintenance";
 import { STORAGE_MAINTENANCE_CHANNEL, STORAGE_MAINTENANCE_EVENT, type StorageMaintenanceCommand, type StorageMaintenanceStatus } from "../shared/storage-maintenance";
 import { readBootstrapAppearance, themedWindowAdditionalArguments } from "./settings/appearance-bootstrap";
 import { themedWindowBackgroundColor } from "./native-appearance";
@@ -29,22 +30,21 @@ export async function interruptStartupStorageMaintenance(): Promise<void> {
  * closes itself on the renderer's countdown, which pauses under the pointer.
  */
 export async function runStartupStorageMaintenance(options: {
-  state: StateDb;
+  storage: StorageMaintenanceStorage;
   existingDatabase: boolean;
   onboardingCompleted: boolean;
   discover: () => Promise<{ archived: StorageThreadIdentity[]; active: StorageThreadIdentity[] }>;
 }): Promise<void> {
-  const db = options.state.raw;
-  const record = readStorageMaintenance(db);
+  const storage = options.storage;
+  const record = storage.read();
   const policy = storageHistoryPolicy(record);
-  const bytes = (db.pragma("page_count", { simple: true }) as number) * (db.pragma("page_size", { simple: true }) as number);
+  const bytes = storage.readBytes();
   if (!storageMaintenanceDue({ ...options, bytes, attemptedAt: record.attemptedAt, now: Date.now() })) return;
   const otherInstances = () => {
     if (findLiveProfileRuntimeMarkers(resolveActiveProfileName()).some((marker) => marker.processId !== process.pid)) return true;
     // An old or busy process can miss a file heartbeat; a live registered PID
     // still owns its profile. Prefer a conservative deferral over stealing it.
-    const instances = db.prepare("SELECT process_id FROM app_runtime_instances WHERE exited_at IS NULL").all() as Array<{ process_id: number }>;
-    return instances.some((instance) => instance.process_id !== process.pid && storageProcessAlive(instance.process_id));
+    return storage.listRunningProcessIds().some((processId) => processId !== process.pid && storageProcessAlive(processId));
   };
   if (otherInstances()) return;
   const startedAt = Date.now();
@@ -99,9 +99,9 @@ export async function runStartupStorageMaintenance(options: {
     publish({ phase: "cancelled", message: "Stopped. Completed cleanup is kept; unfinished work can continue on a later startup." });
     if (worker) worker.kill();
     else {
-      const latest = readStorageMaintenance(db);
+      const latest = storage.read();
       if (latest.attemptedAt === undefined || Date.now() - latest.attemptedAt >= 24 * 60 * 60 * 1000) {
-        writeStorageMaintenance(db, { ...latest, attemptedAt: Date.now() });
+        storage.write({ ...latest, attemptedAt: Date.now() });
       }
       finish();
     }
@@ -109,7 +109,7 @@ export async function runStartupStorageMaintenance(options: {
   interruptMaintenance = async () => { cancel(); await done; };
   app.once("before-quit", cancel);
   const start = async () => {
-    const { historyEnabled } = storageHistoryPolicy(readStorageMaintenance(db));
+    const { historyEnabled } = storageHistoryPolicy(storage.read());
     if (running || finished) return;
     running = true;
     publish({ historyEnabled, phase: "discovering" });
@@ -146,9 +146,9 @@ export async function runStartupStorageMaintenance(options: {
         worker.kill();
         return;
       }
-      const latest = readStorageMaintenance(db);
+      const latest = storage.read();
       if (latest.attemptedAt === undefined || Date.now() - latest.attemptedAt >= 24 * 60 * 60 * 1000) {
-        writeStorageMaintenance(db, { ...latest, attemptedAt: Date.now() });
+        storage.write({ ...latest, attemptedAt: Date.now() });
       }
       publish({ phase: "error", message: "Archived thread status could not be verified. Nothing was removed; PwrAgent will try again later." });
       finish();
@@ -161,7 +161,7 @@ export async function runStartupStorageMaintenance(options: {
     if (command.action === "dismiss") window.close();
     if (command.action === "start") void start();
     if (command.action === "preference" && (status.phase === "ready" || finished) && typeof command.historyEnabled === "boolean") {
-      setStorageHistoryPreference(db, command.historyEnabled);
+      storage.setHistoryPreference(command.historyEnabled);
       publish({ historyEnabled: command.historyEnabled });
     }
     return status;

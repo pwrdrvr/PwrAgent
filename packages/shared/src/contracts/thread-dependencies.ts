@@ -165,6 +165,11 @@ export type ManageThreadDependenciesRequest = {
   conditionIndex?: number;
   /** `mark_done`: what finished. Optional; the card says "Marked done" without it. */
   note?: string;
+  /**
+   * `list`: a pull request this thread would merge. The response then
+   * carries `mergeHolds`, the waits the owner would refuse that merge for.
+   */
+  pullRequest?: string;
 };
 
 export type ManageThreadDependenciesResponse = {
@@ -175,6 +180,11 @@ export type ManageThreadDependenciesResponse = {
   peerDependents?: Array<{ dependency: ThreadDependency; owner: FederationTarget }>;
   /** `active` from a window: connected peers' active registrations, with their owner. */
   peerActive?: Array<{ dependency: ThreadDependency; owner: FederationTarget }>;
+  /**
+   * `list` with `pullRequest`: the owner's merge check for it, including holds
+   * on other threads with that PR attached. Owners that predate it omit it.
+   */
+  mergeHolds?: ThreadDependency[];
 };
 
 /** The first `marked_done` prerequisite still open, or the requested one. */

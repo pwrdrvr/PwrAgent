@@ -40803,7 +40803,7 @@ button.pricing-token-miser__folded:focus-visible {
 
 .linked-project__facts {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 4px 12px;
   margin: 0;
 }

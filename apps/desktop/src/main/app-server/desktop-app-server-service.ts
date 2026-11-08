@@ -6,7 +6,7 @@ import {
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { ThreadPendingWakesCache } from "../app-server/thread-pending-wakes-cache";
 import type { DesktopAutomaticArchiveRetiredNotice } from "@pwragent/shared";
-import { assertMergeNotHeld } from "./thread-dependency-merge-hold";
+import { assertMergeNotHeld, blockingMergeDependencies, resolveMergePullRequest } from "./thread-dependency-merge-hold";
 import {
   appendPeerDependents, collectPeerActiveDependencies, manageRemoteThreadDependencies, readFederationThreadDependenciesRequest,
 } from "./thread-dependencies-federation";
@@ -316,6 +316,7 @@ import {
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
+import { setLocalDirectoryPin, reorderLocalDirectoryPins, rejectNonUserDirectoryKey } from "./local-directory-pins";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import {
   DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE,
@@ -507,6 +508,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     DesktopOwnerStorage,
     | "readDetachedThreadPullRequests"
+    | "readThreadPullRequestUrls"
     | "initializeNavigationUnreadBaseline"
     | "readDirectoryGitStatusCache"
     | "writeDirectoryGitStatusCacheEntry"
@@ -561,24 +563,6 @@ function remoteProjectForgeOwner(request: {
   return runtime.remoteBackend(target);
 }
 
-/**
- * Reject directory preference writes that target the synthetic
- * catch-all bucket (`unlinked`). Both real directories
- * (`directory:*`) and workspaces (`workspace:*`) are named entries
- * the user actually browses. The `unlinked` bucket is a roll-up of
- * threads with no linked directory and doesn't model a single
- * entry, so sticky preferences there are meaningless.
- */
-function rejectNonUserDirectoryKey(directoryKey: string): void {
-  if (
-    !directoryKey.startsWith("directory:") &&
-    !directoryKey.startsWith("workspace:")
-  ) {
-    throw new Error(
-      `Cannot persist preferences for synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are supported)`,
-    );
-  }
-}
 
 /**
  * `preferredBackendFallback` for an ensure response, given the provider the
@@ -9222,89 +9206,24 @@ class DesktopAppServerService {
     };
   }
 
-  /**
-   * Directory pin handlers (plan 2026-05-09-002, Unit G). Mirror of
-   * `setThreadPin` / `reorderThreadPins` with the `backend` dim
-   * dropped. The handlers reject pseudo-directory keys (workspace /
-   * unlinked) — these are synthesized aggregator entries that don't
-   * represent a user-picked folder, so pinning them is meaningless.
-   * The check is on the key prefix rather than a snapshot lookup
-   * because the overlay store doesn't have visibility into the
-   * snapshot at write time, and we want the rejection to be
-   * deterministic.
-   *
-   * `publishLocalEvent` reuses the existing local-bus infrastructure
-   * (no per-directory bus scope — these are global events on the
-   * default backend `codex` for routing purposes; the renderer
-   * listens for the `method` regardless of `backend`).
-   */
   async setDirectoryPin(
     request: SetDirectoryPinRequest,
   ): Promise<SetDirectoryPinResponse> {
-    rejectNonUserDirectoryKey(request.directoryKey);
-
-    const overlay = await this.getOverlayStore().setDirectoryPin({
-      directoryKey: request.directoryKey,
-      pinned: request.pinned,
-      pinnedRank: request.pinnedRank,
-    });
-
-    logDebug("setDirectoryPin", {
-      directoryKey: request.directoryKey,
-      pinnedRank: overlay.pinnedRank ?? null,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend: "codex",
-      notification: overlay.pinnedRank
-        ? {
-            method: "directory/pin/added",
-            params: {
-              directoryKey: request.directoryKey,
-              pinnedRank: overlay.pinnedRank,
-            },
-          }
-        : {
-            method: "directory/pin/removed",
-            params: {
-              directoryKey: request.directoryKey,
-            },
-          },
-    });
-
-    return {
-      directoryKey: request.directoryKey,
-      pinnedRank: overlay.pinnedRank,
-    };
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).setDirectoryPin(remoteRequest);
+    }
+    return await setLocalDirectoryPin(request);
   }
 
   async reorderDirectoryPins(
     request: ReorderDirectoryPinsRequest,
   ): Promise<ReorderDirectoryPinsResponse> {
-    for (const directoryKey of request.directoryKeys ?? [request.move?.key, request.move?.anchorKey].filter((key): key is string => Boolean(key))) {
-      rejectNonUserDirectoryKey(directoryKey);
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).reorderDirectoryPins(remoteRequest);
     }
-
-    const pinnedRanks = await this.getOverlayStore().reorderDirectoryPins({
-      directoryKeys: request.directoryKeys,
-      ...(request.move ? { move: request.move } : {}),
-    });
-
-    logDebug("reorderDirectoryPins", {
-      pinCount: request.directoryKeys?.length ?? 1,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend: "codex",
-      notification: {
-        method: "directory/pin/reordered",
-        params: {
-          pinnedRanks,
-        },
-      },
-    });
-
-    return { pinnedRanks };
+    return await reorderLocalDirectoryPins(request);
   }
 
   async setDirectoryThreadsCollapsed(
@@ -10289,7 +10208,7 @@ class DesktopAppServerService {
     }
     if (Object.keys(request).some((key) => ![
       "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
-      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "federationTarget",
+      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "pullRequest", "federationTarget",
     ].includes(key))) throw new Error("Unknown dependency request field.");
     const { federationTarget, ...owned } = request;
     const runtime = getDesktopFederationRuntime();
@@ -10344,7 +10263,23 @@ class DesktopAppServerService {
         throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
       }
     }
-    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance, actor);
+    const { pullRequest, ...managed } = request;
+    if (pullRequest !== undefined && (managed.action !== "list" || typeof pullRequest !== "string" || !pullRequest.trim())) {
+      throw new Error("pullRequest is a PR number or URL, and only list takes it.");
+    }
+    const threadId = managed.threadId!.trim();
+    const response = await this.getThreadDependencyCoordinator().manage({ ...managed, backend: request.backend, threadId }, provenance, actor);
+    if (pullRequest === undefined) return response;
+    // The same check a merge from this thread runs, so the card agrees with it.
+    const overlay = this.getOverlayStore();
+    const readUrls = (thread: { backend: string; threadId: string }) => overlay.readThreadPullRequestUrls(thread as { backend: AppServerBackendKind; threadId: string });
+    return {
+      ...response,
+      mergeHolds: blockingMergeDependencies(createThreadDependencyStorage().active(), {
+        backend: request.backend, threadId,
+        pullRequest: resolveMergePullRequest(pullRequest, readUrls({ backend: request.backend, threadId })),
+      }, readUrls),
+    };
   }
 
   /**

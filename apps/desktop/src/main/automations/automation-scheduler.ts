@@ -19,12 +19,12 @@ import {
 import { getMainLogger } from "../log.js";
 import type { AutomationGateRunner } from "./automation-gate-runner.js";
 import type { AutomationRunner } from "./automation-runner.js";
-import type { AutomationRecord, AutomationStore } from "./automation-store.js";
+import type { AutomationRecord, AutomationStorage } from "@pwragent/owner-core/automation-storage";
 
 const automationSchedulerLog = getMainLogger("pwragent:automation-scheduler");
 
 export type AutomationSchedulerOptions = {
-  store: AutomationStore;
+  store: AutomationStorage;
   runner: AutomationRunner;
   gateRunner?: AutomationGateRunner;
   now?: () => number;

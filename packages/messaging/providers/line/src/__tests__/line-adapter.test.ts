@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   type MessagingCallbackHandleRecord,
@@ -667,6 +668,39 @@ describe("LineAdapter", () => {
       receivedAt: 2_234,
       value: "yes",
     });
+  });
+
+  it("preserves each approval card's durable identity across adapter restarts", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("accept", "decline", "cancel"), fc.uuid(), async (decision, id) => {
+      const store = createCallbackStore();
+      const api = createApi();
+      const port = await getFreePort();
+      const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+      const first = new LineAdapter({ api, callbackHandleStore: store, config, now: () => 1000 });
+      adapters.push(first);
+      await first.deliver({ id, kind: "approval", createdAt: 1000, title: "Confirm", body: "Fixture proposal",
+        decisions: [{ id: `approval:mcp:${decision}`, label: decision, decision }],
+        audit: { actor: { platformUserId: config.authorizedActorIds[0]!.id }, occurredAt: 1000,
+          channel: { channel: "line", conversation: { id: config.authorizedActorIds[0]!.id, kind: "dm" } } },
+      });
+      const record = store.records.find((candidate) => candidate.pendingIntentId === id)!;
+      expect(record).toBeDefined();
+      const second = new LineAdapter({ api: createApi(), callbackHandleStore: store, config, now: () => 2000 });
+      adapters.push(second);
+      const events: MessagingInboundEvent[] = [];
+      await second.start(async (event) => { events.push(event); });
+      try {
+        await postLineWebhook(port, config.channelSecret, { events: [{ type: "postback", webhookEventId: id,
+          source: { type: "user", userId: config.authorizedActorIds[0]!.id },
+          postback: { data: extractFirstPostbackData(api) },
+        }] });
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ kind: "callback", actionId: record.actionId,
+          interaction: { id: record.handle } });
+      } finally {
+        await second.stop();
+      }
+    }), { numRuns: 6 });
   });
 
   it.each(["group", "room"] as const)("observes unmentioned %s messages and sends results to the same surface", async (kind) => {

@@ -1,4 +1,4 @@
-import { readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
+import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
@@ -311,6 +311,7 @@ import {
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
+import { setLocalDirectoryPin, reorderLocalDirectoryPins } from "../app-server/local-directory-pins";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { threadFamilyPricingForPeer } from "../app-server/thread-family-pricing";
@@ -1830,6 +1831,7 @@ export class DesktopFederationRuntime {
     this.endpointStatuses.clear();
     this.rpcByPeer.clear();
     this.remotePeerDirectory.clear();
+    invalidatePeerActiveDependencies(this);
     this.publishedPeerStatuses.clear();
     this.incomingEventSubscriptions.clear();
     this.syncDirectorySetWatchers();
@@ -6798,6 +6800,8 @@ export class DesktopFederationRuntime {
     // has no reason to retry it until another navigation event arrives.
     this.remoteThreadSummaryCache?.invalidate(instanceId);
 
+    invalidatePeerActiveDependencies(this, instanceId);
+
     if (status === "connected") {
       // Hooked to the status TRANSITION (this method already de-dupes
       // repeats) rather than to a specific enrollment call site, so every
@@ -7034,6 +7038,13 @@ export class DesktopFederationRuntime {
   }
 
   private publishReceivedBackendEvent(event: AgentEvent): void {
+    if (event.federationTarget?.scope === "remote"
+      && (event.notification.method === "thread/dependencies/updated"
+        || (event.notification.method === "navigation/invalidated"
+          && event.notification.params.sourceMethod === "thread/dependencies/updated")
+        || event.notification.method === "federation/eventStream/changed")) {
+      invalidatePeerActiveDependencies(this, event.federationTarget.instanceId);
+    }
     this.publishAgentEvent?.(event);
     this.notifyRemoteBackendEventListeners(event);
   }
@@ -7509,6 +7520,12 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async setDirectoryPin(request) {
+      return await setLocalDirectoryPin(request);
+    },
+    async reorderDirectoryPins(request) {
+      return await reorderLocalDirectoryPins(request);
     },
     async legacyManageThreadMergeHolds(request: unknown): Promise<{ holds: []; dependents: [] }> {
       // 1.3.13 and 1.3.14 viewers still ask here. Their reads see nothing;

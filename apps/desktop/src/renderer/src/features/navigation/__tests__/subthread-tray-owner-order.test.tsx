@@ -18,7 +18,7 @@ const target = { scope: "remote", instanceId: OWNER } as const;
  * children were reordered on the owner, one of which has children of its own
  * (one on another provider).
  */
-function mount(browseMode: "directories" | "recents") {
+function mount(browseMode: "directories" | "recents", selectedChildId?: string) {
   const directory: NavigationDirectoryRow = {
     key: "workspace:/projects", label: "Workspaces", path: "/projects", kind: "workspace",
     counts: { total: 6, active: 0, unread: 0, review: 0 }, pinnedRootCount: 1, unpinnedRootCount: 0, launchpadPresent: false,
@@ -49,7 +49,7 @@ function mount(browseMode: "directories" | "recents") {
   ];
   const resources = new Map<string, NavigationWindowResource>();
   const add = (id: string, query: NavigationQueryRequest["query"], entries: NavigationQueryEntry[]) => {
-    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", pageSize: 10, query, federationTarget: target };
+    const request: NavigationQueryRequest = { protocol: 2, inventory: "owner", consumer: "main-sidebar", pageSize: 10, query, federationTarget: target };
     resources.set(id, { id, loading: false, state: { ...createNavigationPageState(request), page: {
       protocol: 2, queryKey: id, generation: "g", ownerEpoch: "owner", countsRevision: "r",
       coverage: { state: "complete" }, counts: directory.counts, entries, complete: true,
@@ -67,6 +67,13 @@ function mount(browseMode: "directories" | "recents") {
       descendants.map((child, index) => ({ row: child, orderKey: String(index),
         placement: { kind: "child", parent: { backend: owner.source, threadId: owner.id, ownerInstanceId: OWNER } } })));
   }
+  const selectedChild = children.find((child) => child.id === selectedChildId);
+  if (selectedChild) {
+    add("selected-context", { kind: "exact", identities: [selectedChild.ref], includeAncestry: true }, [
+      rootEntry,
+      { row: selectedChild, orderKey: "1", siblingOrder: children.indexOf(selectedChild), placement: { kind: "child", parent: root.ref } },
+    ]);
+  }
   const navigation = {
     resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
@@ -74,7 +81,7 @@ function mount(browseMode: "directories" | "recents") {
   };
   render(<Sidebar backends={[]} browseMode={browseMode} directories={[directory]}
     threads={[root, ...children, ...grandchildren]} loading={false}
-    selectedItemKey={`remote:${OWNER}:codex:root`} selectedThreadDirectoryKeys={[directory.key]}
+    selectedItemKey={`remote:${OWNER}:codex:${selectedChildId ?? "root"}`} selectedThreadDirectoryKeys={[directory.key]}
     pagedNavigation={navigation} onUpdateSubthreadOrder={async () => undefined}
     onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
@@ -86,6 +93,16 @@ it.each(["directories", "recents"] as const)("shows a remote tray in the owner's
   // Newest-first would read isolated, exact, runpod: the order before the
   // operator's drag, so the drag appears to do nothing.
   expect(mount(browseMode)).toEqual([
+    "runpod@1",
+    "decoder@2",
+    "counters@2",
+    "isolated@1",
+    "exact@1",
+  ]);
+});
+
+it("keeps the selected remote child in its saved position while sibling metadata loads", () => {
+  expect(mount("directories", "exact")).toEqual([
     "runpod@1",
     "decoder@2",
     "counters@2",

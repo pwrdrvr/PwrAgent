@@ -152,14 +152,14 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
                   <div className="context-list__label">
                     <CopyValueButton
                       label={`Copy path for ${directory.label}`}
-                      value={directory.path}
+                      value={worktreePath}
                       onBlur={props.hideTooltip}
                       onCopy={handleCopyPath}
                       onShowTooltip={props.showTooltip}
                     />
                     <TooltipValue
                       label={`Path for ${directory.label}`}
-                      value={directory.path}
+                      value={worktreePath}
                       onBlur={props.hideTooltip}
                       onShowTooltip={props.showTooltip}
                     >
@@ -189,6 +189,10 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
                 <dl className="linked-project__facts">
                   <div>
                     <dt>Kind</dt>
+                    <dd>{directory.kind === "worktree" ? "Worktree" : "Directory"}</dd>
+                  </div>
+                  <div>
+                    <dt>Path</dt>
                     <dd className="context-value-row">
                       <CopyValueButton
                         label={`Copy path for ${directory.kind} ${directory.label}`}
@@ -203,7 +207,7 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
                         onBlur={props.hideTooltip}
                         onShowTooltip={props.showTooltip}
                       >
-                        {directory.kind === "worktree" ? "Worktree" : "Directory"}
+                        <span className="context-grid__mono">{worktreePath}</span>
                       </TooltipValue>
                     </dd>
                   </div>

@@ -5,7 +5,7 @@ import {
   DesktopAutomationService,
   replayCandidateLimitPerSource,
 } from "../automations/desktop-automation-service";
-import { AutomationStore } from "../automations/automation-store";
+import { AutomationStore } from "../storage/automation-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 

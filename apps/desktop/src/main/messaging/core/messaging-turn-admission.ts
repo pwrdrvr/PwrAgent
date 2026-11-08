@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppServerTurnInputItem,
+  MessagingCausalSourceRef,
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
@@ -33,10 +34,13 @@ export type MessagingQueuedTurnEntry = {
   event?: MessagingInboundEvent;
   id: string;
   input: AppServerTurnInputItem[];
+  ownerQueueEntryId?: string;
+  manualRetryRequired?: boolean;
   pdfAttachments?: PendingPdfAttachment[];
+  pdfSourceRequest?: MessagingCausalSourceRef;
   privateResponseRequested?: boolean;
   preview: string;
-  status: "queued" | "steered" | "cancelled" | "submitted" | "failed";
+  status: "queued" | "steering" | "submitting" | "steered" | "cancelled" | "submitted" | "failed";
   surface?: MessagingSurfaceRef;
   threadKey: string;
   updatedAt: number;
@@ -142,7 +146,7 @@ export class MessagingTurnAdmission {
     const queue = this.queuedByThreadKey.get(entry.threadKey) ?? [];
     const index = queue.findIndex((candidate) => candidate.id === entry.id);
     const updated = {
-      ...entry,
+      ...(index >= 0 ? queue[index] : entry),
       ...patch,
       updatedAt: this.options.now(),
     };
@@ -163,6 +167,11 @@ export class MessagingTurnAdmission {
     return undefined;
   }
 
+  hasDispatchingEntry(threadKey: string): boolean {
+    return this.queuedByThreadKey.get(threadKey)?.some((entry) =>
+      entry.status === "steering" || entry.status === "submitting") ?? false;
+  }
+
   peekNextQueued(threadKey: string): MessagingQueuedTurnEntry | undefined {
     const queue = this.queuedByThreadKey.get(threadKey);
     if (!queue) {
@@ -173,6 +182,9 @@ export class MessagingTurnAdmission {
       const entry = queue[0];
       if (entry?.status === "queued") {
         return entry;
+      }
+      if (entry?.status === "steering" || entry?.status === "submitting") {
+        return undefined;
       }
       queue.shift();
     }
@@ -204,6 +216,9 @@ export class MessagingTurnAdmission {
     }
 
     while (queue.length > 0) {
+      if (queue[0]?.status === "steering" || queue[0]?.status === "submitting") {
+        return undefined;
+      }
       const entry = queue.shift();
       if (entry?.status === "queued") {
         if (queue.length === 0) {

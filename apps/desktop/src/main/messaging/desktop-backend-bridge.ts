@@ -14,6 +14,10 @@ import type {
   AppServerThreadStatus,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
+  CancelQueuedTurnRequest,
+  CancelQueuedTurnResponse,
+  ReadQueuedTurnRequest,
+  ReadQueuedTurnResponse,
   CompactThreadRequest,
   CompactThreadResponse,
   SetThreadLockRequest,
@@ -145,6 +149,19 @@ type AssistantImageRequest = Parameters<
 >[0];
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
+  readonly ownsTurnQueue = true;
+
+  async readQueuedTurn(request: ReadQueuedTurnRequest): Promise<ReadQueuedTurnResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    return remote ? await remote.readQueuedTurn(stripFederationTarget(request)) : await this.registry.readQueuedTurn(request);
+  }
+
+  async cancelQueuedTurn(request: CancelQueuedTurnRequest): Promise<CancelQueuedTurnResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    return remote ? await remote.cancelQueuedTurn(stripFederationTarget(request))
+      : this.registry.cancelQueuedTurnWithDisposition(request.queueEntryId, "Cancelled from messaging.", request.expectedContentHash);
+  }
+
   private readonly assistantImageResolutions = new Map<
     string,
     Promise<MessagingImagePart[]>

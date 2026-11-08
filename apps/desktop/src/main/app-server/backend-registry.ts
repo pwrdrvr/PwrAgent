@@ -9752,25 +9752,38 @@ export class DesktopBackendRegistry {
   );
   private readonly archiveLifecycleMutationPaths = new Map<string, Set<readonly string[]>>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
+  private archiveCleanupProgressVisible = false;
+  private archiveCleanupProgressSignature?: string;
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>(undefined, () => {
     this.drainArchiveCleanupOverflow();
     this.dispatchReleasedArchiveCleanups(this.archiveWorktreeReferences.readyIntents());
     // A drained queue ends its batch; the next batch reads the fleet afresh.
     if (!this.archiveCleanupQueue.pendingKeys().length && !this.archiveCleanupOverflow.size) this.archiveFleet = undefined;
-  }, (progress) => {
+  }, () => {
     if (this.closed) return;
+    // The physical queue also paces audits, hourly repair and recovery. Only
+    // newly requested archives belong in the archive action progress notice.
+    const progress = this.archiveCleanupQueue.progress(true);
+    const overflow = [...this.archiveCleanupOverflow.values()].filter((job) => !job.resuming).length;
+    const params = {
+      batchId: `${this.runtimeInstanceId}:${progress.batch}`,
+      active: progress.active.flatMap(({ key, worktreePath }) => {
+        const identity = parseThreadIdentityKey(key);
+        return identity ? [{ backend: identity.backend, threadId: identity.threadId, ...(worktreePath ? { worktreePath } : {}) }] : [];
+      }),
+      queued: progress.queued + overflow,
+      completed: progress.completed,
+      total: progress.total + overflow,
+    };
+    // Audits/recovery have no action progress. Still clear an earlier action
+    // if its terminal update was coalesced with the start of a silent batch.
+    if (params.total === 0 && !this.archiveCleanupProgressVisible) return;
+    const signature = JSON.stringify(params);
+    if (signature === this.archiveCleanupProgressSignature) return;
+    this.archiveCleanupProgressSignature = signature;
+    this.archiveCleanupProgressVisible = params.active.length > 0 || params.queued > 0;
     void this.emit({ backend: "codex", notification: {
-      method: "archiveCleanup/progress",
-      params: {
-        batchId: `${this.runtimeInstanceId}:${progress.batch}`,
-        active: progress.active.flatMap(({ key, worktreePath }) => {
-          const identity = parseThreadIdentityKey(this.archiveRepairOwners.get(key) ?? key);
-          return identity ? [{ backend: identity.backend, threadId: identity.threadId, ...(worktreePath ? { worktreePath } : {}) }] : [];
-        }),
-        queued: progress.queued + this.archiveCleanupOverflow.size,
-        completed: progress.completed,
-        total: progress.total + this.archiveCleanupOverflow.size,
-      },
+      method: "archiveCleanup/progress", params,
     } }).catch((error: unknown) => backendRegistryLog.warn("archive cleanup progress publication failed", { error: String(error) }));
   });
   /** Cleanups beyond the bounded physical queue, in arrival order. Each keeps
@@ -17089,6 +17102,7 @@ export class DesktopBackendRegistry {
         this.codexClient.listThreads({ archived, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true }, { callerReason: "auto-archive" }),
         this.codexClient.listNativeSubAgentThreads!({ all: true, archived }, { callerReason: "auto-archive" }),
         this.listAllInstalledAcpThreads(undefined, archived),
+        this.claudeBackend.listThreads({ archived, requireComplete: true }),
       ]);
       return lists.flat().map((thread) => ({ ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined }));
     }));
@@ -17108,6 +17122,11 @@ export class DesktopBackendRegistry {
       observeArchives: async (threads, now) => await this.observeArchivedThreads(
         threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), now),
       confirmAbsent: async (state) => {
+        if (state.backend === "claude") {
+          const absent = await this.claudeBackend.confirmThreadAbsent(state.threadId);
+          if (absent) await deleteThreadAssets(state);
+          return absent;
+        }
         if (isAcpBackendId(state.backend)) {
           const absent = !this.acpBackend.getSession(state.backend, state.threadId);
           if (absent) await deleteThreadAssets(state);
@@ -17178,6 +17197,8 @@ export class DesktopBackendRegistry {
           this.acpBackend.deleteStoredSession(backend, threadId);
           await this.emit({ backend, notification: { method: "thread/deleted", params: { threadId } } });
         });
+      } else if (root.source === "claude") {
+        await run(async (threadId) => await this.claudeBackend.deleteThread(threadId));
       } else {
         await this.withCodexThreadClient(root.id, async (client) => {
           if (!client.deleteThread) throw new Error("This provider does not support permanent thread deletion.");
@@ -17966,7 +17987,7 @@ export class DesktopBackendRegistry {
         // missing rollouts; it never repeats the provider archive operation.
         ...(resuming ? { requireArchived: true, codexRolloutMissing: false } : {}),
       });
-    });
+    }, { reportProgress: !resuming });
     void completion.then((response) => {
       const completedAt = Date.now();
       backendRegistryLog.info("archive cleanup completed", { ...logFields, completedAt,
@@ -18012,7 +18033,7 @@ export class DesktopBackendRegistry {
       await Promise.allSettled(remaining.splice(0, room).map((intent) => {
         this.archiveWorktreeReferences.scheduled(intent);
         const completion = this.enqueueArchiveCleanup(intent, true);
-        return this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true });
+        return this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true, reporting: "background" });
       }));
       // Background acknowledgements do not drain the bounded queue. Wait for
       // admitted jobs before taking another chunk of the durable backlog.
@@ -18022,6 +18043,7 @@ export class DesktopBackendRegistry {
 
   private async observeArchiveCleanupCompletion(completion: Promise<ArchiveThreadResponse>, params: {
     backend: AppServerBackendKind; threadId: string; archivedAt: number; backgroundCleanup?: boolean; mustComplete?: boolean;
+    reporting?: "background";
   }): Promise<ArchiveThreadResponse> {
     const { backend, threadId, archivedAt } = params;
     // Register the result/error observer before returning a background ack.
@@ -18045,7 +18067,7 @@ export class DesktopBackendRegistry {
       if (this.closed) return;
       await this.emit({ backend, notification: {
         method: "thread/archiveCleanup/completed",
-        params: { threadId, archivedAt, cleanup: response.cleanup },
+        params: { threadId, archivedAt, cleanup: response.cleanup, ...(params.reporting ? { reporting: params.reporting } : {}) },
       } });
       backendRegistryLog.info("archive cleanup completion published", { backend, threadId, archivedAt,
         runtimeInstanceId: this.runtimeInstanceId, publishedAt: Date.now(), archiveAgeMs: Date.now() - archivedAt,
@@ -18054,7 +18076,8 @@ export class DesktopBackendRegistry {
       if (this.closed) return;
       await this.emit({ backend, notification: {
         method: "thread/archiveCleanup/completed",
-        params: { threadId, archivedAt, cleanup: [], error: error instanceof Error ? error.message : String(error) },
+        params: { threadId, archivedAt, cleanup: [], error: error instanceof Error ? error.message : String(error),
+          ...(params.reporting ? { reporting: params.reporting } : {}) },
       } });
       backendRegistryLog.info("archive cleanup completion published", { backend, threadId, archivedAt,
         runtimeInstanceId: this.runtimeInstanceId, publishedAt: Date.now(), archiveAgeMs: Date.now() - archivedAt, failed: true,
@@ -41955,7 +41978,7 @@ export class DesktopBackendRegistry {
       if (this.archiveCleanupQueue.pending(key) || this.archiveCleanupOverflow.has(key)) continue;
       this.archiveWorktreeReferences.scheduled(intent);
       const completion = this.enqueueArchiveCleanup(intent, true);
-      void this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true });
+      void this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true, reporting: "background" });
     }
   }
 

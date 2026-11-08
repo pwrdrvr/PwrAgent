@@ -38,6 +38,7 @@ export type ArchiveCleanupQueueProgress = {
 
 type Job<T> = {
   key: string;
+  reportProgress: boolean;
   batch: object;
   cancelled: boolean;
   started: boolean;
@@ -66,6 +67,8 @@ export class ArchiveCleanupQueue<T> {
   private batchNumber = 0;
   private completed = 0;
   private total = 0;
+  private reportedCompleted = 0;
+  private reportedTotal = 0;
   private progressScheduled = false;
   private readonly checkpointWaiters: (() => void)[] = [];
 
@@ -93,10 +96,12 @@ export class ArchiveCleanupQueue<T> {
     return this.closed ? 0 : ARCHIVE_CLEANUP_QUEUE_LIMIT - this.jobs.size;
   }
 
-  progress(): ArchiveCleanupQueueProgress {
-    const active = [...this.jobs.values()].filter((job) => job.active)
+  progress(reportedOnly = false): ArchiveCleanupQueueProgress {
+    const jobs = [...this.jobs.values()].filter((job) => !reportedOnly || job.reportProgress);
+    const active = jobs.filter((job) => job.active)
       .map((job) => ({ key: job.key, ...(job.worktreePath ? { worktreePath: job.worktreePath } : {}) }));
-    return { batch: this.batchNumber, active, queued: [...this.jobs.values()].filter((job) => !job.started).length, completed: this.completed, total: this.total };
+    return { batch: this.batchNumber, active, queued: jobs.filter((job) => !job.started).length,
+      completed: reportedOnly ? this.reportedCompleted : this.completed, total: reportedOnly ? this.reportedTotal : this.total };
   }
 
   /** A fake-clock driver advances only owned pacing timers, never host I/O. */
@@ -109,7 +114,7 @@ export class ArchiveCleanupQueue<T> {
   pendingKeys(): string[] { return [...this.jobs.keys()]; }
   isCancelled(key: string): boolean { return this.jobs.get(key)?.cancelled === true; }
 
-  enqueue(key: string, work: Job<T>["work"]): Promise<T> {
+  enqueue(key: string, work: Job<T>["work"], options: { reportProgress?: boolean } = {}): Promise<T> {
     const existing = this.pending(key);
     if (existing) return existing;
     if (this.closed) return Promise.reject(new ArchiveCleanupCancelledError());
@@ -124,11 +129,14 @@ export class ArchiveCleanupQueue<T> {
       this.batchNumber += 1;
       this.completed = 0;
       this.total = 0;
+      this.reportedCompleted = 0;
+      this.reportedTotal = 0;
     }
-    const job: Job<T> = { key, batch: this.batch, work, promise, resolve, reject, cancelled: false, started: false, active: false, wakes: new Set() };
+    const job: Job<T> = { key, reportProgress: options.reportProgress === true, batch: this.batch, work, promise, resolve, reject, cancelled: false, started: false, active: false, wakes: new Set() };
     this.jobs.set(key, job);
     this.waiting.push(job);
     this.total += 1;
+    if (job.reportProgress) this.reportedTotal += 1;
     this.publishProgress();
     this.feed();
     return promise;
@@ -150,6 +158,7 @@ export class ArchiveCleanupQueue<T> {
       if (index >= 0) this.waiting.splice(index, 1);
       this.jobs.delete(key);
       this.completed += 1;
+      if (job.reportProgress) this.reportedCompleted += 1;
       job.reject(new ArchiveCleanupCancelledError());
       this.publishProgress();
       if (!this.closed) this.onCapacityAvailable?.();
@@ -210,6 +219,7 @@ export class ArchiveCleanupQueue<T> {
     } finally {
       job.active = false;
       if (job.started) this.completed += 1;
+      if (job.started && job.reportProgress) this.reportedCompleted += 1;
       this.publishProgress();
     }
   }

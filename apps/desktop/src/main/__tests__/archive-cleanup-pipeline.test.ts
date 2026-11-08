@@ -127,6 +127,9 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
   // Keep this fake-timer harness independent of filesystem session discovery.
   const claudeStore = new ClaudeSessionStore("/contrived/claude");
   vi.spyOn(claudeStore, "list").mockResolvedValue([]);
+  // Reads and writes below are contrived, so no filesystem admission is needed.
+  // Real-store concurrency tests exercise the shared-profile mutation lock.
+  vi.spyOn(claudeStore, "withMutation").mockImplementation(async (_id, work) => await work());
   const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store as never,
     claudeBackendOptions: { store: claudeStore },
     archiveCleanupCheckpointStore: checkpoint, runtimeInstanceId: "cleanup-fixture", resolveLiveProfileRuntimeInstanceIds: () => ["cleanup-fixture"],
@@ -216,6 +219,9 @@ describe("archive cleanup pipeline", () => {
         }
       });
       expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+      for (const event of fixture.events) {
+        if (event.notification.method === "thread/archiveCleanup/completed") expect(event.notification.params).toHaveProperty("reporting", "background");
+      }
       expectSqliteWriteBudget({ scenario: "archive-worktree-100-reference-wait-release",
         note: "100 archived owners of one checkout: one queue-drain checkpoint writing one row per intent, a non-final release that only shrinks the backlog and writes nothing, and one final drain deletion; 2 commits, zero idle writes. At 10 batches/day and about 128 KB WAL per batch, about 1.3 MB/day.", writes });
     } finally {
@@ -547,6 +553,7 @@ describe("archive cleanup pipeline", () => {
     const response = await fixture.registry.archiveThread({ backend: "claude", threadId: session.thread.id, backgroundCleanup: true });
     expect(response).toMatchObject({ cleanup: [], cleanupPending: true });
     const event = await drivePacer(fixture.registry, fixture.completion);
+    expect(event.notification.params).not.toHaveProperty("reporting");
     expect(event.notification.params).toMatchObject({ cleanup: [{
       worktreePath: worktree.worktreePath, removedWorktree: true, deletedBranch: false,
     }] });
@@ -733,20 +740,53 @@ describe("archive cleanup pipeline", () => {
       const threads = targets.slice(offset, offset + params.limit);
       return { threads, nextCursor: offset + threads.length < targets.length ? String(offset + threads.length) : undefined };
     });
+    // Queue drain and asynchronous event publication have separate owners.
+    // Wait for the publication boundary before counting renderer-bound results.
+    const published = new Promise<void>((resolve) => {
+      let received = 0;
+      fixture.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed" && ++received === targets.length) resolve();
+      });
+    });
     const resumption = fixture.registry.resumeArchiveCleanupsAtStartup();
     expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(130);
     await drivePacer(fixture.registry, resumption);
+    await published;
     expect(fixture.client.archiveThread).not.toHaveBeenCalled();
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     // One identity read of 100-row pages for the whole resumed batch.
     expect(fixture.counts.providerPages).toBe(3);
     expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(0);
+    const completions = fixture.events.map((event) => event.notification).filter((notification) => notification.method === "thread/archiveCleanup/completed");
+    expect(completions).toHaveLength(130);
+    for (const notification of completions) expect(notification.params).toHaveProperty("reporting", "background");
+    expect(fixture.events.filter((event) => event.notification.method === "archiveCleanup/progress")).toEqual([]);
     await fixture.registry.resumeArchiveCleanupsAtStartup();
     expect(checkpoint.recover).toHaveBeenCalledOnce();
     await fixture.registry.close();
     expect(checkpoint.save).toHaveBeenLastCalledWith("cleanup-fixture", expect.arrayContaining([
       expect.objectContaining({ threadId: "resumed-0", deferredWorktrees: [expect.objectContaining({ blockers: ["codex:shared-user"] })] }),
     ]));
+  });
+
+  it("keeps dry-run audit progress and results out of archive activity for every ownership mix", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (shared) => {
+      vi.useFakeTimers();
+      const fixture = buildRepair();
+      if (shared) fixture.active.push(codexThread({ id: "active-owner", linkedDirectories: fixture.archived[0]!.linkedDirectories }));
+      try {
+        await drivePacer(fixture.registry, fixture.registry.repairArchivedThreadWorktrees({ dryRun: true }));
+        expect(fixture.client.archiveThread).not.toHaveBeenCalled();
+        expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+        expect(fixture.store.setThreadArchiveTombstone).not.toHaveBeenCalled();
+        expect(fixture.events.filter((event) => event.notification.method === "thread/archiveCleanup/completed")).toEqual([]);
+        const progress = fixture.events.map((event) => event.notification).filter((notification) => notification.method === "archiveCleanup/progress");
+        expect(progress).toEqual([]);
+      } finally {
+        await fixture.registry.close();
+        vi.useRealTimers();
+      }
+    }), { numRuns: 10 });
   });
 
   it.each([false, true])("does not resume removal for a restored active thread (previously missing: %s)", async (codexRolloutMissing) => {

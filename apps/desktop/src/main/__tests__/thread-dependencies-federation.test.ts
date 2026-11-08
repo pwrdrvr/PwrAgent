@@ -41,6 +41,12 @@ describe("Continue After across machines", () => {
     expect(readFederationThreadDependenciesRequest({ action: "drop_table" })).toBeUndefined();
   });
 
+  it("forwards a merge card's PR, so the owner answers its merge holds", () => {
+    expect(readFederationThreadDependenciesRequest({
+      action: "list", backend: "codex", threadId: "merging", pullRequest: "https://github.com/acme/app/pull/17",
+    })).toEqual({ action: "list", backend: "codex", threadId: "merging", pullRequest: "https://github.com/acme/app/pull/17" });
+  });
+
   it("sends nothing to an owner without the capability or turn control", async () => {
     const { value, calls } = runtime([{ target: lab, capabilities: ["turn_control"], answer: async () => ({ dependencies: [] }) }]);
     await expect(manageRemoteThreadDependencies({ action: "list", backend: "codex", threadId: "waiting" }, lab, "mac", value))

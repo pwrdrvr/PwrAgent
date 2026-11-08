@@ -20,7 +20,8 @@ describe("archive retention persistence", () => {
   afterEach(() => { db.close(); removeTempStateDbDir(tempDir); vi.unstubAllEnvs(); });
 
   it("observes 100 existing archives in one commit and makes zero writes on 24 idle sweeps", async () => {
-    const records = Array.from({ length: 100 }, (_, i) => ({ backend: "codex" as const, threadId: `archive-${i}` }));
+    const providers = ["codex", "claude", "acp:kimi"] as const;
+    const records = Array.from({ length: 100 }, (_, i) => ({ backend: providers[i % providers.length]!, threadId: `archive-${i}` }));
     const { writes } = await measureSqliteWrites(async () => { await store.observeArchivedThreads(records, 1000); });
     expectSqliteWriteBudget({ scenario: "archive-retention-initial-batch", note: "One discovery transaction for 100 existing archives; no per-item commits.", writes });
     const idle = await measureSqliteWrites(async () => {

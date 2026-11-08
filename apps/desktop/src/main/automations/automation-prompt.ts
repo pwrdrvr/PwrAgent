@@ -5,7 +5,7 @@ import type {
   AutomationRunSourceMetadata,
   AutomationRunSummary,
 } from "@pwragent/shared";
-import type { AutomationRecord } from "./automation-store.js";
+import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";
 
 /** Longest prior-run summary/detail line injected into a prompt. */
 const MAX_PRIOR_RUN_TEXT_CHARS = 500;

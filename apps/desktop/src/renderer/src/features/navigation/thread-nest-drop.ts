@@ -35,9 +35,6 @@ export function nestDropTarget<T>(element: HTMLElement, value: T): PointerReorde
   return { element, key: nestDropKey(element), position: "inside", label: NEST_DROP_LABEL, value };
 }
 
-/** Mirrors the owner's own loop check, which has the final word. */
-const MAX_PARENT_WALK = 64;
-
 /**
  * Whether dropping `child` on `parent` makes a link the owner will keep.
  * The owner refuses a loop; the rest would be a no-op or a link that
@@ -77,7 +74,7 @@ export function canNestThread(
 
   const seen = new Set<string>();
   let cursor: NavigationThreadSummary | undefined = parent;
-  while (cursor && seen.size < MAX_PARENT_WALK) {
+  while (cursor) {
     const key = threadSummaryIdentityKey(cursor);
     if (key === childKey) return false;
     if (seen.has(key)) break;

@@ -11,6 +11,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "federation-directory-pin-actions": {"commits": 3, "note": "Pin, move and unpin use three owner commits; 100 actions/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes", "observedWalBytes": 24720, "rowsChanged": 3, "statements": 3},
   "hourly-sweep-idle-day": {
     "commits": 0,
     "note": "24 hourly sweeps over a stale Codex thread and a stale ACP session with nothing to hibernate or delete. The sweep archives nothing, so it commits nothing.",
@@ -575,6 +576,8 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "messaging-owner-queue-lifecycle": {"commits": 3, "note": "One queued reply through preparation activity, queue notice, and owner-start retirement: 3 commits, ~54 KB WAL; ~5.36 MB/day at 100 replies/day, no idle/timer writes.", "observedWalBytes": 53560, "rowsChanged": 3, "statements": 3},
+  "messaging-owner-queue-recovery": {"commits": 6, "note": "One failed steer and failed fallback retained for manual Retry, then accepted by the owner queue: 6 commits, ~91 KB WAL; ~0.91 MB/day at 10 recoveries/day, no idle/automatic retry writes.", "observedWalBytes": 90640, "rowsChanged": 6, "statements": 6},
   "messaging-review-auto-fix-toggle": {"commits": 2, "note": "One Auto-fix toggle: 2 boundary commits, 28840 WAL bytes; 0.577 MB/day at 20 toggles/day; no idle/timer writes.", "observedWalBytes": 28840, "rowsChanged": 2, "statements": 2},
   "messaging-agent-conversation-rename": {
     "commits": 5,

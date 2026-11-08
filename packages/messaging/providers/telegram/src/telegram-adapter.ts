@@ -540,6 +540,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       maxCallbackPayloadBytes: 64,
     },
     text: {
+      supportsApprovalContinuation: true,
       maxLength: 4096,
       encoding: "utf8-bytes",
       markdownDialect: "html",

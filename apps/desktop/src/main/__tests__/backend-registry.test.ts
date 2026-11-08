@@ -1,4 +1,5 @@
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
+import { isolatedGitKeys, isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import { FEDERATION_BACKEND_METHODS, FEDERATION_BACKEND_METHOD_CAPABILITIES, registerFederationBackendHandlers, type FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
 import { PendingEnvironmentLaunchStore } from "../app-server/pending-environment-launch-store";
@@ -7,6 +8,7 @@ import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { AcpLiveToolUpdateResolver, acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
+import type { ClaudeBackend } from "../claude/claude-backend";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
 import {
@@ -151,6 +153,10 @@ import type {
 } from "../codex-app-server/desktop-client";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { MessagingController } from "../messaging/core/messaging-controller";
+import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import * as desktopOverlayStore from "../storage/desktop-overlay-store";
 import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
@@ -423,7 +429,7 @@ const emptyGitConfigPath = path.join(gitConfigDir, "empty.gitconfig");
 writeFileSync(emptyGitConfigPath, "");
 
 const gitTestEnv: NodeJS.ProcessEnv = {
-  ...process.env,
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !isolatedGitKeys.test(key))),
   // A repo-location variable inherited from the outside would redirect every
   // command below at whatever repo the suite was launched from — `git rebase
   // -x`, a pre-push hook, and any npm lifecycle script running inside a git
@@ -3310,10 +3316,16 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 // leaves one running the whole deadline, which is how this file once grew
 // from 10s to 106s on CI. Answer the stop the way the backend does
 // (`answerAcpSessionCancel`, `interruptEndsTurn`).
+let restoreGitEnvironment: () => void;
 beforeEach(() => {
+  // Branch proofs read process.env, while setup Git uses gitTestEnv. Keep
+  // both inside the fixture: inherited config/location overrides correctly
+  // defer a production probe to owned Git, but are not part of these repos.
+  restoreGitEnvironment = isolateProcessGitEnvironment();
   mainLoggerMock.warn.mockClear();
 });
 afterEach(() => {
+  restoreGitEnvironment();
   expect(
     mainLoggerMock.warn.mock.calls.filter(([message]) =>
       message === "running turns still unanswered at the shutdown deadline"
@@ -3322,6 +3334,65 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it.each([false, true])("delivers a text final and dispatches Telegram input through the real lifecycle pipeline (legacy=%s)", async (legacy) => {
+    const overlayStore = createOverlayStoreMock({ executionMode: "default" });
+    const overlay = vi.spyOn(desktopOverlayStore, "getDesktopOverlayStore").mockReturnValue(overlayStore as never);
+    const client = new MockBackendClient({ threads: [], startTurnResults: [
+      { threadId: "thread-1", turnId: "turn-1" },
+      { threadId: "thread-1", turnId: "turn-2" },
+    ] });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const bridge = new DesktopMessagingBackendBridge(registry);
+    if (legacy) Object.defineProperty(bridge, "ownsTurnQueue", { value: false });
+    const db = openInMemoryStateDb();
+    const store = new SqliteMessagingStore(db);
+    const channel = { channel: "telegram" as const, conversation: { id: "fixture-chat", kind: "dm" as const } };
+    const controller = new MessagingController({
+      channel: "telegram", authorizedActorIds: ["fixture-actor"], inputDebounceMs: 0,
+      backend: bridge, store,
+      adapter: { capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE, deliver: async () => ({
+        channel: "telegram", deliveredAt: 1, outcome: "presented", surface: { channel: "telegram", id: "fixture-notice" },
+      }) },
+    });
+    // Match runtime registration order: messaging listens before the viewer.
+    registry.onEvent((event) => controller.handleBackendEvent(event));
+    const viewer: AgentEvent[] = [];
+    registry.onEvent((event) => { viewer.push(event); });
+    const internal = registry as unknown as { emit(event: AgentEvent): Promise<void> };
+    try {
+      await store.upsertBinding({ id: "fixture-binding", backend: "codex", threadId: "thread-1", channel,
+        authorizedActorIds: ["fixture-actor"], createdAt: 1, updatedAt: 1 });
+      for (const [index, text] of ["first", "follow-up"].entries()) {
+        await controller.handleInboundEvent({ kind: "text", id: `fixture-${index}`, text,
+          channel, actor: { platformUserId: "fixture-actor" }, receivedAt: index + 1 });
+      }
+      expect(client.startTurnCalls).toHaveLength(1);
+      if (!legacy) expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "thread-1" })).toHaveLength(1);
+      // Even text-only agentMessage completions enter image materialization.
+      // Queue idle and terminal immediately behind it, as the provider does.
+      const final = internal.emit({ backend: "codex", notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { id: "final", type: "agentMessage", text: "Finished.", phase: "final_answer" },
+      } } });
+      const idle = internal.emit({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: "idle" },
+      } } });
+      const terminal = internal.emit({ backend: "codex", notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } } });
+      await vi.waitFor(() => expect(viewer.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      await Promise.all([final, idle, terminal]);
+      await vi.waitFor(() => expect(client.startTurnCalls).toHaveLength(2));
+      expect(client.startTurnCalls[1]?.input).toEqual([{ type: "text", text: "follow-up" }]);
+      await emitCompletedTurn(registry, "codex", "thread-1", "turn-2");
+    } finally {
+      controller.dispose();
+      await registry.close();
+      await controller.whenToolUpdatesSettled();
+      db.close();
+      overlay.mockRestore();
+    }
+  });
+
   it("supplies authoritative directory scope and withdraws it before asynchronous membership recording", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
@@ -62959,6 +63030,117 @@ script = "printf setup"
     await registry.close();
   });
 
+  it.each(["expired", "fresh", "unobserved", "disabled", "active", "pinned", "Agent", "external", "unreadable", "failed-delete", "shared-ref", "missing"])(
+    "applies archived Claude retention through its own store: %s", async (scenario) => {
+      const day = 86_400_000;
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-retention-"));
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      const id = "a3333333-3333-4333-8333-333333333333";
+      const cwd = scenario === "external" ? "/fixture/operator-checkout" : "/fixture/.pwragent/worktrees/retention/repo";
+      const thread: AppServerThreadSummary = { id, title: "Claude archive", titleSource: "explicit", source: "claude",
+        threadStatus: "idle", linkedDirectories: [], projectKey: cwd, updatedAt: Date.now() - 40 * day,
+        ...(scenario === "active" ? {} : { archivedAt: Date.now() - 31 * day }),
+      };
+      const snapshot: WorktreeSnapshotSummary = { id: "retention-snapshot", backend: "claude", threadId: id,
+        worktreePath: cwd, repositoryPath: "/fixture/repo", snapshotRef: "refs/pwragent/snapshots/retention",
+        snapshotCommit: "abc", createdAt: 1, state: "archived", ignoredFilesExcluded: true };
+      const overlay: ThreadOverlayState = { backend: "claude", threadId: id, extraLinkedDirectories: [],
+        archiveRetentionStartedAt: scenario === "unobserved" ? undefined : Date.now() - (scenario === "fresh" ? 29 : 31) * day,
+        worktreeSnapshots: [snapshot],
+        ...(scenario === "pinned" ? { pinnedRank: "a" } : {}),
+        ...(scenario === "Agent" ? { agent: {} as never } : {}),
+      };
+      let states = [overlay];
+      if (scenario === "shared-ref") states.push({ ...overlay, backend: "codex", threadId: "retained", archiveRetentionStartedAt: undefined });
+      const overlays = Object.fromEntries(states.map((state) => [buildThreadIdentityKey(state.backend, state.threadId), state]));
+      const history = path.join(root, "sessions", `${id}.jsonl`);
+      const metadata = path.join(root, "sessions", `${id}.json`);
+      const backup = path.join(store.rewindBackupDirectory(id), "before.txt");
+      const image = path.join(root, "sessions", "images", id, "image.png");
+      const deletion = vi.spyOn(store, "delete");
+      const deleteSnapshot = vi.fn(async () => {
+        await expect(stat(metadata)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(stat(history)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+      const overlayStore = Object.assign(createOverlayStoreMock({ overlays }), {
+        listThreadArchiveStates: vi.fn(async () => states),
+        observeArchivedThreads: vi.fn(async (records: Array<{ backend: AppServerBackendKind; threadId: string }>, now: number) => {
+          for (const record of records) {
+            const state = states.find((state) => state.backend === record.backend && state.threadId === record.threadId);
+            if (state) state.archiveRetentionStartedAt ??= now;
+          }
+        }),
+        forgetThreadArchiveStates: vi.fn(async (victims: ThreadOverlayState[]) => {
+          states = states.filter((state) => !victims.includes(state));
+        }),
+      });
+      const codex = Object.assign(new MockBackendClient({ threads: [] }), {
+        deleteThread: vi.fn(async () => ({ threadId: id })),
+        readThreadSummary: vi.fn(async () => { throw new Error(`Thread not found: ${id}`); }),
+      });
+      const registry = new DesktopBackendRegistry({ codexClient: codex, overlayStore, claudeBackendOptions: { store },
+        worktreeArchiveService: { deleteSnapshot } as unknown as WorktreeArchiveService,
+        getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: scenario === "disabled" ? 0 : 30 }),
+      });
+      try {
+        await store.save({ cwd, thread });
+        await store.append(id, [{ type: "message", id: "message", role: "user", text: "Fixture history" }]);
+        for (const file of [backup, image]) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, "fixture"); }
+        if (scenario === "unreadable") await writeFile(metadata, "invalid metadata");
+        if (scenario === "missing") await rm(metadata);
+        if (scenario === "failed-delete") deletion.mockRejectedValue(new Error("Fixture store unavailable"));
+        await registry.sweepInactiveThreads();
+        const removed = ["expired", "shared-ref", "missing"].includes(scenario);
+        expect(deletion).toHaveBeenCalledTimes(removed || scenario === "failed-delete" ? 1 : 0);
+        expect(codex.deleteThread).not.toHaveBeenCalled();
+        expect(codex.readThreadSummary).not.toHaveBeenCalled();
+        expect(deleteSnapshot).toHaveBeenCalledTimes(removed && scenario !== "shared-ref" ? 1 : 0);
+        expect(overlayStore.forgetThreadArchiveStates).toHaveBeenCalledTimes(removed ? 1 : 0);
+        for (const file of [history, backup, image]) {
+          if (removed) await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+          else await expect(stat(file)).resolves.toBeDefined();
+        }
+        if (scenario === "unobserved") expect(overlay.archiveRetentionStartedAt).toBeGreaterThan(Date.now() - day);
+      } finally { await registry.close(); await rm(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it.each(["restore", "view", "policy", "live"])("revalidates Claude retention at deletion: %s", async (action) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-retention-race-"));
+    const store = new ClaudeSessionStore(root);
+    const id = "b3333333-3333-4333-8333-333333333333";
+    const cwd = "/fixture/.pwragent/worktrees/retention/repo";
+    const overlay: ThreadOverlayState = { backend: "claude", threadId: id, extraLinkedDirectories: [], archiveRetentionStartedAt: 1 };
+    const overlayStore = Object.assign(createOverlayStoreMock({ overlays: { [`claude:${id}`]: overlay } }), {
+      listThreadArchiveStates: async () => [overlay], observeArchivedThreads: vi.fn(async () => {}), forgetThreadArchiveStates: vi.fn(async () => {}),
+    });
+    const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 };
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
+      claudeBackendOptions: { store }, getThreadArchivePolicy: () => ({ ...policy }) });
+    let mutation: Promise<void> | undefined;
+    const deletion = vi.spyOn(store, "delete");
+    const backend = (registry as unknown as { claudeBackend: ClaudeBackend }).claudeBackend;
+    const originalRead = backend.readThreadSummary.bind(backend);
+    vi.spyOn(backend, "readThreadSummary").mockImplementation(async (threadId) => {
+      if (action === "restore") {
+        const session = await store.read(threadId);
+        session.thread.archivedAt = undefined;
+        await store.save(session);
+      }
+      if (action === "live") vi.spyOn(backend, "hasLiveSession").mockReturnValue(true);
+      if (action === "policy") policy.retentionDays = 0;
+      if (action === "view") mutation = registry.withThreadLifecycleMutation({ backend: "claude", threadId: id }, async () => {});
+      return await originalRead(threadId);
+    });
+    try {
+      await store.save({ cwd, thread: { id, source: "claude", title: "Archive", titleSource: "explicit", linkedDirectories: [], archivedAt: 1 } });
+      await registry.sweepInactiveThreads();
+      await mutation;
+      expect(deletion).not.toHaveBeenCalled();
+      expect(overlayStore.forgetThreadArchiveStates).not.toHaveBeenCalled();
+    } finally { await registry.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it.each([true, false])("cleans every deleted descendant before forgetting family archive states: provider success=%s", async (succeeds) => {
     const day = 86_400_000;
     const family: AppServerThreadSummary[] = ["family-root", "family-child", "family-grandchild"].map((id, index, ids) => ({
@@ -67781,6 +67963,83 @@ script = "printf setup"
       expect(whole.replay.entries).toHaveLength(6);
     });
   });
+
+  it.each(["scratch", "unborn", "detached worktree"] as const)(
+    "settles the %s branch probe to Git's answer before publishing turn completion",
+    async (layout) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-oracle-"));
+      let cwd = root;
+      if (layout !== "scratch") {
+        await git(root, ["init", "-b", "main"]);
+        if (layout === "detached worktree") {
+          const commit = await git(root, ["commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "seed"]);
+          await git(root, ["update-ref", "refs/remotes/origin/main", commit]);
+          cwd = path.join(root, "linked");
+          await git(root, ["worktree", "add", "--detach", cwd, "origin/main"]);
+        }
+      }
+      // Git owns discovery and HEAD. A failed abbreviation is either an
+      // unborn repository or a directory outside any repository.
+      const oracle = await git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .then((branch) => ({ branch }), () =>
+          git(cwd, ["rev-parse", "--git-dir"])
+            .then(() => ({}), () => gitHeadBranch.NOT_A_GIT_REPOSITORY));
+      const identity = { backend: "codex" as const, threadId: "branch-oracle" };
+      const client = new MockBackendClient({ threads: [{
+        id: identity.threadId, source: "codex", title: "Branch oracle", titleSource: "explicit",
+        linkedDirectories: [{ id: cwd, path: cwd, label: "fixture", kind: "local" }],
+      }] });
+      const registry = new DesktopBackendRegistry({
+        codexClient: client, overlayStore: createOverlayStoreMock(),
+        agentToolMcpServer: null, pdfToolMcpServer: null,
+      });
+      const probeRead = createDeferred<void>();
+      const releaseProbe = createDeferred<void>();
+      const settled: Array<Awaited<ReturnType<typeof gitHeadBranch.probeCurrentGitBranch>>> = [];
+      const probe = gitHeadBranch.probeCurrentGitBranch;
+      const branchProbe = vi.spyOn(gitHeadBranch, "probeCurrentGitBranch").mockImplementation(async (...args) => {
+        const result = await probe(...args);
+        probeRead.resolve();
+        await releaseProbe.promise;
+        settled.push(result);
+        return result;
+      });
+      const gitLaunch = vi.spyOn(gitExecutable, "runGitCommand");
+      let atTerminal: typeof settled = [];
+      let terminalPublished = false;
+      let terminal: Promise<void> | undefined;
+      registry.onEvent((event) => {
+        if (event.notification.method === "turn/completed") {
+          terminalPublished = true;
+          atTerminal = [...settled];
+        }
+      });
+      try {
+        await client.emit({ method: "turn/started", params: {
+          threadId: identity.threadId, turnId: "turn-oracle", turn: { id: "turn-oracle" },
+        } });
+        terminal = client.emit({ method: "turn/completed", params: {
+          threadId: identity.threadId, turn: { id: "turn-oracle", status: "completed", output: [] },
+        } } as unknown as AppServerNotification);
+        await probeRead.promise;
+        expect(terminalPublished).toBe(false);
+        releaseProbe.resolve();
+        await terminal;
+        // Completion is a readiness boundary: listeners see a settled proof,
+        // and ordinary metadata never needs the owned Git fallback.
+        expect(atTerminal).toEqual([oracle]);
+        expect(branchProbe).toHaveBeenCalledWith(cwd, expect.any(AbortSignal));
+        expect(gitLaunch.mock.calls.filter(([, , options]) => options?.ownProcessTree)).toEqual([]);
+      } finally {
+        releaseProbe.resolve();
+        await terminal;
+        await registry.close();
+        branchProbe.mockRestore();
+        gitLaunch.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(["no PATH Git", "missing selected Git", "not a repository"] as const)(
     "checks branch drift and delivers a terminal event with %s",

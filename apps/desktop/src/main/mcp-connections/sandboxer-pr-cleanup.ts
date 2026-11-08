@@ -1,8 +1,8 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type {
   ThreadSandboxRecord,
-  ThreadSandboxStore,
-} from "../state/thread-sandbox-store";
+  ThreadSandboxStorage,
+} from "@pwragent/owner-core/mcp-connection-storage";
 
 /**
  * Releases the Sandboxer sandboxes a thread created, once every PR attached
@@ -61,7 +61,7 @@ export type SandboxerCleanupTransport = {
 };
 
 export type SandboxerPrCleanupOptions = {
-  store: Pick<ThreadSandboxStore, "pendingForThread" | "markOutcome" | "threadIdsWithPending">;
+  store: Pick<ThreadSandboxStorage, "pendingForThread" | "markOutcome" | "threadIdsWithPending">;
   openTransport: (params: {
     connectionId: string;
     backend: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { transitionQueueAdmission } from "../app-server/queue-admission";
+import { transitionQueueAdmission } from "../queue-admission";
 
 describe("queue admission identity", () => {
   it("retains matching outcomes received after acknowledgement until the attempt settles", () => {

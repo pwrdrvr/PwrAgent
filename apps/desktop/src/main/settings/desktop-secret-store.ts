@@ -1,3 +1,4 @@
+import type { SettingsSecretStorage } from "@pwragent/owner-core/settings-secret-storage";
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
@@ -49,15 +50,7 @@ export function isE2eMemorySecretStorageEnabled(
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
-export interface DesktopSecretStore {
-  describe(): DesktopSettingsSecretStorageState;
-  getSecretAccessError?(name: DesktopSettingsSecretName): string | undefined;
-  hasSecret(name: DesktopSettingsSecretName): Promise<boolean>;
-  getSecretSync?(name: DesktopSettingsSecretName): string | undefined;
-  getSecret(name: DesktopSettingsSecretName): Promise<string | undefined>;
-  setSecret(name: DesktopSettingsSecretName, value: string): Promise<void>;
-  deleteSecret(name: DesktopSettingsSecretName): Promise<void>;
-}
+export type DesktopSecretStore = SettingsSecretStorage;
 
 export class MemoryDesktopSecretStore implements DesktopSecretStore {
   private readonly values = new Map<DesktopSettingsSecretName, string>();

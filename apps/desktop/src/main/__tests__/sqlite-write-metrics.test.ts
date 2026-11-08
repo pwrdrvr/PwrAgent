@@ -20,7 +20,7 @@ import { runGitCommand } from "../app-server/git-executable";
 import { CodexEnvironmentHydrationStore } from "../storage/codex-environment-hydration-store";
 import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
-import { AutomationStore } from "../automations/automation-store";
+import { AutomationStore } from "../storage/automation-store";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";

@@ -54,9 +54,6 @@ export function readOwnerChildOrder(
       ranked.set(parentKey, children);
     }
   }
-  for (const [parentKey, children] of ranked) {
-    order.set(parentKey, new Set([...children].sort(([, left], [, right]) => left - right).map(([key]) => key)));
-  }
   for (const resource of resources.values()) {
     if (resource.state.request.query.kind !== "children") continue;
     for (const entry of presentation.get(resource.id) ?? []) {
@@ -66,6 +63,22 @@ export function readOwnerChildOrder(
       keys.add(entry.key);
       order.set(parentKey, keys);
     }
+  }
+  for (const [parentKey, children] of ranked) {
+    const pageKeys = order.get(parentKey) ?? new Set<string>();
+    const keys = [...pageKeys];
+    const rankedChildren = [...children].sort(([, left], [, right]) => left - right);
+    // An exact-only child has no page slot to preserve. Insert its slot at
+    // the known sibling position, bounded by the currently loaded range.
+    for (const [key, position] of rankedChildren) {
+      if (!pageKeys.has(key)) keys.splice(Math.min(position, keys.length), 0, key);
+    }
+    const rankedKeys = rankedChildren.map(([key]) => key);
+    let index = 0;
+    // Exact reads can know only the selected child's position. Reorder the
+    // known siblings within their existing slots; leave unknown siblings in
+    // page order instead of promoting every child whose metadata arrives.
+    order.set(parentKey, new Set(keys.map((key) => children.has(key) ? rankedKeys[index++]! : key)));
   }
   return new Map([...order].map(([parentKey, keys]) => [parentKey, [...keys]]));
 }
