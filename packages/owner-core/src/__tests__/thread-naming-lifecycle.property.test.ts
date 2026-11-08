@@ -165,3 +165,15 @@ it("does not let a superseded attempt retire a newer placeholder's eligibility",
   f.lifecycle.finishTitleGeneration(current);
   expect(f.lifecycle.hasSystemPlaceholder(identity)).toBe(false);
 });
+
+it("keeps explicit intent when a later generation starts with the same prompt title", async () => {
+  await fc.assert(fc.asyncProperty(backend, async (kind) => {
+    const f = fixture();
+    const id = { ...identity, backend: kind };
+    await f.lifecycle.renameThread({ ...id, name: "Prompt" });
+    const attempt = f.lifecycle.beginTitleGeneration(id);
+    expect((await f.lifecycle.applyGeneratedTitle({ attempt, prompt: "Prompt", title: "Helper" })).applied).toBe(false);
+    expect(f.names.get(identityKey(id))).toBe("Prompt");
+    f.lifecycle.finishTitleGeneration(attempt);
+  }));
+});

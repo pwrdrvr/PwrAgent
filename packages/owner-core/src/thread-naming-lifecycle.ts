@@ -46,6 +46,7 @@ export class ThreadNamingLifecycle {
   private readonly queues = new Map<string, Promise<void>>();
   private readonly attempts = new Map<string, ThreadNamingAttempt>();
   private readonly placeholders = new Set<string>();
+  private readonly explicitRenames = new Set<string>();
 
   constructor(private readonly host: ThreadNamingHost) {}
 
@@ -55,6 +56,11 @@ export class ThreadNamingLifecycle {
 
   hasSystemPlaceholder(identity: OwnerThreadIdentity): boolean {
     return this.placeholders.has(this.key(identity));
+  }
+
+  isEligible(identity: OwnerThreadIdentity, thread: AppServerThreadSummary | undefined, prompt: string): boolean {
+    return !this.explicitRenames.has(this.key(identity))
+      && isEligibleForGeneratedTitle(thread, prompt, { systemPlaceholder: this.hasSystemPlaceholder(identity) });
   }
 
   beginTitleGeneration(identity: OwnerThreadIdentity): ThreadNamingAttempt {
@@ -93,9 +99,7 @@ export class ThreadNamingLifecycle {
       const latest = await this.host.readTitle(attempt);
       // An explicit rename can be admitted while this metadata read is pending.
       if (this.attempts.get(key) !== attempt) return { applied: false, reason: "superseded", thread: latest };
-      if (!isEligibleForGeneratedTitle(latest, params.prompt, {
-        systemPlaceholder: this.placeholders.has(key),
-      })) return { applied: false, reason: "ineligible", thread: latest };
+      if (!this.isEligible(attempt, latest, params.prompt)) return { applied: false, reason: "ineligible", thread: latest };
       const source = params.titleSource ?? "derived";
       if (isAcpBackendId(attempt.backend)) {
         // ACP generated naming has always updated only its session and event.
@@ -123,6 +127,13 @@ export class ThreadNamingLifecycle {
     }
     const source = options?.titleSource ?? "explicit";
     const result = await this.host.renameProvider(request, source);
+    if (source === "explicit") {
+      // A provider can call its prompt-derived placeholder explicit too. Keep
+      // the owner's successful rename intent so even that same text stays put.
+      const key = this.key(identity);
+      this.explicitRenames.add(key);
+      this.attempts.delete(key);
+    }
     // Preserve ACP's event-before-Agent-metadata ordering.
     if (isAcpBackendId(backend)) await this.announce(backend, result.threadId, request.name, source, options);
     const renamed = { backend, threadId: result.threadId };

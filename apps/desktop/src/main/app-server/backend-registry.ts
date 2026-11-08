@@ -1,4 +1,4 @@
-import { ThreadNamingLifecycle, isEligibleForGeneratedTitle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadNamingAttempt, type ThreadTitleApplication, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
+import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadNamingAttempt, type ThreadTitleApplication, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
@@ -42628,11 +42628,7 @@ export class DesktopBackendRegistry {
         callerReason: "title-generation",
         threadId: params.threadId,
       });
-      if (
-        !isEligibleForGeneratedTitle(currentThread, params.prompt, {
-          systemPlaceholder: this.threadNaming.hasSystemPlaceholder(params),
-        })
-      ) {
+      if (!this.threadNaming.isEligible(params, currentThread, params.prompt)) {
         this.logThreadTitleGeneration(
           "skipped",
           params,
