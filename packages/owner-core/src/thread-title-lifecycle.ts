@@ -257,4 +257,3 @@ function buildLateTitleCancellationReason(
   }
   return `A newer thread title was already present: ${thread.title}.`;
 }
-
