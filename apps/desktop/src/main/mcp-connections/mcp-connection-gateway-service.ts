@@ -112,8 +112,8 @@ import {
   type RuntimeLeaseHolder,
 } from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { getAppStateDb, getAppStateMode, getAppOverlayStore } from "../state/app-state";
-import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import { getAppStateMode } from "../storage/desktop-runtime-storage";
+import { desktopMcpConnectionSelectionStorage, recordCreatedSandbox } from "../storage/desktop-mcp-connection-storage";
 import { readCreatedSandbox, type SandboxerCleanupTransport } from "./sandboxer-pr-cleanup";
 import {
   McpConnectionRegistry,
@@ -724,13 +724,10 @@ export class McpConnectionGatewayService {
 
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
     this.recordCreatedSandbox = options.recordCreatedSandbox
-      ?? ((params) => {
-        if (!getAppStateMode()) return;
-        new ThreadSandboxStore(getAppStateDb().raw).recordCreated(params);
-      });
+      ?? recordCreatedSandbox;
     this.threadRootsResolver = options.resolveThreadRoots;
     this.readGatewaySelection = options.readGatewaySelection
-      ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
+      ?? (async (context) => desktopMcpConnectionSelectionStorage.readSelection(context));
     this.bridgeEntryPath =
       options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);

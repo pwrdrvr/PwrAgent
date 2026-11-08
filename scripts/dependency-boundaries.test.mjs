@@ -82,13 +82,13 @@ beforeAll(async () => {
     storageCases.push({ from, to: target });
   }
 
-  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "composer-drafts", "composer-drafts/nested", "operator-requests", "operator-requests/nested", "pr-status", "pr-status/nested", "scheduled-actions", "scheduled-actions/nested", "thread-search", "thread-search/nested", "token-miser", "token-miser/nested", "thread-todos", "thread-todos/nested", "thread-reviews", "thread-reviews/nested", "acp", "acp/nested", "messaging", "messaging/nested", "settings", "settings/nested"]) {
+  for (const area of ["ipc", "ipc/nested", "app-server", "app-server/nested", "federation", "federation/nested", "composer-drafts", "composer-drafts/nested", "operator-requests", "operator-requests/nested", "pr-status", "pr-status/nested", "scheduled-actions", "scheduled-actions/nested", "thread-search", "thread-search/nested", "token-miser", "token-miser/nested", "thread-todos", "thread-todos/nested", "thread-reviews", "thread-reviews/nested", "acp", "acp/nested", "messaging", "messaging/nested", "settings", "settings/nested", "automations", "automations/nested", "mcp-connections", "mcp-connections/nested", "future-area", "future-area/nested"]) {
     for (const target of ["overlay", "app-state", "nested/store"]) {
       const to = `apps/desktop/src/main/state/${target}.js`;
       const from = `apps/desktop/src/main/${area}/state-${target.replaceAll("/", "-")}.js`;
       source(to, "export const value = 1;\n");
       source(from, `import ${JSON.stringify(relative(dirname(from), to).replaceAll("\\", "/"))};\n`);
-      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos", "thread-reviews", "acp", "messaging", "settings"].includes(area.split("/")[0]) });
+      ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos", "thread-reviews", "acp", "messaging", "settings", "automations", "mcp-connections", "future-area"].includes(area.split("/")[0]) });
     }
   }
 
@@ -111,6 +111,24 @@ beforeAll(async () => {
     source(to, "export interface Value { value: string; }\n");
     source(from, statement);
     ipcStateCases.push({ from, to, forbidden: true });
+  }
+
+  for (const area of ["automations", "mcp-connections", "future-area"]) {
+    for (const [style, statement] of [
+      ["static", 'import { value } from "../../state/application-contract"; export { value };'],
+      ["type-import", 'import type { Value } from "../../state/application-contract"; export type { Value };'],
+      ["type-expression", 'export type Value = import("../../state/application-contract").Value;'],
+      ["type-export", 'export type { Value } from "../../state/application-contract";'],
+      ["export", 'export * from "../../state/application-contract";'],
+      ["dynamic", 'export const load = () => import("../../state/application-contract");'],
+      ["require", 'const value = require("../../state/application-contract"); module.exports = value;'],
+    ]) {
+      const to = "apps/desktop/src/main/state/application-contract.ts";
+      const from = `apps/desktop/src/main/${area}/nested/${style}.ts`;
+      source(to, "export interface Value { value: string; }\nexport const value = 1;\n");
+      source(from, statement);
+      ipcStateCases.push({ from, to, forbidden: true });
+    }
   }
 
   // Every root application module uses ports, including future consumers.

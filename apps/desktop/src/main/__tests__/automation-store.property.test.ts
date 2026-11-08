@@ -1,6 +1,7 @@
 import fc from "fast-check";
-import { expect, it } from "vitest";
-import { AutomationStore } from "../automations/automation-store";
+import { expect, expectTypeOf, it } from "vitest";
+import type { AutomationStorage } from "@pwragent/owner-core/automation-storage";
+import { AutomationStore } from "../storage/automation-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const statusRank = {
@@ -22,7 +23,7 @@ it("never moves an automation run backwards and keeps its first terminal outcome
       // StateDb.open uses the migrated template in desktop-main, including for :memory:.
       const db = openInMemoryStateDb();
       try {
-        const store = new AutomationStore(db);
+        const store: AutomationStorage = new AutomationStore(db);
         store.createAutomation({
           id: "automation-1",
           backend: "codex",
@@ -61,4 +62,9 @@ it("never moves an automation run backwards and keeps its first terminal outcome
       }
     },
   ), { numRuns: 50 });
+});
+
+it("exposes the complete automation persistence contract without a constructor or database", async () => {
+  expectTypeOf<keyof AutomationStorage>().toEqualTypeOf<keyof AutomationStore>();
+  expect(Object.keys(await import("../automations/automation-store"))).toEqual([]);
 });

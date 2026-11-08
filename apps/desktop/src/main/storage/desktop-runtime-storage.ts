@@ -1,3 +1,4 @@
+import type { ThreadSandboxStorage } from "@pwragent/owner-core/mcp-connection-storage";
 import type { RuntimeLeaseStorage } from "@pwragent/owner-core/runtime-lease-storage";
 import type { AcpAgentStorage, AcpAvailableCommandsStorage, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
@@ -50,7 +51,7 @@ export function createRestartContinuationStorage(): RestartContinuationStorage {
 export function createThreadDependencyStorage(): ThreadDependencyStorage {
   return new ThreadDependencyStore(getAppStateDb().raw);
 }
-export function createThreadSandboxStorage() {
+export function createThreadSandboxStorage(): ThreadSandboxStorage {
   return new ThreadSandboxStore(getAppStateDb().raw);
 }
 export function createProviderThreadSnapshotStorage() {
