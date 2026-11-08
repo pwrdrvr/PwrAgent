@@ -22,6 +22,14 @@ async function regular(target: string): Promise<boolean> {
   }
 }
 
+async function repositoryBoundary(folder: string): Promise<boolean> {
+  try { await lstat(path.join(folder, ".git")); return true; }
+  catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+    throw error;
+  }
+}
+
 async function cargoTarget(folder: string): Promise<boolean> {
   const tag = path.join(folder, "CACHEDIR.TAG");
   if (await regular(tag) && (await lstat(tag)).size <= 4096 && (await readFile(tag, "utf8")).startsWith(CACHE_SIGNATURE)) return true;
@@ -43,6 +51,7 @@ async function identity(row: ThreadMaintenanceBuildOutput): Promise<string> {
   let current = row.checkoutPath;
   for (const segment of ["", ...parts]) {
     if (segment) current = path.join(current, segment);
+    if (segment && await repositoryBoundary(current)) throw new Error("Output repository changed");
     const info = await lstat(current);
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Output directory changed");
     tokens.push(`${info.dev}:${info.ino}`);
@@ -54,13 +63,16 @@ async function identity(row: ThreadMaintenanceBuildOutput): Promise<string> {
 
 /** Only Cargo artifact directories and binaries/dependency products are
  * removed. User files beside them (including .env files) stay untouched. */
-async function artifactPaths(profile: string): Promise<string[]> {
+async function artifactPaths(profile: string, signal: AbortSignal): Promise<string[]> {
   const result: string[] = [];
   for (const entry of await readdir(profile, { withFileTypes: true })) {
     if (CARGO_LOCKS.has(entry.name) || entry.isSymbolicLink()) continue;
     const file = path.join(profile, entry.name);
     if (entry.isDirectory()) {
-      if (ARTIFACT_FOLDERS.has(entry.name) || entry.name.endsWith(".dSYM")) result.push(file);
+      if (ARTIFACT_FOLDERS.has(entry.name) || entry.name.endsWith(".dSYM")) {
+        await assertNoNestedRepository(file, signal);
+        result.push(file);
+      }
     } else if (entry.isFile()) {
       if (/\.(?:d|rlib|rmeta|a|so|dylib|dll|exe|pdb|lib|exp)$/.test(entry.name)) { result.push(file); continue; }
       const handle = await open(file, "r");
@@ -75,7 +87,31 @@ async function artifactPaths(profile: string): Promise<string[]> {
   return result;
 }
 
+/** Recursive removal must not erase an embedded repository's index or files. */
+async function assertNoNestedRepository(folder: string, signal: AbortSignal): Promise<void> {
+  const queue = [folder];
+  for (let index = 0; index < queue.length; index++) {
+    signal.throwIfAborted();
+    const current = queue[index]!;
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      if (entry.name.toLowerCase() === ".git") throw new Error("Nested Git repository in build output");
+      if (entry.isDirectory() && !entry.isSymbolicLink()) queue.push(path.join(current, entry.name));
+    }
+  }
+}
+
 async function assertUntracked(row: ThreadMaintenanceBuildOutput, signal: AbortSignal): Promise<void> {
+  const canonical = async (folder: string) => {
+    const target = await realpath(folder);
+    return process.platform === "win32" ? target.toLowerCase() : target;
+  };
+  const expected = await canonical(row.checkoutPath);
+  // Ask Git at the actual output and manifest locations. A parent index
+  // cannot establish that files belonging to a nested repository are untracked.
+  for (const cwd of [row.outputPath, path.dirname(row.manifestPath)]) {
+    const { stdout } = await runGitCommand(cwd, ["rev-parse", "--path-format=absolute", "--show-toplevel"], { signal, timeout: 15_000 });
+    if (await canonical(stdout.trim()) !== expected) throw new Error("Output repository changed");
+  }
   const relative = path.relative(row.checkoutPath, row.outputPath).split(path.sep).join("/");
   const { stdout } = await runGitCommand(row.checkoutPath, ["ls-files", "-z", "--", `:(literal)${relative}`], { signal, timeout: 15_000 });
   if (stdout) throw new Error("Output contains tracked files");
@@ -123,8 +159,9 @@ export async function scanCargoBuildOutputs(
         if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name === ".git") continue;
         const child = path.join(folder, entry.name);
         try {
+          if (await repositoryBoundary(child)) continue;
           if (await cargoTarget(child)) { targets.push(child); continue; }
-          if (!SOURCE_SKIP.has(entry.name) && !await regular(path.join(child, ".git"))) queue.push(child);
+          if (!SOURCE_SKIP.has(entry.name)) queue.push(child);
         } catch { result.kept.push({ path: child, reason: "Cargo folder could not be read" }); }
       }
     }
@@ -149,14 +186,14 @@ export async function scanCargoBuildOutputs(
           lease.assertHeld();
           await lease.release();
           lease = undefined;
-          const paths = await artifactPaths(outputPath);
+          const paths = await artifactPaths(outputPath, signal);
           if (!paths.length) continue;
           const space = await measureMaintenanceAllocationPaths(paths, signal);
           if (await identity(row) !== token) throw new Error("Output directory changed");
           result.items.push({ row: { ...row, ...(space ? { space } : {}) }, identity: token });
         } catch (error) {
           const message = error instanceof Error ? error.message : "";
-          const reason = ["Output directory changed", "Cargo lock changed", "Output contains tracked files", "Cargo manifest is missing",
+          const reason = ["Output directory changed", "Output repository changed", "Nested Git repository in build output", "Cargo lock changed", "Output contains tracked files", "Cargo manifest is missing",
             "Native build lock verification unavailable", "Build lock could not be verified"].includes(message) ? message : "Cargo output could not be checked";
           result.kept.push({ path: outputPath, reason });
         } finally { await lease?.release(); }
@@ -189,16 +226,19 @@ export async function removeCargoBuildOutput(
     lease = await acquireMaintenanceLock(path.join(row.outputPath, ".cargo-lock"), options.helperPath);
     if (!lease) return { kept: "Cargo build in progress" };
     if (await identity(row) !== candidate.identity) return { kept: "Output directory changed" };
-    const paths = await artifactPaths(row.outputPath);
+    await assertUntracked(row, signal);
+    const paths = await artifactPaths(row.outputPath, signal);
     const space = await measureMaintenanceAllocationPaths(paths, signal);
     for (const file of paths) {
       if (signal.aborted) return { kept: "Stopped before removing" };
       lease.assertHeld();
       if (await identity(row) !== candidate.identity) return { kept: "Output directory changed" };
+      if ((await lstat(file)).isDirectory()) await assertNoNestedRepository(file, signal);
       await rm(file, { recursive: true, force: true });
     }
     return { ...(space?.allocatedBytes !== undefined ? { allocatedBytesRemoved: space.allocatedBytes } : {}) };
   } catch (error) {
+    if (error instanceof Error && ["Output repository changed", "Nested Git repository in build output"].includes(error.message)) return { kept: error.message };
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       try { await lstat(row.outputPath); return { kept: "Output directory changed" }; }
       catch (missing) { if ((missing as NodeJS.ErrnoException).code === "ENOENT") return { alreadyGone: true }; throw missing; }

@@ -40,6 +40,25 @@ async function fixture(targetName = "target", profileName = "debug") {
   return { repo, profile, target, git };
 }
 
+async function nestedProfile(parent: string, layout: "source" | "target") {
+  const checkout = path.join(parent, layout === "source" ? "vendor/dependency" : "target-other");
+  const target = layout === "source" ? path.join(checkout, "target") : checkout;
+  const profile = path.join(target, "debug");
+  await mkdir(path.join(profile, "deps"), { recursive: true });
+  await writeFile(path.join(checkout, "Cargo.toml"), '[package]\nname="dependency"\nversion="0.1.0"\n');
+  await writeFile(path.join(target, "CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n");
+  await writeFile(path.join(profile, ".cargo-lock"), "");
+  const tracked = path.join(profile, "deps", "tracked.rmeta");
+  await writeFile(tracked, "tracked nested repository data\n");
+  const git = async (...args: string[]) => await exec("git", ["-C", checkout, ...args]);
+  const initialize = async (kind: "directory" | "file") => {
+    const args = kind === "file" ? ["--separate-git-dir", await mkdtemp(path.join(root, "nested-git-"))] : [];
+    await git("init", "-b", "main", ...args);
+    await git("add", ".");
+  };
+  return { checkout, profile, tracked, git, initialize };
+}
+
 describe("Cargo output cleanup", () => {
   // Model: output profile names and target location do not depend on the
   // thread's age or on unrelated ignored/operator files in the checkout.
@@ -51,6 +70,62 @@ describe("Cargo output cleanup", () => {
       expect(discovery.kept).toEqual([]);
       expect(discovery.items.map((item) => item.row.outputPath)).toEqual([profile]);
     }), { numRuns: 6 });
+  });
+
+  it.each(["directory", "file"] as const)("review regression: stops at nested .git %s boundaries before detecting targets", async (kind) => {
+    const { repo, profile } = await fixture();
+    for (const layout of ["source", "target"] as const) {
+      const child = await nestedProfile(repo, layout);
+      await child.initialize(kind);
+      expect((await child.git("ls-files", "--", path.relative(child.checkout, child.tracked))).stdout).not.toBe("");
+    }
+    const discovery = await scanCargoBuildOutputs([repo], signal(), undefined, { helperPath });
+    expect(discovery.items.map((item) => item.row.outputPath)).toEqual([profile]);
+  });
+
+  it.each(["directory", "file"] as const)("review regression: preserves tracked output when a nested .git %s appears after review", async (kind) => {
+    const { repo } = await fixture();
+    const child = await nestedProfile(repo, "source");
+    const discovery = await scanCargoBuildOutputs([repo], signal(), undefined, { helperPath });
+    const candidate = discovery.items.find((item) => item.row.outputPath === child.profile)!;
+    expect(candidate).toBeDefined();
+    await child.initialize(kind);
+    const before = (await child.git("diff", "--cached", "--binary")).stdout;
+    expect(await removeCargoBuildOutput(candidate, signal(), { helperPath })).toHaveProperty("kept");
+    expect(await readFile(child.tracked, "utf8")).toBe("tracked nested repository data\n");
+    expect((await child.git("diff", "--cached", "--binary")).stdout).toBe(before);
+    expect((await child.git("diff", "--name-only")).stdout).toBe("");
+  });
+
+  it("review regression: rechecks the manifest's owning repository before removing output", async () => {
+    const { repo, profile } = await fixture();
+    const source = path.join(repo, "source");
+    await mkdir(source);
+    const manifest = path.join(source, "Cargo.toml");
+    await writeFile(manifest, await readFile(path.join(repo, "Cargo.toml")));
+    await rm(path.join(repo, "Cargo.toml"));
+    const discovery = await scanCargoBuildOutputs([repo], signal(), undefined, { helperPath });
+    expect(discovery.items[0]!.row.manifestPath).toBe(manifest);
+    await exec("git", ["-C", source, "init", "-b", "main"]);
+    await exec("git", ["-C", source, "add", "."]);
+    expect(await removeCargoBuildOutput(discovery.items[0]!, signal(), { helperPath })).toEqual({ kept: "Output repository changed" });
+    expect(await lstat(path.join(profile, "deps", "fixture.rmeta"))).toBeDefined();
+    expect((await exec("git", ["-C", source, "diff", "--name-only"])).stdout).toBe("");
+  });
+
+  it("review regression: never recursively removes a nested repository inside an artifact directory", async () => {
+    const { repo, profile } = await fixture();
+    const discovery = await scanCargoBuildOutputs([repo], signal(), undefined, { helperPath });
+    const child = path.join(profile, "deps", "nested");
+    await mkdir(child);
+    await exec("git", ["-C", child, "init", "-b", "main"]);
+    const tracked = path.join(child, "keep.rmeta");
+    await writeFile(tracked, "tracked artifact repository data\n");
+    await exec("git", ["-C", child, "add", "."]);
+    expect(await removeCargoBuildOutput(discovery.items[0]!, signal(), { helperPath })).toHaveProperty("kept");
+    expect(await readFile(tracked, "utf8")).toBe("tracked artifact repository data\n");
+    expect((await exec("git", ["-C", child, "diff", "--name-only"])).stdout).toBe("");
+    expect((await scanCargoBuildOutputs([repo], signal(), undefined, { helperPath })).items).toEqual([]);
   });
 
   // Filesystem/Git oracle: source, unrelated files, and the existing lock

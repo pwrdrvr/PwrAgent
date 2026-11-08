@@ -1175,6 +1175,47 @@ describe("rebuildableOutputFolder", () => {
 });
 
 describe("project-scoped checkout scan", () => {
+  it("review regression: classifies and offers only the selected project's primary and linked checkouts", async () => {
+    const root = await tempRoot();
+    const projects = await Promise.all(["app", "app-other"].map(async (name) => {
+      const { repo, git } = await gitRepo(root, name);
+      const checkout = path.join(root, "worktrees", name);
+      await git("worktree", "add", "-b", "linked", checkout);
+      return { repo, checkout };
+    }));
+    const entries = projects.flatMap((project, index) => [project.repo, project.checkout].map((target, part) => ({
+      path: target, project: index, candidate: candidate(`owner-${index}-${part}`, { cwd: target }),
+    })));
+    await fc.assert(fc.asyncProperty(fc.constantFrom(undefined, 0, 1), fc.shuffledSubarray(entries, { minLength: entries.length, maxLength: entries.length }),
+      async (selected, inventory) => {
+        const measured: string[] = [], classified: string[] = [];
+        const removed: string[] = [];
+        const { service } = harness(inventory.map((item) => item.candidate), {
+          auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+            inventory: { roots: [], paths: inventory.map((item) => item.path), providers: [],
+              owners: inventory.map((item) => ({ path: item.path, candidates: [item.candidate], threads: [] })) } }),
+          measureAllocation: async (target) => { measured.push(target); return { allocatedBytes: 1024 }; },
+          buildOutputs: {
+            scan: async (roots) => {
+              classified.push(...roots);
+              return { items: roots.map((target) => ({ identity: "fixture", row: { kind: "cargo" as const,
+                checkoutPath: target, outputPath: path.join(target, "target", "debug"), manifestPath: path.join(target, "Cargo.toml") } })), kept: [] };
+            },
+            remove: async ({ row }) => { removed.push(row.checkoutPath); return { allocatedBytesRemoved: 1024 }; },
+          },
+        });
+        const scan = await service.scan({ steps: ["checkouts"], ...(selected !== undefined ? { projectKey: projects[selected]!.repo } : {}) });
+        const expected = inventory.filter((item) => selected === undefined || item.project === selected).map((item) => item.path).sort();
+        expect([...measured].sort()).toEqual(expected);
+        expect([...classified].sort()).toEqual(expected);
+        expect(scan.checkouts.buildOutputs!.map((row) => row.checkoutPath).sort()).toEqual(expected);
+        const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+          removeBuildOutputs: scan.checkouts.buildOutputs!.map((row) => ({ outputPath: row.outputPath })) });
+        expect([...removed].sort()).toEqual(expected);
+        expect(run.steps.find((step) => step.step === "checkouts")).toMatchObject({ done: expected.length, kept: 0, failed: 0 });
+      }), { numRuns: 12 });
+  });
+
   it("keeps only checkouts whose own repository is the project, even when names overlap", async () => {
     const root = await tempRoot();
     const pointTo = async (checkout: string, repository: string) => {

@@ -344,7 +344,7 @@ export function ThreadMaintenanceDialog(props: {
                 ? { ...selection, threads: new Set() }
                 : step === "hibernate"
                   ? { ...selection, hibernate: new Set() }
-                  : { ...selection, checkouts: new Set<string>(), emptyFolders: false });
+                  : { ...selection, checkouts: new Set<string>(), buildOutputs: new Set<string>(), emptyFolders: false });
             }}
             onFinish={(step) => finishReview(step)}
             onStop={() => {

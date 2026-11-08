@@ -172,6 +172,40 @@ describe("ThreadMaintenanceDialog build output", () => {
     expect(request.removeBuildOutputs).toEqual([{ outputPath: "/w/live/kiln/target/debug" }, { outputPath: "/repos/grok/target/debug" }]);
   });
 
+  it.each(["single", "skip earlier", "keep earlier"])("review regression: Skip checkouts clears every checkout action (%s)", async (mode) => {
+    await fc.assert(fc.asyncProperty(fc.subarray(["/repos/grok/target/debug", "/w/live/kiln/target/debug"], { minLength: 1 }), async (picked) => {
+      const scan = scanWith({ emptyFolders: 2 });
+      const desktopApi = api(scan);
+      const onClose = vi.fn();
+      try {
+        render(<ThreadMaintenanceDialog desktopApi={desktopApi} onClose={onClose} />);
+        const dialog = screen.getByRole("dialog", { name: "Thread maintenance" });
+        if (mode === "single") fireEvent.click(within(dialog).getByRole("radio", { name: "Archived checkouts" }));
+        fireEvent.click(within(dialog).getByRole("button", { name: "Scan" }));
+        if (mode !== "single") {
+          fireEvent.click(await within(dialog).findByRole("button", {
+            name: mode === "keep earlier" ? "Hibernate 1 and continue" : "Skip idle checkouts",
+          }));
+        }
+        const section = await within(dialog).findByRole("region", { name: "Build output" });
+        for (const outputPath of picked) fireEvent.click(within(section).getByRole("checkbox", { name: `Clean ${outputPath}` }));
+        fireEvent.click(within(dialog).getByRole("button", { name: "Skip checkouts" }));
+        if (mode === "keep earlier") {
+          await waitFor(() => expect(desktopApi.applyThreadMaintenance).toHaveBeenCalledOnce());
+          expect(vi.mocked(desktopApi.applyThreadMaintenance!).mock.calls[0]![0]).toMatchObject({
+            archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+            hibernate: [{ backend: "codex", threadId: "h-1" }],
+          });
+          expect(vi.mocked(desktopApi.applyThreadMaintenance!).mock.calls[0]![0]).not.toHaveProperty("removeBuildOutputs");
+          expect(onClose).not.toHaveBeenCalled();
+        } else {
+          await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+          expect(desktopApi.applyThreadMaintenance).not.toHaveBeenCalled();
+        }
+      } finally { cleanup(); }
+    }), { numRuns: 4 });
+  });
+
   it("offers an output on its own again when its checkout is no longer removed", async () => {
     const { desktopApi, dialog, section } = await openCheckouts(scanWith());
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Remove /w/old/ledger" }));

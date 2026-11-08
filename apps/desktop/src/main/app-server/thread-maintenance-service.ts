@@ -585,8 +585,27 @@ export class ThreadMaintenanceService {
     }
     const measuredPaths = new Map<string, ThreadMaintenanceSpace | undefined>();
     const ownership = new Map(audit.inventory?.owners?.map((item) => [item.path, item]));
-    const paths = [...new Set(audit.inventory?.owners?.filter((item) => item.candidates?.length).map((item) => item.path)
+    const ownedPaths = [...new Set(audit.inventory?.owners?.filter((item) => item.candidates?.length).map((item) => item.path)
       ?? audit.candidates.map((item) => item.worktreePath))];
+    const canonical = async (target: string) => {
+      const resolved = await realpath(target).catch(() => path.resolve(target));
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    };
+    const selectedProject = projectFilter ? await canonical(projectFilter) : undefined;
+    const matchesProject = async (target: string) => {
+      if (!selectedProject || await canonical(target) === selectedProject) return true;
+      const repository = await checkoutProjectPath(target);
+      return !!repository && await canonical(repository) === selectedProject;
+    };
+    const paths = selectedProject
+      ? (await mapLimit(ownedPaths, INSPECT_CONCURRENCY, async (target) =>
+        await matchesProject(target) ? target : undefined))
+        .filter((target) => target !== undefined)
+      : ownedPaths;
+    const candidates = selectedProject
+      ? (await mapLimit(audit.candidates, INSPECT_CONCURRENCY, async (item) => await matchesProject(item.worktreePath) ? item : undefined))
+        .filter((item) => item !== undefined)
+      : audit.candidates;
     progress.check("checkouts", paths.length);
     progress.discovery({ detail: "Measuring checkout allocation on disk", found: paths.length });
     await mapLimit(paths, INSPECT_CONCURRENCY, progress.track((target) => target, async (target) => {
@@ -595,10 +614,9 @@ export class ThreadMaintenanceService {
     const inspect = this.deps.inspectWorkspace ?? inspectMaintenanceWorkspace;
     const kept = { ...audit.kept };
     const excludedReasons = new Map(audit.inventory?.keptPaths?.map((item) => [item.path, item.reason]));
-    progress.check("checkouts", audit.candidates.length);
-    const items = await mapLimit(audit.candidates, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.worktreePath, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
+    progress.check("checkouts", candidates.length);
+    const items = await mapLimit(candidates, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.worktreePath, async (candidate): Promise<ThreadMaintenanceArchivedCheckout | undefined> => {
       if (this.abort.signal.aborted) return undefined;
-      if (projectFilter && await checkoutProjectPath(candidate.worktreePath) !== path.resolve(projectFilter)) return undefined;
       try {
         const missingRepository = await missingWorktreeRepository(candidate.worktreePath);
         if (missingRepository) {
@@ -641,7 +659,7 @@ export class ThreadMaintenanceService {
     const owners = new MaintenanceCheckoutOwners();
     for (const row of audit.inventory?.owners ?? []) for (const thread of row.threads) owners.add(row.path, thread);
     return { items: result, kept, emptyFolders: audit.emptyFolders, ...(buildOutputs ? { buildOutputs } : {}),
-      coverage: allocationCoverage(measuredPaths, audit.inventory?.providers ?? [], audit.inventory?.roots,
+      coverage: allocationCoverage(measuredPaths, audit.inventory?.providers ?? [], selectedProject ? undefined : audit.inventory?.roots,
         [...excluded].map(([reason, paths]) => ({ reason, paths, count: paths.length })), this.now(), owners) };
   }
 
