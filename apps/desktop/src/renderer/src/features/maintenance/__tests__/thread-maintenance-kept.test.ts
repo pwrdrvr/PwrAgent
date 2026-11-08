@@ -65,9 +65,10 @@ describe("kept guidance", () => {
   it("sends a PR watch to the thread's own watch controls, without saying an agent made it", () => {
     const text = keptGuidance("Watching a PR", { step: "hibernate" })!;
     expect(text).toContain("Wakes this thread");
-    expect(text).toContain("Stop button");
-    expect(text).toContain("re-scan");
+    expect(text).toContain("use Stop, then re-scan");
     expect(text).not.toMatch(/agent/i);
+    // Hibernation keeps the thread and restores on send, so no consequence is claimed.
+    expect(text).not.toMatch(/strand|archiving|hibernating/i);
   });
 
   it("routes each limit and next step to where it really is", () => {

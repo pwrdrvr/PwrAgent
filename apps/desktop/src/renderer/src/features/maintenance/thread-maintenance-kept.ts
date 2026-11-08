@@ -62,9 +62,9 @@ function days(count: number): string {
 export function keptGuidance(reason: string, context: KeptGuidanceContext): string | undefined {
   switch (reason) {
     case "Watching a PR":
-      return "A watch on this thread's pull request will wake the thread, and archiving or hibernating would strand "
-        + "that wake-up. Open the thread: its Pull requests card lists each watch under Wakes this thread, with a "
-        + "Stop button. Once no watch is wanted, re-scan.";
+      return "An active PR watch will wake this thread. This scan keeps its checkout while the watch is active. "
+        + "Open the thread's Pull requests card and find Wakes this thread. If you no longer need the watch, use Stop, "
+        + "then re-scan.";
     case "Recently active": {
       const threshold = context.step === "hibernate" ? context.idleDays : context.inactivityDays;
       return threshold === undefined
