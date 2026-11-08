@@ -120,20 +120,21 @@ describe("ThreadMaintenanceService.scan", () => {
   it("classifies each shared checkout once, aggregates unique profiles and retains every identified owner", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.option(fc.nat({ max: 1_000_000 }), { nil: undefined }), { minLength: 1, maxLength: 6 }),
       fc.boolean(), async (sizes, incomplete) => {
-        const active = candidate("active", { cwd: "/fixture/repo" });
-        const archived = candidate("archived", { cwd: "/fixture/repo" });
-        const rows = sizes.map((bytes, index) => ({ row: { kind: "cargo" as const, checkoutPath: "/fixture/repo",
-          outputPath: `/fixture/repo/target/profile-${index}`, manifestPath: "/fixture/repo/Cargo.toml",
+        const checkout = path.resolve("/fixture/repo");
+        const active = candidate("active", { cwd: checkout });
+        const archived = candidate("archived", { cwd: checkout });
+        const rows = sizes.map((bytes, index) => ({ row: { kind: "cargo" as const, checkoutPath: checkout,
+          outputPath: path.join(checkout, "target", `profile-${index}`), manifestPath: path.join(checkout, "Cargo.toml"),
           ...(bytes !== undefined ? { space: { allocatedBytes: bytes } } : {}) }, identity: "fixture" }));
         const scanOutputs = vi.fn(async () => ({ items: [...rows, rows[0]!],
-          kept: incomplete ? [{ path: "/fixture/repo/target/busy", reason: "Cargo build in progress" }] : [] }));
+          kept: incomplete ? [{ path: path.join(checkout, "target", "busy"), reason: "Cargo build in progress" }] : [] }));
         const { service } = harness([active], {
           hibernation: { getPolicy: () => ({ enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
-            keepReason: () => ({ target: "/fixture/repo", keep: "Watching a PR" }),
+            keepReason: () => ({ target: checkout, keep: "Watching a PR" }),
             inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true },
           auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
-            inventory: { roots: [], paths: ["/fixture/repo"], providers: [],
-              owners: [{ path: "/fixture/repo", threads: [], candidates: [active, archived] }] } }),
+            inventory: { roots: [], paths: [checkout], providers: [],
+              owners: [{ path: checkout, threads: [], candidates: [active, archived] }] } }),
           buildOutputs: { scan: scanOutputs, remove: async () => ({}) },
         });
         const scan = await service.scan({ steps: ["hibernate", "checkouts"] });
@@ -182,13 +183,14 @@ describe("ThreadMaintenanceService.scan", () => {
   });
 
   it("classifies a kept owned checkout during ordinary hibernation review without making it eligible", async () => {
-    const owner = candidate("recent", { cwd: "/fixture/recent" });
-    const output = { kind: "cargo" as const, checkoutPath: "/fixture/recent", outputPath: "/fixture/recent/target/debug",
-      manifestPath: "/fixture/recent/Cargo.toml", space: { allocatedBytes: 9000 } };
+    const checkout = path.resolve("/fixture/recent");
+    const owner = candidate("recent", { cwd: checkout });
+    const output = { kind: "cargo" as const, checkoutPath: checkout, outputPath: path.join(checkout, "target", "debug"),
+      manifestPath: path.join(checkout, "Cargo.toml"), space: { allocatedBytes: 9000 } };
     const { service } = harness([owner], { measureAllocation: async () => ({ allocatedBytes: 10000 }),
       hibernation: {
         getPolicy: () => ({ enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
-        keepReason: () => ({ target: "/fixture/recent", keep: "Recently active" }),
+        keepReason: () => ({ target: checkout, keep: "Recently active" }),
         inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true,
       },
       buildOutputs: { scan: async () => ({ items: [{ row: output, identity: "fixture" }], kept: [] }), remove: async () => ({}) },

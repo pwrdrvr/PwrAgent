@@ -34,12 +34,12 @@ describe("maintenance repository scope", () => {
         running -= 1;
         return path.dirname(cwd);
       });
-      expect(new Set(requested)).toEqual(new Set(rows.map((row) => `/any/location/${row.checkout}/src`)));
+      expect(new Set(requested)).toEqual(new Set(rows.map((row) => path.normalize(`/any/location/${row.checkout}/src`))));
       expect(requested.length).toBe(new Set(requested).size);
       expect(peak).toBeLessThanOrEqual(6);
-      expect(new Set(resolved.map((row) => row.path))).toEqual(new Set(rows.map((row) => `/any/location/${row.checkout}`)));
+      expect(new Set(resolved.map((row) => row.path))).toEqual(new Set(rows.map((row) => path.normalize(`/any/location/${row.checkout}`))));
       for (const row of resolved) {
-        const expected = rows.filter((item) => row.path === `/any/location/${item.checkout}`).map((item) => `${item.source}:${item.id}`);
+        const expected = rows.filter((item) => row.path === path.normalize(`/any/location/${item.checkout}`)).map((item) => `${item.source}:${item.id}`);
         expect(new Set(row.candidates.map((item) => `${item.thread.source}:${item.thread.id}`))).toEqual(new Set(expected));
         expect(row.candidates.length).toBe(new Set(expected).size);
       }
@@ -73,8 +73,8 @@ describe("maintenance repository scope", () => {
 
   it("uses project cwd only when no explicit checkout directories are present", () => {
     const candidate = owner("child", "/linked/checkout");
-    expect(candidateCheckoutDirectories(candidate)).toEqual(["/linked/checkout"]);
+    expect(candidateCheckoutDirectories(candidate)).toEqual([path.normalize("/linked/checkout")]);
     candidate.thread.linkedDirectories = [];
-    expect(candidateCheckoutDirectories(candidate)).toEqual(["/unrelated/primary"]);
+    expect(candidateCheckoutDirectories(candidate)).toEqual([path.normalize("/unrelated/primary")]);
   });
 });
