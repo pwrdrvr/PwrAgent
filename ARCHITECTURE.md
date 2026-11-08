@@ -308,6 +308,20 @@ Successful retention is not repeated if later causal-origin completion fails.
 Desktop supplies attachment preparation, provider calls, ACP prompt locking,
 pending-message context and persistence at their existing lifecycle sites.
 
+Turn-start admission and optimistic Codex preparation live in
+`owner-core/thread-turn-start-lifecycle.ts`. Pending starts are counted by
+backend/thread before lifecycle mutation admission, so handoff, archive and
+live-event checks see starts that are still waiting. The lifecycle checks the
+current lock after admission, wakes the workspace, and releases each count
+when that start settles. Codex preparation owns the synthetic start identity
+and ordered input/context/title admission. Context staging finishes before
+the optimistic start, so a rejection announces no turn and needs no synthetic
+terminal persistence. Later announcement failures clean up the staged context;
+reservation retirement still runs if terminal delivery fails. Desktop retains provider active-turn maps,
+model/runtime/MCP/input preparation, workspace effects, notifications and
+persistence through host ports. Provider submission and successful turn
+finalization remain in the host for the next lifecycle slice.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or

@@ -1,3 +1,4 @@
+import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
 import { ThreadSteeringLifecycle, type ThreadSteeringSubmission } from "@pwragent/owner-core/thread-steering-lifecycle";
 import { ThreadSteerSubmissionLifecycle, type PreparedAcpSteer, type PreparedCodexSteer } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
@@ -9844,7 +9845,12 @@ export class DesktopBackendRegistry {
   private readonly threadAttachmentAdmissionLocks = new PerKeyAsyncLock();
   private readonly automaticArchiveReservations = new Map<string, { cancelled: boolean; worktreePath?: string }>();
   private readonly threadLifecycleMutationCounts = new Map<string, number>();
-  private readonly handoffTurnStarts = new Map<string, number>();
+  private readonly threadStarts = new ThreadTurnStartLifecycle({
+    assertAvailable: ({ backend, threadId }) => this.assertThreadNotHandingOff(backend, threadId),
+    withMutation: (identity, work) => this.withThreadLifecycleMutation(identity, work),
+    assertUnlocked: ({ backend, threadId }) => this.assertThreadNotLocked(backend, threadId),
+    wake: (identity) => this.ensureCheckoutAwake(identity),
+  });
   /**
    * Codex runtime activity recovered from `thread/list` / `thread/read`.
    * The long-lived Codex registry keeps this truth across a desktop
@@ -16648,7 +16654,7 @@ export class DesktopBackendRegistry {
     return this.liveSubAgentMonitorIds("codex", threadId).length > 0
       || this.threadLifecycleMutationCounts.has(identityKey)
       || this.threadHandoffReservations.has(identityKey)
-      || this.handoffTurnStarts.has(identityKey)
+      || this.threadStarts.hasPending({ backend: "codex", threadId })
       || this.codexBackgroundTerminals.has(threadId)
       || this.liveCodexToolItemsByThread.has(threadId)
       || this.codexRetryableOperations.has(threadId)
@@ -17598,7 +17604,7 @@ export class DesktopBackendRegistry {
     return this.closed || this.stoppingRunningTurnsForShutdown
       || this.threadLifecycleMutationCounts.has(buildThreadIdentityKey(thread.source, thread.id))
       || this.threadHandoffReservations.has(buildThreadIdentityKey(thread.source, thread.id))
-      || this.handoffTurnStarts.has(buildThreadIdentityKey(thread.source, thread.id))
+      || this.threadStarts.hasPending(identity)
       || (thread.source === "codex" && this.codexBackgroundTerminals.has(thread.id))
       || (thread.source === "claude" && this.claudeBackend.hasLiveSession(thread.id))
       || this.threadHasActiveTurn(thread.id, thread.source)
@@ -21780,7 +21786,7 @@ export class DesktopBackendRegistry {
   private async withThreadHandoffWithoutArchiveLock<T>(threadId: string, work: () => Promise<T>): Promise<T> {
     const key = buildThreadIdentityKey("codex", threadId);
     this.assertThreadNotHandingOff("codex", threadId);
-    if (this.handoffTurnStarts.has(key)
+    if (this.threadStarts.hasPending({ backend: "codex", threadId })
       || !this.threadTurnQueue.canStartImmediately({ backend: "codex", threadId })
       || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length) {
       // A paused prompt never finishes on its own.
@@ -24175,24 +24181,7 @@ export class DesktopBackendRegistry {
   }
 
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const key = buildThreadIdentityKey(params.backend, params.threadId);
-    this.handoffTurnStarts.set(key, (this.handoffTurnStarts.get(key) ?? 0) + 1);
-    try {
-      // Checked inside the lifecycle mutation, after the handoff count is
-      // raised: a start that waited behind a move or archive sees a lock
-      // that landed meanwhile. A queued entry that reaches here is held with
-      // this refusal as its reason until an unlock releases it.
-      return await this.withThreadLifecycleMutation(params, async () => {
-        await this.assertThreadNotLocked(params.backend, params.threadId);
-        await this.ensureCheckoutAwake(params);
-        return await this.startTurnWithoutHandoff(params);
-      });
-    } finally {
-      const count = (this.handoffTurnStarts.get(key) ?? 1) - 1;
-      if (count) this.handoffTurnStarts.set(key, count);
-      else this.handoffTurnStarts.delete(key);
-    }
+    return await this.threadStarts.run(params, () => this.startTurnWithoutHandoff(params));
   }
 
   private async startTurnWithoutHandoff(params: {
@@ -24446,163 +24435,143 @@ export class DesktopBackendRegistry {
     }
 
     let input: AppServerTurnInputItem[] = [];
-    let pdfAttachments: PendingPdfAttachment[];
+    let pdfAttachments!: PendingPdfAttachment[];
     const reserveCodexStart = params.backend === "codex";
-    if (reserveCodexStart) {
-      if (this.threadHasActiveTurn(params.threadId)) {
-        throw new ThreadAlreadyActiveError("A turn is already active for this thread.");
-      }
-      this.reservedCodexStartThreadIds.add(params.threadId);
-    }
-    // Race-safe flush: if a queued permission-mode change is still
-    // pending when the user fires off the next turn (e.g. submit
-    // immediately after the previous turn ended), apply it before
-    // codex sees the new turn so the new turn runs under the
-    // intended profile. The emit-listener flush in `emit()` is the
-    // faster path when no immediate user action follows; this is the
-    // belt-and-suspenders guarantee. Idempotent — a no-op when no
-    // queue is present.
-    const syntheticStartedTurnId = `pending:${params.threadId}`;
-    if (reserveCodexStart) {
-      this.activeCodexTurnCollaborationModes.set(
-        buildActiveTurnKey("codex", params.threadId, syntheticStartedTurnId),
-        params.collaborationMode?.mode ?? "default",
-      );
-    }
     let overlay: ThreadOverlayState | undefined;
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
     let codexThreadConfig: CodexThreadStartParams["config"] | undefined;
     let tokenMiserEnabledForThread = false;
-    try {
-      if (params.backend === "codex") {
-        await this.flushQueuedAgentChange(params.threadId, true);
-        await this.flushQueuedExecutionModeIfPresent(params.threadId);
-      }
-      overlay = await this.overlayStore.getThreadOverlayState({
-        backend: params.backend,
-        threadId: params.threadId,
-      });
-      if (params.backend === "codex") {
-        tokenMiserEnabledForThread = this.resolveTokenMiserEnabledForOverride(
-          overlay?.tokenMiserEnabled,
-        );
-      }
-      // Permission/agent changes above own the lifecycle boundary. Everything
-      // here uses that resulting overlay; only input preparation needs the PDF
-      // bridge result, and only config inventory needs the resolved cwd.
-      const cwdPreparation =
-        params.backend === "codex"
-          ? this.resolveThreadEnvironmentCwd(
-              params.backend,
-              params.threadId,
-              overlay,
-            )
-          : Promise.resolve(undefined);
-      const runtimePreparation = tokenMiserEnabledForThread
-        ? this.prepareTokenMiserRuntime()
-        : Promise.resolve();
-      const hasPdfMcpToolCatalog =
-        params.backend === "codex" && this.hasPdfMcpToolCatalog(overlay);
-      const pdfPreparation = hasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
-        ? this.registerPdfMcpClient({ threadId: params.threadId })
-        : Promise.resolve(undefined);
-      // Re-read per turn so a mid-thread change to the selection or the
-      // provider policy lands on the operator's next message.
-      const isolateFromInherited =
-        params.backend === "codex"
-        && overlay?.mcpProviderServersEnabled === false;
-      const connectionPreparation = (async () => {
-        if (params.backend !== "codex" || !(overlay?.mcpConnectionIds?.length || isolateFromInherited)) return undefined;
-        const [registrations, inheritedNames] = await joinConcurrent([
-          this.registerMcpConnections(overlay?.mcpConnectionIds ?? [], params.threadId, params.backend),
-          cwdPreparation.then((resolvedCwd) => this.readConfiguredCodexMcpServerNames(resolvedCwd)),
-        ]);
-        if (isolateFromInherited && inheritedNames === undefined) throw codexMcpIsolationUnavailableError();
-        return buildCodexConnectionMcpConfig(registrations, inheritedNames, { isolateFromInherited });
-      })();
-      const inputPreparation = listingDiagnostics.trace("workflow", { query: "input-preparation" }, async () => {
-        const registration = await pdfPreparation;
-        const preparedPdfInput = await preparePdfTurnInput({
-          handling: this.resolvePdfTurnInputHandling({ backend: params.backend, overlay, pdfMcpAvailable: registration !== undefined }),
-          input: params.input,
-        });
-        const owned = await ownThreadInputAttachments(
-          await enrichLocalFileInputs(preparedPdfInput.input, { privateStorageRoots: this.localFilePrivateStorageRoots }),
-          params,
-          this.localFilePrivateStorageRoots,
-        );
-        return { input: owned, pdfAttachments: preparedPdfInput.pdfAttachments };
-      });
-      const settingsPreparation = this.resolveModelSettings(params.backend, {
-        ...params,
-        model: migrationApplied
-          ? overlay?.model
-          : params.model ?? overlay?.model,
-        serviceTier: params.serviceTier ?? overlay?.serviceTier,
-        reasoningEffort: migrationApplied
-          ? overlay?.reasoningEffort
-          : params.reasoningEffort ?? overlay?.reasoningEffort,
-        fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
-      });
-      const [, connectionConfig, preparedInput, settings, resolvedCwd, pdfRegistration] = await joinConcurrent([
-        runtimePreparation, connectionPreparation, inputPreparation, settingsPreparation, cwdPreparation, pdfPreparation,
-      ]);
-      cwd = resolvedCwd;
-      turnParams = settings;
-      input = preparedInput.input;
-      pdfAttachments = preparedInput.pdfAttachments;
-      codexThreadConfig = mergeCodexThreadConfigs(
-        hasPdfMcpToolCatalog ? (pdfRegistration ? buildCodexPdfMcpConfig(pdfRegistration) : buildCodexPdfMcpDisabledConfig()) : undefined,
-        connectionConfig,
-      );
-      await this.emit({
-        backend: params.backend,
-        notification: {
-          method: "turn/started",
-          params: {
-            threadId: params.threadId,
-            turnId: syntheticStartedTurnId,
-            turn: {
-              id: syntheticStartedTurnId,
-              status: "in_progress",
-              startedAt: Date.now(),
-            },
-          },
-        },
-      });
-    } catch (error) {
-      await this.drainPendingReviewStartsForTerminalTurn({
-        backend: params.backend,
-        threadId: params.threadId,
-        turnId: syntheticStartedTurnId,
-        method: "turn/failed",
-      });
-      this.activeCodexTurnCollaborationModes.delete(
-        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
-      );
-      this.activeCodexTurnModes.delete(
-        buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
-      );
-      if (reserveCodexStart) {
-        this.reservedCodexStartThreadIds.delete(params.threadId);
-      }
-      throw error;
-    }
-
-    let result: { threadId: string; turnId: string };
-    // Title generation can be scheduled from a lifecycle event before this
-    // turn/start call resolves. It must receive the same prepared input that
-    // goes to the agent, not raw local PDF references from the composer.
-    this.threadTitles.rememberPendingInput(params, input);
-    const pendingMessageContextId = await this.registerPendingThreadMessageContext({
-      backend: params.backend,
-      input,
+    const { pendingTurnId: syntheticStartedTurnId, context: pendingMessageContextId } = await this.threadStarts.prepareCodex({
       threadId: params.threadId,
-      origin: resolveThreadMessageOrigin(params),
-      text: extractFirstMeaningfulTextInput(input),
+      reserve: (pendingTurnId) => {
+        if (!reserveCodexStart) return;
+        if (this.threadHasActiveTurn(params.threadId)) {
+          throw new ThreadAlreadyActiveError("A turn is already active for this thread.");
+        }
+        this.reservedCodexStartThreadIds.add(params.threadId);
+        this.activeCodexTurnCollaborationModes.set(
+          buildActiveTurnKey("codex", params.threadId, pendingTurnId),
+          params.collaborationMode?.mode ?? "default",
+        );
+      },
+      prepare: async () => {
+        if (params.backend === "codex") {
+          await this.flushQueuedAgentChange(params.threadId, true);
+          await this.flushQueuedExecutionModeIfPresent(params.threadId);
+        }
+        overlay = await this.overlayStore.getThreadOverlayState({
+          backend: params.backend,
+          threadId: params.threadId,
+        });
+        if (params.backend === "codex") {
+          tokenMiserEnabledForThread = this.resolveTokenMiserEnabledForOverride(
+            overlay?.tokenMiserEnabled,
+          );
+        }
+        // Permission/agent changes above own the lifecycle boundary. Everything
+        // here uses that resulting overlay; only input preparation needs the PDF
+        // bridge result, and only config inventory needs the resolved cwd.
+        const cwdPreparation =
+          params.backend === "codex"
+            ? this.resolveThreadEnvironmentCwd(
+                params.backend,
+                params.threadId,
+                overlay,
+              )
+            : Promise.resolve(undefined);
+        const runtimePreparation = tokenMiserEnabledForThread
+          ? this.prepareTokenMiserRuntime()
+          : Promise.resolve();
+        const hasPdfMcpToolCatalog =
+          params.backend === "codex" && this.hasPdfMcpToolCatalog(overlay);
+        const pdfPreparation = hasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+          ? this.registerPdfMcpClient({ threadId: params.threadId })
+          : Promise.resolve(undefined);
+        // Re-read per turn so a mid-thread change to the selection or the
+        // provider policy lands on the operator's next message.
+        const isolateFromInherited =
+          params.backend === "codex"
+          && overlay?.mcpProviderServersEnabled === false;
+        const connectionPreparation = (async () => {
+          if (params.backend !== "codex" || !(overlay?.mcpConnectionIds?.length || isolateFromInherited)) return undefined;
+          const [registrations, inheritedNames] = await joinConcurrent([
+            this.registerMcpConnections(overlay?.mcpConnectionIds ?? [], params.threadId, params.backend),
+            cwdPreparation.then((resolvedCwd) => this.readConfiguredCodexMcpServerNames(resolvedCwd)),
+          ]);
+          if (isolateFromInherited && inheritedNames === undefined) throw codexMcpIsolationUnavailableError();
+          return buildCodexConnectionMcpConfig(registrations, inheritedNames, { isolateFromInherited });
+        })();
+        const inputPreparation = listingDiagnostics.trace("workflow", { query: "input-preparation" }, async () => {
+          const registration = await pdfPreparation;
+          const preparedPdfInput = await preparePdfTurnInput({
+            handling: this.resolvePdfTurnInputHandling({ backend: params.backend, overlay, pdfMcpAvailable: registration !== undefined }),
+            input: params.input,
+          });
+          const owned = await ownThreadInputAttachments(
+            await enrichLocalFileInputs(preparedPdfInput.input, { privateStorageRoots: this.localFilePrivateStorageRoots }),
+            params,
+            this.localFilePrivateStorageRoots,
+          );
+          return { input: owned, pdfAttachments: preparedPdfInput.pdfAttachments };
+        });
+        const settingsPreparation = this.resolveModelSettings(params.backend, {
+          ...params,
+          model: migrationApplied
+            ? overlay?.model
+            : params.model ?? overlay?.model,
+          serviceTier: params.serviceTier ?? overlay?.serviceTier,
+          reasoningEffort: migrationApplied
+            ? overlay?.reasoningEffort
+            : params.reasoningEffort ?? overlay?.reasoningEffort,
+          fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
+        });
+        const [, connectionConfig, preparedInput, settings, resolvedCwd, pdfRegistration] = await joinConcurrent([
+          runtimePreparation, connectionPreparation, inputPreparation, settingsPreparation, cwdPreparation, pdfPreparation,
+        ]);
+        cwd = resolvedCwd;
+        turnParams = settings;
+        input = preparedInput.input;
+        pdfAttachments = preparedInput.pdfAttachments;
+        codexThreadConfig = mergeCodexThreadConfigs(
+          hasPdfMcpToolCatalog ? (pdfRegistration ? buildCodexPdfMcpConfig(pdfRegistration) : buildCodexPdfMcpDisabledConfig()) : undefined,
+          connectionConfig,
+        );
+      },
+      announce: (pendingTurnId) => this.emit(buildTurnStartEvent(params, pendingTurnId)),
+      rememberInput: () => this.threadTitles.rememberPendingInput(params, input),
+      registerContext: () => this.registerPendingThreadMessageContext({
+        backend: params.backend,
+        input,
+        threadId: params.threadId,
+        origin: resolveThreadMessageOrigin(params),
+        text: extractFirstMeaningfulTextInput(input),
+      }),
+      forgetContext: (context) => this.forgetPendingThreadMessageContext(context),
+      fail: async (pendingTurnId, error, announced) => {
+        if (announced) await this.emit(buildTurnStartFailureEvent(params, pendingTurnId, error));
+        else await this.drainPendingReviewStartsForTerminalTurn({
+          backend: params.backend,
+          threadId: params.threadId,
+          turnId: pendingTurnId,
+          method: "turn/failed",
+        });
+      },
+      retire: (pendingTurnId) => {
+        this.activeCodexTurnCollaborationModes.delete(buildActiveTurnKey(params.backend, params.threadId, pendingTurnId));
+        this.activeCodexTurnModes.delete(buildActiveTurnModeKey(params.threadId, pendingTurnId));
+        this.activeTurnKeys.delete(buildActiveTurnKey(params.backend, params.threadId, pendingTurnId));
+        if (reserveCodexStart) this.reservedCodexStartThreadIds.delete(params.threadId);
+        // A list read during terminal delivery can project the still-reserved
+        // start as active. Once released, restore the latest status observation;
+        // a newer provider status or another real turn retains its authority.
+        const observedStatus = this.observedCodexThreadStatuses.get(params.threadId)?.status;
+        if (reserveCodexStart && observedStatus) this.seedBackendCodexThreadStatus(params.threadId, observedStatus);
+        this.threadTitles.forgetPendingInput(params);
+      },
     });
+    let result: { threadId: string; turnId: string };
     const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
       params.backend === "codex" && !params.invalidIdRecoveryAttempted
         ? {
@@ -24703,24 +24672,7 @@ export class DesktopBackendRegistry {
       );
     } catch (error) {
       this.dropStartingTurnOrigin(startingOrigin);
-      await this.emit({
-        backend: params.backend,
-        notification: {
-          method: "turn/failed",
-          params: {
-            threadId: params.threadId,
-            turnId: syntheticStartedTurnId,
-            turn: {
-              id: syntheticStartedTurnId,
-              status: "failed",
-              completedAt: Date.now(),
-              error: {
-                message: error instanceof Error ? error.message : String(error),
-              },
-            },
-          },
-        },
-      });
+      await this.emit(buildTurnStartFailureEvent(params, syntheticStartedTurnId, error));
       this.activeCodexTurnModes.delete(
         buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
       );
