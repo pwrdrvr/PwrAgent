@@ -32854,6 +32854,61 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("keeps every duplicate steer pending through causal-origin completion (generated)", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 6 }), fc.string({ maxLength: 30 }), async (copies, text) => {
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
+      const registry = new DesktopBackendRegistry({ codexClient,
+        overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
+      const read = createDeferred<AppServerThreadMessageOrigin | undefined>();
+      const host = registry as unknown as {
+        readTurnCausalMessagingOrigin: () => Promise<AppServerThreadMessageOrigin | undefined>;
+      };
+      const originRead = vi.spyOn(host, "readTurnCausalMessagingOrigin").mockImplementation(async () => await read.promise);
+      const request = { backend: "codex" as const, threadId: "thread-1", expectedTurnId: "turn-1",
+        requestId: "completion", input: [{ type: "text" as const, text: `Steer ${text}` }] };
+      let completed = 0;
+      const responses = Array.from({ length: copies }, () => registry.steerTurn(request, { kind: "messaging" })
+        .then((result) => { completed += 1; return result; }));
+      try {
+        await waitForCondition(() => originRead.mock.calls.length === 1);
+        await flushAsync();
+        expect(completed).toBe(0);
+        expect(codexClient.steerTurnCallCount).toBe(1);
+      } finally {
+        read.resolve(undefined);
+        await Promise.all(responses);
+        await registry.close();
+      }
+      expect(completed).toBe(copies);
+    }), { numRuns: 10 });
+  });
+
+  it("recovers causal-origin failure without resending an accepted steer (generated)", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), async (failures) => {
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
+      const registry = new DesktopBackendRegistry({ codexClient,
+        overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
+      const host = registry as unknown as {
+        readTurnCausalMessagingOrigin: () => Promise<AppServerThreadMessageOrigin | undefined>;
+      };
+      const originRead = vi.spyOn(host, "readTurnCausalMessagingOrigin");
+      for (let index = 0; index < failures; index += 1) originRead.mockRejectedValueOnce(new Error("Origin read failed"));
+      originRead.mockResolvedValue(undefined);
+      const request = { backend: "codex" as const, threadId: "thread-1", expectedTurnId: "turn-1",
+        requestId: "recovery", input: [{ type: "text" as const, text: "Course correct once" }] };
+      try {
+        for (let index = 0; index < failures; index += 1) {
+          await expect(registry.steerTurn(request, { kind: "messaging" })).rejects.toThrow("Origin read failed");
+        }
+        await expect(registry.steerTurn(request, { kind: "messaging" })).resolves.toMatchObject({ disposition: "steered" });
+        expect(codexClient.steerTurnCallCount).toBe(1);
+        expect(originRead).toHaveBeenCalledTimes(failures + 1);
+      } finally {
+        await registry.close();
+      }
+    }), { numRuns: 10 });
+  });
+
   it("attributes a messaging steer to its own completed user item", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
