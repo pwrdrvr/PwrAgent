@@ -24947,17 +24947,19 @@ export class DesktopBackendRegistry {
           turn: { id: string };
         };
       };
+      const turnId = notification.params.turnId ?? notification.params.turn.id;
+      // An optimistic start owns admission, not a provider turn. Context is
+      // staged before it now, and must stay unbound for provider user items
+      // that can arrive before the start response or provider turn/started.
+      if (event.backend === "codex" && turnId === `pending:${notification.params.threadId}`) {
+        return event;
+      }
       const pending = this.findPendingThreadMessageContext({
         backend: event.backend,
         threadId: notification.params.threadId,
-        turnId:
-          notification.params.turnId
-          ?? notification.params.turn.id,
+        turnId,
       });
       if (pending && !pending.turnId) {
-        const turnId =
-          notification.params.turnId
-          ?? notification.params.turn.id;
         pending.turnId = turnId;
         this.mergeTurnInputAttachments({
           backend: pending.backend,
