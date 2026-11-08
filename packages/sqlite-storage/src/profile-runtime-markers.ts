@@ -146,6 +146,30 @@ export function findLiveProfileRuntimeMarkers(
   return markers;
 }
 
+/** Read-only ownership evidence. A hung live process still owns its work;
+ * unlike profile discovery, this must not expire or remove its marker. */
+export function readProfileRuntimeIdentities(
+  profileName: string,
+  options: { markerDir: string },
+): ProfileRuntimeIdentity[] | undefined {
+  const normalizedProfileName = normalizeProfileName(profileName);
+  if (!normalizedProfileName) return undefined;
+  try {
+    const identities: ProfileRuntimeIdentity[] = [];
+    for (const entry of fs.readdirSync(options.markerDir)) {
+      if (!entry.endsWith(".json")) continue;
+      const marker = readProfileRuntimeMarker(path.join(options.markerDir, entry));
+      // An unreadable sibling marker makes the sole-runtime proof incomplete.
+      if (!marker || marker.profileName !== normalizedProfileName) return undefined;
+      if (isProcessAlive(marker.processId)) identities.push(marker);
+    }
+    return identities;
+  } catch {
+    // Missing or inaccessible evidence must not prove an unknown owner dead.
+    return undefined;
+  }
+}
+
 export function isProfileRuntimeIdentityLive(
   profileName: string,
   identity: ProfileRuntimeIdentity,

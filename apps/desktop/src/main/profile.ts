@@ -15,6 +15,7 @@ import {
 import {
   startProfileRuntimeHeartbeat as startRuntimeHeartbeat,
   findLiveProfileRuntimeMarkers as findRuntimeMarkers,
+  readProfileRuntimeIdentities as readRuntimeIdentities,
   isProfileRuntimeIdentityLive as isRuntimeIdentityLive,
   PROFILE_RUNTIME_HEARTBEAT_TTL_MS,
   type ProfileRuntimeHeartbeat,
@@ -767,6 +768,18 @@ export function findLiveProfileRuntimeMarkers(
   if (!normalizeProfileName(profileName)) return [];
   return findRuntimeMarkers(profileName, {
     now: options?.now,
+    markerDir: resolveProfileRuntimeMarkerDir(normalizeProfileName(profileName), options),
+  });
+}
+
+/** Read-only ownership evidence. A hung live process still owns its work;
+ * unlike profile discovery, this must not expire or remove its marker. */
+export function readProfileRuntimeIdentities(
+  profileName = resolveActiveProfileName(),
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): ProfileRuntimeIdentity[] | undefined {
+  if (!normalizeProfileName(profileName)) return undefined;
+  return readRuntimeIdentities(profileName, {
     markerDir: resolveProfileRuntimeMarkerDir(normalizeProfileName(profileName), options),
   });
 }

@@ -18,8 +18,11 @@ afterEach(() => vi.unstubAllEnvs());
 
 it("binds every desktop owner metadata entry point to one portable implementation", () => {
   fc.assert(fc.property(fc.constantFrom("desktop", "state", "dependencies"), entry => {
-    if (entry === "desktop") expect(DesktopOverlay).toBe(PortableOverlay);
-    if (entry === "state") expect(StateOverlay).toBe(PortableOverlay);
+    if (entry === "desktop") {
+      expect(DesktopOverlay.prototype).toBeInstanceOf(PortableOverlay);
+      expect(DesktopOverlay.prototype.updateThreadMetadata).toBe(PortableOverlay.prototype.updateThreadMetadata);
+    }
+    if (entry === "state") expect(StateOverlay).toBe(DesktopOverlay);
     if (entry === "dependencies") expect(StateDependencies).toBe(PortableDependencies);
   }));
 });

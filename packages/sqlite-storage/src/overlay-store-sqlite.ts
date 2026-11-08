@@ -836,7 +836,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    * check treat it as the stored `prsFetchedAt`, as if it had been written.
    */
   private readonly unwrittenPrsFetchedAt = new Map<string, number>();
-  constructor(private readonly stateDb: StateDb) {
+  constructor(
+    private readonly stateDb: StateDb,
+    private readonly options: {
+      /** Synchronous host ownership probe, rechecked inside the claim transaction. */
+      canReclaimPrWatchLease?: (ownerId: string | null, expiresAt: number | null, now: number) => boolean;
+    } = {},
+  ) {
     const meta = {
       get: (key: string) => stateDb.getMeta(key),
       set: (key: string, value: string) => stateDb.setMeta(key, value),
@@ -8771,6 +8777,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return advance();
   }
 
+  private canReclaimPrWatchLease(ownerId: string | null, expiresAt: number | null, now: number): boolean {
+    return this.options.canReclaimPrWatchLease?.(ownerId, expiresAt, now) ?? (expiresAt ?? 0) <= now;
+  }
+
   /** Persist the observed event before trying to wake its thread. Locks and
    * project dispatch policy cannot keep a completed subscription alive. */
   async observeThreadPrTerminalWatches(params: {
@@ -8781,14 +8791,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }): Promise<PrStatusWatchThreadRef[]> {
     const prKey = buildPullRequestStatusKey(params.pr);
     const select = this.stateDb.raw.prepare(`SELECT watch_id, backend, thread_id, pr_key,
-        notify_on_merged, notify_on_closed
+        notify_on_merged, notify_on_closed, status, lease_owner, lease_expires_at
       FROM pr_status_watches WHERE pr_key = ? AND head_sha = ''
-        AND (status = 'watching' OR (status = 'dispatching' AND COALESCE(lease_expires_at, 0) <= ?))`);
+        AND status IN ('watching', 'dispatching')`);
     type Row = { watch_id: string; backend: string; thread_id: string; pr_key: string;
-      notify_on_merged: number; notify_on_closed: number };
-    if (!select.get(prKey, params.now)) return [];
+      notify_on_merged: number; notify_on_closed: number; status: string;
+      lease_owner: string | null; lease_expires_at: number | null };
+    const eligible = (row: Row) => row.status === "watching"
+      || this.canReclaimPrWatchLease(row.lease_owner, row.lease_expires_at, params.now);
+    if (!(select.all(prKey) as Row[]).some(eligible)) return [];
     return this.stateDb.raw.transaction(() => {
-      const rows = select.all(prKey, params.now) as Row[];
+      // Recheck ownership under the write lock, including legacy claims.
+      const rows = (select.all(prKey) as Row[]).filter(eligible);
       const update = this.stateDb.raw.prepare(`UPDATE pr_status_watches
         SET status = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?,
           payload = json_set(payload, '$.endedReason', ?, '$.terminalObservation', json(?))
@@ -8840,40 +8854,29 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const claim = this.stateDb.raw.transaction(() => {
       const rows = this.stateDb.raw
         .prepare(
-          `SELECT watch_id, attempt_count, payload
+          `SELECT watch_id, attempt_count, payload, status, lease_owner, lease_expires_at
            FROM pr_status_watches
            WHERE pr_key = ? AND head_sha = ''
              AND attempt_count < ?
-             AND (
-               status = 'pending_terminal'
-               OR (
-                 status = 'notifying_terminal'
-                 AND COALESCE(lease_expires_at, 0) <= ?
-               )
-             )
+             AND status IN ('pending_terminal', 'notifying_terminal')
            ORDER BY created_at ASC, watch_id ASC`,
         )
         .all(
           params.prKey,
           params.maxAttempts,
-          params.now,
-        ) as Array<PrStatusWatchRow & { watch_id: string }>;
+        ) as Array<PrStatusWatchRow & { watch_id: string; status: string;
+          lease_owner: string | null; lease_expires_at: number | null }>;
       const claimed: PrStatusWatchClaim[] = [];
       const update = this.stateDb.raw.prepare(
         `UPDATE pr_status_watches
          SET status = 'notifying_terminal',
              attempt_count = attempt_count + 1,
              lease_owner = ?, lease_expires_at = ?, updated_at = ?
-         WHERE watch_id = ?
-           AND (
-             status = 'pending_terminal'
-             OR (
-               status = 'notifying_terminal'
-               AND COALESCE(lease_expires_at, 0) <= ?
-             )
-           )`,
+         WHERE watch_id = ?`,
       );
       for (const row of rows) {
+        if (row.status === "notifying_terminal"
+          && !this.canReclaimPrWatchLease(row.lease_owner, row.lease_expires_at, params.now)) continue;
         const watch = parsePrStatusWatchSummary(row.payload);
         if (!watch) continue;
         const updated = update.run(
@@ -8881,7 +8884,6 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           params.leaseExpiresAt,
           params.now,
           row.watch_id,
-          params.now,
         );
         if (updated.changes > 0) {
           const { terminalObservation } = JSON.parse(row.payload) as { terminalObservation: PrTerminalWatchObservation };
@@ -8890,7 +8892,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       return claimed;
     });
-    return claim();
+    return claim.immediate();
   }
 
   /**
