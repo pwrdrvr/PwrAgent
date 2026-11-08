@@ -5254,6 +5254,78 @@ describe("DesktopBackendRegistry", () => {
     await assertFailedTurnSubmissionRetires("submitting", true, false, false, false, false);
   });
 
+  async function assertAcceptedTurnSurvivesFinalizationFailure(
+    threadId: string,
+    failure: "origin" | "model" | "execution" | "attachments" | "replay" | "title",
+    terminal: boolean,
+  ): Promise<void> {
+    const client = new MockBackendClient({});
+    const overlay = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: overlay, threadTitleGenerationService: null });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const internal = registry as unknown as {
+      persistStartingTurnOrigin: () => Promise<void>;
+      rememberTurnInputAttachments: () => Promise<void>;
+      scheduleCompletedTurnFromReplay: () => void;
+      scheduleThreadTitleGeneration: () => void;
+      startingTurnOrigins: Set<unknown>;
+      reservedCodexStartThreadIds: Set<string>;
+      activeTurnKeys: Set<string>;
+      activeCodexTurnModes: Map<string, unknown>;
+      codexRetryableOperations: Map<string, { turnId: string }>;
+      emit: (event: AgentEvent) => Promise<void>;
+    };
+    const reject = () => { throw new Error(`finalization ${failure}`); };
+    vi.spyOn(internal, "persistStartingTurnOrigin").mockImplementation(async () => {
+      // A provider terminal arriving while host persistence awaits is still
+      // authoritative when accepted identity handover eventually runs.
+      if (terminal) await internal.emit({ backend: "codex", notification: {
+        method: "turn/completed", params: { threadId, turnId: "turn-1", turn: { id: "turn-1", status: "completed" } },
+      } });
+      if (failure === "origin") reject();
+    });
+    if (failure === "model") vi.spyOn(overlay, "setThreadModelSettings").mockRejectedValueOnce(new Error("finalization model"));
+    if (failure === "execution") vi.spyOn(overlay, "setThreadExecutionMode").mockRejectedValueOnce(new Error("finalization execution"));
+    const retain = vi.spyOn(internal, "rememberTurnInputAttachments").mockImplementation(async () => {
+      if (failure === "attachments") reject();
+    });
+    const replay = vi.spyOn(internal, "scheduleCompletedTurnFromReplay").mockImplementation(() => {
+      if (failure === "replay") reject();
+    });
+    const title = vi.spyOn(internal, "scheduleThreadTitleGeneration").mockImplementation(() => {
+      if (failure === "title") reject();
+    });
+    try {
+      await expect(registry.startTurn({ backend: "codex", threadId,
+        input: [{ type: "text", text: "Continue accepted turn" }], executionMode: "auto", fastMode: false,
+        messageOrigin: { kind: "messaging" },
+      })).resolves.toEqual({ backend: "codex", threadId, turnId: "turn-1" });
+      expect(client.startTurnCallCount).toBe(1);
+      expect(events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
+      expect(internal.startingTurnOrigins.size).toBe(0);
+      expect(internal.reservedCodexStartThreadIds.has(threadId)).toBe(false);
+      expect([...internal.activeTurnKeys].some((key) => key.includes(`pending:${threadId}`))).toBe(false);
+      expect([...internal.activeCodexTurnModes.keys()].some((key) => key.endsWith(":turn-1"))).toBe(!terminal);
+      if (!terminal) expect(internal.codexRetryableOperations.get(threadId)?.turnId).toBe("turn-1");
+      expect(retain).toHaveBeenCalledOnce();
+      expect(replay).toHaveBeenCalledOnce();
+      expect(title).toHaveBeenCalledOnce();
+    } finally {
+      await registry.close();
+    }
+  }
+
+  it("returns provider acceptance through generated host finalization failures and terminal interleavings", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("accepted", "same:thread", "pending:source"),
+      fc.constantFrom("origin" as const, "model" as const, "execution" as const, "attachments" as const, "replay" as const, "title" as const),
+      fc.boolean(), assertAcceptedTurnSurvivesFinalizationFailure), { numRuns: 18 });
+  });
+
+  it("hands over an accepted Codex turn when origin persistence rejects", async () => {
+    await assertAcceptedTurnSurvivesFinalizationFailure("accepted", "origin", false);
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
