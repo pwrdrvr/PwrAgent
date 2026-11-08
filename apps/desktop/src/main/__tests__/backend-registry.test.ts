@@ -5169,11 +5169,11 @@ describe("DesktopBackendRegistry", () => {
     await assertFailedTurnPreparationRetires("preparing", "Continue", "idle");
   });
 
-  async function assertFailedTurnSubmissionRetires(threadId: string, notificationRejects: boolean, providerActive: boolean): Promise<void> {
+  async function assertFailedTurnSubmissionRetires(threadId: string, notificationRejects: boolean, providerActive: boolean, duringDelivery = false, genuineTurn = false, observesProvider = true): Promise<void> {
     const client = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const internal = registry as unknown as {
-      emit: (event: AgentEvent) => Promise<void>;
+      emit: (event: AgentEvent, sequence?: number) => Promise<void>;
       reconcileCodexThreadListStatus: (thread: AppServerThreadSummary) => AppServerThreadSummary;
       threadHasActiveTurn: (threadId: string, backend: AppServerBackendKind) => boolean;
       reservedCodexStartThreadIds: Set<string>;
@@ -5187,20 +5187,28 @@ describe("DesktopBackendRegistry", () => {
     const project = () => internal.reconcileCodexThreadListStatus({ id: threadId, source: "codex", title: "Fixture", titleSource: "explicit", linkedDirectories: [], updatedAt: 1, threadStatus: "idle" });
     const forgotten = vi.spyOn(internal, "forgetPendingThreadMessageContext");
     vi.spyOn(internal, "registerPendingThreadMessageContext").mockResolvedValueOnce("submission-context");
-    vi.spyOn(internal, "emit").mockImplementation(async (event) => {
-      if (event.notification.method !== "turn/failed") return await emit(event);
+    vi.spyOn(internal, "emit").mockImplementation(async (event, sequence) => {
+      if (event.notification.method !== "turn/failed") return await emit(event, sequence);
       if (notificationRejects) throw new Error("notification rejected");
-      await emit(event);
+      await emit(event, sequence);
       // Terminal delivery can itself trigger navigation while reserved.
       project();
+      if (providerActive && duringDelivery) await emit({ backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } },
+      } });
     });
     const submit = vi.spyOn(client, "startTurn").mockImplementationOnce(async () => {
-      await emit({ backend: "codex", notification: {
-        method: "thread/status/changed", params: { threadId, status: { type: "idle" } },
-      } });
-      project();
-      if (providerActive) await emit({ backend: "codex", notification: {
+      if (observesProvider) {
+        await emit({ backend: "codex", notification: {
+          method: "thread/status/changed", params: { threadId, status: { type: "idle" } },
+        } });
+        project();
+      }
+      if (providerActive && !duringDelivery) await emit({ backend: "codex", notification: {
         method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } },
+      } });
+      if (genuineTurn) await emit({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId, turnId: "genuine", turn: { id: "genuine", status: "in_progress" } },
       } });
       throw new Error("provider rejected");
     });
@@ -5212,18 +5220,20 @@ describe("DesktopBackendRegistry", () => {
       expect(forgotten).toHaveBeenCalledWith("submission-context");
       expect([...internal.activeTurnKeys].some((key) => key.includes(`pending:${threadId}`))).toBe(false);
       expect([...internal.activeCodexTurnCollaborationModes.keys()].some((key) => key.includes(`pending:${threadId}`))).toBe(false);
-      expect(internal.threadHasActiveTurn(threadId, "codex")).toBe(providerActive);
-      if (providerActive) await expect(registry.startTurn(request)).rejects.toThrow("already active");
+      const stillActive = genuineTurn || (providerActive && (!duringDelivery || !notificationRejects));
+      expect(internal.threadHasActiveTurn(threadId, "codex")).toBe(stillActive);
+      if (genuineTurn) expect([...internal.activeTurnKeys].some((key) => key.endsWith(":genuine"))).toBe(true);
+      if (stillActive) await expect(registry.startTurn(request)).rejects.toThrow("already active");
       else await expect(registry.startTurn(request)).resolves.toMatchObject({ backend: "codex", threadId, turnId: "turn-1" });
-      expect(submit).toHaveBeenCalledTimes(providerActive ? 1 : 2);
+      expect(submit).toHaveBeenCalledTimes(stillActive ? 1 : 2);
     } finally {
       await registry.close();
     }
   }
 
   it("retires failed submissions through notification rejection and navigation projection", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("submitting", "same:thread", "pending:source"), fc.boolean(), fc.boolean(),
-      assertFailedTurnSubmissionRetires), { numRuns: 12 });
+    await fc.assert(fc.asyncProperty(fc.constantFrom("submitting", "same:thread", "pending:source"), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
+      assertFailedTurnSubmissionRetires), { numRuns: 20 });
   });
 
   it("releases the failed submission when terminal delivery rejects", async () => {
@@ -5232,6 +5242,16 @@ describe("DesktopBackendRegistry", () => {
 
   it("releases idle navigation activity projected during submission failure", async () => {
     await assertFailedTurnSubmissionRetires("submitting", false, false);
+  });
+
+  it("preserves provider activity and genuine turns through synthetic failure", async () => {
+    await assertFailedTurnSubmissionRetires("submitting", false, true);
+    await assertFailedTurnSubmissionRetires("submitting", false, true, true);
+    await assertFailedTurnSubmissionRetires("submitting", true, false, false, true);
+  });
+
+  it("retires an unobserved synthetic status when terminal delivery rejects", async () => {
+    await assertFailedTurnSubmissionRetires("submitting", true, false, false, false, false);
   });
 
   it("rejects handoff while a turn start is awaiting its provider", async () => {

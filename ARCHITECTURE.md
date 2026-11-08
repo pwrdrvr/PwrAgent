@@ -319,8 +319,13 @@ the optimistic start, so a rejection announces no turn and needs no synthetic
 terminal persistence. Later announcement failures clean up the staged context;
 reservation retirement still runs if terminal delivery fails. Desktop retains provider active-turn maps,
 model/runtime/MCP/input preparation, workspace effects, notifications and
-persistence through host ports. Provider submission and successful turn
-finalization remain in the host for the next lifecycle slice.
+persistence through host ports. The shared lifecycle also coordinates Codex
+submission failure retirement, optional recovery, and backend-qualified response
+identity resolution from provider events. Retirement and retry disposal run even
+if failure notification rejects. Synthetic start/failure share an observation
+sequence, so a newer provider status retains authority through failure and
+navigation projection. Provider calls, repair execution/registry and successful
+turn finalization remain host effects at their existing lifecycle sites.
 
 ### Transcript invariants
 

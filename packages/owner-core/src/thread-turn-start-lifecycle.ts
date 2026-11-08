@@ -1,4 +1,4 @@
-import { buildThreadIdentityKey, type AgentEvent, type AppServerBackendKind } from "@pwragent/shared";
+import { buildThreadIdentityKey, type AgentEvent, type AppServerBackendKind, type ThreadExecutionMode } from "@pwragent/shared";
 
 export type TurnStartIdentity = { backend: AppServerBackendKind; threadId: string };
 
@@ -36,6 +36,37 @@ export interface CodexTurnStartPreparationHost<Context> {
   forgetContext(context: Context): void;
   fail(pendingTurnId: string, error: unknown, announced: boolean): Promise<void>;
   retire(pendingTurnId: string): void;
+}
+
+export type StartedTurn = { threadId: string; turnId: string };
+
+export interface CodexTurnSubmissionHost<Recovered> {
+  identity: TurnStartIdentity;
+  pendingTurnId: string;
+  submit(): Promise<StartedTurn>;
+  activeTurns(): Iterable<TurnStartIdentity & { turnId: string }>;
+  fail(error: unknown): Promise<void>;
+  retireFailed(): void;
+  discardRetry(): void;
+  recovery?: {
+    accepts(error: unknown): boolean;
+    run(failureMessage: string): Promise<Recovered>;
+    failed(details: { failureMessage: string; recoveryError: string; status: "failed"; threadId: string; turnId: string }): Promise<void>;
+  };
+}
+
+export interface CodexTurnStartHandoffHost {
+  identity: TurnStartIdentity;
+  pendingTurnId: string;
+  turn: StartedTurn;
+  terminalObserved: boolean;
+  executionMode?: ThreadExecutionMode;
+  reserved: boolean;
+  bindReview(): void;
+  activateCollaboration(): void;
+  retirePending(): void;
+  activateExecutionMode(mode: ThreadExecutionMode): void;
+  release(): void;
 }
 
 /** Owns start admission, not provider active-turn identity. */
@@ -98,5 +129,63 @@ export class ThreadTurnStartLifecycle {
       }
       throw error;
     }
+  }
+
+  async submitCodex<Recovered>(host: CodexTurnSubmissionHost<Recovered>): Promise<
+    { kind: "started"; turn: StartedTurn } | { kind: "recovered"; response: Recovered }
+  > {
+    let turn: StartedTurn;
+    try {
+      turn = await host.submit();
+    } catch (error) {
+      try {
+        try {
+          await host.fail(error);
+        } finally {
+          // Notification consumers can reject after observing a terminal.
+          // Neither that rejection nor recovery may retain synthetic ownership.
+          host.retireFailed();
+        }
+        if (host.recovery?.accepts(error)) {
+          const failureMessage = error instanceof Error ? error.message : String(error);
+          try {
+            return { kind: "recovered", response: await host.recovery.run(failureMessage) };
+          } catch (recoveryError) {
+            await host.recovery.failed({
+              failureMessage,
+              recoveryError: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+              status: "failed",
+              threadId: host.identity.threadId,
+              turnId: host.pendingTurnId,
+            });
+          }
+        }
+        throw error;
+      } finally {
+        host.discardRetry();
+      }
+    }
+    if (host.identity.backend === "codex" && turn.turnId === host.pendingTurnId) {
+      // The provider's start event may bind the real id before an incomplete
+      // response arrives. Only that backend and response thread are authority.
+      for (const active of host.activeTurns()) {
+        if (active.backend === "codex" && active.threadId === turn.threadId
+          && !active.turnId.startsWith("pending:")) {
+          turn = { threadId: turn.threadId, turnId: active.turnId };
+          break;
+        }
+      }
+    }
+    return { kind: "started", turn };
+  }
+
+  handoffCodex(host: CodexTurnStartHandoffHost): void {
+    host.bindReview();
+    if (host.identity.backend === "codex" && !host.terminalObserved) host.activateCollaboration();
+    if (host.turn.turnId !== host.pendingTurnId || host.terminalObserved) host.retirePending();
+    if (host.identity.backend === "codex" && host.executionMode && !host.terminalObserved) {
+      host.activateExecutionMode(host.executionMode);
+    }
+    if (host.reserved) host.release();
   }
 }
