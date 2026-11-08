@@ -1,3 +1,4 @@
+import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
 import { ThreadSteeringLifecycle } from "@pwragent/owner-core/thread-steering-lifecycle";
 import { ThreadTitleLifecycle, extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
@@ -26581,107 +26582,58 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    this.mcpGatewayTools?.cancel(params.backend, params.threadId, params.turnId);
-    if (params.backend === "claude") return { backend: "claude", ...await this.claudeBackend.interruptTurn(params) };
-    const review = this.findReviewForParentTurn({
-      backend: params.backend,
-      parentThreadId: params.threadId,
-      turnId: params.turnId,
-    });
-    if (review) {
-      if (isAcpBackendId(review.backend)) {
-        const childLockKey = executionModeQueueKey(
-          review.backend,
-          review.reviewThreadId,
-        );
-        await this.acpSessionPromptLocks.run(
-          childLockKey,
-          async () => await this.interruptAcpTurn({
-            backend: review.backend,
-            threadId: review.reviewThreadId,
-            turnId: review.turnId,
-          }),
-        );
-        backendRegistryLog.info("managed ACP review interrupt requested", {
-          parentThreadId: review.parentThreadId,
-          reviewThreadId: review.reviewThreadId,
-          turnId: review.turnId,
-        });
-        return params;
-      }
-      const activeMode = this.activeCodexTurnModes.get(
-        buildActiveTurnModeKey(
-          review.reviewThreadId,
-          review.turnId,
-        ),
-      );
-      const client = activeMode
-        ? this.getClient("codex", activeMode)
-        : this.codexClient;
-      await client.interruptTurn({
-        threadId: review.reviewThreadId,
-        turnId: this.activeCodexReviewInterruptTurnIds.get(
-          buildActiveTurnModeKey(review.reviewThreadId, review.turnId),
-        ) ?? review.turnId,
+    return await this.threadInterruption.interruptTurn(params);
+  }
+
+  private readonly threadInterruption = new ThreadInterruptionLifecycle({
+    cancelTools: (target) => { this.mcpGatewayTools?.cancel(target.backend, target.threadId, target.turnId); },
+    findReview: (target) => {
+      const review = this.findReviewForParentTurn({
+        backend: target.backend, parentThreadId: target.threadId, turnId: target.turnId,
       });
-      backendRegistryLog.info("review interrupt requested", {
-        parentThreadId: review.parentThreadId,
-        reviewThreadId: review.reviewThreadId,
+      return review ? { backend: review.backend, threadId: review.reviewThreadId, turnId: review.turnId } : undefined;
+    },
+    readCodexInterruptTurnId: (target) => this.activeCodexReviewInterruptTurnIds.get(
+      buildActiveTurnModeKey(target.threadId, target.turnId),
+    ),
+    interruptClaude: async (target) => await this.claudeBackend.interruptTurn(target),
+    interruptAcp: async (target, serializePrompt) => serializePrompt
+      ? await this.acpSessionPromptLocks.run(executionModeQueueKey(target.backend, target.threadId),
+          async () => await this.interruptAcpTurn(target))
+      : await this.interruptAcpTurn(target),
+    interruptCodex: async (target, routing) => {
+      const requestedKey = buildActiveTurnModeKey(target.threadId, routing.requestedTurnId);
+      const activeMode = routing.review
+        ? this.activeCodexTurnModes.get(requestedKey)
+        : this.activeCodexTurnModes.get(buildActiveTurnModeKey(target.threadId, target.turnId))
+          ?? this.activeCodexTurnModes.get(requestedKey);
+      if (routing.review) {
+        const client = activeMode ? this.getClient("codex", activeMode) : this.codexClient;
+        return await client.interruptTurn({ threadId: target.threadId, turnId: target.turnId });
+      }
+      return activeMode
+        ? await this.getClient("codex", activeMode).interruptTurn(target)
+        : await this.withCodexThreadClient(target.threadId, async (client) => await client.interruptTurn(target));
+    },
+    retireCodexTurn: (requested, result) => {
+      const requestedKey = buildActiveTurnModeKey(requested.threadId, requested.turnId);
+      const activeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
+      this.activeCodexTurnModes.delete(activeKey);
+      this.activeCodexReviewTurnKeys.delete(activeKey);
+      if (requestedKey !== activeKey) {
+        this.activeCodexTurnModes.delete(requestedKey);
+        this.activeCodexReviewTurnKeys.delete(requestedKey);
+      }
+    },
+    reviewInterrupted: (parent, review) => {
+      backendRegistryLog.info(isAcpBackendId(review.backend)
+        ? "managed ACP review interrupt requested" : "review interrupt requested", {
+        parentThreadId: parent.threadId,
+        reviewThreadId: review.threadId,
         turnId: review.turnId,
       });
-      return params;
-    }
-
-    if (isAcpBackendId(params.backend)) {
-      return await this.interruptAcpTurn(params);
-    }
-
-    const requestedCodexTurnModeKey =
-      params.backend === "codex"
-        ? buildActiveTurnModeKey(params.threadId, params.turnId)
-        : undefined;
-    const codexInterruptTurnId =
-      requestedCodexTurnModeKey
-        ? this.activeCodexReviewInterruptTurnIds.get(requestedCodexTurnModeKey) ??
-          params.turnId
-        : params.turnId;
-    const interruptParams =
-      params.backend === "codex" && codexInterruptTurnId !== params.turnId
-        ? { ...params, turnId: codexInterruptTurnId }
-        : params;
-    const activeCodexTurnMode =
-      params.backend === "codex"
-        ? this.activeCodexTurnModes.get(
-            buildActiveTurnModeKey(params.threadId, codexInterruptTurnId),
-          ) ??
-          (requestedCodexTurnModeKey
-            ? this.activeCodexTurnModes.get(requestedCodexTurnModeKey)
-            : undefined)
-        : undefined;
-    const result = activeCodexTurnMode
-      ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(
-          interruptParams,
-        )
-      : await this.withCodexThreadClient(params.threadId, async (client) =>
-          await client.interruptTurn(interruptParams),
-        );
-
-    if (params.backend === "codex") {
-      const activeTurnModeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
-      this.activeCodexTurnModes.delete(activeTurnModeKey);
-      this.activeCodexReviewTurnKeys.delete(activeTurnModeKey);
-      if (requestedCodexTurnModeKey && requestedCodexTurnModeKey !== activeTurnModeKey) {
-        this.activeCodexTurnModes.delete(requestedCodexTurnModeKey);
-        this.activeCodexReviewTurnKeys.delete(requestedCodexTurnModeKey);
-      }
-    }
-
-    return {
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-    };
-  }
+    },
+  });
 
   /**
    * Turns a backend scheduled in its own live process, from memory. Only
