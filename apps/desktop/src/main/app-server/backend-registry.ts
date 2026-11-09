@@ -5,7 +5,7 @@ import { ThreadSteeringLifecycle, type ThreadSteeringSubmission } from "@pwragen
 import { ThreadSteerSubmissionLifecycle, type PreparedAcpSteer, type PreparedCodexSteer } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
 import { ThreadTitleLifecycle, extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
-import { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
+import { projectOwnerThreadTitle, projectOverlayThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 import { ProfileThreadOwnerAdmission, type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import { getRuntimeLeaseManager } from "../runtime-lease-manager";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
@@ -14011,8 +14011,7 @@ export class DesktopBackendRegistry {
         : undefined;
       const projected = this.withObservedThreadName({
         ...thread,
-        ...(thread.source === "codex" ? projectOwnerThreadTitle(thread,
-          await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: thread.id })) : {}),
+        ...(thread.source === "codex" ? projectOverlayThreadTitle(thread, overlay) : {}),
         executionMode: overlay?.executionMode ?? thread.executionMode,
         model: overlay?.model ?? thread.model,
         reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
@@ -34631,25 +34630,22 @@ export class DesktopBackendRegistry {
       Object.assign(overlaysByThreadId, updatedOverlaysByThreadId);
     }
 
-    const enrichedThreads = await Promise.all(
-      visibleThreads.map(async (thread) => {
-        const overlay = overlaysByThreadId[thread.id];
-        const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: thread.id });
-        return {
-          ...thread,
-          ...projectOwnerThreadTitle(thread, metadata),
-          ...this.persistedCodexNativeSubAgentDisclosure(thread, nativeCardsByThreadId[thread.id]),
-          executionMode: overlay?.executionMode ?? thread.executionMode,
-          model: overlay?.model ?? thread.model,
-          reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
-          serviceTier: overlay?.serviceTier ?? thread.serviceTier,
-          fastMode: overlay?.fastMode ?? thread.fastMode,
-          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
-            thread.linkedDirectories,
-          ),
-        };
-      }),
-    );
+    const enrichedThreads = visibleThreads.map((thread) => {
+      const overlay = overlaysByThreadId[thread.id];
+      return {
+        ...thread,
+        ...projectOverlayThreadTitle(thread, overlay),
+        ...this.persistedCodexNativeSubAgentDisclosure(thread, nativeCardsByThreadId[thread.id]),
+        executionMode: overlay?.executionMode ?? thread.executionMode,
+        model: overlay?.model ?? thread.model,
+        reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
+        serviceTier: overlay?.serviceTier ?? thread.serviceTier,
+        fastMode: overlay?.fastMode ?? thread.fastMode,
+        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+          thread.linkedDirectories,
+        ),
+      };
+    });
 
     const statusReconciledThreads = enrichedThreads
       .map((thread) => this.reconcileCodexThreadListStatus(thread))
@@ -54308,9 +54304,17 @@ export class DesktopBackendRegistry {
     if (event.backend === "codex" && event.notification.method === "thread/name/updated") {
       const { threadId, threadName, titleSource } = event.notification.params;
       if (typeof threadName === "string" && threadName.trim()) {
-        await this.overlayStore.updateThreadMetadata?.({ backend: "codex", threadId }, {
-          title: { text: threadName.trim(), source: normalizeRenamedTitleSource(titleSource), nativeName: threadName.trim() },
-        });
+        const source = normalizeRenamedTitleSource(titleSource);
+        const identity = { backend: "codex" as const, threadId };
+        const metadata = source === "explicit" ? await this.overlayStore.getThreadMetadata?.(identity) : undefined;
+        // The provider already persists ordinary explicit names. Retain owner
+        // provenance for derived titles and replace any earlier canonical title
+        // so a pending import cannot overwrite this acknowledged rename.
+        if (source !== "explicit" || metadata?.title !== undefined) {
+          await this.overlayStore.updateThreadMetadata?.(identity, {
+            title: { text: threadName.trim(), source, nativeName: threadName.trim() },
+          });
+        }
       }
     }
     this.rememberThreadTitleFromEvent(event);

@@ -51,7 +51,6 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
-  AppServerThreadTitleSource,
   AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
   DesktopProviderModelDefaults,
@@ -11291,9 +11290,6 @@ function isStampFresh(stored: number | undefined, next: number): boolean {
 type OwnerThreadOverlay = ThreadOverlayState & {
   messagingFileTools?: boolean;
   archived?: boolean;
-  title?: string;
-  titleSource?: AppServerThreadTitleSource;
-  titleNativeName?: string;
   createdAt?: number;
   updatedAt?: number;
   cwd?: string;

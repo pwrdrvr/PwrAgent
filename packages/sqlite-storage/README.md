@@ -328,13 +328,18 @@ make no commits. Canonical titles retain the last acknowledged native name so
 both hosts preserve derived provenance without hiding a later provider rename.
 Legacy names remain pending owner facts until the shared naming lifecycle
 publishes them to Codex. The acknowledgement is an optional overlay JSON field,
-with no schema change. Desktop persists it through its actual name-event bus.
+with no schema change. Desktop persists it through its actual name-event bus
+for derived names and changes to existing canonical titles. Ordinary explicit
+names remain provider-owned and add no title-metadata commit; an existing Agent
+name still uses its one inherited overlay commit. Navigation projects canonical
+titles from the compact overlay rows it already loaded, without rereading full
+rows or transcript histories.
 
 `outpost-profile-parity-write-budgets.json` measures one changed inventory as one
 commit/8,240 WAL bytes (about 0.00824 MB/day at one refresh/day), an Outpost native
 rename as one commit/16,480 bytes (about 1.648 MB/day at 100 renames/day), and a
-desktop native-title event as one commit/12,360 bytes (about 1.236 MB/day at 100
-events/day). One thousand unchanged discoveries and one thousand repeated title
+desktop native-title event replacing an existing canonical title as one
+commit/12,360 bytes (about 1.236 MB/day at 100 events/day). One thousand unchanged discoveries and one thousand repeated title
 events make zero commits. Publishing one pending imported title and its complete
 inventory costs two commits/16,480 bytes (about 0.01648 MB for one such start/day).
 These boundaries add no timer. Generated conformance

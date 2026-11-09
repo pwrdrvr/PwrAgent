@@ -14,6 +14,7 @@ import type {
   AppServerThreadReviewEntry,
   AppServerThreadStatus,
   AppServerThreadSummary,
+  AppServerThreadTitleSource,
   CodexEnvironmentAction,
   CodexEnvironmentExecutionTarget,
   CodexThreadEnvironmentRuntime,
@@ -3263,6 +3264,11 @@ export type ThreadOverlayState = {
   monitorJobSuggestionTurnId?: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Canonical owner title, retained in compact navigation overlays. */
+  title?: string;
+  titleSource?: AppServerThreadTitleSource;
+  /** Native name acknowledged by the owner; a later provider rename supersedes it. */
+  titleNativeName?: string;
   agent?: ThreadAgentMetadata;
   queuedAgentChange?: {
     agent: NavigationLaunchpadAgent | null;
