@@ -27,6 +27,7 @@ it("budgets one atomic native retirement and zero repeated absent discoveries, l
     await new SqliteOverlayStore(db).updateThreadMetadata(ref, { pinnedRank: "1024", seenUpdatedAt: 2 });
     let present = true;
     const runtime = { workspace: root, store, loadedThreads: new Set(), messagingTools: { buildDynamicToolSpecs: () => [] },
+      turnQueue: { getAllQueuedEntries: () => [], drainAll() {} },
       projects: { list: () => [], resolve: () => root }, onFailure(error: unknown) { throw error; },
       codex: { listThreads: async ({ archived }: { archived: boolean }) => present && !archived
         ? [{ id: "native", source: "codex", title: "Native", titleSource: "explicit", linkedDirectories: [] }] : [],

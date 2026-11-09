@@ -115,6 +115,7 @@ it("a listing admitted before native creation cannot retire it, but a later comp
       let wait: Promise<void> | undefined;
       let release!: () => void;
       const runtime = { workspace: root, store: new JobStore(directory, { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile),
+        turnQueue: { getAllQueuedEntries: () => [], drainAll() {} },
         loadedThreads: new Set(), messagingTools: { buildDynamicToolSpecs: () => [] }, projects: { list: () => [], resolve: () => root },
         onFailure(error: unknown) { throw error; }, codex: { listThreads: async () => { await wait; return []; },
           startThread: async () => ({ threadId }) } };
