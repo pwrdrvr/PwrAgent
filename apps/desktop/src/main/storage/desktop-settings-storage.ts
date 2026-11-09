@@ -2,7 +2,7 @@ import type { DesktopConfigSnapshotStorage } from "../settings/config-store/dura
 import type { ProfileSecretStorage, SettingsSecretEncryption, SettingsSecretStorage } from "@pwragent/owner-core/settings-secret-storage";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
-import { StateDb } from "../state/state-db";
+import { StateDb } from "./state-db";
 import { DurableConfigSnapshotStore } from "./durable-config-snapshot-store";
 
 export { getAppStateMode };

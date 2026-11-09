@@ -4,7 +4,7 @@ import type {
   TokenMiserRetentionRecord,
   TokenMiserStorage,
 } from "@pwragent/owner-core/token-miser-storage";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 export class SqliteTokenMiserStorage<
   Metadata extends TokenMiserObjectRecord,

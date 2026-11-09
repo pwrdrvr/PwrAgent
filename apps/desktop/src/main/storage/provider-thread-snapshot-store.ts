@@ -2,7 +2,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadSummary,
 } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 export const PROVIDER_THREAD_SNAPSHOT_SCHEMA_VERSION = 1;
 

@@ -6,23 +6,7 @@ import type Database from "better-sqlite3";
 import type { MessagingCausalSourceRef, PwrAgentMessagingResponse } from "@pwragent/shared";
 import type { MessagingChannelRef, MessagingInboundEvent } from "@pwragent/messaging-interface";
 
-export const MESSAGING_REQUEST_SCHEMA = `
-CREATE TABLE IF NOT EXISTS messaging_request_owner (
-  singleton INTEGER PRIMARY KEY CHECK(singleton = 1), owner_id TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS messaging_requests (
-  request_id TEXT PRIMARY KEY, payload TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS messaging_human_destinations (
-  selector TEXT PRIMARY KEY, principal_scope TEXT NOT NULL,
-  interacted_at INTEGER NOT NULL, request_id TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_messaging_human_destinations_scope
-  ON messaging_human_destinations(principal_scope, interacted_at DESC, selector);
-CREATE TABLE IF NOT EXISTS messaging_attachment_operations (
-  operation_id TEXT PRIMARY KEY, result TEXT
-);
-`;
+export { MESSAGING_REQUEST_SCHEMA } from "@pwragent/sqlite-storage/state-schema";
 
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");

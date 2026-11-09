@@ -14,16 +14,7 @@ import { storageProcessAlive } from "./storage-maintenance";
  * the only copy that outlives the process. It lives from the hold until the
  * entry leaves the queue (started, failed, or discarded).
  */
-export const PROJECT_HELD_WAKEUP_SCHEMA = `
-CREATE TABLE IF NOT EXISTS project_held_wakeups (
-  entry_id TEXT PRIMARY KEY,
-  owner_instance_id TEXT NOT NULL,
-  owner_pid INTEGER NOT NULL,
-  directory_key TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  payload TEXT NOT NULL
-);
-`;
+export { PROJECT_HELD_WAKEUP_SCHEMA } from "@pwragent/sqlite-storage/state-schema";
 
 export type StoredProjectHeldWakeup = {
   id: string;

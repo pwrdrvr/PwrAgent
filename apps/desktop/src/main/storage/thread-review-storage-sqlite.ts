@@ -1,7 +1,7 @@
 import type { ThreadReviewPullRequest, ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
 import type { ListThreadReviewsRequest, ThreadReview } from "@pwragent/shared";
 import { normalizeThreadReview } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 const TRACKING_STARTED_KEY = "thread_review_tracking_started_at";
 

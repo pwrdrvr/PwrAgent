@@ -102,12 +102,22 @@ module.exports = {
       },
     },
     {
+      name: "sqlite-storage-only-imports-storage-contracts",
+      severity: "error",
+      comment:
+        "Profile SQLite schema, migrations and stores depend only on shared contracts and storage-agnostic owner ports, never hosts or transports.",
+      from: { path: "^packages/sqlite-storage/" },
+      to: {
+        path: "^(@pwragent/(?!sqlite-storage(?:/|$)|shared(?:/|$)|owner-core(?:/|$))|pwragent(?:/|$)|packages/(?!sqlite-storage/|shared/|owner-core/))",
+      },
+    },
+    {
       name: "owner-core-has-no-storage-format-dependencies",
       severity: "error",
       comment: "Owner storage ports cannot reach host stores, SQLite or file-format modules.",
       from: { path: "^packages/owner-core/" },
       to: {
-        path: "^apps/desktop/src/main/state/|(?:^|/)(?:better-sqlite3|sqlite3|sql\\.js|yaml|js-yaml|toml|smol-toml|json5|jsonfile|write-file-atomic)(?:/|$)|\\.(?:json|jsonl|yaml|yml|toml)$",
+        path: "^(?:apps/desktop/src/main/state/|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))|(?:^|/)(?:better-sqlite3|sqlite3|sql\\.js|yaml|js-yaml|toml|smol-toml|json5|jsonfile|write-file-atomic)(?:/|$)|\\.(?:json|jsonl|yaml|yml|toml)$",
       },
     },
     {
@@ -226,7 +236,7 @@ module.exports = {
         path: "^apps/desktop/src/main/(?!__tests__/|state/|storage/)",
       },
       to: {
-        path: "^apps/desktop/src/main/state/",
+        path: "^(?:apps/desktop/src/main/(?:state/|storage/state-db\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
       },
     },
     {
