@@ -4,12 +4,13 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Runtime } from "../src/runtime.js";
-import { ThreadTurnStartLifecycle } from "../dist/federation-core.js";
+import { ThreadTurnStartLifecycle, ThreadTurnQueue } from "../dist/federation-core.js";
 
 function runningRuntime(request) {
   let job = { id: "job", threadId: "thread", turnId: "turn", status: "running" };
   return Object.assign(Object.create(Runtime.prototype), {
     active: job.id, loadedThreads: new Set(), codex: { interruptTurn: (params) => request("turn/interrupt", params) },
+    turnQueue: new ThreadTurnQueue({ startTurn: async () => { throw new Error("No queued start in this fixture"); } }),
     store: { get: () => job, save: (value) => { job = { ...value }; return job; } },
     onFailure: (error) => { throw error; },
   });

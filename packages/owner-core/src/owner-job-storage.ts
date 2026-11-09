@@ -4,7 +4,7 @@ import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
 export type OwnerJobRecord = {
   version: 1;
   id: string;
-  status: "starting" | "running" | "interrupting" | "completed" | "failed" | "interrupted" | "blocked" | "unknown";
+  status: "queued" | "starting" | "running" | "interrupting" | "completed" | "failed" | "interrupted" | "blocked" | "unknown";
   fingerprint?: string;
   threadId?: string | null;
   turnId?: string;

@@ -347,9 +347,14 @@ continuations, title generation, correspondence and event delivery. Closing
 the queue cancels its pending drains at the same registry shutdown boundary.
 The generated queue model runs against this shared implementation; desktop's
 restart-gate model and actual registry construction/projection oracle exercise
-its host wiring. Outpost still refuses busy submissions and reports no queue;
-adopting the engine there requires its actual durable acceptance and no-replay
-host integration.
+its host wiring. Outpost's executable Runtime also constructs that class
+directly. Continued-thread jobs commit acceptance before entering its FIFO;
+the host supplies the existing turn lifecycle, one daemon-global provider
+slot, handoff/intake gates and typed queue events/projections. Prompts stay in
+memory. Cancellation settles the job before dispatch, and shutdown or recovery
+settles unfinished queued jobs as unknown without restoring or replaying input.
+New-thread jobs still require an idle host. Confirmed provider acceptance cannot
+return to a retryable FIFO after a host confirmation failure.
 
 Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
 It owns delivery refusal, restart-gate queue admission, native-review admission,

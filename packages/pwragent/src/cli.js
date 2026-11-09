@@ -32,7 +32,8 @@ serve runs in the foreground; use systemd to own its lifetime remotely.
 submit returns durable acceptance. wait exits 0 only for completed, 2 otherwise.
 Approvals are never granted. Job IDs cannot be reused for different input.
 Federation uses private retained identity files and the standard encrypted protocol.
-No provisioning, login, queue, automatic replay, or local messaging providers.
+Continued-thread jobs queue while busy; new-thread jobs require an idle daemon.
+No provisioning, login, automatic replay, or local messaging providers.
 `;
 
 export async function main(args) {
@@ -117,7 +118,7 @@ export async function main(args) {
   if (command === "wait") {
     for (;;) {
       const job = await call(directory, "show", { id: values.id });
-      if (!ACTIVE.has(job.status)) {
+      if (job.status !== "queued" && !ACTIVE.has(job.status)) {
         console.log(JSON.stringify(job));
         return job.status === "completed" ? 0 : 2;
       }

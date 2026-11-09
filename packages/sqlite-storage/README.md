@@ -528,3 +528,23 @@ origin write commits zero times; its completion retry commits once. Ordinary
 steering, 1,000 accepted steering retries/reads, and 1,000 repeated pending
 interrupts commit zero times and add no provider sends. Setup is excluded;
 there is no timer, and every inherited budget remains byte-identical.
+
+Outpost's executable Runtime now admits continued-thread jobs through the
+shared `ThreadTurnQueue`. Acceptance records `queued` in the existing owner-job
+payload before inference; input remains transient. Dispatch uses the existing
+turn lifecycle and one daemon-global provider slot. Queued jobs recover to
+`unknown` in the same recovery transaction as active jobs, without restoring
+input or replaying a provider call. No schema change is needed.
+
+`outpost-turn-queue-write-budgets.json` measures acceptance as one commit/8,240
+observed WAL bytes (0.824 MB/day at 100/day), cancellation as one/4,120
+(0.412 MB/day), and prior completion plus queued dispatch/confirmation/completion
+as five/16,480 (1.648 MB/day). Native and confirmation refusal each cost three
+commits/8,240 bytes (0.824 MB/day); a handoff-lock refusal makes no writes.
+Graceful shutdown of one active and one queued job costs two commits/8,240
+bytes; crash recovery settles both in one transaction/4,120 bytes. An acceptance
+observer that immediately stops the host costs two commits/12,360 bytes
+(1.236 MB/day at 100/day). One thousand matching retries and queue projections
+make zero commits. There is no SQLite timer. Every inherited budget and the
+historical conformance snapshot remain byte-identical; live conformance now
+requires the queue identity/event differences in that snapshot to stay fixed.
