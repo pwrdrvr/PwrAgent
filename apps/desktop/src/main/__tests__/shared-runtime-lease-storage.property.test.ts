@@ -30,7 +30,13 @@ function release(store: RuntimeLeaseStorage, kind: Kind, instanceId: string, now
 afterEach(() => vi.unstubAllEnvs());
 
 it("binds desktop construction and state compatibility to the functioning portable lease implementation", () => {
-  expect(DesktopStore).toBe(SharedStore);
+  fc.assert(fc.property(fc.constantFrom("portable", "desktop", "state"), binding => {
+    const constructors = { portable: SharedStore, desktop: DesktopStore, state: CompatibilityStore };
+    expect(constructors[binding]).toBe(SharedStore);
+  }));
+});
+
+it("does not retain a desktop-only class behind state compatibility exports", () => {
   expect(CompatibilityStore).toBe(SharedStore);
 });
 

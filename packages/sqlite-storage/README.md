@@ -29,3 +29,10 @@ The desktop-main test project runs the native storage tests in its existing fork
 pool. `shared-sqlite-foundation.property.test.ts` checks the pre-extraction schema
 oracle, generated upgrade/reopen sequences, metadata preservation, transaction
 variants, rollback, cross-connection visibility and zero-write reads/reopens.
+
+`shared-runtime-lease-storage.property.test.ts` runs an independent owner model
+against real WAL connections through portable, desktop and compatibility entry
+points. It covers live identity authority, persisted death and PID reuse, clock
+changes, grace deadlines, all three lease kinds, profile isolation, reopen order,
+atomic rollback and zero-write reads/reopens. The desktop E2E profile test also
+checks Node-created lease takeover by Electron and release back to Node.
