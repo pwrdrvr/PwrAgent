@@ -330,8 +330,20 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await desktop.client.markThreadSeen({ backend: "codex", threadId: child.threadId, seenAt: before.updatedAt! + 100, seenUpdatedAt: before.updatedAt });
         await desktop.client.archiveThread({ backend: "codex", threadId: archived.threadId });
         await desktop.close(); desktop = undefined;
+        // A real pre-SQLite Outpost record shares this provider/profile. Its
+        // derived title must reach native Codex and retain provenance on desktop.
+        const headless = path.join(root, "profiles/t/state/headless");
+        mkdirSync(headless, { recursive: true, mode: 0o700 });
+        writeFileSync(path.join(headless, "identity.json"), JSON.stringify({ version: 1, workspace: path.join(root, "w"), codexHome: path.join(root, "c") }), { mode: 0o600 });
+        writeFileSync(path.join(headless, "threads.json"), JSON.stringify({ version: 1, threads: [{ id: "legacy-native", title: `Imported ${suffix}`, titleSource: "derived", cwd: path.join(root, "w"), sandbox: "read-only" }] }), { mode: 0o600 });
+        const records = path.join(root, "f/fixture-threads.json");
+        writeFileSync(records, JSON.stringify({ ...JSON.parse(readFileSync(records, "utf8")), "legacy-native": {
+          id: "legacy-native", name: "Previous native name", cwd: path.join(root, "w"), turns: [], createdAt: 1, updatedAt: 1,
+        } }));
 
         outpost = await startOutpostDaemon({ profileRoot: root });
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "legacy-native" } })).thread)
+          .toMatchObject({ title: `Imported ${suffix}`, titleSource: "derived" });
         const page = await inbox({ client: outpost.client } as OwnerHost);
         expect(page.entries.some(entry => entry.row.id === archived.threadId)).toBe(false);
         expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread).toMatchObject({ title: `Desktop ${suffix}`, titleSource: "explicit", parentThreadId: parent.threadId, inbox: { inInbox: false } });
@@ -345,6 +357,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await outpost.close(); outpost = undefined;
 
         desktop = await startDesktopOwner(null, undefined, undefined, root);
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "legacy-native" } })).thread)
+          .toMatchObject({ title: `Imported ${suffix}`, titleSource: "derived" });
         expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread).toMatchObject({ title: `Outpost ${suffix}`, titleSource: "explicit", parentThreadId: parent.threadId });
         expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: parent.threadId } })).thread).toMatchObject({ pinnedRank: "8192" });
         expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: added.threadId } })).thread).toMatchObject({ title: `New Outpost ${suffix}`, titleSource: "explicit" });
@@ -356,6 +370,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         expect((await inbox({ client: outpost.client } as OwnerHost)).entries.some(entry => entry.row.id === archived.threadId)).toBe(true);
         expect((await outpost.client.lookupArchivedThreads({ backend: "codex", threadIds: [archived.threadId] })).threads).toEqual([]);
         const native = JSON.parse(readFileSync(path.join(root, "f/fixture-threads.json"), "utf8"));
+        expect(native["legacy-native"].name).toBe(`Imported ${suffix}`);
         expect(native[child.threadId].name).toBe(`Outpost ${suffix}`);
         expect(native[added.threadId].name).toBe(`New Outpost ${suffix}`);
       } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }

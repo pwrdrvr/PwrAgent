@@ -115,7 +115,9 @@ export class HeadlessBackend {
           if (this.providerMutationVersion !== generation + 1) return;
           generation = this.providerMutationVersion;
           native.title = title.text;
-          native.titleSource = title.source;
+          // Codex's native name has no provenance field. The owner retains
+          // derived/explicit intent separately from this provider inventory.
+          native.titleSource = "explicit";
         }
       }
       if (generation !== this.providerMutationVersion) return;

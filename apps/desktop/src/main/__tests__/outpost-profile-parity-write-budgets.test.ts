@@ -44,6 +44,9 @@ it("budgets actual discovery and native-title boundaries without writes on uncha
     expectSqliteWriteBudget({ budgetFile, scenario: "outpost-native-rename", note: "Acknowledged native rename and title provenance in one canonical metadata commit", writes: rename.writes });
     // First changed inventory boundary is separate from passive reads.
     await backend.refreshThreads();
+    await overlay.updateThreadMetadata({ backend: "codex", threadId: "thread" }, { title: { text: "Imported title", source: "derived" } });
+    const imported = await measureSqliteWrites(() => backend.refreshThreads());
+    expectSqliteWriteBudget({ budgetFile, scenario: "outpost-pending-title-discovery", note: "One imported owner title reaches the native provider, then one metadata acknowledgement and one complete inventory commit", writes: imported.writes });
     const unchanged = await measureSqliteWrites(async () => {
       for (let i = 0; i < 1000; i++) await backend.handle("listThreads");
     });

@@ -335,7 +335,9 @@ commit/8,240 WAL bytes (about 0.00824 MB/day at one refresh/day), an Outpost nat
 rename as one commit/16,480 bytes (about 1.648 MB/day at 100 renames/day), and a
 desktop native-title event as one commit/12,360 bytes (about 1.236 MB/day at 100
 events/day). One thousand unchanged discoveries and one thousand repeated title
-events make zero commits. These boundaries add no timer. Generated conformance
+events make zero commits. Publishing one pending imported title and its complete
+inventory costs two commits/16,480 bytes (about 0.01648 MB for one such start/day).
+These boundaries add no timer. Generated conformance
 runs desktop → actual daemon → desktop → actual daemon over one test-owned
 profile/provider, checking native names, pins, parents, seen watermarks and
 archive/restore. The inherited default and conformance fixtures are unchanged.
