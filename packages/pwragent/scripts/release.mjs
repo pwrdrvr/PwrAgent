@@ -9,7 +9,7 @@ export function releaseMetadata(pkg, { tag, desktopVersion } = {}) {
   assert.equal(pkg.name, "pwragent");
   assert.equal(pkg.private, false);
   assert.equal(pkg.license, "MIT");
-  assert.equal(pkg.engines.node, ">=22");
+  assert.equal(pkg.engines.node, "^22.14.0 || >=23.6.0", "Bundled SQLite requires Node-API 10 (Node 22.14+ or 23.6+)");
   assert.equal(pkg.bin.pwragent, "bin/pwragent.js");
   assert.equal(pkg.repository.url, "git+https://github.com/pwrdrvr/PwrAgent.git");
   assert.equal(pkg.repository.directory, "packages/pwragent");

@@ -63,6 +63,14 @@ test("release validation permits only the pinned native SQLite and PTY dependenc
   }
 });
 
+test("release validation rejects Node ranges that include runtimes below SQLite's Node-API 10 floor", () => {
+  // Node's version matrix starts Node-API 10 at 22.14.0 and 23.6.0.
+  // https://nodejs.org/api/n-api.html#node-api-version-matrix
+  for (const node of [">=22", ">=22.14.0", "^22.13.0 || >=23.6.0", "^22.14.0 || >=23.5.0"]) {
+    assert.throws(() => releaseMetadata({ ...pkg, engines: { node } }), /Node-API 10/);
+  }
+});
+
 test("registry preflight fails closed on ownership, incomplete metadata, duplicate versions and channel rollback", () => {
   const metadata = releaseMetadata(candidate("0.1.0-alpha.2"));
   checkRegistry(metadata, registry());
