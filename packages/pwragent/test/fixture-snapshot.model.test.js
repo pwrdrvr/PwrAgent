@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,7 +14,7 @@ const initialized = { method: "initialized" };
 // any file-write boundary must leave a complete old or new provider snapshot.
 for (const phase of ["before-write", "after-truncate", "after-write"]) {
   test(`provider fixture preserves a restartable snapshot when killed ${phase}`, () => {
-    const root = mkdtempSync(path.join(tmpdir(), "pa-fixture-snapshot-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-fixture-snapshot-")));
     try {
       const records = path.join(root, "fixture-threads.json");
       writeFileSync(records, JSON.stringify({ existing: { id: "existing", cwd: root, turns: [] } }));
