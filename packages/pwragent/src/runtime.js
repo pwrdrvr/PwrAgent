@@ -31,9 +31,12 @@ export class Runtime {
     this.queueRelease = null;
     this.turnQueue = new ThreadTurnQueue({
       startTurn: entry => this.dispatchJob(this.store.get(entry.id), entry.input[0].text, entry),
+      canSteerThread: entry => this.canSteerQueued(entry),
+      steerTurn: entry => this.dispatchQueuedSteer(entry),
       isThreadActive: ({ threadId }) => Boolean(this.active && this.store.get(this.active).threadId === threadId),
-      isDispatchHeld: ({ id }) => Boolean(this.stopping || this.uncertain || this.active
-        || this.dispatches.size > (this.queueRelease && id === this.queueRelease.entryId ? 1 : 0) || this.intakeBusy || this.threadCreationBusy?.()),
+      isDispatchHeld: entry => Boolean(this.stopping || this.uncertain
+        || this.dispatches.size > (this.queueRelease && entry.id === this.queueRelease.entryId ? 1 : 0) || this.intakeBusy || this.threadCreationBusy?.()
+        || (this.active && !this.canSteerQueued(entry))),
       onLifecycle: event => this.queueEvent(event),
     });
     this.threadCreations = new ThreadCreationLifecycle();
@@ -141,7 +144,8 @@ export class Runtime {
     // Preserve fingerprints created before optional turn settings were added.
     const cwd = this.projects.resolve(threadId ? this.threadCwd?.(threadId) || params.cwd || this.workspace : params.cwd);
     if (threadId && params.cwd && params.cwd !== cwd) throw new Error("Turn cwd differs from its owner thread project");
-    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) });
+    const delivery = queuedControls?.delivery === "queued-steer" ? "queued-steer" : undefined;
+    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}), ...(delivery ? { delivery } : {}) });
     const prior = this.store.jobs.get(id);
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error("Job ID was already used with different input");
@@ -154,7 +158,7 @@ export class Runtime {
     if (this.store.jobs.size >= 10000) throw new Error("Job retention limit reached (10000); use a new profile");
     const status = threadId && !this.turnQueue.canStartImmediately({ backend: "codex", threadId }) ? "queued" : "starting";
     const job = this.save({ version: 1, id, fingerprint, status, threadId,
-      model, sandbox, cwd, messageOrigin: params.messageOrigin, reasoningEffort, serviceTier, createdAt: new Date().toISOString() });
+      model, sandbox, cwd, messageOrigin: params.messageOrigin, reasoningEffort, serviceTier, ...(delivery ? { delivery } : {}), createdAt: new Date().toISOString() });
     // A committed acceptance observer can initiate shutdown synchronously.
     // Its cancellation sweep ran before this entry existed in the live FIFO.
     if (this.stopping) {
@@ -165,11 +169,12 @@ export class Runtime {
     const entry = { id, backend: "codex", threadId,
       origin: params.messageOrigin ? "messaging" : "manual", messageOrigin: structuredClone(job.messageOrigin),
       input: [{ type: "text", text: prompt }], createdAt: Date.parse(job.createdAt),
+      ...(delivery ? { delivery } : {}),
       ...(queuedControls?.paused ? { paused: true, pauseRevision: queuedControls.pauseRevision } : {}),
     };
     this.work = threadId ? (queuedControls?.manualReleaseRequired
       ? this.turnQueue.submitHeld(entry, queuedControls.holdReason, { queueIndex: queuedControls.queueIndex })
-      : this.turnQueue.submit(entry, { queueIndex: queuedControls?.queueIndex })).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
+      : delivery ? this.turnQueue.submitSteer(entry) : this.turnQueue.submit(entry, { queueIndex: queuedControls?.queueIndex })).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
     // The durable acceptance precedes inference. Socket loss cannot cancel it.
     return job;
   }
@@ -198,10 +203,10 @@ export class Runtime {
     if (this.threadLocked?.(job.threadId)) throw new Error("Thread handoff is in progress");
     const cwd = this.projects.resolve(this.threadCwd?.(job.threadId) || this.workspace);
     if (cwd !== job.cwd) throw new Error("Turn cwd differs from its owner thread project");
-    const { threadId, model, sandbox, messageOrigin, reasoningEffort, serviceTier } = job;
+    const { threadId, model, sandbox, messageOrigin, reasoningEffort, serviceTier, delivery } = job;
     const prompt = entry.input.length === 1 && entry.input[0].type === "text" ? entry.input[0].text : null;
-    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(messageOrigin ? { messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) });
-    if (fingerprint !== job.fingerprint || digest(entry.messageOrigin ?? null) !== digest(messageOrigin ?? null)) throw new Error("Queued input differs from its accepted identity");
+    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(messageOrigin ? { messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}), ...(delivery ? { delivery } : {}) });
+    if (fingerprint !== job.fingerprint || entry.delivery !== delivery || digest(entry.messageOrigin ?? null) !== digest(messageOrigin ?? null)) throw new Error("Queued input differs from its accepted identity");
   }
 
   async releaseQueuedTurn({ queueEntryId }) {
@@ -351,6 +356,53 @@ export class Runtime {
     return work;
   }
 
+  canSteerQueued(entry) {
+    const active = this.active && this.store.get(this.active);
+    return Boolean(entry.delivery === "queued-steer" && this.steerQueuedTurn && active?.status === "running"
+      && active.threadId === entry.threadId && active.turnId);
+  }
+
+  dispatchQueuedSteer(entry) {
+    if (!this.canSteerQueued(entry)) return undefined;
+    if (this.stopping || this.uncertain || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) throw new Error("Outpost cannot dispatch work");
+    const job = this.store.get(entry.id), active = this.store.get(this.active);
+    this.assertQueuedIdentity(job, entry);
+    const target = { backend: "codex", threadId: active.threadId, turnId: active.turnId };
+    const work = Promise.resolve().then(async () => {
+      let claimed = false;
+      try {
+        // Commit the exact native target before inference. Recovery already
+        // settles starting jobs as unknown; it must never resend a steer.
+        this.save({ ...job, status: "starting", turnId: target.turnId });
+        claimed = true;
+        if (this.stopping || this.uncertain || this.intakeBusy || this.threadCreationBusy?.() || this.active !== active.id) throw new Error("Active turn changed before steering");
+        const result = await this.steerQueuedTurn({ backend: "codex", threadId: job.threadId, expectedTurnId: target.turnId,
+          requestId: job.id, input: entry.input, messageOrigin: job.messageOrigin });
+        if (result.turnId !== target.turnId) throw new Error("Provider steering target changed");
+        const current = this.store.get(job.id);
+        // A provider terminal can settle this captured target while native
+        // acknowledgement or origin finalization is still pending.
+        if (current.status === "starting") this.save({ ...current, status: "running" });
+      } catch (error) {
+        if (!claimed) throw error;
+        this.uncertain = true;
+        if (ACTIVE.has(this.store.get(job.id).status)) {
+          try { this.finish(job.id, "unknown", error.message); }
+          catch (failure) { this.reportFailure(failure); }
+        }
+        this.reportFailure(error);
+      }
+      // Once claimed, never restore input to the retryable FIFO, including
+      // native or host-finalization uncertainty. Keep the original owner.
+      return target;
+    }).finally(() => {
+      if (this.dispatches.get(job.id) === work) this.dispatches.delete(job.id);
+      this.turnQueue.drainAll();
+    });
+    if (job.id !== this.queueRelease?.entryId) this.dispatches.set(job.id, work);
+    return work;
+  }
+
   queueEvent(event) {
     if (event.type === "cancelled") {
       const job = this.store.get(event.entry.id);
@@ -421,6 +473,13 @@ export class Runtime {
       if (params?.threadId === job.threadId) {
         if (!job.turnId) this.earlyCompletion = params;
         else if (params.turn?.id === job.turnId) this.complete(params);
+      }
+    }
+    if (params?.threadId && turnId) {
+      for (const job of this.store.jobs.values()) {
+        if (ACTIVE.has(job.status) && job.delivery === "queued-steer" && job.threadId === params.threadId && job.turnId === turnId) {
+          this.finish(job.id, this.blockedReason ? "blocked" : params.turn.status, this.blockedReason || params.turn.error?.message);
+        }
       }
     }
     if (params?.threadId && turnId) {
@@ -551,6 +610,8 @@ export class Runtime {
       // while the daemon still owns its profile leases and storage.
       await this.codex.stop();
     }
-    if (this.active) this.finish(this.active, "unknown", "Daemon stopped; inspect the thread before explicitly continuing");
+    for (const job of this.store.jobs.values()) {
+      if (ACTIVE.has(job.status)) this.finish(job.id, "unknown", "Daemon stopped; inspect the thread before explicitly continuing");
+    }
   }
 }

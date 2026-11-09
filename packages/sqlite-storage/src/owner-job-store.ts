@@ -3,12 +3,12 @@ import type { StateDb } from "./state-db";
 
 export const ACTIVE_OWNER_JOB_STATUSES = new Set(["starting", "running", "interrupting"]);
 const STATUSES = new Set([...ACTIVE_OWNER_JOB_STATUSES, "queued", "completed", "failed", "interrupted", "blocked", "unknown"]);
-const FIELDS = ["version", "id", "status", "fingerprint", "threadId", "turnId", "model", "sandbox", "cwd",
+const FIELDS = ["version", "id", "status", "fingerprint", "delivery", "threadId", "turnId", "model", "sandbox", "cwd",
   "messageOrigin", "reasoningEffort", "serviceTier", "messagingFileTools", "createdAt", "updatedAt", "finishedAt", "reason"] as const;
 
 export function projectOwnerJob(value: OwnerJobRecord): OwnerJobRecord {
   if (value?.version !== 1 || typeof value.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(value.id)
-    || !STATUSES.has(value.status)) throw new Error("Invalid headless job record");
+    || !STATUSES.has(value.status) || (value.delivery !== undefined && value.delivery !== "queued-steer")) throw new Error("Invalid headless job record");
   // Never retain a prompt, transcript or arbitrary provider response in SQLite.
   return Object.fromEntries(FIELDS.filter(field => value[field] !== undefined).map(field => [field, structuredClone(value[field])])) as OwnerJobRecord;
 }
