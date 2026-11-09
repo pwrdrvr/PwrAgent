@@ -800,6 +800,7 @@ export function permissionForDynamicTool(
     case "forge":
       return isForgeWriteToolName(tool) ? "tools.forge_write" : "tools.thread_inspection";
     case "thread_orchestration":
+      if (tool === "register_thread_worktree") return "thread.control.archive";
       return "tools.thread_orchestration";
     case "automation_inspection":
     case "app_management":

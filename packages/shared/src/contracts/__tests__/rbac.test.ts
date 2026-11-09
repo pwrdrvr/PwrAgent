@@ -28,6 +28,9 @@ function roleById(id: string): RbacRoleDefinition {
 const ROLES = BUILT_IN_ROLES;
 
 describe("rbac permission catalog", () => {
+  it("requires archive authority to register an outside checkout for future removal", () => {
+    expect(permissionForDynamicTool("thread_orchestration", "register_thread_worktree")).toBe("thread.control.archive");
+  });
   it("catalog and permission-id list stay in sync", () => {
     expect(ALL_MESSAGING_PERMISSIONS).toEqual(
       MESSAGING_PERMISSION_CATALOG.map((d) => d.id),

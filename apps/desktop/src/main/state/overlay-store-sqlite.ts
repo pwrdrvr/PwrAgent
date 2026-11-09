@@ -1642,6 +1642,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     };
   }
 
+  async setThreadWorktreeRegistration(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    worktreePath: string;
+    registration?: NonNullable<ThreadOverlayState["worktreeRegistrations"]>[number];
+  }): Promise<void> {
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(key) ?? {
+      backend: params.backend, threadId: params.threadId,
+      executionMode: "default" as const, extraLinkedDirectories: [],
+    };
+    const registrations = current.worktreeRegistrations ?? [];
+    const next = [...registrations.filter((entry) => entry.worktreePath !== params.worktreePath),
+      ...(params.registration ? [params.registration] : [])];
+    if (JSON.stringify(registrations) === JSON.stringify(next)) return;
+    this.putThread(key, { ...current, worktreeRegistrations: next });
+  }
+
   async addLinkedDirectory(params: {
     backend: ThreadOverlayState["backend"];
     directory: LinkedDirectorySummary;
@@ -12589,6 +12607,7 @@ export type OverlayStoreLike = Pick<
   | "upsertDirectoryLaunchpad"
   | "resetDirectoryLaunchpad"
 > & {
+  setThreadWorktreeRegistration?: SqliteOverlayStore["setThreadWorktreeRegistration"];
   getThreadListingOverlayStates?: SqliteOverlayStore["getThreadListingOverlayStates"];
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
   setThreadCodexEnvironmentActionLiveOutput?: SqliteOverlayStore["setThreadCodexEnvironmentActionLiveOutput"];

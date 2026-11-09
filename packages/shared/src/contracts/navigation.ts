@@ -3244,6 +3244,18 @@ export type DirectoryOverlayState = {
   forgeAutomation?: ProjectForgeAutomation;
 };
 
+/** Operator authorization for one existing linked checkout, never inferred
+ * from a provider cwd, PR link, or repository trust. Identity changes revoke it. */
+export type ThreadWorktreeRegistration = {
+  worktreePath: string;
+  gitDirectory: string;
+  commonDirectory: string;
+  checkoutIdentity: string;
+  gitDirectoryIdentity: string;
+  authorizedAt: number;
+  requestedBy: { backend: AppServerBackendKind; threadId: string };
+};
+
 export type ThreadOverlayState = {
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
@@ -3327,6 +3339,7 @@ export type ThreadOverlayState = {
   archiveRetentionStartedAt?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
+  worktreeRegistrations?: ThreadWorktreeRegistration[];
   /**
    * Worktrees this thread created and then left with a fresh-start move.
    * They stay on disk and are not the thread's workspace. Only thread

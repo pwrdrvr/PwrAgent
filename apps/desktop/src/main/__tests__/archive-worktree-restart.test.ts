@@ -19,7 +19,7 @@ import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import type { AcpTransportFactory } from "../app-server/acp-backend-adapter";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse } from "@pwragent/shared";
 import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
 import type { MaintenanceDiscoveryProgress } from "../app-server/unreferenced-worktrees";
 import { AcpSessionStore } from "../storage/acp-session-store";
@@ -138,6 +138,38 @@ class ArchiveAcpTransport extends FakeAcpAgentTransport {
     return result;
   }
 }
+
+describe("current-profile worktree registration across providers", () => {
+  it.each(["claude", "acp:fixture"] as const)("registers an archived %s owner's outside checkout without changing its external marker", async (backend) => {
+    const fixture = await createFixture();
+    const instance = fixture.reopen();
+    const owner = { backend, threadId: backend === "claude" ? "11111111-1111-4111-8111-111111111111" : acpOwner.threadId };
+    if (backend === "claude") {
+      await fixture.claudeStore.save({ cwd: fixture.worktree, thread: {
+        id: owner.threadId, source: "claude", title: "Registration fixture", titleSource: "explicit",
+        linkedDirectories: [fixture.directory], updatedAt: 1, archivedAt: 1,
+      } });
+    } else seedAcpOwner(instance, fixture.worktree, true);
+    await instance.store.replaceWorkspaceLinkedDirectory({ ...owner,
+      directory: { ...fixture.directory, worktreeOwnership: "external" } });
+    const internal = instance.registry as unknown as {
+      isLiveDynamicToolCall: () => boolean;
+      requestThreadMaintenanceConfirmation: () => Promise<boolean>;
+      handleThreadOrchestrationRequest: (request: PwrAgentThreadOrchestrationRequest) => Promise<PwrAgentThreadOrchestrationResponse>;
+    };
+    vi.spyOn(internal, "isLiveDynamicToolCall").mockReturnValue(true);
+    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    expect(await internal.handleThreadOrchestrationRequest({ operation: "register_thread_worktree",
+      context: { backend: "codex", threadId: "operator-agent", turnId: "registration" },
+      args: { ...owner, worktreePath: fixture.worktree },
+    })).toMatchObject({ ok: true, data: { ...owner, registered: true } });
+    const candidate = (await instance.registry.listAutoArchiveCandidates()).find((item) => item.thread.source === backend && item.thread.id === owner.threadId);
+    expect(candidate?.managedWorktreePath).toBe(fixture.worktree);
+    expect((await instance.registry.auditArchivedCheckouts()).candidates).toContainEqual({ ...owner, worktreePath: fixture.worktree });
+    expect((await instance.store.getThreadOverlayState(owner))?.extraLinkedDirectories[0]?.worktreeOwnership).toBe("external");
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("original\n");
+  });
+});
 
 describe("ACP snapshot archive and restoration", () => {
   it("preserves archive metadata when an earlier replay read resumes between cleanup inventories", async () => {
