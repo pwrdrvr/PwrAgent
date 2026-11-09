@@ -277,6 +277,21 @@ try {
     const lookup = { backend: "codex", threadId, id: durable.clientRequest.id, callerScope: "packed-device" };
     assert.equal((await controller.handle("backend.getTurnRequest", lookup, envelope)).outcome, "cancelled");
     assert.equal(await controller.handle("backend.getTurnRequest", { ...lookup, callerScope: "other-device" }, envelope), null);
+    const steerText = "Packed durable steer";
+    const durableSteer = { clientRequest: { version: 1, id: randomUUID(), createdAt, payloadHash: createHash("sha256").update(JSON.stringify({
+      createdAt, destination: { backend: "codex", instanceId: "packed-owner", threadId }, operation: "steerTurn",
+      request: { backend: "codex", expectedTurnId: "packed-control", input: [{ text: steerText, type: "text" }], threadId }, version: 1,
+    })).digest("hex") }, request: { backend: "codex", threadId, expectedTurnId: "packed-control", input: [{ type: "text", text: steerText }] }, callerScope: "packed-device" };
+    const steerReceipt = await controller.handle("backend.submitSteerRequest", durableSteer, envelope);
+    assert.equal(steerReceipt.state, "dispatched");
+    assert.equal(steerReceipt.result.requestId, steerReceipt.queueEntryId);
+    assert.equal(steerReceipt.result.turnId, "packed-control");
+    assert.deepEqual(await controller.handle("backend.submitSteerRequest", durableSteer, envelope), steerReceipt);
+    const steerLookup = { ...lookup, id: durableSteer.clientRequest.id };
+    assert.deepEqual(await controller.handle("backend.getSteerRequest", steerLookup, envelope), steerReceipt);
+    assert.equal(await controller.handle("backend.getSteerRequest", { ...steerLookup, callerScope: "other-device" }, envelope), null);
+    assert.equal(await controller.handle("backend.getSteerRequest", steerLookup, { sourceInstanceId: "other-issuer" }), null);
+    assert.equal(steers, 1);
     const save = store.save.bind(store);
     let refuseOrigin = true;
     store.save = job => { if (refuseOrigin && job.messageOrigin) { refuseOrigin = false; throw new Error("origin refused"); } return save(job); };
@@ -285,11 +300,11 @@ try {
     await Promise.all(Array.from({ length: 3 }, () => controller.handle("controlActiveTurn", { ...request, operation: "steer" })));
     await assert.rejects(controller.handle("steerTurn", { ...request, input: [{ type: "text", text: "changed" }] }), /reused with different input/);
     await controller.handle("controlActiveTurn", { backend: "codex", threadId, expectedTurnId: "packed-control", requestId: "stop", operation: "stop" });
-    assert.equal(steers, 1);
+    assert.equal(steers, 2);
     assert.equal(interrupts, 1);
     assert.equal(store.get("packed-control").status, "interrupted");
   } finally { profile.close(); }
-  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue receipts/caller isolation/cancellation, shared steering retention/retry and interruption");
+  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue and steering receipts/caller isolation/cancellation, shared steering retention/retry and interruption");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {

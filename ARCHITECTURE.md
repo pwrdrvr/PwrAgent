@@ -377,6 +377,15 @@ authentication. Proven queue boundaries reconcile receipts. Shutdown or a
 missing live queue yields uncertainty without restoring input or reclaiming a
 dispatch claim. Changing accepted input requires cancellation and a new UUID.
 
+Outpost also registers the existing durable steering methods on that same inbox.
+Both `turn_control` and `durable_steer_requests_v1` are required. Its host port
+calls the existing active-turn control method, using the receipt identity as the
+steer request id and the caller's expected native turn as the target. The receipt
+acknowledges acceptance of the interjection, independently of eventual turn output;
+it creates no job or FIFO entry and cannot displace waiting input. Issuer/device
+and start/steer namespaces remain separate. Native or result-persistence uncertainty
+retains the durable claim across retries and restart without sending again.
+
 Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
 It owns delivery refusal, restart-gate queue admission, native-review admission,
 provider selection and response/effect sequencing. The existing steering

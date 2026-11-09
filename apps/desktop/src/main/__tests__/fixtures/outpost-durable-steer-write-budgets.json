@@ -1,0 +1,37 @@
+{
+  "duplicate-read": {
+    "commits": 0,
+    "note": "100 matching accepted steer submissions and receipt reads with no native resend",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "native-acceptance": {
+    "commits": 3,
+    "note": "Actual steer receipt admission, claim and accepted native result; owner/job setup excluded",
+    "observedWalBytes": 24720,
+    "rowsChanged": 3,
+    "statements": 4
+  },
+  "stale-claim": {
+    "commits": 1,
+    "note": "One fresh-host receipt read settles a stale durable steering claim as uncertain without replay; claim setup excluded",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "uncertain-outcome": {
+    "commits": 3,
+    "note": "Actual steer receipt admission, claim and uncertainty boundary after an unconfirmed native outcome",
+    "observedWalBytes": 24720,
+    "rowsChanged": 3,
+    "statements": 4
+  },
+  "uncertain-retry-read": {
+    "commits": 0,
+    "note": "100 uncertain steer retries and receipt reads with no native resend",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}
