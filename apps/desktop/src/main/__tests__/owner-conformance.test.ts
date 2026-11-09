@@ -8,7 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, FederationCapability } from "@pwragent/shared";
+import type { AgentEvent, AppServerBackendKind, AppServerThreadSummary, FederationCapability } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import {
@@ -413,7 +413,24 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           const ref = { backend, threadId };
           const registry = desktopOwner.registry as DesktopBackendRegistry;
           await registry.listThreads({ backend, callerReason: "startup-provider-refresh", forceRefresh: true });
+          const provider = registry as unknown as { readProviderThreadList: (backend: AppServerBackendKind, params: unknown, diagnostics: unknown) => Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }> };
+          const read = provider.readProviderThreadList.bind(registry);
+          let release!: () => void;
+          let entered!: () => void;
+          const gate = new Promise<void>(resolve => { release = resolve; });
+          const started = new Promise<void>(resolve => { entered = resolve; });
+          const heldRead = vi.spyOn(provider, "readProviderThreadList").mockImplementation(async (...args) => {
+            const result = await read(...args);
+            entered();
+            await gate;
+            return result;
+          });
+          const stale = registry.listThreads({ backend, callerReason: "startup-provider-refresh", forceRefresh: true });
+          await started;
+          heldRead.mockRestore();
           await desktop.client.renameThread({ ...ref, name: `${backend === "claude" ? "Claude" : "ACP"} New ${suffix}` });
+          release();
+          await stale;
           await desktop.client.setThreadPin({ ...ref, pinnedRank: backend === "claude" ? "1024" : "2048" });
           const before = (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread!;
           await desktop.client.markThreadSeen({ ...ref, seenAt: 10_000, seenUpdatedAt: before.updatedAt });
