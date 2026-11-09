@@ -83,6 +83,58 @@ function script(config: ThreadCreationOptions, migration: boolean, connections: 
 }
 
 describe("thread creation lifecycle contract", () => {
+  it("drains preparation before rejection cleanup and transfers each resource exactly once", async () => {
+    await fc.assert(fc.asyncProperty(fc.scheduler(), options, fc.array(fc.boolean(), { minLength: 0, maxLength: 5 }),
+      fc.constantFrom("prepare" as const, "branch" as const, "provider" as const, "accepted" as const), fc.boolean(), fc.boolean(),
+      async (scheduler, config, failedRevokes, outcome, rollbackFails, reportFails) => {
+        const run = fixture(config, new Set(["pr"]), false, 0, outcome === "provider", reportFails);
+        const resources: string[] = [];
+        const reports: string[] = [];
+        const refusal = new Error("preparation refused");
+        const started = new ThreadCreationLifecycle().prepare(async (scope) => {
+          scope.setWorkspaceRollback(async () => {
+            resources.push("rollback");
+            if (rollbackFails) throw new Error("rollback refused");
+          });
+          const grants = failedRevokes.map((fails, index) => scope.registerConnections(scheduler.schedule(Promise.resolve([{
+              bindThread: (threadId: string) => { expect(threadId).toBe("same:thread"); resources.push(`bind:${index}`); },
+              revoke: () => { resources.push(`revoke:${index}`); if (fails) throw new Error("revoke refused"); },
+            }]), `grant:${index}`).then((connections) => {
+              resources.push(`acquire:${index}`);
+              return connections;
+            })));
+          // The core must also observe admitted work the host never joins.
+          scope.track(scheduler.schedule(Promise.resolve().then(() => {
+            resources.push("runtime-settled");
+            if (outcome === "branch") throw refusal;
+          }), "runtime"));
+          if (outcome === "prepare") throw refusal;
+          await Promise.all(grants);
+          const host = { ...run.host, failed: (stage: ThreadCreationStage, error: unknown, identity: CreatedThreadIdentity | undefined) => {
+            reports.push(stage); run.host.failed(stage, error, identity);
+          } };
+          return { options: config, host, metadata: { executionMode: "default", threadId: "untrusted metadata" } };
+        }, (stage) => { reports.push(stage); if (reportFails) throw new Error("report refused"); });
+        const observed = started.then((value) => ({ value }), (error: unknown) => ({ error }));
+        const result = await scheduler.waitFor(observed);
+        const acquired = resources.filter((effect) => effect.startsWith("acquire:")).map((effect) => effect.slice(8));
+        expect(acquired).toHaveLength(failedRevokes.length);
+        if (outcome === "accepted") {
+          expect(result).toEqual({ value: { backend: config.backend, threadId: "same:thread", executionMode: "default", pinnedRank: "0" } });
+          expect(resources.filter((effect) => effect.startsWith("revoke:") || effect === "rollback")).toEqual([]);
+          expect(resources.filter((effect) => effect.startsWith("bind:"))).toEqual(acquired.map((id) => `bind:${id}`));
+          expect(run.calls).toEqual(script(config, false, 0));
+        } else {
+          expect(result).toEqual({ error: outcome === "provider" ? run.providerError : refusal });
+          expect(resources.slice(-failedRevokes.length - 1)).toEqual([...acquired.map((id) => `revoke:${id}`), "rollback"]);
+          expect(resources.indexOf("runtime-settled")).toBeLessThan(resources.indexOf("rollback"));
+          expect(resources.filter((effect) => effect.startsWith("bind:"))).toEqual([]);
+          if (outcome !== "provider") expect(run.calls).toEqual([]);
+          expect(reports).toHaveLength(failedRevokes.filter(Boolean).length + Number(rollbackFails));
+        }
+      }), { numRuns: 60 });
+  });
+
   it("preserves acceptance and every independent effect across generated host failures", async () => {
     await fc.assert(fc.asyncProperty(options, fc.subarray([...stages, "bind:0", "bind:1"]), fc.boolean(), fc.integer({ min: 0, max: 3 }), fc.boolean(),
       async (config, failures, migration, count, reportThrows) => {

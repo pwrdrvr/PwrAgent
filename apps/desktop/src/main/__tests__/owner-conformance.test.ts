@@ -1,5 +1,6 @@
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -432,6 +433,65 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           backend: "codex", threadId: identities[index].threadId, turnId: turns[0].turnId,
         });
         await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
+        await Promise.all(hosts.map(settle));
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+      vi.unstubAllEnvs();
+    }
+  }, 120_000);
+
+  it("rolls back rejected desktop preparation before later desktop and Outpost creations", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    const git = (...args: string[]) => execFileSync("git", ["-C", desktop.workspace, ...args], { encoding: "utf8" });
+    const effects: string[] = [];
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const internal = registry as unknown as {
+      gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
+      readConfiguredCodexMcpServerNames: () => Promise<string[] | undefined>;
+      registerMcpConnections: (ids: string[] | undefined) => Promise<unknown[]>;
+    };
+    let workspaceIndex = 0;
+    let grants = 1;
+    const workspaces: string[] = [];
+    vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockImplementation(async () => {
+      const cwd = path.join(desktop.workspace, `checkout-${++workspaceIndex}`);
+      git("worktree", "add", "--detach", cwd);
+      workspaces.push(cwd);
+      return { cwd, workMode: "worktree", rollback: async () => { effects.push("rollback"); git("worktree", "remove", cwd); } };
+    });
+    const inventory = vi.spyOn(internal, "readConfiguredCodexMcpServerNames");
+    vi.spyOn(internal, "registerMcpConnections").mockImplementation(async (ids) => ids?.length ? Array.from({ length: grants }, (_, i) => ({
+      server: { name: `fixture-${i}`, command: "/fixture/mcp", args: [], env: {} },
+      bindThread: () => { effects.push(`bind:${i}`); },
+      revoke: () => { effects.push(`revoke:${i}`); if (i === 0) throw new Error("fixture grant cleanup refused"); },
+    })) : []);
+    try {
+      git("init", "-b", "main");
+      git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture repository");
+      outpost = await startOutpostOwner();
+      for (const count of [2, ...fc.sample(fc.integer({ min: 1, max: 3 }), 2)]) {
+        grants = count;
+        effects.length = 0;
+        inventory.mockResolvedValueOnce(undefined);
+        const before = OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start").length;
+        const { writes } = await measureSqliteWrites(async () => {
+          await expect(desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, workMode: "worktree",
+            mcpConnectionIds: ["fixture"], mcpProviderServersEnabled: false })).rejects.toThrow();
+        });
+        expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0 });
+        expect(effects).toEqual([...Array.from({ length: count }, (_, i) => `revoke:${i}`), "rollback"]);
+        expect(workspaces.every((cwd) => !existsSync(cwd))).toBe(true);
+        expect(git("worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
+        expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start")).toHaveLength(before);
+        const hosts = [desktop, outpost];
+        const created = await Promise.all(hosts.map((host) => host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto" })));
+        const turns = await Promise.all(hosts.map((host, i) => host.client.startTurn({ backend: "codex", threadId: created[i].threadId, input: [{ type: "text", text: "slow" }] })));
+        expect(turns[0]).toMatchObject({ threadId: created[0].threadId, turnId: turns[1].turnId });
+        await Promise.all(hosts.map((host, i) => host.client.interruptTurn(turns[i])));
         await Promise.all(hosts.map(settle));
       }
     } finally {

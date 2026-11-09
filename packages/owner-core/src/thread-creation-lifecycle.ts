@@ -7,6 +7,63 @@ export type ThreadCreationStage = "workspace" | "revoke-connections" | "rollback
   | "pr" | "mcp" | "agent" | "environment" | "model" | "parent" | "parent-event" | "visibility" | "started";
 
 type Visibility = Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">;
+type Connection = ThreadCreationHost["connections"][number];
+type PreparationFailure = (stage: "revoke-connections" | "rollback-workspace", error: unknown) => void;
+
+/** Invocation-local resources remain owned until preparation hands them to creation. */
+export class ThreadCreationPreparation {
+  readonly connections: Connection[] = [];
+  private readonly pending: Promise<PromiseSettledResult<unknown>>[] = [];
+  private workspaceRollback: (() => Promise<void>) | undefined;
+
+  setWorkspaceRollback(rollback: (() => Promise<void>) | undefined): void {
+    this.workspaceRollback = rollback;
+  }
+
+  track<T>(work: Promise<T>): Promise<T> {
+    // Observe immediately, including branches admitted before a synchronous
+    // preparation failure prevents the host from reaching its normal join.
+    this.pending.push(work.then(
+      (value) => ({ status: "fulfilled", value }),
+      (reason: unknown) => ({ status: "rejected", reason }),
+    ));
+    return work;
+  }
+
+  registerConnections<T extends Connection>(work: Promise<T[]>): Promise<T[]> {
+    return this.track(work.then((connections) => {
+      this.connections.push(...connections);
+      return connections;
+    }));
+  }
+
+  async drain(): Promise<PromiseSettledResult<unknown>[]> {
+    return await Promise.all(this.pending);
+  }
+
+  async rollbackWorkspace(): Promise<void> {
+    const rollback = this.workspaceRollback;
+    this.workspaceRollback = undefined;
+    await rollback?.();
+  }
+
+  async reject(failed: PreparationFailure): Promise<void> {
+    await this.drain();
+    const report: PreparationFailure = (stage, error) => {
+      try { failed(stage, error); } catch { /* Cleanup must survive diagnostics failure. */ }
+    };
+    for (const connection of this.connections) {
+      try { connection.revoke(); } catch (error) { report("revoke-connections", error); }
+    }
+    try { await this.rollbackWorkspace(); } catch (error) { report("rollback-workspace", error); }
+  }
+}
+
+export interface PreparedThreadCreation<Metadata> {
+  options: ThreadCreationOptions;
+  host: Omit<ThreadCreationHost, "connections" | "rollbackWorkspace">;
+  metadata: Metadata;
+}
 
 export interface ThreadCreationHost {
   providers: {
@@ -55,6 +112,29 @@ export interface ThreadCreationOptions {
 
 /** Coordinates creation outcomes; providers own identities and hosts own effects. */
 export class ThreadCreationLifecycle {
+  async prepare<Metadata>(
+    prepare: (resources: ThreadCreationPreparation) => Promise<PreparedThreadCreation<Metadata>>,
+    failed: PreparationFailure,
+  ): Promise<CreatedThreadIdentity & Visibility & Metadata> {
+    const resources = new ThreadCreationPreparation();
+    let prepared: PreparedThreadCreation<Metadata>;
+    try {
+      prepared = await prepare(resources);
+      const results = await resources.drain();
+      for (const result of results) if (result.status === "rejected") throw result.reason;
+    } catch (error) {
+      await resources.reject(failed);
+      throw error;
+    }
+    // From here start owns rejection cleanup; acceptance retains these resources.
+    const result = await this.start(prepared.options, {
+      ...prepared.host,
+      connections: resources.connections,
+      rollbackWorkspace: async () => await resources.rollbackWorkspace(),
+    });
+    return { ...prepared.metadata, ...result };
+  }
+
   async start(options: ThreadCreationOptions, host: ThreadCreationHost): Promise<CreatedThreadIdentity & Visibility> {
     const { backend } = options;
     let identity: CreatedThreadIdentity | undefined;
