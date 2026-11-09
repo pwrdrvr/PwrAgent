@@ -14,6 +14,7 @@ const layers = [
   { path: "agent-tools", imports: ["shared"] },
   { path: "messaging/interface", imports: ["shared"] },
   { path: "owner-core", imports: ["shared"] },
+  { path: "sqlite-storage", imports: ["shared", "owner-core"] },
   ...providers.map((path) => ({ path, imports: ["messaging/interface"] })),
   { path: "pwragent", imports: [...reusable, "owner-core"] },
 ];
@@ -90,6 +91,32 @@ beforeAll(async () => {
       source(from, `import ${JSON.stringify(relative(dirname(from), to).replaceAll("\\", "/"))};\n`);
       ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos", "thread-reviews", "acp", "messaging", "settings", "automations", "mcp-connections", "future-area"].includes(area.split("/")[0]) });
     }
+  }
+
+  // Moving SQLite below the host must preserve the same privacy for every
+  // import syntax, including future application areas and root consumers.
+  for (const area of ["ipc", "app-server", "federation", "settings", "messaging", "future-area", "state", "storage"]) {
+    const to = "packages/sqlite-storage/src/index.js";
+    for (const [style, statement] of [
+      ["package", 'import "@pwragent/sqlite-storage";'],
+      ["static", `import ${JSON.stringify(relative(`apps/desktop/src/main/${area}/nested`, to).replaceAll("\\", "/"))};`],
+      ["type-import", 'import type { Value } from "@pwragent/sqlite-storage"; export type { Value };'],
+      ["type-expression", 'export type Value = import("@pwragent/sqlite-storage").Value;'],
+      ["type-export", 'export type { Value } from "@pwragent/sqlite-storage";'],
+      ["export", 'export * from "@pwragent/sqlite-storage";'],
+      ["dynamic", 'export const load = () => import("@pwragent/sqlite-storage");'],
+      ["require", 'const value = require("@pwragent/sqlite-storage"); module.exports = value;'],
+    ]) {
+      const from = `apps/desktop/src/main/${area}/nested/sqlite-${style}.ts`;
+      source(from, statement);
+      ipcStateCases.push({ from, to, forbidden: !["state", "storage"].includes(area) });
+    }
+  }
+  for (const consumer of ["index", "runtime-lease-manager", "future-root-service"]) {
+    const to = "packages/sqlite-storage/src/index.js";
+    const from = `apps/desktop/src/main/${consumer}-sqlite.ts`;
+    source(from, 'export * from "@pwragent/sqlite-storage";');
+    ipcStateCases.push({ from, to, forbidden: true });
   }
 
   const settingsService = "apps/desktop/src/main/settings/desktop-settings-service.js";
