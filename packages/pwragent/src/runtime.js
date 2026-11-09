@@ -256,8 +256,11 @@ export class Runtime {
     if (typeof paused !== "boolean") throw new Error("Paused must be a boolean");
     const result = await this.turnQueue.setEntryPaused(queueEntryId, paused);
     const entry = result.entry;
-    if (result.disposition === "updated" && entry) {
-      this.queueEvent({ type: entry.manualReleaseRequired ? "held" : "queued", entry, reason: entry.holdReason });
+    if (result.disposition === "updated") {
+      // A later serialized edit can finish before this awaiting caller resumes.
+      // Publish only the live entry, never a cancelled or superseded snapshot.
+      const current = this.queuedEntry(queueEntryId);
+      if (current) this.queueEvent({ type: current.manualReleaseRequired ? "held" : "queued", entry: current, reason: current.holdReason });
     }
     return { queueEntryId, disposition: result.disposition,
       ...(entry ? { paused: entry.paused === true } : {}),
