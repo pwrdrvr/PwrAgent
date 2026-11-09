@@ -40,6 +40,28 @@ it("does not retain a desktop-only class behind state compatibility exports", ()
   expect(CompatibilityStore).toBe(SharedStore);
 });
 
+it("keeps the MCP death grace when the shared test driver requests immediate reclamation", () => {
+  const { dbPath, tempDir } = createTempStateDb("shared-mcp-grace-");
+  const db = StateDb.open(dbPath);
+  const store = new SharedStore(db);
+  try {
+    for (const instanceId of ["owner", "challenger"]) store.recordInstanceStart({
+      instanceId, processId: 123, profileName: "fixture", startedAt: 100, desiredMessagingEnabled: true,
+    });
+    expect(acquire(store, "mcp", "owner", 100, () => true, false).acquired).toBe(true);
+    expect(acquire(store, "mcp", "challenger", 100, () => false, true)).toEqual({
+      acquired: false, reason: "held", holder: {
+        ownerInstanceId: "owner", acquiredAt: 100, heartbeatAt: 100,
+        expiresAt: 100 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS, status: "active",
+      },
+    });
+    expect(store.getInstance("owner")?.exitedAt).toBe(100);
+    // A later live PID cannot undo the recorded death or shorten MCP's grace.
+    expect(acquire(store, "mcp", "challenger", 100 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS - 1, () => true, true).acquired).toBe(false);
+    expect(acquire(store, "mcp", "challenger", 100 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS, () => true, true).acquired).toBe(true);
+  } finally { db.close(); removeTempStateDbDir(tempDir); }
+});
+
 // One owner per lease, persisted death cannot be undone by PID reuse, and only
 // the owner can release. This model knows identities and deadlines, no SQL.
 it("matches an independent owner model across WAL connections, clocks, death, PID reuse and reopens", async () => {
