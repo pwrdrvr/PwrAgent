@@ -102,3 +102,30 @@ it("a provider listing begun before an acknowledged rename cannot restore the ol
     } finally { profile.close(); rmSync(root, { recursive: true, force: true }); }
   }), { numRuns: 15 });
 });
+
+it("fresh complete provider archive membership outranks an unstamped retained owner flag", async () => {
+  const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+  await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 2, maxLength: 12 }), async states => {
+    const root = realpathSync(mkdtempSync("/tmp/pa-archive-model-"));
+    mkdirSync(path.join(root, "headless"), { mode: 0o700 });
+    const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
+    await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "codex", threadId: "thread" }, { archived: false });
+    const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+    try {
+      let archived = false;
+      const runtime = { workspace: root, store: new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile),
+        projects: { list: () => [{ path: root, label: "fixture" }] }, onFailure(error: unknown) { throw error; },
+        codex: { listThreads: async (params: { archived: boolean }) => params.archived === archived
+          ? [{ id: "thread", source: "codex", title: "Native", titleSource: "explicit", linkedDirectories: [] }] : [] } };
+      const backend = new HeadlessBackend(runtime, () => {});
+      await backend.initialize();
+      for (const state of states) {
+        archived = state;
+        const active = await backend.handle("listThreads");
+        const retired = await backend.handle("lookupArchivedThreads", { threadIds: ["thread"] });
+        expect(active.threads.map((thread: { id: string }) => thread.id)).toEqual(state ? [] : ["thread"]);
+        expect(retired.threads.map((thread: { id: string }) => thread.id)).toEqual(state ? ["thread"] : []);
+      }
+    } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+  }), { numRuns: 15 });
+});

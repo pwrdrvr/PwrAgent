@@ -154,7 +154,8 @@ it.skipIf(process.platform === "win32")("budgets the actual runtime turn, owner 
     const store = new JobStore(f.directory, f.identity, profile);
     const runtime = new Runtime({ store, workspace: f.identity.workspace, home: f.identity.codexHome, command: "/fixture/codex",
       onFailure(error: unknown) { throw error; } });
-    runtime.codex = { startThread: async () => ({ threadId: "thread" }), startTurn: async () => ({ turnId: "turn" }) };
+    runtime.codex = { startThread: async () => ({ threadId: "thread" }), startTurn: async () => ({ turnId: "turn" }),
+      renameThread: async ({ threadId }: { threadId: string }) => ({ threadId }) };
     const backend = new HeadlessBackend(runtime, () => {});
     runtime.onEvent = (message: unknown) => backend.event(message);
     const turn = await measureSqliteWrites(async () => {

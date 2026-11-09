@@ -123,7 +123,7 @@ export class HeadlessBackend {
       if (!isDeepStrictEqual(previous?.threads, threads)) {
         this.runtime.store.inventory.replace({ backend: "codex", observedAt: Date.now(), threads });
       }
-      this.threads.replaceInventory(threads);
+      this.threads.replaceInventory(threads, Date.now());
     };
     this.discovery = discover();
     try { await this.discovery; } finally { this.discovery = undefined; }
@@ -358,6 +358,7 @@ export class HeadlessBackend {
 
   // The canonical owner record retains title provenance, including explicit renames.
   setTitle(thread, title, titleSource) {
+    this.providerMutationVersion++;
     Object.assign(thread, { title, titleSource, titleNativeName: title });
     this.persist(thread);
     this.threads.observeNativeTitle(thread.id, title, titleSource);

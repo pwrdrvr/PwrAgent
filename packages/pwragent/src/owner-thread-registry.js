@@ -8,7 +8,7 @@ export class OutpostThreadRegistry {
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
     this.inventory = new Map((inventory?.list() ?? []).filter(snapshot => snapshot.backend === "codex")
-      .flatMap(snapshot => snapshot.threads).map(thread => [thread.id, thread]));
+      .flatMap(snapshot => snapshot.threads.map(thread => [thread.id, { ...thread, observedAt: snapshot.observedAt }])));
   }
 
   identity(identity) {
@@ -31,7 +31,14 @@ export class OutpostThreadRegistry {
   project(id, record, native) {
     if (!record && !native) return undefined;
     const thread = record ? outpostThreadProjection(record) : { id };
-    if (native) Object.assign(thread, projectOwnerThreadTitle(native, record));
+    if (native) {
+      Object.assign(thread, projectOwnerThreadTitle(native, record));
+      if (record?.title?.nativeName !== undefined && record.title.nativeName !== native.title) thread.titleNativeName = native.title;
+      if (native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
+        thread.archived = native.archivedAt !== undefined;
+        thread.archivedAt = native.archivedAt;
+      }
+    }
     const projected = { ...(native ? { id, title: native.title, titleSource: native.titleSource,
       createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path,
       archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
@@ -45,8 +52,8 @@ export class OutpostThreadRegistry {
     return projected;
   }
 
-  replaceInventory(threads) {
-    this.inventory = new Map(threads.map(thread => [thread.id, thread]));
+  replaceInventory(threads, observedAt) {
+    this.inventory = new Map(threads.map(thread => [thread.id, { ...thread, observedAt }]));
   }
 
   observeNativeTitle(id, title, titleSource) {

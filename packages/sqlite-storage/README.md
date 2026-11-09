@@ -321,3 +321,21 @@ per day the entire new data path projects to about 4.94 MB/day (the job portion
 Each changed owner metadata command commits once (12,360 WAL bytes, about
 1.24 MB/day at 100 commands/day). These are boundary costs, with no idle timer.
 The inherited default budget and conformance fixtures remain byte-identical.
+
+Outpost completes fresh active/archive Codex protocol discovery before listening,
+and uses the same scrubbed provider projection as this package. Unchanged reads
+make no commits. Canonical titles retain the last acknowledged native name so
+both hosts preserve derived provenance without hiding a later provider rename.
+Legacy names remain pending owner facts until the shared naming lifecycle
+publishes them to Codex. The acknowledgement is an optional overlay JSON field,
+with no schema change. Desktop persists it through its actual name-event bus.
+
+`outpost-profile-parity-write-budgets.json` measures one changed inventory as one
+commit/8,240 WAL bytes (about 0.00824 MB/day at one refresh/day), an Outpost native
+rename as one commit/16,480 bytes (about 1.648 MB/day at 100 renames/day), and a
+desktop native-title event as one commit/12,360 bytes (about 1.236 MB/day at 100
+events/day). One thousand unchanged discoveries and one thousand repeated title
+events make zero commits. These boundaries add no timer. Generated conformance
+runs desktop → actual daemon → desktop → actual daemon over one test-owned
+profile/provider, checking native names, pins, parents, seen watermarks and
+archive/restore. The inherited default and conformance fixtures are unchanged.

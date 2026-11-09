@@ -14011,6 +14011,8 @@ export class DesktopBackendRegistry {
         : undefined;
       const projected = this.withObservedThreadName({
         ...thread,
+        ...(thread.source === "codex" ? projectOwnerThreadTitle(thread,
+          await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: thread.id })) : {}),
         executionMode: overlay?.executionMode ?? thread.executionMode,
         model: overlay?.model ?? thread.model,
         reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
