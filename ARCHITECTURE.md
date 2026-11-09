@@ -446,6 +446,10 @@ port through its private desktop binding and the original federation factory.
 Synchronous FULL/immediate receipt and claim commits precede dispatch, then the
 connection's original durability mode is restored. SQL and lifecycle sites stay
 unchanged; the owner service never receives a database handle.
+Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
+ACP metadata and command ports. Their private desktop bindings preserve the
+explicit runtime factories and app-state construction sites. Legacy history
+stripping, archive keyset pages, command filtering and SQL stay unchanged.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
