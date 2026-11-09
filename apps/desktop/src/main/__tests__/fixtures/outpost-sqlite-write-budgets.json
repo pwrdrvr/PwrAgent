@@ -1,0 +1,16 @@
+{
+  "outpost-idle-hour": {
+    "commits": 0,
+    "note": "One idle hour, profile markers refreshed; no SQLite heartbeat",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "outpost-profile-lifecycle": {
+    "commits": 6,
+    "note": "Register, acquire both leases, release both and mark exited; schema excluded",
+    "observedWalBytes": 94792,
+    "rowsChanged": 8,
+    "statements": 8
+  }
+}

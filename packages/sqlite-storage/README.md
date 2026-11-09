@@ -11,6 +11,19 @@ site. Host liveness remains injected. PID-owned leases, immediate acquisition,
 dead-owner grace and messaging side effects retain the original transactions;
 no heartbeat or new write is introduced.
 
+The real Outpost daemon also opens the profile database through its
+`federation-core.ts` host binding. That binding returns only shutdown, uses the
+same runtime lease manager as desktop, and holds both profile-federation and
+messaging leases before starting a provider, recovering jobs or opening a
+listener. Shutdown drains the runtime before releasing leases and closing the
+database. The existing private headless owner lock still guards crash recovery.
+
+`profile-runtime-markers.ts` owns the existing PID/instance/start-time marker
+format, freshness checks and file heartbeat. Desktop retains its profile path
+resolution and process defaults. The marker timer performs no SQLite writes;
+the shared manager receives host liveness and boot time through its ports.
+Outpost has its own pinned native SQLite dependency external to the JS bundle.
+
 The shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
 to-do and review storage ports. Their private desktop bindings keep the existing
 construction sites. Model-settings recents move with the to-do dispatch closure;
@@ -254,3 +267,16 @@ outer rollback/statement refusal, legacy status filters and exact unchanged comm
 Supported isolated Electron E2E runs those factories and the real cleanup service
 with an invented transport, observes later portable WAL commits through a retained
 port, and hands persisted cleanup outcomes back to Node after graceful shutdown.
+
+`outpost-profile-runtime.property.test.ts` checks generated live-owner models,
+actual binding cleanup on held leases and statement refusal, the handle-free
+host interface, and measured lifecycle/idle budgets in the separate
+`outpost-sqlite-write-budgets.json` fixture. One start/stop cycle costs six
+commits, eight statements and about 95 KB of WAL; an idle hour costs zero
+SQLite commits. One cycle per day projects to about 0.095 MB/day (one per hour,
+about 2.28 MB/day). Schema setup is outside that measurement. The inherited
+SQLite budget fixture is unchanged. Real daemon tests preserve acceptance,
+explicit crash recovery and restart without replay, including the existing
+60-second dead-owner grace. Supported Electron E2E observes an Outpost-held
+lease, refuses its desktop federation runtime, transfers ownership to desktop,
+refuses Outpost startup while desktop holds it, and transfers back after quit.

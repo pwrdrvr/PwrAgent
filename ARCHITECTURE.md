@@ -413,8 +413,16 @@ including the sub-agent and usage-activity table helpers and write instrumentati
 The package also owns `AppRuntimeInstanceStore`, implementing owner-core runtime
 lease ports with injected host liveness and the existing PID-owned lease
 transactions. Desktop constructs it through a private `main/storage` binding at
-the existing app-state lifecycle site. Both hosts can use this same storage
-without moving runtime identity observation into the database.
+the existing app-state lifecycle site. Both hosts use this same storage without moving runtime identity observation
+into the database. The real Outpost daemon opens the profile through its
+`federation-core.ts` binding and takes both federation and messaging leases
+before job recovery, provider startup or listener creation. It drains services
+before releasing them. Desktop supplies its existing defaults to the same
+owner-core runtime lease manager. Both use the existing profile marker format
+and file heartbeat; no SQLite heartbeat is introduced. The Outpost bundle
+externalizes its own pinned native SQLite dependency, and its application code
+receives only a shutdown port. Desktop's runtime gates observe the same lease
+rows; configured enablement remains separate from effective runtime ownership.
 Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
 ports through private desktop bindings at the existing runtime construction
 sites. The model-settings-recents helper is shared by to-do dispatch and the
@@ -650,7 +658,8 @@ graph TB
     Outpost --> AgentTools
     Outpost --> Shared
     Outpost --> MsgInterface
-    Outpost -.-> OwnerCore
+    Outpost --> OwnerCore
+    Outpost --> SqliteStorage
     OwnerCore --> Shared
     SqliteStorage --> Shared
     SqliteStorage --> OwnerCore
@@ -678,6 +687,9 @@ projection, Attention ordering, and thread-title policy. The Outpost may use the
 reusable libraries and owner-core through its bundle entry; its JavaScript
 consumes the bundle.
 Every package under `packages/` is forbidden from importing `apps/`.
+
+Only Outpost's `federation-core.ts` binding imports the shared SQLite package;
+its runtime and daemon code cannot import raw storage or the native driver.
 
 SQLite storage is below the hosts and may depend only on shared contracts and
 owner-core ports. Desktop application modules cannot import it or the raw

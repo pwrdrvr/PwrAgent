@@ -24,7 +24,7 @@ try {
   const source = context ? { tag: context.tag, commit: context.commit } : undefined;
   const require = createRequire(import.meta.url);
   const ptyRequire = createRequire(require.resolve("node-pty/package.json"));
-  const nativePackages = [["node-pty", require], ["node-addon-api", ptyRequire]];
+  const nativePackages = [["node-pty", require], ["node-addon-api", ptyRequire], ["better-sqlite3", require]];
   run(process.execPath, [path.join(root, "scripts/build.mjs")], { cwd: root });
   // npm pack follows pnpm's external symlinks and can emit ../../.pnpm paths.
   // Stage a flat dependency tree without mutating the checkout's node_modules.
@@ -47,7 +47,7 @@ try {
   }
   for (const file of files) {
     assert.ok(!file.split("/").includes(".."), `Packed paths must stay inside the package: ${file}`);
-    assert.match(file, /^(package\.json|LICENSE|README\.md|bin\/[^/]+\.js|src\/[^/]+\.(js|ts)|examples\/[^/]+\.service|dist\/(federation-core\.js|ws-LICENSE|THIRD_PARTY_LICENSES)|licenses\/xterm-LICENSE|node_modules\/(node-pty|node-addon-api)\/(?!.*(?:^|\/)node_modules\/).+)$/,
+    assert.match(file, /^(package\.json|LICENSE|README\.md|bin\/[^/]+\.js|src\/[^/]+\.(js|ts)|examples\/[^/]+\.service|dist\/(federation-core\.js|ws-LICENSE|THIRD_PARTY_LICENSES)|licenses\/xterm-LICENSE|node_modules\/(node-pty|node-addon-api|better-sqlite3)\/(?!.*(?:^|\/)node_modules\/).+)$/,
       `Unexpected packed file: ${file}`);
   }
   const unpacked = (file) => run("tar", ["-xOf", tarball, `package/${file}`]);
@@ -59,7 +59,7 @@ try {
   const wsPackage = federationRequire.resolve("ws/package.json");
   assert.equal(JSON.parse(readFileSync(wsPackage, "utf8")).license, "MIT");
   assert.equal(unpacked("dist/ws-LICENSE"), readFileSync(path.join(path.dirname(wsPackage), "LICENSE"), "utf8"));
-  assert.deepEqual([...packed.bundled].sort(), ["node-addon-api", "node-pty"]);
+  assert.deepEqual([...packed.bundled].sort(), ["better-sqlite3", "node-addon-api", "node-pty"]);
   for (const [name, resolver] of nativePackages) {
     const sourcePackagePath = resolver.resolve(`${name}/package.json`);
     const sourcePackage = JSON.parse(readFileSync(sourcePackagePath, "utf8"));

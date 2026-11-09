@@ -3,6 +3,7 @@ import net from "node:net";
 import path from "node:path";
 import { JobStore, privateDirectory } from "./store.js";
 import { Runtime } from "./runtime.js";
+import { openOutpostProfileRuntime } from "../dist/federation-core.js";
 import { HeadlessFederation } from "./federation.js";
 import { MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, readMessages } from "./wire.js";
 
@@ -32,6 +33,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
     if (error.code === "EEXIST") throw new Error(`Headless owner lock already exists: ${lockPath}. See README crash recovery; never remove a live owner's lock.`, { cause: error });
     throw error;
   }
+  let profileRuntime;
   let runtime;
   let federation;
   let server;
@@ -50,12 +52,14 @@ export async function serve({ directory, workspace, home, command, profile }) {
       try {
         try { await federation?.stop(); } finally { await runtime?.stop(); }
       } finally {
-        closeSync(lock);
-        unlinkSync(lockPath);
-        process.off("SIGTERM", signalStop);
-        process.off("SIGINT", signalStop);
-        resolveDone(exitCode);
+        try { profileRuntime?.close(); } finally {
+          closeSync(lock);
+          unlinkSync(lockPath);
+          process.off("SIGTERM", signalStop);
+          process.off("SIGINT", signalStop);
+        }
       }
+      resolveDone(exitCode);
     })();
     // Persistence/cleanup failure must fail the process, not become an
     // unhandled rejection that leaves a healthy-looking daemon running.
@@ -65,6 +69,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
   const signalStop = () => { void stop(); };
   try {
     writeFileSync(lock, JSON.stringify({ pid: process.pid }) + "\n");
+    profileRuntime = openOutpostProfileRuntime({ stateDirectory: path.dirname(directory), profileName: profile, cwd: workspace });
     const store = new JobStore(directory, { version: 1, workspace, codexHome: home });
     runtime = new Runtime({ store, workspace, home, command,
       onFailure: (error) => { console.error(`Headless runtime stopped: ${error.message}`); void stop(error); } });

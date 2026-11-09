@@ -59,7 +59,7 @@
     "@pwragent/sqlite-storage": "workspace:*"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "13.0.3",
     "node-pty": "1.2.0-beta.15"
   },
   "bundleDependencies": [

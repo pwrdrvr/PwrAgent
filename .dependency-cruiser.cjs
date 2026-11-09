@@ -127,8 +127,15 @@ module.exports = {
         "The Outpost can bundle reusable owner libraries, but cannot depend on messaging provider adapters.",
       from: { path: "^packages/pwragent/" },
       to: {
-        path: "^(@pwragent/(?!shared(?:/|$)|federation(?:/|$)|agent-tools(?:/|$)|messaging-interface(?:/|$)|owner-core(?:/|$))|packages/(?!pwragent/|shared/|federation/|agent-tools/|messaging/interface/|owner-core/))",
+        path: "^(@pwragent/(?!shared(?:/|$)|federation(?:/|$)|agent-tools(?:/|$)|messaging-interface(?:/|$)|owner-core(?:/|$)|sqlite-storage(?:/|$))|packages/(?!pwragent/|shared/|federation/|agent-tools/|messaging/interface/|owner-core/|sqlite-storage/))",
       },
+    },
+    {
+      name: "outpost-application-storage-is-private",
+      severity: "error",
+      comment: "Only the bundle's host binding opens profile storage; Outpost application modules receive handle-free services.",
+      from: { path: "^packages/pwragent/src/(?!federation-core\\.ts$)" },
+      to: { path: "^(?:packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))|(?:^|/)better-sqlite3(?:/|$)" },
     },
     {
       name: "outpost-workspace-imports-use-bundle-entry",

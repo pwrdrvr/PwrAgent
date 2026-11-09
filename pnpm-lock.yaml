@@ -689,7 +689,7 @@ importers:
   packages/pwragent:
     dependencies:
       better-sqlite3:
-        specifier: ^13.0.3
+        specifier: 13.0.3
         version: 13.0.3
       node-pty:
         specifier: 1.2.0-beta.15
