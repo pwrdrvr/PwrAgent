@@ -29,7 +29,7 @@ export class Runtime {
     // accepted submission has already returned from enqueueing.
     this.dispatches = new Map();
     this.turnQueue = new ThreadTurnQueue({
-      startTurn: entry => this.dispatchJob(this.store.get(entry.id), entry.input[0].text),
+      startTurn: entry => this.dispatchJob(this.store.get(entry.id), entry.input[0].text, entry),
       isThreadActive: ({ threadId }) => Boolean(this.active && this.store.get(this.active).threadId === threadId),
       isDispatchHeld: () => Boolean(this.stopping || this.uncertain || this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()),
       onLifecycle: event => this.queueEvent(event),
@@ -82,6 +82,8 @@ export class Runtime {
       case "list": return [...this.store.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);
       case "show": return this.store.get(params.id);
       case "submit": return this.submit(params);
+      case "release": return this.releaseQueuedTurn({ queueEntryId: params.id });
+      case "cancel": return this.cancelQueuedTurn({ queueEntryId: params.id });
       case "read": {
         const job = this.store.get(params.id);
         if (!job.threadId) throw new Error("This job has no confirmed thread ID");
@@ -90,7 +92,8 @@ export class Runtime {
       case "interrupt": {
         const job = this.store.get(params.id);
         if (job.status === "queued") {
-          if (!this.turnQueue.cancelEntry(job.id, "Interrupted before dispatch")) throw new Error("Job is being admitted; retry interrupt");
+          const result = await this.cancelQueuedTurn({ queueEntryId: job.id });
+          if (!result.cancelled) throw new Error("Job is being admitted; retry interrupt");
           return this.store.get(job.id);
         }
         if (!ACTIVE.has(job.status)) return job;
@@ -163,10 +166,69 @@ export class Runtime {
     return job;
   }
 
-  dispatchJob(job, prompt) {
+  queuedEntry(id) {
+    if (!validId(id)) throw new Error("Invalid queue entry ID");
+    return this.turnQueue.getAllQueuedEntries().find(entry => entry.id === id);
+  }
+
+  assertQueuedIdentity(job, entry) {
+    if (entry.backend !== "codex" || entry.threadId !== job.threadId || job.turnId
+      || !["queued", "starting"].includes(job.status)) throw new Error("Queued job identity changed; no work was replayed");
+    if (!this.ownsThread?.(job.threadId)) throw new Error("Thread is not owned by this outpost");
+    if (this.threadLocked?.(job.threadId)) throw new Error("Thread handoff is in progress");
+    const cwd = this.projects.resolve(this.threadCwd?.(job.threadId) || this.workspace);
+    if (cwd !== job.cwd) throw new Error("Turn cwd differs from its owner thread project");
+    const { threadId, model, sandbox, messageOrigin, reasoningEffort, serviceTier } = job;
+    const prompt = entry.input.length === 1 && entry.input[0].type === "text" ? entry.input[0].text : null;
+    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(messageOrigin ? { messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) });
+    if (fingerprint !== job.fingerprint || digest(entry.messageOrigin ?? null) !== digest(messageOrigin ?? null)) throw new Error("Queued input differs from its accepted identity");
+  }
+
+  async releaseQueuedTurn({ queueEntryId }) {
+    const entry = this.queuedEntry(queueEntryId);
+    if (!entry) return { queueEntryId, disposition: "not_found" };
+    if (this.stopping || this.uncertain || this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) {
+      return { queueEntryId, disposition: "busy" };
+    }
+    try {
+      const job = this.store.get(queueEntryId);
+      if (job.status !== "queued") throw new Error("Job is no longer waiting; no work was replayed");
+      this.assertQueuedIdentity(job, entry);
+    }
+    catch (error) { return { queueEntryId, disposition: "blocked", errorMessage: error.message }; }
+    const result = await this.turnQueue.releaseEntryWithDisposition(queueEntryId);
+    return { queueEntryId, disposition: result.disposition,
+      ...(result.disposition === "started" ? { turnId: result.turnId } : {}),
+      ...(result.disposition === "blocked" ? { errorMessage: result.error.message } : {}) };
+  }
+
+  async cancelQueuedTurn({ queueEntryId, expectedContentHash }) {
+    const entry = this.queuedEntry(queueEntryId);
+    const cancel = () => {
+      const current = this.queuedEntry(queueEntryId);
+      if (current) {
+        if (expectedContentHash && digest(current.input) !== expectedContentHash) {
+          return { queueEntryId, cancelled: false, disposition: "content_changed" };
+        }
+        const job = this.store.get(queueEntryId);
+        if (job.status !== "queued" || job.turnId || job.threadId !== current.threadId) throw new Error("Queued job identity changed");
+        // Commit the outcome while the shared engine suspends admission. A
+        // refused write leaves the entry waiting; no provider is interrupted.
+        this.finish(job.id, "interrupted", "Cancelled before dispatch");
+      }
+      const result = this.turnQueue.cancelEntryWithDisposition(queueEntryId, "Cancelled before dispatch");
+      return { queueEntryId, cancelled: result.disposition === "cancelled", disposition: result.disposition,
+        ...(result.disposition === "already_admitted" && result.turnId ? { turnId: result.turnId } : {}) };
+    };
+    if (this.stopping) throw new Error("Daemon is stopping");
+    return entry ? await this.turnQueue.withDispatchSuspended(entry, cancel) : cancel();
+  }
+
+  dispatchJob(job, prompt, entry) {
     if (this.stopping || this.uncertain) throw new Error("Daemon cannot dispatch work");
     if (this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) throw new Error("Outpost is busy");
     if (job.threadId && this.threadLocked?.(job.threadId)) throw new Error("Thread handoff is in progress");
+    if (entry) this.assertQueuedIdentity(job, entry);
     if (!ACTIVE.has(job.status) && job.status !== "queued") throw new Error("Job already has an outcome; no work was replayed");
     this.active = job.id;
     this.earlyCompletion = null;

@@ -24,7 +24,7 @@ test.beforeAll(() => {
   });
 });
 
-test("actual Outpost queued acceptance drains once and hands unfinished outcomes to desktop without replay", async () => {
+test("actual Outpost held queue controls hand durable outcomes to desktop without replay", async () => {
   test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
   const ref = { backend: "codex" as const, threadId: "thread-smoke" };
@@ -41,7 +41,10 @@ test("actual Outpost queued acceptance drains once and hands unfinished outcomes
         const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(homeRoot, "codex") }, profile);
         const runtime = new Runtime({ workspace, store, home: path.join(homeRoot, "codex"), command: "unused", onFailure() {} });
         let sends = 0;
-        runtime.codex = { startTurn: async () => ({ threadId: ref.threadId, turnId: `queue-turn-${++sends}` }), stop: async () => {} };
+        runtime.codex = { startTurn: async () => {
+          if (++sends === 2) throw new Error("Invented native refusal");
+          return { threadId: ref.threadId, turnId: `queue-turn-${sends}` };
+        }, stop: async () => {} };
         const backend = new HeadlessBackend(runtime, () => {});
         runtime.onEvent = (event: unknown) => backend.event(event);
         backend.persistCreatedNativeThread({ id: ref.threadId, cwd: workspace, title: "Replay smoke thread", titleSource: "explicit", createdAt: Date.now() });
@@ -52,13 +55,18 @@ test("actual Outpost queued acceptance drains once and hands unfinished outcomes
         expect((await backend.handle("getNavigationQueueProjection", { protocol: 2, ref })).entries).toMatchObject([{ queueEntryId: waiting.id }]);
         runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "queue-turn-1", status: "completed" } } });
         for (let n = 0; n < 12; n++) await new Promise<void>(resolve => setImmediate(resolve));
-        expect(store.get(waiting.id)).toMatchObject({ status: "running", turnId: "queue-turn-2" });
+        expect((await backend.handle("getNavigationQueueProjection", { protocol: 2, ref })).entries).toMatchObject([{ queueEntryId: waiting.id, manualReleaseRequired: true }]);
+        expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: waiting.id })).toMatchObject({ disposition: "started", turnId: "queue-turn-3" });
+        expect(store.get(waiting.id)).toMatchObject({ status: "running", turnId: "queue-turn-3" });
+        runtime.submit({ id: "queue-delete", threadId: ref.threadId, prompt: "Invented deleted input" });
+        expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: "queue-delete" })).toMatchObject({ disposition: "cancelled", cancelled: true });
+        expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: waiting.id })).toMatchObject({ disposition: "already_admitted", cancelled: false });
         const pending = runtime.submit({ id: "queue-unfinished", threadId: ref.threadId, prompt: "Invented never-replayed input" });
         fingerprint = pending.fingerprint;
         await runtime.stop();
         expect(store.get("queue-unfinished")).toMatchObject({ status: "unknown", fingerprint });
         expect(store.get("queue-unfinished")).not.toHaveProperty("turnId");
-        expect(sends).toBe(2);
+        expect(sends).toBe(3);
       } finally { profile.close(); }
     },
   });
@@ -76,8 +84,10 @@ test("actual Outpost queued acceptance drains once and hands unfinished outcomes
     try {
       const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(app.homeRoot, "codex") }, profile);
       expect(store.get("queue-first")).toMatchObject({ status: "completed", turnId: "queue-turn-1" });
-      expect(store.get("queue-second")).toMatchObject({ status: "unknown", turnId: "queue-turn-2" });
+      expect(store.get("queue-second")).toMatchObject({ status: "unknown", turnId: "queue-turn-3" });
       expect(store.get("queue-unfinished")).toMatchObject({ status: "unknown", fingerprint });
+      expect(store.get("queue-delete")).toMatchObject({ status: "interrupted" });
+      expect(store.get("queue-delete")).not.toHaveProperty("turnId");
     } finally { profile.close(); }
   } finally { await app.close(); }
 });

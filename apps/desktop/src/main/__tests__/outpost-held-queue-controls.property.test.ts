@@ -166,3 +166,75 @@ it.skipIf(process.platform === "win32")("concurrent retries, terminal-before-con
     });
   }), { numRuns: 8 });
 });
+
+it.skipIf(process.platform === "win32")("queue control write budgets measure release, cancellation, blocked gates and duplicate outcomes", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-09T15:00:00Z"));
+  const budgetFile = "outpost-held-queue-control-write-budgets.json";
+  try {
+    for (const cancel of [false, true]) await fixture(async (runtime, backend, store) => {
+      await held(runtime);
+      const request = { queueEntryId: "waiting0" };
+      const { writes } = await measureSqliteWrites(() => backend.handle(cancel ? "backend.cancelQueuedTurn" : "backend.releaseQueuedTurn", request));
+      expectSqliteWriteBudget({ budgetFile, scenario: cancel ? "held-cancellation" : "held-release",
+        note: cancel ? "One held job's durable cancellation before shared FIFO removal; no provider send" : "One explicit held retry through existing dispatch/identity/confirmation boundaries; acceptance and terminal excluded", writes });
+      const repeats = await measureSqliteWrites(async () => {
+        for (let i = 0; i < 1000; i++) {
+          await backend.handle("backend.releaseQueuedTurn", request);
+          await backend.handle("backend.cancelQueuedTurn", request);
+          backend.queueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } });
+        }
+      });
+      expectSqliteWriteBudget({ budgetFile, scenario: cancel ? "cancelled-retries" : "admitted-retries", note: "1000 repeated release/cancel/projection reads; no provider sends or writes", writes: repeats.writes });
+      expect(store.get("waiting0").status).toBe(cancel ? "interrupted" : "running");
+    });
+    await fixture(async (runtime, backend) => {
+      await held(runtime);
+      runtime.threadLocked = () => true;
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let i = 0; i < 1000; i++) expect((await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" })).disposition).toBe("blocked");
+      });
+      expectSqliteWriteBudget({ budgetFile, scenario: "blocked-retries", note: "1000 live handoff-gated retries preserve the shared hold and durable acceptance", writes });
+    });
+  } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
+});
+
+it.skipIf(process.platform === "win32")("queue controls preserve content fences and restart-without-replay", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async cancel => {
+    await fixture(async (runtime, backend, store, profile) => {
+      const sent = await held(runtime);
+      const fingerprint = store.get("waiting0").fingerprint;
+      expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: "waiting0", expectedContentHash: "stale" })).toMatchObject({ disposition: "content_changed", cancelled: false });
+      expect(store.get("waiting0")).toMatchObject({ status: "queued", fingerprint });
+      if (cancel) expect(await runtime.handle("cancel", { id: "waiting0" })).toMatchObject({ disposition: "cancelled" });
+      else expect(await runtime.handle("release", { id: "waiting0" })).toMatchObject({ disposition: "started" });
+      await runtime.stop();
+      const { JobStore } = await load("src/store.js");
+      runtime.store = new JobStore(path.dirname(store.directory), { version: 1, workspace: runtime.workspace, codexHome: path.join(runtime.workspace, "codex") }, profile);
+      runtime.stopping = false;
+      expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" })).toMatchObject({ disposition: "not_found" });
+      expect(runtime.submit({ id: "waiting0", threadId: "native", prompt: "waiting0" })).toMatchObject({ fingerprint, status: cancel ? "interrupted" : "unknown" });
+      expect(sent).toEqual(cancel ? ["first"] : ["first", "waiting0"]);
+    });
+  }), { numRuns: 4 });
+});
+
+it.skipIf(process.platform === "win32")("retry verifies transient input against immutable acceptance and ignores replacement origins", async () => {
+  await fc.assert(fc.asyncProperty(fc.string({ minLength: 1, maxLength: 20 }), async text => {
+    fc.pre(text !== "waiting0");
+    await fixture(async (runtime, backend, store) => {
+      const sent = await held(runtime);
+      const accepted = store.get("waiting0");
+      runtime.turnQueue.updateQueuedEntryInput("waiting0", [{ type: "text", text }]);
+      expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" })).toMatchObject({ disposition: "blocked" });
+      expect(store.get("waiting0")).toEqual(accepted);
+      expect(sent).toEqual(["first"]);
+      runtime.turnQueue.updateQueuedEntryInput("waiting0", [{ type: "text", text: "waiting0" }]);
+      expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0", messageOrigin: { kind: "agent", sourceInstanceId: "forged" } })).toMatchObject({ disposition: "started" });
+      expect(store.get("waiting0")).toMatchObject({ fingerprint: accepted.fingerprint });
+      expect(store.get("waiting0").messageOrigin).toBeUndefined();
+      expect(sent).toEqual(["first", "waiting0"]);
+    });
+  }), { numRuns: 8 });
+});

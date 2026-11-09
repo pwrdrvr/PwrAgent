@@ -291,9 +291,46 @@ test("owner methods require the same grants as on desktop", { timeout: 15000 }, 
   }
   const detail = await enroll(["thread_navigation", "thread_detail"]);
   assert.equal((await detail.call("getNavigationSelectedDetail", { protocol: 2, ref })).identity, "present");
+  for (const method of ["releaseQueuedTurn", "cancelQueuedTurn"]) {
+    await assert.rejects(detail.call(method, { queueEntryId: "absent" }), /capability/i, `${method} needs turn_control`);
+  }
   const noEnvironment = await enroll(HEADLESS_CAPABILITIES.filter((capability) => capability !== "environment_actions"));
   await assert.rejects(noEnvironment.call("materializeDirectoryLaunchpad", { directoryKey: h.workspace, launchpad: {} }), /capability/i);
   assert.equal(h.calls().filter((message) => message.method === "thread/start").length, 1, "a refused launchpad creates no thread");
+});
+
+test("encrypted owner controls release held jobs and cancel waiting input without interrupting admitted work", { timeout: 20000 }, async t => {
+  const h = await setup(t);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  const owner = await viewer(invite);
+  t.after(() => owner.connection.close());
+  const created = await owner.call("startThread", { backend: "codex", cwd: h.workspace });
+  const ref = { backend: "codex", threadId: created.threadId };
+  owner.subscribe();
+  const active = await owner.call("startTurn", { ...ref, input: [{ type: "text", text: "slow" }] });
+  const failed = await owner.call("startTurn", { ...ref, queueEntryId: "failed", input: [{ type: "text", text: "fail" }] });
+  const waiting = await owner.call("startTurn", { ...ref, queueEntryId: "waiting", input: [{ type: "text", text: "slow" }] });
+  const deleted = await owner.call("startTurn", { ...ref, queueEntryId: "deleted", input: [{ type: "text", text: "deleted-private-input" }] });
+  const fingerprint = (await h.rpc("show", { id: waiting.queueEntryId })).fingerprint;
+  const cancel = h.launch(["cancel", "--id", deleted.queueEntryId]);
+  assert.equal((await cancel.done).code, 0, cancel.errors);
+  assert.equal(JSON.parse(cancel.output).disposition, "cancelled");
+  assert.equal((await h.rpc("show", { id: deleted.queueEntryId })).status, "interrupted");
+  await owner.call("interruptTurn", { ...ref, turnId: active.turnId });
+  await eventually(async () => (await owner.call("getNavigationQueueProjection", { protocol: 2, ref })).entries[0]?.manualReleaseRequired);
+  assert.equal((await h.rpc("show", { id: failed.queueEntryId })).status, "failed");
+  assert.equal((await owner.call("releaseQueuedTurn", { queueEntryId: waiting.queueEntryId })).disposition, "started");
+  assert.deepEqual(await owner.call("cancelQueuedTurn", { queueEntryId: waiting.queueEntryId }), {
+    queueEntryId: waiting.queueEntryId, cancelled: false, disposition: "already_admitted",
+    turnId: (await h.rpc("show", { id: waiting.queueEntryId })).turnId,
+  });
+  const admitted = await h.rpc("show", { id: waiting.queueEntryId });
+  assert.equal(admitted.status, "running");
+  assert.equal(admitted.fingerprint, fingerprint);
+  await owner.call("interruptTurn", { ...ref, turnId: admitted.turnId });
+  await eventually(() => owner.events.some(event => event.params?.notification?.method === "thread/turnQueue/updated" && event.params.notification.params.status === "cancelled"));
+  assert.equal(h.calls().filter(call => call.method === "turn/start" && call.params.input[0].text === "deleted-private-input").length, 0);
+  assert.equal(h.calls().filter(call => call.method === "turn/interrupt").length, 2);
 });
 
 for (const relay of [false, true]) {

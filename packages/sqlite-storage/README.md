@@ -548,3 +548,19 @@ observer that immediately stops the host costs two commits/12,360 bytes
 make zero commits. There is no SQLite timer. Every inherited budget and the
 historical conformance snapshot remain byte-identical; live conformance now
 requires the queue identity/event differences in that snapshot to stay fixed.
+
+Outpost's real owner methods and CLI now release held entries and cancel waiting
+entries through that same queue. Release rechecks live ownership, workspace,
+handoff and daemon gates and the immutable acceptance fingerprint. Cancellation
+suspends shared dispatch and commits its terminal job outcome before removing
+the entry. A refused write leaves input waiting; an admitted provider turn is
+never interrupted by queue cancellation. Restart restores neither input nor
+retryable entries.
+
+`outpost-held-queue-control-write-budgets.json` measures explicit release as
+three existing dispatch commits/8,240 observed WAL bytes (0.824 MB/day at
+100 releases/day), excluding acceptance and completion. Cancellation costs
+one commit/4,120 bytes (0.412 MB/day at 100/day). One thousand duplicate
+release/cancel/projection requests and one thousand gated retries each make
+zero commits and add no provider sends. There is no SQLite timer, schema
+change or change to inherited budgets or the historical conformance snapshot.
