@@ -61,5 +61,12 @@
     "observedWalBytes": 4120,
     "rowsChanged": 3,
     "statements": 3
+  },
+  "refused-claim-stop": {
+    "commits": 2,
+    "note": "A refused claim shuts down the owner and retires input restored after the first cancellation sweep",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
   }
 }

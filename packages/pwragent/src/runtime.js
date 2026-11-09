@@ -610,6 +610,9 @@ export class Runtime {
       // while the daemon still owns its profile leases and storage.
       await this.codex.stop();
     }
+    // A refused in-flight claim can restore its entry after the first sweep.
+    // Dispatch has now settled, so retire that input before owner shutdown.
+    for (const entry of this.turnQueue.getAllQueuedEntries()) this.turnQueue.cancelEntry(entry.id, "Daemon stopped; no queued work was replayed");
     for (const job of this.store.jobs.values()) {
       if (ACTIVE.has(job.status)) this.finish(job.id, "unknown", "Daemon stopped; inspect the thread before explicitly continuing");
     }

@@ -277,5 +277,19 @@ it.skipIf(process.platform === "win32")("budgets individual queued steering at a
         new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
       });
     });
+    await fixture(async ({ runtime, store, submit, value }: any) => {
+      const accepted = await submit(value("claim-stop")), save = store.save.bind(store);
+      let stopped: Promise<void> | undefined;
+      runtime.onFailure = () => { stopped ??= runtime.stop(); };
+      store.save = (job: any) => {
+        if (job.id === accepted.queueEntryId && job.status === "starting") throw new Error("claim refused");
+        return save(job);
+      };
+      await measure("refused-claim-stop", "A refused claim shuts down the owner and retires input restored after the first cancellation sweep", async () => {
+        await drain(); await stopped;
+      });
+      expect(store.get(accepted.queueEntryId).status).toBe("unknown");
+      expect(runtime.turnQueue.getAllQueuedEntries()).toEqual([]);
+    });
   } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
 });
