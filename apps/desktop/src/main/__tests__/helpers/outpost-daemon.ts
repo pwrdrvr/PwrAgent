@@ -39,6 +39,7 @@ export type OutpostDaemon = {
 export async function startOutpostDaemon(options: {
   workspaceKind?: "direct" | "symlink";
   capabilities?: FederationCapability[];
+  profileRoot?: string;
 } = {}): Promise<OutpostDaemon> {
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
@@ -48,11 +49,11 @@ export async function startOutpostDaemon(options: {
   // resolves to a long /private/var/folders/... path. Canonicalize the short
   // root so every fixture path uses the outpost's realpath identity (on
   // macOS /tmp is an alias for /private/tmp, which is still short enough).
-  const root = realpathSync(mkdtempSync("/tmp/pwragent-h-"));
+  const root = options.profileRoot ?? realpathSync(mkdtempSync("/tmp/pwragent-h-"));
   const workspace = path.join(root, "w");
   const home = path.join(root, "c");
   const data = path.join(root, "f");
-  for (const directory of [workspace, home, data]) mkdirSync(directory);
+  for (const directory of [workspace, home, data]) mkdirSync(directory, { recursive: true });
   // Exercise alias resolution on Linux too, while all RPC requests and
   // assertions continue to use the canonical project/directory identity.
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
@@ -71,7 +72,7 @@ export async function startOutpostDaemon(options: {
     connection?.close();
     daemon.kill("SIGTERM");
     await exited;
-    rmSync(root, { recursive: true, force: true });
+    if (!options.profileRoot) rmSync(root, { recursive: true, force: true });
   };
   try {
     for (let attempt = 0; !output.includes('"ready":true'); attempt++) {

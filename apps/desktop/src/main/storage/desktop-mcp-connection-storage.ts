@@ -1,6 +1,6 @@
 import type { ThreadMcpConnectionSelectionStorage, ThreadSandboxStorage } from "@pwragent/owner-core/mcp-connection-storage";
 import { getAppStateDb, getAppStateMode, getAppOverlayStore } from "../state/app-state";
-import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import { ThreadSandboxStore } from "./thread-sandbox-store";
 
 // Keep the event-time state guard and store construction at the gateway's
 // existing lifecycle boundary; initialization and profile selection stay owned

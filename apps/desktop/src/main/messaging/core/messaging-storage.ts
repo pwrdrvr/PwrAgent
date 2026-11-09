@@ -18,7 +18,7 @@ import type {
 import type { MessagingDeliveryRecord, MessagingStoreData } from "./messaging-migrations";
 import type { MessagingBindingChannelMetadataUpdate, MessagingBindingChannelMetadataMerge, MessagingManagedTopicObservationMerge } from "./messaging-store-merge";
 
-type DesktopMessagingStorageRecords = {
+export type DesktopMessagingStorageRecords = {
   binding: MessagingBindingRecord;
   bindingMetadataUpdate: MessagingBindingChannelMetadataUpdate;
   bindingMetadataMerge: MessagingBindingChannelMetadataMerge;

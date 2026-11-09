@@ -188,7 +188,7 @@ import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
-import type { ProviderThreadSnapshot } from "../storage/provider-thread-snapshot-store";
+import type { ProviderThreadSnapshot } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
 import {
   mockSubAgentReads,
@@ -2918,6 +2918,7 @@ function createKimiAcpRegistry(options?: {
   startPrompt?: KimiStartPrompt;
   overlayStore?: ReturnType<typeof createOverlayStoreMock>;
   codexClient?: MockBackendClient;
+  ownerAdmission?: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["ownerAdmission"];
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
@@ -3044,6 +3045,7 @@ function createKimiAcpRegistry(options?: {
       : {}),
   };
   const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+    ownerAdmission: options?.ownerAdmission,
     correspondenceStore: options?.correspondenceStore,
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
@@ -3334,6 +3336,58 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("retains the owner claim when its real pooled ACP adapter cannot dispose a provider", async () => {
+    const close = vi.fn();
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({
+      ownerAdmission: { assertOwnership: vi.fn(), close },
+    });
+    const adapter = (registry as unknown as { acpBackend: { getClient(backend: AcpBackendId): Promise<unknown> } }).acpBackend;
+    await adapter.getClient(acpBackendId);
+    acpClient.dispose.mockRejectedValue(new Error("fixture ACP child still running"));
+    await expect(registry.close()).rejects.toThrow("Desktop backend registry close failed");
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("retains profile ownership until provider close succeeds (failure=%s)", async failure => {
+    const client = new MockBackendClient({ threads: [] });
+    const entered = Promise.withResolvers<void>();
+    const finished = Promise.withResolvers<void>();
+    vi.spyOn(client, "close").mockImplementation(async () => { entered.resolve(); await finished.promise; });
+    const close = vi.fn();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), ownerAdmission: { assertOwnership: vi.fn(), close } });
+    const closing = registry.close();
+    await entered.promise;
+    expect(close).not.toHaveBeenCalled();
+    if (failure) {
+      finished.reject(new Error("fixture provider close failed"));
+      await expect(closing).rejects.toThrow("Desktop backend registry close failed");
+      expect(close).not.toHaveBeenCalled();
+    } else {
+      finished.resolve();
+      await closing;
+      expect(close).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("refuses generated thread/turn admissions before host preparation when another profile owner holds the lease", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("codex", "claude", "acp:kimi"), fc.boolean(), async (backend, turn) => {
+      const client = new MockBackendClient({ threads: [] });
+      const assertOwnership = vi.fn(() => { throw new Error("fixture profile owner holds the lease"); });
+      const close = vi.fn();
+      const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(),
+        ownerAdmission: { assertOwnership, close } });
+      try {
+        const request = turn
+          ? registry.startTurn({ backend, threadId: "fixture", input: [{ type: "text", text: "fixture" }] })
+          : registry.startThread({ backend, cwd: os.tmpdir() });
+        await expect(request).rejects.toThrow("fixture profile owner holds the lease");
+        expect(assertOwnership).toHaveBeenCalled();
+        expect(client.startTurnCalls).toHaveLength(0);
+      } finally { await registry.close(); }
+      expect(close).toHaveBeenCalledOnce();
+    }), { numRuns: 12 });
+  });
+
   it.each([false, true])("delivers a text final and dispatches Telegram input through the real lifecycle pipeline (legacy=%s)", async (legacy) => {
     const overlayStore = createOverlayStoreMock({ executionMode: "default" });
     const overlay = vi.spyOn(desktopOverlayStore, "getDesktopOverlayStore").mockReturnValue(overlayStore as never);
@@ -5383,6 +5437,74 @@ describe("DesktopBackendRegistry", () => {
 
   it("returns an accepted ACP turn when managed-review context consumption rejects", async () => {
     await assertAcceptedAcpTurnSurvivesFinalizationFailure("acp:kimi" as AcpBackendId, "accepted", "review");
+  });
+
+  async function assertClaudeStartOutcome(threadId: string, failure: "bind" | "persist" | "dispose" | "begin") {
+    const revoke = vi.fn();
+    const registration = { server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} },
+      bindThread: vi.fn(), revoke };
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock({ overlays: { [`claude:${threadId}`]: {
+        backend: "claude", threadId, extraLinkedDirectories: [], mcpConnectionIds: ["fixture"],
+      } } }), mcpConnectionService: { registerBridge: vi.fn(async () => registration) },
+      pdfToolMcpServer: null, agentToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      claudeBackend: { startTurn: (params: { onSessionClosed?: () => void }) => Promise<{ backend: "claude"; threadId: string; turnId: string }> };
+      beginStartingTurnOrigin: () => unknown;
+      bindStartingTurnOrigin: () => void;
+      persistStartingTurnOrigin: () => Promise<void>;
+      dropStartingTurnOrigin: (origin: unknown) => void;
+      startingTurnOrigins: Set<unknown>;
+    };
+    const accepted = { backend: "claude" as const, threadId, turnId: "accepted-claude" };
+    const provider = vi.spyOn(internal.claudeBackend, "startTurn").mockResolvedValue(accepted);
+    const refused = new Error(`Claude host ${failure}`);
+    const begin = vi.spyOn(internal, "beginStartingTurnOrigin");
+    const bind = vi.spyOn(internal, "bindStartingTurnOrigin");
+    const persist = vi.spyOn(internal, "persistStartingTurnOrigin").mockResolvedValue();
+    const drop = internal.dropStartingTurnOrigin.bind(registry);
+    const dispose = vi.spyOn(internal, "dropStartingTurnOrigin");
+    if (failure === "begin") begin.mockImplementationOnce(() => { throw refused; });
+    if (failure === "bind") bind.mockImplementationOnce(() => { throw refused; });
+    if (failure === "persist") persist.mockRejectedValueOnce(refused);
+    // Dispose the real resource before injecting a disposer failure.
+    if (failure === "dispose") {
+      dispose.mockImplementationOnce((origin) => { drop(origin); throw refused; });
+    }
+    try {
+      const pending = registry.startTurn({ backend: "claude", threadId,
+        input: [{ type: "text", text: "Continue Claude" }], messageOrigin: { kind: "messaging" } });
+      if (failure === "begin") {
+        await expect(pending).rejects.toBe(refused);
+        expect(provider).not.toHaveBeenCalled();
+        expect(revoke).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).resolves.toBe(accepted);
+        expect(provider).toHaveBeenCalledOnce();
+        expect(bind).toHaveBeenCalledOnce();
+        expect(persist).toHaveBeenCalledOnce();
+        expect(revoke).not.toHaveBeenCalled();
+        provider.mock.calls[0][0].onSessionClosed!();
+        provider.mock.calls[0][0].onSessionClosed!();
+        expect(revoke).toHaveBeenCalledOnce();
+      }
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(internal.startingTurnOrigins.size).toBe(0);
+    } finally { await registry.close(); }
+  }
+
+  it("preserves Claude acceptance and grant ownership through generated host failures", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("accepted", "same:thread", "pending:source"),
+      fc.constantFrom("bind" as const, "persist" as const, "dispose" as const, "begin" as const), assertClaudeStartOutcome), { numRuns: 12 });
+  });
+
+  it("returns an accepted Claude turn when origin persistence rejects", async () => {
+    await assertClaudeStartOutcome("accepted", "persist");
+  });
+
+  it("revokes Claude grants when origin preparation rejects before provider invocation", async () => {
+    await assertClaudeStartOutcome("accepted", "begin");
   });
 
   it("rejects handoff while a turn start is awaiting its provider", async () => {
@@ -15916,6 +16038,236 @@ describe("DesktopBackendRegistry", () => {
     );
 
     await registry.close();
+  });
+
+  async function assertRejectedCreationPreparationCleansUp(failingRevokes: boolean[], failure: "isolation" | "config" | "inventory"): Promise<void> {
+    const effects: string[] = [];
+    const client = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const internal = registry as unknown as {
+      gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
+      registerMcpConnections: () => Promise<unknown[]>;
+      readConfiguredCodexMcpServerNames: () => Promise<string[] | undefined>;
+      buildSupportedCodexTokenMiserConfig: () => Promise<undefined>;
+    };
+    const registrations = failingRevokes.map((reject, i) => ({
+      server: { name: `fixture-${i}`, command: "/fixture/mcp", args: [], env: {} },
+      bindThread: vi.fn(),
+      revoke: vi.fn(() => { effects.push(`revoke:${i}`); if (reject) throw new Error("fixture revoke refused"); }),
+    }));
+    const rollback = vi.fn(async () => { effects.push("rollback"); });
+    vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: process.cwd(), workMode: "worktree", rollback });
+    const connections = createDeferred<unknown[]>();
+    const inventory = createDeferred<string[] | undefined>();
+    vi.spyOn(internal, "registerMcpConnections").mockImplementation(async () => await connections.promise);
+    vi.spyOn(internal, "readConfiguredCodexMcpServerNames").mockImplementation(async () => {
+      effects.push("inventory");
+      return await inventory.promise;
+    });
+    const refusal = new Error(`fixture ${failure} preparation refused`);
+    if (failure === "config") vi.spyOn(internal, "buildSupportedCodexTokenMiserConfig").mockRejectedValue(refusal);
+    const provider = vi.spyOn(client, "startThread");
+    try {
+      const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", mcpConnectionIds: ["fixture"], mcpProviderServersEnabled: false })
+        .then(() => undefined, (error: unknown) => error);
+      await waitForCondition(() => effects.includes("inventory"));
+      if (failure === "inventory") inventory.reject(refusal);
+      else inventory.resolve(failure === "isolation" ? undefined : []);
+      // A sibling refusal cannot release the workspace before late grants settle.
+      expect(rollback).not.toHaveBeenCalled();
+      effects.push("acquired");
+      connections.resolve(registrations);
+      const error = await outcome;
+      if (failure === "isolation") expect(error).toBeInstanceOf(Error);
+      else expect(error).toBe(refusal);
+      expect(provider).not.toHaveBeenCalled();
+      expect(effects.slice(-registrations.length - 1)).toEqual([...registrations.map((_, i) => `revoke:${i}`), "rollback"]);
+      expect(rollback).toHaveBeenCalledOnce();
+      for (const registration of registrations) {
+        expect(registration.revoke).toHaveBeenCalledOnce();
+        expect(registration.bindThread).not.toHaveBeenCalled();
+      }
+    } finally { await registry.close(); }
+  }
+
+  it("releases every acquired creation resource after rejected preparation", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }),
+      fc.constantFrom("isolation" as const, "config" as const, "inventory" as const), assertRejectedCreationPreparationCleansUp), { numRuns: 12 });
+  });
+
+  it("revokes a late MCP grant before rolling back an isolated creation refusal", async () => {
+    await assertRejectedCreationPreparationCleansUp([true, false], "isolation");
+  });
+
+  it("drains admitted runtime work after synchronous creation preparation refuses", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (runtimeRejects) => {
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock() });
+      const internal = registry as unknown as {
+        gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
+        prepareTokenMiserRuntime: () => Promise<void>;
+        resolveTokenMiserEnabledForOverride: () => boolean;
+        resolveForgeToolPolicy: () => undefined;
+      };
+      const runtime = createDeferred<void>();
+      const rollback = vi.fn(async () => {});
+      vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: process.cwd(), workMode: "worktree", rollback });
+      vi.spyOn(internal, "resolveTokenMiserEnabledForOverride").mockReturnValue(true);
+      const prepareRuntime = vi.spyOn(internal, "prepareTokenMiserRuntime").mockReturnValue(runtime.promise);
+      const refusal = new Error("fixture catalog preparation refused");
+      const catalog = vi.spyOn(internal, "resolveForgeToolPolicy").mockImplementation(() => { throw refusal; });
+      let settled = false;
+      try {
+        const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", tokenMiserEnabled: true })
+          .then(() => undefined, (error: unknown) => { settled = true; return error; });
+        await waitForCondition(() => catalog.mock.calls.length === 1);
+        expect(prepareRuntime).toHaveBeenCalledOnce();
+        expect(settled).toBe(false);
+        expect(rollback).not.toHaveBeenCalled();
+        if (runtimeRejects) runtime.reject(new Error("fixture runtime refused"));
+        else runtime.resolve();
+        expect(await outcome).toBe(refusal);
+        expect(rollback).toHaveBeenCalledOnce();
+      } finally { await registry.close(); }
+    }), { numRuns: 4 });
+  });
+
+  async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event" | "workspace"): Promise<void> {
+    const client = new MockBackendClient({ threads: [], startThreadResult: { threadId: "same:thread" } });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, threadTitleGenerationService: null });
+    const internal = registry as unknown as {
+      claudeBackend: { startThread: () => Promise<{ threadId: string }> };
+      startAcpSession: () => Promise<{ threadId: string }>;
+      emit: (event: AgentEvent) => Promise<void>;
+      pendingStartedThreads: Map<string, AppServerThreadSummary>;
+      withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T>;
+    };
+    const submit = backend === "claude"
+      ? vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId: "same:thread" })
+      : backend.startsWith("acp:")
+      ? vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId: "same:thread" })
+      : vi.spyOn(client, "startThread");
+    const parent = vi.spyOn(overlayStore, "setThreadParent");
+    const agent = vi.spyOn(overlayStore, "setThreadAgent");
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    if (failure === "workspace") {
+      const admit = internal.withArchiveWorkspaceWrite.bind(registry);
+      vi.spyOn(internal, "withArchiveWorkspaceWrite").mockImplementation(async (paths, work) => {
+        await admit(paths, work);
+        throw new Error("creation workspace release rejected");
+      });
+    }
+    if (failure === "pr") vi.spyOn(overlayStore, "setThreadPrAutoDispatchEnabled").mockRejectedValueOnce(new Error("creation metadata rejected"));
+    if (failure === "parent") parent.mockRejectedValueOnce(new Error("creation parent rejected"));
+    if (failure === "event") {
+      const emit = internal.emit.bind(registry);
+      vi.spyOn(internal, "emit").mockImplementation(async (event) => {
+        if (event.notification.method === "thread/parent/set") throw new Error("creation event rejected");
+        await emit(event);
+      });
+    }
+    try {
+      // A provider-created identity remains accepted; unrelated finalizers still run.
+      await expect(registry.startThread({ backend, cwd: process.cwd(), parentThreadId: "parent", agent: { name: "Fixture" } }))
+        .resolves.toMatchObject({ backend, threadId: "same:thread", executionMode: "default" });
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(agent).toHaveBeenCalledOnce();
+      expect(parent).toHaveBeenCalledOnce();
+      expect(internal.pendingStartedThreads.has(buildThreadIdentityKey(backend, "same:thread"))).toBe(true);
+      if (backend !== "codex") expect(events.filter((event) => event.notification.method === "thread/started")).toHaveLength(1);
+    } finally { await registry.close(); }
+  }
+
+  it("preserves every accepted thread creation through independent host failures", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi"),
+      fc.constantFrom("pr" as const, "parent" as const, "event" as const, "workspace" as const), assertAcceptedThreadCreationSurvives), { numRuns: 12 });
+  });
+
+  it("returns a created Codex thread when its PR metadata write rejects", async () => {
+    await assertAcceptedThreadCreationSurvives("codex", "pr");
+  });
+
+  it("returns a created thread when workspace admission release rejects", async () => {
+    await assertAcceptedThreadCreationSurvives("codex", "workspace");
+  });
+
+  async function assertCreationVisibilityUsesSavedParent(backend: AppServerBackendKind, parentBackend: AppServerBackendKind,
+    failure: "write" | "notification" | "none" | "unsupported", explicitParentBackend: boolean, checkBudget = false): Promise<void> {
+    const temp = createTempStateDb("pwragent-creation-parent-visibility-");
+    const db = StateDb.open(temp.dbPath);
+    const overlayStore = new SqliteOverlayStore(db);
+    const parentId = "same:parent";
+    const threadId = "new:thread";
+    const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-creation-parent-visibility-project"));
+    const directoryKey = `directory:${directoryPath}`;
+    await overlayStore.setThreadPin({ backend: parentBackend, threadId: parentId, pinnedRank: "1024" });
+    await overlayStore.setSubthreadsCollapsed({ backend: parentBackend, parentThreadId: parentId, collapsed: true });
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], startThreadResult: { threadId } }),
+      overlayStore, threadTitleGenerationService: null });
+    const internal = registry as unknown as {
+      claudeBackend: { startThread: () => Promise<{ threadId: string }> };
+      startAcpSession: () => Promise<{ threadId: string }>;
+      emit: (event: AgentEvent) => Promise<void>;
+    };
+    if (backend === "claude") vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId });
+    if (backend.startsWith("acp:")) vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId });
+    registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({ backend: "all", fetchedAt: 1000, firstSnapshot: false,
+      directoryOverlayByKey: { [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } },
+      overlayByThreadKey: { [buildThreadIdentityKey(parentBackend, parentId)]: (await overlayStore.getThreadOverlayState({ backend: parentBackend, threadId: parentId }))! },
+      previousKnownThreadKeys: [buildThreadIdentityKey(parentBackend, parentId)],
+      threads: [{ id: parentId, title: "Pinned parent", titleSource: "explicit", source: parentBackend, updatedAt: 1000,
+        linkedDirectories: [{ id: directoryKey, kind: "local", label: "project", path: directoryPath }] }], unchanged: false,
+    }));
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    if (failure === "write") vi.spyOn(overlayStore, "setThreadParent").mockRejectedValueOnce(new Error("parent write refused"));
+    if (failure === "unsupported") Object.defineProperty(overlayStore, "setThreadParent", { value: undefined });
+    if (failure === "notification") {
+      const emit = internal.emit.bind(registry);
+      vi.spyOn(internal, "emit").mockImplementation(async (event) => {
+        if (event.notification.method === "thread/parent/set") throw new Error("parent notification refused");
+        await emit(event);
+      });
+    }
+    try {
+      const { result: response, writes } = await measureSqliteWrites(() => registry.startThread({ backend, cwd: directoryPath, parentThreadId: parentId,
+        ...(explicitParentBackend || parentBackend !== backend ? { parentThreadBackend: parentBackend } : {}) }));
+      if (checkBudget) expectSqliteWriteBudget({ scenario: "all-pinned-project-thread-creation", writes,
+        note: "A rejected parent port leaves the ordinary root-creation budget, including the visibility pin, unchanged." });
+      const saved = await overlayStore.getThreadOverlayState({ backend, threadId });
+      const parent = await overlayStore.getThreadOverlayState({ backend: parentBackend, threadId: parentId });
+      // Storage owns the relationship. A root needs its own pin; a saved child
+      // needs the pinned parent's tray, even if announcing that write failed.
+      const isChild = Boolean(saved?.parentThreadId);
+      expect(isChild).toBe(failure === "none" || failure === "notification");
+      expect(Boolean(saved?.pinnedRank)).toBe(!isChild);
+      expect(Boolean(response.pinnedRank)).toBe(!isChild);
+      expect(parent?.subthreadsCollapsed).toBe(!isChild);
+      expect(events.filter((event) => event.notification.method === "thread/parent/set")).toHaveLength(failure === "none" ? 1 : 0);
+      expect(response).toMatchObject({ backend, threadId });
+    } finally {
+      await registry.close();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }
+
+  it("finalizes creation visibility from the persisted parent relationship", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi"),
+      fc.constantFrom<AppServerBackendKind>("codex", "claude"), fc.constantFrom("write" as const, "notification" as const, "none" as const, "unsupported" as const),
+      fc.boolean(), (backend, parentBackend, failure, explicitParentBackend) =>
+        assertCreationVisibilityUsesSavedParent(backend, parentBackend, failure, explicitParentBackend)), { numRuns: 25 });
+  });
+
+  it("pins an unparented root after its requested parent write rejects", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    try { await assertCreationVisibilityUsesSavedParent("codex", "codex", "write", false, true); }
+    finally { vi.unstubAllEnvs(); }
+  });
+
+  it("reveals a committed parent's tray when its notification rejects", async () => {
+    await assertCreationVisibilityUsesSavedParent("codex", "codex", "notification", false);
   });
 
   it.each([true, false])("uses a directory disclosure changed after its navigation snapshot (collapsed: %s)", async (collapsed) => {
@@ -51273,6 +51625,68 @@ script = "printf setup"
 
   it("keeps prepared start provenance when user items precede the provider's start reply", async () => {
     await assertPreparedStartOrigin({ threadId: "prepared", text: "", providerStarted: false, agent: false });
+  });
+
+  async function assertPriorTurnCannotConsumeStart(command: {
+    threadId: string; text: string; priorTurns: number; delayedTurn: number; providerStarted: boolean;
+  }): Promise<void> {
+    const client = new MockBackendClient({});
+    const store = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const origin: AppServerThreadMessageOrigin = { kind: "agent", sourceThread: { backend: "claude", threadId: "sender" } };
+    const items: Array<{ id: string; origin?: unknown }> = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "item/started" || event.notification.method === "item/completed") {
+        items.push(event.notification.params.item as { id: string; origin?: unknown });
+      }
+    });
+    const started = async (turnId: string, threadId = command.threadId) => client.emit({ method: "turn/started", params: {
+      threadId, turnId, turn: { id: turnId, status: "in_progress" },
+    } });
+    const item = async (method: "item/started" | "item/completed", turnId: string, id: string) => client.emit({ method, params: {
+      threadId: command.threadId, turnId, item: { id, type: "userMessage", content: [{ type: "text", text: command.text }] },
+    } });
+    vi.spyOn(client, "startTurn").mockImplementation(async () => {
+      await item("item/completed", `prior-${command.delayedTurn % command.priorTurns}`, "old-message");
+      if (command.providerStarted) await started("new-turn");
+      await item("item/started", "new-turn", "new-message");
+      await item("item/completed", "new-turn", "new-message");
+      await client.emit({ method: "turn/completed", params: { threadId: command.threadId,
+        turnId: "new-turn", turn: { id: "new-turn", status: "completed", output: [] } } });
+      return { threadId: command.threadId, turnId: "new-turn" };
+    });
+    try {
+      // The same provider turn id in a different thread must not fence this
+      // start's real item, even though that observation precedes admission.
+      await started("new-turn", `${command.threadId}:other`);
+      await client.emit({ method: "turn/completed", params: { threadId: `${command.threadId}:other`,
+        turnId: "new-turn", turn: { id: "new-turn", status: "completed", output: [] } } });
+      for (let index = 0; index < command.priorTurns; index += 1) {
+        await started(`prior-${index}`);
+        await client.emit({ method: "turn/completed", params: { threadId: command.threadId,
+          turnId: `prior-${index}`, turn: { id: `prior-${index}`, status: "completed", output: [] } } });
+      }
+      await registry.startTurn({ backend: "codex", threadId: command.threadId,
+        input: [{ type: "text", text: command.text }], messageOrigin: origin });
+      expect(items).toHaveLength(3);
+      expect(items[0]).toEqual({ id: "old-message", type: "userMessage", content: [{ type: "text", text: command.text }] });
+      for (const message of items.slice(1)) expect(message).toMatchObject({ id: "new-message", origin });
+      expect(store.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(expect.objectContaining({ messageId: "old-message" }));
+      expect(store.upsertThreadMessageOrigin).toHaveBeenCalledWith({ backend: "codex", threadId: command.threadId,
+        messageId: "new-message", origin });
+    } finally { await registry.close(); }
+  }
+
+  it("keeps a new start's provenance through generated delayed prior-turn completions with identical text", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({ threadId: fc.constantFrom("same", "same:thread", "pending:source"),
+      text: fc.constantFrom("Continue.", "Continue", "Same prepared input"), priorTurns: fc.integer({ min: 1, max: 4 }),
+      delayedTurn: fc.nat(8), providerStarted: fc.boolean(),
+    }), assertPriorTurnCannotConsumeStart), { numRuns: 20 });
+  });
+
+  it("does not give a delayed previous-turn completion the new start's origin", async () => {
+    await assertPriorTurnCannotConsumeStart({ threadId: "same", text: "Continue.", priorTurns: 1,
+      delayedTurn: 0, providerStarted: true });
   });
 
   it.each([

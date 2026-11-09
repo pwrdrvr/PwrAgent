@@ -42,7 +42,7 @@ test("publishing requires the reviewed desktop-tag environment with admin bypass
   assert.throws(() => checkEnvironment(environment, { branch_policies: [...policies.branch_policies, { name: "*", type: "tag" }] }));
 });
 
-test("release validation permits only the pinned native PTY dependency and bundled JavaScript", () => {
+test("release validation permits only the pinned native SQLite and PTY dependencies and bundled JavaScript", () => {
   for (const change of [{ name: "other" }, { private: true }, { license: "UNLICENSED" },
     { engines: { node: ">=20" } }, { bin: { pwragent: "src/cli.js" } },
     { repository: { url: "https://example.com", directory: "packages/pwragent" } },
@@ -52,10 +52,22 @@ test("release validation permits only the pinned native PTY dependency and bundl
     { dependencies: { "node-pty": "1.2.0-beta.14" } },
     { dependencies: { "node-pty": "1.2.0-beta.16" } },
     { dependencies: { ...pkg.dependencies, ws: "8.22.0" } },
+    { dependencies: { ...pkg.dependencies, "better-sqlite3": "^13.0.3" } },
+    { dependencies: { ...pkg.dependencies, "better-sqlite3": "13.0.2" } },
+    { bundleDependencies: ["node-pty"] },
+    { bundleDependencies: ["better-sqlite3"] },
     { bundleDependencies: undefined }, { bundleDependencies: [] },
     { bundleDependencies: ["node-pty", "ws"] },
     { optionalDependencies: { ws: "*" } }, { peerDependencies: { ws: "*" } }]) {
     assert.throws(() => releaseMetadata({ ...pkg, ...change }));
+  }
+});
+
+test("release validation rejects Node ranges that include runtimes below SQLite's Node-API 10 floor", () => {
+  // Node's version matrix starts Node-API 10 at 22.14.0 and 23.6.0.
+  // https://nodejs.org/api/n-api.html#node-api-version-matrix
+  for (const node of [">=22", ">=22.14.0", "^22.13.0 || >=23.6.0", "^22.14.0 || >=23.5.0"]) {
+    assert.throws(() => releaseMetadata({ ...pkg, engines: { node } }), /Node-API 10/);
   }
 });
 

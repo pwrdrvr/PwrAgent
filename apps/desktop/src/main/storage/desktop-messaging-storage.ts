@@ -2,7 +2,7 @@ import type { MessagingActivityStorage } from "@pwragent/owner-core/messaging-ac
 import type { MessagingPairingStorage } from "@pwragent/owner-core/messaging-pairing-storage";
 import type { DesktopMessagingStorage, MessagingRequestStore } from "../messaging/core/messaging-storage";
 import { getAppMessagingStore, getAppStateDb } from "../state/app-state";
-import { SqliteMessagingRequestStore } from "../state/messaging-request-store";
+import { SqliteMessagingRequestStore } from "./messaging-request-store";
 import { MessagingActivityLog } from "./messaging-activity-log";
 import { MessagingPairingStore } from "./messaging-pairing-store";
 

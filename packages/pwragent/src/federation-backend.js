@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import path from "node:path";
-import { buildThreadIdentityKey, NavigationQueryStore, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
-import { ACTIVE, atomicJson, digest } from "./store.js";
+import { isDeepStrictEqual } from "node:util";
+import { buildThreadIdentityKey, NavigationQueryStore, ThreadNamingLifecycle, projectProviderThreadSummary, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
+import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
 
 // The owner methods this outpost serves. Each one's capability comes from the
@@ -26,7 +26,6 @@ export const METHOD_CAPABILITIES = ownerMethodCapabilities(OWNER_METHODS);
 // The placeholder title desktop gives a new thread. Viewers recognize this
 // exact text as "no name yet".
 export const PLACEHOLDER_THREAD_TITLE = "Untitled thread";
-const LEGACY_PLACEHOLDER_THREAD_TITLE = "New outpost thread";
 
 function mode(sandbox) { return sandbox === "workspace-write" ? "auto" : "default"; }
 function sandboxFor(params, fallback = "read-only") {
@@ -58,32 +57,89 @@ export class HeadlessBackend {
     };
     // Same headroom as desktop's FEDERATION_RESPONSE_BYTE_BUDGET.
     this.replayByteBudget = FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
-    this.file = path.join(path.dirname(runtime.store.directory), "threads.json");
-    try {
-      const data = JSON.parse(readFileSync(this.file, "utf8"));
-      if (data.version !== 1 || !Array.isArray(data.threads)) throw new Error("Invalid headless thread registry");
-      this.threads = new Map(data.threads.map((thread) => [thread.id,
-        thread.titleSource === "fallback" && thread.title === LEGACY_PLACEHOLDER_THREAD_TITLE
-          ? { ...thread, title: PLACEHOLDER_THREAD_TITLE } : thread]));
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      this.threads = new Map();
-    }
+    this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory);
+    this.threadRegistry = this.threads;
+    this.providerMutationVersion = 0;
+    this.naming = new ThreadNamingLifecycle({
+      readName: async ({ threadId }) => this.threads.get(threadId)?.title,
+      readTitle: async ({ threadId }) => this.summary(this.owned(threadId)),
+      renameProvider: async ({ threadId, name }, titleSource) => {
+        if (!this.threads.has(threadId)) throw new Error("Thread is not owned by this outpost");
+        const result = await this.runtime.codex.renameThread({ threadId, name });
+        this.providerMutationVersion++;
+        try {
+          await this.threadRegistry.updateThreadMetadata({ backend: "codex", threadId }, {
+            title: { text: name.trim(), source: titleSource, nativeName: name.trim() },
+          });
+        } catch (error) { this.runtime.onFailure(error); throw error; }
+        this.threads.observeNativeTitle(threadId, name.trim(), titleSource);
+        return result;
+      },
+      getAgent: async () => undefined, setAgent: async () => {},
+      invalidate: () => {},
+      emit: async event => {
+        this.publish(event, "transcript");
+        this.invalidate(event.notification.params.threadId, event.notification.method);
+      },
+      now: () => Date.now(),
+    });
     runtime.ownsThread = (id) => this.threads.has(id) && !this.threads.get(id).archived;
     runtime.threadCwd = (id) => this.owned(id).cwd || runtime.workspace;
     runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
     this.latestJobs = new Map();
     this.syncJobs();
-    this.threadRegistry = new OutpostThreadRegistry(this);
   }
 
-  persist() {
-    try { atomicJson(this.file, { version: 1, threads: [...this.threads.values()] }); }
+  async initialize() {
+    await this.refreshThreads();
+    this.initialized = true;
+  }
+
+  async refreshThreads() {
+    if (this.discovery) return this.discovery;
+    const discover = async () => {
+      let generation = this.providerMutationVersion;
+      const observedAt = Date.now();
+      // A retained inventory is a startup projection, never proof of current
+      // provider membership. Both complete walks must succeed before replacement.
+      const active = await this.runtime.codex.listThreads({ archived: false, enrichDirectories: false, requireComplete: true, skipArchivedMetadataRefresh: true });
+      const archived = await this.runtime.codex.listThreads({ archived: true, enrichDirectories: false, requireComplete: true });
+      const threads = [...active, ...archived.map(thread => ({ ...thread, archivedAt: thread.archivedAt ?? 0 }))]
+        .map(projectProviderThreadSummary).sort((a, b) => a.id.localeCompare(b.id));
+      if (generation !== this.providerMutationVersion) return;
+      for (const native of threads) {
+        const identity = { backend: "codex", threadId: native.id };
+        const record = await this.threadRegistry.getThreadMetadata(identity);
+        const title = record?.title;
+        // A legacy/imported owner name has not yet reached Codex. Publish it
+        // once, then retain the acknowledgement so a later native rename wins.
+        if (title && title.source !== "fallback" && title.nativeName === undefined) {
+          await this.naming.renameThread({ ...identity, name: title.text, expectedName: title.text }, { titleSource: title.source });
+          if (this.providerMutationVersion !== generation + 1) return;
+          generation = this.providerMutationVersion;
+          native.title = title.text;
+          // Codex's native name has no provenance field. The owner retains
+          // derived/explicit intent separately from this provider inventory.
+          native.titleSource = "explicit";
+        }
+      }
+      if (generation !== this.providerMutationVersion) return;
+      const previous = this.runtime.store.inventory.list().find(snapshot => snapshot.backend === "codex");
+      if (!isDeepStrictEqual(previous?.threads, threads)) {
+        this.runtime.store.inventory.replace({ backend: "codex", observedAt, threads });
+      }
+      this.threads.replaceInventory(threads, observedAt);
+    };
+    this.discovery = discover();
+    try { await this.discovery; } finally { this.discovery = undefined; }
+  }
+
+  persist(thread) {
+    try { this.threads.set(thread.id, thread); }
     catch (error) { this.runtime.onFailure(error); throw error; }
   }
 
   syncJobs(jobs = this.runtime.store.jobs.values()) {
-    let changed = false;
     for (const job of jobs) {
       if (!job.threadId) continue;
       const previous = this.latestJobs.get(job.threadId);
@@ -91,9 +147,7 @@ export class HeadlessBackend {
       if (this.threads.has(job.threadId)) continue;
       this.threads.set(job.threadId, { id: job.threadId, title: `Thread ${job.threadId.slice(0, 8)}`, titleSource: "fallback",
         createdAt: Date.parse(job.createdAt), messagingFileTools: job.messagingFileTools === true, cwd: job.cwd || this.runtime.workspace, sandbox: job.sandbox, model: job.model });
-      changed = true;
     }
-    if (changed) this.persist();
   }
 
   owned(id) {
@@ -109,18 +163,22 @@ export class HeadlessBackend {
   summary(thread) {
     const cwd = thread.cwd || this.runtime.workspace;
     const job = this.latest(thread.id);
-    const updatedAt = Math.max(thread.updatedAt || thread.createdAt, job ? Date.parse(job.updatedAt) : 0);
+    const createdAt = thread.createdAt ?? 0;
+    const updatedAt = Math.max(thread.updatedAt ?? createdAt, job ? Date.parse(job.updatedAt) : 0);
     return { id: thread.id, title: thread.title, titleSource: thread.titleSource, source: "codex",
-      createdAt: thread.createdAt, updatedAt, projectKey: cwd,
+      createdAt, updatedAt, projectKey: cwd,
       threadStatus: job && ACTIVE.has(job.status) ? "active" : "idle",
       linkedDirectories: [{ id: cwd, kind: "local", path: cwd, label: path.basename(cwd) }],
       executionMode: mode(thread.sandbox), model: thread.model || undefined,
       reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier,
-      inbox: { inInbox: updatedAt > (thread.seenUpdatedAt ?? thread.seenAt ?? 0), reason: "updated-since-seen" },
+      pinnedRank: thread.pinnedRank, parentThreadId: thread.parentThreadId, parentThreadBackend: thread.parentThreadBackend,
+      parentThreadInstanceId: thread.parentThreadInstanceId, subthreadOrder: thread.subthreadOrder, subthreadsCollapsed: thread.subthreadsCollapsed,
+      inbox: { inInbox: updatedAt > this.threads.seenWatermark(thread), reason: "updated-since-seen" },
       workspaceHandoff: { available: false, unavailableReason: "Workspace handoff is unavailable on this outpost" } };
   }
 
   event(message) {
+    if (["thread/started", "thread/name/updated", "thread/archived", "thread/unarchived", "turn/completed"].includes(message.method)) this.providerMutationVersion++;
     if (message.method === "headless/turnStarted") {
       this.titleFromFirstPrompt(message.params);
       return;
@@ -166,6 +224,7 @@ export class HeadlessBackend {
     if (params.ref && params.ref.backend !== "codex") throw new Error("This outpost serves Codex only");
     if (params.cwd) this.runtime.projects.resolve(params.cwd);
     const name = method.replace(/^backend\./, "");
+    if (this.initialized && ["listThreads", "getNavigationQueryPage", "lookupArchivedThreads"].includes(name)) await this.refreshThreads();
     switch (name) {
       case "listBackends": return this.listBackends();
       case "listThreads": return { backend: "codex", fetchedAt: Date.now(), threads: [...this.threads.values()].filter((thread) => !thread.archived).map((thread) => this.summary(thread)), workspaceRoots: this.runtime.projects.list().map((project) => project.path) };
@@ -190,7 +249,18 @@ export class HeadlessBackend {
         return { thread, threadStatus: thread.threadStatus,
           ...(job?.turnId && ACTIVE.has(job.status) ? { activeTurn: { backend: "codex", threadId: thread.id, turnId: job.turnId } } : {}) };
       }
-      case "lookupArchivedThreads": return { threads: [] };
+      case "lookupArchivedThreads": {
+        if (!Array.isArray(params.threadIds) || params.threadIds.length > 100
+          || params.threadIds.some(id => typeof id !== "string" || !id || id.length > 1024)
+          || (params.includeParent !== undefined && params.includeParent !== true)) throw new Error("Archived lookup requires at most 100 non-empty thread IDs");
+        const requested = new Set(params.threadIds);
+        const threads = [...this.threads.values()].filter(thread => thread.archived && requested.has(thread.id));
+        return { threads: threads.map(thread => ({ ...this.summary(thread), archivedAt: thread.archivedAt ?? 0 })),
+          ...(params.includeParent ? { parentLinks: [...this.threads.values()].filter(thread => requested.has(thread.id)).map(thread => ({
+            backend: "codex", threadId: thread.id, parentThreadId: thread.parentThreadId,
+            parentThreadBackend: thread.parentThreadBackend, parentThreadInstanceId: thread.parentThreadInstanceId,
+          })) } : {}) };
+      }
       case "getProjectPage": return { backend: "codex", fetchedAt: Date.now(),
         launchpadDefaults: { backend: "codex", executionMode: "default", workMode: "local" },
         directories: this.runtime.projects.list().filter((project) => (!params.projectKey || params.projectKey === project.path)
@@ -244,8 +314,9 @@ export class HeadlessBackend {
         const thread = this.owned(params.threadId);
         const title = params.title || params.name;
         if (typeof title !== "string" || !title.trim() || title.length > 200) throw new Error("Invalid title");
-        this.setTitle(thread, title.trim(), "explicit");
-        return { backend: "codex", threadId: thread.id, title: thread.title };
+        await this.naming.renameThread({ backend: "codex", threadId: thread.id, name: title.trim(),
+          ...(params.expectedName !== undefined ? { expectedName: params.expectedName } : {}) });
+        return { backend: "codex", threadId: thread.id, title: title.trim() };
       }
       case "markThreadSeen": {
         const thread = this.owned(params.threadId);
@@ -253,11 +324,11 @@ export class HeadlessBackend {
           if (params[key] !== undefined && (!Number.isFinite(params[key]) || params[key] < 0)) throw new Error(`Invalid ${key}`);
         }
         // An omitted watermark keeps the stored one (see MarkThreadSeenRequest).
-        // A thread never given one is pinned to the seenAt it was judged by,
+        // A thread never given one is pinned to the baseline/seenAt it was judged by,
         // so recording a new seenAt cannot change its unread state.
-        thread.seenUpdatedAt = params.seenUpdatedAt ?? thread.seenUpdatedAt ?? thread.seenAt ?? 0;
+        thread.seenUpdatedAt = params.seenUpdatedAt ?? this.threads.seenWatermark(thread);
         thread.seenAt = params.seenAt ?? Date.now();
-        this.persist();
+        this.persist(thread);
         this.publish({ backend: "codex", notification: { method: "navigation/thread/seen",
           params: { threadId: thread.id, ...(params.seenUpdatedAt !== undefined ? { seenUpdatedAt: params.seenUpdatedAt } : {}) } } }, "transcript");
         this.invalidate(thread.id, "navigation/thread/seen");
@@ -267,7 +338,7 @@ export class HeadlessBackend {
       case "setThreadExecutionMode": {
         const thread = this.owned(params.threadId);
         thread.sandbox = sandboxFor({ executionMode: params.executionMode });
-        this.persist();
+        this.persist(thread);
         this.invalidate(thread.id);
         return { backend: "codex", threadId: thread.id, executionMode: mode(thread.sandbox) };
       }
@@ -277,7 +348,7 @@ export class HeadlessBackend {
           if (params[key] !== undefined && (typeof params[key] !== "string" || params[key].length > 200)) throw new Error(`Invalid ${key}`);
           if (params[key] !== undefined) thread[key] = params[key];
         }
-        this.persist();
+        this.persist(thread);
         this.invalidate(thread.id);
         return { backend: "codex", threadId: thread.id, model: thread.model, reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier };
       }
@@ -290,10 +361,12 @@ export class HeadlessBackend {
     this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId, ...(sourceMethod ? { sourceMethod } : {}) } } }, "navigation");
   }
 
-  // threads.json retains owner title provenance, including explicit renames.
+  // The canonical owner record retains title provenance, including explicit renames.
   setTitle(thread, title, titleSource) {
-    Object.assign(thread, { title, titleSource });
-    this.persist();
+    this.providerMutationVersion++;
+    Object.assign(thread, { title, titleSource, titleNativeName: title });
+    this.persist(thread);
+    this.threads.observeNativeTitle(thread.id, title, titleSource);
     this.publish({ backend: "codex", notification: { method: "thread/name/updated",
       params: { threadId: thread.id, threadName: title, titleSource } } }, "transcript");
     this.invalidate(thread.id, "thread/name/updated");
@@ -353,8 +426,7 @@ export class HeadlessBackend {
       this.runtime.loadedThreads.add(result.threadId);
       const thread = { id: result.threadId, messagingFileTools: true, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
-      this.threads.set(thread.id, thread);
-      this.persist();
+      this.persist(thread);
       this.invalidate(thread.id, "thread/started");
       return { backend: "codex", threadId: thread.id, executionMode: mode(sandbox) };
     } finally { this.creating = false; }

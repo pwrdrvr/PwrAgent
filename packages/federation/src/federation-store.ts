@@ -1,44 +1,7 @@
 import type { FederationPeerId, FederationPeerSummary, FederationInstanceRole, FederationSessionId } from "@pwragent/shared";
 
-export type FederationEnrollmentStatus =
-  | "pending"
-  | "used"
-  | "expired"
-  | "revoked";
-
-export type FederationEnrollmentEntry = {
-  id: string;
-  status: FederationEnrollmentStatus;
-  generatedAt: number;
-  expiresAt: number;
-  usedAt?: number;
-  peerId?: FederationPeerId;
-  label?: string;
-  role?: FederationInstanceRole;
-  endpoint?: string;
-  gatewayInstanceId?: string;
-};
-
-export type FederationSessionAuditKind =
-  | "connect_attempt"
-  | "connected"
-  | "rejected"
-  | "disconnected"
-  | "relay"
-  | "error"
-  | "remote_pty_open"
-  | "remote_pty_close";
-
-export type FederationSessionAuditEntry = {
-  eventId: number;
-  peerId?: FederationPeerId;
-  sessionId?: FederationSessionId;
-  kind: FederationSessionAuditKind;
-  createdAt: number;
-  detail?: string;
-  repeatCount?: number;
-  firstSeenAt?: number;
-};
+import type { FederationEnrollmentEntry, FederationSessionAuditEntry, FederationSessionAuditKind } from "@pwragent/shared";
+export type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationSessionAuditKind, FederationSessionAuditEntry } from "@pwragent/shared";
 
 /** Storage supplied by the host; transport never depends on SQLite or secrets. */
 export interface FederationStore {

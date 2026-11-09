@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:
 import net from "node:net";
 import path from "node:path";
 import test from "node:test";
+import Database from "better-sqlite3";
 import { setup, eventually } from "./helpers.js";
 const timeout = 10000;
 
@@ -24,8 +25,10 @@ test("real CLI submits once, disconnects, reads results and explicitly continues
   await assert.rejects(h.submit("first", "different"), /different input/);
   assert.equal((await h.rpc("read", { id: "first" })).thread.turns.length, 1);
   assert.equal(statSync(h.directory).mode & 0o777, 0o700);
-  assert.equal(statSync(path.join(h.directory, "jobs/first.json")).mode & 0o777, 0o600);
-  assert.ok(!readFileSync(path.join(h.directory, "jobs/first.json"), "utf8").includes("hello"));
+  assert.equal(existsSync(path.join(h.directory, "jobs/first.json")), false);
+  const reader = new Database(path.join(path.dirname(h.directory), "state.db"), { readonly: true });
+  try { assert.ok(!reader.prepare("SELECT payload FROM owner_jobs WHERE job_id = ?").get("first").payload.includes("hello")); }
+  finally { reader.close(); }
   assert.equal((await h.stop(h.daemon)).code, 0);
   await h.start();
   assert.equal((await h.rpc("show", { id: "first" })).status, "completed");
@@ -43,7 +46,7 @@ test("acceptance survives a socket disappearing before the response", { timeout 
   const socket = net.createConnection(path.join(h.directory, "rpc.sock"));
   await new Promise((resolve) => socket.once("connect", resolve));
   socket.write(JSON.stringify({ version: 1, method: "submit", params: { id: "lost-client", prompt: "hello" } }) + "\n");
-  await eventually(() => existsSync(path.join(h.directory, "jobs/lost-client.json")));
+  await eventually(async () => (await h.rpc("list")).some(job => job.id === "lost-client"));
   socket.destroy();
   assert.equal((await h.finished("lost-client")).status, "completed");
   await h.submit("lost-client", "hello");
@@ -108,6 +111,20 @@ test("abrupt daemon death refuses stale ownership until explicit recovery, then 
   assert.equal((await refused.done).code, 1);
   assert.match(refused.errors, /owner lock/);
   for (const name of ["owner.lock", "rpc.sock"]) rmSync(path.join(h.directory, name), { force: true });
+  // Shared profile leases retain desktop's persisted dead-owner grace even
+  // after the operator explicitly removes the headless lock. Observe the
+  // refusal, then advance only this fixture's durable death timestamp to the
+  // grace boundary; no wall-clock sleep or provider work is needed.
+  const grace = h.launch(h.serveArgs);
+  assert.equal((await grace.done).code, 1);
+  assert.match(grace.errors, /Profile federation lease is held/);
+  const db = new Database(path.join(path.dirname(h.directory), "state.db"));
+  try {
+    const dead = db.prepare("SELECT instance_id, exited_at FROM app_runtime_instances WHERE process_id = ?").get(h.daemon.pid);
+    const lease = db.prepare("SELECT expires_at FROM messaging_runtime_lease WHERE owner_instance_id = ? AND lease_key = 'profile-federation'").get(dead.instance_id);
+    assert.equal(lease.expires_at - dead.exited_at, 60_000);
+    db.prepare("UPDATE app_runtime_instances SET exited_at = ? WHERE instance_id = ?").run(Date.now() - 60_000, dead.instance_id);
+  } finally { db.close(); }
   await h.start();
   assert.equal((await h.rpc("show", { id: "abrupt" })).status, "unknown");
   await h.submit("abrupt", "slow");

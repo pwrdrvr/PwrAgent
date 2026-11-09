@@ -344,6 +344,36 @@ rejection. The host retains ACP prompt locks, provider active-turn ownership,
 runtime/model/environment setup and every existing storage site. This adds no
 request identity, retry state or persistence.
 
+Claude turn starts use the lifecycle for preparation-to-session grant ownership,
+accepted origin binding/persistence and origin disposal. Before provider invocation,
+failed preparation releases its MCP grants. Claude's existing session-close contract
+consumes release on every invocation, including refusal while a session is live;
+only that callback then revokes grants, once. Later origin or cleanup failures are
+reported without replacing the provider outcome. Desktop retains Claude execution,
+runtime/model/environment/MCP/input setup, active sessions and every storage site.
+
+Thread creation acceptance and finalization live in
+`owner-core/thread-creation-lifecycle.ts`. It selects the provider, limits
+connection revocation and workspace rollback to rejected creation, and hands
+accepted identities to binding, pending navigation, metadata, visibility and
+notification ports in the established order. Independent finalization failures
+are reported without rejecting a thread its provider already created. Parent
+notification follows a successful relationship write; visibility uses that saved
+relationship even if its notification fails. Codex owns its start event. Desktop
+retains workspace/environment/model/MCP preparation, provider execution, pending
+summary construction and all existing storage sites. No request identity or
+retry state is introduced.
+
+Creation preparation uses that lifecycle's invocation-local resource scope.
+It owns the prepared workspace rollback and acquired connection grants until
+provider creation takes ownership. A preparation refusal drains every admitted
+branch, including work admitted before a synchronous host failure, then revokes
+all acquired grants before rolling back the workspace once. Cleanup and reporting
+failures do not replace the preparation refusal. Provider rejection uses the
+existing creation cleanup; accepted threads retain their resources. Runtime,
+environment, model and MCP construction remain desktop host effects. This
+coordination adds no persistence.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or
@@ -373,10 +403,144 @@ below are layered separately so you can read each layer on its own.
 
 ### Desktop state (sqlite WAL)
 
+Local provider ownership is admitted independently of federation/messaging
+service enablement. The production BackendRegistry receives the owner-core
+`ThreadOwnerAdmission` port, whose PID-owned `thread_owner` claim retains the
+existing profile-federation lease through provider shutdown. Service disable
+cannot release that claim. Codex transport connection, Claude session queries,
+ACP pooled/ephemeral startup and registry thread/turn/helper admissions share
+the port. Passive readers remain unclaimed. The Outpost's existing acquisition
+of the same lease excludes these desktop owners without a database lock file.
+
 The desktop main process owns a single sqlite database holding messaging
 bindings, the thread overlay (per-thread UI state), and
 `safeStorage`-encrypted secret blobs. Multiple PwrAgent instances may share
 the same profile DB safely thanks to sqlite WAL mode.
+
+`packages/sqlite-storage` owns the profile database opener, schema and migrations,
+including the sub-agent and usage-activity table helpers and write instrumentation.
+The package also owns `AppRuntimeInstanceStore`, implementing owner-core runtime
+lease ports with injected host liveness and the existing PID-owned lease
+transactions. Desktop constructs it through a private `main/storage` binding at
+the existing app-state lifecycle site. Both hosts use this same storage without moving runtime identity observation
+into the database. The real Outpost daemon opens the profile through its
+`federation-core.ts` binding and takes both federation and messaging leases
+before job recovery, provider startup or listener creation. It drains services
+before releasing them. Desktop supplies its existing defaults to the same
+owner-core runtime lease manager. Both use the existing profile marker format
+and file heartbeat; no SQLite heartbeat is introduced. The Outpost bundle
+externalizes its own pinned native SQLite dependency, and its application code
+receives shutdown and handle-free owner storage ports. Desktop's runtime gates observe the same lease
+rows; configured enablement remains separate from effective runtime ownership.
+Outpost's production jobs and thread registry now use that same database. The
+shared v81 migration adds owner-job acceptance/outcome metadata; existing thread
+overlays remain the canonical metadata registry. Its first start validates host
+identity, backs up legacy jobs and threads, imports both in one FULL-durability
+transaction, then retires matching JSON files. A committed manifest makes partial
+retirement restartable without reimport or replay. Active jobs become unknown.
+Private identity, projects, tools and intake ledgers stay host-owned. Outpost
+reads retained provider inventory independently of canonical metadata; SQLite
+contains no provider transcript or prompt text.
+Before opening its listeners, Outpost now completes active and archived Codex
+protocol discovery. Navigation refreshes that inventory without writing unchanged
+snapshots; provider mutations fence older in-flight discoveries. Fresh provider
+archive membership outranks an unstamped retained flag, while newer canonical
+archive/restore timestamps still fence older retained inventory.
+Both hosts project canonical title provenance against the last acknowledged
+native name. Imported names without that acknowledgement stay visible; Outpost
+publishes them through the shared naming lifecycle before discovery completes.
+An acknowledged Outpost rename reaches Codex before owner success. Desktop's
+name-event pipeline retains the same title/provenance fact; a later differing
+native name wins over its old acknowledgement. No transcript is stored.
+Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
+ports through private desktop bindings at the existing runtime construction
+sites. The model-settings-recents helper is shared by to-do dispatch and the
+desktop recents service. Their SQL, immediate transactions and write counts
+remain unchanged.
+Shared `SqliteOverlayStore` implements the owner metadata registry and the
+existing PR and remote-target storage ports, with its dependency, pin-order,
+change-version and in-memory output closure. Desktop constructs it through a
+private storage binding at the original app-state site; the application-facing
+`desktop-overlay-store` adapter exposes its public API without its database or
+caches. State compatibility exports resolve to the same implementation.
+Shared `ThreadSearchStore` and `ProviderThreadSnapshotStore` own persisted search
+projections and provider inventory, including FTS query construction and legacy
+inventory scrubbing. Their private desktop bindings retain both runtime factory
+sites and return owner-core ports; no database handle reaches application code.
+Search refresh/prune transactions, retained usage titles and write counts stay
+unchanged.
+Shared `AutomationStore` owns persisted automation definitions, runs and
+artifacts with existing pruning and reconciliation transactions. Its private
+desktop binding injects the two existing warning sites and preserves app-state
+construction. The pure transcript merge policy lives in owner-core and is
+shared with desktop artifact rebuilding. No SQL or write count changes.
+Shared `ScheduledThreadActionStore` retains its file/memory payload closure,
+profile-adjacent immutable files, legacy payload migration, claims/recovery and
+bounded projection cursors. Its private desktop bindings preserve app-state
+construction and the owner-core storage port. SQL and transactions are unchanged.
+Shared `SqliteDurableTurnRequestStore` implements the owner-core durable inbox
+port through its private desktop binding and the original federation factory.
+Synchronous FULL/immediate receipt and claim commits precede dispatch, then the
+connection's original durability mode is restored. SQL and lifecycle sites stay
+unchanged; the owner service never receives a database handle.
+Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
+ACP metadata and command ports. Their private desktop bindings preserve the
+explicit runtime factories and app-state construction sites. Legacy history
+stripping, archive keyset pages, command filtering and SQL stay unchanged.
+Shared `MessagingPairingStore` and `MessagingActivityLog` implement owner-core
+pairing and activity ports through private desktop bindings. Their explicitly
+typed factories retain app-state construction at the original lifecycle sites.
+Profile-secret/HMAC identity, timing-safe comparison, expiry/approval transitions,
+activity payloads/freshness, list/retention bounds and all SQL remain unchanged.
+This storage boundary grants no messaging or federation access.
+Shared `OperatorRequestStore` implements owner-local question and seen storage.
+Its private concrete desktop binding and separate application factory preserve
+service construction at the original lifecycle site. Pending question text is
+retained only while open; closed rows keep identity and times. First-record and
+first-seen identity, batched writes and open question/to-do/review seen retention
+preserve every SQL statement and transaction. Live server requests remain owned
+by the registry, rather than reconstructed from storage.
+Shared generic `SqliteTokenMiserStorage` implements owner-core accounting ports
+through a private desktop binding. The existing runtime factory still constructs
+the host service at its original lifecycle site. Object/observation identities,
+ordering, conditional updates, archive generations and immediate transactions
+are unchanged. Safe content projection, legacy filesystem migration/cleanup,
+original-output caches and buffered replay accounting remain with the service.
+Shared generic `AcpAgentStore` implements the existing ACP agent port with only
+scalar index constraints. Launch descriptors, capabilities and registry policy
+stay host-owned. Its private desktop specialization retains the explicit factory
+and both service/backend construction sites. Cache replacement, NOCASE ordering,
+backend identity, JSON guards and every SQL statement/write count are unchanged.
+Shared generic `SqliteMessagingRequestStore` owns immutable request provenance,
+monotone latest-human pointers and idempotent attachment outcomes. Its private
+desktop specialization injects host admission and routing privacy at the original
+explicit factory. The storage package receives scalar identity fields and an
+opaque bounded event, without importing messaging-interface. Profile-file
+authority, hash/JSON semantics, SQL, transactions and write counts are unchanged.
+Shared generic `SqliteMessagingStore` implements the existing owner-core messaging
+port with scalar persistence constraints and injected host policy. The private
+desktop specialization keeps original app-state construction and accessor lifetime.
+Conversation/default-Agent policy, migrations, merges, matching, credential
+scrubbing and snapshot versioning remain host-owned without database access.
+The in-memory implementation shares only the pure questionnaire predicate.
+Every SQL statement and transaction site is preserved.
+Shared `FederationStore` implements the complete handle-free federation storage
+port in shared, alongside its enrollment/audit records. Federation retains its
+narrow transport contract and compatibility exports, keeping both sibling layers
+independent. The private desktop binding retains the original explicit factory
+and peer trust, profile HMACs, expiry, audit collapse and SQL/write behavior.
+Shared `ThreadSandboxStore` implements the existing owner-core thread-resource
+port. Its private desktop binding serves both the guarded event-time gateway
+observer and the original per-call cleanup factory. First-creator ownership,
+native unqualified grants, pending cleanup and stale outcomes retain the same
+SQL and write counts. Viewer-local composer drafts remain a desktop application
+concern and never enter owner projections.
+Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
+compatibility exports resolve to the same class and schema definitions. Only
+state internals and storage adapters may import this package or its desktop
+binding. Owner/application code continues to use storage ports. The package has
+no host imports; each host supplies `better-sqlite3` for its own runtime through
+the package's peer dependency. There is no shared native binary.
 
 ```mermaid
 graph TB
@@ -504,6 +668,7 @@ graph TB
     DesktopApp["apps/desktop"]
     Outpost["packages/pwragent · src/federation-core.ts"]
     OwnerCore["packages/owner-core"]
+    SqliteStorage["packages/sqlite-storage"]
     Federation["packages/federation"]
     AgentTools["packages/agent-tools"]
     MsgProviders["packages/messaging/providers/*"]
@@ -516,13 +681,17 @@ graph TB
     DesktopApp --> Federation
     DesktopApp --> AgentTools
     DesktopApp --> OwnerCore
+    DesktopApp --> SqliteStorage
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
     Outpost --> Federation
     Outpost --> AgentTools
     Outpost --> Shared
     Outpost --> MsgInterface
-    Outpost -.-> OwnerCore
+    Outpost --> OwnerCore
+    Outpost --> SqliteStorage
     OwnerCore --> Shared
+    SqliteStorage --> Shared
+    SqliteStorage --> OwnerCore
     Federation --> Shared
     AgentTools --> Shared
     MsgProviders --> MsgInterface
@@ -548,6 +717,13 @@ reusable libraries and owner-core through its bundle entry; its JavaScript
 consumes the bundle.
 Every package under `packages/` is forbidden from importing `apps/`.
 
+Only Outpost's `federation-core.ts` binding imports the shared SQLite package;
+its runtime and daemon code cannot import raw storage or the native driver.
+
+SQLite storage is below the hosts and may depend only on shared contracts and
+owner-core ports. Desktop application modules cannot import it or the raw
+database binding; their storage adapters and state internals own that access.
+
 ## Workspace map
 
 | Path | What's there |
@@ -557,6 +733,7 @@ Every package under `packages/` is forbidden from importing `apps/`.
 | `packages/federation` | Owner contract, federation transport, enrollment, routing and RPC |
 | `packages/agent-tools` | Agent tool definitions, routing and messaging tool contracts |
 | `packages/owner-core` | Shared navigation projection, Attention ordering, and thread-title policy (`@pwragent/owner-core`) |
+| `packages/sqlite-storage` | Portable profile SQLite opening, schema, migrations, table helpers and write accounting |
 | `packages/pwragent` | Headless Outpost daemon and CLI, with reusable libraries bundled through `src/federation-core.ts` |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |

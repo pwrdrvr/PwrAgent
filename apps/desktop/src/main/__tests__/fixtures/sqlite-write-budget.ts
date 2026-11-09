@@ -40,9 +40,11 @@ type BudgetFile = Record<string, Budget>;
 export function expectSqliteWriteBudget(params: {
   note: string;
   scenario: string;
+  budgetFile?: string;
   writes: SqliteWriteDelta;
 }): void {
-  const budgets = readBudgets();
+  const budgetPath = params.budgetFile ? path.join(import.meta.dirname, params.budgetFile) : BUDGETS_PATH;
+  const budgets = readBudgets(budgetPath);
   const measured: Budget = {
     commits: params.writes.commits,
     note: params.note,
@@ -54,7 +56,7 @@ export function expectSqliteWriteBudget(params: {
   if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) {
     budgets[params.scenario] = measured;
     writeFileSync(
-      BUDGETS_PATH,
+      budgetPath,
       `${JSON.stringify(sortKeys(budgets), null, 2)}\n`,
     );
     return;
@@ -117,9 +119,9 @@ function describe(budget: Budget): string {
   );
 }
 
-function readBudgets(): BudgetFile {
+function readBudgets(budgetPath = BUDGETS_PATH): BudgetFile {
   try {
-    return JSON.parse(readFileSync(BUDGETS_PATH, "utf8")) as BudgetFile;
+    return JSON.parse(readFileSync(budgetPath, "utf8")) as BudgetFile;
   } catch {
     return {};
   }

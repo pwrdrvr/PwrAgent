@@ -1,0 +1,1555 @@
+import { randomUUID } from "node:crypto";
+import type {
+  AppServerBackendKind,
+  AutomationBacklogPolicy,
+  AutomationExecutionProfile,
+  AutomationPriorRunLookback,
+  AutomationRunUsage,
+  AutomationGateConfig,
+  AutomationInboundMessageTriggerDefinition,
+  AutomationListItemSummary,
+  AutomationLoadIssue,
+  AutomationOutputActionDefinition,
+  AutomationOutputActionResult,
+  AutomationRunArtifact,
+  AutomationRunOutputDecision,
+  AutomationRunSkipReason,
+  AutomationRunSourceMetadata,
+  AutomationRunStatus,
+  AutomationRunSummary,
+  AutomationRunTranscriptEvent,
+  AutomationRunTrigger,
+  AutomationRunWindow,
+  AutomationScheduleDefinition,
+  AutomationStatus,
+  AutomationTriggerDefinition,
+  AutomationThreadSummary,
+  ThreadIdentifier,
+} from "@pwragent/shared";
+import {
+  AUTOMATION_SCHEDULE_KINDS,
+  DEFAULT_AUTOMATION_BACKLOG_POLICY,
+  DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
+  buildLegacyEncodedThreadIdentityKey,
+  buildThreadIdentityKey,
+  formatAutomationConversationList,
+  formatAutomationScheduleSummary,
+  isSupportedAutomationInboundConditionGroup,
+  normalizeAutomationPriorRunLookback,
+  resolveAutomationRunsPerHour,
+} from "@pwragent/shared";
+import type { StateDb } from "./state-db.js";
+import { mergeTranscriptEvents } from "@pwragent/owner-core/automation-transcript-merge";
+import type { AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
+export type { AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
+
+const DEFAULT_RUN_HISTORY_LIMIT = 200;
+
+const TERMINAL_RUN_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
+const RUN_STATUS_TRANSITIONS: Record<AutomationRunStatus, readonly AutomationRunStatus[]> = {
+  pending: ["queued", "running", ...TERMINAL_RUN_STATUSES],
+  queued: ["running", ...TERMINAL_RUN_STATUSES],
+  running: TERMINAL_RUN_STATUSES,
+  completed: [],
+  failed: [],
+  cancelled: [],
+  skipped: [],
+};
+
+export type AutomationStoreOptions = {
+  runHistoryLimit?: number;
+  warn?: (message: string, details: Record<string, unknown>) => void;
+};
+
+const UNDERSTOOD_SCHEDULE_KINDS = new Set<string>(AUTOMATION_SCHEDULE_KINDS);
+
+/**
+ * True only when `schedule` is a shape this build can actually run. Anything
+ * else — missing schedule (e.g. a trigger-only automation written by a newer
+ * build), a non-object, or an unrecognized `kind` — is something we must skip
+ * rather than dereference. Never throws; safe to call on untrusted JSON.
+ */
+function isUnderstoodSchedule(
+  schedule: unknown,
+): schedule is AutomationScheduleDefinition {
+  if (!schedule || typeof schedule !== "object") return false;
+  const kind = (schedule as { kind?: unknown }).kind;
+  return typeof kind === "string" && UNDERSTOOD_SCHEDULE_KINDS.has(kind);
+}
+
+type AutomationRow = {
+  automation_id: string;
+  backend: AppServerBackendKind;
+  thread_id: string;
+  name: string;
+  status: AutomationStatus;
+  backlog_policy: AutomationBacklogPolicy;
+  next_run_at: number | null;
+  last_run_at: number | null;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  payload: string;
+};
+
+type AutomationRunRow = {
+  run_id: string;
+  automation_id: string;
+  backend: AppServerBackendKind;
+  thread_id: string;
+  status: AutomationRunStatus;
+  trigger: AutomationRunTrigger;
+  scheduled_for: number | null;
+  queued_at: number | null;
+  started_at: number | null;
+  completed_at: number | null;
+  backend_turn_id: string | null;
+  queue_entry_id: string | null;
+  created_at: number;
+  updated_at: number;
+  payload: string;
+};
+
+type AutomationRunArtifactRow = {
+  run_id: string;
+  automation_id: string;
+  backend: AppServerBackendKind;
+  thread_id: string;
+  status: AutomationRunStatus;
+  created_at: number;
+  updated_at: number;
+  payload: string;
+};
+
+type AutomationPayload = {
+  taskPrompt: string;
+  gate?: AutomationGateConfig;
+  triggers?: AutomationTriggerDefinition[];
+  schedule?: AutomationScheduleDefinition;
+  scheduleSummary: string;
+  executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
+  outputActions?: AutomationOutputActionDefinition[];
+  inboundCoalesceWindowMs?: number;
+  maxRunsPerHour?: number | null;
+  lastRunStatus?: AutomationRunStatus;
+};
+
+type AutomationRunPayload = {
+  scheduledWindows: AutomationRunWindow[];
+  backendThreadId?: string;
+  errorMessage?: string;
+  skipReason?: AutomationRunSkipReason;
+  coalescedCount?: number;
+  source?: AutomationRunSourceMetadata;
+  usage?: AutomationRunUsage;
+};
+
+type AutomationRunArtifactPayload = {
+  finalText?: string;
+  errorMessage?: string;
+  outputDecision?: AutomationRunOutputDecision;
+  actionResults?: AutomationOutputActionResult[];
+  transcriptEvents: AutomationRunTranscriptEvent[];
+};
+
+export class AutomationStore implements AutomationStorage {
+  /**
+   * Automations that couldn't be loaded this process lifetime, keyed by id.
+   * Populated as a side effect of `recordFromRow` whenever a row's payload is
+   * unparseable. Surfaced (read-only) via `getAutomationLoadIssues` so the UI
+   * can warn the user; the underlying rows are never mutated.
+   */
+  private readonly loadIssues = new Map<string, { name: string; reason: string }>();
+
+  constructor(
+    private readonly stateDb: StateDb,
+    private readonly options: AutomationStoreOptions = {},
+  ) {}
+
+  /** Snapshot of automation rows skipped because this build can't load them. */
+  getAutomationLoadIssues(): AutomationLoadIssue[] {
+    return [...this.loadIssues.entries()].map(([id, value]) => ({
+      id,
+      name: value.name,
+      reason: value.reason,
+    }));
+  }
+
+  private noteAutomationLoadIssue(row: AutomationRow, reason: string): void {
+    // Don't warn about soft-deleted rows — they never run and aren't shown.
+    if (row.deleted_at != null || row.status === "deleted") {
+      this.loadIssues.delete(row.automation_id);
+      return;
+    }
+    if (this.loadIssues.get(row.automation_id)?.reason !== reason) {
+      this.options.warn?.("skipping automation that could not be loaded", {
+        automationId: row.automation_id,
+        name: row.name,
+        reason,
+      });
+    }
+    this.loadIssues.set(row.automation_id, { name: row.name, reason });
+  }
+
+  createAutomation(input: CreateAutomationInput): AutomationRecord {
+    const now = input.now ?? Date.now();
+    const triggers = normalizeAutomationTriggers({
+      schedule: input.schedule,
+      triggers: input.triggers,
+    }, this.options.warn);
+    const schedule = scheduleFromTriggers(triggers);
+    const record: AutomationRecord = {
+      id: input.id ?? `automation:${randomUUID()}`,
+      backend: input.backend,
+      threadId: input.threadId,
+      name: input.name,
+      taskPrompt: input.taskPrompt,
+      gate: input.gate,
+      status: input.status ?? "enabled",
+      triggers,
+      schedule,
+      scheduleSummary: schedule
+        ? formatAutomationScheduleSummary(schedule)
+        : formatAutomationTriggerSummary(triggers),
+      backlogPolicy: input.backlogPolicy ?? DEFAULT_AUTOMATION_BACKLOG_POLICY,
+      executionProfile: input.executionProfile,
+      priorRunLookback: normalizeAutomationPriorRunLookback(input.priorRunLookback),
+      outputActions: normalizeAutomationOutputActions(input.outputActions),
+      maxRunsPerHour: resolveAutomationRunsPerHour(input.maxRunsPerHour),
+      inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
+        input.inboundCoalesceWindowMs,
+      ),
+      nextRunAt: input.nextRunAt,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.upsertAutomationRecord(record);
+    return record;
+  }
+
+  updateAutomation(id: string, input: UpdateAutomationInput): AutomationRecord | undefined {
+    const current = this.getAutomation(id, { includeDeleted: true });
+    if (!current) return undefined;
+    const now = input.now ?? Date.now();
+    const triggers =
+      input.triggers ?? (
+        input.schedule
+          ? normalizeAutomationTriggers({ schedule: input.schedule }, this.options.warn)
+          : current.triggers
+      );
+    const schedule = scheduleFromTriggers(triggers);
+    const nextRunAt =
+      input.nextRunAt === null ? undefined : input.nextRunAt ?? current.nextRunAt;
+    const record: AutomationRecord = {
+      ...current,
+      backend: input.backend ?? current.backend,
+      threadId: input.threadId ?? current.threadId,
+      name: input.name ?? current.name,
+      taskPrompt: input.taskPrompt ?? current.taskPrompt,
+      gate: input.gate === null ? undefined : input.gate ?? current.gate,
+      status: input.status ?? current.status,
+      triggers,
+      schedule,
+      scheduleSummary: schedule
+        ? formatAutomationScheduleSummary(schedule)
+        : formatAutomationTriggerSummary(triggers),
+      backlogPolicy: input.backlogPolicy ?? current.backlogPolicy,
+      executionProfile:
+        input.executionProfile === null
+          ? undefined
+          : input.executionProfile ?? current.executionProfile,
+      priorRunLookback:
+        input.priorRunLookback === null
+          ? undefined
+          : normalizeAutomationPriorRunLookback(input.priorRunLookback)
+            ?? current.priorRunLookback,
+      outputActions: input.outputActions ?? current.outputActions,
+      maxRunsPerHour:
+        input.maxRunsPerHour === undefined
+          ? current.maxRunsPerHour
+          : resolveAutomationRunsPerHour(input.maxRunsPerHour),
+      inboundCoalesceWindowMs:
+        input.inboundCoalesceWindowMs === undefined
+          ? current.inboundCoalesceWindowMs
+          : normalizeInboundCoalesceWindowMs(input.inboundCoalesceWindowMs),
+      nextRunAt,
+      updatedAt: now,
+    };
+
+    this.upsertAutomationRecord(record);
+    return record;
+  }
+
+  pauseAutomation(id: string, now = Date.now()): AutomationRecord | undefined {
+    return this.updateAutomation(id, { status: "paused", now });
+  }
+
+  resumeAutomation(
+    id: string,
+    params: { nextRunAt?: number; now?: number } = {},
+  ): AutomationRecord | undefined {
+    return this.updateAutomation(id, {
+      status: "enabled",
+      nextRunAt: params.nextRunAt,
+      now: params.now,
+    });
+  }
+
+  deleteAutomation(id: string, now = Date.now()): AutomationRecord | undefined {
+    const current = this.getAutomation(id, { includeDeleted: true });
+    if (!current) return undefined;
+    const record: AutomationRecord = {
+      ...current,
+      status: "deleted",
+      deletedAt: now,
+      updatedAt: now,
+    };
+    this.upsertAutomationRecord(record);
+    this.cancelPendingRunsForAutomation({
+      automationId: id,
+      now,
+      errorMessage: "Automation deleted before the run started.",
+    });
+    return record;
+  }
+
+  cancelPendingRunsForAutomation(params: {
+    automationId: string;
+    now: number;
+    errorMessage: string;
+  }): void {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued')",
+      )
+      .all(params.automationId) as AutomationRunRow[];
+    for (const row of rows) {
+      const run = this.runFromRow(row);
+      if (!run) continue;
+      this.upsertRun(
+        {
+          ...run,
+          status: "cancelled",
+          completedAt: params.now,
+          errorMessage: params.errorMessage,
+        },
+        {
+          backend: row.backend,
+          threadId: row.thread_id,
+          queueEntryId: row.queue_entry_id ?? undefined,
+          createdAt: row.created_at,
+          updatedAt: params.now,
+        },
+      );
+    }
+  }
+
+  getAutomation(
+    id: string,
+    options: { includeDeleted?: boolean } = {},
+  ): AutomationRecord | undefined {
+    const row = this.stateDb.raw
+      .prepare("SELECT * FROM automations WHERE automation_id = ?")
+      .get(id) as AutomationRow | undefined;
+    if (!row) return undefined;
+    const record = this.recordFromRow(row);
+    if (!record) return undefined;
+    if (!options.includeDeleted && record.status === "deleted") return undefined;
+    return record;
+  }
+
+  listAutomations(options: { includeDeleted?: boolean } = {}): AutomationRecord[] {
+    const rows = this.stateDb.raw
+      .prepare("SELECT * FROM automations ORDER BY updated_at DESC")
+      .all() as AutomationRow[];
+    return rows
+      .map((row) => this.recordFromRow(row))
+      .filter((record): record is AutomationRecord =>
+        Boolean(record && (options.includeDeleted || record.status !== "deleted")),
+      );
+  }
+
+  /**
+   * Inbound matching runs on every inbound message (a hot path). Pre-filter at
+   * the SQL layer to enabled automations whose payload could carry an inbound
+   * trigger, so the common case (only scheduled automations, or a busy channel)
+   * does not JSON-parse every automation row per message. The LIKE can admit a
+   * false positive (e.g. the literal appears in a task prompt); recordFromRow
+   * plus matchAutomationInboundEvent then ignore non-inbound triggers, so the
+   * resulting match set is identical to filtering listAutomations().
+   */
+  listEnabledInboundAutomations(): AutomationRecord[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automations WHERE status = 'enabled' AND payload LIKE '%inbound_message%' ORDER BY updated_at DESC",
+      )
+      .all() as AutomationRow[];
+    return rows
+      .map((row) => this.recordFromRow(row))
+      .filter((record): record is AutomationRecord => Boolean(record));
+  }
+
+  listAutomationsForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    includeDeleted?: boolean;
+  }): AutomationRecord[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automations WHERE backend = ? AND thread_id = ? ORDER BY updated_at DESC",
+      )
+      .all(params.backend, params.threadId) as AutomationRow[];
+    return rows
+      .map((row) => this.recordFromRow(row))
+      .filter((record): record is AutomationRecord =>
+        Boolean(record && (params.includeDeleted || record.status !== "deleted")),
+      );
+  }
+
+  listEnabledDueAutomations(now: number): AutomationRecord[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automations WHERE status = 'enabled' AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC",
+      )
+      .all(now) as AutomationRow[];
+    return rows
+      .map((row) => this.recordFromRow(row))
+      .filter((record): record is AutomationRecord => Boolean(record));
+  }
+
+  createRun(input: CreateAutomationRunInput): AutomationRunSummary | undefined {
+    const automation = this.getAutomation(input.automationId);
+    if (!automation) return undefined;
+    const now = input.now ?? Date.now();
+    const scheduledWindows = input.scheduledWindows ?? (
+      input.scheduledFor === undefined ? [] : [{ scheduledFor: input.scheduledFor }]
+    );
+    const run: AutomationRunSummary = {
+      id: input.id ?? `automation-run:${randomUUID()}`,
+      automationId: automation.id,
+      trigger: input.trigger,
+      status: input.status ?? "pending",
+      scheduledFor: input.scheduledFor ?? scheduledWindows[0]?.scheduledFor,
+      scheduledWindows,
+      source: input.source,
+      queuedAt: input.queuedAt,
+      queueEntryId: input.queueEntryId,
+    };
+
+    this.upsertRun(run, {
+      backend: automation.backend,
+      threadId: automation.threadId,
+      queueEntryId: input.queueEntryId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    this.pruneRuns(automation.id);
+    return run;
+  }
+
+  coalescePendingScheduledRun(params: {
+    automationId: string;
+    scheduledWindows: AutomationRunWindow[];
+    now?: number;
+  }): AutomationRunSummary | undefined {
+    const existing = this.findPendingScheduledRun(params.automationId);
+    if (!existing) return undefined;
+    const byScheduledFor = new Map<number, AutomationRunWindow>();
+    for (const window of existing.scheduledWindows) {
+      byScheduledFor.set(window.scheduledFor, window);
+    }
+    for (const window of params.scheduledWindows) {
+      byScheduledFor.set(window.scheduledFor, window);
+    }
+    const nextRun: AutomationRunSummary = {
+      ...existing,
+      scheduledWindows: [...byScheduledFor.values()].sort(
+        (left, right) => left.scheduledFor - right.scheduledFor,
+      ),
+    };
+    const row = this.getRunRow(existing.id);
+    if (!row) return undefined;
+    this.upsertRun(nextRun, {
+      backend: row.backend,
+      threadId: row.thread_id,
+      queueEntryId: row.queue_entry_id ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: params.now ?? Date.now(),
+    });
+    return nextRun;
+  }
+
+  findPendingScheduledRun(automationId: string): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND trigger = 'scheduled' AND status IN ('pending', 'queued') ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get(automationId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  listPendingOrQueuedRunsForAutomation(automationId: string): AutomationRunSummary[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued') ORDER BY updated_at DESC, rowid DESC",
+      )
+      .all(automationId) as AutomationRunRow[];
+    return rows
+      .map((row) => this.runFromRow(row))
+      .filter((run): run is AutomationRunSummary => Boolean(run));
+  }
+
+  findActiveRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued', 'running') ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(automationId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  findRunBySourceEventKey(params: {
+    automationId: string;
+    sourceEventKey: string;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND source_event_key = ? ORDER BY rowid DESC LIMIT 1",
+      )
+      .get(params.automationId, params.sourceEventKey) as
+      | AutomationRunRow
+      | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  /**
+   * Count inbound-triggered runs created for this automation at or after
+   * `sinceMs` that consumed (or will consume) a headless turn — everything
+   * except `skipped` runs (a busy-lane / drop_missed skip never started).
+   * Backs the per-automation inbound run-rate limit: a rolling-hour count from
+   * the run history survives process restarts (unlike an in-memory bucket) and
+   * makes "N per hour" a hard cap rather than a burstable token bucket.
+   */
+  countRecentInboundRuns(params: {
+    automationId: string;
+    sinceMs: number;
+  }): number {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT COUNT(*) AS count FROM automation_runs WHERE automation_id = ? AND trigger = 'inbound_message' AND status != 'skipped' AND created_at >= ?",
+      )
+      .get(params.automationId, params.sinceMs) as { count: number };
+    return row.count;
+  }
+
+  findPendingRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued') ORDER BY created_at ASC, rowid ASC LIMIT 1",
+      )
+      .get(automationId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  markRunQueued(params: {
+    runId: string;
+    queueEntryId: string;
+    queuedAt?: number;
+    now?: number;
+  }): AutomationRunSummary | undefined {
+    return this.updateRun(params.runId, {
+      status: "queued",
+      queuedAt: params.queuedAt ?? params.now ?? Date.now(),
+      queueEntryId: params.queueEntryId,
+      now: params.now,
+    });
+  }
+
+  markRunStarted(params: {
+    runId: string;
+    backendThreadId?: string;
+    backendTurnId: string;
+    queueEntryId?: string;
+    startedAt?: number;
+    now?: number;
+  }): AutomationRunSummary | undefined {
+    return this.updateRun(params.runId, {
+      status: "running",
+      backendThreadId: params.backendThreadId,
+      backendTurnId: params.backendTurnId,
+      queueEntryId: params.queueEntryId,
+      startedAt: params.startedAt ?? params.now ?? Date.now(),
+      now: params.now,
+    });
+  }
+
+  markRunTerminal(params: {
+    runId: string;
+    status: Extract<AutomationRunStatus, "completed" | "failed" | "cancelled" | "skipped">;
+    completedAt?: number;
+    errorMessage?: string;
+    skipReason?: AutomationRunSkipReason;
+    coalescedCount?: number;
+    now?: number;
+  }): AutomationRunSummary | undefined {
+    const current = this.getRun(params.runId);
+    if (!current || !RUN_STATUS_TRANSITIONS[current.status].includes(params.status)) {
+      return current;
+    }
+    const completedAt = params.completedAt ?? params.now ?? Date.now();
+    const run = this.updateRun(params.runId, {
+      status: params.status,
+      completedAt,
+      errorMessage: params.errorMessage,
+      skipReason: params.skipReason,
+      coalescedCount: params.coalescedCount,
+      now: params.now,
+    });
+    if (!run) return undefined;
+    this.updateAutomationLastRun(run.automationId, {
+      lastRunAt: completedAt,
+      lastRunStatus: params.status,
+      now: params.now ?? completedAt,
+    });
+    return run;
+  }
+
+  /** A throttle marker aggregates distinct drops; it is not another terminal event. */
+  coalesceRateLimitedRun(params: {
+    runId: string;
+    coalescedCount: number;
+    errorMessage: string;
+    now: number;
+  }): AutomationRunSummary | undefined {
+    const row = this.getRunRow(params.runId);
+    if (!row) return undefined;
+    const current = this.runFromRow(row);
+    if (
+      !current
+      || current.status !== "skipped"
+      || current.skipReason !== "rate_limited"
+      || params.coalescedCount <= (current.coalescedCount ?? 0)
+    ) return current;
+    const run = {
+      ...current,
+      coalescedCount: params.coalescedCount,
+      errorMessage: params.errorMessage,
+      completedAt: params.now,
+    };
+    this.upsertRun(run, {
+      backend: row.backend,
+      threadId: row.thread_id,
+      queueEntryId: row.queue_entry_id ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: params.now,
+    });
+    this.updateAutomationLastRun(run.automationId, {
+      lastRunAt: params.now,
+      lastRunStatus: run.status,
+      now: params.now,
+    });
+    return run;
+  }
+
+  getRun(runId: string): AutomationRunSummary | undefined {
+    const row = this.getRunRow(runId);
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  getLatestRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(automationId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  findRunningRunByBackendTurnId(params: {
+    backend: AppServerBackendKind;
+    backendTurnId: string;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE backend = ? AND backend_turn_id = ? AND status = 'running' ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(params.backend, params.backendTurnId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  findRunByBackendTurnId(params: {
+    backend: AppServerBackendKind;
+    backendTurnId: string;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE backend = ? AND backend_turn_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(params.backend, params.backendTurnId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  /**
+   * The run each backend turn id belongs to, for many turns in one scan:
+   * the newest running run, else the newest run in any status. That is
+   * `findRunningRunByBackendTurnId ?? findRunByBackendTurnId` for every id.
+   * A thread's pricing event names every turn in the thread, and the table
+   * has no index on `backend_turn_id`, so a lookup per turn scanned it once
+   * per line.
+   */
+  findRunsByBackendTurnIds(params: {
+    backend: AppServerBackendKind;
+    backendTurnIds: readonly string[];
+  }): Map<string, AutomationRunSummary> {
+    const runs = new Map<string, AutomationRunSummary>();
+    if (params.backendTurnIds.length === 0) return runs;
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT * FROM automation_runs
+         WHERE backend = ?
+           AND backend_turn_id IN (SELECT value FROM json_each(?))
+         ORDER BY updated_at DESC, rowid DESC`,
+      )
+      .all(params.backend, JSON.stringify(params.backendTurnIds)) as AutomationRunRow[];
+    const chosen = new Map<string, AutomationRunRow>();
+    for (const row of rows) {
+      const turnId = row.backend_turn_id;
+      if (!turnId) continue;
+      const current = chosen.get(turnId);
+      if (!current || (current.status !== "running" && row.status === "running")) {
+        chosen.set(turnId, row);
+      }
+    }
+    for (const [turnId, row] of chosen) {
+      const run = this.runFromRow(row);
+      if (run) runs.set(turnId, run);
+    }
+    return runs;
+  }
+
+  upsertRunArtifact(
+    input: UpsertAutomationRunArtifactInput,
+  ): AutomationRunArtifact | undefined {
+    const runRow = this.getRunRow(input.runId);
+    if (!runRow) return undefined;
+    const existing = this.getRunArtifactRow(input.runId);
+    const existingArtifact = existing ? this.artifactFromRow(existing) : undefined;
+    const now = input.now ?? Date.now();
+    const artifact: AutomationRunArtifact = {
+      runId: input.runId,
+      automationId: runRow.automation_id,
+      status: input.status,
+      finalText: input.finalText ?? existingArtifact?.finalText,
+      errorMessage: input.errorMessage ?? existingArtifact?.errorMessage,
+      outputDecision: input.outputDecision ?? existingArtifact?.outputDecision,
+      actionResults: input.actionResults ?? existingArtifact?.actionResults ?? [],
+      transcriptEvents:
+        input.transcriptEvents ?? existingArtifact?.transcriptEvents ?? [],
+      createdAt: existing?.created_at ?? now,
+      updatedAt: now,
+    };
+    this.upsertArtifact(artifact, {
+      backend: runRow.backend,
+      threadId: runRow.thread_id,
+    });
+    return artifact;
+  }
+
+  appendRunTranscriptEvent(params: {
+    runId: string;
+    event: AutomationRunTranscriptEvent;
+    now?: number;
+  }): AutomationRunArtifact | undefined {
+    return this.appendRunTranscriptEvents({
+      runId: params.runId,
+      events: [params.event],
+      now: params.now,
+    });
+  }
+
+  appendRunTranscriptEvents(params: {
+    runId: string;
+    events: AutomationRunTranscriptEvent[];
+    now?: number;
+  }): AutomationRunArtifact | undefined {
+    const run = this.getRun(params.runId);
+    if (!run) return undefined;
+    const existing = this.getRunArtifact(params.runId);
+    const transcriptEvents = mergeTranscriptEvents(
+      existing?.transcriptEvents ?? [],
+      params.events,
+    );
+    return this.upsertRunArtifact({
+      runId: params.runId,
+      status: run.status,
+      finalText: existing?.finalText,
+      errorMessage: existing?.errorMessage,
+      outputDecision: existing?.outputDecision,
+      transcriptEvents,
+      now: params.now,
+    });
+  }
+
+  getRunArtifact(runId: string): AutomationRunArtifact | undefined {
+    const row = this.getRunArtifactRow(runId);
+    return row ? this.artifactFromRow(row) : undefined;
+  }
+
+  listRunsForAutomation(automationId: string, limit = 50): AutomationRunSummary[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+      )
+      .all(automationId, limit) as AutomationRunRow[];
+    return rows
+      .map((row) => this.runFromRow(row))
+      .filter((run): run is AutomationRunSummary => Boolean(run));
+  }
+
+  listRunsForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    limit?: number;
+  }): AutomationRunSummary[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE backend = ? AND thread_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+      )
+      .all(params.backend, params.threadId, params.limit ?? 50) as AutomationRunRow[];
+    return rows
+      .map((row) => this.runFromRow(row))
+      .filter((run): run is AutomationRunSummary => Boolean(run));
+  }
+
+  reconcileStartup(input: StartupReconciliationInput = {}): void {
+    const now = input.now ?? Date.now();
+    const rows = this.stateDb.raw
+      .prepare("SELECT * FROM automation_runs WHERE status IN ('pending', 'queued', 'running')")
+      .all() as AutomationRunRow[];
+
+    const transaction = this.stateDb.raw.transaction(() => {
+      for (const row of rows) {
+        const run = this.runFromRow(row);
+        if (!run) continue;
+        this.upsertRun(
+          {
+            ...run,
+            status: "cancelled",
+            completedAt: now,
+            errorMessage: "PwrAgent restarted before this local automation run completed.",
+          },
+          {
+            backend: row.backend,
+            threadId: row.thread_id,
+            queueEntryId: row.queue_entry_id ?? undefined,
+            createdAt: row.created_at,
+            updatedAt: now,
+          },
+        );
+        this.updateAutomationLastRun(run.automationId, {
+          lastRunAt: now,
+          lastRunStatus: "cancelled",
+          now,
+        });
+      }
+
+      for (const [automationId, nextRunAt] of Object.entries(
+        input.nextRunAtByAutomationId ?? {},
+      )) {
+        this.updateAutomation(automationId, {
+          nextRunAt: nextRunAt ?? null,
+          now,
+        });
+      }
+    });
+    transaction();
+  }
+
+  buildThreadSummaries(): Record<string, AutomationThreadSummary> {
+    const summaries: Record<string, AutomationThreadSummary> = {};
+    for (const automation of this.listAutomations()) {
+      const key = buildThreadIdentityKey(automation.backend, automation.threadId);
+      const current = summaries[key] ?? {
+        totalCount: 0,
+        enabledCount: 0,
+        pausedCount: 0,
+        pendingRunCount: 0,
+        coalescedWindowCount: 0,
+        skippedSinceLastCompletedCount: 0,
+        automations: [],
+      };
+      const runCounts = this.countRunsForAutomation(automation.id);
+      const item: AutomationListItemSummary = {
+        id: automation.id,
+        backend: automation.backend,
+        threadId: automation.threadId,
+        name: automation.name,
+        status: automation.status,
+        triggers: automation.triggers,
+        schedule: automation.schedule,
+        scheduleSummary: automation.scheduleSummary,
+        backlogPolicy: automation.backlogPolicy,
+        nextRunAt: automation.nextRunAt,
+        lastRunAt: automation.lastRunAt,
+        lastRunStatus: automation.lastRunStatus,
+        pendingRunCount: runCounts.pending,
+        coalescedWindowCount: runCounts.coalescedWindows,
+        updatedAt: automation.updatedAt,
+      };
+      current.totalCount += 1;
+      current.enabledCount += automation.status === "enabled" ? 1 : 0;
+      current.pausedCount += automation.status === "paused" ? 1 : 0;
+      current.nextRunAt = minDefined(current.nextRunAt, automation.nextRunAt);
+      current.lastRunAt = maxDefined(current.lastRunAt, automation.lastRunAt);
+      current.pendingRunCount += runCounts.pending;
+      current.coalescedWindowCount += runCounts.coalescedWindows;
+      current.skippedSinceLastCompletedCount += runCounts.skippedSinceLastCompleted;
+      current.automations.push(item);
+      summaries[key] = current;
+    }
+
+    return summaries;
+  }
+
+  private updateRun(
+    runId: string,
+    input: {
+      status: AutomationRunStatus;
+      queuedAt?: number;
+      startedAt?: number;
+      completedAt?: number;
+      backendThreadId?: string;
+      backendTurnId?: string;
+      queueEntryId?: string;
+      errorMessage?: string;
+      skipReason?: AutomationRunSkipReason;
+      coalescedCount?: number;
+      now?: number;
+    },
+  ): AutomationRunSummary | undefined {
+    const row = this.getRunRow(runId);
+    if (!row) return undefined;
+    const current = this.runFromRow(row);
+    if (!current) return undefined;
+    const now = input.now ?? Date.now();
+    const transitions = RUN_STATUS_TRANSITIONS[current.status];
+    const acceptsLifecycle = transitions.includes(input.status)
+      || (transitions.length > 0 && input.status === current.status);
+    // Lifecycle events may beat submission acknowledgements. Stale updates
+    // can fill missing identities, but cannot rewind status, timestamps or outcome.
+    const nextRun: AutomationRunSummary = {
+      ...current,
+      status: acceptsLifecycle ? input.status : current.status,
+      queuedAt: current.queuedAt ?? (acceptsLifecycle ? input.queuedAt : undefined),
+      startedAt: current.startedAt ?? (acceptsLifecycle ? input.startedAt : undefined),
+      completedAt: current.completedAt ?? (acceptsLifecycle ? input.completedAt : undefined),
+      backendThreadId: current.backendThreadId ?? input.backendThreadId,
+      backendTurnId: current.backendTurnId ?? input.backendTurnId,
+      queueEntryId: input.queueEntryId ?? current.queueEntryId,
+      errorMessage: acceptsLifecycle
+        ? input.errorMessage ?? current.errorMessage
+        : current.errorMessage,
+      skipReason: acceptsLifecycle
+        ? input.skipReason ?? current.skipReason
+        : current.skipReason,
+      coalescedCount: acceptsLifecycle
+        ? input.coalescedCount ?? current.coalescedCount
+        : current.coalescedCount,
+    };
+    if (
+      (Object.keys(nextRun) as (keyof AutomationRunSummary)[])
+        .every((key) => nextRun[key] === current[key])
+    ) return current;
+    this.upsertRun(nextRun, {
+      backend: row.backend,
+      threadId: row.thread_id,
+      queueEntryId: nextRun.queueEntryId,
+      createdAt: row.created_at,
+      updatedAt: Math.max(row.updated_at, now),
+    });
+    return nextRun;
+  }
+
+  private updateAutomationLastRun(
+    automationId: string,
+    params: {
+      lastRunAt: number;
+      lastRunStatus: AutomationRunStatus;
+      now: number;
+    },
+  ): void {
+    const current = this.getAutomation(automationId, { includeDeleted: true });
+    if (!current) return;
+    this.upsertAutomationRecord({
+      ...current,
+      lastRunAt: params.lastRunAt,
+      lastRunStatus: params.lastRunStatus,
+      updatedAt: params.now,
+    });
+  }
+
+  private upsertAutomationRecord(record: AutomationRecord): void {
+    const payload: AutomationPayload = {
+      taskPrompt: record.taskPrompt,
+      gate: record.gate,
+      triggers: record.triggers,
+      schedule: record.schedule,
+      scheduleSummary: record.scheduleSummary,
+      executionProfile: record.executionProfile,
+      priorRunLookback: record.priorRunLookback,
+      outputActions: record.outputActions,
+      inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
+      maxRunsPerHour: record.maxRunsPerHour,
+      lastRunStatus: record.lastRunStatus,
+    };
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO automations (
+          automation_id,
+          backend,
+          thread_id,
+          name,
+          status,
+          backlog_policy,
+          next_run_at,
+          last_run_at,
+          created_at,
+          updated_at,
+          deleted_at,
+          payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(automation_id) DO UPDATE SET
+          backend = excluded.backend,
+          thread_id = excluded.thread_id,
+          name = excluded.name,
+          status = excluded.status,
+          backlog_policy = excluded.backlog_policy,
+          next_run_at = excluded.next_run_at,
+          last_run_at = excluded.last_run_at,
+          updated_at = excluded.updated_at,
+          deleted_at = excluded.deleted_at,
+          payload = excluded.payload`,
+      )
+      .run(
+        record.id,
+        record.backend,
+        record.threadId,
+        record.name,
+        record.status,
+        record.backlogPolicy,
+        record.nextRunAt ?? null,
+        record.lastRunAt ?? null,
+        record.createdAt,
+        record.updatedAt,
+        record.deletedAt ?? null,
+        JSON.stringify(payload),
+      );
+  }
+
+  setRunUsage(params: {
+    runId: string;
+    usage: AutomationRunUsage;
+    now?: number;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare("SELECT * FROM automation_runs WHERE run_id = ?")
+      .get(params.runId) as AutomationRunRow | undefined;
+    if (!row) return undefined;
+    const run = this.runFromRow(row);
+    if (!run) return undefined;
+    const payload = parseJson<AutomationRunPayload>(row.payload);
+    if (!payload) return undefined;
+    const updated: AutomationRunPayload = { ...payload, usage: params.usage };
+    this.stateDb.raw
+      .prepare(
+        "UPDATE automation_runs SET payload = ?, updated_at = ? WHERE run_id = ?",
+      )
+      .run(JSON.stringify(updated), params.now ?? Date.now(), params.runId);
+    return { ...run, usage: params.usage };
+  }
+
+  private upsertRun(
+    run: AutomationRunSummary,
+    metadata: {
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      queueEntryId?: string;
+      createdAt: number;
+      updatedAt: number;
+    },
+  ): void {
+    const payload: AutomationRunPayload = {
+      scheduledWindows: run.scheduledWindows,
+      backendThreadId: run.backendThreadId,
+      errorMessage: run.errorMessage,
+      skipReason: run.skipReason,
+      coalescedCount: run.coalescedCount,
+      source: run.source,
+      usage: run.usage,
+    };
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO automation_runs (
+          run_id,
+          automation_id,
+          backend,
+          thread_id,
+          status,
+          trigger,
+          scheduled_for,
+          queued_at,
+          started_at,
+          completed_at,
+          backend_turn_id,
+          queue_entry_id,
+          created_at,
+          updated_at,
+          source_event_key,
+          payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET
+          status = excluded.status,
+          scheduled_for = excluded.scheduled_for,
+          queued_at = excluded.queued_at,
+          started_at = excluded.started_at,
+          completed_at = excluded.completed_at,
+          backend_turn_id = excluded.backend_turn_id,
+          queue_entry_id = excluded.queue_entry_id,
+          updated_at = excluded.updated_at,
+          source_event_key = excluded.source_event_key,
+          payload = excluded.payload`,
+      )
+      .run(
+        run.id,
+        run.automationId,
+        metadata.backend,
+        metadata.threadId,
+        run.status,
+        run.trigger,
+        run.scheduledFor ?? null,
+        run.queuedAt ?? null,
+        run.startedAt ?? null,
+        run.completedAt ?? null,
+        run.backendTurnId ?? null,
+        metadata.queueEntryId ?? null,
+        metadata.createdAt,
+        metadata.updatedAt,
+        run.source?.sourceEventKey ?? null,
+        JSON.stringify(payload),
+      );
+  }
+
+  private upsertArtifact(
+    artifact: AutomationRunArtifact,
+    metadata: {
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+    },
+  ): void {
+    const payload: AutomationRunArtifactPayload = {
+      finalText: artifact.finalText,
+      errorMessage: artifact.errorMessage,
+      outputDecision: artifact.outputDecision,
+      actionResults: artifact.actionResults,
+      transcriptEvents: artifact.transcriptEvents,
+    };
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO automation_run_artifacts (
+          run_id,
+          automation_id,
+          backend,
+          thread_id,
+          status,
+          created_at,
+          updated_at,
+          payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          payload = excluded.payload`,
+      )
+      .run(
+        artifact.runId,
+        artifact.automationId,
+        metadata.backend,
+        metadata.threadId,
+        artifact.status,
+        artifact.createdAt,
+        artifact.updatedAt,
+        JSON.stringify(payload),
+      );
+  }
+
+  private recordFromRow(row: AutomationRow): AutomationRecord | undefined {
+    const payload = parseJson<AutomationPayload>(row.payload);
+    if (!payload) {
+      this.noteAutomationLoadIssue(row, "The automation's stored data is corrupt.");
+      return undefined;
+    }
+    const triggers = normalizeAutomationTriggers({
+      schedule: payload.schedule,
+      triggers: payload.triggers,
+    }, this.options.warn);
+    if (Array.isArray(payload.triggers) && triggers.length === 0) {
+      this.noteAutomationLoadIssue(
+        row,
+        "This automation was created by a newer version of PwrAgent.",
+      );
+      return undefined;
+    }
+    const schedule = scheduleFromTriggers(triggers);
+    if (schedule && !isUnderstoodSchedule(schedule)) {
+      // A schedule using a kind a newer build introduced cannot be run safely.
+      // Inbound-only automations have no schedule and remain loadable.
+      this.noteAutomationLoadIssue(
+        row,
+        "This automation was created by a newer version of PwrAgent.",
+      );
+      return undefined;
+    }
+    this.loadIssues.delete(row.automation_id);
+    return {
+      id: row.automation_id,
+      backend: row.backend,
+      threadId: row.thread_id,
+      name: row.name,
+      taskPrompt: payload.taskPrompt,
+      gate: payload.gate,
+      status: row.status,
+      triggers,
+      schedule,
+      priorRunLookback: normalizeAutomationPriorRunLookback(payload.priorRunLookback),
+      scheduleSummary:
+        payload.scheduleSummary ??
+        (schedule
+          ? formatAutomationScheduleSummary(schedule)
+          : formatAutomationTriggerSummary(triggers)),
+      backlogPolicy: row.backlog_policy,
+      executionProfile: payload.executionProfile,
+      outputActions: normalizeAutomationOutputActions(payload.outputActions),
+      maxRunsPerHour: resolveAutomationRunsPerHour(payload.maxRunsPerHour),
+      inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
+        payload.inboundCoalesceWindowMs,
+      ),
+      nextRunAt: row.next_run_at ?? undefined,
+      lastRunAt: row.last_run_at ?? undefined,
+      lastRunStatus: payload.lastRunStatus,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      deletedAt: row.deleted_at ?? undefined,
+    };
+  }
+
+  private runFromRow(row: AutomationRunRow): AutomationRunSummary | undefined {
+    const payload = parseJson<AutomationRunPayload>(row.payload);
+    if (!payload) return undefined;
+    return {
+      id: row.run_id,
+      automationId: row.automation_id,
+      backend: row.backend,
+      trigger: row.trigger,
+      status: row.status,
+      scheduledFor: row.scheduled_for ?? undefined,
+      scheduledWindows: payload.scheduledWindows,
+      source: payload.source,
+      queuedAt: row.queued_at ?? undefined,
+      queueEntryId: row.queue_entry_id ?? undefined,
+      startedAt: row.started_at ?? undefined,
+      completedAt: row.completed_at ?? undefined,
+      backendThreadId: payload.backendThreadId,
+      backendTurnId: row.backend_turn_id ?? undefined,
+      errorMessage: payload.errorMessage,
+      skipReason: payload.skipReason,
+      coalescedCount: payload.coalescedCount,
+      usage: payload.usage,
+    };
+  }
+
+  private artifactFromRow(
+    row: AutomationRunArtifactRow,
+  ): AutomationRunArtifact | undefined {
+    const payload = parseJson<AutomationRunArtifactPayload>(row.payload);
+    if (!payload) return undefined;
+    return {
+      runId: row.run_id,
+      automationId: row.automation_id,
+      status: row.status,
+      finalText: payload.finalText,
+      errorMessage: payload.errorMessage,
+      outputDecision: payload.outputDecision,
+      actionResults: payload.actionResults ?? [],
+      transcriptEvents: payload.transcriptEvents ?? [],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private getRunRow(runId: string): AutomationRunRow | undefined {
+    return this.stateDb.raw
+      .prepare("SELECT * FROM automation_runs WHERE run_id = ?")
+      .get(runId) as AutomationRunRow | undefined;
+  }
+
+  private getRunArtifactRow(runId: string): AutomationRunArtifactRow | undefined {
+    return this.stateDb.raw
+      .prepare("SELECT * FROM automation_run_artifacts WHERE run_id = ?")
+      .get(runId) as AutomationRunArtifactRow | undefined;
+  }
+
+  private countRunsForAutomation(automationId: string): {
+    pending: number;
+    coalescedWindows: number;
+    skippedSinceLastCompleted: number;
+  } {
+    const runs = this.listRunsForAutomation(automationId, this.runHistoryLimit);
+    const pendingRuns = runs.filter((run) =>
+      run.status === "pending" || run.status === "queued",
+    );
+    const latestCompletedAt = runs.find((run) => run.status === "completed")
+      ?.completedAt;
+    return {
+      pending: pendingRuns.length,
+      coalescedWindows: pendingRuns.reduce(
+        (total, run) => total + Math.max(0, run.scheduledWindows.length - 1),
+        0,
+      ),
+      skippedSinceLastCompleted: runs.filter(
+        (run) =>
+          run.status === "skipped" &&
+          (latestCompletedAt === undefined ||
+            (run.completedAt ?? run.scheduledFor ?? 0) > latestCompletedAt),
+      ).length,
+    };
+  }
+
+  private pruneRuns(automationId: string): void {
+    const count = this.stateDb.raw.prepare(
+      "SELECT COUNT(*) AS count FROM automation_runs WHERE automation_id = ?",
+    ).get(automationId) as { count: number };
+    if (count.count <= this.runHistoryLimit) return;
+    this.stateDb.raw.transaction(() => {
+      const expired = this.stateDb.raw.prepare(`
+        SELECT r.backend, r.thread_id AS owner_thread_id,
+               CASE WHEN json_valid(r.payload)
+                 THEN json_extract(r.payload, '$.backendThreadId') END AS execution_thread_id,
+               a.name AS automation_name
+          FROM automation_runs r
+          JOIN automations a ON a.automation_id = r.automation_id
+         WHERE r.automation_id = ?
+           AND r.run_id IN (
+             SELECT run_id FROM automation_runs
+              WHERE automation_id = ?
+              ORDER BY updated_at DESC, rowid DESC
+              LIMIT -1 OFFSET ?
+           )
+      `).all(automationId, automationId, this.runHistoryLimit) as Array<{
+        backend: AppServerBackendKind;
+        owner_thread_id: string;
+        execution_thread_id: string | null;
+        automation_name: string;
+      }>;
+      if (expired.length === 0) return;
+      const currentTitle = this.stateDb.raw.prepare(
+        "SELECT title FROM thread_search_documents WHERE identity_key = ?",
+      );
+      const historicalTitle = this.stateDb.raw.prepare(
+        "SELECT title FROM thread_usage_titles WHERE identity_key = ?",
+      );
+      const hasUsage = this.stateDb.raw.prepare(`
+        SELECT 1 FROM thread_usage_lines
+         WHERE backend = ? AND thread_id = ? AND status != 'superseded'
+         LIMIT 1
+      `);
+      const retainTitle = this.stateDb.raw.prepare(`
+        INSERT INTO thread_usage_titles (identity_key, title)
+        VALUES (?, ?)
+        ON CONFLICT(identity_key) DO UPDATE SET title = excluded.title
+      `);
+      for (const run of expired) {
+        if (!run.execution_thread_id) continue;
+        // Only visible ledger rows need a durable title. This lookup uses
+        // idx_thread_usage_lines_read_thread, avoiding a ledger scan per run.
+        if (!hasUsage.get(run.backend, run.execution_thread_id)) continue;
+        const ownerKey = buildLegacyEncodedThreadIdentityKey(
+          run.backend, run.owner_thread_id,
+        );
+        const executionKey = buildLegacyEncodedThreadIdentityKey(
+          run.backend, run.execution_thread_id,
+        );
+        const title = (currentTitle.get(ownerKey) as { title: string } | undefined)?.title
+          ?? (historicalTitle.get(ownerKey) as { title: string } | undefined)?.title
+          ?? run.automation_name;
+        retainTitle.run(executionKey, title);
+      }
+      this.stateDb.raw.prepare(`
+        DELETE FROM automation_runs
+         WHERE automation_id = ?
+           AND run_id IN (
+             SELECT run_id FROM automation_runs
+              WHERE automation_id = ?
+              ORDER BY updated_at DESC, rowid DESC
+              LIMIT -1 OFFSET ?
+           )
+      `).run(automationId, automationId, this.runHistoryLimit);
+    })();
+  }
+
+  private get runHistoryLimit(): number {
+    return this.options.runHistoryLimit ?? DEFAULT_RUN_HISTORY_LIMIT;
+  }
+}
+
+function parseJson<T>(value: string): T | undefined {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeAutomationTriggers(params: {
+  schedule?: AutomationScheduleDefinition;
+  triggers?: AutomationTriggerDefinition[];
+}, warn: AutomationStoreOptions["warn"]): AutomationTriggerDefinition[] {
+  const triggers = Array.isArray(params.triggers)
+    ? params.triggers.filter(trigger => isSupportedAutomationTrigger(trigger, warn))
+    : [];
+  if (triggers.length > 0) {
+    return triggers;
+  }
+  if (params.schedule) {
+    return [
+      {
+        id: "schedule",
+        kind: "schedule",
+        schedule: params.schedule,
+      },
+    ];
+  }
+  return [];
+}
+
+function isSupportedAutomationTrigger(
+  trigger: AutomationTriggerDefinition,
+  warn: AutomationStoreOptions["warn"],
+): trigger is AutomationTriggerDefinition {
+  if (!trigger || typeof trigger !== "object") return false;
+  if (trigger.kind === "schedule") {
+    return isUnderstoodSchedule(trigger.schedule);
+  }
+  if (trigger.kind === "inbound_message") {
+    if (
+      !trigger.id ||
+      !trigger.conversation?.channel ||
+      !trigger.conversation.conversationId
+    ) {
+      return false;
+    }
+    // A malformed condition group is not persisted: the matcher could not
+    // honor it, and storing it would leave an automation whose displayed
+    // filter and actual behavior disagree. Dropping the trigger silently would
+    // leave an automation that simply stops firing with nothing to explain it,
+    // so say so — this is the only signal an operator gets.
+    if (
+      trigger.conditionGroup !== undefined &&
+      !isSupportedAutomationInboundConditionGroup(trigger.conditionGroup)
+    ) {
+      warn?.(
+        "dropping inbound trigger with an unparseable condition group",
+        {
+          triggerId: trigger.id,
+          channel: trigger.conversation.channel,
+          conditionCount: Array.isArray(trigger.conditionGroup?.conditions)
+            ? trigger.conditionGroup.conditions.length
+            : undefined,
+          join: trigger.conditionGroup?.join,
+        },
+      );
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function scheduleFromTriggers(
+  triggers: AutomationTriggerDefinition[],
+): AutomationScheduleDefinition | undefined {
+  return triggers.find((trigger) => trigger.kind === "schedule")?.schedule;
+}
+
+function formatAutomationTriggerSummary(
+  triggers: AutomationTriggerDefinition[],
+): string {
+  const inbound = triggers.filter(
+    (trigger): trigger is AutomationInboundMessageTriggerDefinition =>
+      trigger.kind === "inbound_message",
+  );
+  const [only] = inbound;
+  if (!only) return "not scheduled";
+  if (inbound.length === 1) {
+    return only.name ? `inbound: ${only.name}` : "inbound message";
+  }
+  // Several sources: name them, since "inbound message" alone no longer says
+  // where the automation listens. The editor writes one filter to every
+  // source, so a shared trigger name (the filter's wording) is still worth
+  // stating; names that disagree are left out rather than listed N times.
+  const sources = formatAutomationConversationList(
+    inbound.map((trigger) => trigger.conversation),
+  );
+  const names = new Set(inbound.map((trigger) => trigger.name));
+  const [sharedName] = names;
+  return names.size === 1 && sharedName
+    ? `inbound from ${sources}: ${sharedName}`
+    : `inbound from ${sources}`;
+}
+
+function normalizeInboundCoalesceWindowMs(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+  if (!Number.isFinite(value) || value < 0) {
+    return DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS;
+  }
+  return Math.floor(value);
+}
+
+function normalizeAutomationOutputActions(
+  actions: AutomationOutputActionDefinition[] | undefined,
+): AutomationOutputActionDefinition[] {
+  if (!Array.isArray(actions) || actions.length === 0) {
+    return [{ id: "agent-context", kind: "agent_context" }];
+  }
+  return actions.filter(isSupportedAutomationOutputAction);
+}
+
+function isSupportedAutomationOutputAction(
+  action: AutomationOutputActionDefinition,
+): action is AutomationOutputActionDefinition {
+  if (!action || typeof action !== "object" || !action.id) return false;
+  if (action.kind === "agent_context") return true;
+  if (action.kind === "source_message") {
+    return (
+      action.destination === "source_thread" ||
+      action.destination === "source_channel"
+    );
+  }
+  if (action.kind === "messaging_target") {
+    return Boolean(action.target?.channel && action.target.conversationId);
+  }
+  return false;
+}
+
+function minDefined(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.min(left, right);
+}
+
+function maxDefined(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.max(left, right);
+}

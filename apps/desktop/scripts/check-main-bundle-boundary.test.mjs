@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import fc from "fast-check";
 import { expect, it } from "vitest";
 
 const verifier = fileURLToPath(new URL("./check-main-bundle-boundary.mjs", import.meta.url));
@@ -51,13 +52,33 @@ it("rejects workspace dependency imports emitted as template literals", async ()
   expect(result.stderr).toContain("externalized workspace bundled-dependency import");
 });
 
-it.each(["agent-tools/pwragent-messaging-codex-tools", "federation/git-instance-handoff", "owner-core/thread-title-prompt"])(
+it.each(["agent-tools/pwragent-messaging-codex-tools", "federation/git-instance-handoff", "owner-core/thread-title-prompt", "sqlite-storage/state-db"])(
   "rejects externalized workspace source subpath %s", async (specifier) => {
     const result = await verify({ "out/main/index.js": `import "@pwragent/${specifier}";` });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("externalized workspace bundled-dependency import");
   },
 );
+
+it("rejects every generated workspace source package and import syntax", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.stringMatching(/^[a-z][a-z0-9-]{1,12}$/),
+    fc.constantFrom("side-effect", "named", "dynamic", "require", "template"),
+    async (name, style) => {
+      const specifier = `@pwragent/${name}/state-db`;
+      const code = {
+        "side-effect": `import ${JSON.stringify(specifier)};`,
+        named: `import { value } from ${JSON.stringify(specifier)};`,
+        dynamic: `import(${JSON.stringify(specifier)});`,
+        require: `require(${JSON.stringify(specifier)});`,
+        template: "require(`" + specifier + "`);",
+      }[style];
+      const result = await verify({ "out/main/chunks/storage.js": code });
+      expect(result.status, specifier).toBe(1);
+      expect(result.stderr).toContain("externalized workspace bundled-dependency import");
+    },
+  ), { numRuns: 12 });
+});
 
 it("rejects sandboxed preloads requiring a shared chunk", async () => {
   const result = await verify({ "out/preload/index.cjs": "require(`./chunks/shared.cjs`);" });

@@ -1,7 +1,8 @@
+import type { FederationStorage } from "@pwragent/shared";
 import { getAppStateDb } from "../state/app-state";
 import { FederationStore } from "./federation-store";
 import { SqliteDurableTurnRequestStore } from "./durable-turn-request-store";
-import type { DurableTurnRequestStorage } from "../federation/durable-turn-request-storage";
+import type { DurableTurnRequestStorage } from "@pwragent/owner-core/durable-turn-request-storage";
 
 const fields = {
   instanceId: "federation_instance_id",
@@ -28,7 +29,7 @@ export const desktopFederationState = {
   },
 };
 
-export type FederationStorage = Pick<FederationStore, keyof FederationStore>;
+export type { FederationStorage } from "@pwragent/shared";
 export function createFederationStorage(): FederationStorage {
   return new FederationStore(getAppStateDb());
 }

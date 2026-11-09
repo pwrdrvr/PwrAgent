@@ -2,7 +2,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import type { DismissOperatorQuestionRequest, OperatorQuestionThreadRequest, ListOperatorRequestsRequest, MarkOperatorItemsSeenRequest, SubmitThreadReplyRequest, SubmitThreadReplyResponse } from "@pwragent/shared";
 import { isAppServerBackendKind } from "@pwragent/shared";
 import { OperatorRequestService } from "./operator-request-service";
-import { createOperatorRequestStorage } from "../storage/operator-request-store";
+import { createOperatorRequestStorage } from "../storage/desktop-operator-request-storage";
 
 let service: OperatorRequestService | undefined;
 

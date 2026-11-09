@@ -8,7 +8,7 @@ import { serve } from "./daemon.js";
 import { ACTIVE } from "./store.js";
 import { formatVersion, installedVersion, packageVersion, restartRequired } from "./version.js";
 
-const help = `PwrAgent Headless (experimental, Linux/macOS, Node >=22)
+const help = `PwrAgent Headless (experimental, Linux/macOS, Node 22.14+ (22.x) or >=23.6)
 
   pwragent serve --workspace /project --codex-home /codex-home --codex-bin /path/to/codex
   pwragent project-list

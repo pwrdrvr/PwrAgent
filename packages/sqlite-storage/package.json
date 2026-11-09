@@ -1,0 +1,24 @@
+{
+  "name": "@pwragent/sqlite-storage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@pwragent/owner-core": "workspace:*",
+    "@pwragent/shared": "workspace:*"
+  },
+  "peerDependencies": {
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^13.0.3"
+  },
+  "scripts": {
+    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
+  }
+}

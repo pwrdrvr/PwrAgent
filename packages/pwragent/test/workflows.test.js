@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -8,7 +9,7 @@ import { connectFederationClient, decodeFederationInvite, FederationRpcEndpoint,
   generateNoiseStaticKeyPair, FederationFilePushReceiver, FederationFilePushReceipts } from "../dist/federation-core.js";
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { OutpostGit } from "../src/projects.js";
-import { setup, eventually, restartAfterCompletedTurn } from "./helpers.js";
+import { setup, eventually, restartAfterCompletedTurn, runCompletedTurn } from "./helpers.js";
 
 async function peer(h, prior, onRequest, capabilities = HEADLESS_CAPABILITIES) {
   const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
@@ -327,8 +328,8 @@ test("incoming messaging preserves causal context and authorized tools return to
   owner.connection.sendEnvelope({ kind: "notification", id: randomUUID(), protocolVersion: 1, createdAt: Date.now(),
     sourceInstanceId: owner.identity.id, targetInstanceId: owner.invite.gatewayInstanceId, method: "federation.eventSubscription",
     params: { eventClasses: ["transcript"], threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: thread.threadId }] } } });
-  const send = () => owner.call("backend.startTurn", { threadId: thread.threadId, messageOrigin,
-    input: [{ type: "text", text: 'tool {"operation":"send_private_response","args":{"text":"mock-only private reply"}}' }] });
+  const send = () => runCompletedTurn(h, () => owner.call("backend.startTurn", { threadId: thread.threadId, messageOrigin,
+    input: [{ type: "text", text: 'tool {"operation":"send_private_response","args":{"text":"mock-only private reply"}}' }] }));
   await send();
   await eventually(() => provider.sends.length === 1);
   await eventually(() => owner.events.some((event) => event.method === "backend.event" && event.params.notification.method === "turn/completed"));
@@ -510,10 +511,10 @@ test("older messaging owners and persisted catalogs fail closed for file/PDF con
   assert.deepEqual(requests, [], "old owners receive neither attachment bytes nor file/PDF requests");
   owner.connection.close();
   await h.stop(h.daemon);
-  const registry = path.join(h.directory, "threads.json");
-  const prior = JSON.parse(readFileSync(registry, "utf8"));
-  delete prior.threads.find((item) => item.id === thread.threadId).messagingFileTools;
-  writeFileSync(registry, JSON.stringify(prior));
+  const db = new Database(path.join(path.dirname(h.directory), "state.db"));
+  try {
+    db.prepare("UPDATE threads SET payload = json_remove(payload, '$.messagingFileTools') WHERE json_extract(payload, '$.threadId') = ?").run(thread.threadId);
+  } finally { db.close(); }
   await h.start();
   owner = await peer(h, owner, undefined, oldCapabilities);
   assert.equal(await owner.call("backend.supportsMessagingPdfTools", { backend: "codex", threadId: thread.threadId }), false,

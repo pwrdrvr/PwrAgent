@@ -1,6 +1,6 @@
 import type { NavigationPreferencesStorage } from "@pwragent/owner-core/navigation-preferences-storage";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
-import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import type { SqliteOverlayStore } from "./overlay-store-sqlite";
 import { getAppOverlayStore } from "../state/app-state";
 
 export type DesktopOwnerStorage = OwnerThreadRegistry & Pick<SqliteOverlayStore, keyof SqliteOverlayStore>;
@@ -15,7 +15,7 @@ export type {
   PrAutoDispatchCandidateChange,
   PrLookupCacheEntry,
   PrStatusCacheEntry,
-} from "../state/overlay-store-sqlite";
+} from "./overlay-store-sqlite";
 
 let overlayStoreOverride: DesktopOwnerStorage | null = null;
 

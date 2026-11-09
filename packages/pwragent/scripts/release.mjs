@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const registry = "https://registry.npmjs.org";
-const nativeRuntimeDependencies = { "node-pty": "1.2.0-beta.15" };
+const nativeRuntimeDependencies = { "better-sqlite3": "13.0.3", "node-pty": "1.2.0-beta.15" };
 
 export function releaseMetadata(pkg, { tag, desktopVersion } = {}) {
   assert.equal(pkg.name, "pwragent");
   assert.equal(pkg.private, false);
   assert.equal(pkg.license, "MIT");
-  assert.equal(pkg.engines.node, ">=22");
+  assert.equal(pkg.engines.node, "^22.14.0 || >=23.6.0", "Bundled SQLite requires Node-API 10 (Node 22.14+ or 23.6+)");
   assert.equal(pkg.bin.pwragent, "bin/pwragent.js");
   assert.equal(pkg.repository.url, "git+https://github.com/pwrdrvr/PwrAgent.git");
   assert.equal(pkg.repository.directory, "packages/pwragent");
@@ -19,10 +19,10 @@ export function releaseMetadata(pkg, { tag, desktopVersion } = {}) {
   assert.ok(!pkg.version.startsWith("0.0.0"), "The placeholder version cannot be released");
   const distTag = pkg.version.includes("-") ? "next" : "latest";
   assert.equal(pkg.publishConfig.tag, distTag, "publishConfig.tag must match the version channel");
-  // JavaScript services are bundled by esbuild. The pinned native PTY package
-  // must travel in the npm tarball, including its transitive native headers.
-  assert.deepEqual(pkg.dependencies, nativeRuntimeDependencies, "Only the pinned native PTY dependency may ship");
-  assert.deepEqual(pkg.bundleDependencies, ["node-pty"], "The native PTY dependency must be bundled in the tarball");
+  // JavaScript services are bundled by esbuild. Each host carries its own
+  // pinned native SQLite and PTY packages, including their native headers.
+  assert.deepEqual(pkg.dependencies, nativeRuntimeDependencies, "Only the pinned native SQLite and PTY dependencies may ship");
+  assert.deepEqual(pkg.bundleDependencies, ["better-sqlite3", "node-pty"], "Both native dependencies must be bundled in the tarball");
   for (const field of ["optionalDependencies", "peerDependencies"]) {
     assert.equal(Object.keys(pkg[field] || {}).length, 0, "Runtime dependencies must remain bundled");
   }

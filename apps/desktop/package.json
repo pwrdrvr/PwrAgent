@@ -77,6 +77,7 @@
     "@pwragent/shared": "workspace:*",
     "@pwragent/federation": "workspace:*",
     "@pwragent/owner-core": "workspace:*",
+    "@pwragent/sqlite-storage": "workspace:*",
     "@pwrdrvr/agent-acp": "^0.16.1",
     "@pwrdrvr/agent-client": "^0.8.2",
     "@pwrdrvr/agent-core": "^0.2.0",
