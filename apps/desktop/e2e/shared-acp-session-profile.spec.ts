@@ -47,7 +47,8 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/acp-runtime-modes/replay.fixture.json"),
     async preLaunchHook(homeRoot) {
-      repositoryPath = path.join(homeRoot, "portable-acp-repo");
+      // The owner keys command caches with forward slashes on every host.
+      repositoryPath = path.join(homeRoot, "portable-acp-repo").replaceAll("\\", "/");
       await mkdir(repositoryPath, { recursive: true });
       const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
       try {
