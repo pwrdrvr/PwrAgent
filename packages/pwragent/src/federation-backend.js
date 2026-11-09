@@ -64,12 +64,14 @@ export class HeadlessBackend {
       readName: async ({ threadId }) => this.threads.get(threadId)?.title,
       readTitle: async ({ threadId }) => this.summary(this.owned(threadId)),
       renameProvider: async ({ threadId, name }, titleSource) => {
-        const thread = this.threads.get(threadId);
-        if (!thread) throw new Error("Thread is not owned by this outpost");
+        if (!this.threads.has(threadId)) throw new Error("Thread is not owned by this outpost");
         const result = await this.runtime.codex.renameThread({ threadId, name });
         this.providerMutationVersion++;
-        Object.assign(thread, { title: name.trim(), titleSource, titleNativeName: name.trim() });
-        this.persist(thread);
+        try {
+          await this.threadRegistry.updateThreadMetadata({ backend: "codex", threadId }, {
+            title: { text: name.trim(), source: titleSource, nativeName: name.trim() },
+          });
+        } catch (error) { this.runtime.onFailure(error); throw error; }
         this.threads.observeNativeTitle(threadId, name.trim(), titleSource);
         return result;
       },
@@ -97,6 +99,7 @@ export class HeadlessBackend {
     if (this.discovery) return this.discovery;
     const discover = async () => {
       let generation = this.providerMutationVersion;
+      const observedAt = Date.now();
       // A retained inventory is a startup projection, never proof of current
       // provider membership. Both complete walks must succeed before replacement.
       const active = await this.runtime.codex.listThreads({ archived: false, enrichDirectories: false, requireComplete: true, skipArchivedMetadataRefresh: true });
@@ -123,9 +126,9 @@ export class HeadlessBackend {
       if (generation !== this.providerMutationVersion) return;
       const previous = this.runtime.store.inventory.list().find(snapshot => snapshot.backend === "codex");
       if (!isDeepStrictEqual(previous?.threads, threads)) {
-        this.runtime.store.inventory.replace({ backend: "codex", observedAt: Date.now(), threads });
+        this.runtime.store.inventory.replace({ backend: "codex", observedAt, threads });
       }
-      this.threads.replaceInventory(threads, Date.now());
+      this.threads.replaceInventory(threads, observedAt);
     };
     this.discovery = discover();
     try { await this.discovery; } finally { this.discovery = undefined; }
