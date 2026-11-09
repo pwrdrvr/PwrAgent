@@ -66,7 +66,8 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
         await f.desktop.updateThreadMetadata({ backend, threadId }, { seenAt: 1000, seenUpdatedAt: explicit ?? null });
         await f.desktop.updateThreadMetadata({ backend, threadId: metadataOnlyId }, { executionMode: "default" });
         if (backend === "claude") {
-          await f.claude.save({ cwd: f.root, thread: { id: metadataOnlyId, source: "claude", linkedDirectories: [], executionMode: "default" } });
+          await f.claude.save({ cwd: f.root, thread: { id: metadataOnlyId, source: "claude", title: "Untitled thread", titleSource: "fallback",
+            linkedDirectories: [], executionMode: "default" } });
           await f.desktop.updateThreadMetadata({ backend, threadId: absentId }, { executionMode: "default" });
         }
       }
