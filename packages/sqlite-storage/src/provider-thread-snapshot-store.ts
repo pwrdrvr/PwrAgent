@@ -2,7 +2,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadSummary,
 } from "@pwragent/shared";
-import type { ProviderThreadSnapshot, ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
+import { projectProviderThreadSummary as toDurableThreadSummary, type ProviderThreadSnapshot, type ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { StateDb } from "./state-db";
 
 export const PROVIDER_THREAD_SNAPSHOT_SCHEMA_VERSION = 1;
@@ -79,46 +79,6 @@ implements ProviderThreadSnapshotStorage {
   }
 }
 
-function toDurableThreadSummary(
-  thread: AppServerThreadSummary,
-): AppServerThreadSummary {
-  return {
-    id: thread.id,
-    title: thread.title,
-    titleSource: thread.titleSource,
-    source: thread.source,
-    linkedDirectories: thread.linkedDirectories,
-    ...(thread.threadStatus ? { threadStatus: thread.threadStatus } : {}),
-    ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
-    ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
-    ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
-    ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
-    ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),
-    ...(thread.gitOriginUrl ? { gitOriginUrl: thread.gitOriginUrl } : {}),
-    ...(thread.observedGitBranch
-      ? { observedGitBranch: thread.observedGitBranch }
-      : {}),
-    ...(thread.gitWorkingState
-      ? { gitWorkingState: thread.gitWorkingState }
-      : {}),
-    ...(thread.executionMode ? { executionMode: thread.executionMode } : {}),
-    ...(thread.model ? { model: thread.model } : {}),
-    ...(thread.serviceTier ? { serviceTier: thread.serviceTier } : {}),
-    ...(thread.reasoningEffort
-      ? { reasoningEffort: thread.reasoningEffort }
-      : {}),
-    ...(thread.fastMode !== undefined ? { fastMode: thread.fastMode } : {}),
-    ...(thread.workspaceHandoff
-      ? { workspaceHandoff: thread.workspaceHandoff }
-      : {}),
-    ...(thread.worktreeSnapshots
-      ? { worktreeSnapshots: thread.worktreeSnapshots }
-      : {}),
-    ...(thread.codexNativeSubAgent
-      ? { codexNativeSubAgent: thread.codexNativeSubAgent }
-      : {}),
-  };
-}
 
 function parseThreadSummaries(payload: string): AppServerThreadSummary[] | undefined {
   let parsed: unknown;

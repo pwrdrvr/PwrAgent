@@ -9,7 +9,7 @@ export type OwnerThreadIdentity = {
 /** Owner facts, independent of provider sessions, job records and file formats. */
 export type OwnerThreadMetadata = {
   /** A title and its provenance are one fact and are replaced together. */
-  title?: { text: string; source: AppServerThreadTitleSource };
+  title?: { text: string; source: AppServerThreadTitleSource; nativeName?: string };
   createdAt?: number;
   updatedAt?: number;
   cwd?: string;

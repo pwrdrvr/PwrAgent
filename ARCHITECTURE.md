@@ -441,6 +441,17 @@ retirement restartable without reimport or replay. Active jobs become unknown.
 Private identity, projects, tools and intake ledgers stay host-owned. Outpost
 reads retained provider inventory independently of canonical metadata; SQLite
 contains no provider transcript or prompt text.
+Before opening its listeners, Outpost now completes active and archived Codex
+protocol discovery. Navigation refreshes that inventory without writing unchanged
+snapshots; provider mutations fence older in-flight discoveries. Fresh provider
+archive membership outranks an unstamped retained flag, while newer canonical
+archive/restore timestamps still fence older retained inventory.
+Both hosts project canonical title provenance against the last acknowledged
+native name. Imported names without that acknowledgement stay visible; Outpost
+publishes them through the shared naming lifecycle before discovery completes.
+An acknowledged Outpost rename reaches Codex before owner success. Desktop's
+name-event pipeline retains the same title/provenance fact; a later differing
+native name wins over its old acknowledgement. No transcript is stored.
 Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
 ports through private desktop bindings at the existing runtime construction
 sites. The model-settings-recents helper is shared by to-do dispatch and the

@@ -51,7 +51,7 @@ it("binds concrete choices and the original factory/service to the shared implem
 
 // A second host's records deliberately have no desktop launch or registry types.
 // SQLite owns only these scalar indexes; every other JSON field is opaque.
-it("preserves arbitrary host payloads over the minimal generic port", async () => {
+it("preserves arbitrary host JSON payloads over the minimal generic port", async () => {
   await fc.assert(fc.property(fc.jsonValue(), fc.integer(), (opaque, fetchedAt) => {
     const db = openInMemoryStateDb();
     try {
@@ -62,11 +62,13 @@ it("preserves arbitrary host payloads over the minimal generic port", async () =
         installedAt: 1, updatedAt: 2, opaque };
       store.saveRegistrySnapshot({ fetchedAt, opaque });
       store.upsertInstalledAgent(agent);
-      expect(store.readRegistrySnapshot()).toEqual({ fetchedAt, opaque });
-      expect(store.getInstalledAgent("acp:other-host")).toEqual(agent);
-      expect(store.listInstalledAgents()).toEqual([agent]);
+      // The oracle is the JSON round trip: even nested -0 becomes 0.
+      const expectedAgent = clone(agent);
+      expect(store.readRegistrySnapshot()).toEqual(clone({ fetchedAt, opaque }));
+      expect(store.getInstalledAgent("acp:other-host")).toEqual(expectedAgent);
+      expect(store.listInstalledAgents()).toEqual([expectedAgent]);
     } finally { db.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 25, examples: [[-0, 0], [[-0], 0], [[{ "": -0 }], 0]] });
 });
 
 it("matches independent backend replacement, NOCASE order and latest-cache models across WAL hosts and reopens", async () => {
@@ -132,6 +134,7 @@ it("keeps permissive legacy payload guards and JSON failure behavior without rep
         const store = new SharedStore(db);
         const valid = { backendId: "acp:legacy", registryId: "Legacy", name: "Invented legacy", installStatus: "old",
           authStatus: "unknown-host-state", verificationStatus: "old", opaque };
+        const expected = clone(valid);
         store.upsertInstalledAgent(record(0, 1));
         store.upsertInstalledAgent(record(1, 1));
         const corrupt = { ...valid, [field]: field === "backendId" ? "codex" : null };
@@ -141,9 +144,9 @@ it("keeps permissive legacy payload guards and JSON failure behavior without rep
         const reads = await measureSqliteWrites(() => {
           // Guard admits legacy rows without timestamps/version/launch data and
           // does not substitute indexed columns for the persisted JSON identity.
-          expect(store.getInstalledAgent(backend(0))).toEqual(valid);
+          expect(store.getInstalledAgent(backend(0))).toEqual(expected);
           expect(store.getInstalledAgent(backend(1))).toBeUndefined();
-          expect(store.listInstalledAgents()).toEqual([valid]);
+          expect(store.listInstalledAgents()).toEqual([expected]);
         });
         expect(reads.writes.commits).toBe(0);
         expect(db.raw.prepare("SELECT * FROM acp_installed_agents").all()).toEqual(before);
@@ -160,7 +163,7 @@ it("keeps permissive legacy payload guards and JSON failure behavior without rep
           expect(measured.writes.commits).toBe(0);
         }
       } finally { db.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 25, examples: [[-0, "name"], [[{ "": -0 }], "registryId"]] });
 });
 
 it("preserves outer transaction atomicity, WAL visibility and zero-write serialization refusal", async () => {

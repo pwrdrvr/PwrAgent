@@ -78,6 +78,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
     await runtime.codex.initialize();
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, codexPid: runtime.codex.child.pid }) + "\n");
     federation = new HeadlessFederation({ directory, runtime, profile, onFailure: (error) => { void stop(error); } });
+    await federation.backend.initialize();
     await federation.start();
     if (shutdown) return done;
     server = net.createServer((socket) => {

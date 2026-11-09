@@ -138,3 +138,23 @@ it("matches desktop's baseline-backed unread oracle without persisting derived f
       }), { numRuns: 25, examples: [[1, 1, undefined, undefined]] });
   } finally { owner.close(); f.close(); }
 });
+
+it("keeps an archive observation authoritative until a newer complete provider observation", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const f = fixture();
+  const owner = await open(f);
+  try {
+    await fc.assert(fc.asyncProperty(fc.nat(10000), fc.nat(10000), async (archiveAt, observedAt) => {
+      await f.desktop.updateThreadMetadata(identity, { archived: false, archivedAt: null, restoredAt: null, archiveRetentionStartedAt: null });
+      await f.desktop.observeArchivedThreads([identity], archiveAt);
+      // Native discovery and the desktop's durable archive observation are
+      // independent authorities; only a strictly newer provider view wins.
+      owner.backend.threads.replaceInventory([provider(1)], observedAt);
+      const { result: owned, writes } = await measureSqliteWrites(() => owner.backend.runtime.ownsThread(identity.threadId));
+      expect(owned).toBe(observedAt > archiveAt);
+      expect(owner.backend.runtime.listOwnedThreads().length).toBe(owned ? 1 : 0);
+      expect((await owner.backend.handle("listThreads")).threads.length).toBe(owned ? 1 : 0);
+      expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
+    }), { numRuns: 25, examples: [[0, 0], [1, 0], [0, 1]] });
+  } finally { owner.close(); f.close(); }
+});

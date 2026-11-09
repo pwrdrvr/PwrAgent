@@ -29,6 +29,9 @@ export { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwra
 
 export { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";
 export { patchOwnerThreadMetadata } from "@pwragent/owner-core/thread-storage";
+export { ThreadNamingLifecycle } from "@pwragent/owner-core/thread-naming-lifecycle";
+export { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
+export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 
 import path from "node:path";
 import os from "node:os";

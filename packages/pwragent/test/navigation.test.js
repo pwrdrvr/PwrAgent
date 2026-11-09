@@ -15,6 +15,7 @@ function backendFixture(t, jobs, published = []) {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const owner = ownerStorage(t, directory);
   const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(), store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, inventory: owner.inventory },
+    codex: { renameThread: async ({ threadId }) => ({ threadId }) },
     onFailure: (error) => { throw error; } };
   return new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
 }
