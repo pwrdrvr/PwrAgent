@@ -13,11 +13,69 @@ import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlit
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { ThreadSearchStore } from "@pwragent/sqlite-storage/thread-search-store";
 import { AutomationStore } from "@pwragent/sqlite-storage/automation-store";
+import { ScheduledThreadActionStore } from "@pwragent/sqlite-storage/scheduled-thread-action-store";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+test("desktop recovers portable scheduled claims and hands payload edits and cancellations back to portable storage", async () => {
+  const scheduledFor = Date.now() + 2 * 86_400_000;
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    preLaunchHook(homeRoot) {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        const store = new ScheduledThreadActionStore(db);
+        const now = Date.now();
+        for (const id of ["portable-edit", "portable-cancel", "portable-dispatch", "portable-held"]) store.create({
+          id, backend: "codex", threadId: "thread-smoke", kind: "turn", origin: "desktop", scheduledFor,
+          displayText: `Invented portable wake ${id}`, turn: { input: [{ type: "text", text: `Invented input ${id}` }] },
+          manualReleaseRequired: id === "portable-held", now,
+        });
+        for (const id of ["portable-dispatch", "portable-held"]) store.claim(id, {
+          ownerId: "scheduler:99999999:retired-portable-fixture", now, leaseExpiresAt: now - 1,
+        });
+        store.markQueued("portable-held", "portable-queue", now, "scheduler:99999999:retired-portable-fixture");
+      } finally { db.close(); }
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const result = await app.window.evaluate(async scheduledFor => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const before = await api.listScheduledThreadActions!({ backend: "codex", threadId: "thread-smoke", includeTerminal: true, projectionProtocol: 2 });
+      const updated = await api.updateScheduledThreadAction!({ id: "portable-edit", scheduledFor: scheduledFor + 1_000,
+        displayText: "Invented desktop edited wake", turn: { input: [{ type: "text", text: "Invented desktop edited input" }] } });
+      const cancelled = await api.cancelScheduledThreadAction!({ id: "portable-cancel" });
+      const created = await api.createScheduledThreadAction!({ backend: "codex", threadId: "thread-smoke", kind: "turn", origin: "desktop",
+        scheduledFor, displayText: "Invented desktop created wake", turn: { input: [{ type: "text", text: "Invented desktop created input" }] } });
+      return { before, updated, cancelled, created };
+    }, scheduledFor);
+    expect(result.before.projectionProtocol).toBe(2);
+    expect(result.before.actions).toHaveLength(4);
+    expect(result.before.actions).toContainEqual(expect.objectContaining({ id: "portable-edit", status: "scheduled",
+      turn: { input: [{ type: "text", text: "Invented input portable-edit" }] } }));
+    expect(result.before.actions).toContainEqual(expect.objectContaining({ id: "portable-dispatch", status: "failed",
+      errorMessage: "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again." }));
+    expect(result.before.actions).toContainEqual(expect.objectContaining({ id: "portable-held", status: "held", manualReleaseRequired: true }));
+    expect(result.cancelled.action.status).toBe("cancelled");
+    expect(result.updated.action).toMatchObject({ displayText: "Invented desktop edited wake", scheduledFor: scheduledFor + 1_000 });
+    await app.closeApplication();
+    const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+    try {
+      const store = new ScheduledThreadActionStore(db);
+      expect(store.get("portable-edit")).toEqual(result.updated.action);
+      expect(store.get("portable-cancel")).toEqual(result.cancelled.action);
+      expect(store.get(result.created.action.id)).toEqual(result.created.action);
+      expect(store.get("portable-dispatch")?.status).toBe("failed");
+      expect(store.get("portable-held")).toMatchObject({ status: "held", manualReleaseRequired: true, queueEntryId: undefined });
+      expect(JSON.stringify(db.raw.prepare("SELECT * FROM scheduled_thread_actions").all())).not.toContain("Invented");
+    } finally { db.close(); }
+  } finally { await app.close(); }
+});
 
 test("desktop reads portable automations and hands lifecycle and editor mutations back to portable storage", async () => {
   const app = await launchElectronApp({
