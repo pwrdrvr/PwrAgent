@@ -709,6 +709,9 @@ importers:
 
   packages/sqlite-storage:
     dependencies:
+      '@pwragent/owner-core':
+        specifier: workspace:*
+        version: link:../owner-core
       '@pwragent/shared':
         specifier: workspace:*
         version: link:../shared

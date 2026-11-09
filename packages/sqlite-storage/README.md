@@ -4,6 +4,13 @@ This package owns PwrAgent's profile `state.db` opener, schema and migration
 ladder. Desktop consumes this implementation through `main/storage`; its
 state-internal compatibility exports contain no second implementation.
 
+The shared `AppRuntimeInstanceStore` implements owner-core runtime lease ports
+for profile messaging, federation and MCP connections. Desktop constructs it
+through its private `main/storage` binding at the existing app-state lifecycle
+site. Host liveness remains injected. PID-owned leases, immediate acquisition,
+dead-owner grace and messaging side effects retain the original transactions;
+no heartbeat or new write is introduced.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
