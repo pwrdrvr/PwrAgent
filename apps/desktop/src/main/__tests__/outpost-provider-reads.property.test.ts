@@ -80,6 +80,9 @@ it("retained owner reads preserve provider identity, native authority and canoni
     const overlay = new SqliteOverlayStore(db);
     const inventory = new ProviderThreadSnapshotStore(db);
     for (const backend of backends) inventory.replace({ backend, observedAt: 1, threads: [native(backend, "Native")] });
+    const acp = new AcpSessionStore(db);
+    acp.upsertSession({ backendId: "acp:fixture", sessionId: "00000000-0000-4000-8000-000000000001", title: "acp:fixture Native",
+      titleSource: "explicit", cwd: "/fixture", createdAt: 10, updatedAt: 20, executionMode: "full-access", status: "idle" });
     const claude = new ClaudeSessionStore(path.join(root, "claude"));
     await claude.save({ cwd: "/fixture", thread: native("claude", "Native") });
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
@@ -93,6 +96,8 @@ it("retained owner reads preserve provider identity, native authority and canoni
         const ref = { backend, threadId: "00000000-0000-4000-8000-000000000001" };
         if (backend === "claude") await claude.save({ cwd: "/fixture", thread: { ...native(backend, "Native"),
           title: command.name, titleSource: "derived", ...(command.archived ? { archivedAt: 100 + index * 2 } : {}) } });
+        else acp.upsertSession({ ...acp.getSession("acp:fixture", ref.threadId)!, title: command.name, titleSource: "derived",
+          archivedAt: command.archived ? 100 + index * 2 : undefined });
         await overlay.updateThreadMetadata(ref, { title: { text: command.name, source: "derived", nativeName: `${backend} Native` },
           pinnedRank: `${index}`, seenUpdatedAt: command.seen ? 20 : 19, seenAt: 1000,
           executionMode: "full-access", parent: { backend: "codex", threadId: "parent" },
@@ -101,7 +106,8 @@ it("retained owner reads preserve provider identity, native authority and canoni
         const resolved = (await owner.handle("resolveThread", ref)).thread;
         expect(resolved).toMatchObject({ id: "00000000-0000-4000-8000-000000000001", source: backend, title: command.name, titleSource: "derived",
           pinnedRank: `${index}`, parentThreadId: "parent", parentThreadBackend: "codex", executionMode: "full-access",
-          linkedDirectories: native(backend, "Native").linkedDirectories, inbox: { inInbox: !command.seen } });
+          linkedDirectories: backend === "claude" ? native(backend, "Native").linkedDirectories
+            : [{ id: "/fixture", kind: "local", path: "/fixture", label: "fixture" }], inbox: { inInbox: !command.seen } });
         const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
         expect(detail.identity).toBe(command.archived ? "archived" : "present");
         expect(detail.thread).toEqual(resolved);

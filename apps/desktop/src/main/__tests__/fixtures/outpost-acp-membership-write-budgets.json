@@ -1,0 +1,4 @@
+{
+  "acp-native-delete-retirement": {"commits": 1, "note": "One existing native ACP deletion plus Outpost retirement; no overlay or inventory cleanup write", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "acp-retired-membership-passive-reads": {"commits": 0, "note": "1000 absent ACP resolve/detail/list/archive/navigation rounds and ten owner reopens add zero SQLite writes (0 MB/day)", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}
