@@ -37,8 +37,8 @@
   "queued-dispatch": {
     "commits": 5,
     "note": "Prior owner terminal plus queued native dispatch/confirmation and durable receipt started boundary; initial admission excluded",
-    "observedWalBytes": 20600,
-    "rowsChanged": 5,
+    "observedWalBytes": 16480,
+    "rowsChanged": 4,
     "statements": 5
   },
   "shutdown-uncertain": {

@@ -83,7 +83,7 @@ queued input is transient and is never restored after shutdown or recovery.
 `outpost-durable-turn-write-budgets.json` measures actual feature boundaries:
 queued admission is four commits/32,960 observed WAL bytes (3.296 MB/day at
 100/day), direct admission seven/41,200 (4.12 MB/day), queued dispatch including
-the prior terminal five/20,600 (2.06 MB/day), cancellation or native completion
+the prior terminal five/16,480 (1.648 MB/day), cancellation or native completion
 two/8,240 each (0.824 MB/day), and shutdown of one active plus one queued job
 three/12,360 (1.236 MB at 100 shutdowns/day). One hundred duplicate submissions
 plus reads and one hundred uncertain retries plus reads each make zero commits.

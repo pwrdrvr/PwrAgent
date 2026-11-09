@@ -183,6 +183,11 @@ it.skipIf(process.platform === "win32")("durable storage and provider refusals p
 
 it.skipIf(process.platform === "win32")("durable turn admission writes only at acceptance, claim and queue outcome boundaries", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  // JobStore stamps wall time before its unchanged-payload SQL guard. Freeze
+  // Date alone so row counts do not depend on crossing a millisecond; drains
+  // and provider scheduling continue to use real timers.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-09T16:00:00Z"));
   try {
     await fixture(async ({ runtime, submit, get, value, active, terminal }: any) => {
       await active();
@@ -214,5 +219,5 @@ it.skipIf(process.platform === "win32")("durable turn admission writes only at a
       const reads = await measureSqliteWrites(async () => { for (let n = 0; n < 100; n++) { await get(request); await submit(request); } });
       expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "uncertain-retries", note: "100 reads and retries of stopped uncertain acceptance; no dispatch or prompt restoration", writes: reads.writes });
     });
-  } finally { vi.unstubAllEnvs(); }
+  } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
 });
