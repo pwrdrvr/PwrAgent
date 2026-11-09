@@ -149,10 +149,42 @@ it.skipIf(process.platform === "win32")("receipt admission and claim commit befo
   });
 });
 
+it.skipIf(process.platform === "win32")("durable storage and provider refusals preserve claims and never resend accepted unknown work", async () => {
+  for (const phase of ["accept", "claim", "result", "native", "confirm"]) {
+    await fixture(async ({ runtime, store, submit, get, value, active, sent }: any) => {
+      if (["accept", "claim", "result"].includes(phase)) await active();
+      const request = value(), storage = store.durableTurnRequests;
+      const insert = storage.insert, write = storage.write, save = store.save.bind(store);
+      let refuse = true;
+      storage.insert = (...args: any[]) => { if (refuse && phase === "accept") { refuse = false; throw new Error("refused"); } return insert(...args); };
+      storage.write = (scope: string, receipt: any) => {
+        if (refuse && ((phase === "claim" && receipt.state === "dispatching") || (phase === "result" && receipt.result))) { refuse = false; throw new Error("refused"); }
+        return write(scope, receipt);
+      };
+      if (phase === "native") runtime.codex.startTurn = async () => { sent.push("attempt"); throw new Error("private native refusal"); };
+      if (phase === "confirm") store.save = (job: any) => { if (refuse && job.turnId) { refuse = false; throw new Error("refused"); } return save(job); };
+      if (phase === "accept" || phase === "claim") {
+        await expect(submit(request)).rejects.toThrow("refused");
+        expect(await get(request)).toEqual(phase === "accept" ? null : expect.objectContaining({ state: "accepted" }));
+        expect(sent).toHaveLength(1);
+        expect(await submit(request)).toMatchObject({ state: "accepted", result: { queueStatus: "queued" } });
+      } else {
+        const receipt = await submit(request);
+        expect(receipt.state).toBe(phase === "confirm" ? "dispatched" : "uncertain");
+        const count = sent.length;
+        for (let n = 0; n < 8; n++) expect(await submit(request)).toEqual(receipt);
+        expect(sent).toHaveLength(count);
+        if (phase === "confirm") expect(store.get(receipt.queueEntryId)).toMatchObject({ status: "unknown", turnId: "turn-1" });
+      }
+      storage.insert = insert; storage.write = write; store.save = save;
+    });
+  }
+});
+
 it.skipIf(process.platform === "win32")("durable turn admission writes only at acceptance, claim and queue outcome boundaries", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   try {
-    await fixture(async ({ runtime, submit, get, value, active }: any) => {
+    await fixture(async ({ runtime, submit, get, value, active, terminal }: any) => {
       await active();
       const request = value();
       const admitted = await measureSqliteWrites(() => submit(request));
@@ -161,6 +193,26 @@ it.skipIf(process.platform === "win32")("durable turn admission writes only at a
       expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "duplicate-read", note: "100 matching durable submissions and receipt reads; no dispatch", writes: duplicates.writes });
       const cancelled = await measureSqliteWrites(() => runtime.cancelQueuedTurn({ queueEntryId: admitted.result.queueEntryId }));
       expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "queued-cancellation", note: "Existing durable owner cancellation and receipt terminal boundary", writes: cancelled.writes });
+      const next = value("next");
+      await submit(next);
+      const dispatched = await measureSqliteWrites(async () => { terminal(); await settle(); });
+      expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "queued-dispatch", note: "Prior owner terminal plus queued native dispatch/confirmation and durable receipt started boundary; initial admission excluded", writes: dispatched.writes });
+      const completed = await measureSqliteWrites(async () => { terminal(); await settle(); });
+      expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "native-completion", note: "Native terminal owner outcome and durable receipt completion; no per-item writes", writes: completed.writes });
+    });
+    await fixture(async ({ submit, value, terminal }: any) => {
+      const started = await measureSqliteWrites(() => submit(value("direct")));
+      expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "direct-admission", note: "Actual idle-host durable receipt admission/claim, existing owner native dispatch/confirmation and receipt result; terminal excluded", writes: started.writes });
+      terminal(); await settle();
+    });
+    await fixture(async ({ runtime, submit, get, value, active }: any) => {
+      await active();
+      const request = value();
+      await submit(request);
+      const shutdown = await measureSqliteWrites(() => runtime.stop());
+      expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "shutdown-uncertain", note: "Graceful shutdown settles one active plus one queued owner job and its queued receipt without replay", writes: shutdown.writes });
+      const reads = await measureSqliteWrites(async () => { for (let n = 0; n < 100; n++) { await get(request); await submit(request); } });
+      expectSqliteWriteBudget({ budgetFile: "outpost-durable-turn-write-budgets.json", scenario: "uncertain-retries", note: "100 reads and retries of stopped uncertain acceptance; no dispatch or prompt restoration", writes: reads.writes });
     });
   } finally { vi.unstubAllEnvs(); }
 });

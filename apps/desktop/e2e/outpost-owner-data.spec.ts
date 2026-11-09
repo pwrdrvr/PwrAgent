@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { createHash, randomUUID } from "node:crypto";
+import { canonicalDurableTurnRequest, type SubmitDurableTurnRequest } from "@pwragent/shared";
 import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
@@ -24,6 +26,57 @@ test.beforeAll(() => {
   execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
     cwd: path.resolve(specDir, "../../.."), stdio: "pipe",
   });
+});
+
+test("durable Outpost admission appears in the mounted queue and cancelled input needs a new receipt before one send", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  test.setTimeout(120_000);
+  const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent") });
+  let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  try {
+    const identity = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    await outpost.client.renameThread({ ...identity, name: "Invented durable queue" });
+    const active = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+    const submission = (text: string): SubmitDurableTurnRequest => {
+      const value: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+        request: { backend: "codex", threadId: identity.threadId, input: [{ type: "text", text }] } };
+      value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(outpost.ownerInstanceId, value)).digest("hex");
+      return value;
+    };
+    const request = submission("Invented durable original"), original = await outpost.client.submitTurnRequest(request);
+    const invite = JSON.parse((await promisify(execFile)(process.execPath, [outpost.cli, "federation-invite", "--port", "0"], { env: outpost.env })).stdout);
+    app = await launchElectronApp({ secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json") });
+    await app.window.evaluate(async encoded => {
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encoded });
+    }, invite.invite);
+    await expect.poll(async () => app!.window.evaluate(async () =>
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status)).toBe("connected");
+    await app.window.evaluate(async ({ instanceId, threadId }) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const ref = { backend: "codex" as const, threadId, target: { scope: "remote" as const, instanceId } };
+      await api.addRemoteThreadPin!({ ref, instanceLabel: "Invented Outpost", summary: {
+        id: threadId, source: "codex", title: "Invented durable queue", titleSource: "explicit", linkedDirectories: [],
+        threadStatus: "active", inbox: { inInbox: true }, updatedAt: 2_000,
+        federation: { ref, instanceLabel: "Invented Outpost", peerStatus: "connected" },
+      } });
+    }, { instanceId: outpost.ownerInstanceId, threadId: identity.threadId });
+    await app.window.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Invented durable queue", exact: true }).click();
+    const queued = app.window.locator(".composer__queued");
+    await expect(queued.filter({ hasText: "Invented durable original" })).toHaveCount(1);
+    for (let n = 0; n < 5; n++) expect((await outpost.client.submitTurnRequest(request)).queueEntryId).toBe(original.queueEntryId);
+    await outpost.client.cancelQueuedTurn({ queueEntryId: original.queueEntryId });
+    expect(await outpost.client.getTurnRequest({ backend: "codex", threadId: identity.threadId, id: request.clientRequest.id })).toMatchObject({ state: "completed", outcome: "cancelled" });
+    await expect(queued.filter({ hasText: "Invented durable original" })).toHaveCount(0);
+    const changed = submission("Invented durable changed"), replacement = await outpost.client.submitTurnRequest(changed);
+    expect(replacement.queueEntryId).not.toBe(original.queueEntryId);
+    await expect(queued.filter({ hasText: "Invented durable changed" })).toHaveCount(1);
+    await outpost.client.interruptTurn(active);
+    await expect.poll(() => outpost.client.getTurnRequest({ backend: "codex", threadId: identity.threadId, id: changed.clientRequest.id })).toMatchObject({ state: "completed", outcome: "completed" });
+    await expect(queued.filter({ hasText: "Invented durable changed" })).toHaveCount(0);
+    const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented durable original")).toHaveLength(0);
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented durable changed")).toHaveLength(1);
+  } finally { await app?.close(); await outpost.close(); }
 });
 
 test("an authenticated queued replacement reaches the mounted desktop with a new durable identity and one provider send", async () => {

@@ -6,7 +6,7 @@ import {
   type AppServerTurnInputItem, type FederationRequestEnvelope,
   type SubmitDurableSteerRequest, type SubmitDurableTurnRequest,
 } from "@pwragent/shared";
-import { DurableTurnRequestService } from "../federation/durable-turn-request-service";
+import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import {
   additionalFederationBackendCapabilities, durableFederationCallerScope,
   FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_BACKEND_METHODS,

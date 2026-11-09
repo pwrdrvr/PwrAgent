@@ -5,7 +5,7 @@ import {
   canonicalDurableTurnRequest, DURABLE_TURN_REQUEST_RETENTION_MS,
   type DurableTurnReceipt, type SubmitDurableTurnRequest, type FederationRequestEnvelope,
 } from "@pwragent/shared";
-import { DurableTurnRequestService } from "../federation/durable-turn-request-service";
+import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import {
   registerFederationBackendHandlers, FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES, additionalFederationBackendCapabilities,

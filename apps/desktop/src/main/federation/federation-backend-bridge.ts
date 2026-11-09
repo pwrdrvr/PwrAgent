@@ -277,18 +277,13 @@ import type {
   DurableSteerReceipt,
   FederationSubmitDurableSteerRequest,
 } from "@pwragent/shared";
-import { DurableTurnRequestError, type DurableTurnRequestService } from "./durable-turn-request-service";
+import { DurableTurnRequestError, type DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 
 export const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
 
-/** A delegated device can only occupy its authenticated issuer's namespace. */
-export function durableFederationCallerScope(sourceInstanceId: string, callerScope?: string): string {
-  if (callerScope !== undefined && (typeof callerScope !== "string" || !callerScope || callerScope.length > 256)) {
-    throw new DurableTurnRequestError("request_invalid");
-  }
-  return JSON.stringify(["federation", sourceInstanceId, callerScope ?? ""]);
-}
+import { durableFederationCallerScope } from "@pwragent/shared";
+export { durableFederationCallerScope } from "@pwragent/shared";
 
 /**
  * Load queries answer from in-memory OS counters plus one statfs, so a

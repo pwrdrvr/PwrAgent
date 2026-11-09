@@ -5,6 +5,7 @@ import { buildThreadIdentityKey, isAppServerBackendKind, NavigationQueryStore, N
 import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
 import { ThreadCreationLifecycle, ThreadSteeringLifecycle, ThreadSteerSubmissionLifecycle, ThreadTitleGenerationService, ThreadTitleLifecycle } from "../dist/federation-core.js";
+import { DurableTurnRequestService, DurableTurnRequestError, durableFederationCallerScope } from "../dist/federation-core.js";
 
 // The owner methods this outpost serves. Each one's capability comes from the
 // shared owner contract, so a grant means the same here as on desktop.
@@ -16,6 +17,7 @@ const OWNER_METHODS = [
   "startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread",
   "setThreadModelSettings", "setThreadExecutionMode",
   "readQueuedTurn", "replaceQueuedMessage", "releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn",
+  "submitTurnRequest", "getTurnRequest",
 ];
 export function ownerMethodCapabilities(methods, contract = FEDERATION_BACKEND_METHOD_CAPABILITIES) {
   return Object.fromEntries(methods.map((name) => {
@@ -48,8 +50,9 @@ function textInput(input) {
 }
 
 export class HeadlessBackend {
-  constructor(runtime, publish) {
+  constructor(runtime, publish, ownerInstanceId) {
     this.runtime = runtime;
+    this.ownerInstanceId = ownerInstanceId;
     this.navigation = new NavigationQueryStore();
     this.publish = (event, eventClass) => {
       const thread = this.threads.get(event.notification.params.threadId);
@@ -306,6 +309,10 @@ export class HeadlessBackend {
     }
     if (message.method === "headless/queueChanged") {
       const { entry, type, position, turnId, status, error, reason } = message.params;
+      const outcome = type === "terminal" ? this.runtime.store.get(entry.id).status : undefined;
+      this.durableRequests?.observeQueueEvent({ backend: entry.backend, threadId: entry.threadId, queueEntryId: entry.id,
+        status: type === "cancelled" && this.runtime.stopping ? "failed" : type, turnId,
+        terminalStatus: outcome === "interrupted" ? "turn/cancelled" : outcome === "blocked" ? "turn/failed" : status });
       const summary = this.queuedTurns(entry.threadId).find(item => item.queueEntryId === entry.id);
       this.publish({ backend: "codex", notification: { method: "thread/turnQueue/updated", params: {
         threadId: entry.threadId, queueEntryId: entry.id, queueEntryCreatedAt: entry.createdAt,
@@ -445,6 +452,8 @@ export class HeadlessBackend {
       case "startThread": return this.startThread(params);
       case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);
       case "startTurn": return this.startTurn(params, envelope);
+      case "submitTurnRequest": return this.durableTurnRequests().submit(durableFederationCallerScope(envelope.sourceInstanceId, params.callerScope), params);
+      case "getTurnRequest": return this.durableTurnRequests().get(durableFederationCallerScope(envelope.sourceInstanceId, params.callerScope), params);
       case "replaceQueuedMessage": return this.replaceQueuedMessage(params, envelope);
       case "readQueuedTurn": return this.runtime.readQueuedTurn(params);
       case "releaseQueuedTurn": return this.runtime.releaseQueuedTurn(params);
@@ -595,14 +604,36 @@ export class HeadlessBackend {
     } finally { this.creating = false; this.runtime.turnQueue.drainAll(); }
   }
 
-  async startTurn(params, envelope) {
+  durableTurnRequests() {
+    if (!this.durableRequests) {
+      const ownerInstanceId = this.ownerInstanceId?.();
+      if (!ownerInstanceId) throw new DurableTurnRequestError("request_destination_unavailable");
+      this.durableRequests = new DurableTurnRequestService({
+        storage: this.runtime.store.durableTurnRequests, ownerInstanceId,
+        // The receipt, durable job, live FIFO and lifecycle events use one
+        // immutable identity. Host job IDs are restricted to 80 safe bytes.
+        queueEntryId: (scope, id) => `dturn-${digest([scope, id])}`,
+        authorize: async (_scope, request) => {
+          if (request.backend !== "codex" || !this.runtime.ownsThread(request.threadId)) throw new DurableTurnRequestError("request_destination_unavailable");
+        },
+        dispatch: (request, scope) => this.startTurn(request, { sourceInstanceId: JSON.parse(scope)[1] }, request.queueEntryId),
+        isQueued: async receipt => {
+          this.runtime.readQueuedTurn(receipt);
+          return true;
+        },
+      });
+    }
+    return this.durableRequests;
+  }
+
+  async startTurn(params, envelope, acceptedJobId) {
     if (params.collaborationMode || params.fastMode || params.acpRuntime) throw new Error("Collaboration modes, fast mode and ACP settings are unavailable on this outpost");
     const thread = this.owned(params.threadId);
     if (params.cwd && params.cwd !== (thread.cwd || this.runtime.workspace)) throw new Error("Turn cwd differs from its owner thread project");
     const sandbox = sandboxFor(params, thread.sandbox);
     const prompt = textInput(params.input);
     if (params.queueEntryId !== undefined && (typeof params.queueEntryId !== "string" || !params.queueEntryId || params.queueEntryId.length > 256)) throw new Error("Invalid submission identity");
-    const job = this.runtime.submit({ id: `fed-${digest([envelope.sourceInstanceId, params.queueEntryId || envelope.id])}`, prompt,
+    const job = this.runtime.submit({ id: acceptedJobId ?? `fed-${digest([envelope.sourceInstanceId, params.queueEntryId || envelope.id])}`, prompt,
       threadId: thread.id, cwd: thread.cwd || this.runtime.workspace, messageOrigin: this.authenticateOrigin?.(params.messageOrigin, envelope), sandbox, model: params.model || thread.model,
       reasoningEffort: params.reasoningEffort || thread.reasoningEffort, serviceTier: params.serviceTier || thread.serviceTier });
     if (job.status === "queued") {

@@ -75,6 +75,19 @@ port. Its private desktop binding retains the existing federation factory and
 synchronous FULL/immediate receipt and claim commits before dispatch. The prior
 connection durability mode is restored on success or refusal. Receipt SQL,
 caller/request/queue identities, expiry and transaction sites are unchanged.
+Outpost's private profile binding also supplies this handle-free port to the
+same owner-core inbox service. Receipt, job, FIFO and event identities agree;
+authenticated callers cannot read another issuer/device's receipts. Accepted
+queued input is transient and is never restored after shutdown or recovery.
+
+`outpost-durable-turn-write-budgets.json` measures actual feature boundaries:
+queued admission is four commits/32,960 observed WAL bytes (3.296 MB/day at
+100/day), direct admission seven/41,200 (4.12 MB/day), queued dispatch including
+the prior terminal five/20,600 (2.06 MB/day), cancellation or native completion
+two/8,240 each (0.824 MB/day), and shutdown of one active plus one queued job
+three/12,360 (1.236 MB at 100 shutdowns/day). One hundred duplicate submissions
+plus reads and one hundred uncertain retries plus reads each make zero commits.
+Setup is excluded; no schema, timer or inherited budget changes.
 
 Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
 ACP session metadata and last-observed command ports. Desktop's private bindings

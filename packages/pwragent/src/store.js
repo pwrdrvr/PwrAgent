@@ -48,6 +48,7 @@ export class JobStore {
     this.retainedOwners = storage.retainedOwners;
     this.acpSessions = storage.acpSessions;
     this.claudeSessions = storage.claudeSessions;
+    this.durableTurnRequests = storage.durableTurnRequests;
     // Existing runtime consumers retain point reads and iteration, without a
     // second mutable registry that could diverge from the profile database.
     this.jobs = {

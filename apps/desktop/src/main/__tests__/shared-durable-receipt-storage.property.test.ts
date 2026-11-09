@@ -7,7 +7,7 @@ import type { DurableRequestReceipt } from "@pwragent/owner-core/durable-turn-re
 import { SqliteDurableTurnRequestStore as SharedStore } from "@pwragent/sqlite-storage/durable-turn-request-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteDurableTurnRequestStore as DesktopStore } from "../storage/durable-turn-request-store";
-import { DurableTurnRequestService } from "../federation/durable-turn-request-service";
+import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
