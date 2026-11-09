@@ -69,8 +69,11 @@ describe("native helper fixture ownership", () => {
     const fixture = createNativeHelperFixture(async (root) => {
       const driver = `
         require("node:fs").writeFileSync(${JSON.stringify(driverPid)}, String(process.pid));
+        // Bypass Node's own kill-child-on-exit Job on Windows. Detachment
+        // does not request Job breakaway, so PwrAgent still owns the compiler.
         const child = require("node:child_process").spawn(process.execPath,
-          ["-e", ${JSON.stringify(compiler)}, ...process.argv.slice(1)], { stdio: "ignore" });
+          ["-e", ${JSON.stringify(compiler)}, ...process.argv.slice(1)],
+          { stdio: "ignore", detached: process.platform === "win32" });
         child.unref();
         process.exitCode = ${exitCode};
       `;
