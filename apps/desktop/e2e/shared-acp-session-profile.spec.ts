@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { AcpAvailableCommandsStore } from "@pwragent/sqlite-storage/acp-available-commands-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
+import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { AcpAgentStore } from "../src/main/storage/acp-agent-store";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test } from "./fixtures/electron-test";
@@ -22,6 +23,7 @@ test.beforeAll(() => {
 });
 const backend = "acp:gemini" as const;
 const threadId = "portable-acp-session";
+const baselineId = "portable-baseline-acp";
 const providerCommands = [{ name: "portable-live", description: "Provider command", aliases: ["live"], input: { hint: "<fixture>" } }];
 const normalizedCommands = [{ name: "portable-live", description: "Provider command", aliases: ["live"],
   argumentHint: "<fixture>", backend, scope: "session", source: "provider" }];
@@ -76,6 +78,13 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
         sessions.upsertSession({ backendId: backend, sessionId: "portable-archived-acp", title: "Portable archived ACP",
           cwd: repositoryPath, createdAt: 1_779_400_000_000, updatedAt: 1_779_400_000_002,
           archivedAt: 1_779_400_000_003, status: "idle", executionMode: "default" });
+        sessions.upsertSession({ backendId: backend, sessionId: baselineId, title: "Portable baseline ACP", titleSource: "explicit",
+          cwd: repositoryPath, createdAt: 0, updatedAt: 2, status: "idle", executionMode: "default" });
+        const overlay = new SqliteOverlayStore(db);
+        overlay.initializeNavigationUnreadBaseline(overlay.readNavigationQueryIndex({ backend, threads: [{
+          id: baselineId, source: backend, title: "Portable baseline ACP", titleSource: "explicit",
+          createdAt: 0, updatedAt: 2, linkedDirectories: [],
+        }] }).threads);
         new AcpAvailableCommandsStore(db).upsert({ backendId: backend, repositoryPath, observedAt: Date.now(),
           commands: [{ name: "portable-cached", description: "Portable command", backend, scope: "session", source: "provider" }] });
       } finally { db.close(); }
@@ -83,6 +92,11 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
   });
   try {
     await expect(app.window.getByRole("button", { name: /Portable ACP session/i })).toBeVisible();
+    const desktopBaseline = await app.window.evaluate(async ref => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return (await api.getNavigationSelectedDetail!({ protocol: 2, ref })).thread;
+    }, { backend, threadId: baselineId });
+    expect(desktopBaseline?.inbox.inInbox).toBe(false);
     const cached = await app.window.evaluate(async ({ backend, cwd }) => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       return await api.listSkills!({ backend, cwd });
@@ -117,6 +131,12 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
       expect(JSON.parse(payload)).not.toHaveProperty("transcriptUpdates");
     } finally { raw.close(); }
     await app.closeApplication();
+    const desktopDb = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+    try {
+      const overlay = new SqliteOverlayStore(desktopDb);
+      expect((await overlay.getThreadMetadata({ backend, threadId: baselineId }))?.seenUpdatedAt).toBeUndefined();
+      await overlay.observeArchivedThreads([{ backend, threadId: baselineId }], 0);
+    } finally { desktopDb.close(); }
     const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
     const stateDirectory = path.dirname(stateDbPathForHomeRoot(app.homeRoot));
     const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: app.homeRoot });
@@ -127,6 +147,9 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
       const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref: { backend, threadId } });
       expect(detail.identity).toBe("archived");
       expect(detail.thread).toMatchObject({ id: threadId, source: backend, title: "Desktop renamed portable ACP", titleSource: "explicit" });
+      const baseline = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref: { backend, threadId: baselineId } });
+      expect(baseline.thread.inbox.inInbox).toBe(desktopBaseline!.inbox.inInbox);
+      expect(baseline.identity).toBe("archived");
       expect((await owner.handle("lookupArchivedThreads", { backend, threadIds: [threadId] })).threads)
         .toMatchObject([{ id: threadId, source: backend, title: "Desktop renamed portable ACP" }]);
       await expect(owner.handle("startTurn", { backend, threadId })).rejects.toThrow("executes Codex only");
@@ -136,7 +159,7 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
       const sessions = new AcpSessionStore(db);
       expect(sessions.getSession(backend, threadId)).toMatchObject({ title: "Desktop renamed portable ACP",
         agentSessionId: "provider-portable-id", hasConversationHistory: true, availableCommands: normalizedCommands });
-      expect(sessions.listSessions(backend)).toEqual([]);
+      expect(sessions.listSessions(backend).map(row => row.sessionId)).toEqual([baselineId]);
       expect(sessions.listSessions(backend, { archived: true }).map(row => row.sessionId).sort())
         .toEqual(["portable-acp-session", "portable-archived-acp"]);
       expect(new AcpAvailableCommandsStore(db).get(backend, repositoryPath)?.commands).toEqual(normalizedCommands);
