@@ -7,6 +7,7 @@ import type { AppServerBackendKind, AppServerThreadSummary } from "@pwragent/sha
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
+import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
@@ -38,6 +39,32 @@ it("every supported provider inventory round trips without changing another back
   }), { numRuns: 25 });
 });
 
+it("discovers actual ACP session metadata without an installed agent or a retained inventory, including archives", async () => {
+  const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+  await fc.assert(fc.asyncProperty(word, fc.boolean(), fc.constantFrom("default", "auto", "full-access"), async (name, archived, executionMode) => {
+    const root = realpathSync(mkdtempSync("/tmp/pa-acp-discovery-"));
+    mkdirSync(path.join(root, "headless"), { mode: 0o700 });
+    const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
+    const sessions = new AcpSessionStore(db);
+    sessions.upsertSession({ backendId: "acp:removed", sessionId: "same-id", title: name, titleSource: "derived", cwd: root,
+      createdAt: 1, updatedAt: 2, executionMode, status: "idle", ...(archived ? { archivedAt: 3 } : {}) });
+    sessions.upsertSession({ backendId: "acp:removed", sessionId: "hidden", title: "Hidden helper", hidden: true,
+      createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
+    const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+    try {
+      const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
+      const owner = new HeadlessBackend({ workspace: root, store, projects: { list: () => [] }, onFailure(error: unknown) { throw error; } }, () => {});
+      const ref = { backend: "acp:removed", threadId: "same-id" };
+      const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
+      expect(detail.identity).toBe(archived ? "archived" : "present");
+      expect(detail.thread).toMatchObject({ id: "same-id", source: "acp:removed", title: name, titleSource: "derived", executionMode });
+      expect((await owner.handle("resolveThread", { backend: "acp:removed", threadId: "hidden" })).thread).toBeUndefined();
+      sessions.upsertSession({ ...sessions.getSession("acp:removed", "same-id")!, title: `Changed ${name}`, archivedAt: undefined });
+      expect((await owner.handle("resolveThread", ref)).thread.title).toBe(`Changed ${name}`);
+    } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+  }), { numRuns: 25 });
+});
+
 it("retained owner reads preserve provider identity, native authority and canonical facts through arbitrary desktop updates", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
   await fc.assert(fc.asyncProperty(fc.array(fc.record({
@@ -53,7 +80,7 @@ it("retained owner reads preserve provider identity, native authority and canoni
     try {
       const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
       const runtime = { workspace: root, store, onFailure(error: unknown) { throw error; },
-        projects: { list: () => [{ path: root, label: "Fixture" }] } };
+        projects: { list: () => [{ path: root, label: "Fixture" }] }, codex: { listModels: async () => [] } };
       let owner = new HeadlessBackend(runtime, () => {});
       for (const [index, command] of commands.entries()) {
         const backend = command.backend as AppServerBackendKind;
@@ -76,9 +103,20 @@ it("retained owner reads preserve provider identity, native authority and canoni
         expect(archived.threads.map((row: AppServerThreadSummary) => row.source)).toEqual(command.archived ? [backend] : []);
         expect(archived.parentLinks).toEqual([{ ...ref, parentThreadId: "parent", parentThreadBackend: "codex", parentThreadInstanceId: undefined }]);
         expect((await owner.handle("resolveThread", { backend: "codex", threadId: "same-id" })).thread.title).toBe("codex Native");
+        const page = await owner.handle("getNavigationQueryPage", { protocol: 2, consumer: "remote-window", backend,
+          query: { kind: "exact", identities: [ref] } });
+        expect(page.entries.map((entry: { row: { ref: { backend: string } } }) => entry.row.ref.backend)).toEqual(command.archived ? [] : [backend]);
       }
       const all = (await owner.handle("listThreads", { backend: "all" })).threads;
       expect(new Set(all.map((row: AppServerThreadSummary) => row.source)).size).toBe(all.length);
+      const advertised = await owner.handle("listBackends");
+      for (const backend of backends.filter(value => value !== "codex")) {
+        expect(advertised.backends.find((entry: { kind: string }) => entry.kind === backend))
+          .toMatchObject({ available: false, capabilities: { listThreads: true, createThread: false, readThread: false, startTurn: false } });
+        for (const method of ["startThread", "startTurn", "steerTurn", "interruptTurn", "controlActiveTurn", "renameThread", "markThreadSeen", "setThreadExecutionMode", "setThreadModelSettings", "readThread", "getNavigationQueueProjection"]) {
+          await expect(owner.handle(method, { backend, threadId: "same-id", ref: { backend, threadId: "same-id" } })).rejects.toThrow("executes Codex only");
+        }
+      }
     } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
   }), { numRuns: 25 });
 });
