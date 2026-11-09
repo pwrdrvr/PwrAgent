@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A protocol fixture, not a model/provider. All state is test-owned.
 import assert from "node:assert/strict";
-import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
@@ -159,6 +159,16 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       }, ["slow", "descendant", "approval", "question"].includes(prompt) ? 30000 : 100);
     } else if (method === "turn/steer") {
       assert.equal(params.expectedTurnId, active.id);
+      if (params.input?.[0]?.text === "hold-steer-ack") {
+        const turnId = active.id;
+        const watcher = watch(directory, (_event, file) => {
+          if (file !== "steer.release") return;
+          watcher.close();
+          reply({ turnId });
+        });
+        writeFileSync(path.join(directory, "steer.ready"), turnId);
+        continue;
+      }
       reply({ turnId: active.id });
     } else if (method === "turn/interrupt") {
       assert.equal(params.threadId, active.threadId);

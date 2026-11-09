@@ -371,6 +371,14 @@ entries again after admitted dispatch settles, including a refused claim.
 Explicit new turns, requested settings and durable turn receipts retain ordinary
 turn admission. Delivery metadata uses the existing job payload, without a schema
 change, and is part of each fresh immutable fingerprint.
+Explicit Retry also admits held, unclaimed
+individual guidance into a confirmed running native turn when that same
+steering path is eligible. It rechecks live owner/project/handoff gates and
+immutable acceptance before claiming the captured target; occupied dispatch,
+uncertainty and shutdown still refuse it. Shared release preserves review
+holds behind a dispatch gate and cannot start work after queue close. The
+original job retains native control; accepted or uncertain guidance never
+returns to the waiting FIFO.
 Outpost's registered pause/resume and ordering methods delegate to the same
 queue operations desktop uses. Pause revisions and independent review holds
 remain in that engine; typed state/order events invalidate the owner projection.

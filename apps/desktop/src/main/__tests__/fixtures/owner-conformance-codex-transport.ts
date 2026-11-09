@@ -32,6 +32,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static threads = new Map<string, FixtureThread>();
   static requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   static refusedStarts = 0;
+  static refusedSteers = 0;
   static recordsFile: string | undefined;
   static helperTitle: string | undefined;
   private static sequence = 0;
@@ -44,6 +45,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.requests = [];
     OwnerConformanceCodexTransport.sequence = 0;
     OwnerConformanceCodexTransport.refusedStarts = 0;
+    OwnerConformanceCodexTransport.refusedSteers = 0;
     OwnerConformanceCodexTransport.recordsFile = undefined;
     OwnerConformanceCodexTransport.helperTitle = undefined;
   }
@@ -161,6 +163,12 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
         }, 100);
       }
     } else if (request.method === "turn/steer" || request.method === "turn/interrupt") {
+      if (request.method === "turn/steer" && OwnerConformanceCodexTransport.refusedSteers > 0) {
+        OwnerConformanceCodexTransport.refusedSteers--;
+        this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id,
+          error: { code: -32600, message: "Fixture provider refused guidance" } }));
+        return;
+      }
       const turn = this.activeTurns.get(String(params.threadId));
       const expected = request.method === "turn/steer" ? params.expectedTurnId : params.turnId;
       if (!turn || turn.id !== expected) {
