@@ -8,6 +8,7 @@ export class OutpostThreadRegistry {
     this.unreadBaseline = storage?.readUnreadBaseline?.() ?? {};
     this.acpSessions = acpSessions;
     this.claudeSessions = claudeSessions;
+    this.acceptedJobThreadIds = new Set();
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
     this.inventory = new Map((inventory?.list() ?? [])
@@ -45,7 +46,26 @@ export class OutpostThreadRegistry {
     // Neither a retained inventory nor an overlay can create a native session.
     if (backend.startsWith("acp:") && (!session || session.hidden)) return undefined;
     const native = session ? this.acpThread(session) : this.inventory.get(buildThreadIdentityKey(backend, id));
+    if (backend === "codex" && !native && record?.nativeMembershipRetired && !this.acceptedJobThreadIds.has(id)) return undefined;
     return this.project(id, record, native, backend);
+  }
+
+  retainAcceptedJobThread(id) { this.acceptedJobThreadIds.add(id); }
+
+  observeCreatedNativeThread(thread) {
+    this.inventory.set(buildThreadIdentityKey("codex", thread.id), { ...thread, observedAt: Date.now() });
+  }
+
+  absentConfirmedCodexThreadIds(threads) {
+    const present = new Set(threads.map(thread => thread.id));
+    const confirmed = new Set([...this.inventory.values()].filter(thread => thread.source === "codex").map(thread => thread.id));
+    const records = new Map(this.storage.listThreadMetadata().filter(record => record.backend === "codex").map(record => [record.threadId, record]));
+    for (const record of records.values()) {
+      if (record.nativeMembershipRetired === false || record.title?.nativeName !== undefined) confirmed.add(record.threadId);
+    }
+    // Pending imports have no positive native observation. Retired metadata
+    // remains available without manufacturing a member on the next restart.
+    return [...confirmed].filter(id => !present.has(id) && !records.get(id)?.nativeMembershipRetired);
   }
 
   acpThread(session) {
@@ -115,7 +135,9 @@ export class OutpostThreadRegistry {
     for (const [key, thread] of acpThreads) natives.set(key, thread);
     const identities = new Map([...natives].map(([key, thread]) => [key, { backend: thread.source, threadId: thread.id }]));
     for (const [key, record] of byId) identities.set(key, record);
-    return [...identities].map(([key, identity]) => this.project(identity.threadId, byId.get(key), natives.get(key), identity.backend)).values();
+    return [...identities].filter(([key, identity]) => identity.backend !== "codex" || natives.has(key)
+      || !byId.get(key)?.nativeMembershipRetired || this.acceptedJobThreadIds.has(identity.threadId))
+      .map(([key, identity]) => this.project(identity.threadId, byId.get(key), natives.get(key), identity.backend)).values();
   }
   set(id, thread) {
     if (id !== thread.id) throw new Error("Thread registry identity changed");

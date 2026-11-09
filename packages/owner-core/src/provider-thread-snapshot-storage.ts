@@ -11,7 +11,8 @@ export type ProviderThreadSnapshot = Readonly<{
 
 export interface ProviderThreadSnapshotStorage {
   list(): ProviderThreadSnapshot[];
-  replace(snapshot: ProviderThreadSnapshot): void;
+  /** Retire confirmed native identities and publish inventory atomically. */
+  replace(snapshot: ProviderThreadSnapshot, retiredThreadIds?: readonly string[]): void;
 }
 
 export function projectProviderThreadSummary(

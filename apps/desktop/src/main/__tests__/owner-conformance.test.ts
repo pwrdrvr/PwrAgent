@@ -1,7 +1,7 @@
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -606,7 +606,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       };
       try {
         desktop = await startDesktopOwner(null, prepare, undefined, root);
-        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread?.title).toBe("Native confirmed");
+        const before = archived ? (await desktop.client.lookupArchivedThreads({ backend: "codex", threadIds: [threadId] })).threads[0]
+          : (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread;
+        expect(before?.title).toBe("Native confirmed");
         await desktop.close(); desktop = undefined;
         const headless = path.join(root, "profiles/t/state/headless");
         mkdirSync(path.join(headless, "jobs"), { recursive: true, mode: 0o700 });
@@ -619,6 +621,15 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         writeFileSync(path.join(headless, "jobs/confirmed-job.json"), JSON.stringify(accepted));
         outpost = await startOutpostDaemon({ profileRoot: root });
         expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread).toMatchObject({ title: "Native confirmed", pinnedRank: "1024" });
+        // A repeated cursor is an incomplete protocol discovery, not an empty
+        // authoritative inventory. Neither active nor archive failure retires.
+        for (const repeatArchived of [false, true]) {
+          writeFileSync(path.join(root, "f/discovery-control.json"), JSON.stringify({ repeatArchived }));
+          await expect(outpost.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend: "codex",
+            query: { kind: "exact", identities: [ref] } })).rejects.toThrow("incomplete");
+          expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread?.title).toBe("Native confirmed");
+        }
+        unlinkSync(path.join(root, "f/discovery-control.json"));
         writeFileSync(path.join(root, "f/fixture-threads.json"), "{}");
         const assertRetired = async (client: FederationRemoteBackendClient) => {
           const page = await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend: "codex",
