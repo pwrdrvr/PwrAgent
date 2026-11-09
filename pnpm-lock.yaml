@@ -219,6 +219,9 @@ importers:
       dependency-cruiser:
         specifier: ^18.0.0
         version: 18.7.0
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       eslint:
         specifier: ^10.6.0
         version: 10.13.0(jiti@2.7.0)(supports-color@7.2.0)
