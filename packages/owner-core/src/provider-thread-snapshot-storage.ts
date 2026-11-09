@@ -13,4 +13,3 @@ export interface ProviderThreadSnapshotStorage {
   list(): ProviderThreadSnapshot[];
   replace(snapshot: ProviderThreadSnapshot): void;
 }
-
