@@ -53,7 +53,7 @@ it("seeds the retained unread fixture independently of whether startup discovery
       });
       expect((await f.desktop.getThreadMetadata(identity))?.seenUpdatedAt).toBeUndefined();
     } finally { owner?.close(); f.close(); }
-  }), { numRuns: 20, examples: [[1, false]] });
+  }), { numRuns: 20, examples: [[0, false]] });
 });
 
 it("keeps metadata-only rows filterable without replacing provider or canonical titles", async () => {
