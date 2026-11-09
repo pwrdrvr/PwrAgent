@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
@@ -23,7 +24,7 @@ function native(backend: AppServerBackendKind, name: string, archived = false): 
 
 it("every supported provider inventory round trips without changing another backend's identical thread ID", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.record({ backend: fc.constantFrom(...backends), name: word }), { minLength: 1, maxLength: 12 }), async commands => {
-    const root = realpathSync(mkdtempSync("/tmp/pa-provider-codec-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-provider-codec-")));
     const db = StateDb.open(path.join(root, "state.db"));
     const model = new Map<AppServerBackendKind, AppServerThreadSummary[]>();
     try {
@@ -42,7 +43,7 @@ it("every supported provider inventory round trips without changing another back
 it("discovers actual ACP session metadata without an installed agent or a retained inventory, including archives", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
   await fc.assert(fc.asyncProperty(word, fc.boolean(), fc.constantFrom("default", "auto", "full-access"), async (name, archived, executionMode) => {
-    const root = realpathSync(mkdtempSync("/tmp/pa-acp-discovery-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-acp-discovery-")));
     mkdirSync(path.join(root, "headless"), { mode: 0o700 });
     const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
     const sessions = new AcpSessionStore(db);
@@ -72,7 +73,7 @@ it("retained owner reads preserve provider identity, native authority and canoni
   await fc.assert(fc.asyncProperty(fc.array(fc.record({
     backend: fc.constantFrom("claude", "acp:fixture"), name: word, archived: fc.boolean(), seen: fc.boolean(),
   }), { minLength: 1, maxLength: 10 }), async commands => {
-    const root = realpathSync(mkdtempSync("/tmp/pa-provider-read-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-provider-read-")));
     mkdirSync(path.join(root, "headless"), { mode: 0o700 });
     const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
     const overlay = new SqliteOverlayStore(db);

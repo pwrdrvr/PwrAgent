@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
@@ -19,7 +20,7 @@ const budgetFile = "outpost-provider-read-write-budgets.json";
 it("budgets Claude inventory publication, legacy scrubbing and passive multi-provider reads separately", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
-  const root = realpathSync(mkdtempSync("/tmp/pa-provider-writes-"));
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-provider-writes-")));
   mkdirSync(path.join(root, "headless"), { mode: 0o700 });
   const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
   let profile: ReturnType<typeof openOutpostProfileRuntime> | undefined;
@@ -56,7 +57,7 @@ it("budgets Claude inventory publication, legacy scrubbing and passive multi-pro
 
 it("budgets changed non-Codex native name events and makes no repeated or undiscovered-provider writes", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const root = realpathSync(mkdtempSync("/tmp/pa-provider-events-"));
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-provider-events-")));
   const db = StateDb.open(path.join(root, "state.db"));
   const inventory = new ProviderThreadSnapshotStore(db);
   const client = new CodexAppServerClient({ directoryResolver: async () => [] });
