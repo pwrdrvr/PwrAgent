@@ -234,7 +234,8 @@ export class HeadlessBackend {
       && ((params.backend && params.backend !== "codex") || (params.ref && params.ref.backend !== "codex"))) throw new Error("This outpost executes Codex only");
     if (params.cwd) this.runtime.projects.resolve(params.cwd);
     const scope = params.backend ?? "all";
-    if (RETAINED_READ_METHODS.includes(name) && (scope === "all" || scope === "claude" || params.ref?.backend === "claude")) {
+    const readBackend = params.ref?.backend ?? scope;
+    if (RETAINED_READ_METHODS.includes(name) && (readBackend === "all" || readBackend === "claude")) {
       await this.threads.refreshClaudeThreads();
     }
     if (this.initialized && (scope === "all" || scope === "codex")

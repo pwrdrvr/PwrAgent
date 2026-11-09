@@ -57,9 +57,10 @@ export class OutpostThreadRegistry {
     if (native) {
       Object.assign(thread, actualClaude ? { title: native.title, titleSource: native.titleSource } : projectOwnerThreadTitle(native, record));
       if (record?.title?.nativeName !== undefined && record.title.nativeName !== native.title) thread.titleNativeName = native.title;
-      // Only a fresh walk may supersede durable owner archive observations;
-      // the retained inventory is never authority for restoring ownership.
-      if (actualClaude || native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.archiveRetentionStartedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
+      if (actualClaude) {
+        Object.assign(thread, { archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
+          createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path });
+      } else if (native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.archiveRetentionStartedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
         thread.archived = native.archivedAt !== undefined;
         thread.archivedAt = native.archivedAt;
       }
