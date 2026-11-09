@@ -66,7 +66,7 @@ it("preserves arbitrary host payloads over the minimal generic port", async () =
       expect(store.getInstalledAgent("acp:other-host")).toEqual(agent);
       expect(store.listInstalledAgents()).toEqual([agent]);
     } finally { db.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 25, examples: [[-0, 0], [[-0], 0], [[{ "": -0 }], 0]] });
 });
 
 it("matches independent backend replacement, NOCASE order and latest-cache models across WAL hosts and reopens", async () => {
@@ -160,7 +160,7 @@ it("keeps permissive legacy payload guards and JSON failure behavior without rep
           expect(measured.writes.commits).toBe(0);
         }
       } finally { db.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 25, examples: [[-0, "name"], [[{ "": -0 }], "registryId"]] });
 });
 
 it("preserves outer transaction atomicity, WAL visibility and zero-write serialization refusal", async () => {
