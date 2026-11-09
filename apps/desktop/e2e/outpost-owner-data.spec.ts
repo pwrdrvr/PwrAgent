@@ -1,4 +1,5 @@
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
@@ -9,6 +10,14 @@ import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.resolve(specDir, "../../../packages/pwragent/src", file)).href);
+
+test.beforeAll(() => {
+  // The production JS imports Outpost's published bundle. A desktop-only
+  // build does not produce it in a clean checkout.
+  execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
+    cwd: path.resolve(specDir, "../../.."), stdio: "pipe",
+  });
+});
 
 test("the actual Outpost registry adopts legacy owner data and receives desktop metadata edits after shutdown", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
