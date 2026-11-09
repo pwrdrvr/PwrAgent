@@ -47,6 +47,12 @@ the original app-state construction site. Immutable payload files remain beside
 the profile database; legacy inline payload moves, compare-and-set cleanup,
 claims/recovery, bounded projection cursors and transactions are preserved.
 
+Shared `SqliteDurableTurnRequestStore` implements the owner-core durable inbox
+port. Its private desktop binding retains the existing federation factory and
+synchronous FULL/immediate receipt and claim commits before dispatch. The prior
+connection durability mode is restored on success or refusal. Receipt SQL,
+caller/request/queue identities, expiry and transaction sites are unchanged.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -100,3 +106,8 @@ models across portable/desktop WAL connections and reopens, with backend
 identity, exact writes, payload cleanup/failure, legacy migration and bounded
 cursor oracles. Supported profile E2E hands portable scheduled payloads and
 claims to the real desktop services and reads their mutations after shutdown.
+
+`shared-durable-receipt-storage.property.test.ts` compares an independent inbox
+model across shared/desktop WAL connections and reopens. It checks rollback,
+caller isolation, expiry, write counts, immediate locking, durability restoration
+and committed claims observed from a second handle before provider dispatch.

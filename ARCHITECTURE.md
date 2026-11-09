@@ -441,6 +441,11 @@ Shared `ScheduledThreadActionStore` retains its file/memory payload closure,
 profile-adjacent immutable files, legacy payload migration, claims/recovery and
 bounded projection cursors. Its private desktop bindings preserve app-state
 construction and the owner-core storage port. SQL and transactions are unchanged.
+Shared `SqliteDurableTurnRequestStore` implements the owner-core durable inbox
+port through its private desktop binding and the original federation factory.
+Synchronous FULL/immediate receipt and claim commits precede dispatch, then the
+connection's original durability mode is restored. SQL and lifecycle sites stay
+unchanged; the owner service never receives a database handle.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
