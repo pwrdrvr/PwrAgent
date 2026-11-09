@@ -63,6 +63,11 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     acknowledged = true;
   } else {
     assert.ok(acknowledged);
+    const stalled = helperControl()?.stalledMethod;
+    if (method === stalled
+      && (method !== "thread/start" || params.ephemeral === true)
+      && (method !== "turn/start" || helpers.has(params.threadId))
+      && (method !== "thread/name/set" || params.name === "Helper generated title")) continue;
     if (method === "config/read" && helperControl()) {
       reply({ config: { mcp_servers: {} } });
     } else if (method === "account/read") {
