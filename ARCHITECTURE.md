@@ -437,6 +437,10 @@ artifacts with existing pruning and reconciliation transactions. Its private
 desktop binding injects the two existing warning sites and preserves app-state
 construction. The pure transcript merge policy lives in owner-core and is
 shared with desktop artifact rebuilding. No SQL or write count changes.
+Shared `ScheduledThreadActionStore` retains its file/memory payload closure,
+profile-adjacent immutable files, legacy payload migration, claims/recovery and
+bounded projection cursors. Its private desktop bindings preserve app-state
+construction and the owner-core storage port. SQL and transactions are unchanged.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop

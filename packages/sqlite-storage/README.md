@@ -41,6 +41,12 @@ binding injects the existing warning logger at the same app-state construction
 site. The pure transcript merge policy lives in owner-core and serves both
 storage and desktop artifact rebuilding. SQL and transaction sites are preserved.
 
+Shared `ScheduledThreadActionStore` implements owner-core scheduled-action
+storage with its file/memory payload stores. Desktop's private binding retains
+the original app-state construction site. Immutable payload files remain beside
+the profile database; legacy inline payload moves, compare-and-set cleanup,
+claims/recovery, bounded projection cursors and transactions are preserved.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -88,3 +94,9 @@ transcript models across shared/desktop WAL connections and reopens, with
 backend identity, pruning, reconciliation/outer rollback, host warnings and
 unchanged write counts. Supported profile E2E hands portable automations and
 artifacts to Electron's real services and reads its mutations after shutdown.
+
+`shared-scheduled-action-storage.property.test.ts` compares independent claim
+models across portable/desktop WAL connections and reopens, with backend
+identity, exact writes, payload cleanup/failure, legacy migration and bounded
+cursor oracles. Supported profile E2E hands portable scheduled payloads and
+claims to the real desktop services and reads their mutations after shutdown.
