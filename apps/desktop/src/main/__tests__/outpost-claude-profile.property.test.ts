@@ -97,3 +97,28 @@ it("shares the actual desktop metadata reader while ignoring histories, account 
     }), { numRuns: 25 });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+it("concurrent Claude reads share one complete discovery and a failed discovery cannot replace its published facts", async () => {
+  const { OutpostThreadRegistry } = await load("owner-thread-registry.js");
+  await fc.assert(fc.asyncProperty(fc.uuid(), word, fc.integer({ min: 1, max: 12 }), async (id, title, readers) => {
+    const native = { id, source: "claude", title, titleSource: "explicit", updatedAt: 2, linkedDirectories: [] };
+    let finish!: (threads: typeof native[]) => void;
+    const held = new Promise<typeof native[]>(resolve => { finish = resolve; });
+    let calls = 0;
+    let discovery = () => { calls++; return held; };
+    const owner = new OutpostThreadRegistry({ getThreadMetadata: () => undefined, listThreadMetadata: () => [] }, undefined, undefined,
+      { listThreads: () => discovery() });
+    const pending = Array.from({ length: readers }, () => owner.refreshClaudeThreads());
+    expect(calls).toBe(1);
+    expect(owner.get(id, "claude")).toBeUndefined();
+    finish([native]);
+    await Promise.all(pending);
+    expect(owner.get(id, "claude").title).toBe(title);
+    discovery = async () => { throw new Error("Metadata directory read failed"); };
+    await expect(owner.refreshClaudeThreads()).rejects.toThrow("Metadata directory read failed");
+    expect(owner.get(id, "claude").title).toBe(title);
+    discovery = async () => [{ ...native, title: `Next ${title}` }];
+    await owner.refreshClaudeThreads();
+    expect(owner.get(id, "claude").title).toBe(`Next ${title}`);
+  }), { numRuns: 25 });
+});
