@@ -146,6 +146,7 @@ export default defineConfig(({ command }) => {
             "@pwragent/shared",
             "@pwragent/federation",
             "@pwragent/owner-core",
+            "@pwragent/sqlite-storage",
             "@pwragent/agent-tools",
             "@pwrdrvr/codex-app-server-protocol",
             "@pwragent/messaging-interface",
