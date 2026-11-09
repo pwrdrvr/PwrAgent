@@ -639,10 +639,15 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           expect((await client.getNavigationSelectedDetail({ protocol: 2, ref })).identity).toBe("unresolved");
           expect((await client.lookupArchivedThreads({ backend: "codex", threadIds: [threadId], includeParent: true })).threads).toEqual([]);
         };
-        const assertRetained = async () => {
-          expect((await outpost!.client.resolveThread({ backend: "codex", threadId: "pending-import" })).thread)
+        // Durable import and acceptance are owner identities on either host;
+        // complete native absence retires only the separately confirmed member.
+        const assertRetained = async (client: FederationRemoteBackendClient) => {
+          expect((await client.resolveThread({ backend: "codex", threadId: "pending-import" })).thread)
             .toMatchObject({ title: "Pending imported title", titleSource: "derived" });
-          expect((await outpost!.client.resolveThread({ backend: "codex", threadId: "accepted-owner" })).thread).toBeDefined();
+          expect((await client.resolveThread({ backend: "codex", threadId: "accepted-owner" })).thread).toBeDefined();
+          for (const id of ["pending-import", "accepted-owner"]) {
+            expect((await client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: id } })).thread).toBeDefined();
+          }
           const db = StateDb.open(path.join(root, "profiles/t/state/state.db"), { profileName: "t" });
           try {
             expect(await new SqliteOverlayStore(db).getThreadMetadata(ref)).toMatchObject({ pinnedRank: "1024", seenUpdatedAt: 2,
@@ -652,14 +657,15 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           } finally { db.close(); }
         };
         await assertRetired(outpost.client);
-        await assertRetained();
+        await assertRetained(outpost.client);
         await outpost.close(); outpost = undefined;
         outpost = await startOutpostDaemon({ profileRoot: root });
         await assertRetired(outpost.client);
-        await assertRetained();
+        await assertRetained(outpost.client);
         await outpost.close(); outpost = undefined;
         desktop = await startDesktopOwner(null, prepare, undefined, root);
         await assertRetired(desktop.client);
+        await assertRetained(desktop.client);
       } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
     }), { numRuns: 3 });
   }, 60_000);
