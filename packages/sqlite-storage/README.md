@@ -66,6 +66,13 @@ qualified HMACs and timing-safe matching, expiry/approval transitions, activity
 payloads, response freshness, list bounds and retention keep their existing SQL
 and write counts. Sharing storage grants no messaging or federation access.
 
+Shared `OperatorRequestStore` implements the owner-core operator-request port.
+Desktop's private concrete binding and separate application factory retain the
+original service-construction lifecycle. First-record identity, pending question
+text and immediate closed-text retirement, first-seen times, batched seen writes
+and retention of open question/to-do/review marks keep their original SQL and
+transactions. Pending server requests remain owned by the live registry.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -142,3 +149,11 @@ bounded cursors, monotone freshness, per-origin retention, atomic rollback and
 unchanged write counts. Supported Electron E2E reads portable pairing/activity
 facts through real desktop services, generates and dismisses local requests,
 then hands the persisted mutations back to Node with messaging disabled.
+
+`shared-operator-request-storage.property.test.ts` compares independent question,
+seen and open-work retention models across portable/desktop WAL connections and
+reopens. It checks backend/thread/message qualification, first-record/first-seen
+identity, exact deadlines, open-review preservation, closure privacy, atomic
+rollback, malformed payloads, detached reads and unchanged write counts.
+Supported Electron E2E hands portable pending questions and old seen marks to the
+real desktop service, then reads its mutations after graceful shutdown.

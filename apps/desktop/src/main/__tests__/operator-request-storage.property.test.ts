@@ -5,7 +5,7 @@ import { operatorQuestionItemKey, type OperatorAsyncQuestion } from "@pwragent/s
 import { createDesktopOperatorRequestService } from "../operator-requests/operator-request-runtime";
 import type { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
-import { createOperatorRequestStorage } from "../storage/operator-request-store";
+import { createOperatorRequestStorage } from "../storage/desktop-operator-request-storage";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const active = vi.hoisted(() => ({ db: undefined as StateDb | undefined }));
