@@ -16,7 +16,7 @@ const layers = [
   { path: "owner-core", imports: ["shared"] },
   { path: "sqlite-storage", imports: ["shared", "owner-core"] },
   ...providers.map((path) => ({ path, imports: ["messaging/interface"] })),
-  { path: "pwragent", imports: [...reusable, "owner-core"] },
+  { path: "pwragent", imports: [...reusable, "owner-core", "sqlite-storage"] },
 ];
 const targets = [
   ...layers.map(({ path }) => ({
@@ -30,6 +30,7 @@ const targets = [
 const cases = [];
 const storageCases = [];
 const ipcStateCases = [];
+const outpostStorageCases = [];
 let root;
 let result;
 
@@ -65,7 +66,7 @@ beforeAll(async () => {
     cases.push({
       from: entry,
       to: target.file,
-      allowed: target.path === "pwragent" || [...reusable, "owner-core"].includes(target.path),
+      allowed: target.path === "pwragent" || [...reusable, "owner-core", "sqlite-storage"].includes(target.path),
     });
   }
 
@@ -125,6 +126,20 @@ beforeAll(async () => {
       source(to, 'export * from "@pwragent/sqlite-storage";');
       source(from, `export * from "../../storage/${binding}";`);
       ipcStateCases.push({ from, to, forbidden: !["state", "storage"].includes(area) });
+    }
+  }
+
+  for (const area of ["daemon", "runtime", "nested/future-owner"]) {
+    for (const [style, statement] of [
+      ["static", 'import "better-sqlite3";'],
+      ["export", 'export * from "better-sqlite3";'],
+      ["dynamic", 'export const load = () => import("better-sqlite3");'],
+      ["require", 'module.exports = require("better-sqlite3");'],
+      ["type", 'export type Value = import("better-sqlite3").Value;'],
+    ]) {
+      const from = `packages/pwragent/src/${area}-${style}.ts`;
+      source(from, statement);
+      outpostStorageCases.push({ from, to: "node_modules/better-sqlite3/index.js" });
     }
   }
 
@@ -226,6 +241,15 @@ describe("workspace dependency layers", () => {
       }
     }
     expect({ count: mismatches.length, first: mismatches.slice(0, 10) }).toEqual({ count: 0, first: [] });
+  });
+
+  it("keeps Outpost application modules out of raw native storage for every import syntax", () => {
+    for (const { from, to } of outpostStorageCases) {
+      const dependency = result.modules.find(module => module.source === from)
+        ?.dependencies.find(dependency => dependency.resolved === to);
+      expect(dependency?.rules?.map(rule => rule.name), `${from} -> ${to}`)
+        .toContain("outpost-application-storage-is-private");
+    }
   });
 
   it("keeps every forbidden rule fatal", () => {

@@ -34,10 +34,11 @@ npm install --global pwragent@1.3.7
 npm install --global pwragent@next
 ```
 
-Provide **Node >=22 and npm separately**, on Linux (macOS is also supported for
-development). The npm package includes the JavaScript federation bundle and its
-license notice; it does not need Electron, pnpm, a compiler or workspace packages
-on the destination machine. It supports **Codex only**. Install the Codex CLI
+Provide **Node 22.14+ (22.x) or Node >=23.6, and npm separately**, on Linux
+(macOS is also supported for development). The npm package includes the JavaScript
+federation bundle and its license notice; it does not need Electron, pnpm, a
+compiler or workspace packages on the destination machine. It supports **Codex
+only**. Install the Codex CLI
 separately and authenticate a dedicated Codex home as the eventual service user.
 The adapter follows the Codex **0.159.2** App Server contract; compatibility with
 other versions is not guaranteed. PwrAgent neither installs nor authenticates
@@ -76,7 +77,7 @@ unprivileged `pwragent` user/group and provision these non-overlapping directori
 | `/opt/pwragent` | root, npm installation prefix |
 
 Keep both state homes private (0700). Verify the service user can execute Node
->=22 at `/usr/bin/node` and its separately installed Codex at
+22.14+ (22.x) or >=23.6 at `/usr/bin/node` and its separately installed Codex at
 `/usr/local/bin/codex`; edit the template if either absolute path differs. A
 shell's Node version-manager initialization does not run under systemd.
 
@@ -111,10 +112,11 @@ with the installed one before deliberately updating it; npm does not overwrite
 
 ## Run from a checkout
 
-Use Node 22 or newer on Linux (macOS is also supported for development). Provide
-an installed Codex executable, an existing workspace, and an existing dedicated
-Codex home with authentication configured by the operator. Install this checkout's
-dependencies with `pnpm install`, then run `pnpm --filter pwragent build`. A packed
+Use the Node versions required above on Linux (macOS is also supported for
+development). Provide an installed Codex executable, an existing workspace, and an
+existing dedicated Codex home with authentication configured by the operator.
+Install this checkout's dependencies with `pnpm install`, then run
+`pnpm --filter pwragent build`. A packed
 tarball already includes the bundle. The protocol adapter follows the repository's
 Codex 0.159.2 contract; compatibility with other versions is not guaranteed.
 Validation uses a fake App Server, not real inference or live accounts.

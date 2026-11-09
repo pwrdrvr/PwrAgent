@@ -29,3 +29,64 @@ export { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwra
 
 export { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";
 export { patchOwnerThreadMetadata } from "@pwragent/owner-core/thread-storage";
+
+import path from "node:path";
+import os from "node:os";
+import { StateDb } from "@pwragent/sqlite-storage/state-db";
+import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
+import {
+  getProcessRuntimeIdentity,
+  startProfileRuntimeHeartbeat,
+  isProfileRuntimeIdentityLive,
+} from "@pwragent/sqlite-storage/profile-runtime-markers";
+import { RuntimeLeaseManager } from "@pwragent/owner-core/runtime-lease-manager";
+
+/** Outpost's private host binding. Application code receives only shutdown. */
+export function openOutpostProfileRuntime(params: {
+  stateDirectory: string;
+  profileName: string;
+  cwd: string;
+}): { close(): void } {
+  if (!path.isAbsolute(params.stateDirectory) || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(params.profileName)) {
+    throw new Error("Outpost requires an absolute profile state directory and a valid profile name");
+  }
+  const systemBootedAt = Date.now() - os.uptime() * 1_000;
+  const db = StateDb.open(path.join(params.stateDirectory, "state.db"), { profileName: params.profileName });
+  const identity = getProcessRuntimeIdentity();
+  const markerDir = path.join(params.stateDirectory, "runtime-instances");
+  let heartbeat: ReturnType<typeof startProfileRuntimeHeartbeat> | undefined;
+  const manager = new RuntimeLeaseManager({
+    ...identity,
+    profileName: params.profileName,
+    processId: process.pid,
+    cwd: params.cwd,
+    store: new AppRuntimeInstanceStore(db),
+    systemBootedAt,
+    runtimeIdentityIsAlive: owner => isProfileRuntimeIdentityLive(owner.profileName, owner, { markerDir }),
+  });
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    try {
+      try { manager.release("messaging"); } finally { manager.release("federation"); }
+    } finally {
+      try { manager.markExited(); } finally {
+        try { heartbeat?.stop(); } finally { db.close(); }
+      }
+    }
+  };
+  try {
+    heartbeat = startProfileRuntimeHeartbeat(params.profileName, { ...identity, markerDir });
+    for (const kind of ["federation", "messaging"] as const) {
+      const result = manager.acquire(kind);
+      if (!result.acquired) {
+        throw new Error(`Profile ${kind} lease is held by another runtime (${result.holder.instanceId}); stop that owner before starting Outpost`);
+      }
+    }
+    return { close };
+  } catch (error) {
+    close();
+    throw error;
+  }
+}

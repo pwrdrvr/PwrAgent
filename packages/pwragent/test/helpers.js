@@ -20,15 +20,21 @@ export async function eventually(check, waitMs = timeout) {
   throw new Error("Condition did not become true");
 }
 
-export async function restartAfterCompletedTurn(h, turn, wait = eventually) {
-  // A workspace write can precede saved provider history and turn/completed.
-  // The owning runtime's completed job is the restart readiness boundary.
+export async function runCompletedTurn(h, start, wait = eventually) {
+  const turn = await start();
+  // Tool results and workspace writes precede the owner's turn/completed.
+  // Only that exact job's completion permits the workflow's next action.
   await wait(async () => {
     const job = (await h.rpc("list")).find((job) => job.threadId === turn.threadId && job.turnId === turn.turnId);
     if (!job || ACTIVE.has(job.status)) return false;
-    if (job.status !== "completed") throw new Error(`Expected a completed turn before restart; got ${job.status}`);
+    if (job.status !== "completed") throw new Error(`Expected a completed turn; got ${job.status}`);
     return true;
   });
+  return turn;
+}
+
+export async function restartAfterCompletedTurn(h, turn, wait = eventually) {
+  await runCompletedTurn(h, async () => turn, wait);
   await h.stop(h.daemon);
   return h.start();
 }

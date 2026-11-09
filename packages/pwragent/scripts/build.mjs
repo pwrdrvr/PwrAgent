@@ -15,7 +15,7 @@ const result = await build({
   target: "node22",
   metafile: true,
   banner: { js: 'import { createRequire as __pwragentCreateRequire } from "node:module"; const require = __pwragentCreateRequire(import.meta.url);' },
-  external: ["bufferutil", "utf-8-validate"],
+  external: ["better-sqlite3", "bufferutil", "utf-8-validate"],
 });
 const require = createRequire(import.meta.url);
 const federationPackage = require.resolve("@pwragent/federation/federation-transport");

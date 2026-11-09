@@ -8,7 +8,7 @@ import { connectFederationClient, decodeFederationInvite, FederationRpcEndpoint,
   generateNoiseStaticKeyPair, FederationFilePushReceiver, FederationFilePushReceipts } from "../dist/federation-core.js";
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { OutpostGit } from "../src/projects.js";
-import { setup, eventually, restartAfterCompletedTurn } from "./helpers.js";
+import { setup, eventually, restartAfterCompletedTurn, runCompletedTurn } from "./helpers.js";
 
 async function peer(h, prior, onRequest, capabilities = HEADLESS_CAPABILITIES) {
   const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
@@ -327,8 +327,8 @@ test("incoming messaging preserves causal context and authorized tools return to
   owner.connection.sendEnvelope({ kind: "notification", id: randomUUID(), protocolVersion: 1, createdAt: Date.now(),
     sourceInstanceId: owner.identity.id, targetInstanceId: owner.invite.gatewayInstanceId, method: "federation.eventSubscription",
     params: { eventClasses: ["transcript"], threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: thread.threadId }] } } });
-  const send = () => owner.call("backend.startTurn", { threadId: thread.threadId, messageOrigin,
-    input: [{ type: "text", text: 'tool {"operation":"send_private_response","args":{"text":"mock-only private reply"}}' }] });
+  const send = () => runCompletedTurn(h, () => owner.call("backend.startTurn", { threadId: thread.threadId, messageOrigin,
+    input: [{ type: "text", text: 'tool {"operation":"send_private_response","args":{"text":"mock-only private reply"}}' }] }));
   await send();
   await eventually(() => provider.sends.length === 1);
   await eventually(() => owner.events.some((event) => event.method === "backend.event" && event.params.notification.method === "turn/completed"));
