@@ -14,7 +14,7 @@ import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store.j
 import { AutomationStore } from "../storage/automation-store.js";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store.js";
 import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
-import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
+import { SqliteOverlayStore } from "../storage/overlay-store-sqlite.js";
 import { type AutoVacuumConversion, StateDb } from "./state-db.js";
 
 let stateDb: StateDb | null = null;
