@@ -7,6 +7,7 @@ import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
@@ -26,7 +27,7 @@ it("budgets Claude inventory publication, legacy scrubbing and passive multi-pro
   let profile: ReturnType<typeof openOutpostProfileRuntime> | undefined;
   try {
     const inventory = new ProviderThreadSnapshotStore(db);
-    const thread = { source: "claude" as const, id: "same-id", title: "Claude native", titleSource: "explicit" as const, linkedDirectories: [] };
+    const thread = { source: "claude" as const, id: "00000000-0000-4000-8000-000000000001", title: "Claude native", titleSource: "explicit" as const, linkedDirectories: [] };
     const publication = await measureSqliteWrites(() => inventory.replace({ backend: "claude", observedAt: 1, threads: [thread] }));
     expectSqliteWriteBudget({ budgetFile, scenario: "claude-inventory-publication", note: "One complete Claude provider list replaces one scrubbed inventory row", writes: publication.writes });
     db.raw.prepare("UPDATE provider_thread_snapshots SET payload = ? WHERE backend = ?")
@@ -36,11 +37,12 @@ it("budgets Claude inventory publication, legacy scrubbing and passive multi-pro
     expect(scrub.result[0]?.threads[0]).not.toHaveProperty("summary");
     new AcpSessionStore(db).upsertSession({ backendId: "acp:removed", sessionId: "native-acp", title: "Actual ACP metadata",
       cwd: root, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
+    await new ClaudeSessionStore(path.join(root, "claude")).save({ cwd: root, thread });
     profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
     const owner = new HeadlessBackend({ workspace: root, store, onFailure(error: unknown) { throw error; },
       projects: { list: () => [] }, codex: { listModels: async () => [] } }, () => {});
-    const ref = { backend: "claude", threadId: "same-id" };
+    const ref = { backend: "claude", threadId: "00000000-0000-4000-8000-000000000001" };
     const passive = await measureSqliteWrites(async () => {
       for (let i = 0; i < 1000; i++) {
         expect((await owner.handle("resolveThread", ref)).thread.source).toBe("claude");
@@ -69,8 +71,8 @@ it("budgets changed non-Codex native name events and makes no repeated or undisc
     pdfToolMcpServer: null, discoverLocalAcpAgents: async () => [] });
   try {
     for (const backend of ["claude", "acp:fixture"] as const) {
-      inventory.replace({ backend, observedAt: 1, threads: [{ id: "same-id", source: backend, title: "Before", titleSource: "explicit", linkedDirectories: [] }] });
-      const event = { backend, notification: { method: "thread/name/updated" as const, params: { threadId: "same-id", threadName: "After", titleSource: "derived" as const } } };
+      inventory.replace({ backend, observedAt: 1, threads: [{ id: "00000000-0000-4000-8000-000000000001", source: backend, title: "Before", titleSource: "explicit", linkedDirectories: [] }] });
+      const event = { backend, notification: { method: "thread/name/updated" as const, params: { threadId: "00000000-0000-4000-8000-000000000001", threadName: "After", titleSource: "derived" as const } } };
       const changed = await measureSqliteWrites(() => owner.publishLocalEvent(event));
       expectSqliteWriteBudget({ budgetFile, scenario: `${backend}-native-name-event`, note: "One acknowledged native title updates one retained provider row without changing inventory membership freshness", writes: changed.writes });
       expect(inventory.list().find(snapshot => snapshot.backend === backend)).toMatchObject({ observedAt: 1, threads: [{ title: "After", titleSource: "derived" }] });

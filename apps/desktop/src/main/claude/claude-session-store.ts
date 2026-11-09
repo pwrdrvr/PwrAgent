@@ -1,12 +1,14 @@
 import type { ClaudeUsageTotals } from "./claude-usage";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { lock } from "proper-lockfile";
 import type {
   AppServerThreadEntry, AppServerThreadSummary, AppServerThreadTurnMetadata, BackendRateLimitSummary,
 } from "@pwragent/shared";
+import type { ClaudeSessionMetadataStorage } from "@pwragent/owner-core/claude-profile-storage";
+import { createClaudeSessionMetadataStorage } from "../storage/desktop-claude-profile-storage";
 import { persistTranscriptEntryImages } from "../transcript-image-protocol";
 
 /** Not a thread id, so list() never reads it as session metadata. */
@@ -185,10 +187,14 @@ export class ClaudeSessionStore {
   private readonly forgotten = new Set<string>();
   private readonly mutationContext = new AsyncLocalStorage<{ id: string; active: boolean }>();
 
+  private readonly metadata: ClaudeSessionMetadataStorage<ClaudeSession>;
+
   constructor(
     private readonly root: string,
     private readonly imageRoot = path.join(root, "images"),
-  ) {}
+  ) {
+    this.metadata = createClaudeSessionMetadataStorage<ClaudeSession>(root);
+  }
 
   /** Starts holding an ephemeral session in memory. */
   holdEphemeral(session: ClaudeSession): void {
@@ -270,11 +276,7 @@ export class ClaudeSessionStore {
   async read(id: string): Promise<ClaudeSession> {
     const held = this.memory.get(id);
     if (held) return JSON.parse(held.session) as ClaudeSession;
-    const session = JSON.parse(await readFile(this.file(id, "json"), "utf8")) as ClaudeSession;
-    if (session.thread?.id !== id || session.thread.source !== "claude" || !session.cwd) {
-      throw new Error(`Invalid Claude session metadata: ${id}`);
-    }
-    return session;
+    return await this.metadata.read(id);
   }
 
   async save(session: ClaudeSession): Promise<void> {
@@ -364,31 +366,11 @@ export class ClaudeSessionStore {
    * to notice a writer outside this process without rereading every session.
    */
   async changeToken(): Promise<string> {
-    try {
-      const entry = await stat(this.root, { bigint: true });
-      return `${entry.ino}:${entry.mtimeNs}:${entry.ctimeNs}`;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
-      throw error;
-    }
+    return await this.metadata.changeToken();
   }
 
   async list(options: { requireComplete?: boolean } = {}): Promise<ClaudeSession[]> {
-    let names: string[];
-    try {
-      names = await readdir(this.root);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
-    // One unreadable metadata file must not hide every other Claude thread.
-    const sessions = await Promise.allSettled(names.filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
-      .map((name) => this.read(name.slice(0, -5))));
-    if (options.requireComplete) {
-      const failed = sessions.find((session) => session.status === "rejected");
-      if (failed?.status === "rejected") throw failed.reason;
-    }
-    return sessions.flatMap((session) => session.status === "fulfilled" ? [session.value] : []);
+    return await this.metadata.list(options);
   }
 
   /** Delete only PwrAgent's files. Metadata goes last so failed cleanup is retried. */

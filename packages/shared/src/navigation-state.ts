@@ -148,6 +148,9 @@ function resolveNavigationExecutionMode(params: {
   overlay?: ThreadOverlayState;
   thread: AppServerThreadSummary;
 }): NavigationThreadSummary["executionMode"] {
+  if (params.thread.source === "claude") {
+    return params.thread.executionMode ?? params.overlay?.executionMode ?? "default";
+  }
   if (isAcpBackendId(params.thread.source)) {
     const overlayIsAtLeastAsFresh =
       params.overlay?.executionModeUpdatedAt !== undefined

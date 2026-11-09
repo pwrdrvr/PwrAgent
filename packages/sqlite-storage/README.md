@@ -348,6 +348,28 @@ profile/provider, checking native names, pins, parents, seen watermarks and
 archive/restore. The inherited default and conformance fixtures are unchanged.
 
 Outpost profile reads retain backend-qualified Codex, Claude and ACP identities.
+The shared `ClaudeSessionMetadataStore` reads PwrAgent-owned Claude JSON metadata,
+including archives, through the same reader desktop's `ClaudeSessionStore` uses.
+Its generic port leaves SDK identity and rewind metadata private to desktop;
+Outpost's binding exposes only scrubbed thread summaries. Metadata reads never
+open JSONL histories, rate-limit files, authentication or provider session files.
+Outpost refreshes this actual metadata before profile reads without starting
+Claude. A completed read replaces older retained Claude membership, including
+deletions; a missing metadata directory confirms an empty inventory. Concurrent
+discoveries coalesce. Sidecar names/provenance, archives and execution mode retain
+authority on both hosts; shared overlay settings, pins, parents and seen watermarks
+remain live. Existing metadata writes, image/history locking and SDK reads stay
+at their original desktop sites. Schema 81 remains unchanged.
+
+`outpost-claude-profile.property.test.ts` generates metadata changes and archives
+without retained inventory, exercises deletion and backend isolation, and compares
+the actual portable/desktop readers including malformed sidecars and ephemeral
+sessions. Actual desktop/daemon conformance clears retained inventory between
+owners; supported Electron coverage hands actual desktop edits to Outpost after
+quit. The separate `outpost-claude-profile-write-budgets.json` measures 100 metadata
+save/discovery boundaries and 1,000 passive read rounds as zero SQLite commits,
+statements, rows and WAL bytes: incremental 0 MB/day. No SQLite timer is added.
+
 Claude inventories use the same supported-backend codec as the other providers.
 Actual ACP session metadata (including archives and uninstalled backends) is read
 through the shared session port, rather than inferred from an older startup

@@ -461,6 +461,16 @@ Desktop native name events update already published non-Codex inventory rows
 without changing membership freshness. Existing owner observation sequences
 fence late lists, and startup hydration projects canonical Codex titles through
 compact overlay batches before publishing retained rows.
+Claude profile discovery now reads PwrAgent's actual `state/claude/*.json`
+metadata through a shared reader used by the desktop session store and a
+handle-free Outpost binding. Active and archived records need no retained
+inventory. Native metadata owns Claude names/provenance, archive membership and
+execution mode; shared overlays retain pins, parents, seen watermarks and model
+overrides. Completed discovery supersedes older retained rows and excludes
+deleted or ephemeral records. An absent metadata directory confirms an empty
+Claude inventory. Histories, SDK identities and provider session files never enter the
+Outpost read projection; only the SDK reads provider sessions. Discovery starts
+no provider and adds no SQLite writes.
 Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
 ports through private desktop bindings at the existing runtime construction
 sites. The model-settings-recents helper is shared by to-do dispatch and the

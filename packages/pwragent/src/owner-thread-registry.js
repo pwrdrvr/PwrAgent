@@ -3,10 +3,11 @@ import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection,
 
 /** Retained provider discovery and live canonical metadata, qualified by backend. */
 export class OutpostThreadRegistry {
-  constructor(storage, inventory, acpSessions) {
+  constructor(storage, inventory, acpSessions, claudeSessions) {
     this.storage = storage;
     this.unreadBaseline = storage?.readUnreadBaseline?.() ?? {};
     this.acpSessions = acpSessions;
+    this.claudeSessions = claudeSessions;
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
     this.inventory = new Map((inventory?.list() ?? [])
@@ -25,7 +26,19 @@ export class OutpostThreadRegistry {
     return thread.seenUpdatedAt ?? this.unreadBaseline[buildThreadIdentityKey(thread.source ?? "codex", thread.id)] ?? thread.seenAt ?? 0;
   }
 
+  async refreshClaudeThreads() {
+    if (!this.claudeSessions) return;
+    if (this.claudeDiscovery) return this.claudeDiscovery;
+    this.claudeDiscovery = (async () => {
+      const threads = await this.claudeSessions.listThreads();
+      this.claudeThreadIds = new Set(threads.map(thread => thread.id));
+      this.replaceInventory(threads, Date.now(), "claude");
+    })();
+    try { await this.claudeDiscovery; } finally { this.claudeDiscovery = undefined; }
+  }
+
   get(id, backend = "codex") {
+    if (backend === "claude" && this.claudeThreadIds && !this.claudeThreadIds.has(id)) return undefined;
     const record = this.storage.getThreadMetadata({ backend, threadId: id });
     const session = backend.startsWith("acp:") ? this.acpSessions?.getSession(backend, id) : undefined;
     if (session?.hidden) return undefined;
@@ -39,13 +52,14 @@ export class OutpostThreadRegistry {
 
   project(id, record, native, backend) {
     if (!record && !native) return undefined;
+    const actualClaude = backend === "claude" && this.claudeThreadIds?.has(id);
     const thread = record ? outpostThreadProjection(record) : { id };
     if (native) {
-      Object.assign(thread, projectOwnerThreadTitle(native, record));
+      Object.assign(thread, actualClaude ? { title: native.title, titleSource: native.titleSource } : projectOwnerThreadTitle(native, record));
       if (record?.title?.nativeName !== undefined && record.title.nativeName !== native.title) thread.titleNativeName = native.title;
       // Only a fresh walk may supersede durable owner archive observations;
       // the retained inventory is never authority for restoring ownership.
-      if (native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.archiveRetentionStartedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
+      if (actualClaude || native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.archiveRetentionStartedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
         thread.archived = native.archivedAt !== undefined;
         thread.archivedAt = native.archivedAt;
       }
@@ -56,7 +70,7 @@ export class OutpostThreadRegistry {
       sandbox: native.executionMode === "auto" ? "workspace-write" : "read-only", model: native.model,
       reasoningEffort: native.reasoningEffort, serviceTier: native.serviceTier, fastMode: native.fastMode } : {}),
       ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)), source: backend,
-      executionMode: record?.executionMode ?? native?.executionMode ?? "default" };
+      executionMode: actualClaude ? native.executionMode ?? "default" : record?.executionMode ?? native?.executionMode ?? "default" };
     if (projected.title === undefined) {
       projected.title = "Untitled thread";
       projected.titleSource = "fallback";
@@ -78,7 +92,8 @@ export class OutpostThreadRegistry {
   has(id) { return this.get(id) !== undefined; }
   get size() { return [...this.values()].length; }
   values(backend = "codex") {
-    const records = this.storage.listThreadMetadata().filter(record => backend === "all" || record.backend === backend);
+    const records = this.storage.listThreadMetadata().filter(record => (backend === "all" || record.backend === backend)
+      && (record.backend !== "claude" || !this.claudeThreadIds || this.claudeThreadIds.has(record.threadId)));
     const byId = new Map(records.map(record => [buildThreadIdentityKey(record.backend, record.threadId), record]));
     const natives = new Map([...this.inventory].filter(([, thread]) => backend === "all" || thread.source === backend));
     const sessions = backend === "all" || backend.startsWith("acp:") ? this.acpSessions?.listAllSessions({ includeHidden: true }) ?? [] : [];

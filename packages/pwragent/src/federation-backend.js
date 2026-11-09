@@ -58,7 +58,7 @@ export class HeadlessBackend {
     };
     // Same headroom as desktop's FEDERATION_RESPONSE_BYTE_BUDGET.
     this.replayByteBudget = FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
-    this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory, runtime.store.acpSessions);
+    this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory, runtime.store.acpSessions, runtime.store.claudeSessions);
     this.threadRegistry = this.threads;
     this.providerMutationVersion = 0;
     this.naming = new ThreadNamingLifecycle({
@@ -92,6 +92,7 @@ export class HeadlessBackend {
   }
 
   async initialize() {
+    await this.threads.refreshClaudeThreads();
     await this.refreshThreads();
     this.initialized = true;
   }
@@ -233,6 +234,9 @@ export class HeadlessBackend {
       && ((params.backend && params.backend !== "codex") || (params.ref && params.ref.backend !== "codex"))) throw new Error("This outpost executes Codex only");
     if (params.cwd) this.runtime.projects.resolve(params.cwd);
     const scope = params.backend ?? "all";
+    if (RETAINED_READ_METHODS.includes(name) && (scope === "all" || scope === "claude" || params.ref?.backend === "claude")) {
+      await this.threads.refreshClaudeThreads();
+    }
     if (this.initialized && (scope === "all" || scope === "codex")
       && ["listThreads", "getNavigationQueryPage", "lookupArchivedThreads"].includes(name)) await this.refreshThreads();
     switch (name) {

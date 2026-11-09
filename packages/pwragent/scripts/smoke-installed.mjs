@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { createRequire } from "node:module";
 import path from "node:path";
 import net from "node:net";
+import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
 const [cli, fixture, temporary] = process.argv.slice(2);
@@ -109,7 +110,30 @@ try {
   const calls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(calls.filter((call) => call.method === "turn/start").length, 1);
   await stop(daemon);
-  console.log("Packed CLI smoke passed: native SQLite legacy jobs/threads adoption and retirement, PTY input/resize/exit, mocked turn, transcript, federation, restart and duplicate submission");
+  // Actual profile discovery must work from the installed bundle with no
+  // provider process or retained Claude inventory.
+  const state = path.dirname(headless);
+  const claudeId = "00000000-0000-4000-8000-000000000001";
+  mkdirSync(path.join(state, "claude"), { mode: 0o700 });
+  writeFileSync(path.join(state, "claude", `${claudeId}.json`), JSON.stringify({ cwd: workspace, sdkSessionId: "private-sdk-id",
+    thread: { id: claudeId, source: "claude", title: "Packed Claude metadata", titleSource: "derived", archivedAt: 3,
+      createdAt: 1, updatedAt: 2, executionMode: "auto", linkedDirectories: [] } }), { mode: 0o600 });
+  const packageRoot = path.resolve(path.dirname(realpathSync(cli)), "..");
+  const installed = file => import(pathToFileURL(path.join(packageRoot, file)).href);
+  const [{ openOutpostProfileRuntime }, { JobStore }, { HeadlessBackend }] = await Promise.all([
+    installed("dist/federation-core.js"), installed("src/store.js"), installed("src/federation-backend.js"),
+  ]);
+  const profile = openOutpostProfileRuntime({ stateDirectory: state, profileName: "t", cwd: workspace });
+  try {
+    const store = new JobStore(headless, { version: 1, workspace, codexHome }, profile);
+    const owner = new HeadlessBackend({ workspace, store, projects: { list: () => [] }, onFailure(error) { throw error; } }, () => {});
+    const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref: { backend: "claude", threadId: claudeId } });
+    assert.equal(detail.identity, "archived");
+    assert.equal(detail.thread.title, "Packed Claude metadata");
+    assert.equal(detail.thread.executionMode, "auto");
+    assert.ok(!JSON.stringify(detail).includes("private-sdk-id"));
+  } finally { profile.close(); }
+  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission and actual Claude profile discovery");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {
