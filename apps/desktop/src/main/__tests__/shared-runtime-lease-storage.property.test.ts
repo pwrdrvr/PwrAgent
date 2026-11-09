@@ -17,9 +17,10 @@ function read(store: RuntimeLeaseStorage, kind: Kind) {
 }
 function acquire(store: RuntimeLeaseStorage, kind: Kind, instanceId: string, now: number,
   isOwnerAlive: (owner: { instanceId: string }) => boolean, immediate: boolean) {
+  if (kind === "mcp") return store.acquireMcpConnectionsLease({ instanceId, now, isOwnerAlive });
   const params = { instanceId, now, isOwnerAlive, canReclaimOwnerImmediately: () => immediate };
   return kind === "messaging" ? store.acquireMessagingLease(params)
-    : kind === "federation" ? store.acquireFederationLease(params) : store.acquireMcpConnectionsLease(params);
+    : store.acquireFederationLease(params);
 }
 function release(store: RuntimeLeaseStorage, kind: Kind, instanceId: string, now: number) {
   const params = { instanceId, now };
