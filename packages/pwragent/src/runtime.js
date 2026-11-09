@@ -5,7 +5,7 @@ import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMes
 import { Codex } from "./codex.js";
 import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
-import { ThreadTurnStartLifecycle } from "../dist/federation-core.js";
+import { ThreadCreationLifecycle, ThreadTurnStartLifecycle } from "../dist/federation-core.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
@@ -24,6 +24,7 @@ export class Runtime {
     this.toolLedgerCount = readdirSync(this.toolLedgerDirectory).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).length;
     this.loadedThreads = new Set();
     this.onFailure = onFailure;
+    this.threadCreations = new ThreadCreationLifecycle();
     this.turnStarts = new ThreadTurnStartLifecycle({
       assertAvailable: () => { if (this.stopping) throw new Error("Daemon is stopping"); },
       withMutation: async (_identity, work) => await work(),
@@ -41,14 +42,22 @@ export class Runtime {
   }
 
   save(job) {
+    let saved;
     try {
-      const saved = this.store.save(job);
-      this.onEvent?.({ method: "headless/jobChanged", params: saved });
-      return saved;
+      saved = this.store.save(job);
     } catch (error) {
-      this.onFailure(error);
+      this.reportFailure(error);
       throw error;
     }
+    // Durability is the acceptance boundary. An observer cannot undo it or
+    // convert confirmed provider input into a retryable submission failure.
+    try { this.onEvent?.({ method: "headless/jobChanged", params: saved }); }
+    catch (error) { this.reportFailure(error); }
+    return saved;
+  }
+
+  reportFailure(error) {
+    try { this.onFailure(error); } catch { /* Diagnostics cannot replace an owner outcome. */ }
   }
 
   async handle(method, params = {}) {
@@ -121,10 +130,11 @@ export class Runtime {
     this.active = id;
     this.earlyCompletion = null;
     this.blockedReason = null;
+    this.acceptedTurn = null;
     this.work = this.start(job, prompt).catch((error) => {
       const current = this.store.get(id);
       if (ACTIVE.has(current.status)) {
-        this.finish(id, this.codexFailure || this.stopping ? "unknown" : "failed", error.message);
+        this.finish(id, this.acceptedTurn || this.codexFailure || this.stopping ? "unknown" : "failed", error.message);
       }
     });
     // The durable acceptance precedes inference. Socket loss cannot cancel it.
@@ -136,26 +146,42 @@ export class Runtime {
     const params = { cwd, approvalPolicy: "never", sandbox: job.sandbox,
       ...(job.model ? { model: job.model } : {}) };
     const result = job.threadId ? { threadId: job.threadId }
-      : await this.codex.startThread({ ...params, ephemeral: false, dynamicTools: this.messagingTools.buildDynamicToolSpecs() });
+      : await this.threadCreations.start({ backend: "codex" }, { providers: { codex: async () => {
+        const created = await this.codex.startThread({ ...params, ephemeral: false, dynamicTools: this.messagingTools.buildDynamicToolSpecs() });
+        if (typeof created?.threadId !== "string" || !created.threadId || created.threadId.length > 256) throw new Error("Codex returned an invalid thread ID");
+        return created;
+      } } });
     if (typeof result.threadId !== "string" || !result.threadId || result.threadId.length > 256) {
       throw new Error("Codex returned an invalid thread ID");
     }
     this.loadedThreads.add(result.threadId);
     this.save({ ...this.store.get(job.id), threadId: result.threadId,
       ...(!job.threadId ? { messagingFileTools: true } : {}) });
-    const turn = await this.turnStarts.run({ backend: "codex", threadId: result.threadId }, () => this.codex.startTurn({ ...params, threadId: result.threadId,
+    const identity = { backend: "codex", threadId: result.threadId };
+    const submission = await this.turnStarts.run(identity, () => this.turnStarts.submitCodex({ identity, pendingTurnId: `pending:${result.threadId}`, submit: () => this.codex.startTurn({ ...params, threadId: result.threadId,
       onTerminalResult: (params) => this.notification({ method: "turn/completed", params }),
       input: [{ type: "text", text: prompt }],
       ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
       ...(job.serviceTier ? { serviceTier: job.serviceTier } : {}),
-    }));
+    }) }));
+    const turn = submission.turn;
     if (typeof turn.turnId !== "string" || !turn.turnId || turn.turnId.length > 256 || turn.turnId.startsWith("pending:")) {
       this.onFailure(new Error("Codex returned an invalid turn ID; execution outcome is unknown"));
       return;
     }
+    this.acceptedTurn = { jobId: job.id, threadId: result.threadId, turnId: turn.turnId };
+    // Confirmed identity is durable before independent finalizers. A storage
+    // refusal stops this owner and records unknown; it never resends input.
     this.save({ ...this.store.get(job.id), turnId: turn.turnId, status: "running" });
-    // The prompt stays in memory: job records never store it.
-    this.onEvent?.({ method: "headless/turnStarted", params: { threadId: result.threadId, jobId: job.id, prompt } });
+    await this.turnStarts.finalizeCodex({ identity, turn,
+      // The prompt stays in memory: job records never store it. The existing
+      // event supplies both prompt fallback and shared helper-title admission.
+      scheduleTitle: () => this.onEvent?.({ method: "headless/turnStarted", params: { threadId: result.threadId, jobId: job.id, prompt } }),
+      failed: (_stage, error) => this.reportFailure(error),
+    });
+    // A terminal may arrive while finalization yields. Its provider outcome
+    // already retired the job and must not complete a second time.
+    if (this.active !== job.id) return;
     if (this.earlyCompletion?.turn?.id === turn.turnId) {
       this.complete(this.earlyCompletion);
     } else if (this.blockedReason) {
@@ -259,7 +285,8 @@ export class Runtime {
   }
 
   finish(id, status, reason) {
-    this.save({ ...this.store.get(id), status, ...(reason ? { reason: String(reason).slice(0, 4096) } : {}), finishedAt: new Date().toISOString() });
+    const confirmed = this.acceptedTurn?.jobId === id ? { threadId: this.acceptedTurn.threadId, turnId: this.acceptedTurn.turnId } : {};
+    this.save({ ...this.store.get(id), ...confirmed, status, ...(reason ? { reason: String(reason).slice(0, 4096) } : {}), finishedAt: new Date().toISOString() });
     if (this.active === id) this.active = null;
   }
 

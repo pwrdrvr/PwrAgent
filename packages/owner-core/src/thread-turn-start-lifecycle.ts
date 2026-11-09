@@ -131,6 +131,12 @@ export interface CodexTurnFinalizationHost {
   failed(stage: CodexTurnFinalizationStage, error: unknown): void;
 }
 
+/** Hosts without optimistic starts, attachments or desktop contexts omit those effects. */
+export type CodexTurnSubmissionPorts<Recovered> = Pick<CodexTurnSubmissionHost<Recovered>, "identity" | "pendingTurnId" | "submit">
+  & Partial<Omit<CodexTurnSubmissionHost<Recovered>, "identity" | "pendingTurnId" | "submit">>;
+export type CodexTurnFinalizationPorts = Pick<CodexTurnFinalizationHost, "identity" | "turn">
+  & Partial<Omit<CodexTurnFinalizationHost, "identity" | "turn">>;
+
 /** Owns start admission, not provider active-turn identity. */
 export class ThreadTurnStartLifecycle {
   private readonly pending = new Map<string, number>();
@@ -193,7 +199,7 @@ export class ThreadTurnStartLifecycle {
     }
   }
 
-  async submitCodex<Recovered>(host: CodexTurnSubmissionHost<Recovered>): Promise<
+  async submitCodex<Recovered>(host: CodexTurnSubmissionPorts<Recovered>): Promise<
     { kind: "started"; turn: StartedTurn } | { kind: "recovered"; response: Recovered }
   > {
     let turn: StartedTurn;
@@ -202,11 +208,11 @@ export class ThreadTurnStartLifecycle {
     } catch (error) {
       try {
         try {
-          await host.fail(error);
+          await host.fail?.(error);
         } finally {
           // Notification consumers can reject after observing a terminal.
           // Neither that rejection nor recovery may retain synthetic ownership.
-          host.retireFailed();
+          host.retireFailed?.();
         }
         if (host.recovery?.accepts(error)) {
           const failureMessage = error instanceof Error ? error.message : String(error);
@@ -224,13 +230,13 @@ export class ThreadTurnStartLifecycle {
         }
         throw error;
       } finally {
-        host.discardRetry();
+        host.discardRetry?.();
       }
     }
     if (host.identity.backend === "codex" && turn.turnId === host.pendingTurnId) {
       // The provider's start event may bind the real id before an incomplete
       // response arrives. Only that backend and response thread are authority.
-      for (const active of host.activeTurns()) {
+      for (const active of host.activeTurns?.() ?? []) {
         if (active.backend === "codex" && active.threadId === turn.threadId
           && !active.turnId.startsWith("pending:")) {
           turn = { threadId: turn.threadId, turnId: active.turnId };
@@ -317,40 +323,40 @@ export class ThreadTurnStartLifecycle {
     }
   }
 
-  async finalizeCodex(host: CodexTurnFinalizationHost): Promise<TurnStartIdentity & { turnId: string }> {
+  async finalizeCodex(host: CodexTurnFinalizationPorts): Promise<TurnStartIdentity & { turnId: string }> {
     // Submission has already succeeded. No host metadata failure can turn
     // that acceptance into a retryable provider rejection. Attempt independent
     // effects in the established order, without adding request/retry state.
     const report = (stage: CodexTurnFinalizationStage, error: unknown) => {
-      try { host.failed(stage, error); } catch { /* Reporting cannot reject an accepted turn either. */ }
+      try { host.failed?.(stage, error); } catch { /* Reporting cannot reject an accepted turn either. */ }
     };
     const effect = (stage: CodexTurnFinalizationStage, work: () => void) => {
       try { work(); } catch (error) { report(stage, error); }
     };
-    const persist = async (stage: CodexTurnFinalizationStage, work: () => Promise<unknown>) => {
+    const persist = async (stage: CodexTurnFinalizationStage, work: () => unknown | Promise<unknown>) => {
       try { await work(); } catch (error) { report(stage, error); }
     };
-    effect("origin", () => host.bindOrigin());
-    effect("retry", () => host.bindRetry());
-    effect("pdf", () => host.bindPdf());
-    effect("context", () => host.bindContext());
-    await persist("persist-origin", () => host.persistOrigin());
-    effect("dispose-origin", () => host.disposeOrigin());
+    effect("origin", () => host.bindOrigin?.());
+    effect("retry", () => host.bindRetry?.());
+    effect("pdf", () => host.bindPdf?.());
+    effect("context", () => host.bindContext?.());
+    await persist("persist-origin", () => host.persistOrigin?.());
+    effect("dispose-origin", () => host.disposeOrigin?.());
     // Read terminal ownership after persistence yields, never at acceptance.
-    this.handoffCodex(host.handoff, effect);
-    const settings = host.settings;
+    if (host.handoff) this.handoffCodex(host.handoff, effect);
+    const settings = host.settings ?? {};
     if (settings.model !== undefined || settings.reasoningEffort !== undefined
       || settings.serviceTier !== undefined || settings.fastMode !== undefined) {
-      await persist("model", () => host.persistModel());
+      await persist("model", () => host.persistModel?.());
     }
     if (host.identity.backend === "codex" && host.executionMode) {
-      await persist("execution", () => host.persistExecutionMode());
+      await persist("execution", () => host.persistExecutionMode?.());
     }
-    await persist("attachments", () => host.retainAttachments());
-    effect("replay", () => host.scheduleReplay());
+    await persist("attachments", () => host.retainAttachments?.());
+    effect("replay", () => host.scheduleReplay?.());
     if (!isAcpBackendId(host.identity.backend)) {
-      effect("forget-title-input", () => host.forgetTitleInput());
-      effect("title", () => host.scheduleTitle());
+      effect("forget-title-input", () => host.forgetTitleInput?.());
+      effect("title", () => host.scheduleTitle?.());
     }
     return { backend: host.identity.backend, threadId: host.turn.threadId, turnId: host.turn.turnId };
   }

@@ -44,7 +44,7 @@ it("native creation acceptance survives each independent host failure and keeps 
 it("durable job acceptance and provider outcomes survive generated observer failures and completion orderings without replay", async () => {
   await fc.assert(fc.asyncProperty(
     fc.constantFrom("acceptance", "thread", "running", "title", "terminal", "none"),
-    fc.constantFrom("before-response", "after-response"), fc.constantFrom("completed", "failed", "interrupted"),
+    fc.constantFrom("before-response", "during-finalization", "after-response"), fc.constantFrom("completed", "failed", "interrupted"),
     fc.integer({ min: 0, max: 4 }), async (failure, ordering, terminal, duplicates) => {
       await fixture(async (runtime, backend, store, root) => {
         const calls: string[] = [];
@@ -56,6 +56,7 @@ it("durable job acceptance and provider outcomes survive generated observer fail
             : event.params.status === "running" ? "running" : "terminal";
           calls.push(phase);
           observe(event);
+          if (phase === "title" && ordering === "during-finalization") runtime.notification(completion);
           if (phase === failure) throw new Error(`${phase} observer refused`);
         };
         const completion = { method: "turn/completed", params: { threadId: "native", turn: { id: "turn", status: terminal } } };

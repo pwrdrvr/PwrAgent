@@ -491,3 +491,24 @@ bytes: about 1.236 MB/day at 100 new-thread titles/day. The immediate fallback
 retains its existing one commit/12,360 bytes; 1,000 repeated turn observations
 and owner reads make zero commits. Admission and shutdown add no write or timer.
 The inherited default budget and conformance baseline remain byte-identical.
+
+Outpost's actual federation and job-created native threads now use the existing
+shared creation coordinator, and accepted jobs use shared turn submission and
+finalization. Host construction, durable acceptance/fingerprints and confirmed
+identity/outcome writes remain at their existing sites. Observer failures cannot
+reject committed acceptance; a refused confirmed-turn write preserves the known
+provider identity as unknown without replay. Native membership is observed before
+creation metadata finalization, so metadata refusal cannot hide provider success.
+
+`outpost-creation-turn-lifecycle.property.test.ts` generates host-port refusals,
+observer failures, terminal orderings and duplicate submissions through the actual
+Runtime/HeadlessBackend with real profile storage. Supported Electron hands an
+actually created/submitted job and helper title to desktop after a refused viewer
+finalizer. The separate `outpost-creation-turn-write-budgets.json` measures native
+federation creation as 1 commit/16,480 observed WAL bytes (1.648 MB/day at 100/day),
+an accepted existing-thread turn as 5 commits/28,840 bytes (2.884 MB/day at 100/day),
+and a new-thread turn as the inherited 6 commits/49,440 bytes (4.944 MB/day at
+100/day). A refused turn-confirmation write uses 4 commits/32,960 bytes including
+the unknown outcome boundary (3.296 MB/day at 100/day). One thousand duplicate
+submissions and owner reads add zero commits and 0 MB/day. There is no SQLite
+timer; all inherited budgets and conformance defaults remain byte-identical.

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
@@ -24,7 +25,7 @@ test.beforeAll(() => {
 });
 
 test("an Outpost shared helper title reaches the actual desktop renderer and survives owner handover without replay", async () => {
-  const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+  const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
   const ref = { backend: "codex" as const, threadId: "thread-smoke" };
   const title = "Replay smoke thread";
   let headless = "";
@@ -32,18 +33,33 @@ test("an Outpost shared helper title reaches the actual desktop renderer and sur
     secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
     async preLaunchHook(homeRoot) {
       const stateDirectory = path.dirname(stateDbPathForHomeRoot(homeRoot));
+      const workspace = realpathSync(homeRoot);
       headless = path.join(stateDirectory, "headless");
-      const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: homeRoot });
+      const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: workspace });
       try {
-        const store = new JobStore(headless, { version: 1, workspace: homeRoot, codexHome: path.join(homeRoot, "codex") }, profile);
-        store.save({ version: 1, id: "accepted", fingerprint: "accepted-input", threadId: ref.threadId, turnId: "turn-owned", status: "completed",
-          sandbox: "read-only", createdAt: new Date(1).toISOString() });
+        const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(homeRoot, "codex") }, profile);
         let helpers = 0;
-        const backend = new HeadlessBackend({ workspace: homeRoot, store, onFailure(error: unknown) { throw error; }, codex: {
+        const runtime = new Runtime({ workspace, store, home: path.join(homeRoot, "codex"), command: "unused", onFailure() {} });
+        runtime.codex = {
+          startThread: async () => ({ threadId: ref.threadId }),
+          startTurn: async () => {
+            runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "turn-owned", status: "completed" } } });
+            return { threadId: ref.threadId, turnId: "turn-owned" };
+          },
           generateTitle: async () => { helpers++; return { status: "ok", object: { title } }; },
           renameThread: async () => ({ threadId: ref.threadId }),
-        } }, () => {});
-        backend.event({ method: "headless/turnStarted", params: { threadId: ref.threadId, jobId: "accepted", prompt: "Please inspect the replay harness" } });
+        };
+        const backend = new HeadlessBackend(runtime, () => {});
+        runtime.onEvent = (event: { method: string }) => {
+          backend.event(event);
+          if (event.method === "headless/turnStarted") throw new Error("Invented viewer finalization refusal");
+        };
+        expect(await backend.handle("startThread")).toMatchObject(ref);
+        const input = { id: "accepted", prompt: "Please inspect the replay harness", threadId: ref.threadId };
+        const accepted = runtime.submit(input);
+        await runtime.work;
+        expect(store.get("accepted")).toMatchObject({ fingerprint: accepted.fingerprint, turnId: "turn-owned", status: "completed" });
+        expect(runtime.submit(input)).toEqual(store.get("accepted"));
         await backend.titles.whenSettled();
         expect(helpers).toBe(1);
         expect(backend.summary(backend.owned(ref.threadId))).toMatchObject({ title, titleSource: "derived" });
@@ -59,11 +75,12 @@ test("an Outpost shared helper title reaches the actual desktop renderer and sur
     }, ref);
     expect(thread).toMatchObject({ title, titleSource: "derived" });
     await app.closeApplication();
-    const profile = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot });
+    const workspace = realpathSync(app.homeRoot);
+    const profile = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: workspace });
     try {
-      const store = new JobStore(headless, { version: 1, workspace: app.homeRoot, codexHome: path.join(app.homeRoot, "codex") }, profile);
+      const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(app.homeRoot, "codex") }, profile);
       expect(store.threadRegistry.getThreadMetadata(ref).title).toMatchObject({ text: title, source: "derived", nativeName: title });
-      expect(store.get("accepted")).toMatchObject({ fingerprint: "accepted-input", threadId: ref.threadId, turnId: "turn-owned", status: "completed" });
+      expect(store.get("accepted")).toMatchObject({ threadId: ref.threadId, turnId: "turn-owned", status: "completed" });
     } finally { profile.close(); }
   } finally { await app.close(); }
 });
