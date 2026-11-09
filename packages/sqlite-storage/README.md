@@ -73,6 +73,13 @@ text and immediate closed-text retirement, first-seen times, batched seen writes
 and retention of open question/to-do/review marks keep their original SQL and
 transactions. Pending server requests remain owned by the live registry.
 
+Shared generic `SqliteTokenMiserStorage` implements the existing owner-core
+accounting port. Its private desktop binding retains the actual runtime factory
+and service construction. Metadata/observation identities, ordering, conditional
+payload writes, archive generations, immediate legacy import and exclusive
+transactions keep their original SQL. The service still owns safe accounting
+projection, filesystem migration/cleanup, replay buffers and temporary originals.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -157,3 +164,13 @@ identity, exact deadlines, open-review preservation, closure privacy, atomic
 rollback, malformed payloads, detached reads and unchanged write counts.
 Supported Electron E2E hands portable pending questions and old seen marks to the
 real desktop service, then reads its mutations after graceful shutdown.
+
+`shared-token-miser-storage.property.test.ts` compares independent object,
+observation and retention models across portable/desktop WAL connections and
+reopens. It checks actual factory binding, immutable index identity, conditional
+writes, duplicate import/archive precedence, migration markers, immediate locking,
+atomic rollback, malformed/no-repair reads and exact commit counts. Generated
+service coverage retains content privacy, buffered replay and failed-flush retry.
+Supported Electron E2E reads portable accounting through the real desktop service,
+observes legacy migration and archive through read-only WAL, then restores
+through the portable service after reopening the profile from Node.
