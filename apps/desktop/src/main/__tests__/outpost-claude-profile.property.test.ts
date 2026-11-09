@@ -35,12 +35,15 @@ async function checkDiscovery(id: string, commands: DiscoveryCommand[]): Promise
           linkedDirectories: [], model: command.name, executionMode: command.executionMode,
           ...(command.archived ? { archivedAt: updatedAt + 1 } : {}) } });
       await overlay.updateThreadMetadata(ref, { pinnedRank: `${index}`, parent: { backend: "codex", threadId: "parent" },
-        seenAt: 10000, seenUpdatedAt: command.seen ? updatedAt : updatedAt - 1 });
+        seenAt: 10000, seenUpdatedAt: command.seen ? updatedAt : updatedAt - 1,
+        title: { text: "Stale canonical title", source: "explicit" }, createdAt: -1, updatedAt: -1, cwd: "/stale",
+        ...(command.archived ? { archivedAt: 1 } : { restoredAt: 2 }) });
       const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
       expect(detail.identity).toBe(command.archived ? "archived" : "present");
       expect(detail.thread).toMatchObject({ id, source: "claude", title: command.name, titleSource: "derived", model: command.name,
         executionMode: command.executionMode, pinnedRank: `${index}`, parentThreadId: "parent", parentThreadBackend: "codex",
-        inbox: { inInbox: !command.seen } });
+        createdAt: 1, updatedAt, projectKey: root, inbox: { inInbox: !command.seen } });
+      expect(detail.thread.archivedAt).toBe(command.archived ? updatedAt + 1 : undefined);
       expect(JSON.stringify(detail)).not.toContain("private-sdk-id");
       expect((await owner.handle("resolveThread", ref)).thread).toEqual(detail.thread);
       expect((await owner.handle("listThreads", { backend: "claude" })).threads.map((row: { id: string }) => row.id))
