@@ -54090,7 +54090,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .thread-maintenance__problem-rows {
-  max-height: 180px;
+  max-height: 320px;
   margin: 0;
   padding: 0;
   overflow-y: auto;
@@ -54112,6 +54112,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .thread-maintenance__open-thread {
   flex: none;
+  /* Grouped rows sit close together; this keeps each target 24px tall. */
+  min-height: 24px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -54154,6 +54156,259 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .thread-maintenance__problem.is-kept .thread-maintenance__problem-why b {
   color: var(--info-text);
+}
+
+.thread-maintenance__problem-rows li.thread-maintenance__problem-group {
+  display: block;
+  padding: 8px 14px 8px 44px;
+}
+
+.thread-maintenance__problem-group > .thread-maintenance__problem-why {
+  margin: 0 0 2px;
+}
+
+.thread-maintenance__problem-group > ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Rows inside a reason group sit under its heading, without their own rule. */
+.thread-maintenance__problem-rows .thread-maintenance__problem-group li {
+  align-items: center;
+  padding: 1px 0;
+  border-top: 0;
+}
+
+.thread-maintenance__problem-group > .thread-maintenance__kept-toggle {
+  margin-top: 2px;
+  font-size: 11.5px;
+}
+
+.thread-maintenance__group-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.thread-maintenance__group-note code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__group-select {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__group-select > .thread-maintenance__kept-toggle {
+  min-height: 24px;
+  font-size: 12px;
+}
+
+.thread-maintenance__rows + .thread-maintenance__group-select {
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 0;
+}
+
+.thread-maintenance__group-aside {
+  margin-left: auto;
+}
+
+.thread-maintenance__elapsed {
+  color: var(--text-muted);
+}
+
+.thread-maintenance__coverage {
+  display: grid;
+  gap: 6px;
+  padding: 9px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.thread-maintenance__coverage-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 2px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-maintenance__coverage-rows li {
+  display: contents;
+}
+
+.thread-maintenance__coverage-rows .thread-maintenance__path {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.thread-maintenance__coverage-rows .thread-maintenance__mono {
+  text-align: right;
+}
+
+.thread-maintenance__coverage-owner {
+  color: var(--text-secondary);
+}
+
+.thread-maintenance__coverage > .thread-maintenance__kept-toggle {
+  justify-self: start;
+  min-height: 24px;
+  font-size: 11.5px;
+}
+
+/* Kept checkouts: one group per reason, its guidance once, then each
+   checkout with the threads that own it. Titles lead; paths are secondary. */
+.thread-maintenance__kept {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__kept-note,
+.thread-maintenance__kept-guidance {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.thread-maintenance__kept-group {
+  display: grid;
+  gap: 4px;
+}
+
+.thread-maintenance__kept-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.thread-maintenance__kept-reason {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.thread-maintenance__kept-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-maintenance__kept-rows > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-maintenance__kept-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.thread-maintenance__kept-owner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-maintenance__kept-owner-text {
+  min-width: 0;
+}
+
+.thread-maintenance__kept-owner .thread-maintenance__row-title {
+  overflow-wrap: anywhere;
+}
+
+/* "Cargo output · 9 GB": describes an owned checkout; never a control. */
+.thread-maintenance__output-class {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__kept-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.thread-maintenance__pr-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  color: var(--accent-bright);
+  text-decoration: none;
+}
+
+.thread-maintenance__pr-link:hover {
+  text-decoration: underline;
+}
+
+.thread-maintenance__pr-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-maintenance__kept-shared {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-style: italic;
+}
+
+/* A path names a checkout the operator may need to find on disk, so it
+   wraps rather than losing its distinguishing tail. */
+.thread-maintenance__kept-rows .thread-maintenance__path {
+  margin: 0;
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.thread-maintenance__kept-group > .thread-maintenance__kept-toggle {
+  justify-self: start;
+  min-height: 24px;
+  font-size: 11.5px;
+}
+
+/* A minimized session stays mounted; nothing of it may show or take input. */
+.thread-maintenance-modal[hidden] {
+  display: none;
+}
+
+.thread-maintenance__coverage-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--text-secondary);
 }
 
 .thread-maintenance__receipt {

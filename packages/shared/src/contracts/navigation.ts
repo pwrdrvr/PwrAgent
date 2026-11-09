@@ -2964,6 +2964,8 @@ export type SetSubthreadsCollapsedResponse = {
  * be pinned).
  */
 export type SetDirectoryPinRequest = {
+  /** A remote-viewer window edits the selected owner's pins. */
+  federationTarget?: FederationTarget;
   directoryKey: string;
   /** Rank within the pinned section. Null/undefined removes the pin. */
   pinnedRank?: string | null;
@@ -2977,6 +2979,8 @@ export type SetDirectoryPinResponse = {
 };
 
 export type ReorderDirectoryPinsRequest = {
+  /** A remote-viewer window edits the selected owner's complete pin order. */
+  federationTarget?: FederationTarget;
   /** Complete pinned order, first item at the top. */
   directoryKeys?: string[];
   /** Owner-revalidated move preserving every unloaded pin. Exclusive with directoryKeys. */
@@ -3240,6 +3244,18 @@ export type DirectoryOverlayState = {
   forgeAutomation?: ProjectForgeAutomation;
 };
 
+/** Operator authorization for one existing linked checkout, never inferred
+ * from a provider cwd, PR link, or repository trust. Identity changes revoke it. */
+export type ThreadWorktreeRegistration = {
+  worktreePath: string;
+  gitDirectory: string;
+  commonDirectory: string;
+  checkoutIdentity: string;
+  gitDirectoryIdentity: string;
+  authorizedAt: number;
+  requestedBy: { backend: AppServerBackendKind; threadId: string };
+};
+
 export type ThreadOverlayState = {
   /** Absent follows the profile default. */
   monitorJobSuggestionsEnabled?: boolean;
@@ -3323,6 +3339,7 @@ export type ThreadOverlayState = {
   archiveRetentionStartedAt?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
+  worktreeRegistrations?: ThreadWorktreeRegistration[];
   /**
    * Worktrees this thread created and then left with a fresh-start move.
    * They stay on disk and are not the thread's workspace. Only thread

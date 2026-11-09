@@ -9,6 +9,7 @@ import type {
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
 import type { FederationInstanceId } from "./federation";
+import type { ThreadWorktreeRegistration } from "./navigation";
 import type {
   CodexEnvironmentStartupFailure,
   CreatedThreadEnvironmentReport,
@@ -22,6 +23,7 @@ export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
   "detach_thread_directory",
   "handoff_task",
   "move_thread_workspace",
+  "register_thread_worktree",
   "stop_thread",
   "steer_thread",
   "send_message_to_thread",
@@ -213,6 +215,24 @@ export type MoveThreadWorkspaceToolArgs = {
   newBranchName?: string;
   /** Start the new worktree at this ref and leave the source untouched. */
   baseRef?: string;
+};
+
+export type RegisterThreadWorktreeToolArgs = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  worktreePath: string;
+  /** Omit to register; inspect reads the receipt, unregister revokes it. */
+  action?: "register" | "unregister" | "inspect";
+};
+
+export type RegisterThreadWorktreeResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  worktreePath: string;
+  registered: boolean;
+  valid?: boolean;
+  registration?: ThreadWorktreeRegistration;
+  message: string;
 };
 
 export type AttachThreadDirectoryWorkspaceMode = "local" | "new_worktree";
@@ -527,6 +547,7 @@ export type PwrAgentThreadOrchestrationToolArgsByOperation = {
   detach_thread_directory: DetachThreadDirectoryToolArgs;
   handoff_task: HandoffTaskToolArgs;
   move_thread_workspace: MoveThreadWorkspaceToolArgs;
+  register_thread_worktree: RegisterThreadWorktreeToolArgs;
   send_message_to_thread: SendMessageToThreadToolArgs;
   steer_thread: SteerThreadToolArgs;
   stop_thread: StopThreadToolArgs;
@@ -557,6 +578,7 @@ export type PwrAgentThreadOrchestrationResponse =
         | DetachThreadDirectoryResult
         | HandoffTaskResult
         | MoveThreadWorkspaceResult
+        | RegisterThreadWorktreeResult
         | SendMessageToThreadResult
         | SteerThreadResult
         | StopThreadResult

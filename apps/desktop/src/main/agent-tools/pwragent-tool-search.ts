@@ -64,6 +64,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   open_thread_maintenance: "open show dialog window review cleanup maintenance",
   attach_thread_directory: "link repository project folder worktree",
   move_thread_workspace: "move project folder checkout worktree",
+  register_thread_worktree: "register authorize adopt ownership external existing outside checkout worktree maintenance snapshot cleanup revoke unregister",
   list_federation_instances: "federation machines computers hosts load capacity",
   list_instance_projects: "federation remote machine projects folders",
   create_instance_thread: "federation run work another remote machine computer",

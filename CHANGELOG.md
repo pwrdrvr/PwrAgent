@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.3.16 - 2026-11-08
+
+- Thread Maintenance: Reclaim Disk Space - Find the checkouts actually used by this profile's threads, not just those in default worktree folders. See their disk usage, largest contents, owning threads, and exactly why a checkout is being kept, with links to the threads so you can resolve the blocker and scan again.
+- Hibernation That Can Finish - Stop treating merely viewing a thread as checkout activity, and stop completed PR watches from holding idle checkouts indefinitely. Include eligible archived checkouts and remove the ignored-file blocker. Ignored files are not saved in recovery snapshots and are removed with a hibernated checkout.
+- Build Output Cleanup - Review and remove verified Cargo build artifacts independently, even when the checkout itself must stay. Check native build locks and repository ownership before removal, preserving tracked files and unrelated user files.
+- Maintenance You Can Follow - Show scan coverage, current work, elapsed time, kept reasons, and cleanup progress instead of leaving a long operation looking stuck. Minimize to a progress notice and reopen with your plan and selections intact. Disk allocation is shown separately from recovery-snapshot size and is not a promise of freed space.
+- Continue After - Bring Wait Until Done into one dependency workflow. Wait for work on this machine, a connected machine, or outside PwrAgent to be explicitly marked done, optionally hold merging, and choose an agent continuation or an operator reminder with follow-up steps. Existing Wait Until Done registrations are not migrated; recreate them in Continue After.
+- Merge Holds - Show holds belonging to other threads attached to the same PR, so a different thread cannot overlook work that still blocks the merge.
+- Messaging - Unblock queued replies and preserve the owning thread's FIFO across messaging and desktop. Bind MCP approvals to the exact displayed proposal; stale buttons and a bare "yes" do not authorize another request.
+- Projects and Navigation - Persist remote project pins on their owning machine, preserve navigation resume across metadata refreshes, retain child ordering when selected, reject deep sub-thread cycles, and show linked checkout paths.
+- Archive Retention - Include PwrAgent's archived Claude threads in the configured retention policy and reduce background cleanup notifications.
+
 ## v1.3.15 - 2026-11-07
 
 - Thread Maintenance - Keep the dialog's size steady through scans, review, and cleanup, with visible scan steps and progress. Make archiving an explicit opt-in step in Combined mode and allow a scan-specific hibernation idle-day threshold without changing Settings or the automatic sweep.

@@ -19,6 +19,9 @@ import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import type { AcpTransportFactory } from "../app-server/acp-backend-adapter";
+import type { AppServerThreadSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse } from "@pwragent/shared";
+import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
+import type { MaintenanceDiscoveryProgress } from "../app-server/unreferenced-worktrees";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { ArchiveWorktreeTransport, type ArchiveWorktreeThread } from "./fixtures/archive-worktree-transport";
 
@@ -135,6 +138,38 @@ class ArchiveAcpTransport extends FakeAcpAgentTransport {
     return result;
   }
 }
+
+describe("current-profile worktree registration across providers", () => {
+  it.each(["claude", "acp:fixture"] as const)("registers an archived %s owner's outside checkout without changing its external marker", async (backend) => {
+    const fixture = await createFixture();
+    const instance = fixture.reopen();
+    const owner = { backend, threadId: backend === "claude" ? "11111111-1111-4111-8111-111111111111" : acpOwner.threadId };
+    if (backend === "claude") {
+      await fixture.claudeStore.save({ cwd: fixture.worktree, thread: {
+        id: owner.threadId, source: "claude", title: "Registration fixture", titleSource: "explicit",
+        linkedDirectories: [fixture.directory], updatedAt: 1, archivedAt: 1,
+      } });
+    } else seedAcpOwner(instance, fixture.worktree, true);
+    await instance.store.replaceWorkspaceLinkedDirectory({ ...owner,
+      directory: { ...fixture.directory, worktreeOwnership: "external" } });
+    const internal = instance.registry as unknown as {
+      isLiveDynamicToolCall: () => boolean;
+      requestThreadMaintenanceConfirmation: () => Promise<boolean>;
+      handleThreadOrchestrationRequest: (request: PwrAgentThreadOrchestrationRequest) => Promise<PwrAgentThreadOrchestrationResponse>;
+    };
+    vi.spyOn(internal, "isLiveDynamicToolCall").mockReturnValue(true);
+    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    expect(await internal.handleThreadOrchestrationRequest({ operation: "register_thread_worktree",
+      context: { backend: "codex", threadId: "operator-agent", turnId: "registration" },
+      args: { ...owner, worktreePath: fixture.worktree },
+    })).toMatchObject({ ok: true, data: { ...owner, registered: true } });
+    const candidate = (await instance.registry.listAutoArchiveCandidates()).find((item) => item.thread.source === backend && item.thread.id === owner.threadId);
+    expect(candidate?.managedWorktreePath).toBe(fixture.worktree);
+    expect((await instance.registry.auditArchivedCheckouts()).candidates).toContainEqual({ ...owner, worktreePath: fixture.worktree });
+    expect((await instance.store.getThreadOverlayState(owner))?.extraLinkedDirectories[0]?.worktreeOwnership).toBe("external");
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("original\n");
+  });
+});
 
 describe("ACP snapshot archive and restoration", () => {
   it("preserves archive metadata when an earlier replay read resumes between cleanup inventories", async () => {
@@ -310,7 +345,7 @@ describe("ACP snapshot archive and restoration", () => {
   });
 
   it.each(["primary", "external", "active owner", "unknown capability", "no load", "rebind"])("retains protected ACP checkouts (%s)", async (scenario) => {
-    const fixture = await createFixture("claude");
+    const fixture = await createFixture(scenario === "external" ? false : "claude");
     const instance = fixture.reopen();
     const cwd = scenario === "primary" ? fixture.repo : fixture.worktree;
     seedAcpOwner(instance, cwd);
@@ -327,6 +362,20 @@ describe("ACP snapshot archive and restoration", () => {
     expect(result.cleanup.every((item) => !item.removedWorktree)).toBe(true);
     expect((await stat(cwd)).isDirectory()).toBe(true);
     expect((await instance.store.getThreadOverlayState(acpOwner))?.worktreeSnapshots ?? []).toHaveLength(0);
+  });
+
+  it("snapshots and restores an attached ACP checkout inside the managed root despite its external marker", async () => {
+    const fixture = await createFixture("claude");
+    const instance = fixture.reopen(fixture.directory, false, () => new ArchiveAcpTransport());
+    seedAcpOwner(instance, fixture.worktree);
+    await instance.store.addLinkedDirectory({ ...acpOwner, directory: { ...fixture.directory, worktreeOwnership: "external" } });
+    await writeFile(path.join(fixture.worktree, "file.txt"), "saved managed checkout work\n");
+    const result = await instance.registry.archiveThread(acpOwner);
+    expect(result.cleanup.some((item) => item.removedWorktree)).toBe(true);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(instance.acpSessionStore.getSession(acpOwner.backend, acpOwner.threadId)?.archivedAt).toBeDefined();
+    await instance.registry.restoreThread(acpOwner);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("saved managed checkout work\n");
   });
 
   it.each(["checkout", "load", "unsupported", "unadvertised", "partial"])("keeps the session archived and recovery available on %s failure", async (failure) => {
@@ -413,7 +462,7 @@ describe("checkouts no thread refers to", () => {
     { selections: [[0], [0]] },
     { selections: [[0], [0], [0]] },
     { selections: [[0, 1], [1, 0]] },
-  ])("removes each checkout once across overlapping requests: $selections", async ({ selections }) => {
+  ])("refuses every unattributed removal across overlapping requests: $selections", async ({ selections }) => {
     const fixture = await createFixture("claude");
     const checkouts = Array.from({ length: Math.max(...selections.flat()) + 1 }, (_, index) =>
       path.join(fixture.root, ".pwragent", "worktrees", `spare-${index}`, "repo"));
@@ -427,58 +476,112 @@ describe("checkouts no thread refers to", () => {
     const result = await Promise.all(selections.map(async (selection) =>
       await registry.removeUnreferencedCheckouts(selection.map((index) => checkouts[index]!))));
     expect(result.flatMap((row) => row.failed)).toEqual([]);
-    expect(result.flatMap((row) => row.removed).map((row) => row.worktreePath).sort()).toEqual([...checkouts].sort());
-    expect(result.flatMap((row) => row.kept)).toHaveLength(selections.flat().length - checkouts.length);
-    // One active and one archived provider page per request, independent of
-    // its selection size. Scope locking must not add a fleet scan per item.
-    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list")).toHaveLength(2 * selections.length);
-    // Git is the oracle: each registration is gone, with exactly one
-    // recoverable snapshot containing that checkout's distinct dirty data.
+    expect(result.flatMap((row) => row.removed)).toEqual([]);
+    expect(result.flatMap((row) => row.kept)).toHaveLength(selections.flat().length);
+    expect(result.flatMap((row) => row.kept).every((row) => row.reason === "No identified thread owns this checkout")).toBe(true);
+    // A refusal needs no provider inventory or snapshot mutation.
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list")).toHaveLength(0);
     const registrations = await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"]);
-    const refs = (await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim().split("\n");
-    expect(refs).toHaveLength(checkouts.length);
-    const contents = await Promise.all(refs.map(async (ref) => await fixture.git(fixture.repo, ["show", `${ref}:notes.txt`])));
-    expect(contents.sort()).toEqual(checkouts.map((_, index) => `checkout ${index}\n`).sort());
-    for (const checkout of checkouts) {
-      expect(registrations).not.toContain(checkout.replaceAll("\\", "/"));
-      await expect(stat(checkout)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim()).toBe("");
+    for (const [index, checkout] of checkouts.entries()) {
+      expect(registrations).toContain(checkout.replaceAll("\\", "/"));
+      expect(await readFile(path.join(checkout, "notes.txt"), "utf8")).toBe(`checkout ${index}\n`);
     }
   });
 
-  it("lists only the PwrAgent worktree no thread uses, then snapshots and removes it", async () => {
-    const fixture = await createFixture("claude");
+  // Ownership is independent of physical location: a profile not queried
+  // could own any registered checkout. Git verifies that it stays intact.
+  it("identifies every known provider owner of a kept checkout without inferring owners for unknown paths", async () => {
+    const fixture = await createSharedArchiveFixture("codex", false);
+    ArchiveWorktreeTransport.threads[0]!.name = "Investigate widget layout";
+    const { registry } = fixture.reopen();
+    const audit = await registry.auditArchivedCheckouts();
+    const owners = audit.inventory?.owners?.find((row) => row.path === fixture.worktree)?.threads ?? [];
+    // Both providers intentionally use the same thread id: identity is not
+    // a title or a path, and must include the provider that owns it.
+    expect(owners.map((owner) => ({ backend: owner.backend, threadId: owner.threadId })).sort((a, b) => a.backend.localeCompare(b.backend)))
+      .toEqual([...fixture.owners].sort((a, b) => a.backend.localeCompare(b.backend)));
+    expect(owners.find((owner) => owner.backend === "codex")?.title).toBe("Investigate widget layout");
+    expect(owners.find((owner) => owner.backend === "claude")?.title).toBe("Shared archive fixture");
+    expect(audit.candidates).toEqual([]);
+    expect(await stat(fixture.worktree)).toBeDefined();
+  });
+
+  it("limits maintenance inventory to identified thread checkouts and never offers a spare folder for removal", async () => {
+    const fixture = await createSharedArchiveFixture("codex", false);
     const spare = path.join(fixture.root, ".pwragent", "worktrees", "spare", "repo");
     await fixture.git(fixture.repo, ["worktree", "add", "-b", "spare", spare]);
-    await writeFile(path.join(spare, "notes.txt"), "left behind\n");
-    // Settled: created two hours ago. A just-made one may be a thread still starting.
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    await utimes(path.join(spare, ".git"), twoHoursAgo, twoHoursAgo);
-    const starting = path.join(fixture.root, ".pwragent", "worktrees", "starting", "repo");
-    await fixture.git(fixture.repo, ["worktree", "add", "-b", "starting", starting]);
-    // A Claude thread still works in the first checkout.
-    await fixture.claudeStore.save({ cwd: fixture.worktree, thread: {
-      id: "11111111-1111-4111-8111-111111111111", source: "claude", title: "Uses the checkout", titleSource: "explicit",
-      linkedDirectories: [fixture.directory],
-    } });
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(path.join(spare, ".git"), old, old);
     const { registry } = fixture.reopen();
-    const { writes } = await measureSqliteWrites(async () => {
-      expect((await registry.auditArchivedCheckouts()).unreferenced).toEqual([spare]);
-      expect(await registry.removeUnreferencedCheckouts([fixture.worktree, starting, spare])).toEqual({
-        removed: [{ worktreePath: spare }],
-        kept: [{ worktreePath: fixture.worktree, reason: "A thread uses it now" },
-          { worktreePath: starting, reason: "Created recently" }],
-        failed: [],
-      });
-    });
-    // Reading every thread and removing through Git persists nothing.
-    expect(writes.commits).toBe(0);
-    await expect(stat(spare)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(stat(fixture.worktree)).resolves.toBeDefined();
-    await expect(stat(starting)).resolves.toBeDefined();
-    const refs = (await fixture.git(fixture.repo, ["for-each-ref", "--format=%(refname)", "refs/pwragent/snapshots/"])).trim().split("\n");
-    expect(refs).toHaveLength(1);
-    expect(await fixture.git(fixture.repo, ["show", `${refs[0]}:notes.txt`])).toBe("left behind\n");
+    const audit = await registry.auditArchivedCheckouts();
+    expect(audit.inventory!.paths).toEqual([fixture.worktree]);
+    expect(audit.unreferenced).toEqual([]);
+    expect(await registry.removeUnreferencedCheckouts([spare])).toEqual({ removed: [], failed: [],
+      kept: [{ worktreePath: spare, reason: "No identified thread owns this checkout" }] });
+    expect(await stat(spare)).toBeDefined();
   });
+
+
+});
+
+it("checks archived owners concurrently with bounded work, ordered results and batch pacing", async () => {
+  const fixture = await createFixture("claude");
+  const { registry } = fixture.reopen();
+  const threads: AppServerThreadSummary[] = Array.from({ length: 13 }, (_, index) => ({
+    id: String(index), source: "claude", title: String(index), titleSource: "explicit",
+    linkedDirectories: [{ ...fixture.directory, worktreePath: path.join(fixture.root, `audit-${index}`) }],
+  }));
+  await Promise.all(threads.map((thread) => mkdir(thread.linkedDirectories[0]!.worktreePath!)));
+  type Ownership = { users: AppServerThreadSummary[]; external: boolean };
+  const boundary = registry as unknown as {
+    readPacedArchiveCleanupInventory: () => Promise<{ activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] }>;
+    maintenanceThreadWorkspace: (thread: AppServerThreadSummary) => Promise<AppServerThreadSummary>;
+    readCanonicalArchiveOwnership: (_inventory: unknown, target: string) => Promise<Ownership>;
+    describeMaintenanceCheckoutInventory: () => Promise<void>;
+    archiveCleanupQueue: { enqueue: (_key: string, work: (context: ArchiveCleanupContext) => Promise<unknown>) => Promise<unknown> };
+  };
+  vi.spyOn(boundary, "readPacedArchiveCleanupInventory").mockResolvedValue({ activeThreads: [], archivedThreads: threads });
+  vi.spyOn(boundary, "maintenanceThreadWorkspace").mockImplementation(async (thread) => thread);
+  vi.spyOn(boundary, "describeMaintenanceCheckoutInventory").mockResolvedValue();
+  const checkpoint = vi.fn(async () => {});
+  vi.spyOn(boundary.archiveCleanupQueue, "enqueue").mockImplementation(async (_key, work) => await work({
+    checkpoint, assertCurrent() {}, settleCheckpoint: async () => {},
+  }));
+  let active = 0, peak = 0, completed = 0, drain = false;
+  const pending: (() => void)[] = [];
+  vi.spyOn(boundary, "readCanonicalArchiveOwnership").mockImplementation(async (_inventory, target) => {
+    active += 1; peak = Math.max(peak, active);
+    try {
+      if (!drain) await new Promise<void>((resolve) => pending.push(resolve));
+      const index = Number(path.basename(target).slice("audit-".length));
+      if (index % 3 === 2) throw new Error("Fixture unreadable checkout");
+      return { users: index % 3 === 1 ? [threads[index]!] : [], external: false };
+    } finally { active -= 1; completed += 1; }
+  });
+  const progress: MaintenanceDiscoveryProgress[] = [];
+  const audit = registry.auditArchivedCheckouts((update) => progress.push(update));
+  try {
+    // The model holds six independent reads in flight, then completes each
+    // wave backwards. Eligibility and scan order must be timing-independent.
+    while (completed < threads.length) {
+      const before = completed;
+      const expected = Math.min(6, threads.length - completed);
+      await vi.waitFor(() => expect(pending).toHaveLength(expected));
+      for (const release of pending.splice(0).reverse()) release();
+      await vi.waitFor(() => expect(completed).toBe(before + expected));
+    }
+    const result = await audit;
+    expect(peak).toBe(6);
+    expect(active).toBe(0);
+    expect(result.candidates.map((row) => row.threadId)).toEqual(threads.filter((_, index) => index % 3 === 0).map((row) => row.id));
+    expect(checkpoint).toHaveBeenCalledTimes(3);
+    expect(progress.some((row) => row.detail?.includes("13/13 checked"))).toBe(true);
+  } finally {
+    drain = true;
+    for (const release of pending.splice(0)) release();
+    await audit;
+  }
 });
 
 describe("archive worktrees across a desktop restart", () => {

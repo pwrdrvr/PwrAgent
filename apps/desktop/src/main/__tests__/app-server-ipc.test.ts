@@ -30,6 +30,8 @@ import type {
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
+  SetDirectoryPinRequest,
+  ReorderDirectoryPinsRequest,
   SetThreadParentRequest,
   ThreadGitWorkingState,
   ThreadPullRequestWatchEvent,
@@ -84,6 +86,9 @@ const wakeHibernatedCheckoutOnOpen = vi.hoisted(() => vi.fn(async (_identity: un
 const overlayStoreFixture = vi.hoisted(() => ({ stable: undefined as unknown }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    setDirectoryPin: vi.fn(async (request: SetDirectoryPinRequest) => ({ directoryKey: request.directoryKey,
+      pinnedRank: request.pinned ? "4096" : undefined })),
+    reorderDirectoryPins: vi.fn(async (request: ReorderDirectoryPinsRequest) => ({ pinnedRanks: { [request.move!.key]: "512" } })),
     manageThreadPrWatchesV1: vi.fn(async (): Promise<ThreadPrWatchesResponse> => ({ ok: true, cancelled: true })),
     continueThreadEnvironmentStartup: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, turnId: "owner-turn" })),
     acknowledgeThreadEnvironmentFailure: vi.fn(async (request: { backend: string; threadId: string }) => ({ ...request, acknowledged: true })),
@@ -1002,6 +1007,8 @@ const advanceThreadPrStatusWatches = vi.fn(async () => ({
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const claimThreadPrTerminalWatches = vi.fn(async () => []);
+const observeThreadPrTerminalWatches = vi.fn(async () => []);
+const listPendingPrTerminalWatchObservations = vi.fn(async () => []);
 const finishThreadPrTerminalWatch = vi.fn(async () => undefined);
 const listPendingPrTerminalWatchPrKeys = vi.fn(async () => [] as string[]);
 const listAllActiveThreadPrStatusWatches = vi.fn(async () => []);
@@ -1190,6 +1197,8 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     listActiveThreadPrStatusWatches,
     cancelThreadPrStatusWatchesForPr,
     claimThreadPrTerminalWatches,
+    observeThreadPrTerminalWatches,
+    listPendingPrTerminalWatchObservations,
     finishThreadPrTerminalWatch,
     listPendingPrTerminalWatchPrKeys,
     listAllActiveThreadPrStatusWatches,
@@ -1385,6 +1394,26 @@ const {
 } = await import("../ipc/app-server");
 
 describe("app server ipc", () => {
+  it("routes remote directory pins and moves to the selected owner", async () => {
+    const { NAVIGATION_SET_DIRECTORY_PIN_CHANNEL, NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const federationTarget = { scope: "remote" as const, instanceId: "m2-max" };
+    const directoryKey = "directory:/fixture/git";
+    const pin = handlers.get(NAVIGATION_SET_DIRECTORY_PIN_CHANNEL)!;
+    const reorder = handlers.get(NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL)!;
+    await expect(pin({}, { directoryKey, pinned: true, federationTarget }))
+      .resolves.toEqual({ directoryKey, pinnedRank: "4096" });
+    await expect(reorder({}, { move: { key: directoryKey, direction: "up" }, federationTarget }))
+      .resolves.toEqual({ pinnedRanks: { [directoryKey]: "512" } });
+    await expect(pin({}, { directoryKey, pinned: false, federationTarget }))
+      .resolves.toEqual({ directoryKey, pinnedRank: undefined });
+    expect(federationMock.runtime.remoteBackend.mock.calls).toEqual([[federationTarget], [federationTarget], [federationTarget]]);
+    expect(federationMock.remoteBackend.setDirectoryPin.mock.calls).toEqual([
+      [{ directoryKey, pinned: true }], [{ directoryKey, pinned: false }],
+    ]);
+    expect(federationMock.remoteBackend.reorderDirectoryPins).toHaveBeenCalledExactlyOnceWith({ move: { key: directoryKey, direction: "up" } });
+  });
+
   it("keeps the selected owner and original cause in remote directory mark-read failures", async () => {
     const { appServerService } = await import("../ipc/app-server");
     const target = { scope: "remote" as const, instanceId: "pwr_laptop" };
@@ -4324,6 +4353,7 @@ describe("app server ipc", () => {
     overlayStoreFixture.stable = {
       setDirectoryForgeAutomation: vi.fn(async (params: { automation: unknown }) => ({ forgeAutomation: params.automation })),
       listPendingPrTerminalWatchPrKeys: listPendingTerminalWatches,
+      listPendingPrTerminalWatchObservations: vi.fn(async () => []),
     };
     const cancelPendingDisallowedByProject = vi.fn(async (_thread: unknown) => true);
     const handlePrEvent = vi.fn(async () => undefined);
@@ -4358,7 +4388,7 @@ describe("app server ipc", () => {
       expect(scheduler.tick).toHaveBeenCalledTimes(1);
       expect(handlePrEvent).toHaveBeenCalledTimes(1);
       // A merge or close seen while paused left its watch pending; resume re-offers it.
-      expect(listPendingTerminalWatches).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread-1" });
+      expect(listPendingTerminalWatches).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread-1", unobservedOnly: true });
       expect(cancelPendingDisallowedByProject).toHaveBeenCalledTimes(1);
     } finally {
       dependencies.mockRestore(); autoDispatch.mockRestore(); mode.mockRestore();
@@ -10568,7 +10598,7 @@ describe("app server ipc", () => {
       };
     };
     const registry = backendRegistryLifecycle.get() as Record<string, unknown>;
-    const submitTurnIfIdle = vi.fn(async () => ({ status: "started" as const, turnId: "wake" }));
+    const submitTurnIfIdle = vi.fn(async (): Promise<{ status: "started" | "busy"; turnId?: string }> => ({ status: "started", turnId: "wake" }));
     registry.submitTurnIfIdle = submitTurnIfIdle;
     registry.getActiveTurnForThread = () => undefined;
     // Dependency registration reads each thread's turns through the provider.
@@ -10595,6 +10625,62 @@ describe("app server ipc", () => {
     };
     return { appServerService, service, submitTurnIfIdle, restore };
   }
+
+  it.each(["status-cache", "legacy-attachment"])("retires a locked terminal watch from %s and delivers its saved event on unlock without a forge read", async (source) => {
+    await withRenamedRepositoryStore("terminal-watch-recovery-", async ({ store }) => {
+      const { appServerService, service, submitTurnIfIdle, restore } = await renamedRepositoryService();
+      const internal = service as unknown as {
+        retryPendingPrTerminalWatches: () => Promise<void>;
+        prStatusRegistryLoaded: boolean;
+        prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+      };
+      const identity = { backend: "codex" as const, threadId: "locked-terminal-fixture" };
+      const terminal = githubPr({ org: "fixture", repo: "project", number: 17, state: "passing", lifecycleState: "merged",
+        url: "https://github.com/fixture/project/pull/17" });
+      const key = buildPullRequestStatusKey(terminal);
+      const previous = { loaded: internal.prStatusRegistryLoaded, entry: internal.prStatusRegistry.get(key) };
+      const appState = await import("../state/app-state");
+      const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+      let locked = true;
+      submitTurnIfIdle.mockImplementation(async () => locked
+        ? { status: "busy" as const }
+        : { status: "started" as const, turnId: "wake" });
+      try {
+        await store.setThreadLock({ ...identity, lock: { source: "operator", lockedAt: 1, note: "Child owns checkout" } });
+        await store.registerThreadPrStatusWatch({ now: 1, watch: {
+          ...identity, watchId: "terminal-fixture", prKey: key, prUrl: terminal.url, prNumber: terminal.number,
+          kind: "terminal", headSha: "", notifyOn: ["merged", "closed"], createdAt: 1, failureHandledByAutoFix: false,
+        } });
+        internal.prStatusRegistryLoaded = true;
+        if (source === "status-cache") internal.prStatusRegistry.set(key, { pr: terminal, fetchedAt: 10 });
+        else {
+          internal.prStatusRegistry.delete(key);
+          await store.setThreadPullRequests({ ...identity, prs: [terminal], fetchedAt: 10 });
+        }
+        await internal.retryPendingPrTerminalWatches();
+        expect(await store.listAllActivePrStatusWatches()).toEqual([]);
+        expect(await store.listPendingPrTerminalWatchObservations(identity)).toEqual([{ pr: terminal, observedAt: 10 }]);
+        expect((await store.getThreadOverlayState(identity))?.lock?.note).toBe("Child owns checkout");
+        expect(fetchPullRequestTerminalDetails).not.toHaveBeenCalled();
+        // The saved event survives independently of the shared status cache.
+        internal.prStatusRegistry.delete(key);
+        locked = false;
+        submitTurnIfIdle.mockClear();
+        appServerService.handleAgentEventForPrWatches({ backend: "codex", notification: {
+          method: "thread/lock/updated", params: { threadId: identity.threadId },
+        } });
+        await vi.waitFor(async () => expect(await store.listPendingPrTerminalWatchObservations(identity)).toEqual([]));
+        expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+        expect(fetchPullRequestTerminalDetails).not.toHaveBeenCalled();
+      } finally {
+        mode.mockRestore();
+        internal.prStatusRegistryLoaded = previous.loaded;
+        if (previous.entry) internal.prStatusRegistry.set(key, previous.entry);
+        else internal.prStatusRegistry.delete(key);
+        restore();
+      }
+    });
+  });
 
   it("removes an archived thread from PR routing immediately and rejects late lookup results", async () => {
     const { appServerService, service, restore } = await renamedRepositoryService();

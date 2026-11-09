@@ -5524,10 +5524,9 @@ export function useThreadSessionState(params: {
           const responseWithRetainedTail = preserveRetainedTranscriptTail(
             orderedResponse,
             current.response,
-            // An in-flight older page is anchored to the current tail's
-            // cursor. Keep that bridge if the newest window advances before
-            // the page arrives, or the two pages leave a permanent gap.
-            Boolean(current.loadedHistory) || current.loadingMore,
+            // Keep the cursor bridge for an in-flight older page, and the
+            // observed live tail when a lifecycle event overtook this read.
+            Boolean(current.loadedHistory) || current.loadingMore || lifecycleChangedDuringRead,
           );
           const hydratedPendingRequest = lifecycleChangedDuringRead
             ? undefined

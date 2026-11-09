@@ -15,8 +15,6 @@ import {
 import { PEER_SUBTHREADS_UNREADABLE, peerSubthreadKey, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import {
   ThreadMaintenanceService,
-  UNREFERENCED_KEEP_PREFIX,
-  unreferencedKeepReason,
   type ArchivedCheckoutAudit,
   type ArchivedCheckoutRemoval,
   type CheckoutHibernationReviewDeps,
@@ -24,6 +22,7 @@ import {
   type ThreadMaintenanceDeps,
 } from "../app-server/thread-maintenance-service";
 import { inspectMaintenanceWorkspace, rebuildableOutputFolder } from "../app-server/thread-maintenance-workspace";
+import { planThreadMaintenanceApply, summarizeThreadMaintenanceScan, threadMaintenanceConfirmationQuestion } from "../agent-tools/thread-maintenance-tool-results";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -93,15 +92,410 @@ function harness(candidates: ThreadArchiveCandidate[], overrides: Partial<Thread
 }
 
 describe("ThreadMaintenanceService.scan", () => {
+  it("normalizes the retired ignored-file rule so older requests cannot restore the blocker", async () => {
+    const { service } = harness([]);
+    const scan = await service.scan({ rules: { rebuildableOutputIsClean: false } });
+    expect(scan.rules.rebuildableOutputIsClean).toBe(true);
+  });
+
+  it("classifies output only in positively owned checkouts, regardless of unrelated inventory paths", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (unknownCount) => {
+      const owner = candidate("owned", { cwd: "/fixture/owned" });
+      const unknown = Array.from({ length: unknownCount }, (_, index) => `/other-profile/checkout-${index}`);
+      const scans: string[] = [];
+      const row = (checkout: string) => ({ kind: "cargo" as const, checkoutPath: checkout,
+        outputPath: `${checkout}/target/debug`, manifestPath: `${checkout}/Cargo.toml`, space: { allocatedBytes: 4096 } });
+      const audit = { candidates: [], kept: {}, emptyFolders: 0, unreferenced: unknown,
+        inventory: { roots: [], paths: ["/fixture/owned", ...unknown], repositories: ["/unrelated-primary"], providers: [],
+          owners: [{ path: "/fixture/owned", threads: [{ backend: "codex", threadId: "owned", title: owner.thread.title }], candidates: [owner] }] } };
+      const { service, deps } = harness([owner], { auditArchivedCheckouts: async () => audit,
+        buildOutputs: { scan: async (roots) => {
+          scans.push(...roots);
+          return { items: [...roots, "/unexpected-detector-result"].map((checkout) => ({ row: row(checkout), identity: "fixture" })), kept: [] };
+        }, remove: async () => ({}) },
+      });
+      const scan = await service.scan({ steps: ["checkouts"] });
+      expect(scans).toEqual(["/fixture/owned"]);
+      expect(scan.checkouts.buildOutputs).toHaveLength(1);
+      expect(scan.checkouts.buildOutputs![0]).toMatchObject({ checkoutPath: "/fixture/owned", threads: [{ backend: "codex", threadId: "owned" }] });
+      expect(scan.checkouts.items.some((item) => item.kind === "unreferenced")).toBe(false);
+      expect(deps.archiveFamily).not.toHaveBeenCalled();
+    }), { numRuns: 8 });
+  });
+
+  it("classifies each shared checkout once, aggregates unique profiles and retains every identified owner", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.option(fc.nat({ max: 1_000_000 }), { nil: undefined }), { minLength: 1, maxLength: 6 }),
+      fc.boolean(), async (sizes, incomplete) => {
+        const checkout = path.resolve("/fixture/repo");
+        const active = candidate("active", { cwd: checkout });
+        const archived = candidate("archived", { cwd: checkout });
+        const rows = sizes.map((bytes, index) => ({ row: { kind: "cargo" as const, checkoutPath: checkout,
+          outputPath: path.join(checkout, "target", `profile-${index}`), manifestPath: path.join(checkout, "Cargo.toml"),
+          ...(bytes !== undefined ? { space: { allocatedBytes: bytes } } : {}) }, identity: "fixture" }));
+        const scanOutputs = vi.fn(async () => ({ items: [...rows, rows[0]!],
+          kept: incomplete ? [{ path: path.join(checkout, "target", "busy"), reason: "Cargo build in progress" }] : [] }));
+        const { service } = harness([active], {
+          hibernation: { getPolicy: () => ({ enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+            keepReason: () => ({ target: checkout, keep: "Watching a PR" }),
+            inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true },
+          auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+            inventory: { roots: [], paths: [checkout], providers: [],
+              owners: [{ path: checkout, threads: [], candidates: [active, archived] }] } }),
+          buildOutputs: { scan: scanOutputs, remove: async () => ({}) },
+        });
+        const scan = await service.scan({ steps: ["hibernate", "checkouts"] });
+        expect(scanOutputs).toHaveBeenCalledTimes(1);
+        expect(scan.checkouts.buildOutputs).toHaveLength(sizes.length);
+        expect(scan.checkouts.buildOutputs!.every((row) => row.threads?.map((thread) => thread.threadId).join() === "active,archived")).toBe(true);
+        const measured = sizes.filter((size) => size !== undefined);
+        expect(scan.hibernate!.coverage!.keptCheckouts![0]!.rebuildableOutput).toEqual([{
+          kind: "cargo", ...(measured.length ? { allocatedBytes: measured.reduce((sum, value) => sum + value, 0) } : {}),
+          ...(incomplete || measured.length !== sizes.length ? { lowerBound: true } : {}),
+        }]);
+        expect(scan.hibernate!.items).toEqual([]);
+      }), { numRuns: 30 });
+  });
+
+  it("matches fresh provider ownership before deleting an output", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("codex" as const, "claude" as const, "acp:grok" as const),
+      fc.constantFrom("same", "descendant", "ancestor", "moved", "unreadable", "missing"), async (backend, state) => {
+        const owner = candidate("owner", { cwd: "/fixture/repo" });
+        owner.thread.source = backend;
+        const row = { kind: "cargo" as const, checkoutPath: "/fixture/repo", outputPath: "/fixture/repo/target/debug",
+          manifestPath: "/fixture/repo/Cargo.toml", space: { allocatedBytes: 1024 } };
+        const remove = vi.fn(async () => ({ allocatedBytesRemoved: 1024 }));
+        const { service } = harness([owner], {
+          auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+            inventory: { roots: [], paths: [row.checkoutPath], providers: [],
+              owners: [{ path: row.checkoutPath, threads: [], candidates: [owner] }] } }),
+          refreshCandidate: async () => {
+            if (state === "missing") throw new Error("Provider no longer has the thread");
+            const cwd = state === "ancestor" ? "/fixture" : state === "moved" ? "/other/repo"
+              : state === "descendant" ? "/fixture/repo/src" : row.checkoutPath;
+            const refreshed = candidate("owner", { cwd });
+            refreshed.thread.source = backend;
+            if (state === "unreadable") refreshed.unreadable = true;
+            return refreshed;
+          },
+          buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
+        });
+        const scan = await service.scan({ steps: ["checkouts"] });
+        const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+          removeBuildOutputs: [{ outputPath: row.outputPath }] });
+        const allowed = state === "same" || state === "descendant";
+        expect(remove).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(run.steps.find((item) => item.step === "checkouts")).toMatchObject({ done: allowed ? 1 : 0, kept: allowed ? 0 : 1, failed: 0 });
+      }), { numRuns: 40 });
+  });
+
+  it("classifies a kept owned checkout during ordinary hibernation review without making it eligible", async () => {
+    const checkout = path.resolve("/fixture/recent");
+    const owner = candidate("recent", { cwd: checkout });
+    const output = { kind: "cargo" as const, checkoutPath: checkout, outputPath: path.join(checkout, "target", "debug"),
+      manifestPath: path.join(checkout, "Cargo.toml"), space: { allocatedBytes: 9000 } };
+    const { service } = harness([owner], { measureAllocation: async () => ({ allocatedBytes: 10000 }),
+      hibernation: {
+        getPolicy: () => ({ enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+        keepReason: () => ({ target: checkout, keep: "Recently active" }),
+        inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true,
+      },
+      buildOutputs: { scan: async () => ({ items: [{ row: output, identity: "fixture" }], kept: [] }), remove: async () => ({}) },
+    });
+    const scan = await service.scan({ steps: ["hibernate"] });
+    expect(scan.hibernate!.items).toEqual([]);
+    expect(scan.hibernate!.coverage!.keptCheckouts![0]).toMatchObject({ reason: "Recently active",
+      rebuildableOutput: [{ kind: "cargo", allocatedBytes: 9000 }] });
+  });
+
+  it("revalidates the thread association before clearing a reviewed build output", async () => {
+    const owner = candidate("moved", { cwd: "/fixture/owned" });
+    const row = { kind: "cargo" as const, checkoutPath: "/fixture/owned", outputPath: "/fixture/owned/target/debug",
+      manifestPath: "/fixture/owned/Cargo.toml", space: { allocatedBytes: 4096 } };
+    const remove = vi.fn(async () => ({ allocatedBytesRemoved: 4096 }));
+    const audit = { candidates: [], kept: {}, emptyFolders: 0, inventory: { roots: [], paths: [row.checkoutPath], providers: [],
+      owners: [{ path: row.checkoutPath, threads: [{ backend: "codex", threadId: owner.thread.id, title: owner.thread.title }], candidates: [owner] }] } };
+    const { service } = harness([owner], { auditArchivedCheckouts: async () => audit,
+      refreshCandidate: async () => candidate("moved", { cwd: "/fixture/new-checkout" }),
+      buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
+    });
+    const scan = await service.scan({ steps: ["checkouts"] });
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      removeBuildOutputs: [{ outputPath: row.outputPath }] });
+    expect(remove).not.toHaveBeenCalled();
+    expect(run.steps.find((item) => item.step === "checkouts")).toMatchObject({ done: 0, kept: 1 });
+  });
+
+  it("rechecks work activity rather than view acknowledgements between hibernation review and apply", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("view", "work", "restore"), async (change) => {
+      const original = candidate("reviewed", { cwd: "/fixture/reviewed" });
+      const refreshed = { ...original, thread: { ...original.thread },
+        overlay: { backend: "codex" as const, threadId: "reviewed", extraLinkedDirectories: [],
+          ...(change === "view" ? { lastSeenAt: NOW } : {}),
+          ...(change === "restore" ? { archiveRestoredAt: NOW } : {}),
+        } };
+      if (change === "work") refreshed.thread.updatedAt = NOW;
+      const hibernate = vi.fn(async () => true);
+      const { service } = harness([original], { refreshCandidate: async () => refreshed,
+        hibernation: {
+          getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+          keepReason: () => ({ target: "/fixture/reviewed" }), inspect: async () => ({ files: 0, bytes: 0 }), hibernate,
+        },
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      const run = await service.apply({ scanId: scan.scanId, archive: [], hibernate: [{ backend: "codex", threadId: "reviewed" }],
+        removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false });
+      expect(run.steps.find((row) => row.step === "hibernate")).toMatchObject({ done: change === "view" ? 1 : 0, kept: change === "view" ? 0 : 1 });
+      expect(hibernate).toHaveBeenCalledTimes(change === "view" ? 1 : 0);
+    }), { numRuns: 15 });
+  });
+
+  it("preserves every kept path's real owners and watch links without offering it for hibernation", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.record({
+      owners: fc.integer({ min: 1, max: 3 }),
+      kept: fc.boolean(),
+      measured: fc.boolean(),
+    }), { minLength: 11, maxLength: 15 }), async (model) => {
+      const rows = model.flatMap((entry, index) => Array.from({ length: entry.owners }, (_, owner) => {
+        const backend = ["codex", "claude", "acp:grok"][owner]! as ThreadArchiveCandidate["thread"]["source"];
+        const row = candidate(`thread-${index}`, { cwd: `/worktrees/${index}/project`, parent: owner ? "remote-parent" : undefined });
+        row.thread.source = backend;
+        row.thread.title = `Project ${index}, owner ${owner}`;
+        row.overlay = { backend, threadId: row.thread.id, extraLinkedDirectories: [],
+          gitBranch: `fix/project-${index}`, lastSeenAt: NOW - DAY,
+          ...(owner ? { parentThreadId: "remote-parent", parentThreadInstanceId: "peer" } : {}),
+        };
+        return Object.assign(row, { activePrWatch: entry.kept, activePrWatches: [{
+          watchId: `watch-${index}-${owner}`, backend, threadId: row.thread.id,
+          prKey: `github.com/example/project/${index + 1}`, prUrl: `https://github.com/example/project/pull/${index + 1}`,
+          prNumber: index + 1, prTitle: `Project ${index} fix`, headSha: "head", notifyOn: [], createdAt: NOW, failureHandledByAutoFix: false,
+        }] });
+      }));
+      const { service, deps } = harness(rows, {
+        measureAllocation: async (target) => model[Number(target.split("/")[2])]!.measured ? { allocatedBytes: 4096 } : undefined,
+        hibernation: {
+          getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+          keepReason: (row) => ({ target: row.thread.linkedDirectories[0]!.worktreePath,
+            ...(row.activePrWatch ? { keep: "Watching a PR" } : {}) }),
+          inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true,
+        },
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      const coverage = scan.hibernate!.coverage!;
+      const kept = coverage.keptCheckouts ?? [];
+      expect(kept.map((row) => row.path).sort()).toEqual(model.flatMap((entry, index) => entry.kept ? [`/worktrees/${index}/project`] : []).sort());
+      for (const row of kept) {
+        const index = Number(row.path.split("/")[2]);
+        expect(row).toMatchObject({ reason: "Watching a PR", ...(model[index]!.measured ? { allocatedBytes: 4096 } : {}) });
+        if (!model[index]!.measured) expect(row.allocatedBytes).toBeUndefined();
+        expect(row.threads).toEqual(rows.filter((owner) => owner.thread.linkedDirectories[0]!.worktreePath === row.path).map((owner) => ({
+          backend: owner.thread.source, threadId: owner.thread.id, title: owner.thread.title,
+          branch: owner.overlay!.gitBranch, lastActivityAt: owner.thread.updatedAt,
+          pullRequests: [{ url: owner.activePrWatches[0]!.prUrl, number: index + 1, title: `Project ${index} fix` }],
+        })));
+        expect(scan.hibernate!.items.some((item) => item.worktreePath === row.path)).toBe(false);
+      }
+      expect(coverage.largestKept).toEqual([...kept].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1)).slice(0, 10));
+      expect(deps.archiveFamily).not.toHaveBeenCalled();
+      expect(deps.removeArchivedCheckouts).not.toHaveBeenCalled();
+    }), { numRuns: 20 });
+  });
+
+  it("keeps archived-audit owner context for all kept paths, including paths with no known owner", async () => {
+    const owner = { backend: "claude", threadId: "owner", title: "Investigate widget layout", branch: "fix/widget", lastActivityAt: NOW };
+    const paths = Array.from({ length: 12 }, (_, index) => `/worktrees/archived-${index}/project`);
+    const audit = { candidates: [], kept: {}, emptyFolders: 0, inventory: { roots: ["/worktrees"], paths,
+      providers: [{ backend: "claude", threads: 1 }],
+      keptPaths: paths.map((target) => ({ path: target, reason: "Used by an active thread" })),
+      owners: paths.map((target, index) => ({ path: target, threads: index === 0 ? [owner] : [],
+        candidates: [candidate(`owner-${index}`, { cwd: target })] })),
+    } };
+    const { service } = harness([], { auditArchivedCheckouts: async () => audit, measureAllocation: async () => ({ allocatedBytes: 1024 }) });
+    const scan = await service.scan({ steps: ["checkouts"] });
+    expect(scan.checkouts.coverage!.keptCheckouts).toHaveLength(paths.length);
+    expect(scan.checkouts.coverage!.keptCheckouts![0]).toMatchObject({ path: paths[0], threads: [owner] });
+    expect(scan.checkouts.coverage!.keptCheckouts!.slice(1).every((row) => !row.threads?.length)).toBe(true);
+    expect(scan.checkouts.items).toEqual([]);
+  });
+
+  it("allows the agent to plan only reviewed Cargo output and describes cache-only cleanup accurately", async () => {
+    const scan = await harness([]).service.scan({ steps: ["checkouts"] });
+    scan.checkouts.buildOutputs = [0, 1].map((index) => ({ kind: "cargo", checkoutPath: `/fixture/${index}`,
+      outputPath: `/fixture/${index}/target/debug`, manifestPath: `/fixture/${index}/Cargo.toml` }));
+    fc.assert(fc.property(fc.array(fc.nat({ max: 3 }), { minLength: 1, maxLength: 10 }), (selection) => {
+      const plan = planThreadMaintenanceApply({ scanId: scan.scanId,
+        removeBuildOutputs: selection.map((index) => ({ outputPath: `/fixture/${index}/target/debug` })) }, scan, { backend: "codex", threadId: "caller" });
+      if (selection.some((index) => index >= 2)) expect(plan).toHaveProperty("error");
+      else {
+        expect(plan).not.toHaveProperty("error");
+        if ("error" in plan) throw new Error(plan.error);
+        expect(plan.request.removeBuildOutputs).toHaveLength(new Set(selection).size);
+        const question = threadMaintenanceConfirmationQuestion(plan.summary);
+        expect(question).toContain("Only compiled Cargo output");
+        expect(question).not.toContain("recovery snapshots");
+      }
+    }));
+  });
+
+  it("offers build output independently of whole-checkout eligibility and retains reviewed targets", async () => {
+    const row = { kind: "cargo" as const, checkoutPath: "/fixture/repo", outputPath: "/fixture/repo/target/debug",
+      manifestPath: "/fixture/repo/Cargo.toml", space: { allocatedBytes: 32 * 2 ** 30 } };
+    const remove = vi.fn(async () => ({ allocatedBytesRemoved: row.space.allocatedBytes }));
+    const owner = candidate("recent", { daysIdle: 0, cwd: row.checkoutPath });
+    const { service } = harness([owner], {
+      auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+        inventory: { roots: [], paths: [row.checkoutPath], providers: [],
+          owners: [{ path: row.checkoutPath, threads: [], candidates: [owner] }] } }),
+      inspectWorkspace: async () => ({ keep: "Commits on no branch" }),
+      buildOutputs: { scan: async () => ({ items: [{ row, identity: "fixture" }], kept: [] }), remove },
+    });
+    const scan = await service.scan({ steps: ["checkouts"] });
+    expect(scan.checkouts.items).toEqual([]);
+    expect(scan.checkouts.buildOutputs).toEqual([row]);
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, removeBuildOutputs: [{ outputPath: row.outputPath }, { outputPath: row.outputPath }] });
+    expect(remove).toHaveBeenCalledOnce();
+    expect(run.steps.find((step) => step.step === "checkouts"))
+      .toMatchObject({ done: 1, failed: 0, allocatedBytesRemoved: row.space.allocatedBytes });
+  });
+
+  it("matches the selected-profile model for duplicates, missing, busy and failed output", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("done", "missing", "busy", "error"), { maxLength: 8 }), fc.array(fc.nat({ max: 10 }), { maxLength: 14 }), async (states, selection) => {
+      const rows = states.map((_, index) => ({ kind: "cargo" as const, checkoutPath: `/fixture/${index}`,
+        outputPath: `/fixture/${index}/target/debug`, manifestPath: `/fixture/${index}/Cargo.toml`, space: { allocatedBytes: (index + 1) * 1024 } }));
+      const called: string[] = [];
+      const owners = rows.map((row, index) => candidate(String(index), { cwd: row.checkoutPath }));
+      const { service } = harness(owners, {
+        auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+          inventory: { roots: [], paths: rows.map((row) => row.checkoutPath), providers: [],
+            owners: rows.map((row, index) => ({ path: row.checkoutPath, threads: [], candidates: [owners[index]!] })) } }),
+        buildOutputs: {
+        scan: async () => ({ items: rows.map((row) => ({ row, identity: "fixture" })), kept: [] }),
+        remove: async ({ row }) => {
+          called.push(row.outputPath);
+          const index = rows.findIndex((item) => item.outputPath === row.outputPath);
+          if (states[index] === "error") throw new Error("fixture error");
+          if (states[index] === "missing") return { alreadyGone: true };
+          if (states[index] === "busy") return { kept: "Cargo build in progress" };
+          return { allocatedBytesRemoved: rows[index]!.space.allocatedBytes };
+        },
+      } });
+      const scan = await service.scan({ steps: ["checkouts"] });
+      const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+        removeBuildOutputs: selection.map((index) => ({ outputPath: `/fixture/${index}/target/debug` })) });
+      const selected = [...new Set(selection)];
+      const count = (state: string) => selected.filter((index) => states[index] === state).length;
+      const step = run.steps.find((item) => item.step === "checkouts")!;
+      expect(step).toMatchObject({ done: count("done"), kept: count("busy"), failed: count("error") + selected.filter((index) => index >= states.length).length });
+      expect(step.allocatedBytesRemoved ?? 0).toBe(selected.filter((index) => states[index] === "done").reduce((total, index) => total + rows[index]!.space.allocatedBytes, 0));
+      expect(called).toEqual(selected.filter((index) => index < states.length).map((index) => rows[index]!.outputPath));
+    }), { numRuns: 20 });
+  });
+
+  it("keeps measured allocation and coverage in bounded agent tool results", async () => {
+    const scan = await harness([]).service.scan({ steps: ["checkouts"] });
+    fc.assert(fc.property(fc.array(fc.nat({ max: 1_000_000 }), { maxLength: 140 }), (sizes) => {
+      scan.hibernate = { idleDays: 3, maxSnapshotMb: 100, removeRebuildableOutput: true, checked: sizes.length, kept: {},
+        coverage: { roots: [], providers: [{ backend: "codex", threads: sizes.length }] },
+        items: sizes.map((bytes, index) => ({ backend: "codex", threadId: String(index), title: "Fixture",
+          worktreePath: `/fixture/${index}`, lastActivityAt: NOW, files: 0, bytes: 0, space: { allocatedBytes: bytes } })) };
+      const summary = summarizeThreadMaintenanceScan(scan);
+      expect(summary.hibernate?.coverage).toEqual(scan.hibernate.coverage);
+      expect(summary.hibernate?.items.map((item) => item.space)).toEqual(scan.hibernate.items.slice(0, 100).map((item) => item.space));
+      scan.checkouts.buildOutputs = sizes.map((bytes, index) => ({ kind: "cargo", checkoutPath: `/fixture/${index}`,
+        outputPath: `/fixture/${index}/target/debug`, manifestPath: `/fixture/${index}/Cargo.toml`, space: { allocatedBytes: bytes } }));
+      const complete = summarizeThreadMaintenanceScan(scan);
+      expect(complete.checkouts.buildOutputCount).toBe(sizes.length);
+      expect(complete.checkouts.buildOutputSpace?.allocatedBytes).toBe(sizes.reduce((sum, value) => sum + value, 0));
+      expect(complete.checkouts.buildOutputs).toHaveLength(Math.min(100, sizes.length));
+    }));
+  });
+
+  it("bounds kept-checkout context in agent results while the dialog retains the complete review", async () => {
+    const scan = await harness([]).service.scan({ steps: ["checkouts"] });
+    fc.assert(fc.property(fc.integer({ min: 101, max: 130 }), (count) => {
+      const coverage = { roots: [], keptCheckouts: Array.from({ length: count }, (_, index) => ({
+        path: `/fixture/${index}`, reason: "Watching a PR", allocatedBytes: count - index,
+        threads: [{ backend: "codex", threadId: String(index), title: `Fixture ${index}` }],
+      })) };
+      scan.checkouts.coverage = coverage;
+      scan.hibernate = { idleDays: 3, maxSnapshotMb: 100, removeRebuildableOutput: true,
+        checked: count, items: [], kept: {}, coverage };
+      const summary = summarizeThreadMaintenanceScan(scan);
+      expect(summary.checkouts.coverage?.keptCheckouts).toEqual(coverage.keptCheckouts.slice(0, 100));
+      expect(summary.hibernate?.coverage?.keptCheckouts).toEqual(coverage.keptCheckouts.slice(0, 100));
+      expect(summary.checkouts.truncated).toBe(true);
+      expect(summary.hibernate?.truncated).toBe(true);
+      expect(scan.checkouts.coverage.keptCheckouts).toHaveLength(count);
+    }), { numRuns: 10 });
+  });
+
+  it("never counts a confirmed missing checkout as space on disk", async () => {
+    const measureAllocation = vi.fn(async () => ({ allocatedBytes: 1_000_000 }));
+    const { service } = harness([candidate("gone", { cwd: "/gone/checkout" })], {
+      isCheckoutOnDisk: async () => false,
+      measureAllocation,
+      hibernation: { getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+        keepReason: () => ({ target: "/gone/checkout" }), inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true },
+    });
+    const scan = await service.scan({ steps: ["hibernate"] });
+    expect(scan.hibernate).toMatchObject({ checked: 0, items: [], coverage: { roots: [], excluded: [{ reason: "Checkout missing", count: 1 }] } });
+    expect(measureAllocation).not.toHaveBeenCalled();
+  });
+
+  it("publishes provider discovery while the archived audit is still pending", async () => {
+    await fc.assert(fc.asyncProperty(fc.nat({ max: 5000 }), async (found) => {
+      let release!: () => void;
+      let listed!: () => void;
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      const started = new Promise<void>((resolve) => { listed = resolve; });
+      const updates: ScanProgressSnapshot[] = [];
+      const { service } = harness([], { auditArchivedCheckouts: async (report) => {
+        report?.({ detail: "Reading archived Codex page", found, root: "/arbitrary/checkouts" });
+        listed();
+        await pending;
+        return { candidates: [], kept: {}, emptyFolders: 0 };
+      } });
+      const scan = service.scan({ steps: ["checkouts"] }, { onProgress: (update) => updates.push(update) });
+      await started;
+      expect(updates.at(-1)).toMatchObject({ stage: "listing", detail: "Reading archived Codex page", found, root: "/arbitrary/checkouts" });
+      release();
+      await scan;
+    }));
+  });
+
+  it("accounts for independent child checkouts across providers and remote-parent links", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("codex", "claude", "acp:grok"), { minLength: 1, maxLength: 12 }), async (backends) => {
+      const rows = backends.map((backend, index) => {
+        const row = candidate(String(index), { cwd: `/outside/checkout-${index}`, parent: `parent-${index}` });
+        row.thread.source = backend as typeof row.thread.source;
+        row.overlay = { parentThreadId: `remote-${index}`, parentThreadInstanceId: "peer-machine" } as ThreadArchiveCandidate["overlay"];
+        return row;
+      });
+      const { service } = harness(rows, {
+        measureAllocation: async () => ({ allocatedBytes: 4096 }),
+        hibernation: {
+          getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+          keepReason: (row) => ({ target: row.thread.linkedDirectories[0]?.worktreePath }),
+          inspect: async () => ({ files: 0, bytes: 0 }),
+          hibernate: async () => true,
+        },
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      expect(scan.hibernate?.items.map((row) => row.threadId).sort()).toEqual(rows.map((row) => row.thread.id).sort());
+      expect(scan.hibernate?.coverage?.roots.reduce((sum, root) => sum + (root.allocatedBytes ?? 0), 0)).toBe(backends.length * 4096);
+      expect(scan.hibernate?.items.every((row) => row.space?.allocatedBytes === 4096 && row.bytes === 0)).toBe(true);
+    }));
+  });
+
   it("keeps the newest per project, lists the rest as idle oldest first, and counts every keep reason", async () => {
     const { service, workspaces } = harness([
       candidate("newest", { daysIdle: 1, cwd: "/w/newest" }),
       candidate("old", { daysIdle: 40, cwd: "/w/old" }),
       candidate("older", { daysIdle: 60, cwd: "/w/older" }),
       candidate("pinned", { daysIdle: 90, cwd: "/w/pinned", pinned: true }),
-      candidate("env", { daysIdle: 50, cwd: "/w/env" }),
+      candidate("env", { daysIdle: 50, cwd: "/w/unretained" }),
     ]);
-    workspaces.set("/w/env", { keep: "Other ignored files" });
+    workspaces.set("/w/unretained", { keep: "Commits on no branch" });
     workspaces.set("/w/old", { kind: "changes", files: 2, bytes: 40 });
     const scan = await service.scan();
     expect(scan.threads.checked).toBe(5);
@@ -109,7 +503,7 @@ describe("ThreadMaintenanceService.scan", () => {
     const [project] = scan.threads.projects;
     expect(project!.idle.map((row) => row.threadId)).toEqual(["older", "old"]);
     expect(project!.idle[1]!.workspace).toEqual({ kind: "changes", files: 2, bytes: 40 });
-    expect(project!.kept).toEqual({ "Pinned thread": 1, "Other ignored files": 1, "Within the per-project limit": 1 });
+    expect(project!.kept).toEqual({ "Pinned thread": 1, "Commits on no branch": 1, "Within the per-project limit": 1 });
     expect(scan.spaceSource).toBe("none");
   });
 
@@ -289,77 +683,22 @@ describe("sub-thread parents", () => {
   });
 });
 
-describe("checkouts no thread refers to", () => {
-  const unreferencedAudit = (paths: string[], extra: Partial<ArchivedCheckoutAudit> = {}) =>
-    vi.fn(async (): Promise<ArchivedCheckoutAudit> => ({ candidates: [], kept: {}, emptyFolders: 0, unreferenced: paths, ...extra }));
-
-  it("lists a clean or snapshot-sized one, and keeps every other with a No thread reason", async () => {
-    const { service, workspaces } = harness([], {
-      auditArchivedCheckouts: unreferencedAudit(["/u/clean", "/u/edits", "/u/commits", "/u/big", "/u/main", "/u/scratch"]),
-    });
-    workspaces.set("/u/edits", { kind: "changes", files: 2, bytes: 40 });
-    workspaces.set("/u/commits", { keep: "Commits on no branch" });
-    workspaces.set("/u/big", { kind: "overLimit", files: 1, bytes: 900, limitBytes: 100, largest: [] });
-    workspaces.set("/u/main", { kind: "inPlace" });
-    workspaces.set("/u/scratch", { kind: "notGit" });
-    const scan = await service.scan();
-    expect(scan.checkouts.items).toEqual([
-      { kind: "unreferenced", worktreePath: "/u/clean", workspace: { kind: "clean" } },
-      { kind: "unreferenced", worktreePath: "/u/edits", workspace: { kind: "changes", files: 2, bytes: 40 } },
-    ]);
-    expect(scan.checkouts.kept).toEqual({
-      [`${UNREFERENCED_KEEP_PREFIX}Commits on no branch`]: 1,
-      [`${UNREFERENCED_KEEP_PREFIX}Changes over the snapshot limit`]: 1,
-      [`${UNREFERENCED_KEEP_PREFIX}Main checkout`]: 1,
-      [`${UNREFERENCED_KEEP_PREFIX}Not a Git checkout`]: 1,
-    });
-  });
-
-  it("says so when they could not be checked", async () => {
-    const { service } = harness([], {
-      auditArchivedCheckouts: unreferencedAudit([], { unreferencedUnavailable: "A thread's folder could not be resolved" }),
-    });
-    const scan = await service.scan();
-    expect(scan.checkouts.kept).toEqual({ [`${UNREFERENCED_KEEP_PREFIX}not checked: A thread's folder could not be resolved`]: 1 });
-  });
-
-  it("removes only selected ones that are still safe, and reports what the registry kept", async () => {
-    const removeUnreferencedCheckouts = vi.fn(async (paths: string[]) => ({
-      removed: paths.filter((value) => value === "/u/clean").map((worktreePath) => ({ worktreePath })),
-      kept: paths.filter((value) => value === "/u/claimed").map((worktreePath) => ({ worktreePath, reason: "A thread uses it now" })),
-      failed: [],
-    }));
-    const { service, workspaces } = harness([], {
-      auditArchivedCheckouts: unreferencedAudit(["/u/clean", "/u/claimed", "/u/later", "/u/unselected"]),
-      removeUnreferencedCheckouts,
-    });
-    const scan = await service.scan();
-    // A commit lands in one checkout between review and removal.
-    workspaces.set("/u/later", { keep: "Commits on no branch" });
-    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
-      removeUnreferenced: ["/u/clean", "/u/claimed", "/u/later", "/u/not-scanned"].map((worktreePath) => ({ worktreePath })),
-      removeEmptyFolders: false });
-    expect(removeUnreferencedCheckouts).toHaveBeenCalledWith(["/u/clean", "/u/claimed"]);
-    expect(run.steps.find((step) => step.step === "checkouts")).toEqual({ step: "checkouts", ran: true, done: 1, kept: 2, failed: 1 });
-    expect(run.problems).toEqual(expect.arrayContaining([
-      expect.objectContaining({ object: "/u/later", kind: "kept", reason: "Changed since the scan", detail: "Commits on no branch" }),
-      expect.objectContaining({ object: "/u/claimed", kind: "kept", reason: "A thread uses it now" }),
-      expect.objectContaining({ object: "/u/not-scanned", kind: "failed", reason: "Not in this scan" }),
-    ]));
-    expect(run.problems.some((problem) => problem.object === "/u/unselected")).toBe(false);
-  });
-
-  it("is removable only for a clean or snapshot-sized checkout", () => {
-    const workspaces: ThreadMaintenanceWorkspace[] = [
-      { kind: "clean" }, { kind: "changes", files: 1, bytes: 1 },
-      { kind: "overLimit", files: 1, bytes: 2, limitBytes: 1, largest: [] },
-      { kind: "notGit" }, { kind: "inPlace" }, { kind: "missing" },
-    ];
-    for (const workspace of workspaces) {
-      const removable = typeof unreferencedKeepReason({ workspace }) !== "string";
-      expect(removable).toBe(workspace.kind === "clean" || workspace.kind === "changes");
-    }
-    expect(unreferencedKeepReason({ keep: "Other ignored files" })).toBe("Other ignored files");
+describe("unattributed checkout requests", () => {
+  it("never offers or removes an unattributed path, even when an older scan supplied it", async () => {
+    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 0, max: 100 }), { maxLength: 12 }), async (ids) => {
+      const paths = ids.map((id) => `/unknown/${id}`);
+      const removeUnreferencedCheckouts = vi.fn(async () => ({ removed: [], kept: [], failed: [] }));
+      const { service, deps } = harness([], { removeUnreferencedCheckouts,
+        auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0, unreferenced: paths }),
+      });
+      const scan = await service.scan({ steps: ["checkouts"] });
+      expect(scan.checkouts.items).toEqual([]);
+      expect(deps.inspectWorkspace).not.toHaveBeenCalled();
+      const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+        removeUnreferenced: paths.map((worktreePath) => ({ worktreePath })), removeEmptyFolders: false });
+      expect(removeUnreferencedCheckouts).not.toHaveBeenCalled();
+      expect(run.steps.find((step) => step.step === "checkouts")).toMatchObject({ done: 0, kept: paths.length, failed: 0 });
+    }), { numRuns: 20 });
   });
 });
 
@@ -556,6 +895,7 @@ describe("hibernate idle checkouts", () => {
         expect.objectContaining({ threadId: "newest", worktreePath: "/w/newest", files: 2, bytes: 900, removedOutput: ["node_modules"] }),
       ],
       kept: { "Rebase in progress": 1 },
+      coverage: expect.objectContaining({ providers: [{ backend: "codex", threads: 4 }] }),
     });
     expect(scan.hibernate?.items[1]).not.toHaveProperty("archiveKey");
     // The review runs the rules as if the setting were on.
@@ -664,7 +1004,7 @@ describe("hibernate idle checkouts", () => {
  * removes only linked worktrees, so that is what most cases inspect. */
 describe("scan steps and progress", () => {
   const threadPaths = ["/w/a", "/w/b", "/w/c"];
-  const checkoutPaths = ["/w/x", "/w/u"];
+  const checkoutPaths = ["/w/x"];
   const policy = { enabled: false, idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, restoreOn: "send" as const };
 
   function setup() {
@@ -726,7 +1066,7 @@ describe("scan steps and progress", () => {
     await service.scan({ steps: ["threads", "checkouts"] }, { onProgress: (next) => progress.push(next) });
     expect(progress[0]).toEqual({ steps: ["threads", "checkouts"], step: "threads", stage: "listing", processed: 0, total: 0, inFlight: [] });
     const named = new Set(progress.flatMap((item) => item.inFlight));
-    expect(named).toEqual(new Set(["Thread a", "Thread b", "Thread c", "/w/x", "/w/u"]));
+    expect(named).toEqual(new Set(["Thread a", "Thread b", "Thread c", "/w/x"]));
   });
 
   it("reads every step when none are named, as the agent tool asks", async () => {
@@ -749,9 +1089,30 @@ async function linkedWorktree(root: string): Promise<{ repo: string; worktree: s
 }
 
 describe("inspectMaintenanceWorkspace", () => {
+  it("ignored files never change snapshot eligibility or saved-work size", async () => {
+    const root = await tempRoot();
+    const { repo, worktree } = await linkedWorktree(root);
+    await writeFile(path.join(repo, ".git", "info", "exclude"), "scratch/\n");
+    await writeFile(path.join(worktree, "file.txt"), "edited\n");
+    await writeFile(path.join(worktree, "notes.txt"), "new work\n");
+    const paths = [".env.local", "node_modules/dep/output.bin", "dist/bundle.js", "scratch/custom-output.bin"];
+    await fc.assert(fc.asyncProperty(fc.subarray(paths, { minLength: 1 }), fc.integer({ min: 128, max: 100_000 }), fc.boolean(),
+      async (ignored, bytes, legacyRule) => {
+        for (const entry of [".env.local", "node_modules", "dist", "scratch"]) await rm(path.join(worktree, entry), { recursive: true, force: true });
+        for (const file of ignored) {
+          await mkdir(path.dirname(path.join(worktree, file)), { recursive: true });
+          await writeFile(path.join(worktree, file), Buffer.alloc(bytes));
+        }
+        expect(await inspectMaintenanceWorkspace(worktree, { signal: new AbortController().signal,
+          limitBytes: 64, rebuildableOutputIsClean: legacyRule })).toMatchObject({
+          workspace: { kind: "changes", files: 2, bytes: Buffer.byteLength("edited\nnew work\n") },
+        });
+      }), { numRuns: 12 });
+  });
+
   const options = (rebuildableOutputIsClean: boolean) => ({ signal: new AbortController().signal, limitBytes: 64, rebuildableOutputIsClean });
 
-  it("treats dependency output as clean only when the rule says so, and other ignored files never", async () => {
+  it("describes rebuildable output without treating any ignored files as a blocker", async () => {
     const root = await tempRoot();
     const { worktree } = await linkedWorktree(root);
     expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ workspace: { kind: "clean" } });
@@ -759,12 +1120,14 @@ describe("inspectMaintenanceWorkspace", () => {
     await writeFile(path.join(worktree, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
     expect(await inspectMaintenanceWorkspace(worktree, options(true)))
       .toEqual({ workspace: { kind: "clean", rebuildableOutput: ["node_modules"] } });
-    expect(await inspectMaintenanceWorkspace(worktree, options(false))).toEqual({ keep: "Ignored files only" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(false)))
+      .toEqual({ workspace: { kind: "clean", rebuildableOutput: ["node_modules"] } });
     await writeFile(path.join(worktree, ".env.local"), "TOKEN=secret\n");
-    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ keep: "Other ignored files" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(true)))
+      .toEqual({ workspace: { kind: "clean", rebuildableOutput: ["node_modules"] } });
   });
 
-  it("keeps an ignored secret that sits inside a tracked folder with a rebuildable name", async () => {
+  it("excludes ignored files inside a tracked folder without labelling that folder rebuildable", async () => {
     const root = await tempRoot();
     const { worktree, git } = await linkedWorktree(root);
     await mkdir(path.join(worktree, "src", "build"), { recursive: true });
@@ -772,7 +1135,7 @@ describe("inspectMaintenanceWorkspace", () => {
     await git("add", ".");
     await git("-c", "commit.gpgsign=false", "commit", "-m", "tracked build folder");
     await writeFile(path.join(worktree, "src", "build", ".env.local"), "TOKEN=secret\n");
-    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ keep: "Other ignored files" });
+    expect(await inspectMaintenanceWorkspace(worktree, options(true))).toEqual({ workspace: { kind: "clean" } });
   });
 
   it("measures the files a snapshot would hold and flags changes over the limit", async () => {
@@ -843,6 +1206,47 @@ describe("rebuildableOutputFolder", () => {
 });
 
 describe("project-scoped checkout scan", () => {
+  it("review regression: classifies and offers only the selected project's primary and linked checkouts", async () => {
+    const root = await tempRoot();
+    const projects = await Promise.all(["app", "app-other"].map(async (name) => {
+      const { repo, git } = await gitRepo(root, name);
+      const checkout = path.join(root, "worktrees", name);
+      await git("worktree", "add", "-b", "linked", checkout);
+      return { repo, checkout };
+    }));
+    const entries = projects.flatMap((project, index) => [project.repo, project.checkout].map((target, part) => ({
+      path: target, project: index, candidate: candidate(`owner-${index}-${part}`, { cwd: target }),
+    })));
+    await fc.assert(fc.asyncProperty(fc.constantFrom(undefined, 0, 1), fc.shuffledSubarray(entries, { minLength: entries.length, maxLength: entries.length }),
+      async (selected, inventory) => {
+        const measured: string[] = [], classified: string[] = [];
+        const removed: string[] = [];
+        const { service } = harness(inventory.map((item) => item.candidate), {
+          auditArchivedCheckouts: async () => ({ candidates: [], kept: {}, emptyFolders: 0,
+            inventory: { roots: [], paths: inventory.map((item) => item.path), providers: [],
+              owners: inventory.map((item) => ({ path: item.path, candidates: [item.candidate], threads: [] })) } }),
+          measureAllocation: async (target) => { measured.push(target); return { allocatedBytes: 1024 }; },
+          buildOutputs: {
+            scan: async (roots) => {
+              classified.push(...roots);
+              return { items: roots.map((target) => ({ identity: "fixture", row: { kind: "cargo" as const,
+                checkoutPath: target, outputPath: path.join(target, "target", "debug"), manifestPath: path.join(target, "Cargo.toml") } })), kept: [] };
+            },
+            remove: async ({ row }) => { removed.push(row.checkoutPath); return { allocatedBytesRemoved: 1024 }; },
+          },
+        });
+        const scan = await service.scan({ steps: ["checkouts"], ...(selected !== undefined ? { projectKey: projects[selected]!.repo } : {}) });
+        const expected = inventory.filter((item) => selected === undefined || item.project === selected).map((item) => item.path).sort();
+        expect([...measured].sort()).toEqual(expected);
+        expect([...classified].sort()).toEqual(expected);
+        expect(scan.checkouts.buildOutputs!.map((row) => row.checkoutPath).sort()).toEqual(expected);
+        const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+          removeBuildOutputs: scan.checkouts.buildOutputs!.map((row) => ({ outputPath: row.outputPath })) });
+        expect([...removed].sort()).toEqual(expected);
+        expect(run.steps.find((step) => step.step === "checkouts")).toMatchObject({ done: expected.length, kept: 0, failed: 0 });
+      }), { numRuns: 12 });
+  });
+
   it("keeps only checkouts whose own repository is the project, even when names overlap", async () => {
     const root = await tempRoot();
     const pointTo = async (checkout: string, repository: string) => {

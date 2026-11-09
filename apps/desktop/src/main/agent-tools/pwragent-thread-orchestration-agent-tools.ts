@@ -11,6 +11,7 @@ import type {
   HandoffTaskWorkspaceMode,
   DetachThreadDirectoryToolArgs,
   MoveThreadWorkspaceToolArgs,
+  RegisterThreadWorktreeToolArgs,
   PwrAgentThreadOrchestrationOperationName,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
@@ -189,6 +190,8 @@ function descriptionForOperation(
   operation: PwrAgentThreadOrchestrationOperationName,
 ): string {
   switch (operation) {
+    case "register_thread_worktree":
+      return "Register a known current-profile thread's existing linked checkout for snapshot and cleanup, including outside PwrAgent roots. Use only when the operator explicitly requests ownership registration. Pass the target backend, threadId and exact canonical worktreePath. Find them with search_threads/get_thread_status. Register and unregister always show an operator approval card, including in Full Access. Registration changes no files and grants no immediate removal: idle, activity, shared-owner and snapshot protections still apply. Tracked edits and non-ignored untracked files are saved before removal. Ignored files are deleted without recovery. Main checkouts, aliases and unrelated paths are refused. Use action=inspect to read the receipt and validity without writes, or action=unregister to revoke authorization. Provider cwd, PR links, directory trust and to-project moves never authorize registration.";
     case "handoff_task":
       return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. Same-project handoffs create grouped subthreads in new worktrees by default. Assigned worktrees remain authoritative for child threads. Children must not edit, build, or run Git in another worktree because a branch is checked out there. When the user names another local project, pass its path as cwd. Also pass cwd when the user links or references a local directory. Never put the target path only in task or context. For an isolated worktree in that project, set workspaceMode=new_worktree. Set branchName only to an existing base ref. Omit cwd only to inherit the current project. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout. workspaceMode=none creates an unscoped scratch workspace. Do not use none as a fallback for work in a named project. Provider overrides need a registered backend and exact model ID. Set environment to an environment id or name from the project's .codex/environments, or environment=none for no environment. Omit it to give a same-project child this thread's environment. Report a failed setup from the result's environment field. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
     case "attach_thread_directory":
@@ -212,6 +215,17 @@ function inputSchemaForOperation(
   operation: PwrAgentThreadOrchestrationOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "register_thread_worktree":
+      return {
+        type: "object", additionalProperties: false,
+        required: ["backend", "threadId", "worktreePath"],
+        properties: {
+          backend: { type: "string" },
+          threadId: { type: "string" },
+          worktreePath: { type: "string", description: "Exact canonical root of the thread's existing linked checkout." },
+          action: { type: "string", enum: ["register", "unregister", "inspect"], description: "Defaults to register. Inspect reads the authorization receipt without writes. Unregister revokes it." },
+        },
+      };
     case "attach_thread_directory":
       return {
         type: "object",
@@ -509,12 +523,23 @@ function normalizeArgsForOperation(
   | DetachThreadDirectoryToolArgs
   | HandoffTaskToolArgs
   | MoveThreadWorkspaceToolArgs
+  | RegisterThreadWorktreeToolArgs
   | SendMessageToThreadToolArgs
   | SteerThreadToolArgs
   | StartReviewToolArgs
   | StopThreadToolArgs
   | undefined {
   switch (operation) {
+    case "register_thread_worktree": {
+      if (Object.keys(args).some((key) => !["backend", "threadId", "worktreePath", "action"].includes(key))) return undefined;
+      const backend = readTrimmedString(args.backend);
+      const threadId = readTrimmedString(args.threadId);
+      const worktreePath = readTrimmedString(args.worktreePath);
+      if (!backend || !threadId || !worktreePath
+        || (args.action !== undefined && args.action !== "register" && args.action !== "unregister" && args.action !== "inspect")) return undefined;
+      return { backend: backend as RegisterThreadWorktreeToolArgs["backend"], threadId, worktreePath,
+        ...(args.action ? { action: args.action as RegisterThreadWorktreeToolArgs["action"] } : {}) };
+    }
     case "attach_thread_directory":
       return normalizeAttachThreadDirectoryArgs(args);
     case "detach_thread_directory":
@@ -538,6 +563,8 @@ function invalidArgumentsMessageForOperation(
   operation: PwrAgentThreadOrchestrationOperationName,
 ): string {
   switch (operation) {
+    case "register_thread_worktree":
+      return "register_thread_worktree requires backend, threadId and worktreePath, and accepts action=register, unregister or inspect.";
     case "attach_thread_directory":
       return "attach_thread_directory requires a non-empty path and accepts only known workspaceMode/worktreeBranchMode values.";
     case "detach_thread_directory":

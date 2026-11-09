@@ -7,8 +7,11 @@ import {
   type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type ThreadMaintenanceArchivedCheckout,
+  type ThreadMaintenanceBuildOutput,
+  type ThreadMaintenanceCoverage,
   type ThreadMaintenanceHibernateCheckout,
   type ThreadMaintenanceIdleThread,
+  type ThreadMaintenanceKeptCheckout,
   type ThreadMaintenanceProblem,
   type ThreadMaintenanceProject,
   type ThreadMaintenanceRules,
@@ -16,24 +19,36 @@ import {
   type ThreadMaintenanceScan,
   type ThreadMaintenanceScanProgress,
   type ThreadMaintenanceScanStep,
+  type ThreadMaintenanceSpace,
   type ThreadMaintenanceStep,
 } from "@pwragent/shared";
 import { PendingSpinner } from "../../components/PendingSpinner";
-import { CloseIcon } from "../../icons";
+import { CloseIcon, MinimizeIcon } from "../../icons";
+import { openExternalUrl } from "../../lib/open-external-url";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";
 import {
   allIdleThreads,
+  allocationTotal,
   buildApplyRequest,
+  buildOutputCoveredBy,
+  buildOutputOwned,
+  buildOutputsToClean,
+  buildOutputType,
   DEFAULT_THREAD_MAINTENANCE_PLAN,
   defaultSelection,
   formatAge,
+  formatAllocation,
+  rebuildableOutputLabels,
   formatBytes,
+  formatElapsed,
+  groupProblems,
   hibernateItems,
   idleThreadKey,
   keptEntries,
   keptTotal,
+  largestFirst,
   needsDecision,
   runSteps,
   workspaceLead,
@@ -48,6 +63,8 @@ import {
   type ThreadMaintenancePhase,
   type ThreadMaintenanceStoredPhase,
 } from "./thread-maintenance-run-state";
+import type { ThreadMaintenanceSessionStatus } from "./thread-maintenance-session";
+import { groupKeptCheckouts, keptGuidance, pullRequestHref, spaceOf, type KeptGroup } from "./thread-maintenance-kept";
 
 type Phase = ThreadMaintenancePhase;
 
@@ -97,10 +114,19 @@ export function ThreadMaintenanceDialog(props: {
   /** Checkout hibernation's settings, for the plan's wording. */
   hibernationPolicy?: DesktopCheckoutHibernationPolicy;
   projectKey?: string;
-  /** Shows a thread from a finished run's outcome rows. The caller closes
-   * the dialog; a run still in progress keeps it open. */
+  /** Shows a thread from a kept row or an outcome row. The host minimizes
+   * the dialog first, so the session is there to reopen. */
   onOpenThread?: (thread: { backend: string; threadId: string }) => void;
+  /** Discards the session: its plan, scan, selections and review. A run
+   * already started keeps going in main and shows on the next open. */
   onClose: () => void;
+  /** Hides the dialog and keeps the session. Without it, Escape closes. */
+  onMinimize?: () => void;
+  /** Hidden but mounted: the scan and run keep landing in this session, and
+   * the dialog neither traps focus nor answers Escape. */
+  minimized?: boolean;
+  /** Tells the host where the session is, for its minimized notice. */
+  onStatus?: (status: ThreadMaintenanceSessionStatus) => void;
 }) {
   const api = props.desktopApi;
   const policy = useMemo(() => normalizeThreadArchivePolicy(props.policy), [props.policy]);
@@ -119,6 +145,9 @@ export function ThreadMaintenanceDialog(props: {
   const [scan, setScan] = useState<ThreadMaintenanceScan>();
   const [scanProgress, setScanProgress] = useState<ThreadMaintenanceScanProgress>();
   const progressIdRef = useRef<string | undefined>(undefined);
+  // When this scan, and each step it reached, started. Read by the status
+  // card's elapsed time; set from events, never during render.
+  const [scanClock, setScanClock] = useState<{ startedAt: number; steps: Partial<Record<ReviewStep, number>> }>();
   const [selection, setSelection] = useState<ThreadMaintenanceSelection>();
   const [run, setRun] = useState<ThreadMaintenanceRun>();
   const [error, setError] = useState<string>();
@@ -128,8 +157,13 @@ export function ThreadMaintenanceDialog(props: {
   // through every review.
   const steps = useMemo(() => runSteps(mode, plan), [mode, plan]);
   // Closing never stops a run: it keeps going in the background, and opening
-  // the dialog again shows it.
-  const dialogRef = useModalDialog<HTMLDivElement>({ onClose: props.onClose });
+  // the dialog again shows it. With a host that keeps sessions, Escape
+  // minimizes: an edited plan is worth keeping too. Only Close discards.
+  const canMinimize = Boolean(props.onMinimize);
+  const dialogRef = useModalDialog<HTMLDivElement>({
+    open: !props.minimized,
+    onClose: () => (canMinimize ? props.onMinimize! : props.onClose)(),
+  });
 
   // Every snapshot goes through newerRun, so a late apply reply cannot undo
   // a result that already arrived as an event.
@@ -154,7 +188,10 @@ export function ThreadMaintenanceDialog(props: {
 
   // Only this dialog's current scan moves the status card.
   useEffect(() => api?.onThreadMaintenanceScanProgress?.((next) => {
-    if (next.progressId === progressIdRef.current) setScanProgress(next);
+    if (next.progressId !== progressIdRef.current) return;
+    setScanProgress(next);
+    setScanClock((clock) => !clock || clock.steps[next.step] !== undefined ? clock
+      : { ...clock, steps: { ...clock.steps, [next.step]: Date.now() } });
   }), [api]);
 
   const startScan = useCallback(async () => {
@@ -162,11 +199,14 @@ export function ThreadMaintenanceDialog(props: {
     const progressId = `thread-maintenance-scan-${++nextProgressId}`;
     progressIdRef.current = progressId;
     setScanProgress(undefined);
+    setScanClock({ startedAt: Date.now(), steps: {} });
     setPhase("scanning");
     setError(undefined);
     try {
       const next = await api.scanThreadMaintenance({
-        rules, steps, progressId, ...(props.projectKey ? { projectKey: props.projectKey } : {}),
+        // Ignored files never keep a checkout; an older owner reads this field.
+        rules: { ...rules, rebuildableOutputIsClean: true }, steps, progressId,
+        ...(props.projectKey ? { projectKey: props.projectKey } : {}),
         ...(steps.includes("hibernate") ? { hibernateIdleDays: clampIdleDays(hibernateIdleDays, hibernationPolicy.idleDays) } : {}),
       });
       if (progressIdRef.current !== progressId) return;
@@ -224,9 +264,30 @@ export function ThreadMaintenanceDialog(props: {
             ? `${run.current.processed} / ${run.current.total}`
             : undefined;
 
+  const statusDetail = phase === "finished" && run ? ` · ${receiptLine(run, scan)}` : headChip ? ` · ${headChip}` : "";
+  const onStatus = props.onStatus;
+  useEffect(() => {
+    onStatus?.({ phase, ...(statusDetail ? { detail: statusDetail.slice(3) } : {}) });
+  }, [onStatus, phase, statusDetail]);
+
+  const closeLabel = !props.onMinimize || phase === "finished"
+    ? "Close thread maintenance"
+    : phase === "plan"
+      ? "Discard this plan and close"
+      : phase === "running"
+        ? "Close thread maintenance; the run keeps going"
+        : "Discard this scan and close";
+  const keptContext: KeptContext = {
+    idleDays: scan?.hibernate?.idleDays,
+    inactivityDays: scan?.rules.mode === "age" ? scan.rules.inactivityDays : undefined,
+    buildOutputs: steps.includes("checkouts") && scan?.checkouts.buildOutputs !== undefined,
+    checkoutsStep: steps.includes("checkouts"),
+    ...(scan ? { scanAt: scan.finishedAt ?? scan.startedAt } : {}),
+    ...(props.onOpenThread ? { onOpenThread: props.onOpenThread } : {}),
+  };
+
   return (
-    <div className="thread-maintenance-modal"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
+    <div className="thread-maintenance-modal" hidden={props.minimized}>
       <div ref={dialogRef} aria-labelledby="thread-maintenance-title" aria-modal="true"
         className="thread-maintenance" role="dialog" tabIndex={-1}>
         <div className="thread-maintenance__head">
@@ -236,7 +297,12 @@ export function ThreadMaintenanceDialog(props: {
           </div>
           <div className="thread-maintenance__head-side">
             {headChip ? <span className="settings-pathrow__chip">{headChip}</span> : null}
-            <button aria-label="Close thread maintenance" className="workspace-handoff-dialog__close"
+            {canMinimize ? (
+              <button aria-label="Minimise thread maintenance" className="workspace-handoff-dialog__close tooltip-target"
+                data-tooltip="Keep this session in a notice. Reopen it to continue where you left off."
+                type="button" onClick={props.onMinimize}><MinimizeIcon size={14} /></button>
+            ) : null}
+            <button aria-label={closeLabel} className="workspace-handoff-dialog__close tooltip-target" data-tooltip={closeLabel}
               type="button" onClick={props.onClose}><CloseIcon size={14} /></button>
           </div>
         </div>
@@ -250,7 +316,8 @@ export function ThreadMaintenanceDialog(props: {
           {phase === "scanning" ? (
             <>
               <Rail steps={steps} phase={phase} scanning={scanProgress} />
-              <ScanStatus steps={steps} progress={scanProgress} />
+              <ScanStatus steps={steps} progress={scanProgress}
+                startedAt={(scanProgress && scanClock?.steps[scanProgress.step]) ?? scanClock?.startedAt} />
             </>
           ) : null}
           {(phase === "threads" || phase === "hibernate" || phase === "checkouts") && scan && selection ? (
@@ -259,8 +326,8 @@ export function ThreadMaintenanceDialog(props: {
               {phase === "threads"
                 ? <IdleThreadsReview scan={scan} selection={selection} onSelection={setSelection} />
                 : phase === "hibernate"
-                  ? <HibernateReview scan={scan} selection={selection} steps={steps} onSelection={setSelection} />
-                  : <CheckoutsReview scan={scan} selection={selection} onSelection={setSelection} />}
+                  ? <HibernateReview scan={scan} selection={selection} steps={steps} kept={keptContext} onSelection={setSelection} />
+                  : <CheckoutsReview scan={scan} selection={selection} steps={steps} kept={keptContext} onSelection={setSelection} />}
             </>
           ) : null}
           {(phase === "running" || phase === "finished") && run ? (
@@ -279,7 +346,7 @@ export function ThreadMaintenanceDialog(props: {
                 ? { ...selection, threads: new Set() }
                 : step === "hibernate"
                   ? { ...selection, hibernate: new Set() }
-                  : { ...selection, checkouts: new Set<string>(), emptyFolders: false });
+                  : { ...selection, checkouts: new Set<string>(), buildOutputs: new Set<string>(), emptyFolders: false });
             }}
             onFinish={(step) => finishReview(step)}
             onStop={() => {
@@ -350,21 +417,21 @@ function PlanView(props: {
   const description = (step: ReviewStep): string => {
     switch (step) {
       case "threads":
-        return "Threads past each project's keep count, or untouched for the chosen days. Their worktrees are removed after any changes are saved.";
+        return `Threads past each project's keep count, or untouched for the chosen days. ${SAVED_AND_DELETED}`;
       case "hibernate": {
         const days = clampIdleDays(props.hibernateIdleDays, props.hibernationPolicy.idleDays);
-        return `Threads idle ${days} ${days === 1 ? "day" : "days"}${steps.includes("threads") ? " that aren't being archived" : ""}. Their checkouts are removed after any changes are saved; each comes back when you send it a message.`;
+        return `Threads idle ${days} ${days === 1 ? "day" : "days"}${steps.includes("threads") ? " that aren't being archived" : ""}. ${SAVED_AND_DELETED} Each checkout comes back when you send its thread a message.`;
       }
       case "checkouts":
-        return "Worktrees still on disk for archived threads, empty worktree folders, and checkouts whose repository is gone.";
+        return "Worktrees still on disk for this profile's archived threads, empty worktree folders, checkouts whose repository is gone, and Cargo build output in checkouts a known thread uses.";
     }
   };
   return (
     <>
       <p className="thread-maintenance__lead">
         {combined
-          ? "Runs top to bottom on this machine. Each step you tick stops for your review."
-          : "Runs one step on this machine and stops for your review."}
+          ? "Runs top to bottom over the active profile's threads and the checkouts they use on this machine. Each step you tick stops for your review."
+          : "Runs one step over the active profile's threads and the checkouts they use on this machine, and stops for your review."}
       </p>
       {shown.map(({ step, title }, index) => {
         const on = !combined || props.plan[step];
@@ -408,11 +475,6 @@ function PlanView(props: {
                     </label>
                   )}
                 </div>
-                <Checkbox checked={rules.rebuildableOutputIsClean} label="Count dependencies and build output as clean"
-                  onChange={() => props.onRules({ ...rules, rebuildableOutputIsClean: !rules.rebuildableOutputIsClean })}>
-                  Count dependencies and build output as clean
-                  <span className="thread-maintenance__hint">node_modules, dist, target… Other ignored files, like .env.local, still keep the checkout.</span>
-                </Checkbox>
               </div>
             ) : null}
             {step === "hibernate" && on ? (
@@ -455,12 +517,16 @@ function PlanView(props: {
         <dl>
           <dt>threads</dt><dd>Pinned, Agent, running or blocked, watching a PR, scheduled, or running remotely</dd>
           <dt>checkouts</dt><dd>A main checkout, a locked worktree, one another thread still uses, or changes over the snapshot limit you have not approved</dd>
-          <dt>files</dt><dd>Ignored files other than dependencies and build output, and anything outside a managed worktree folder</dd>
+          <dt>files</dt><dd>Anything outside a managed worktree folder</dd>
         </dl>
       </div>
     </>
   );
 }
+
+/** What a removed checkout keeps and loses, said the same way everywhere. */
+const SAVED_AND_DELETED = "Tracked and non-ignored changes are saved to a snapshot first. Ignored files are deleted and are not in the snapshot.";
+const IGNORED_RULE = "ignored files are deleted, not saved";
 
 /** The idle days a scan sends: a whole number from 1 to 3650, or Settings'
  * value while the field is empty or invalid. */
@@ -482,12 +548,19 @@ function scanTitle(progress: ThreadMaintenanceScanProgress): string {
 
 /** The scan's live status: the step, how far it is, and what it is reading
  * now. Its height never changes, so the rows under it stay put. */
-function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMaintenanceScanProgress }) {
+function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMaintenanceScanProgress; startedAt?: number }) {
   const { progress } = props;
   const title = progress ? scanTitle(progress) : "Starting the scan…";
   const checking = progress?.stage === "checking";
   const fraction = checking ? progress.processed / Math.max(1, progress.total) : 0;
   const stepNumber = progress ? props.steps.indexOf(progress.step) + 1 : 1;
+  const count = checking ? `${progress.processed} of ${progress.total}`
+    : progress?.found !== undefined ? `${progress.found} found`
+      : `step ${stepNumber} of ${props.steps.length}`;
+  // What it reads now: the items in flight, else the listing's own words.
+  const now = progress?.inFlight.length ? `${progress.detail ? `${progress.detail} · ` : ""}now: ${progress.inFlight.join(" · ")}`
+    : progress?.detail || progress?.root ? [progress.detail, progress.root].filter(Boolean).join(" · ")
+      : "\u00a0";
   return (
     <div className="thread-maintenance__scan-card">
       <div className="thread-maintenance__progress-top">
@@ -496,16 +569,253 @@ function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMain
           <span role="status">{title}</span>
         </span>
         <span className="thread-maintenance__mono">
-          {checking ? `${progress.processed} of ${progress.total}` : `step ${stepNumber} of ${props.steps.length}`}
+          <span>{count}</span>
+          {props.startedAt !== undefined ? <Elapsed since={props.startedAt} /> : null}
         </span>
       </div>
       <div aria-hidden="true" className={`thread-maintenance__bar${checking ? "" : " is-waiting"}`}>
         <span style={{ width: `${Math.round(100 * fraction)}%` }} />
       </div>
-      <p className="thread-maintenance__path thread-maintenance__scan-now">
-        {progress?.inFlight.length ? `now: ${progress.inFlight.join(" · ")}` : "\u00a0"}
-      </p>
+      <p className="thread-maintenance__path thread-maintenance__scan-now">{now}</p>
     </div>
+  );
+}
+
+/** Time since `since`, counting up once a second, so a long step reads as
+ * working rather than stuck. Outside the live region: it is not announced. */
+function Elapsed(props: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <span className="thread-maintenance__elapsed">{` · ${formatElapsed(now - props.since)}`}</span>;
+}
+
+/** Roots listed before "N more roots". */
+const COVERAGE_ROOTS = 5;
+
+/** What a step read: each root with its checkouts and allocation, the
+ * threads read per backend, and what it left out and why. */
+function Coverage(props: { coverage?: ThreadMaintenanceCoverage; kept: KeptContext & { step: ReviewStep } }) {
+  const coverage = props.coverage;
+  // Any registered repository's worktrees can be a root, so the list folds.
+  const [allRoots, setAllRoots] = useState(false);
+  const rootsId = useId();
+  if (!coverage || (!coverage.roots.length && !coverage.providers?.length && !coverage.excluded?.length
+    && !coverage.largestKept?.length && !coverage.keptCheckouts?.length)) return null;
+  const roots = largestFirst(coverage.roots.map((root) => ({
+    ...root, space: root.allocatedBytes === undefined ? undefined : { allocatedBytes: root.allocatedBytes, lowerBound: root.lowerBound },
+  })));
+  const checkouts = coverage.roots.reduce((sum, root) => sum + root.checkouts, 0);
+  const total = allocationTotal(roots);
+  const shownRoots = allRoots ? roots : roots.slice(0, COVERAGE_ROOTS);
+  const hidden = roots.slice(COVERAGE_ROOTS);
+  const hiddenTotal = allocationTotal(hidden);
+  return (
+    <section className="thread-maintenance__coverage" aria-label="What the scan read">
+      <p className="thread-maintenance__eyebrow">
+        {`Scanned ${roots.length} ${roots.length === 1 ? "root" : "roots"} · ${checkouts} ${checkouts === 1 ? "checkout" : "checkouts"}`}
+        {total ? ` · ${formatAllocation(total)} on disk` : ""}
+      </p>
+      {roots.length ? (
+        <ul className="thread-maintenance__coverage-rows" id={rootsId}>
+          {shownRoots.map((root) => (
+            <li key={root.path}>
+              <span className="thread-maintenance__path">{root.path}</span>
+              <span className="thread-maintenance__coverage-owner">{root.owner}</span>
+              <span className="thread-maintenance__mono">{root.checkouts}</span>
+              <span className="thread-maintenance__mono">{root.space ? formatAllocation({ bytes: root.space.allocatedBytes!, lowerBound: !!root.lowerBound }) : "—"}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {hidden.length ? (
+        <button aria-controls={rootsId} aria-expanded={allRoots} className="thread-maintenance__kept-toggle" type="button"
+          onClick={() => setAllRoots(!allRoots)}>
+          {allRoots ? "Show fewer roots"
+            : `${hidden.length} more ${hidden.length === 1 ? "root" : "roots"}${hiddenTotal ? ` · ${formatAllocation(hiddenTotal)}` : ""}`}
+        </button>
+      ) : null}
+      {coverage.providers?.length ? (
+        <p className="thread-maintenance__coverage-line">
+          <span className="thread-maintenance__eyebrow">Threads read</span>
+          {coverage.providers.map((provider) => `${provider.backend} ${provider.threads}`).join(" · ")}
+        </p>
+      ) : null}
+      {coverage.excluded?.length ? (
+        <p className="thread-maintenance__coverage-line">
+          <span className="thread-maintenance__eyebrow">Not offered</span>
+          {[...coverage.excluded].sort((a, b) => (b.allocatedBytes ?? -1) - (a.allocatedBytes ?? -1) || b.count - a.count)
+            .map((item) => `${item.count} ${item.reason}${item.allocatedBytes !== undefined ? ` (${formatBytes(item.allocatedBytes)})` : ""}`)
+            .join(" · ")}
+        </p>
+      ) : null}
+      {coverage.keptCheckouts?.length || coverage.largestKept?.length
+        ? <KeptCheckouts coverage={coverage} context={props.kept} /> : null}
+    </section>
+  );
+}
+
+/** What a kept list needs from the scan around it. */
+type KeptContext = {
+  idleDays?: number;
+  inactivityDays?: number;
+  /** This scan reviews build output (Cargo) on its own. */
+  buildOutputs: boolean;
+  checkoutsStep: boolean;
+  /** Shows a thread; the host minimizes the dialog first. */
+  onOpenThread?: OpenThread;
+  /** When the scan finished, for "active 3 days ago". */
+  scanAt?: number;
+};
+
+/** Kept checkouts listed per reason before "Show all". */
+const KEPT_ROWS_PER_REASON = 3;
+
+/**
+ * Every checkout the step kept, grouped by why, with the threads known to
+ * own it, so the operator can see what holds the space and go and change it.
+ * Nothing here can be selected. An owner that predates `keptCheckouts` sends
+ * only its ten largest, without threads, and the list says so.
+ */
+function KeptCheckouts(props: { coverage: ThreadMaintenanceCoverage; context: KeptContext & { step: ReviewStep } }) {
+  const complete = props.coverage.keptCheckouts !== undefined;
+  const rows = props.coverage.keptCheckouts ?? props.coverage.largestKept ?? [];
+  const groups = groupKeptCheckouts(rows);
+  const count = groups.reduce((sum, group) => sum + group.rows.length, 0);
+  const total = allocationTotal(rows.map((row) => ({ worktreePath: row.path, space: spaceOf(row) })));
+  const shared = groups.some((group) => group.rows.some((row) => (row.threads?.length ?? 0) > 1));
+  const { step, buildOutputs } = props.context;
+  return (
+    <section className="thread-maintenance__kept" aria-label="Kept checkouts">
+      <p className="thread-maintenance__eyebrow">
+        {complete
+          ? `Kept · ${count} ${count === 1 ? "checkout" : "checkouts"}${total ? ` · ${formatAllocation(total)} on disk` : ""}`
+          : "Largest kept"}
+      </p>
+      <p className="thread-maintenance__kept-note">
+        {"These stay on disk and are not offered here. Each reason says what keeps a checkout; change that, then re-scan."}
+        {shared ? " A checkout shared by several threads stays while any of them keeps it, so resolving one thread may leave another keeping it." : ""}
+        {buildOutputs
+          ? step === "checkouts"
+            ? " Cargo output inside a kept checkout is reviewed on its own, under Build output."
+            : " Cargo output inside a kept checkout is reviewed on its own, in the Archived checkouts step."
+          : step === "hibernate" && !props.context.checkoutsStep
+            ? " Cargo output inside a kept checkout is reviewed on its own: scan Archived checkouts to see it."
+            : ""}
+        {complete ? "" : " This scan sent only the largest, without their threads."}
+      </p>
+      {groups.map((group) => <KeptReasonGroup key={group.reason} group={group} context={props.context} complete={complete} />)}
+    </section>
+  );
+}
+
+function KeptReasonGroup(props: { group: KeptGroup; context: KeptContext & { step: ReviewStep }; complete: boolean }) {
+  const { group } = props;
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const shown = open ? group.rows : group.rows.slice(0, KEPT_ROWS_PER_REASON);
+  const guidance = keptGuidance(group.reason, props.context);
+  return (
+    <div className="thread-maintenance__kept-group">
+      <p className="thread-maintenance__kept-head">
+        <span className="thread-maintenance__kept-reason">{group.reason}</span>
+        <span className="thread-maintenance__mono">
+          {`${group.rows.length} ${group.rows.length === 1 ? "checkout" : "checkouts"}${group.total ? ` · ${formatAllocation(group.total)}` : ""}`}
+        </span>
+      </p>
+      {guidance ? <p className="thread-maintenance__kept-guidance">{guidance}</p> : null}
+      <ul id={listId} aria-label={`Kept: ${group.reason}`} className="thread-maintenance__kept-rows">
+        {shown.map((row) => <KeptRow key={row.path} row={row} context={props.context} complete={props.complete} />)}
+      </ul>
+      {group.rows.length > KEPT_ROWS_PER_REASON ? (
+        <button aria-controls={listId} aria-expanded={open} className="thread-maintenance__kept-toggle" type="button"
+          onClick={() => setOpen(!open)}>
+          {open ? "Show fewer" : `Show all ${group.rows.length}`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function KeptRow(props: { row: ThreadMaintenanceKeptCheckout; context: KeptContext & { step: ReviewStep }; complete: boolean }) {
+  const { row, context } = props;
+  const threads = row.threads ?? [];
+  return (
+    <li>
+      <div className="thread-maintenance__kept-main">
+        {threads.map((thread) => (
+          <div className="thread-maintenance__kept-owner" key={`${thread.backend}:${thread.threadId}`}>
+            <div className="thread-maintenance__kept-owner-text">
+              <p className="thread-maintenance__row-title">{thread.title || "Untitled thread"}</p>
+              <p className="thread-maintenance__kept-meta">
+                {[thread.backend, thread.branch,
+                  thread.lastActivityAt !== undefined && context.scanAt !== undefined
+                    // Hibernation judges work and restores, not views.
+                    ? `${context.step === "hibernate" ? "last work" : "active"} ${formatAge(thread.lastActivityAt, context.scanAt)}` : undefined]
+                  .filter(Boolean).join(" · ")}
+                {(thread.pullRequests ?? []).map((pr) => {
+                  const href = pullRequestHref(pr.url);
+                  if (!href) return null;
+                  const label = pr.number !== undefined ? `PR #${pr.number}` : "Pull request";
+                  return (
+                    <a key={pr.url} className="thread-maintenance__pr-link" href={href}
+                      {...(pr.title ? { title: pr.title } : {})}
+                      onClick={(event) => { event.preventDefault(); openExternalUrl(href); }}>
+                      {label}
+                    </a>
+                  );
+                })}
+              </p>
+            </div>
+            {context.onOpenThread ? (
+              <button className="thread-maintenance__open-thread" type="button"
+                aria-label={`Open thread ${thread.title || thread.threadId}`}
+                onClick={() => context.onOpenThread!({ backend: thread.backend, threadId: thread.threadId })}>
+                Open thread
+              </button>
+            ) : null}
+          </div>
+        ))}
+        {!threads.length && props.complete ? <p className="thread-maintenance__kept-meta">Thread not identified in this scan</p> : null}
+        {threads.length > 1 ? (
+          <p className="thread-maintenance__kept-shared">
+            {`Shared by ${threads.length} threads. Any one of them can keep it, so it stays until none does.`}
+          </p>
+        ) : null}
+        <OutputClass output={row.rebuildableOutput} />
+        <p className="thread-maintenance__path">{row.path}</p>
+      </div>
+      <span className="thread-maintenance__size">{row.allocatedBytes === undefined ? "—" : formatBytes(row.allocatedBytes)}</span>
+    </li>
+  );
+}
+
+/** "Cargo output · 9 GB": what the owned checkout holds. It describes the
+ * checkout and never changes whether it is offered. */
+function OutputClass(props: { output: ThreadMaintenanceSpace["rebuildableOutput"] }) {
+  const labels = rebuildableOutputLabels(props.output);
+  if (!labels.length) return null;
+  return (
+    <p className="thread-maintenance__output-class">
+      {labels.map((label) => <span key={label}>{label}</span>)}
+    </p>
+  );
+}
+
+/** A row's allocation on disk, right-aligned; private allocation in the
+ * tooltip. Neither is space a removal is sure to free. */
+function SizeCell(props: { space?: ThreadMaintenanceSpace }) {
+  const space = props.space;
+  if (space?.allocatedBytes === undefined) return null;
+  const tip = space.privateBytes !== undefined
+    ? `${formatBytes(space.allocatedBytes)} on disk · ${formatBytes(space.privateBytes)} private allocation`
+    : `${formatBytes(space.allocatedBytes)} on disk`;
+  return (
+    <span className="thread-maintenance__size tooltip-target" data-tooltip={tip}>
+      {formatAllocation({ bytes: space.allocatedBytes, lowerBound: !!space.lowerBound })}
+    </span>
   );
 }
 
@@ -646,9 +956,9 @@ function IdleThreadsReview(props: {
       </div>
       <div className="thread-maintenance__rules-strip">
         <span className="thread-maintenance__eyebrow">Rules</span>
-        <span>{ruleText} · snapshots up to the limit · {scan.rules.rebuildableOutputIsClean ? "dependencies and build output count as clean" : "any ignored file keeps the checkout"}</span>
+        <span>{ruleText} · snapshots up to the limit · {IGNORED_RULE}</span>
         <span className="thread-maintenance__eyebrow">Never</span>
-        <span className="thread-maintenance__never-inline">pinned · Agent · running or blocked · watching a PR · other ignored files</span>
+        <span className="thread-maintenance__never-inline">pinned · Agent · running or blocked · watching a PR</span>
       </div>
       {decidable.length ? (
         <Checkbox checked={chosen === decidable.length} mixed={chosen > 0 && chosen < decidable.length}
@@ -754,8 +1064,8 @@ function IdleRow(props: {
           </p>
         ) : null}
       </div>
-      {props.showSpace && row.space ? (
-        <span className="thread-maintenance__size">{row.space.lowerBound ? "≥ " : ""}{formatBytes(row.space.privateBytes)}</span>
+      {props.showSpace && row.space?.allocatedBytes !== undefined ? (
+        <span className="thread-maintenance__size">{row.space.lowerBound ? "≥ " : ""}{formatBytes(row.space.allocatedBytes)}</span>
       ) : null}
     </li>
   );
@@ -764,13 +1074,17 @@ function IdleRow(props: {
 function CheckoutsReview(props: {
   scan: ThreadMaintenanceScan;
   selection: ThreadMaintenanceSelection;
+  steps: readonly ReviewStep[];
+  kept: KeptContext;
   onSelection: (selection: ThreadMaintenanceSelection) => void;
 }) {
   const { scan, selection } = props;
-  const owned = scan.checkouts.items.filter((item) => item.kind !== "unreferenced");
-  const removable = owned.filter((item) => item.kind === "removable");
-  const gone = owned.filter((item) => item.kind === "repositoryGone");
-  const unreferenced = scan.checkouts.items.filter((item) => item.kind === "unreferenced");
+  // A checkout no thread refers to is not offered, even from an older owner.
+  const items = largestFirst(scan.checkouts.items.filter((item) => item.kind !== "unreferenced"));
+  const removable = items.filter((item) => item.kind === "removable");
+  const gone = items.filter((item) => item.kind === "repositoryGone");
+  const outputs = (scan.checkouts.buildOutputs ?? []).filter(buildOutputOwned).length;
+  const total = allocationTotal(items);
   const toggle = (item: ThreadMaintenanceArchivedCheckout) => {
     const checkouts = new Set(selection.checkouts);
     if (checkouts.has(item.worktreePath)) checkouts.delete(item.worktreePath);
@@ -783,15 +1097,18 @@ function CheckoutsReview(props: {
         <div>
           <p className="thread-maintenance__summary-title">
             {removable.length ? `${removable.length} archived ${removable.length === 1 ? "checkout is" : "checkouts are"} still on disk`
-              : unreferenced.length ? `${unreferenced.length} ${unreferenced.length === 1 ? "checkout has" : "checkouts have"} no thread`
+              : outputs
+                ? `${outputs} Cargo build ${outputs === 1 ? "output" : "outputs"} can be cleaned`
                 : "No archived checkouts to remove"}
           </p>
           <p className="thread-maintenance__summary-sub">
+            {total ? `${formatAllocation(total)} on disk · ` : ""}
             {`${keptTotal(scan.checkouts.kept)} kept · ${scan.checkouts.emptyFolders} empty ${scan.checkouts.emptyFolders === 1 ? "folder" : "folders"}`}
             {scan.checkouts.skipped ? ` · ${scan.checkouts.skipped}` : ""}
           </p>
         </div>
       </div>
+      <Coverage coverage={scan.checkouts.coverage} kept={{ ...props.kept, step: "checkouts" }} />
       {removable.length ? (
         <section className="thread-maintenance__group" aria-label="Still on disk">
           <div className="thread-maintenance__group-head">
@@ -808,6 +1125,7 @@ function CheckoutsReview(props: {
                     {lead ? <p className="thread-maintenance__row-meta"><span className={`thread-maintenance__lead-text is-${lead.tone}`}>{lead.text}</span></p> : null}
                     <p className="thread-maintenance__path">{item.worktreePath}</p>
                   </div>
+                  <SizeCell space={item.space} />
                 </li>
               );
             })}
@@ -831,34 +1149,15 @@ function CheckoutsReview(props: {
                     {` ${item.missingRepositoryPath ?? "unknown"}. Git cannot save anything from it. Selected checkouts go to the Trash.`}
                   </p>
                 </div>
+                <SizeCell space={item.space} />
               </li>
             ))}
           </ul>
         </section>
       ) : null}
-      {unreferenced.length ? (
-        <section className="thread-maintenance__group" aria-label="No thread">
-          <div className="thread-maintenance__group-head">
-            <span className="thread-maintenance__eyebrow">No thread · {unreferenced.length}</span>
-          </div>
-          <ul className="thread-maintenance__rows">
-            {unreferenced.map((item) => {
-              const lead = workspaceLead(item.workspace);
-              return (
-                <li key={item.worktreePath} className="thread-maintenance__row">
-                  <Checkbox checked={selection.checkouts.has(item.worktreePath)} label={`Remove ${item.worktreePath}`} onChange={() => toggle(item)} />
-                  <div className="thread-maintenance__row-body">
-                    <p className="thread-maintenance__row-title is-path">{item.worktreePath}</p>
-                    <p className="thread-maintenance__row-meta">
-                      <span className={`thread-maintenance__lead-text is-${lead.tone}`}>{lead.text}</span>
-                      {" · No thread refers to this checkout. Git saves its changes to a recovery snapshot before it is removed."}
-                    </p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
+      {scan.checkouts.buildOutputs?.length ? (
+        <BuildOutputsReview scan={scan} selection={selection} steps={props.steps} onOpenThread={props.kept.onOpenThread}
+          onSelection={props.onSelection} />
       ) : null}
       {scan.checkouts.emptyFolders ? (
         <Checkbox checked={selection.emptyFolders} label="Remove empty worktree folders"
@@ -867,6 +1166,122 @@ function CheckoutsReview(props: {
         </Checkbox>
       ) : null}
     </>
+  );
+}
+
+/** Build output rows shown before "Show all". */
+const BUILD_OUTPUT_ROWS = 8;
+
+/** `path` relative to `root` when inside it, else `path`. */
+function relativeTo(path: string, root: string): string {
+  const base = root.replace(/[\\/]+$/, "");
+  return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+}
+
+/** Build profile folders, reviewed apart from whole checkouts: cleaning one
+ * deletes compiled files only. Offered whatever keeps its checkout, only
+ * when the scan identified a thread that uses it, and never selected by
+ * default, since each costs a rebuild. */
+function BuildOutputsReview(props: {
+  scan: ThreadMaintenanceScan;
+  selection: ThreadMaintenanceSelection;
+  steps: readonly ReviewStep[];
+  onOpenThread?: OpenThread;
+  onSelection: (selection: ThreadMaintenanceSelection) => void;
+}) {
+  const { scan, selection, steps } = props;
+  const [open, setOpen] = useState(false);
+  const rowsId = useId();
+  const outputs = largestFirst((scan.checkouts.buildOutputs ?? []).filter(buildOutputOwned));
+  const unowned = (scan.checkouts.buildOutputs ?? []).length - outputs.length;
+  const chosen = selection.buildOutputs ?? new Set<string>();
+  const covered = (output: ThreadMaintenanceBuildOutput) => buildOutputCoveredBy(scan, selection, steps, output);
+  const offered = outputs.filter((output) => !covered(output));
+  const picked = offered.filter((output) => chosen.has(output.outputPath)).length;
+  const toClean = buildOutputsToClean(scan, selection, steps);
+  const size = allocationTotal(toClean.map((output) => ({ ...output, worktreePath: output.outputPath })));
+  const all = allocationTotal(outputs.map((output) => ({ ...output, worktreePath: output.outputPath })));
+  const shown = open ? outputs : outputs.slice(0, BUILD_OUTPUT_ROWS);
+  const write = (next: Set<string>) => props.onSelection({ ...selection, buildOutputs: next });
+  const toggle = (output: ThreadMaintenanceBuildOutput) => {
+    const next = new Set(chosen);
+    if (next.has(output.outputPath)) next.delete(output.outputPath);
+    else next.add(output.outputPath);
+    write(next);
+  };
+  const selectAll = () => {
+    const next = new Set(chosen);
+    for (const output of offered) {
+      if (picked === offered.length) next.delete(output.outputPath);
+      else next.add(output.outputPath);
+    }
+    write(next);
+  };
+  return (
+    <section className="thread-maintenance__group" aria-label="Build output">
+      <div className="thread-maintenance__group-head">
+        <span className="thread-maintenance__eyebrow">Build output · {outputs.length}</span>
+        {all ? <span className="thread-maintenance__eyebrow thread-maintenance__group-aside">{`${formatAllocation(all)} on disk`}</span> : null}
+      </div>
+      <p className="thread-maintenance__group-note">
+        Detected type: Cargo. Deletes the compiled files in each selected Cargo profile folder of a checkout a known thread uses. The checkout, its source and its thread stay; the next build of that profile compiles again. A folder in use by a build is skipped.
+        {unowned ? ` ${unowned} more ${unowned === 1 ? "is" : "are"} not offered: thread not identified in this scan.` : ""}
+        {size ? ` Selected: ${formatAllocation(size)} on disk.` : ""}
+      </p>
+      {offered.length > 1 ? (
+        <div className="thread-maintenance__group-select">
+          <Checkbox checked={picked === offered.length} mixed={picked > 0 && picked < offered.length}
+            label="Select every build output" onChange={selectAll}>
+            Select all {offered.length}
+          </Checkbox>
+        </div>
+      ) : null}
+      <ul className="thread-maintenance__rows" id={rowsId}>
+        {shown.map((output) => {
+          const holder = covered(output);
+          return (
+            <li key={output.outputPath} className="thread-maintenance__row">
+              <Checkbox checked={!!holder || chosen.has(output.outputPath)} disabled={!!holder}
+                label={`Clean ${output.outputPath}`} onChange={() => toggle(output)} />
+              <div className="thread-maintenance__row-body">
+                {(output.threads ?? []).map((thread) => (
+                  <div className="thread-maintenance__kept-owner" key={`${thread.backend}:${thread.threadId}`}>
+                    <p className="thread-maintenance__row-title">
+                      {thread.title || "Untitled thread"}
+                      {thread.branch ? <span className="thread-maintenance__branch">{thread.branch}</span> : null}
+                    </p>
+                    {props.onOpenThread ? (
+                      <button className="thread-maintenance__open-thread" type="button"
+                        aria-label={`Open thread ${thread.title || thread.threadId}`}
+                        onClick={() => props.onOpenThread!({ backend: thread.backend, threadId: thread.threadId })}>
+                        Open thread
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+                <p className="thread-maintenance__row-meta">
+                  {holder
+                    ? <span className="thread-maintenance__lead-text is-muted">Removed with its checkout</span>
+                    : <span className="thread-maintenance__lead-text is-ok">{`${buildOutputType(output.kind)} · ${relativeTo(output.outputPath, output.checkoutPath)}`}</span>}
+                  {holder ? ` · ${relativeTo(output.outputPath, output.checkoutPath)}` : ""}
+                  {` · ${relativeTo(output.manifestPath, output.checkoutPath)}`}
+                </p>
+                <p className="thread-maintenance__path">{output.checkoutPath}</p>
+              </div>
+              <SizeCell space={output.space} />
+            </li>
+          );
+        })}
+      </ul>
+      {outputs.length > BUILD_OUTPUT_ROWS ? (
+        <div className="thread-maintenance__group-select">
+          <button aria-controls={rowsId} aria-expanded={open} className="thread-maintenance__kept-toggle" type="button"
+            onClick={() => setOpen(!open)}>
+            {open ? "Show fewer" : `Show all ${outputs.length}`}
+          </button>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -880,11 +1295,13 @@ function HibernateReview(props: {
   scan: ThreadMaintenanceScan;
   selection: ThreadMaintenanceSelection;
   steps: readonly ReviewStep[];
+  kept: KeptContext;
   onSelection: (selection: ThreadMaintenanceSelection) => void;
 }) {
   const { scan, selection } = props;
   const section = scan.hibernate;
-  const items = hibernateItems(scan, selection, props.steps);
+  const items = largestFirst(hibernateItems(scan, selection, props.steps));
+  const total = allocationTotal(items);
   const chosen = items.filter((item) => selection.hibernate.has(idleThreadKey(item))).length;
   const toggle = (item: ThreadMaintenanceHibernateCheckout) => {
     const hibernate = new Set(selection.hibernate);
@@ -926,6 +1343,7 @@ function HibernateReview(props: {
           </p>
           <p className="thread-maintenance__summary-sub">
             {`${section.checked} ${section.checked === 1 ? "checkout" : "checkouts"} on disk checked`}
+            {total ? ` · candidates hold ${formatAllocation(total)} on disk` : ""}
             {section.skipped ? ` · ${section.skipped}` : ""}
           </p>
         </div>
@@ -959,12 +1377,12 @@ function HibernateReview(props: {
       <div className="thread-maintenance__rules-strip">
         <span className="thread-maintenance__eyebrow">Rules</span>
         <span>
-          {`Idle ${section.idleDays} ${section.idleDays === 1 ? "day" : "days"} · snapshots up to ${section.maxSnapshotMb} MB · `}
-          {section.removeRebuildableOutput ? "dependencies and build output are removed" : "any ignored file keeps the checkout"}
+          {`Idle ${section.idleDays} ${section.idleDays === 1 ? "day" : "days"} · snapshots up to ${section.maxSnapshotMb} MB · ${IGNORED_RULE}`}
         </span>
         <span className="thread-maintenance__eyebrow">Never</span>
         <span className="thread-maintenance__never-inline">kept awake · Agent · running or blocked · watching a PR · shared checkouts</span>
       </div>
+      <Coverage coverage={section.coverage} kept={{ ...props.kept, step: "hibernate" }} />
       {items.length > 1 ? (
         <Checkbox checked={chosen === items.length} mixed={chosen > 0 && chosen < items.length}
           label="Select every idle checkout" onChange={selectAll}>
@@ -975,6 +1393,7 @@ function HibernateReview(props: {
         <section className="thread-maintenance__group" aria-label="Can hibernate">
           <div className="thread-maintenance__group-head">
             <span className="thread-maintenance__eyebrow">Can hibernate · {items.length}</span>
+            {total ? <span className="thread-maintenance__eyebrow thread-maintenance__group-aside">Largest first · on disk</span> : null}
           </div>
           <ul className="thread-maintenance__rows">
             {items.map((item) => {
@@ -996,8 +1415,10 @@ function HibernateReview(props: {
                       {output ? ` · ${output}` : ""}
                       {` · idle ${formatAge(item.lastActivityAt, scan.startedAt).replace(/ ago$/, "")}`}
                     </p>
+                    <OutputClass output={item.space?.rebuildableOutput} />
                     <p className="thread-maintenance__path">{item.worktreePath}</p>
                   </div>
+                  <SizeCell space={item.space} />
                 </li>
               );
             })}
@@ -1029,7 +1450,8 @@ const STEP_PROGRESS: Record<ThreadMaintenanceStep, string> = {
 /** Whether a request would change nothing. */
 function isEmptyRequest(request: ReturnType<typeof buildApplyRequest>): boolean {
   return request.archive.length + request.removeCheckouts.length + request.trashCheckouts.length
-    + (request.removeUnreferenced?.length ?? 0) + (request.hibernate?.length ?? 0) === 0
+    + (request.hibernate?.length ?? 0)
+    + (request.removeBuildOutputs?.length ?? 0) === 0
     && !request.removeEmptyFolders;
 }
 
@@ -1058,7 +1480,7 @@ function RunView(props: {
                 ? `Maintenance finished with ${failed.length} ${failed.length === 1 ? "problem" : "problems"}`
                 : "Maintenance finished"}
             </p>
-            <p className="thread-maintenance__summary-sub">{receiptLine(run)}{done === 0 ? " · nothing changed" : ""}</p>
+            <p className="thread-maintenance__summary-sub">{receiptLine(run, props.scan)}{done === 0 ? " · nothing changed" : ""}</p>
           </div>
         </div>
       )}
@@ -1071,7 +1493,10 @@ function RunView(props: {
         <div className="thread-maintenance__progress-card" role="status">
           <div className="thread-maintenance__progress-top">
             <span>{STEP_PROGRESS[run.current.step]}</span>
-            <span className="thread-maintenance__mono">{`${run.current.processed} of ${run.current.total}`}</span>
+            <span className="thread-maintenance__mono">
+              <span>{`${run.current.processed} of ${run.current.total}`}</span>
+              <Elapsed since={run.startedAt} />
+            </span>
           </div>
           <div aria-hidden="true" className="thread-maintenance__bar">
             <span style={{ width: `${Math.round(100 * run.current.processed / Math.max(1, run.current.total))}%` }} />
@@ -1103,15 +1528,25 @@ function RunView(props: {
   );
 }
 
-function receiptLine(run: ThreadMaintenanceRun): string {
+function receiptLine(run: ThreadMaintenanceRun, scan?: ThreadMaintenanceScan): string {
   const threads = run.steps.find((step) => step.step === "threads");
   const hibernate = run.steps.find((step) => step.step === "hibernate");
   const checkouts = run.steps.find((step) => step.step === "checkouts");
   return [
     threads?.ran ? `${threads.done} ${threads.done === 1 ? "thread" : "threads"} archived` : undefined,
-    hibernate?.ran ? `${hibernate.done} ${hibernate.done === 1 ? "checkout" : "checkouts"} hibernated` : undefined,
-    checkouts?.ran ? `${checkouts.done} ${checkouts.done === 1 ? "checkout or folder" : "checkouts and folders"} removed` : undefined,
+    hibernate?.ran ? `${hibernate.done} ${hibernate.done === 1 ? "checkout" : "checkouts"} hibernated${removedAllocation(hibernate)}` : undefined,
+    checkouts?.ran
+      ? `${checkouts.done} ${scan?.checkouts.buildOutputs?.length
+        ? checkouts.done === 1 ? "checkout, folder or build output" : "checkouts, folders and build outputs"
+        : checkouts.done === 1 ? "checkout or folder" : "checkouts and folders"} removed${removedAllocation(checkouts)}`
+      : undefined,
   ].filter(Boolean).join(" · ") || "No steps ran";
+}
+
+/** " (18 GB allocation removed)". Summed checkout sizes, not space freed:
+ * shared extents can stay allocated. */
+function removedAllocation(step: ThreadMaintenanceRun["steps"][number]): string {
+  return step.allocatedBytesRemoved ? ` (${formatBytes(step.allocatedBytesRemoved)} allocation removed)` : "";
 }
 
 /** One red card for what failed and one blue card for what was kept on
@@ -1160,23 +1595,75 @@ function ProblemCard(props: {
         </div>
       </div>
       <ul className="thread-maintenance__problem-rows" tabIndex={props.problems.length > 4 ? 0 : undefined}>
-        {props.problems.map((problem, index) => (
-          <li key={`${problem.object}:${index}`}>
-            <div className="thread-maintenance__problem-text">
-              <p className="thread-maintenance__problem-object">{problem.object}</p>
-              <p className="thread-maintenance__problem-why"><b>{problem.reason}.</b>{problem.detail ? ` ${problem.detail}` : ""}</p>
-            </div>
-            {props.onOpenThread && problem.backend && problem.threadId ? (
-              <button className="thread-maintenance__open-thread" type="button"
-                aria-label={`Open thread ${problem.object}`}
-                onClick={() => props.onOpenThread!({ backend: problem.backend!, threadId: problem.threadId! })}>
-                Open thread
-              </button>
-            ) : null}
-          </li>
-        ))}
+        {groupProblems(props.problems).map((group) => group.problems.length === 1
+          ? <ProblemRow key={group.reason} problem={group.problems[0]!} showReason onOpenThread={props.onOpenThread} />
+          : <ProblemGroup key={group.reason} reason={group.reason} problems={group.problems} onOpenThread={props.onOpenThread} />)}
       </ul>
     </section>
+  );
+}
+
+/** Rows shown per reason before "Show all". */
+const ROWS_PER_REASON = 3;
+
+/** Rows that share a reason, under one heading with their count, so 22
+ * rows with one reason read as one fact. */
+function ProblemGroup(props: { reason: string; problems: ThreadMaintenanceProblem[]; onOpenThread?: OpenThread }) {
+  const [open, setOpen] = useState(false);
+  const rowsId = useId();
+  const shown = open ? props.problems : props.problems.slice(0, ROWS_PER_REASON);
+  const size = allocationTotal(props.problems.map((problem) => ({
+    space: problem.bytes === undefined ? undefined : { allocatedBytes: problem.bytes },
+  })));
+  // A detail every row shares is said once, in the heading.
+  const shared = props.problems.every((problem) => problem.detail === props.problems[0]!.detail)
+    ? props.problems[0]!.detail : undefined;
+  return (
+    <li className="thread-maintenance__problem-group">
+      <p className="thread-maintenance__problem-why">
+        <b>{props.reason}</b>{` · ${props.problems.length}`}{size ? ` · ${formatAllocation(size)} on disk` : ""}
+        {shared ? ` · ${shared}` : ""}
+      </p>
+      <ul id={rowsId} aria-label={props.reason}>
+        {shown.map((problem, index) => (
+          <ProblemRow key={`${problem.object}:${index}`} problem={shared ? { ...problem, detail: undefined } : problem}
+            onOpenThread={props.onOpenThread} />
+        ))}
+      </ul>
+      {props.problems.length > ROWS_PER_REASON ? (
+        <button aria-controls={rowsId} aria-expanded={open} className="thread-maintenance__kept-toggle" type="button"
+          onClick={() => setOpen(!open)}>
+          {open ? "Show fewer" : `Show all ${props.problems.length}`}
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
+function ProblemRow(props: { problem: ThreadMaintenanceProblem; showReason?: boolean; onOpenThread?: OpenThread }) {
+  const { problem } = props;
+  const why = [
+    problem.detail,
+    problem.bytes !== undefined ? `${formatBytes(problem.bytes)} on disk.` : undefined,
+  ].filter(Boolean).join(" ");
+  return (
+    <li>
+      <div className="thread-maintenance__problem-text">
+        <p className="thread-maintenance__problem-object">{problem.object}</p>
+        {props.showReason || why ? (
+          <p className="thread-maintenance__problem-why">
+            {props.showReason ? <b>{problem.reason}.</b> : null}{why ? `${props.showReason ? " " : ""}${why}` : ""}
+          </p>
+        ) : null}
+      </div>
+      {props.onOpenThread && problem.backend && problem.threadId ? (
+        <button className="thread-maintenance__open-thread" type="button"
+          aria-label={`Open thread ${problem.object}`}
+          onClick={() => props.onOpenThread!({ backend: problem.backend!, threadId: problem.threadId! })}>
+          Open thread
+        </button>
+      ) : null}
+    </li>
   );
 }
 
@@ -1229,6 +1716,10 @@ function Footer(props: {
     const step = props.phase;
     const request = buildApplyRequest(scan, selection, step);
     const count = step === "threads" ? request.archive.length : request.hibernate?.length ?? 0;
+    const chosenKeys = new Set((request.hibernate ?? []).map(idleThreadKey));
+    const size = step === "hibernate"
+      ? allocationTotal((scan.hibernate?.items ?? []).filter((item) => chosenKeys.has(idleThreadKey(item))))
+      : undefined;
     const next = nextReview(steps, step);
     const [verb, one, many, skip] = step === "threads"
       ? ["Archive", "thread", "threads", "Skip idle threads"]
@@ -1236,7 +1727,7 @@ function Footer(props: {
     return (
       <>
         <span className="thread-maintenance__footnote">
-          <b>{count} selected</b>{next ? ` · then ${STEP_TITLES[next].toLowerCase()}` : ""}
+          <b>{count} selected</b>{size ? ` · ${formatAllocation(size)} on disk` : ""}{next ? ` · then ${STEP_TITLES[next].toLowerCase()}` : ""}
         </span>
         <span className="thread-maintenance__actions">
           {steps[0] === step ? (
@@ -1256,13 +1747,25 @@ function Footer(props: {
   }
   if (props.phase === "checkouts" && scan && selection) {
     const request = buildApplyRequest(scan, selection, steps);
-    const checkouts = request.removeCheckouts.length + request.trashCheckouts.length + (request.removeUnreferenced?.length ?? 0);
+    const checkouts = request.removeCheckouts.length + request.trashCheckouts.length;
+    const outputs = request.removeBuildOutputs?.length ?? 0;
     const hibernate = request.hibernate?.length ?? 0;
     const nothing = isEmptyRequest(request);
+    const paths = new Set([...request.removeCheckouts, ...request.trashCheckouts].map((item) => item.worktreePath));
+    const cleaned = new Set((request.removeBuildOutputs ?? []).map((item) => item.outputPath));
+    // An output inside a removed checkout is never in the request, so
+    // nothing here is counted twice.
+    const size = allocationTotal([
+      ...scan.checkouts.items.filter((item) => paths.has(item.worktreePath)),
+      ...(scan.checkouts.buildOutputs ?? []).filter((output) => cleaned.has(output.outputPath))
+        .map((output) => ({ space: output.space, worktreePath: output.outputPath })),
+    ]);
     return (
       <>
         <span className="thread-maintenance__footnote">
-          <b>{checkouts} selected</b>
+          <b>{checkouts + outputs} selected</b>
+          {outputs ? ` · ${outputs} build ${outputs === 1 ? "output" : "outputs"}` : ""}
+          {size ? ` · ${formatAllocation(size)} on disk` : ""}
           {request.archive.length ? ` · ${request.archive.length} ${request.archive.length === 1 ? "thread" : "threads"} to archive first` : ""}
           {hibernate ? ` · ${hibernate} to hibernate first` : ""}
         </span>
@@ -1271,7 +1774,7 @@ function Footer(props: {
           <button className="button button--primary thread-maintenance__button" type="button"
             aria-disabled={nothing || undefined}
             onClick={() => { if (!nothing) props.onFinish("checkouts"); }}>
-            {checkouts ? `Remove ${checkouts} and finish` : "Finish"}
+            {checkouts + outputs ? `Remove ${checkouts + outputs} and finish` : "Finish"}
           </button>
         </span>
       </>
