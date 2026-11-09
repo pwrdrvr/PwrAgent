@@ -1,7 +1,7 @@
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -96,11 +96,18 @@ async function startDesktopOwner(
   threadTitleGenerationService: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
   prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
   claudeOptions?: (workspace: string) => NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["claudeBackendOptions"],
+  profileRoot?: string,
 ): Promise<OwnerHost> {
   OwnerConformanceCodexTransport.reset();
-  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
-  const { dbPath, tempDir } = createTempStateDb("pwragent-conformance-db-");
-  const db = StateDb.open(dbPath);
+  const workspace = profileRoot ? path.join(profileRoot, "w") : await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
+  const { dbPath, tempDir } = profileRoot
+    ? { dbPath: path.join(profileRoot, "profiles/t/state/state.db"), tempDir: path.join(profileRoot, "desktop") }
+    : createTempStateDb("pwragent-conformance-db-");
+  if (profileRoot) {
+    for (const dir of [workspace, tempDir, path.join(profileRoot, "f")]) mkdirSync(dir, { recursive: true });
+    OwnerConformanceCodexTransport.recordsFile = path.join(profileRoot, "f/fixture-threads.json");
+  }
+  const db = StateDb.open(dbPath, profileRoot ? { profileName: "t" } : undefined);
   const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
   const overlayStore = new SqliteOverlayStore(db);
   await prepareAcp?.(db, workspace);
@@ -140,15 +147,22 @@ async function startDesktopOwner(
   const registerHandler = router.registerHandler.bind(router);
   router.registerHandler = (method, handler) => {
     if (method.startsWith("backend.")) methods.add(method);
-    registerHandler(method, handler);
+    registerHandler(method, async envelope => {
+      try { return await handler(envelope); }
+      catch (error) { throw new Error(`${method}: ${error instanceof Error ? error.stack : String(error)}`); }
+    });
   };
   let rpc: FederationRpcEndpoint;
-  router.registerConnection({ peerId: "viewer", capabilities: VIEWER_CAPABILITIES,
+  router.registerConnection({ peerId: "viewer", capabilities: [...VIEWER_CAPABILITIES, "thread_grouping"],
     sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
   const backend = new DesktopFederationRuntime().localBackend();
   // Bind the production admission path to this owner's real scheduler/store;
   // the app's process singleton belongs to an initialized desktop profile.
   backend.steerTurn = (request) => admitSteerTurn(registry, scheduler, request);
+  // This isolated profile has no mounted peers to promote during archive.
+  // Keep archive/restore on its real registry and storage, like the scheduler.
+  backend.archiveThread = (request) => registry.archiveThread(request);
+  backend.restoreThread = (request) => registry.restoreThread(request);
   registerFederationBackendHandlers({ router, backend });
   rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "desktop-owner", defaultTimeoutMs: 5000,
     sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
@@ -164,8 +178,10 @@ async function startDesktopOwner(
       resetDesktopOverlayStoreForTests();
       configStore.dispose();
       db.close();
-      await rm(workspace, { recursive: true, force: true });
-      await rm(tempDir, { recursive: true, force: true });
+      if (!profileRoot) {
+        await rm(workspace, { recursive: true, force: true });
+        await rm(tempDir, { recursive: true, force: true });
+      }
     },
   };
 }
@@ -274,6 +290,78 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+
+  it("projects canonical title provenance until a confirmed native name changes", async () => {
+    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), fc.constantFrom("pending", "acknowledged", "external"), async (suffix, state) => {
+      const nativeName = `Native ${suffix}`;
+      const ownerName = state === "pending" ? `Imported ${suffix}` : state === "external" ? `Previous ${suffix}` : nativeName;
+      const host = await startDesktopOwner(null, async (db, workspace) => {
+        OwnerConformanceCodexTransport.threads.set("imported", { id: "imported", name: nativeName, preview: "", cwd: workspace, createdAt: 1, updatedAt: 1, turns: [] });
+        await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "codex", threadId: "imported" }, {
+          title: { text: ownerName, source: "derived", ...(state !== "pending" ? { nativeName: ownerName } : {}) },
+        });
+      });
+      try {
+        const thread = (await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread;
+        expect(thread).toMatchObject(state === "external" ? { title: nativeName, titleSource: "explicit" } : { title: ownerName, titleSource: "derived" });
+        await host.client.renameThread({ backend: "codex", threadId: "imported", name: `Operator ${suffix}`, expectedName: thread!.title });
+        expect((await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread)
+          .toMatchObject({ title: `Operator ${suffix}`, titleSource: "explicit" });
+      } finally { await host.close(); }
+    }), { numRuns: 12 });
+  });
+
+  it("hands one real profile desktop → daemon → desktop → daemon with native titles and canonical metadata", async () => {
+    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), async suffix => {
+      const root = await realpath(await mkdtemp("/tmp/pa-owner-parity-"));
+      let desktop: OwnerHost | undefined;
+      let outpost: Awaited<ReturnType<typeof startOutpostDaemon>> | undefined;
+      try {
+        desktop = await startDesktopOwner(null, undefined, undefined, root);
+        const parent = await desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, executionMode: "default" });
+        const child = await desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, executionMode: "default" });
+        const archived = await desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, executionMode: "default" });
+        await desktop.client.renameThread({ backend: "codex", threadId: parent.threadId, name: `Parent ${suffix}` });
+        await desktop.client.renameThread({ backend: "codex", threadId: child.threadId, name: `Desktop ${suffix}` });
+        await desktop.client.renameThread({ backend: "codex", threadId: archived.threadId, name: `Archive ${suffix}` });
+        await desktop.client.setThreadPin({ backend: "codex", threadId: parent.threadId, pinnedRank: "8192" });
+        await desktop.client.setThreadParent({ backend: "codex", threadId: child.threadId, parentThreadId: parent.threadId, parentThreadBackend: "codex" });
+        const before = (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread!;
+        await desktop.client.markThreadSeen({ backend: "codex", threadId: child.threadId, seenAt: before.updatedAt! + 100, seenUpdatedAt: before.updatedAt });
+        await desktop.client.archiveThread({ backend: "codex", threadId: archived.threadId });
+        await desktop.close(); desktop = undefined;
+
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        const page = await inbox({ client: outpost.client } as OwnerHost);
+        expect(page.entries.some(entry => entry.row.id === archived.threadId)).toBe(false);
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread).toMatchObject({ title: `Desktop ${suffix}`, titleSource: "explicit", parentThreadId: parent.threadId, inbox: { inInbox: false } });
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: parent.threadId } })).thread).toMatchObject({ pinnedRank: "8192" });
+        expect((await outpost.client.lookupArchivedThreads({ backend: "codex", threadIds: [archived.threadId] })).threads.map(thread => thread.id)).toEqual([archived.threadId]);
+        await outpost.client.renameThread({ backend: "codex", threadId: child.threadId, name: `Outpost ${suffix}`, expectedName: `Desktop ${suffix}` });
+        const added = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+        await outpost.client.renameThread({ backend: "codex", threadId: added.threadId, name: `New Outpost ${suffix}` });
+        await outpost.client.markThreadSeen({ backend: "codex", threadId: child.threadId, seenAt: before.updatedAt! + 200, seenUpdatedAt: before.updatedAt! - 1 });
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread?.inbox?.inInbox).toBe(true);
+        await outpost.close(); outpost = undefined;
+
+        desktop = await startDesktopOwner(null, undefined, undefined, root);
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread).toMatchObject({ title: `Outpost ${suffix}`, titleSource: "explicit", parentThreadId: parent.threadId });
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: parent.threadId } })).thread).toMatchObject({ pinnedRank: "8192" });
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: added.threadId } })).thread).toMatchObject({ title: `New Outpost ${suffix}`, titleSource: "explicit" });
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread?.inbox?.inInbox).toBe(true);
+        await desktop.client.restoreThread({ backend: "codex", threadId: archived.threadId });
+        await desktop.close(); desktop = undefined;
+
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        expect((await inbox({ client: outpost.client } as OwnerHost)).entries.some(entry => entry.row.id === archived.threadId)).toBe(true);
+        expect((await outpost.client.lookupArchivedThreads({ backend: "codex", threadIds: [archived.threadId] })).threads).toEqual([]);
+        const native = JSON.parse(readFileSync(path.join(root, "f/fixture-threads.json"), "utf8"));
+        expect(native[child.threadId].name).toBe(`Outpost ${suffix}`);
+        expect(native[added.threadId].name).toBe(`New Outpost ${suffix}`);
+      } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
+    }), { numRuns: 3 });
+  }, 60_000);
+
   it("serves native and remote navigation from the real desktop owner with the same bounded results", async () => {
     const desktop = await startDesktopOwner();
     try {

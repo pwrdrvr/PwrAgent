@@ -1579,6 +1579,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
           title: next.title?.text,
           titleSource: next.title?.source,
+          titleNativeName: next.title?.nativeName,
           parentThreadId: next.parent?.threadId,
           parentThreadBackend: next.parent?.backend,
           parentThreadInstanceId: next.parent?.instanceId,
@@ -11292,6 +11293,7 @@ type OwnerThreadOverlay = ThreadOverlayState & {
   archived?: boolean;
   title?: string;
   titleSource?: AppServerThreadTitleSource;
+  titleNativeName?: string;
   createdAt?: number;
   updatedAt?: number;
   cwd?: string;
@@ -11313,7 +11315,8 @@ const OWNER_OVERLAY_FIELDS = [
 
 function ownerThreadRecord(state: OwnerThreadOverlay): OwnerThreadRecord {
   const patch: OwnerThreadMetadataPatch = {
-    title: state.title === undefined ? undefined : { text: state.title, source: state.titleSource ?? "fallback" },
+    title: state.title === undefined ? undefined : { text: state.title, source: state.titleSource ?? "fallback",
+      ...(state.titleNativeName !== undefined ? { nativeName: state.titleNativeName } : {}) },
     parent: state.parentThreadId !== undefined ? {
       backend: state.parentThreadBackend ?? state.backend,
       threadId: state.parentThreadId,

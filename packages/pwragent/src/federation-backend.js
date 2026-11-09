@@ -1,5 +1,6 @@
 import path from "node:path";
-import { buildThreadIdentityKey, NavigationQueryStore, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
+import { isDeepStrictEqual } from "node:util";
+import { buildThreadIdentityKey, NavigationQueryStore, ThreadNamingLifecycle, projectProviderThreadSummary, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
 
@@ -58,11 +59,74 @@ export class HeadlessBackend {
     this.replayByteBudget = FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
     this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory);
     this.threadRegistry = this.threads;
+    this.providerMutationVersion = 0;
+    this.naming = new ThreadNamingLifecycle({
+      readName: async ({ threadId }) => this.threads.get(threadId)?.title,
+      readTitle: async ({ threadId }) => this.summary(this.owned(threadId)),
+      renameProvider: async ({ threadId, name }, titleSource) => {
+        const thread = this.threads.get(threadId);
+        if (!thread) throw new Error("Thread is not owned by this outpost");
+        const result = await this.runtime.codex.renameThread({ threadId, name });
+        this.providerMutationVersion++;
+        Object.assign(thread, { title: name.trim(), titleSource, titleNativeName: name.trim() });
+        this.persist(thread);
+        this.threads.observeNativeTitle(threadId, name.trim(), titleSource);
+        return result;
+      },
+      getAgent: async () => undefined, setAgent: async () => {},
+      invalidate: () => {},
+      emit: async event => {
+        this.publish(event, "transcript");
+        this.invalidate(event.notification.params.threadId, event.notification.method);
+      },
+      now: () => Date.now(),
+    });
     runtime.ownsThread = (id) => this.threads.has(id) && !this.threads.get(id).archived;
     runtime.threadCwd = (id) => this.owned(id).cwd || runtime.workspace;
     runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
     this.latestJobs = new Map();
     this.syncJobs();
+  }
+
+  async initialize() {
+    await this.refreshThreads();
+    this.initialized = true;
+  }
+
+  async refreshThreads() {
+    if (this.discovery) return this.discovery;
+    const discover = async () => {
+      let generation = this.providerMutationVersion;
+      // A retained inventory is a startup projection, never proof of current
+      // provider membership. Both complete walks must succeed before replacement.
+      const active = await this.runtime.codex.listThreads({ archived: false, enrichDirectories: false, requireComplete: true, skipArchivedMetadataRefresh: true });
+      const archived = await this.runtime.codex.listThreads({ archived: true, enrichDirectories: false, requireComplete: true });
+      const threads = [...active, ...archived.map(thread => ({ ...thread, archivedAt: thread.archivedAt ?? 0 }))]
+        .map(projectProviderThreadSummary).sort((a, b) => a.id.localeCompare(b.id));
+      if (generation !== this.providerMutationVersion) return;
+      for (const native of threads) {
+        const identity = { backend: "codex", threadId: native.id };
+        const record = await this.threadRegistry.getThreadMetadata(identity);
+        const title = record?.title;
+        // A legacy/imported owner name has not yet reached Codex. Publish it
+        // once, then retain the acknowledgement so a later native rename wins.
+        if (title && title.source !== "fallback" && title.nativeName === undefined) {
+          await this.naming.renameThread({ ...identity, name: title.text, expectedName: title.text }, { titleSource: title.source });
+          if (this.providerMutationVersion !== generation + 1) return;
+          generation = this.providerMutationVersion;
+          native.title = title.text;
+          native.titleSource = title.source;
+        }
+      }
+      if (generation !== this.providerMutationVersion) return;
+      const previous = this.runtime.store.inventory.list().find(snapshot => snapshot.backend === "codex");
+      if (!isDeepStrictEqual(previous?.threads, threads)) {
+        this.runtime.store.inventory.replace({ backend: "codex", observedAt: Date.now(), threads });
+      }
+      this.threads.replaceInventory(threads);
+    };
+    this.discovery = discover();
+    try { await this.discovery; } finally { this.discovery = undefined; }
   }
 
   persist(thread) {
@@ -109,6 +173,7 @@ export class HeadlessBackend {
   }
 
   event(message) {
+    if (["thread/started", "thread/name/updated", "thread/archived", "thread/unarchived", "turn/completed"].includes(message.method)) this.providerMutationVersion++;
     if (message.method === "headless/turnStarted") {
       this.titleFromFirstPrompt(message.params);
       return;
@@ -154,6 +219,7 @@ export class HeadlessBackend {
     if (params.ref && params.ref.backend !== "codex") throw new Error("This outpost serves Codex only");
     if (params.cwd) this.runtime.projects.resolve(params.cwd);
     const name = method.replace(/^backend\./, "");
+    if (this.initialized && ["listThreads", "getNavigationQueryPage", "lookupArchivedThreads"].includes(name)) await this.refreshThreads();
     switch (name) {
       case "listBackends": return this.listBackends();
       case "listThreads": return { backend: "codex", fetchedAt: Date.now(), threads: [...this.threads.values()].filter((thread) => !thread.archived).map((thread) => this.summary(thread)), workspaceRoots: this.runtime.projects.list().map((project) => project.path) };
@@ -178,7 +244,18 @@ export class HeadlessBackend {
         return { thread, threadStatus: thread.threadStatus,
           ...(job?.turnId && ACTIVE.has(job.status) ? { activeTurn: { backend: "codex", threadId: thread.id, turnId: job.turnId } } : {}) };
       }
-      case "lookupArchivedThreads": return { threads: [] };
+      case "lookupArchivedThreads": {
+        if (!Array.isArray(params.threadIds) || params.threadIds.length > 100
+          || params.threadIds.some(id => typeof id !== "string" || !id || id.length > 1024)
+          || (params.includeParent !== undefined && params.includeParent !== true)) throw new Error("Archived lookup requires at most 100 non-empty thread IDs");
+        const requested = new Set(params.threadIds);
+        const threads = [...this.threads.values()].filter(thread => thread.archived && requested.has(thread.id));
+        return { threads: threads.map(thread => ({ ...this.summary(thread), archivedAt: thread.archivedAt ?? 0 })),
+          ...(params.includeParent ? { parentLinks: [...this.threads.values()].filter(thread => requested.has(thread.id)).map(thread => ({
+            backend: "codex", threadId: thread.id, parentThreadId: thread.parentThreadId,
+            parentThreadBackend: thread.parentThreadBackend, parentThreadInstanceId: thread.parentThreadInstanceId,
+          })) } : {}) };
+      }
       case "getProjectPage": return { backend: "codex", fetchedAt: Date.now(),
         launchpadDefaults: { backend: "codex", executionMode: "default", workMode: "local" },
         directories: this.runtime.projects.list().filter((project) => (!params.projectKey || params.projectKey === project.path)
@@ -232,8 +309,9 @@ export class HeadlessBackend {
         const thread = this.owned(params.threadId);
         const title = params.title || params.name;
         if (typeof title !== "string" || !title.trim() || title.length > 200) throw new Error("Invalid title");
-        this.setTitle(thread, title.trim(), "explicit");
-        return { backend: "codex", threadId: thread.id, title: thread.title };
+        await this.naming.renameThread({ backend: "codex", threadId: thread.id, name: title.trim(),
+          ...(params.expectedName !== undefined ? { expectedName: params.expectedName } : {}) });
+        return { backend: "codex", threadId: thread.id, title: title.trim() };
       }
       case "markThreadSeen": {
         const thread = this.owned(params.threadId);
@@ -280,8 +358,9 @@ export class HeadlessBackend {
 
   // The canonical owner record retains title provenance, including explicit renames.
   setTitle(thread, title, titleSource) {
-    Object.assign(thread, { title, titleSource });
+    Object.assign(thread, { title, titleSource, titleNativeName: title });
     this.persist(thread);
+    this.threads.observeNativeTitle(thread.id, title, titleSource);
     this.publish({ backend: "codex", notification: { method: "thread/name/updated",
       params: { threadId: thread.id, threadName: title, titleSource } } }, "transcript");
     this.invalidate(thread.id, "thread/name/updated");

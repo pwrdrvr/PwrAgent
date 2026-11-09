@@ -1,4 +1,4 @@
-import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection } from "../dist/federation-core.js";
+import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection, projectOwnerThreadTitle } from "../dist/federation-core.js";
 
 /** Codex host projection over the profile's canonical owner storage port. */
 export class OutpostThreadRegistry {
@@ -31,6 +31,7 @@ export class OutpostThreadRegistry {
   project(id, record, native) {
     if (!record && !native) return undefined;
     const thread = record ? outpostThreadProjection(record) : { id };
+    if (native) Object.assign(thread, projectOwnerThreadTitle(native, record));
     const projected = { ...(native ? { id, title: native.title, titleSource: native.titleSource,
       createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path,
       archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
@@ -42,6 +43,15 @@ export class OutpostThreadRegistry {
       projected.titleSource = "fallback";
     }
     return projected;
+  }
+
+  replaceInventory(threads) {
+    this.inventory = new Map(threads.map(thread => [thread.id, thread]));
+  }
+
+  observeNativeTitle(id, title, titleSource) {
+    const native = this.inventory.get(id);
+    if (native) this.inventory.set(id, { ...native, title, titleSource });
   }
 
   has(id) { return this.get(id) !== undefined; }

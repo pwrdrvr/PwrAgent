@@ -5,6 +5,7 @@ import { ThreadSteeringLifecycle, type ThreadSteeringSubmission } from "@pwragen
 import { ThreadSteerSubmissionLifecycle, type PreparedAcpSteer, type PreparedCodexSteer } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
 import { ThreadTitleLifecycle, extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
+import { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 import { ProfileThreadOwnerAdmission, type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import { getRuntimeLeaseManager } from "../runtime-lease-manager";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
@@ -9241,7 +9242,7 @@ type CodexRetryableTurnStart = {
   turnId?: string;
 };
 
-type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<OwnerThreadRegistry, "getThreadMetadata">> & Partial<
+type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<OwnerThreadRegistry, "getThreadMetadata" | "updateThreadMetadata">> & Partial<
   Pick<
     DesktopOwnerStorage,
     | "acknowledgeThreadEnvironmentFailure"
@@ -18994,7 +18995,9 @@ export class DesktopBackendRegistry {
     readName: async ({ backend, threadId }) => backend === "codex"
       ? await this.withCodexThreadClient(threadId, async (client) => {
           if (!client.readThreadName) throw new Error("Persisted thread names are unavailable.");
-          return await client.readThreadName(threadId);
+          const title = await client.readThreadName(threadId);
+          const metadata = await this.overlayStore.getThreadMetadata?.({ backend, threadId });
+          return projectOwnerThreadTitle({ title: title ?? "", titleSource: title ? "explicit" : "fallback" }, metadata).title || undefined;
         })
       : (await this.readThreadInspectionSummaryForMutation({ backend, threadId, fresh: true }))?.title,
     readTitle: async (identity) => await this.findThreadForTitleGeneration(identity),
@@ -34629,8 +34632,10 @@ export class DesktopBackendRegistry {
     const enrichedThreads = await Promise.all(
       visibleThreads.map(async (thread) => {
         const overlay = overlaysByThreadId[thread.id];
+        const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: thread.id });
         return {
           ...thread,
+          ...projectOwnerThreadTitle(thread, metadata),
           ...this.persistedCodexNativeSubAgentDisclosure(thread, nativeCardsByThreadId[thread.id]),
           executionMode: overlay?.executionMode ?? thread.executionMode,
           model: overlay?.model ?? thread.model,
@@ -43858,7 +43863,8 @@ export class DesktopBackendRegistry {
       // each time so a late operator rename still cancels generated naming.
       return await this.withCodexThreadClient(params.threadId, async (client) => {
         const thread = await client.readThreadSummary!(params.threadId);
-        return thread.archivedAt === undefined ? this.withObservedThreadName(thread) : undefined;
+        const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: params.threadId });
+        return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }) : undefined;
       }).catch(() => undefined);
     }
     const activeThreads = await this.listThreads({
@@ -54297,6 +54303,14 @@ export class DesktopBackendRegistry {
       }
     }
 
+    if (event.backend === "codex" && event.notification.method === "thread/name/updated") {
+      const { threadId, threadName, titleSource } = event.notification.params;
+      if (typeof threadName === "string" && threadName.trim()) {
+        await this.overlayStore.updateThreadMetadata?.({ backend: "codex", threadId }, {
+          title: { text: threadName.trim(), source: normalizeRenamedTitleSource(titleSource), nativeName: threadName.trim() },
+        });
+      }
+    }
     this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);

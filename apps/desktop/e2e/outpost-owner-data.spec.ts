@@ -100,7 +100,7 @@ test("the actual Outpost registry adopts legacy owner data and receives desktop 
     },
   });
   try {
-    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await app.window.getByRole("button", { name: /Legacy Outpost owner title/i }).first().click();
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
     const result = await app.window.evaluate(async ref => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
@@ -111,7 +111,7 @@ test("the actual Outpost registry adopts legacy owner data and receives desktop 
       await api.markThreadSeen!({ ...ref, seenAt, seenUpdatedAt: before!.updatedAt });
       return { before, seenAt };
     }, identity);
-    expect(result.before).toMatchObject({ pinnedRank: "1024", parentThreadId: "legacy-parent" });
+    expect(result.before).toMatchObject({ title: "Legacy Outpost owner title", titleSource: "explicit", pinnedRank: "1024", parentThreadId: "legacy-parent" });
     await app.closeApplication();
     const profile = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot });
     try {

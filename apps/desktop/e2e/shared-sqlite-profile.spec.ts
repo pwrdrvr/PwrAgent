@@ -224,7 +224,7 @@ test("desktop reads portable owner metadata and hands its mutations back to the 
       expect((await new SqliteOverlayStore(reader).getThreadMetadata(identity))?.title)
         .toEqual({ text: "Portable owner metadata", source: "explicit" });
     } finally { reader.close(); }
-    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await app.window.getByRole("button", { name: /Portable owner metadata/i }).first().click();
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
     const result = await app.window.evaluate(async identity => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
@@ -237,9 +237,8 @@ test("desktop reads portable owner metadata and hands its mutations back to the 
       const after = (await api.getNavigationSelectedDetail!({ protocol: 2, ref: identity })).thread;
       return { before, after, seenAt };
     }, identity);
-    // Codex owns its displayed title through the protocol. The portable
-    // title remains metadata; desktop mutates its own pin and relationship.
-    expect(result.before).toMatchObject({ pinnedRank: "1024", parentThreadId: "portable-parent", tokenMiserEnabled: true });
+    // Imported owner names remain visible until they are acknowledged by the provider.
+    expect(result.before).toMatchObject({ title: "Portable owner metadata", titleSource: "explicit", pinnedRank: "1024", parentThreadId: "portable-parent", tokenMiserEnabled: true });
     expect(result.after).toMatchObject({ pinnedRank: "8192", tokenMiserEnabled: false });
     expect(result.after?.parentThreadId).toBeUndefined();
     await app.closeApplication();

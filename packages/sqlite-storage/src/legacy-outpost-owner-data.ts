@@ -21,6 +21,7 @@ export function outpostThreadMetadata(thread: OutpostThread): OwnerThreadMetadat
     title: typeof thread.title === "string" ? {
       text: thread.titleSource === "fallback" && thread.title === "New outpost thread" ? "Untitled thread" : thread.title,
       source: (thread.titleSource ?? "fallback") as NonNullable<OwnerThreadRecord["title"]>["source"],
+      ...(typeof thread.titleNativeName === "string" ? { nativeName: thread.titleNativeName } : {}),
     } : undefined,
     parent: thread.parentThreadId !== undefined ? { backend: (thread.parentThreadBackend ?? "codex") as "codex",
       threadId: thread.parentThreadId as string,
@@ -31,7 +32,7 @@ export function outpostThreadMetadata(thread: OutpostThread): OwnerThreadMetadat
 }
 
 export function outpostThreadProjection(record: OwnerThreadRecord): OutpostThread {
-  const thread: OutpostThread = { id: record.threadId, title: record.title?.text, titleSource: record.title?.source,
+  const thread: OutpostThread = { id: record.threadId, title: record.title?.text, titleSource: record.title?.source, titleNativeName: record.title?.nativeName,
     sandbox: record.executionMode === "auto" ? "workspace-write" : record.executionMode === "full-access" ? "danger-full-access" : "read-only",
     parentThreadId: record.parent?.threadId, parentThreadBackend: record.parent?.backend, parentThreadInstanceId: record.parent?.instanceId };
   for (const field of FIELDS) if (record[field] !== undefined) thread[field] = structuredClone(record[field]);
