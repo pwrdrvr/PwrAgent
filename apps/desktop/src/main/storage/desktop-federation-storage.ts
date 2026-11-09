@@ -1,7 +1,7 @@
 import { getAppStateDb } from "../state/app-state";
 import { FederationStore } from "./federation-store";
 import { SqliteDurableTurnRequestStore } from "./durable-turn-request-store";
-import type { DurableTurnRequestStorage } from "../federation/durable-turn-request-storage";
+import type { DurableTurnRequestStorage } from "@pwragent/owner-core/durable-turn-request-storage";
 
 const fields = {
   instanceId: "federation_instance_id",

@@ -13,7 +13,7 @@ import {
   type SubmitDurableSteerRequest,
   type ControlActiveTurnResponse,
 } from "@pwragent/shared";
-import type { DurableTurnRequestStorage } from "./durable-turn-request-storage";
+import type { DurableTurnRequestStorage } from "@pwragent/owner-core/durable-turn-request-storage";
 
 import { DurableTurnRequestError } from "@pwragent/federation/errors";
 export { DurableTurnRequestError } from "@pwragent/federation/errors";
