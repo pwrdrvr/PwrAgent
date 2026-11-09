@@ -803,6 +803,8 @@ describe("Thread maintenance's hibernate step", () => {
 
   it("requires every archived external owner's receipt at hibernation admission (Git oracle property)", async () => {
     await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 3 }), async (authorizations) => {
+      expect({ registries: registries.length, databases: databases.length, roots: roots.length })
+        .toEqual({ registries: 0, databases: 0, roots: 0 });
       const { registry, store, directory, worktree, call, internal } = await outsideRegistrationFixture();
       vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
       expect((await call(worktree)).ok).toBe(true);
