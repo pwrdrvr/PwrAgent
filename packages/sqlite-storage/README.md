@@ -35,6 +35,12 @@ the provider snapshot record and port live in owner-core. Inventory scrubbing,
 search refresh/prune transactions and retained usage titles keep their existing
 behavior and write counts.
 
+Shared `AutomationStore` implements owner-core automation storage, including run
+lifecycle, artifacts, pruning and startup reconciliation. Desktop's private
+binding injects the existing warning logger at the same app-state construction
+site. The pure transcript merge policy lives in owner-core and serves both
+storage and desktop artifact rebuilding. SQL and transaction sites are preserved.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -76,3 +82,9 @@ Node to Electron's real services and back to Node after graceful shutdown.
 facts with independent provider models across WAL connections and reopen order.
 It covers backend-qualified identities, filters, pruning, detached results,
 legacy scrubbing, atomic inventory/document/FTS rollback and unchanged writes.
+
+`shared-automation-storage.property.test.ts` runs independent lifecycle and
+transcript models across shared/desktop WAL connections and reopens, with
+backend identity, pruning, reconciliation/outer rollback, host warnings and
+unchanged write counts. Supported profile E2E hands portable automations and
+artifacts to Electron's real services and reads its mutations after shutdown.

@@ -12,11 +12,71 @@ import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { ThreadSearchStore } from "@pwragent/sqlite-storage/thread-search-store";
+import { AutomationStore } from "@pwragent/sqlite-storage/automation-store";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+test("desktop reads portable automations and hands lifecycle and editor mutations back to portable storage", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    preLaunchHook(homeRoot) {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        const store = new AutomationStore(db);
+        for (const id of ["portable-automation", "portable-delete"]) store.createAutomation({
+          id, backend: "codex", threadId: "thread-smoke", name: "Portable automation",
+          taskPrompt: "Invented portable automation task", status: "paused",
+          schedule: { kind: "interval", every: 1, unit: "hours" }, now: 1,
+        });
+        store.createRun({ id: "portable-interrupted-run", automationId: "portable-automation", trigger: "manual", now: 2 });
+        store.markRunStarted({ runId: "portable-interrupted-run", backendTurnId: "portable-old-turn", now: 3 });
+        store.createRun({ id: "portable-completed-run", automationId: "portable-automation", trigger: "manual", now: 4 });
+        store.markRunTerminal({ runId: "portable-completed-run", status: "completed", now: 5 });
+        store.appendRunTranscriptEvents({ runId: "portable-completed-run", now: 5, events: [
+          { id: "portable-final", kind: "assistant_final", text: "Invented portable result", at: 5 },
+          { id: "portable-final-copy", kind: "assistant_final", text: " Invented portable result ", at: 6 },
+        ] });
+      } finally { db.close(); }
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const result = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const before = await api.listAutomations!({ backend: "codex", threadId: "thread-smoke" });
+      const runs = await api.listAutomationRuns!({ automationId: "portable-automation" });
+      const artifact = await api.getAutomationRunArtifact!({ runId: "portable-completed-run" });
+      const updated = await api.updateAutomation!({ automationId: "portable-automation",
+        name: "Desktop edited automation", taskPrompt: "Invented desktop edited task", enabled: false });
+      await api.deleteAutomation!({ automationId: "portable-delete" });
+      return { before, runs, artifact, updated };
+    });
+    expect(result.before.automations).toHaveLength(2);
+    expect(result.before.automations).toContainEqual(expect.objectContaining({ id: "portable-automation", name: "Portable automation", status: "paused" }));
+    expect(result.runs.runs).toContainEqual(expect.objectContaining({ id: "portable-interrupted-run", status: "cancelled",
+      backendTurnId: "portable-old-turn", errorMessage: "PwrAgent restarted before this local automation run completed." }));
+    expect(result.runs.runs).toContainEqual(expect.objectContaining({ id: "portable-completed-run", status: "completed", completedAt: 5 }));
+    expect(result.artifact.artifact?.transcriptEvents).toEqual([
+      { id: "portable-final", kind: "assistant_final", text: "Invented portable result", at: 5 },
+    ]);
+    expect(result.updated.automation).toMatchObject({ name: "Desktop edited automation", status: "paused" });
+    await app.closeApplication();
+    const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+    try {
+      const store = new AutomationStore(db);
+      expect(store.getAutomation("portable-automation")).toMatchObject({ name: "Desktop edited automation",
+        taskPrompt: "Invented desktop edited task", status: "paused" });
+      expect(store.getAutomation("portable-delete")).toBeUndefined();
+      expect(store.getAutomation("portable-delete", { includeDeleted: true })?.status).toBe("deleted");
+      expect(store.getRun("portable-interrupted-run")?.status).toBe("cancelled");
+      expect(store.getRunArtifact("portable-completed-run")?.transcriptEvents).toEqual(result.artifact.artifact?.transcriptEvents);
+    } finally { db.close(); }
+  } finally { await app.close(); }
+});
 
 test("desktop refreshes portable inventory and search projections for the next portable owner", async () => {
   const app = await launchElectronApp({
