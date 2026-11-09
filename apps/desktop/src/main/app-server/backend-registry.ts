@@ -9083,6 +9083,7 @@ type StartingTurnOrigin = {
 type PendingThreadMessageContext = {
   backend: AppServerBackendKind;
   createdAt: number;
+  admittedCodexTurnSequence?: number;
   id: string;
   messageId?: string;
   imageParts?: AppServerThreadImagePart[];
@@ -9753,6 +9754,8 @@ export class DesktopBackendRegistry {
     string,
     PendingThreadMessageContext
   >();
+  private codexMessageContextTurnSequence = 0;
+  private readonly codexMessageContextTurnObservations = new Map<string, Map<string, number>>();
   /**
    * A provider can call a tool before its turn-start call returns, and so
    * before the turn's origin row is written. The causal lookup reads these
@@ -24229,64 +24232,61 @@ export class DesktopBackendRegistry {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }), params, this.localFilePrivateStorageRoots);
       const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId, params.backend);
-      // Once handed over, the Claude session revokes them when it closes.
-      let handedOver = false;
-      let startingOrigin: StartingTurnOrigin | undefined;
-      let revoked = false;
-      const revokeConnections = () => {
-        if (revoked) return;
-        revoked = true;
-        for (const registration of registrations) registration.revoke();
-      };
-      try {
-        for (const registration of registrations) registration.bindThread(params.threadId);
-        // As for ACP, PwrAgent's own tools are optional: a server that cannot
-        // start must not block the operator's turn.
-        const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
-          .catch((error: unknown) => {
-            backendRegistryLog.warn("agent_tool_mcp_start_failed", {
-              backend: "claude",
-              error: error instanceof Error ? error.message : String(error),
-              threadId: params.threadId,
+      let prepared!: Parameters<ClaudeBackend["startTurn"]>[0];
+      return await this.threadStarts.startClaude({
+        prepare: async () => {
+          for (const registration of registrations) registration.bindThread(params.threadId);
+          // As for ACP, PwrAgent's own tools are optional: a server that cannot
+          // start must not block the operator's turn.
+          const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
+            .catch((error: unknown) => {
+              backendRegistryLog.warn("agent_tool_mcp_start_failed", {
+                backend: "claude",
+                error: error instanceof Error ? error.message : String(error),
+                threadId: params.threadId,
+              });
+              return undefined;
             });
-            return undefined;
-          });
-        const servers = [...registrations.map((registration) => ({
-          ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
-        })), ...(owned ? [owned.server] : [])];
-        const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
-          ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
-          : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
-        const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
-        handedOver = true;
-        const messageOrigin = resolveThreadMessageOrigin(params);
-        startingOrigin = this.beginStartingTurnOrigin({ backend: "claude", threadId: params.threadId, origin: messageOrigin });
-        const result = await this.claudeBackend.startTurn({
-          ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
-          messageOrigin,
-          executionMode: params.executionMode ?? overlay?.executionMode,
-          instructions,
-          mcpServers,
-          ...(this.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
-          // Directories attached to the thread, so Claude can work in them too.
-          attachedDirectories: overlay?.extraLinkedDirectories,
-          shellEnvironment: setupVariablesForAgent(
-            overlay?.codexEnvironmentRuntime,
-            this.resolvePassSetupVariablesToAgentsFn(),
-          ),
-          onSessionClosed: revokeConnections,
-        });
-        this.bindStartingTurnOrigin(startingOrigin, { threadId: params.threadId, turnId: result.turnId });
-        await this.persistStartingTurnOrigin(startingOrigin);
-        return result;
-      } catch (error) {
-        // A live session shares the thread's grants, so it alone revokes them.
-        if (!handedOver) revokeConnections();
-        if (error instanceof ClaudeTurnActiveError) throw new ThreadAlreadyActiveError(error.message);
-        throw error;
-      } finally {
-        this.dropStartingTurnOrigin(startingOrigin);
-      }
+          const servers = [...registrations.map((registration) => ({
+            ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
+          })), ...(owned ? [owned.server] : [])];
+          const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
+            ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
+            : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
+          const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
+          const messageOrigin = resolveThreadMessageOrigin(params);
+          prepared = {
+            ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
+            messageOrigin,
+            executionMode: params.executionMode ?? overlay?.executionMode,
+            instructions,
+            mcpServers,
+            ...(this.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
+            // Directories attached to the thread, so Claude can work in them too.
+            attachedDirectories: overlay?.extraLinkedDirectories,
+            shellEnvironment: setupVariablesForAgent(
+              overlay?.codexEnvironmentRuntime,
+              this.resolvePassSetupVariablesToAgentsFn(),
+            ),
+          };
+        },
+        beginOrigin: () => this.beginStartingTurnOrigin({ ...params, origin: prepared.messageOrigin }),
+        submit: async (onSessionClosed) => {
+          try { return await this.claudeBackend.startTurn({ ...prepared, onSessionClosed }); }
+          catch (error) {
+            if (error instanceof ClaudeTurnActiveError) throw new ThreadAlreadyActiveError(error.message);
+            throw error;
+          }
+        },
+        bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
+        persistOrigin: (origin) => this.persistStartingTurnOrigin(origin),
+        disposeOrigin: (origin) => this.dropStartingTurnOrigin(origin),
+        revokeConnections: () => { for (const registration of registrations) registration.revoke(); },
+        failed: (stage, error, turn) => backendRegistryLog.warn("claude_turn_start_finalization_failed", {
+          backend: params.backend, threadId: params.threadId, turnId: turn?.turnId, stage,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      });
     }
     // A selection already in flight must finish before this turn reads its runtime.
     await this.withCodexEnvironmentRuntimeLock(
@@ -24774,6 +24774,9 @@ export class DesktopBackendRegistry {
     turnId?: string;
     retainAttachments?: boolean;
   }): Promise<string | undefined> {
+    const admittedCodexTurnSequence = params.backend === "codex" && !params.turnId
+      ? this.codexMessageContextTurnSequence
+      : undefined;
     const imageParts = await pendingThreadMessageImageParts(params.input, params);
     const retainedInput = params.retainAttachments
       ? await stageTurnInputAttachmentsForRetention(
@@ -24795,6 +24798,7 @@ export class DesktopBackendRegistry {
     this.pendingThreadMessageContexts.set(id, {
       backend: params.backend,
       createdAt: Date.now(),
+      ...(admittedCodexTurnSequence !== undefined ? { admittedCodexTurnSequence } : {}),
       id,
       ...(imageParts.length > 0 ? { imageParts } : {}),
       ...(retainedInput.length > 0 ? { retainedInput } : {}),
@@ -24845,6 +24849,9 @@ export class DesktopBackendRegistry {
     text?: string;
     turnId?: string;
   }): PendingThreadMessageContext | undefined {
+    const observedCodexTurnSequence = params.backend === "codex" && params.turnId
+      ? this.codexMessageContextTurnObservations.get(params.threadId)?.get(params.turnId)
+      : undefined;
     const candidates = [...this.pendingThreadMessageContexts.values()]
       .filter(
         (pending) =>
@@ -24862,6 +24869,15 @@ export class DesktopBackendRegistry {
             !pending.turnId
             || !params.turnId
             || pending.turnId === params.turnId
+          )
+          // An unbound start may receive its real user item before the start
+          // response. Identical text from a previously observed turn cannot
+          // claim that context while the new provider identity is unknown.
+          && (
+            pending.turnId
+            || pending.admittedCodexTurnSequence === undefined
+            || observedCodexTurnSequence === undefined
+            || observedCodexTurnSequence > pending.admittedCodexTurnSequence
           ),
       )
       .sort((left, right) => left.createdAt - right.createdAt);
@@ -54033,6 +54049,22 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent, codexStatusSequence?: number): Promise<void> {
+    if (event.backend === "codex") {
+      const params = readRecord(event.notification.params);
+      const threadId = readOptionalString(params, ["threadId"]);
+      const turnId = readOptionalString(params, ["turnId"])
+        ?? readOptionalString(readRecord(params?.turn), ["id"]);
+      if (threadId && turnId && turnId !== `pending:${threadId}`) {
+        let turns = this.codexMessageContextTurnObservations.get(threadId);
+        if (!turns) {
+          turns = new Map();
+          this.codexMessageContextTurnObservations.set(threadId, turns);
+        }
+        // Keep the first observation at ingress: delayed repeats must not
+        // turn an earlier identity into one admitted by a later start.
+        if (!turns.has(turnId)) turns.set(turnId, ++this.codexMessageContextTurnSequence);
+      }
+    }
     this.navigationDirectoryScope.invalidate(event);
     const archiveWorkspaceChanged = this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {

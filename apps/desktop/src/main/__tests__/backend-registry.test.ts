@@ -5385,6 +5385,74 @@ describe("DesktopBackendRegistry", () => {
     await assertAcceptedAcpTurnSurvivesFinalizationFailure("acp:kimi" as AcpBackendId, "accepted", "review");
   });
 
+  async function assertClaudeStartOutcome(threadId: string, failure: "bind" | "persist" | "dispose" | "begin") {
+    const revoke = vi.fn();
+    const registration = { server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} },
+      bindThread: vi.fn(), revoke };
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock({ overlays: { [`claude:${threadId}`]: {
+        backend: "claude", threadId, extraLinkedDirectories: [], mcpConnectionIds: ["fixture"],
+      } } }), mcpConnectionService: { registerBridge: vi.fn(async () => registration) },
+      pdfToolMcpServer: null, agentToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      claudeBackend: { startTurn: (params: { onSessionClosed?: () => void }) => Promise<{ backend: "claude"; threadId: string; turnId: string }> };
+      beginStartingTurnOrigin: () => unknown;
+      bindStartingTurnOrigin: () => void;
+      persistStartingTurnOrigin: () => Promise<void>;
+      dropStartingTurnOrigin: (origin: unknown) => void;
+      startingTurnOrigins: Set<unknown>;
+    };
+    const accepted = { backend: "claude" as const, threadId, turnId: "accepted-claude" };
+    const provider = vi.spyOn(internal.claudeBackend, "startTurn").mockResolvedValue(accepted);
+    const refused = new Error(`Claude host ${failure}`);
+    const begin = vi.spyOn(internal, "beginStartingTurnOrigin");
+    const bind = vi.spyOn(internal, "bindStartingTurnOrigin");
+    const persist = vi.spyOn(internal, "persistStartingTurnOrigin").mockResolvedValue();
+    const drop = internal.dropStartingTurnOrigin.bind(registry);
+    const dispose = vi.spyOn(internal, "dropStartingTurnOrigin");
+    if (failure === "begin") begin.mockImplementationOnce(() => { throw refused; });
+    if (failure === "bind") bind.mockImplementationOnce(() => { throw refused; });
+    if (failure === "persist") persist.mockRejectedValueOnce(refused);
+    // Dispose the real resource before injecting a disposer failure.
+    if (failure === "dispose") {
+      dispose.mockImplementationOnce((origin) => { drop(origin); throw refused; });
+    }
+    try {
+      const pending = registry.startTurn({ backend: "claude", threadId,
+        input: [{ type: "text", text: "Continue Claude" }], messageOrigin: { kind: "messaging" } });
+      if (failure === "begin") {
+        await expect(pending).rejects.toBe(refused);
+        expect(provider).not.toHaveBeenCalled();
+        expect(revoke).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).resolves.toBe(accepted);
+        expect(provider).toHaveBeenCalledOnce();
+        expect(bind).toHaveBeenCalledOnce();
+        expect(persist).toHaveBeenCalledOnce();
+        expect(revoke).not.toHaveBeenCalled();
+        provider.mock.calls[0][0].onSessionClosed!();
+        provider.mock.calls[0][0].onSessionClosed!();
+        expect(revoke).toHaveBeenCalledOnce();
+      }
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(internal.startingTurnOrigins.size).toBe(0);
+    } finally { await registry.close(); }
+  }
+
+  it("preserves Claude acceptance and grant ownership through generated host failures", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("accepted", "same:thread", "pending:source"),
+      fc.constantFrom("bind" as const, "persist" as const, "dispose" as const, "begin" as const), assertClaudeStartOutcome), { numRuns: 12 });
+  });
+
+  it("returns an accepted Claude turn when origin persistence rejects", async () => {
+    await assertClaudeStartOutcome("accepted", "persist");
+  });
+
+  it("revokes Claude grants when origin preparation rejects before provider invocation", async () => {
+    await assertClaudeStartOutcome("accepted", "begin");
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
@@ -51273,6 +51341,68 @@ script = "printf setup"
 
   it("keeps prepared start provenance when user items precede the provider's start reply", async () => {
     await assertPreparedStartOrigin({ threadId: "prepared", text: "", providerStarted: false, agent: false });
+  });
+
+  async function assertPriorTurnCannotConsumeStart(command: {
+    threadId: string; text: string; priorTurns: number; delayedTurn: number; providerStarted: boolean;
+  }): Promise<void> {
+    const client = new MockBackendClient({});
+    const store = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const origin: AppServerThreadMessageOrigin = { kind: "agent", sourceThread: { backend: "claude", threadId: "sender" } };
+    const items: Array<{ id: string; origin?: unknown }> = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "item/started" || event.notification.method === "item/completed") {
+        items.push(event.notification.params.item as { id: string; origin?: unknown });
+      }
+    });
+    const started = async (turnId: string, threadId = command.threadId) => client.emit({ method: "turn/started", params: {
+      threadId, turnId, turn: { id: turnId, status: "in_progress" },
+    } });
+    const item = async (method: "item/started" | "item/completed", turnId: string, id: string) => client.emit({ method, params: {
+      threadId: command.threadId, turnId, item: { id, type: "userMessage", content: [{ type: "text", text: command.text }] },
+    } });
+    vi.spyOn(client, "startTurn").mockImplementation(async () => {
+      await item("item/completed", `prior-${command.delayedTurn % command.priorTurns}`, "old-message");
+      if (command.providerStarted) await started("new-turn");
+      await item("item/started", "new-turn", "new-message");
+      await item("item/completed", "new-turn", "new-message");
+      await client.emit({ method: "turn/completed", params: { threadId: command.threadId,
+        turnId: "new-turn", turn: { id: "new-turn", status: "completed", output: [] } } });
+      return { threadId: command.threadId, turnId: "new-turn" };
+    });
+    try {
+      // The same provider turn id in a different thread must not fence this
+      // start's real item, even though that observation precedes admission.
+      await started("new-turn", `${command.threadId}:other`);
+      await client.emit({ method: "turn/completed", params: { threadId: `${command.threadId}:other`,
+        turnId: "new-turn", turn: { id: "new-turn", status: "completed", output: [] } } });
+      for (let index = 0; index < command.priorTurns; index += 1) {
+        await started(`prior-${index}`);
+        await client.emit({ method: "turn/completed", params: { threadId: command.threadId,
+          turnId: `prior-${index}`, turn: { id: `prior-${index}`, status: "completed", output: [] } } });
+      }
+      await registry.startTurn({ backend: "codex", threadId: command.threadId,
+        input: [{ type: "text", text: command.text }], messageOrigin: origin });
+      expect(items).toHaveLength(3);
+      expect(items[0]).toEqual({ id: "old-message", type: "userMessage", content: [{ type: "text", text: command.text }] });
+      for (const message of items.slice(1)) expect(message).toMatchObject({ id: "new-message", origin });
+      expect(store.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(expect.objectContaining({ messageId: "old-message" }));
+      expect(store.upsertThreadMessageOrigin).toHaveBeenCalledWith({ backend: "codex", threadId: command.threadId,
+        messageId: "new-message", origin });
+    } finally { await registry.close(); }
+  }
+
+  it("keeps a new start's provenance through generated delayed prior-turn completions with identical text", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({ threadId: fc.constantFrom("same", "same:thread", "pending:source"),
+      text: fc.constantFrom("Continue.", "Continue", "Same prepared input"), priorTurns: fc.integer({ min: 1, max: 4 }),
+      delayedTurn: fc.nat(8), providerStarted: fc.boolean(),
+    }), assertPriorTurnCannotConsumeStart), { numRuns: 20 });
+  });
+
+  it("does not give a delayed previous-turn completion the new start's origin", async () => {
+    await assertPriorTurnCannotConsumeStart({ threadId: "same", text: "Continue.", priorTurns: 1,
+      delayedTurn: 0, providerStarted: true });
   });
 
   it.each([

@@ -344,6 +344,14 @@ rejection. The host retains ACP prompt locks, provider active-turn ownership,
 runtime/model/environment setup and every existing storage site. This adds no
 request identity, retry state or persistence.
 
+Claude turn starts use the lifecycle for preparation-to-session grant ownership,
+accepted origin binding/persistence and origin disposal. Before provider invocation,
+failed preparation releases its MCP grants. Claude's existing session-close contract
+consumes release on every invocation, including refusal while a session is live;
+only that callback then revokes grants, once. Later origin or cleanup failures are
+reported without replacing the provider outcome. Desktop retains Claude execution,
+runtime/model/environment/MCP/input setup, active sessions and every storage site.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or
