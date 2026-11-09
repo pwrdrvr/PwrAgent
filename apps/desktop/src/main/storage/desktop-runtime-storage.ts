@@ -14,7 +14,7 @@ import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoi
 import { ProjectHeldWakeupStore } from "../state/project-held-wakeup-store";
 import { RestartContinuationStore } from "../state/restart-continuation-store";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
-import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import { ThreadSandboxStore } from "./thread-sandbox-store";
 import { runOneTimeArchivedWorktreeRepair as runRepair } from "../state/archived-worktree-repair";
 import { AcpAgentStore } from "./acp-agent-store";
 import { AcpSessionStore } from "./acp-session-store";

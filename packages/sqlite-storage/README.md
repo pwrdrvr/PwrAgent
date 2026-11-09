@@ -111,6 +111,13 @@ The private desktop binding and original explicit factory preserve construction,
 revocation/reauthorization, expiry, repeat collapse, SQL and exact write counts.
 No access policy or native binary is shared.
 
+Shared `ThreadSandboxStore` implements owner-core pending thread-resource
+storage. Its private desktop binding preserves the gateway observer's event-time
+state guard and the original explicitly typed cleanup factory. First-creator
+ownership, unqualified native grants, pending-status filters, cleanup ordering
+and stale outcomes keep every SQL statement and exact write count. This does
+not activate a provider or move viewer-local composer drafts into owner state.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -238,3 +245,12 @@ trust/enrollment/audit models, profile HMAC oracles, WAL/reopen, rollback/refusa
 legacy records, bounded reads and exact writes. Supported Electron E2E hands
 portable trust/audit facts to production IPC services, observes later WAL writes,
 and reads desktop revocation and locally generated invitations back from Node.
+
+`shared-thread-resource-storage.property.test.ts` checks both actual desktop
+construction paths and their profile/guard lifetime against the shared class.
+Independent resource models cover first ownership, connection-qualified identity,
+native grants, cleanup/no-resurrection, detached and zero-write reads, WAL/reopen,
+outer rollback/statement refusal, legacy status filters and exact unchanged commits.
+Supported isolated Electron E2E runs those factories and the real cleanup service
+with an invented transport, observes later portable WAL commits through a retained
+port, and hands persisted cleanup outcomes back to Node after graceful shutdown.
