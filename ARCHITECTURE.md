@@ -420,6 +420,12 @@ ports through private desktop bindings at the existing runtime construction
 sites. The model-settings-recents helper is shared by to-do dispatch and the
 desktop recents service. Their SQL, immediate transactions and write counts
 remain unchanged.
+Shared `SqliteOverlayStore` implements the owner metadata registry and the
+existing PR and remote-target storage ports, with its dependency, pin-order,
+change-version and in-memory output closure. Desktop constructs it through a
+private storage binding at the original app-state site; the application-facing
+`desktop-overlay-store` adapter exposes its public API without its database or
+caches. State compatibility exports resolve to the same implementation.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop

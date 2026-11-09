@@ -9,12 +9,67 @@ import { SqliteThreadReviewStorage } from "@pwragent/sqlite-storage/thread-revie
 import { listModelSettingsRecents, recordModelSettingsRecent } from "@pwragent/sqlite-storage/model-settings-recents-store";
 import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
-import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
+import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+test("desktop reads portable owner metadata and hands its mutations back to the portable store", async () => {
+  const identity = { backend: "codex" as const, threadId: "thread-smoke" };
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        const store = new SqliteOverlayStore(db);
+        await store.updateThreadMetadata(identity, {
+          title: { text: "Portable owner metadata", source: "explicit" }, pinnedRank: "1024",
+          parent: { backend: "claude", threadId: "portable-parent", instanceId: "portable-instance" },
+          subthreadOrder: ["portable-child"], subthreadsCollapsed: true,
+        });
+        await store.setThreadTokenMiser({ ...identity, enabled: true });
+      } finally { db.close(); }
+    },
+  });
+  try {
+    const reader = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+    try {
+      expect((await new SqliteOverlayStore(reader).getThreadMetadata(identity))?.title)
+        .toEqual({ text: "Portable owner metadata", source: "explicit" });
+    } finally { reader.close(); }
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const result = await app.window.evaluate(async identity => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const before = (await api.getNavigationSelectedDetail!({ protocol: 2, ref: identity })).thread;
+      await api.setThreadPin!({ ...identity, pinnedRank: "8192" });
+      await api.setThreadParent!({ ...identity, parentThreadId: null });
+      await api.setThreadTokenMiser!({ ...identity, enabled: false });
+      const seenAt = Date.now() + 60_000;
+      await api.markThreadSeen!({ ...identity, seenAt, seenUpdatedAt: before!.updatedAt });
+      const after = (await api.getNavigationSelectedDetail!({ protocol: 2, ref: identity })).thread;
+      return { before, after, seenAt };
+    }, identity);
+    // Codex owns its displayed title through the protocol. The portable
+    // title remains metadata; desktop mutates its own pin and relationship.
+    expect(result.before).toMatchObject({ pinnedRank: "1024", parentThreadId: "portable-parent", tokenMiserEnabled: true });
+    expect(result.after).toMatchObject({ pinnedRank: "8192", tokenMiserEnabled: false });
+    expect(result.after?.parentThreadId).toBeUndefined();
+    await app.closeApplication();
+    const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+    try {
+      const store = new SqliteOverlayStore(db);
+      const metadata = await store.getThreadMetadata(identity);
+      expect(metadata).toMatchObject({ ...identity, title: { text: "Portable owner metadata", source: "explicit" },
+        pinnedRank: "8192", seenAt: result.seenAt, subthreadOrder: ["portable-child"], subthreadsCollapsed: true });
+      expect(metadata?.seenUpdatedAt).toBeGreaterThanOrEqual(result.before!.updatedAt!);
+      expect(metadata?.parent).toBeUndefined();
+      expect((await store.getThreadOverlayState(identity))?.tokenMiserEnabled).toBe(false);
+    } finally { db.close(); }
+  } finally { await app.close(); }
+});
 
 test("desktop upgrades a profile opened by portable SQLite and retains its owner metadata", async () => {
   const identity = { backend: "codex" as const, threadId: "portable-fixture-thread" };

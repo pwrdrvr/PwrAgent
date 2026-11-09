@@ -18,6 +18,15 @@ the desktop recents service and state compatibility export use the same helper.
 Card edits, checklist/status updates, dispatch preferences, review tracking and
 exclusive transactions retain their existing SQL and write counts.
 
+The shared `SqliteOverlayStore` implements `OwnerThreadRegistry`, PR storage and
+remote thread routing ports. Its complete closure includes dependency storage,
+relative pin ordering, change-version readers and process-local environment
+output. Desktop constructs the same class through a private storage binding at
+the original app-state lifecycle site. State compatibility exports contain no
+second implementation. The detached PR key policy and remote target port live
+in owner-core without any storage dependency. All overlay SQL and transaction
+bodies are preserved.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -48,3 +57,9 @@ checks Node-created lease takeover by Electron and release back to Node.
 records with independent models across portable/desktop WAL connections and
 reopens. It checks backend-qualified ownership, ordering, dispatch recents,
 transaction rollback, zero-write reads and unchanged dispatch commit counts.
+
+`shared-owner-metadata-storage.property.test.ts` checks the portable binding,
+independent metadata/pin/dependency models over alternating WAL connections,
+reopen order, unchanged-fact/read write counts, cross-store rollback and live
+output boundary writes. The supported profile E2E hands owner metadata from
+Node to Electron's real services and back to Node after graceful shutdown.
