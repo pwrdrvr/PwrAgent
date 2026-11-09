@@ -325,6 +325,42 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("actual desktop held admission covers resumed waiting input before its new review row is cancelled", async () => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      for (const id of ["older", "next"]) {
+        await host.client.startTurn({ ...identity, queueEntryId: id, delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+        await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: true });
+      }
+      await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+      await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/completed"
+        && event.notification.params.turnId === active.turnId)).toBe(true));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      stop = registry.onEvent(async event => {
+        if (event.notification.method === "thread/turnQueue/updated" && event.notification.params.queueEntryId === "review"
+          && event.notification.params.status === "queued") {
+          expect(await host.client.cancelQueuedTurn({ queueEntryId: "review" })).toMatchObject({ cancelled: true });
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+      });
+      // The registered Resume controls schedule real drains. Held admission
+      // must protect that pre-existing FIFO before its queued event yields.
+      for (const id of ["older", "next"]) await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: false });
+      await registry.submitHeldTurn({ ...identity, queueEntryId: "review", origin: "scheduled",
+        input: [{ type: "text", text: "Invented target-ended guidance" }], holdReason: "Target turn ended; review required" });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+        .toMatchObject(["older", "next"].map(queueEntryId => ({ queueEntryId, manualReleaseRequired: true })));
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "older" })).toMatchObject({ disposition: "started" });
+    } finally { stop(); await host.close(); }
+  });
+
   it("actual desktop tracked terminal publication cannot dispatch an unreviewed successor", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();
