@@ -579,9 +579,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           desktop = await startDesktopOwner(null, prepare, undefined, root);
           await assertAbsent(desktop.client);
           const publisher = desktopOwner.registry as {
-            publishRefreshedProviderThreadsToCache(refreshes: Array<{ backends: AppServerBackendKind[]; threads: AppServerThreadSummary[] }>): void;
+            publishRefreshedProviderThreadsToCache(refreshes: Array<{ backends: AppServerBackendKind[]; threads: AppServerThreadSummary[] }>): Promise<void>;
           };
-          publisher.publishRefreshedProviderThreadsToCache([{ backends: [backend], threads: [before] }]);
+          await publisher.publishRefreshedProviderThreadsToCache([{ backends: [backend], threads: [before] }]);
           await assertAbsent(desktop.client);
         } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
       }

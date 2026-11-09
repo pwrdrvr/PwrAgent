@@ -380,7 +380,12 @@ installed record. Native titles/provenance, workspace, times and execution mode
 outrank older overlay facts. Native archive state applies without a durable
 owner archive/restore observation; a passive stored session cannot supersede
 that observation. Live pins, parents, seen watermarks and model settings remain
-shared. Hidden helpers remain excluded. Desktop and Outpost use the same pure
+shared. Desktop cache publication reapplies the ordinary directory/environment
+enrichment, then rechecks native membership after its IO. The separate
+`acp-cache-enrichment-write-budgets.json` records the existing first worktree
+mapping commit (16,480 WAL bytes, about 1.648 MB/day at 100 new resolutions);
+100 repeated publications and 1,000 cached reads add zero writes.
+Hidden helpers remain excluded. Desktop and Outpost use the same pure
 ACP summary projection; host path labels stay injected. Unsupported providers
 are listed as unavailable and their execution, transcript and mutation requests
 are refused before reaching Codex. This grants no cross-instance reach.

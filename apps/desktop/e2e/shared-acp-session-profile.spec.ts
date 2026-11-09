@@ -202,10 +202,17 @@ test("desktop and Outpost retire actual ACP active/archive members despite retai
       try {
         const sessions = new AcpSessionStore(db);
         const overlay = new SqliteOverlayStore(db);
+        const repo = path.join(homeRoot, "enriched-repo");
+        const cwd = path.join(homeRoot, ".worktrees", "enriched-member");
+        await mkdir(repo, { recursive: true });
+        await mkdir(path.join(cwd, ".codex", "environments"), { recursive: true });
+        await writeFile(path.join(cwd, ".codex", "environments", "environment.toml"), 'version = 1\nname = "Invented ACP environment"\n');
         for (const [index, id] of ids.entries()) {
           sessions.upsertSession({ backendId: backend, sessionId: id, title: `Invented ACP ${index}`, titleSource: "derived",
-            cwd: homeRoot, createdAt: 1, updatedAt: 2, executionMode: "auto", status: "idle", ...(index ? { archivedAt: 3 } : {}) });
+            cwd, createdAt: 1, updatedAt: 2, executionMode: "auto", status: "idle", ...(index ? { archivedAt: 3 } : {}) });
           await overlay.updateThreadMetadata({ backend, threadId: id }, { pinnedRank: `${1024 + index}`, seenAt: 10_000, seenUpdatedAt: 2 });
+          await overlay.setAcpWorktreeDirectory({ backend, threadId: id, cwd,
+            directory: { id: repo, path: repo, worktreePath: cwd, kind: "worktree", label: "enriched-repo" } });
         }
         sessions.upsertSession({ backendId: other, sessionId: ids[0]!, title: "Uninstalled ACP member", titleSource: "explicit",
           cwd: homeRoot, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
@@ -223,6 +230,14 @@ test("desktop and Outpost retire actual ACP active/archive members despite retai
     }, { backend, ids });
     expect(before[0]).toMatchObject({ title: "Invented ACP 0", executionMode: "auto", pinnedRank: "1024" });
     expect(before[1]).toMatchObject({ title: "Invented ACP 1", archivedAt: 3 });
+    const cached = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return await api.listThreads!();
+    });
+    expect(cached.threads.find(thread => thread.id === ids[0] && thread.source === backend)).toMatchObject({
+      linkedDirectories: [{ path: path.join(app.homeRoot, "enriched-repo"), worktreePath: path.join(app.homeRoot, ".worktrees", "enriched-member") }],
+      codexEnvironmentOptions: [{ name: "Invented ACP environment" }],
+    });
     await app.closeApplication();
     const stateDirectory = path.dirname(stateDbPathForHomeRoot(app.homeRoot));
     const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);

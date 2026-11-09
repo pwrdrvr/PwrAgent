@@ -12678,13 +12678,14 @@ describe("DesktopBackendRegistry", () => {
         const native: AcpSessionMetadata = { backendId: backend, sessionId: "same-id", title: name, titleSource: "derived",
           cwd, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" };
         sessions.upsertSession(native);
+        sessions.upsertSession({ ...native, backendId: "acp:other", title: "Other", cwd: repo });
         const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
           overlayStore: new SqliteOverlayStore(db), acpSessionStore: sessions, providerThreadSnapshotStore: inventory,
           discoverLocalAcpAgents: async () => [], acpWorktreeRepositoryResolver: async () => directory });
         try {
           const ordinary = (await registry.listThreads({ backend, forceRefresh: true }))[0]!;
           expect(ordinary.linkedDirectories).toEqual([directory]);
-          expect(ordinary.codexEnvironmentOptions).toMatchObject([{ name }]);
+          expect(ordinary).toMatchObject({ codexEnvironmentOptions: [{ name }] });
           let present = true;
           for (const [index, command] of ["hydrate", ...commands].entries()) {
             if (command === "delete") { sessions.deleteSession(backend, native.sessionId); present = false; }
@@ -12697,14 +12698,48 @@ describe("DesktopBackendRegistry", () => {
             if (command !== "hydrate") await publish.publishRefreshedProviderThreadsToCache([{ backends: [backend], threads: [ordinary] }]);
             const rows = await registry.listThreads({ callerReason: "navigation-snapshot" });
             const row = rows.find(thread => thread.source === backend);
+            expect(rows.find(thread => thread.source === "acp:other")?.linkedDirectories)
+              .toEqual([{ id: repo, path: repo, kind: "local", label: "repo" }]);
             expect(row !== undefined).toBe(present);
             if (present) {
               expect(row).toMatchObject({ title: sessions.getSession(backend, native.sessionId)!.title,
-                linkedDirectories: ordinary.linkedDirectories, codexEnvironmentOptions: ordinary.codexEnvironmentOptions });
+                linkedDirectories: ordinary.linkedDirectories, codexEnvironmentOptions: [{ name }] });
             }
           }
         } finally { await registry.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
       }), { numRuns: 10, examples: [["Env", ["startup", "authentication", "delete"]]] });
+  });
+
+  it.each(["hydrate", "publish"] as const)("ACP cache %s rechecks native membership after directory IO", async boundary => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("delete", "hide", "rename"), async change => {
+      const temp = createTempStateDb("acp-cache-race-");
+      const db = StateDb.open(temp.dbPath);
+      const sessions = new AcpSessionStore(db);
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const cwd = path.join(temp.tempDir, ".worktrees", "member");
+      const native: AcpSessionMetadata = { backendId: "acp:uninstalled", sessionId: "member", title: "Before",
+        cwd, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" };
+      sessions.upsertSession(native);
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
+        overlayStore: new SqliteOverlayStore(db), acpSessionStore: sessions, providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db),
+        discoverLocalAcpAgents: async () => [], acpWorktreeRepositoryResolver: async () => {
+          entered.resolve(); await resume.promise;
+          return { id: temp.tempDir, path: temp.tempDir, worktreePath: cwd, kind: "worktree", label: "repo" };
+        } });
+      const publisher = registry as unknown as { publishRefreshedProviderThreadsToCache(refreshes: []): Promise<void> };
+      const listing = boundary === "hydrate" ? registry.listThreads({ callerReason: "navigation-snapshot" })
+        : Promise.resolve(publisher.publishRefreshedProviderThreadsToCache([])).then(() => registry.listThreads({ callerReason: "navigation-snapshot" }));
+      try {
+        expect(await Promise.race([entered.promise.then(() => true), listing.then(() => false)])).toBe(true);
+        if (change === "delete") sessions.deleteSession(native.backendId, native.sessionId);
+        else sessions.upsertSession({ ...native, hidden: change === "hide", title: "After" });
+        resume.resolve();
+        const rows = await listing;
+        expect(rows).toHaveLength(change === "rename" ? 1 : 0);
+        if (change === "rename") expect(rows[0]?.title).toBe("After");
+      } finally { resume.resolve(); await listing; await registry.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
+    }), { numRuns: 6, examples: [["delete"], ["hide"], ["rename"]] });
   });
 
   it("returns a cold-start empty snapshot while provider discovery runs", async () => {
