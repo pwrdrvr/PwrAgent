@@ -171,6 +171,7 @@ reopens. It checks actual factory binding, immutable index identity, conditional
 writes, duplicate import/archive precedence, migration markers, immediate locking,
 atomic rollback, malformed/no-repair reads and exact commit counts. Generated
 service coverage retains content privacy, buffered replay and failed-flush retry.
-Supported Electron E2E reads portable accounting through the real desktop service,
-observes legacy migration and archive through read-only WAL, then restores
-through the portable service after reopening the profile from Node.
+Supported Electron E2E reads portable accounting through the real Settings
+service and observes later portable commits through that retained service. The
+profile retains migration markers and archive fences; after Electron shutdown,
+the portable service restores the thread without resurrecting original output.
