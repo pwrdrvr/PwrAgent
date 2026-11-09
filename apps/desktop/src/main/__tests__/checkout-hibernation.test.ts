@@ -30,7 +30,7 @@ import { inspectRegisterableWorktree } from "../app-server/worktree-maintenance-
  * with Git itself, then checks that hibernation leaves the checkout alone.
  */
 
-const probeHook = vi.hoisted(() => ({ onInspect: undefined as undefined | ((call: number) => void), calls: 0 }));
+const probeHook = vi.hoisted(() => ({ onInspect: undefined as undefined | ((call: number) => void), calls: 0, identities: 0 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
 vi.mock("../codex-app-server/stdio-transport", async () => ({
   StdioJsonRpcTransport: (await import("./fixtures/archive-worktree-transport")).ArchiveWorktreeTransport,
@@ -43,6 +43,20 @@ vi.mock("../app-server/checkout-hibernation-workspace", async (importOriginal) =
       probeHook.calls += 1;
       probeHook.onInspect?.(probeHook.calls);
       return await actual.inspectHibernationWorkspace(...args);
+    },
+  };
+});
+vi.mock("../app-server/worktree-maintenance-registration", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../app-server/worktree-maintenance-registration")>();
+  return {
+    ...actual,
+    hasWorktreeRegistration: async (...args: Parameters<typeof actual.hasWorktreeRegistration>) => {
+      probeHook.identities += 1;
+      return await actual.hasWorktreeRegistration(...args);
+    },
+    inspectRegisterableWorktree: async (...args: Parameters<typeof actual.inspectRegisterableWorktree>) => {
+      probeHook.identities += 1;
+      return await actual.inspectRegisterableWorktree(...args);
     },
   };
 });
@@ -82,6 +96,7 @@ afterEach(async () => {
   ArchiveWorktreeTransport.onList = undefined;
   probeHook.onInspect = undefined;
   probeHook.calls = 0;
+  probeHook.identities = 0;
 });
 
 const ON: DesktopCheckoutHibernationPolicy = {
@@ -844,8 +859,15 @@ describe("Thread maintenance's hibernate step", () => {
           if (authorized) await store.setThreadWorktreeRegistration({ ...other, worktreePath: worktree, registration });
         }
         const allowed = authorizations.every(Boolean);
+        const before = { workspaces: probeHook.calls, identities: probeHook.identities };
         const inspected = await measureSqliteWrites(() => service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 }));
         expect(inspected.writes.commits).toBe(0);
+        if (allowed) {
+          // Git owns one checkout, however many conversations refer to it.
+          // A read-only scan must not multiply its probes by owner count.
+          expect({ workspaces: probeHook.calls - before.workspaces, identities: probeHook.identities - before.identities })
+            .toEqual({ workspaces: 1, identities: 1 });
+        }
         const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
           removeEmptyFolders: false, hibernate: [identity] });
         expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: allowed ? 1 : 0, kept: allowed ? 0 : 1 });
