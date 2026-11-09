@@ -8,6 +8,7 @@ import fs from "node:fs";
 import { vi } from "vitest";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
+import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 import { adoptOutpostOwnerData } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
 import { SqliteOwnerJobStore } from "@pwragent/sqlite-storage/owner-job-store";
@@ -259,4 +260,33 @@ it("rejects a corrupted job key without rewriting or aliasing its accepted ident
       expect(f.db.raw.prepare("SELECT payload FROM owner_jobs WHERE job_id = ?").pluck().get("accepted")).toBe(bytes);
     } finally { f.db.close(); rmSync(f.root, { recursive: true, force: true }); }
   }), { numRuns: 15 });
+});
+
+it("honors provider archive state and the latest canonical archive/restore boundary without resurrecting ownership", async () => {
+  const { JobStore, HeadlessBackend } = await modules();
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.array(fc.constantFrom("archive", "restore"), { minLength: 1, maxLength: 12 }), async (initialArchived, commands) => {
+    const f = fixture();
+    new ProviderThreadSnapshotStore(f.db).replace({ backend: "codex", observedAt: 1, threads: [{
+      id: "thread", source: "codex", title: "Provider title", titleSource: "explicit", linkedDirectories: [], createdAt: 1,
+      ...(initialArchived ? { archivedAt: 1 } : {}),
+    }] });
+    const profile = openOutpostProfileRuntime({ stateDirectory: f.root, profileName: "fixture", cwd: f.identity.workspace });
+    try {
+      const store = new JobStore(f.directory, f.identity, profile);
+      const backend = new HeadlessBackend({ workspace: f.identity.workspace, store, onFailure(error: unknown) { throw error; } }, () => {});
+      let archived = initialArchived;
+      const check = () => {
+        if (archived) expect(() => backend.owned("thread")).toThrow("Thread is not owned");
+        else expect(backend.owned("thread").title).toBe("Provider title");
+        expect(backend.runtime.listOwnedThreads().some((thread: { id: string }) => thread.id === "thread")).toBe(!archived);
+      };
+      check();
+      for (const [index, command] of commands.entries()) {
+        await f.desktop.updateThreadMetadata({ backend: "codex", threadId: "thread" }, command === "archive"
+          ? { archivedAt: index + 2 } : { restoredAt: index + 2 });
+        archived = command === "archive";
+        check();
+      }
+    } finally { profile.close(); f.db.close(); rmSync(f.root, { recursive: true, force: true }); }
+  }), { numRuns: 20 });
 });
