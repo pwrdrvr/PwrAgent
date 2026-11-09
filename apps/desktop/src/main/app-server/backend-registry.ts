@@ -24697,87 +24697,63 @@ export class DesktopBackendRegistry {
     });
     if (submitted.kind === "recovered") return submitted.response;
     const result = submitted.turn;
-    this.bindStartingTurnOrigin(startingOrigin, result);
-    if (retryableCodexTurnStart) {
-      retryableCodexTurnStart.turnId = result.turnId;
-    }
-    this.pdfAttachmentStore.bindTurn(
-      {
-        backend: params.backend,
-        threadId: result.threadId,
-        turnId: result.turnId,
-      },
-      pdfAttachments,
-    );
-    this.bindPendingThreadMessageContext(pendingMessageContextId, result.turnId);
-    await this.persistStartingTurnOrigin(startingOrigin);
-    this.threadStarts.handoffCodex({
-      identity: params, pendingTurnId: syntheticStartedTurnId, turn: result,
-      terminalObserved: retryableCodexTurnStart?.terminalObserved ?? false,
-      executionMode: activeTurnMode, reserved: reserveCodexStart,
-      bindReview: () => this.rebindPendingReviewStartsForStartedTurn({
-        backend: params.backend, threadId: params.threadId,
-        pendingTurnId: syntheticStartedTurnId, turnId: result.turnId,
-      }),
-      activateCollaboration: () => this.activeCodexTurnCollaborationModes.set(
-        buildActiveTurnKey("codex", result.threadId, result.turnId), params.collaborationMode?.mode ?? "default",
+    return await this.threadStarts.finalizeCodex({
+      identity: params, turn: result, settings: turnParams, executionMode: params.executionMode,
+      bindOrigin: () => this.bindStartingTurnOrigin(startingOrigin, result),
+      bindRetry: () => { if (retryableCodexTurnStart) retryableCodexTurnStart.turnId = result.turnId; },
+      bindPdf: () => this.pdfAttachmentStore.bindTurn(
+        { backend: params.backend, threadId: result.threadId, turnId: result.turnId }, pdfAttachments,
       ),
-      retirePending: () => {
-        this.activeCodexTurnModes.delete(buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId));
-        this.activeTurnKeys.delete(buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId));
+      bindContext: () => this.bindPendingThreadMessageContext(pendingMessageContextId, result.turnId),
+      persistOrigin: () => this.persistStartingTurnOrigin(startingOrigin),
+      disposeOrigin: () => this.dropStartingTurnOrigin(startingOrigin),
+      handoff: {
+        identity: params, pendingTurnId: syntheticStartedTurnId, turn: result,
+        get terminalObserved() { return retryableCodexTurnStart?.terminalObserved ?? false; },
+        executionMode: activeTurnMode, reserved: reserveCodexStart,
+        bindReview: () => this.rebindPendingReviewStartsForStartedTurn({
+          backend: params.backend, threadId: params.threadId,
+          pendingTurnId: syntheticStartedTurnId, turnId: result.turnId,
+        }),
+        activateCollaboration: () => this.activeCodexTurnCollaborationModes.set(
+          buildActiveTurnKey("codex", result.threadId, result.turnId), params.collaborationMode?.mode ?? "default",
+        ),
+        retirePending: () => {
+          this.activeCodexTurnModes.delete(buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId));
+          this.activeTurnKeys.delete(buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId));
+        },
+        activateExecutionMode: (mode) => this.activeCodexTurnModes.set(buildActiveTurnModeKey(result.threadId, result.turnId), mode),
+        release: () => {
+          this.reservedCodexStartThreadIds.delete(params.threadId);
+          this.maybeDrainCodexInvalidIdRecoveries();
+        },
       },
-      activateExecutionMode: (mode) => this.activeCodexTurnModes.set(buildActiveTurnModeKey(result.threadId, result.turnId), mode),
-      release: () => {
-        this.reservedCodexStartThreadIds.delete(params.threadId);
-        this.maybeDrainCodexInvalidIdRecoveries();
-      },
-    });
-
-    if (
-      turnParams.model !== undefined ||
-      turnParams.reasoningEffort !== undefined ||
-      turnParams.serviceTier !== undefined ||
-      turnParams.fastMode !== undefined
-    ) {
-      await this.overlayStore.setThreadModelSettings({
+      persistModel: () => this.overlayStore.setThreadModelSettings({
         backend: params.backend,
         threadId: result.threadId,
         ...turnParams,
-      });
-    }
-    if (params.backend === "codex" && params.executionMode) {
-      await this.overlayStore.setThreadExecutionMode({
+      }),
+      persistExecutionMode: () => this.overlayStore.setThreadExecutionMode({
         backend: params.backend,
         threadId: result.threadId,
-        executionMode: params.executionMode,
-      });
-    }
-    const response = {
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-    };
-    await this.rememberTurnInputAttachments({
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      input,
-    });
-    this.scheduleCompletedTurnFromReplay({
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-    });
-    if (!isAcpBackendId(params.backend)) {
-      this.threadTitles.forgetPendingInput(params);
-      this.scheduleThreadTitleGeneration({
+        executionMode: params.executionMode!,
+      }),
+      retainAttachments: () => this.rememberTurnInputAttachments({
         backend: params.backend,
         threadId: result.threadId,
+        turnId: result.turnId,
         input,
-      });
-    }
-
-    return response;
+      }),
+      scheduleReplay: () => this.scheduleCompletedTurnFromReplay({
+        backend: params.backend, threadId: result.threadId, turnId: result.turnId,
+      }),
+      forgetTitleInput: () => this.threadTitles.forgetPendingInput(params),
+      scheduleTitle: () => this.scheduleThreadTitleGeneration({ backend: params.backend, threadId: result.threadId, input }),
+      failed: (stage, error) => backendRegistryLog.warn("accepted_turn_finalization_failed", {
+        backend: params.backend, threadId: result.threadId, turnId: result.turnId, stage,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    });
   }
 
   private retireCodexTurnStart(params: { backend: AppServerBackendKind; threadId: string }, pendingTurnId: string, reserved: boolean,
