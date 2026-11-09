@@ -321,3 +321,41 @@ it.skipIf(process.platform === "win32")("pause and ordering invalidate paged pro
     });
   } finally { vi.unstubAllEnvs(); }
 });
+
+it.skipIf(process.platform === "win32")("actual Outpost held admission covers resumed jobs before synchronous review cancellation", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  try {
+    await fixture(async (runtime, backend, store, _profile, events, sent) => {
+      const accepted = ["older", "next"].map(id => runtime.submit({ id, threadId: ref.threadId, prompt: id }));
+      await runtime.work;
+      for (const job of accepted) await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: job.id, paused: true });
+      terminal(runtime, "turn-1"); await settle();
+      let cancellation: Promise<unknown> | undefined;
+      runtime.onEvent = (event: any) => {
+        backend.event(event);
+        if (event.method === "headless/queueChanged" && event.params.type === "queued" && event.params.entry.id === "review") {
+          cancellation = backend.handle("backend.cancelQueuedTurn", { queueEntryId: "review" });
+        }
+      };
+      const { writes } = await measureSqliteWrites(async () => {
+        for (const job of accepted) await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: job.id, paused: false });
+        runtime.submit({ id: "review", threadId: ref.threadId, prompt: "Target-ended guidance" },
+          { manualReleaseRequired: true, holdReason: "Target turn ended; review required" });
+        await runtime.work; await cancellation; await settle();
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-held-admission-write-budgets.json", scenario: "outpost",
+        note: "Actual Runtime/HeadlessBackend resumed FIFO, held job acceptance and synchronous review cancellation plus real drains; setup excluded", writes });
+      expect(sent).toEqual(["active"]);
+      expect(backend.queueProjection({ protocol: 2, ref }).entries.map((entry: any) => [entry.queueEntryId, entry.manualReleaseRequired]))
+        .toEqual([["older", true], ["next", true]]);
+      for (const job of accepted) expect(store.get(job.id)).toEqual(job);
+      expect(store.get("review").status).toBe("interrupted");
+      expect(events.filter((event: any) => event.method === "thread/turnQueue/updated" && event.params.queueEntryId === "review").at(-1).params.status).toBe("cancelled");
+      expect((await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "older" })).disposition).toBe("started");
+      expect(sent).toEqual(["active", "older"]);
+      await runtime.stop();
+      expect(store.get("next").status).toBe("unknown");
+      expect(store.get("next").fingerprint).toBe(accepted[1].fingerprint);
+    });
+  } finally { vi.unstubAllEnvs(); }
+});

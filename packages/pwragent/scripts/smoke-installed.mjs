@@ -403,6 +403,44 @@ try {
     assert.equal((await reopenedOwner.handle("backend.releaseQueuedTurn", { queueEntryId: trackedNext.id })).disposition, "started");
     assert.equal(trackedSends, 2);
     await reopened.stop();
+    const heldRuntime = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
+    const heldSends = [];
+    heldRuntime.codex = { stop: async () => {}, startTurn: async ({ input }) => {
+      heldSends.push(input[0].text);
+      return { threadId, turnId: `packed-held-${heldSends.length}` };
+    } };
+    heldRuntime.loadedThreads.add(threadId);
+    const heldOwner = new HeadlessBackend(heldRuntime, () => {}, () => "packed-owner");
+    heldRuntime.submit({ id: "packed-held-active", threadId, prompt: "active" }); await heldRuntime.work;
+    const pending = ["older", "next"].map(id => heldRuntime.submit({ id: `packed-held-${id}`, threadId, prompt: id }));
+    await heldRuntime.work;
+    for (const job of pending) await heldOwner.handle("backend.setQueuedTurnPaused", { queueEntryId: job.id, paused: true });
+    heldRuntime.notification({ method: "turn/completed", params: { threadId, turn: { id: "packed-held-1", status: "completed" } } });
+    await new Promise(resolve => setImmediate(resolve));
+    let heldCancellation;
+    heldRuntime.onEvent = message => {
+      heldOwner.event(message);
+      if (message.method === "headless/queueChanged" && message.params.type === "queued" && message.params.entry.id === "packed-review") {
+        heldCancellation = heldOwner.handle("backend.cancelQueuedTurn", { queueEntryId: "packed-review" });
+      }
+    };
+    for (const job of pending) await heldOwner.handle("backend.setQueuedTurnPaused", { queueEntryId: job.id, paused: false });
+    heldRuntime.submit({ id: "packed-review", threadId, prompt: "Target-ended guidance" },
+      { manualReleaseRequired: true, holdReason: "Target turn ended; review required" });
+    await heldRuntime.work; await heldCancellation;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(heldSends, ["active"]);
+    assert.deepEqual(heldRuntime.turnQueue.getAllQueuedEntries().map(entry => [entry.id, entry.manualReleaseRequired]), pending.map(job => [job.id, true]));
+    for (const job of pending) assert.deepEqual(store.get(job.id), job);
+    assert.equal(store.get("packed-review").status, "interrupted");
+    assert.equal((await heldOwner.handle("backend.releaseQueuedTurn", { queueEntryId: pending[0].id })).disposition, "started");
+    assert.deepEqual(heldSends, ["active", "older"]);
+    await heldRuntime.stop();
+    const afterHeld = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
+    assert.deepEqual(afterHeld.turnQueue.getAllQueuedEntries(), []);
+    assert.equal(afterHeld.submit({ id: pending[1].id, threadId, prompt: "next" }).status, "unknown");
+    assert.equal(store.get(pending[1].id).fingerprint, pending[1].fingerprint);
+    await afterHeld.stop();
   } finally { profile.close(); }
   console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue and steering receipts/caller isolation/cancellation, shared steering retention/retry and interruption");
 } finally {

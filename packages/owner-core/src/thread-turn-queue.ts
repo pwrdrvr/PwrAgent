@@ -545,15 +545,21 @@ export class ThreadTurnQueue {
     this.addHoldReason(key, reason);
     queue.splice(index, 0, entry);
     options?.onAdmission?.();
-    await this.emit({ type: "queued", entry, position: index + 1 });
     // Entries already held keep their own reason, so each still releases
-    // the way it was held.
+    // the way it was held. Cover the pre-existing FIFO before any publication
+    // can cancel this new row and drain its unreviewed successors.
     await this.holdQueue(key, reason, { keepHeld: true });
     const held = this.findQueuedEntry(entry.id);
+    // A hold observer can cancel, release or replace this row. Its newer
+    // event owns the projection; do not publish this admission over it.
+    if (held?.entry === entry) {
+      await this.emit({ type: "queued", entry, position: held.position });
+    }
+    const current = this.findQueuedEntry(entry.id);
     return {
       status: "queued",
-      entry: held?.entry ?? entry,
-      position: held?.position ?? index + 1,
+      entry: current?.entry ?? entry,
+      position: current?.position ?? index + 1,
     };
   }
 
