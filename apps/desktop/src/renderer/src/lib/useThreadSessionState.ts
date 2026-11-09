@@ -5194,6 +5194,7 @@ export function useThreadSessionState(params: {
   ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
+  const liveTranscriptVersionsRef = useRef(new Map<string, number>());
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const launchpadMessageCandidateRef = useRef<{
     candidate: LaunchpadMessageCandidate;
@@ -5254,6 +5255,9 @@ export function useThreadSessionState(params: {
     const retainedThreadKeys = new Set(Object.keys(sessions));
     for (const key of liveLifecycleVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveLifecycleVersionsRef.current.delete(key);
+    }
+    for (const key of liveTranscriptVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) liveTranscriptVersionsRef.current.delete(key);
     }
     for (const key of conditionalReadsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) conditionalReadsRef.current.delete(key);
@@ -5419,6 +5423,7 @@ export function useThreadSessionState(params: {
       if (hydration.phase !== "loading") return;
       const attempt = hydration.attempt;
       hydrationsRef.current.set(targetThreadKey, hydration);
+      const liveTranscriptVersion = liveTranscriptVersionsRef.current.get(targetThreadKey);
 
       updateSession(targetThreadKey, (current) => ({
         ...current,
@@ -5500,6 +5505,8 @@ export function useThreadSessionState(params: {
             readResponseThreadStatus(response) === "active",
             current.backendReportedActive,
           );
+          const transcriptChangedDuringRead =
+            liveTranscriptVersion !== liveTranscriptVersionsRef.current.get(targetThreadKey);
           const retainedLiveEntryStore =
             retainedLiveEntriesRef.current[targetThreadKey];
           const retainedLiveEntries = retainedLiveEntryStore
@@ -5525,8 +5532,11 @@ export function useThreadSessionState(params: {
             orderedResponse,
             current.response,
             // Keep the cursor bridge for an in-flight older page, and the
-            // observed live tail when a lifecycle event overtook this read.
-            Boolean(current.loadedHistory) || current.loadingMore || lifecycleChangedDuringRead,
+            // observed live tail when a lifecycle or item event overtook this
+            // read. Dropping a completed message also loses the sequence that
+            // its redelivery must reuse, even if the turn itself did not change.
+            Boolean(current.loadedHistory) || current.loadingMore
+              || lifecycleChangedDuringRead || transcriptChangedDuringRead,
           );
           const hydratedPendingRequest = lifecycleChangedDuringRead
             ? undefined
@@ -6330,6 +6340,13 @@ export function useThreadSessionState(params: {
           }
           lastLiveActivitySignatureRef.current[targetThreadKey] = liveActivitySignature;
         }
+      }
+
+      if (isThreadLocalTranscriptNotification(event.notification)) {
+        liveTranscriptVersionsRef.current.set(
+          targetThreadKey,
+          (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1,
+        );
       }
 
       if (event.notification.method === "thread/status/changed"
