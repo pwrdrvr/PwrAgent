@@ -280,3 +280,55 @@ it.skipIf(process.platform === "win32")("cross-thread release contention either 
     });
   }), { numRuns: 12, examples: [[1, 0, false], [1, 0, true]] });
 });
+
+it.skipIf(process.platform === "win32")("release admission reservations retire after native refusal and shutdown", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async shutdown => {
+    await fixture(async (runtime, backend, store) => {
+      await held(runtime);
+      backend.persistCreatedNativeThread({ id: "other", title: "Other", titleSource: "explicit", cwd: runtime.workspace });
+      let reject!: (error: Error) => void;
+      runtime.codex.startTurn = async () => {
+        if (!shutdown) throw new Error("Retry refused");
+        return await new Promise((_resolve, fail) => { reject = fail; });
+      };
+      const release = backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" });
+      if (shutdown) {
+        while (!reject) await tick();
+        runtime.codex.stop = async () => { reject(new Error("Stopped provider")); };
+        await runtime.stop();
+      }
+      expect((await release).disposition).toBe("blocked");
+      expect(runtime.dispatches.size).toBe(0);
+      expect(runtime.releaseEntryId).toBeNull();
+      expect(store.get("waiting0").status).toBe(shutdown ? "unknown" : "queued");
+      if (!shutdown) {
+        expect(backend.queuedTurns("native")[0]).toMatchObject({ queueEntryId: "waiting0", manualReleaseRequired: true });
+        runtime.codex.startTurn = async ({ threadId }: any) => ({ threadId, turnId: "other-turn" });
+        expect(runtime.submit({ id: "other-job", threadId: "other", prompt: "other" }).status).toBe("starting");
+        await runtime.work;
+        expect(store.get("other-job").status).toBe("running");
+      }
+    });
+  }), { numRuns: 4, examples: [[false], [true]] });
+});
+
+it.skipIf(process.platform === "win32")("a same-FIFO cancellation cannot turn a reserved retry into a busy automatic send", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async cancelHead => {
+    await fixture(async (runtime, backend, store) => {
+      const sent = await held(runtime, 2);
+      const observe = runtime.onEvent;
+      let cancellation: Promise<any> | undefined;
+      runtime.onEvent = (event: any) => {
+        observe(event);
+        if (!cancellation && event.method === "headless/queueChanged" && event.params.type === "queued") {
+          cancellation = backend.handle("backend.cancelQueuedTurn", { queueEntryId: cancelHead ? "waiting0" : "waiting1" });
+        }
+      };
+      const result = await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" });
+      expect(result.disposition).toBe("started");
+      expect(await cancellation).toMatchObject({ disposition: cancelHead ? "already_admitted" : "cancelled" });
+      expect(store.get("waiting0").status).toBe("running");
+      expect(sent).toEqual(["first", "waiting0"]);
+    });
+  }), { numRuns: 4, examples: [[false], [true]] });
+});
