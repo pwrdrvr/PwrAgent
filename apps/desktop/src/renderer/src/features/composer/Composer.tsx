@@ -13201,7 +13201,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   disabled={
                     props.disabled
                     || sending
-                    || Boolean(activeTurnId)
+                    || (Boolean(activeTurnId) && Boolean(queued.scheduledActionId))
                     || (!queued.queueEntryId && !queued.scheduledActionId)
                   }
                   type="button"
