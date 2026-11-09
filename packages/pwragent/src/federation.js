@@ -13,7 +13,7 @@ import { setupHandoffs, HANDOFF_CAPABILITIES } from "./handoffs.js";
 import { atomicJson } from "./store.js";
 import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
-export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "durable_turn_requests_v1", "turn_queue_pause", "turn_queue_reorder", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
+export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "durable_turn_requests_v1", "durable_steer_requests_v1", "turn_queue_pause", "turn_queue_reorder", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
 
 const RECEIVER_PERMISSIONS = Object.freeze({ remoteShells: true, portForwarding: false, filePush: true, filePull: false, filePullOutsideThreadDirectories: false });
 
@@ -96,6 +96,7 @@ export class HeadlessFederation {
       additionalRequiredCapabilities: (envelope) => {
         const required = envelope.method.startsWith("thread.handoff.") ? ["turn_control", "environment_actions", "file_push"] : [];
         if (["backend.submitTurnRequest", "backend.getTurnRequest"].includes(envelope.method)) required.push("durable_turn_requests_v1");
+        if (["backend.submitSteerRequest", "backend.getSteerRequest"].includes(envelope.method)) required.push("durable_steer_requests_v1");
         const origin = envelope.method === "backend.submitTurnRequest" ? envelope.params?.request?.messageOrigin : envelope.params?.messageOrigin;
         if (origin?.kind === "messaging" || origin?.causalMessagingSource) required.push("messaging_route");
         return required;

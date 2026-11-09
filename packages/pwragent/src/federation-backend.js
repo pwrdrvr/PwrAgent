@@ -17,7 +17,7 @@ const OWNER_METHODS = [
   "startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread",
   "setThreadModelSettings", "setThreadExecutionMode",
   "readQueuedTurn", "replaceQueuedMessage", "releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn",
-  "submitTurnRequest", "getTurnRequest",
+  "submitTurnRequest", "getTurnRequest", "submitSteerRequest", "getSteerRequest",
 ];
 export function ownerMethodCapabilities(methods, contract = FEDERATION_BACKEND_METHOD_CAPABILITIES) {
   return Object.fromEntries(methods.map((name) => {
@@ -454,6 +454,8 @@ export class HeadlessBackend {
       case "startTurn": return this.startTurn(params, envelope);
       case "submitTurnRequest": return this.durableTurnRequests().submit(durableFederationCallerScope(envelope.sourceInstanceId, params.callerScope), params);
       case "getTurnRequest": return this.durableTurnRequests().get(durableFederationCallerScope(envelope.sourceInstanceId, params.callerScope), params);
+      case "submitSteerRequest": return this.durableTurnRequests().submitSteer(durableFederationCallerScope(envelope.sourceInstanceId, params.callerScope), params);
+      case "getSteerRequest": return this.durableTurnRequests().getSteer(durableFederationCallerScope(envelope.sourceInstanceId, params.callerScope), params);
       case "replaceQueuedMessage": return this.replaceQueuedMessage(params, envelope);
       case "readQueuedTurn": return this.runtime.readQueuedTurn(params);
       case "releaseQueuedTurn": return this.runtime.releaseQueuedTurn(params);
@@ -617,6 +619,7 @@ export class HeadlessBackend {
           if (request.backend !== "codex" || !this.runtime.ownsThread(request.threadId)) throw new DurableTurnRequestError("request_destination_unavailable");
         },
         dispatch: (request, scope) => this.startTurn(request, { sourceInstanceId: JSON.parse(scope)[1] }, request.queueEntryId),
+        steer: request => this.handle("backend.controlActiveTurn", { ...request, operation: "steer" }),
         isQueued: async receipt => {
           this.runtime.readQueuedTurn(receipt);
           return true;
