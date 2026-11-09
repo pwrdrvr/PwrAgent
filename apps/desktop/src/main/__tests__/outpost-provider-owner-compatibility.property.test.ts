@@ -79,7 +79,7 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
         expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
         expect(await f.desktop.listThreadMetadata()).toEqual(before);
       } finally { owner.close(); f.close(); }
-    }), { numRuns: 25, examples: [[[0, 0, 1], 1, undefined], [[0, 1, 2], 1, undefined], [[2, 3, 1], 2, 0]] });
+    }), { numRuns: 25, examples: [[[0, 0, 0], 0, undefined], [[0, 0, 1], 1, undefined], [[0, 1, 2], 1, undefined], [[2, 3, 1], 2, 0]] });
 });
 
 it.each(backends)("keeps durable archive/restore authority over passive %s records without inventing fresh observations", async source => {
