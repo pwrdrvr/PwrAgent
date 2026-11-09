@@ -325,6 +325,37 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("actual desktop tracked terminal publication cannot dispatch an unreviewed successor", async () => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.startTurn({ ...identity, queueEntryId: "tracked-owner", delivery: "new_turn",
+        input: [{ type: "text", text: "fail" }] });
+      for (const id of ["older", "next"]) await host.client.startTurn({ ...identity, queueEntryId: id,
+        delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+      let published!: () => void;
+      const publication = new Promise<void>(resolve => { published = resolve; });
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (armed && event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.queueEntryId === "tracked-owner" && event.notification.params.status === "terminal") {
+          armed = false;
+          await host.client.cancelQueuedTurn({ queueEntryId: "older" });
+          await new Promise<void>(resolve => setImmediate(resolve));
+          published();
+        }
+      });
+      await publication;
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      await vi.waitFor(async () => expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+        .toMatchObject([{ queueEntryId: "next", manualReleaseRequired: true }]));
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "next" })).toMatchObject({ disposition: "started" });
+    } finally { stop(); await host.close(); }
+  });
+
   it("desktop correspondence learns a failure hold after a generated queued title lands", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();
