@@ -176,9 +176,15 @@ function stubProviderTurnStart(registry: DesktopBackendRegistry, onStart?: () =>
     });
 }
 
-function recreateSpy(registry: DesktopBackendRegistry) {
+function recreateSpy(registry: DesktopBackendRegistry, beforeRecreate?: () => Promise<void>) {
   const service = (registry as unknown as { worktreeRecoveryService: { recreate: (...args: unknown[]) => Promise<unknown> } }).worktreeRecoveryService;
-  return vi.spyOn(service, "recreate");
+  const recreate = service.recreate.bind(service);
+  const spy = vi.spyOn(service, "recreate");
+  if (beforeRecreate) spy.mockImplementation(async (...args) => {
+    await beforeRecreate();
+    return await recreate(...args);
+  });
+  return spy;
 }
 
 const probe = (cwd: string, overrides: Partial<{ limitBytes: number; removeRebuildableOutput: boolean }> = {}) =>
@@ -462,20 +468,35 @@ describe("idle checkout hibernation and restore", () => {
     expect(recreate).toHaveBeenCalledTimes(1);
     expect(started).toHaveBeenCalledTimes(2);
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
+  });
 
-    // A queued send: it is admitted as queued while the restore runs.
+  it("keeps a queued send behind its own checkout restore (lifecycle model)", async () => {
+    // Each provider inventory has one registry owner. The preceding direct
+    // sends must settle and close before a queued-send fixture replaces it.
     expect(registries).toHaveLength(0);
-    const again = await createFixture();
-    const second = again.open();
-    await sweep(second.registry);
+    const fixture = await createFixture();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "queued edit\n");
+    const { registry } = fixture.open();
+    await sweep(registry);
+    let restoring!: () => void;
+    const restoreEntered = new Promise<void>((resolve) => { restoring = resolve; });
+    let resume!: () => void;
+    const barrier = new Promise<void>((resolve) => { resume = resolve; });
+    releases.push(resume);
+    const recreate = recreateSpy(registry, async () => { restoring(); await barrier; });
     let didStart!: () => void;
     const queuedStart = new Promise<void>((resolve) => { didStart = resolve; });
-    const startedAgain = stubProviderTurnStart(second.registry, didStart);
-    const submitted = await second.registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] });
+    const started = stubProviderTurnStart(registry, didStart);
+    const submitted = await registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] });
     expect(submitted.status).toBe("queued");
+    try {
+      await restoreEntered;
+      expect(started).not.toHaveBeenCalled();
+    } finally { resume(); }
     await queuedStart;
-    expect(startedAgain).toHaveBeenCalledTimes(1);
-    expect(await exists(again.worktree)).toBe(true);
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("queued edit\n");
   });
 
   it("restores with environment setup in two commits", async () => {
