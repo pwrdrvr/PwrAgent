@@ -358,7 +358,8 @@ connection revocation and workspace rollback to rejected creation, and hands
 accepted identities to binding, pending navigation, metadata, visibility and
 notification ports in the established order. Independent finalization failures
 are reported without rejecting a thread its provider already created. Parent
-persistence and its event remain dependent; Codex owns its start event. Desktop
+notification follows a successful relationship write; visibility uses that saved
+relationship even if its notification fails. Codex owns its start event. Desktop
 retains workspace/environment/model/MCP preparation, provider execution, pending
 summary construction and all existing storage sites. No request identity or
 retry state is introduced.

@@ -21499,15 +21499,20 @@ export class DesktopBackendRegistry {
         ...(currentMigration ? { modelMigrationRevision: currentMigration.revision } : {}),
       }),
       persistParent: async ({ threadId }) => {
-        await this.overlayStore.setThreadParent?.({ backend, threadId, parentThreadId: parentThreadId!, parentThreadBackend, parentThreadInstanceId });
+        const saved = await this.overlayStore.setThreadParent?.({ backend, threadId, parentThreadId: parentThreadId!, parentThreadBackend, parentThreadInstanceId });
+        return saved?.parentThreadId
+          ? { parentThreadId: saved.parentThreadId, parentThreadBackend: saved.parentThreadBackend }
+          : undefined;
+      },
+      announceParent: async ({ threadId }) => {
         await this.emit({ backend, notification: { method: "thread/parent/set", params: {
           threadId, parentThreadId: parentThreadId!, parentThreadBackend, parentThreadInstanceId,
         } } });
       },
-      finalizeVisibility: async ({ threadId }) => await this.finalizeCreatedThreadVisibility({
+      finalizeVisibility: async ({ threadId }, parent) => await this.finalizeCreatedThreadVisibility({
         backend, directoryKey, cwd,
         linkedDirectories: resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd),
-        parentThreadBackend, parentThreadId, threadId,
+        ...parent, threadId,
       }),
       announceStarted: async ({ threadId }) => {
         await this.emit({ backend, notification: { method: "thread/started", params: { threadId } } });

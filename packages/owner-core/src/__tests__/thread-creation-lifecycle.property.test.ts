@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AppServerBackendKind } from "@pwragent/shared";
-import { ThreadCreationLifecycle, type CreatedThreadIdentity, type ThreadCreationHost, type ThreadCreationOptions, type ThreadCreationStage } from "../thread-creation-lifecycle";
+import { ThreadCreationLifecycle, type CreatedThreadIdentity, type CreatedThreadParent, type ThreadCreationHost, type ThreadCreationOptions, type ThreadCreationStage } from "../thread-creation-lifecycle";
 
 const backend = fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi", "acp:qwen");
 const options = fc.record({
@@ -11,11 +11,13 @@ const options = fc.record({
   modelSettings: fc.record({ model: fc.option(fc.string(), { nil: undefined }), fastMode: fc.option(fc.boolean(), { nil: undefined }) }),
 });
 const stages: ThreadCreationStage[] = ["pdf", "connections", "pending", "placeholder", "worktree", "invalidate", "execution",
-  "token-miser", "pdf-catalog", "git", "pr", "mcp", "agent", "environment", "model", "parent", "visibility", "started"];
+  "token-miser", "pdf-catalog", "git", "pr", "mcp", "agent", "environment", "model", "parent", "parent-event", "visibility", "started"];
 
 function fixture(config: ThreadCreationOptions, faults: Set<string>, migration: boolean, count: number, reject: boolean, reportThrows: boolean) {
   const calls: string[] = [];
   const identities: CreatedThreadIdentity[] = [];
+  const parents: Array<CreatedThreadParent | undefined> = [];
+  const savedParent: CreatedThreadParent = { parentThreadId: "saved:parent", parentThreadBackend: "claude" };
   const reports: Array<{ stage: string; identity: CreatedThreadIdentity | undefined }> = [];
   const providerError = new Error("provider refused");
   const effect = (stage: string, identity?: CreatedThreadIdentity) => {
@@ -52,17 +54,18 @@ function fixture(config: ThreadCreationOptions, faults: Set<string>, migration: 
     persistEnvironment: async (id) => effect("environment", id),
     readModelMigration: () => { calls.push("migration"); return migration; },
     persistModel: async (id) => effect("model", id),
-    persistParent: async (id) => effect("parent", id),
-    finalizeVisibility: async (id) => { effect("visibility", id); return { pinnedRank: "0" }; },
+    persistParent: async (id) => { effect("parent", id); return savedParent; },
+    announceParent: async (id) => effect("parent-event", id),
+    finalizeVisibility: async (id, parent) => { parents.push(parent); effect("visibility", id); return { pinnedRank: "0" }; },
     announceStarted: async (id) => effect("started", id),
     failed: (stage, _error, identity) => { reports.push({ stage, identity }); if (reportThrows) throw new Error("report failed"); },
   };
-  return { host, calls, reports, identities, providerError };
+  return { host, calls, reports, identities, providerError, parents, savedParent };
 }
 
 // This script is the creation contract: independent effects keep their order;
 // optional metadata is admitted by presence, including false and empty values.
-function script(config: ThreadCreationOptions, migration: boolean, connections: number): string[] {
+function script(config: ThreadCreationOptions, migration: boolean, connections: number, failures: readonly string[] = []): string[] {
   const enabled: Record<string, boolean> = {
     placeholder: config.systemPlaceholder, worktree: config.worktree,
     execution: config.backend === "codex" || config.backend === "claude",
@@ -70,7 +73,7 @@ function script(config: ThreadCreationOptions, migration: boolean, connections: 
     "pdf-catalog": config.backend === "codex" && config.pdfCatalog, git: config.backend === "codex",
     mcp: config.mcpSelection, agent: config.agent, environment: config.environment,
     model: migration || Object.values(config.modelSettings).some((value) => value !== undefined),
-    parent: config.parent, started: config.backend !== "codex",
+    parent: config.parent, "parent-event": config.parent && !failures.includes("parent"), started: config.backend !== "codex",
   };
   return ["admit", config.backend.startsWith("acp:") ? "acp" : config.backend, ...stages.flatMap((stage) => {
     if (stage === "connections") return Array.from({ length: connections }, (_, i) => `bind:${i}`);
@@ -86,12 +89,23 @@ describe("thread creation lifecycle contract", () => {
         const run = fixture(config, new Set(failures), migration, count, false, reportThrows);
         const result = await new ThreadCreationLifecycle().start(config, run.host);
         expect(result).toEqual({ backend: config.backend, threadId: "same:thread", ...(failures.includes("visibility") ? {} : { pinnedRank: "0" }) });
-        const expected = script(config, migration, count);
+        const expected = script(config, migration, count, failures);
+        expect(run.parents).toEqual([config.parent && !failures.includes("parent") ? run.savedParent : undefined]);
         expect(run.calls).toEqual(expected);
         expect(run.identities.every((id) => id.backend === config.backend && id.threadId === "same:thread")).toBe(true);
         expect(run.reports.map((entry) => entry.stage)).toEqual(expected.filter((step) => failures.includes(step)).map((step) => step.startsWith("bind:") ? "connections" : step));
         expect(run.reports.every((entry) => entry.identity?.backend === config.backend)).toBe(true);
       }));
+  });
+
+  it("does not announce or reveal a parent the storage host did not save", async () => {
+    await fc.assert(fc.asyncProperty(options, async (config) => {
+      const run = fixture({ ...config, parent: true }, new Set(), false, 0, false, false);
+      run.host.persistParent = async (id) => { run.identities.push(id); return undefined; };
+      await new ThreadCreationLifecycle().start({ ...config, parent: true }, run.host);
+      expect(run.parents).toEqual([undefined]);
+      expect(run.calls).not.toContain("parent-event");
+    }));
   });
 
   it("retains the provider identity if workspace release rejects after creation", async () => {

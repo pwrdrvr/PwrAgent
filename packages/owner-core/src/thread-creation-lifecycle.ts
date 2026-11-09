@@ -1,9 +1,10 @@
 import { isAcpBackendId, type AppServerBackendKind, type SetThreadModelSettingsRequest, type StartThreadResponse } from "@pwragent/shared";
 
 export type CreatedThreadIdentity = { backend: AppServerBackendKind; threadId: string };
+export type CreatedThreadParent = { parentThreadId: string; parentThreadBackend?: AppServerBackendKind };
 export type ThreadCreationStage = "workspace" | "revoke-connections" | "rollback-workspace" | "pdf" | "connections" | "pending"
   | "placeholder" | "worktree" | "invalidate" | "execution" | "token-miser" | "pdf-catalog" | "git"
-  | "pr" | "mcp" | "agent" | "environment" | "model" | "parent" | "visibility" | "started";
+  | "pr" | "mcp" | "agent" | "environment" | "model" | "parent" | "parent-event" | "visibility" | "started";
 
 type Visibility = Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">;
 
@@ -32,8 +33,9 @@ export interface ThreadCreationHost {
   persistEnvironment(identity: CreatedThreadIdentity): Promise<unknown>;
   readModelMigration(): boolean;
   persistModel(identity: CreatedThreadIdentity): Promise<unknown>;
-  persistParent(identity: CreatedThreadIdentity): Promise<void>;
-  finalizeVisibility(identity: CreatedThreadIdentity): Promise<Visibility>;
+  persistParent(identity: CreatedThreadIdentity): Promise<CreatedThreadParent | undefined>;
+  announceParent(identity: CreatedThreadIdentity): Promise<void>;
+  finalizeVisibility(identity: CreatedThreadIdentity, parent: CreatedThreadParent | undefined): Promise<Visibility>;
   announceStarted(identity: CreatedThreadIdentity): Promise<void>;
   failed(stage: ThreadCreationStage, error: unknown, identity: CreatedThreadIdentity | undefined): void;
 }
@@ -109,10 +111,11 @@ export class ThreadCreationLifecycle {
     if (modelMigration || Object.values(options.modelSettings).some((value) => value !== undefined)) {
       await attempt("model", () => host.persistModel(created));
     }
-    // Parent persistence and its event are one dependent host effect: a failed
-    // write must not announce a parent that was never saved.
-    if (options.parent) await attempt("parent", () => host.persistParent(created));
-    const visibility = await attempt("visibility", () => host.finalizeVisibility(created));
+    // Storage owns the relationship. Announcement failure cannot undo a saved
+    // parent, and a rejected write leaves visibility to handle a root.
+    const parent = options.parent ? await attempt("parent", () => host.persistParent(created)) : undefined;
+    if (parent) await attempt("parent-event", () => host.announceParent(created));
+    const visibility = await attempt("visibility", () => host.finalizeVisibility(created, parent));
     // Codex owns its thread/started notification. Other providers need the host.
     if (backend !== "codex") await attempt("started", () => host.announceStarted(created));
     return { ...created, ...visibility };

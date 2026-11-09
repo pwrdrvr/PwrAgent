@@ -16048,7 +16048,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   async function assertCreationVisibilityUsesSavedParent(backend: AppServerBackendKind, parentBackend: AppServerBackendKind,
-    failure: "write" | "notification" | "none" | "unsupported", explicitParentBackend: boolean): Promise<void> {
+    failure: "write" | "notification" | "none" | "unsupported", explicitParentBackend: boolean, checkBudget = false): Promise<void> {
     const temp = createTempStateDb("pwragent-creation-parent-visibility-");
     const db = StateDb.open(temp.dbPath);
     const overlayStore = new SqliteOverlayStore(db);
@@ -16086,8 +16086,10 @@ describe("DesktopBackendRegistry", () => {
       });
     }
     try {
-      const response = await registry.startThread({ backend, cwd: directoryPath, parentThreadId: parentId,
-        ...(explicitParentBackend || parentBackend !== backend ? { parentThreadBackend: parentBackend } : {}) });
+      const { result: response, writes } = await measureSqliteWrites(() => registry.startThread({ backend, cwd: directoryPath, parentThreadId: parentId,
+        ...(explicitParentBackend || parentBackend !== backend ? { parentThreadBackend: parentBackend } : {}) }));
+      if (checkBudget) expectSqliteWriteBudget({ scenario: "all-pinned-project-thread-creation", writes,
+        note: "A rejected parent port leaves the ordinary root-creation budget, including the visibility pin, unchanged." });
       const saved = await overlayStore.getThreadOverlayState({ backend, threadId });
       const parent = await overlayStore.getThreadOverlayState({ backend: parentBackend, threadId: parentId });
       // Storage owns the relationship. A root needs its own pin; a saved child
@@ -16113,7 +16115,9 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("pins an unparented root after its requested parent write rejects", async () => {
-    await assertCreationVisibilityUsesSavedParent("codex", "codex", "write", false);
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    try { await assertCreationVisibilityUsesSavedParent("codex", "codex", "write", false, true); }
+    finally { vi.unstubAllEnvs(); }
   });
 
   it("reveals a committed parent's tray when its notification rejects", async () => {
