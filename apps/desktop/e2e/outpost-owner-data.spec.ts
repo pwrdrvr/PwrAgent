@@ -1,6 +1,6 @@
 import path from "node:path";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -28,11 +28,13 @@ test.beforeAll(() => {
   });
 });
 
-test("ordinary Outpost agent guidance steers once while the mounted native owner and distinct waiting turn stay intact", async () => {
+test("ordinary and explicitly retried Outpost guidance preserve the mounted native owner and distinct waiting turn", async () => {
   test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
   test.setTimeout(120_000);
   const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent") });
   const command = async (args: string[]) => JSON.parse((await promisify(execFile)(process.execPath, [outpost.cli, ...args], { env: outpost.env })).stdout);
+  const displaced = `${outpost.workspace}-unavailable`;
+  let workspaceDisplaced = false;
   let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
   try {
     const created = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
@@ -63,6 +65,34 @@ test("ordinary Outpost agent guidance steers once while the mounted native owner
     const accepted = await outpost.client.startTurn(request);
     await expect.poll(async () => (await command(["show", "--id", accepted.queueEntryId!])).status).toBe("running");
     const job = await command(["show", "--id", accepted.queueEntryId!]);
+    // Hold a second acknowledgement so the next accepted entry can be paused
+    // before making its test-owned project unavailable. No native work is
+    // accepted for that next entry until the operator explicitly retries it.
+    await outpost.client.startTurn({ ...request, queueEntryId: "ack-gate", input: [{ type: "text", text: "hold-steer-ack" }] });
+    await expect.poll(async () => readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "steer.ready"), "utf8").then(() => true, () => false)).toBe(true);
+    const heldRequest = { ...request, queueEntryId: "mounted-held-guidance", input: [{ type: "text" as const, text: "Invented held guidance Retry" }] };
+    const held = await outpost.client.startTurn(heldRequest);
+    await command(["pause", "--id", held.queueEntryId!]);
+    await rename(outpost.workspace, displaced); workspaceDisplaced = true;
+    await writeFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "steer.release"), "release");
+    await command(["resume", "--id", held.queueEntryId!]);
+    const heldRow = app.window.locator(".composer__queued").filter({ hasText: heldRequest.input[0].text });
+    const retry = heldRow.getByRole("button", { name: "Retry", exact: true });
+    await expect(retry).toBeVisible();
+    const beforeRetry = await command(["show", "--id", held.queueEntryId!]);
+    expect(beforeRetry.status).toBe("queued");
+    expect(beforeRetry.turnId).toBeUndefined();
+    await rename(displaced, outpost.workspace); workspaceDisplaced = false;
+    await expect(retry).toBeEnabled();
+    const screenshots = path.resolve(specDir, "../../../.local");
+    await mkdir(screenshots, { recursive: true });
+    await app.window.screenshot({ path: path.join(screenshots, "held-steer-before-retry.png") });
+    await retry.click();
+    await expect(heldRow).toHaveCount(0);
+    await app.window.screenshot({ path: path.join(screenshots, "held-steer-after-retry.png") });
+    expect(await command(["show", "--id", held.queueEntryId!])).toMatchObject({ status: "running", turnId: active.turnId, fingerprint: beforeRetry.fingerprint });
+    expect((await outpost.client.startTurn(heldRequest)).queueEntryId).toBe(held.queueEntryId);
+    expect(await outpost.client.releaseQueuedTurn({ queueEntryId: held.queueEntryId! })).toMatchObject({ disposition: "not_found" });
     const waiting = await outpost.client.startTurn({ ...identity, delivery: "new_turn", input: [{ type: "text", text: "Invented distinct waiting turn" }] });
     const first = await outpost.client.startTurn({ ...request, queueEntryId: "mounted-first", input: [{ type: "text", text: "Invented first waiting guidance" }] });
     const second = await outpost.client.startTurn({ ...request, queueEntryId: "mounted-second", input: [{ type: "text", text: "Invented second waiting guidance" }] });
@@ -90,6 +120,10 @@ test("ordinary Outpost agent guidance steers once while the mounted native owner
     const steers = calls.filter(call => call.method === "turn/steer" && call.params.input[0].text === request.input[0].text);
     expect(steers).toHaveLength(1);
     expect(steers[0].params).toMatchObject({ expectedTurnId: active.turnId, input: request.input });
+    const activeTurnSteers = calls.filter(call => call.method === "turn/steer" && call.params.expectedTurnId === active.turnId);
+    expect(activeTurnSteers).toHaveLength(3);
+    expect(activeTurnSteers.filter(call => call.params.input[0].text === heldRequest.input[0].text)).toHaveLength(1);
+    expect(steers.every(call => call.params.expectedTurnId === active.turnId)).toBe(true);
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === request.input[0].text)).toHaveLength(0);
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented distinct waiting turn")).toHaveLength(1);
     const inputs = calls.filter(call => call.method === "turn/start" || call.method === "turn/steer").map(call => call.params.input[0].text);
@@ -99,7 +133,10 @@ test("ordinary Outpost agent guidance steers once while the mounted native owner
     expect((await outpost.client.startTurn(request)).queueEntryId).toBe(accepted.queueEntryId);
     expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
     expect(waiting.queueEntryId).not.toBe(accepted.queueEntryId);
-  } finally { try { await app?.close(); } finally { await outpost.close(); } }
+  } finally {
+    if (workspaceDisplaced) await rename(displaced, outpost.workspace);
+    try { await app?.close(); } finally { await outpost.close(); }
+  }
 });
 
 test("durable Outpost steering delivers once to the mounted active turn while its waiting queue stays intact", async () => {

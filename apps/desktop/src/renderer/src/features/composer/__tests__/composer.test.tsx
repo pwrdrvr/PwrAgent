@@ -14234,7 +14234,7 @@ describe("Composer", () => {
       id: "thread-1", title: "Invented live owner", titleSource: "explicit", source: "codex",
       executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
     }} />);
-    expect(screen.getByRole("button", { name: "Retry", exact: true })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
     await clickButton("Retry");
     expect(releaseQueuedTurn).toHaveBeenCalledExactlyOnceWith({ queueEntryId: "held-1" });
     expect(startTurn).not.toHaveBeenCalled();

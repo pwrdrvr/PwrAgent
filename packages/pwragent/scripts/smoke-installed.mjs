@@ -294,8 +294,17 @@ try {
     assert.equal(steers, 1);
     const guidance = { backend: "codex", threadId, queueEntryId: "packed-guidance", input: [{ type: "text", text: "Packed ordinary guidance" }], messageOrigin: { kind: "agent", systemReason: "packed-guidance" } };
     const admitted = await controller.handle("backend.startTurn", guidance, envelope);
+    controlled.threadLocked = () => true;
     for (let i = 0; i < 24; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(store.get(admitted.queueEntryId).status, "queued");
+    assert.equal(store.get(admitted.queueEntryId).turnId, undefined);
+    assert.equal(controlled.turnQueue.getAllQueuedEntries()[0].manualReleaseRequired, true);
+    assert.equal(steers, 1);
+    const heldFingerprint = store.get(admitted.queueEntryId).fingerprint;
+    controlled.threadLocked = () => false;
+    assert.equal((await controller.handle("backend.releaseQueuedTurn", { queueEntryId: admitted.queueEntryId })).turnId, "packed-control");
     const acceptedGuidance = store.get(admitted.queueEntryId);
+    assert.equal(acceptedGuidance.fingerprint, heldFingerprint);
     assert.equal(acceptedGuidance.status, "running");
     assert.equal(acceptedGuidance.turnId, "packed-control");
     assert.equal(controlled.active, "packed-control");
