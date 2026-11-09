@@ -355,6 +355,11 @@ memory. Cancellation settles the job before dispatch, and shutdown or recovery
 settles unfinished queued jobs as unknown without restoring or replaying input.
 New-thread jobs still require an idle host. Confirmed provider acceptance cannot
 return to a retryable FIFO after a host confirmation failure.
+Outpost's registered pause/resume and ordering methods delegate to the same
+queue operations desktop uses. Pause revisions and independent review holds
+remain in that engine; typed state/order events invalidate the owner projection.
+Local CLI controls use those same runtime methods. The changes stay in memory,
+make no SQLite commits and cannot change accepted input or its fingerprint.
 
 Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
 It owns delivery refusal, restart-gate queue admission, native-review admission,

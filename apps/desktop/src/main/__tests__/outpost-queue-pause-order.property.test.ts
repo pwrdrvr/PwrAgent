@@ -107,7 +107,7 @@ it.skipIf(process.platform === "win32")("pause and move preserve independent sha
       expect(await backend.handle("backend.moveQueuedTurn", { queueEntryId: reverse ? "waiting0" : "waiting1", beforeQueueEntryId: reverse ? "waiting1" : "waiting0" })).toMatchObject({ disposition: "held" });
       expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting1", paused: true })).toMatchObject({ disposition: "held" });
       expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: false })).toMatchObject({ disposition: "updated", paused: false, pauseRevision: 2 });
-      expect(runtime.turnQueue.getAllQueuedEntries().map(({ id, holdReason, holdRevision, manualReleaseRequired }: any) => ({ id, holdReason, holdRevision, manualReleaseRequired }))).toEqual(before.map(({ id, holdReason, holdRevision, manualReleaseRequired }: any) => ({ id, holdReason, holdRevision, manualReleaseRequired })));
+      expect(runtime.turnQueue.getAllQueuedEntries().map(({ id, holdReason, manualReleaseRequired }: any) => ({ id, holdReason, manualReleaseRequired }))).toEqual(before.map(({ id, holdReason, manualReleaseRequired }: any) => ({ id, holdReason, manualReleaseRequired })));
       await runtime.turnQueue.releaseHold(ref, (reason: string) => reason === "separate-lock"); await settle();
       expect(sent).toEqual(["active"]);
       expect(store.get("waiting0")).toEqual(job);
@@ -142,6 +142,89 @@ it.skipIf(process.platform === "win32")("queued controls serialize with admissio
       runtime.stopping = false;
       expect(runtime.submit({ id: "waiting", threadId: ref.threadId, prompt: "waiting" })).toMatchObject({ status: "unknown", fingerprint: accepted.fingerprint });
       expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting", paused: false })).toMatchObject({ disposition: "not_found" });
+    });
+  }), { numRuns: 4 });
+});
+
+it.skipIf(process.platform === "win32")("concurrent control events never republish a cancelled entry or a superseded FIFO order", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async reorder => {
+    await fixture(async (runtime, backend, _store, _profile, events) => {
+      for (const id of ["waiting0", "waiting1"]) runtime.submit({ id, threadId: ref.threadId, prompt: id });
+      const offset = events.length;
+      const pause = backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: true });
+      const move = backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting1", beforeQueueEntryId: reorder ? "waiting0" : undefined });
+      const cancel = backend.handle("backend.cancelQueuedTurn", { queueEntryId: "waiting0" });
+      await Promise.all([pause, move, cancel]);
+      const changes = events.slice(offset);
+      const cancelled = changes.findIndex(event => event.method === "thread/turnQueue/updated" && event.params.status === "cancelled");
+      expect(cancelled).toBeGreaterThanOrEqual(0);
+      for (const event of changes.slice(cancelled + 1)) {
+        if (event.method === "thread/turnQueue/updated") expect(event.params.queueEntryId).not.toBe("waiting0");
+        if (event.method === "thread/turnQueue/reordered") expect(event.params.queueEntryIds).not.toContain("waiting0");
+      }
+      expect(backend.queueProjection({ protocol: 2, ref }).entries.map((entry: any) => entry.queueEntryId)).toEqual(["waiting1"]);
+    });
+  }), { numRuns: 4 });
+});
+
+it.skipIf(process.platform === "win32")("a cancellation overtaking an order notification cannot restore its retired identity", async () => {
+  await fixture(async (runtime, backend, _store, _profile, events) => {
+    for (const id of ["waiting0", "waiting1"]) runtime.submit({ id, threadId: ref.threadId, prompt: id });
+    await Promise.all([
+      backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: true }),
+      backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting1", beforeQueueEntryId: "waiting0" }),
+      backend.handle("backend.cancelQueuedTurn", { queueEntryId: "waiting0" }),
+    ]);
+    expect(events.filter(event => event.method === "thread/turnQueue/reordered").at(-1)?.params.queueEntryIds).toEqual(["waiting1"]);
+  });
+});
+
+it.skipIf(process.platform === "win32")("resuming or moving waiting input cannot bypass the live host admission gates", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("lock", "project", "retired", "intake", "creating", "uncertain"), async gate => {
+    await fixture(async (runtime, backend, store, _profile, _events, sent) => {
+      const accepted = runtime.submit({ id: "waiting", threadId: ref.threadId, prompt: "waiting" });
+      await runtime.handle("pause", { id: "waiting" });
+      const owns = runtime.ownsThread, cwd = runtime.threadCwd;
+      if (gate === "lock") runtime.threadLocked = () => true;
+      if (gate === "project") runtime.threadCwd = () => path.join(runtime.workspace, "changed");
+      if (gate === "retired") runtime.ownsThread = () => false;
+      if (gate === "intake") runtime.intakeBusy = true;
+      if (gate === "creating") backend.creating = true;
+      if (gate === "uncertain") runtime.uncertain = true;
+      terminal(runtime, "turn-1");
+      await backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting" });
+      await runtime.handle("resume", { id: "waiting" }); await settle();
+      expect(sent).toEqual(["active"]);
+      expect(store.get("waiting")).toEqual(accepted);
+      expect(backend.queueProjection({ protocol: 2, ref }).entries).toMatchObject([{ queueEntryId: "waiting", pauseRevision: 2 }]);
+      runtime.ownsThread = owns; runtime.threadCwd = cwd; runtime.threadLocked = () => false;
+      runtime.intakeBusy = false; backend.creating = false; runtime.uncertain = false;
+    });
+  }), { numRuns: 12 });
+});
+
+it.skipIf(process.platform === "win32")("accepted confirmation failure after resume never exposes a retryable queue entry", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async early => {
+    await fixture(async (runtime, backend, store, _profile, _events, sent) => {
+      const accepted = runtime.submit({ id: "waiting", threadId: ref.threadId, prompt: "waiting" });
+      await runtime.handle("pause", { id: "waiting" });
+      terminal(runtime, "turn-1"); await settle();
+      runtime.codex.startTurn = async () => {
+        sent.push("waiting");
+        if (early) terminal(runtime, "accepted");
+        return { threadId: ref.threadId, turnId: "accepted" };
+      };
+      const save = store.save.bind(store);
+      store.save = (job: any) => {
+        if (job.id === "waiting" && job.status === "running") throw new Error("Confirmation refused");
+        return save(job);
+      };
+      await runtime.handle("resume", { id: "waiting" }); await settle();
+      expect(store.get("waiting")).toMatchObject({ status: "unknown", turnId: "accepted", fingerprint: accepted.fingerprint });
+      expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting", paused: false })).toMatchObject({ disposition: "not_found" });
+      expect(await backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting" })).toMatchObject({ disposition: "not_found" });
+      expect(runtime.submit({ id: "waiting", threadId: ref.threadId, prompt: "waiting" }).status).toBe("unknown");
+      expect(sent).toEqual(["active", "waiting"]);
     });
   }), { numRuns: 4 });
 });

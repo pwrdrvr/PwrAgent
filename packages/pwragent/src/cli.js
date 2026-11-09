@@ -22,6 +22,8 @@ const help = `PwrAgent Headless (experimental, Linux/macOS, Node 22.14+ (22.x) o
                   [--model MODEL] [--thread THREAD_ID] [--cwd /workspace/project]
   pwragent show|read|interrupt|wait --id JOB
   pwragent release|cancel --id QUEUED_JOB
+  pwragent pause|resume --id QUEUED_JOB
+  pwragent move --id QUEUED_JOB [--before QUEUED_JOB]
   pwragent federation-join --invite-file /invite.txt --gateway ws://127.0.0.1:47830 [--label NAME]
   pwragent federation-invite [--port 47831] [--label NAME]
   pwragent federation-status | federation-leave
@@ -46,6 +48,7 @@ export async function main(args) {
     "codex-home": { type: "string" },
     "codex-bin": { type: "string" },
     id: { type: "string" },
+    before: { type: "string" },
     "prompt-file": { type: "string" },
     thread: { type: "string" },
     model: { type: "string" },
@@ -68,6 +71,7 @@ export async function main(args) {
     "project-list": [], "project-create": ["name", "label"], "project-clone": ["name", "remote", "label"],
     "project-add": ["path", "label"], "project-remove": ["path"], "git-auth-configure": ["config-file"],
     show: ["id"], read: ["id"], interrupt: ["id"], wait: ["id"], release: ["id"], cancel: ["id"], status: [], list: [], version: [],
+    pause: ["id"], resume: ["id"], move: ["id", "before"],
     "federation-join": ["invite-file", "gateway", "label"],
     "federation-invite": ["port", "label"],
     "federation-status": [], "federation-leave": [], "federation-revoke": ["peer"],
@@ -132,6 +136,6 @@ export async function main(args) {
     console.log(JSON.stringify({ ...status, installed, restartRequired: restartRequired(status.running, installed) }));
     return 0;
   }
-  console.log(JSON.stringify(await call(directory, command, { id: values.id })));
+  console.log(JSON.stringify(await call(directory, command, { id: values.id, ...(values.before !== undefined ? { before: values.before } : {}) })));
   return 0;
 }

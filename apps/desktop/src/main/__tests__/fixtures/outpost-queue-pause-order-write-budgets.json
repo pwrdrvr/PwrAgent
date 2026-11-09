@@ -1,0 +1,9 @@
+{
+  "waiting-controls": {
+    "commits": 0,
+    "note": "100 pause/duplicate-pause/resume and two ordering requests plus projections while provider is active; in-memory changes only",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

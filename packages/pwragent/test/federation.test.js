@@ -291,7 +291,7 @@ test("owner methods require the same grants as on desktop", { timeout: 15000 }, 
   }
   const detail = await enroll(["thread_navigation", "thread_detail"]);
   assert.equal((await detail.call("getNavigationSelectedDetail", { protocol: 2, ref })).identity, "present");
-  for (const method of ["releaseQueuedTurn", "cancelQueuedTurn"]) {
+  for (const method of ["releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn"]) {
     await assert.rejects(detail.call(method, { queueEntryId: "absent" }), /capability/i, `${method} needs turn_control`);
   }
   const noEnvironment = await enroll(HEADLESS_CAPABILITIES.filter((capability) => capability !== "environment_actions"));

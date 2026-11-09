@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "../dist/federation-core.js";
 import { METHOD_CAPABILITIES, ownerMethodCapabilities } from "../src/federation-backend.js";
+import { HEADLESS_CAPABILITIES } from "../src/federation.js";
 
 test("every owner method takes its capability from the shared contract", () => {
   assert.ok(Object.keys(METHOD_CAPABILITIES).length > 0);
@@ -13,6 +14,13 @@ test("every owner method takes its capability from the shared contract", () => {
     "backend.getNavigationSelectedDetail", "backend.getNavigationQueueProjection",
     "backend.getNavigationLaunchpadConfig", "backend.listBackends", "backend.materializeDirectoryLaunchpad",
   ].map((method) => METHOD_CAPABILITIES[method]), ["thread_detail", "thread_detail", "thread_detail", "thread_detail", "environment_actions"]);
+});
+
+test("advertised queue controls register against the shared turn-control contract", () => {
+  for (const [method, capability] of [["setQueuedTurnPaused", "turn_queue_pause"], ["moveQueuedTurn", "turn_queue_reorder"]]) {
+    assert.ok(HEADLESS_CAPABILITIES.includes(capability));
+    assert.equal(METHOD_CAPABILITIES[`backend.${method}`], "turn_control");
+  }
 });
 
 test("an owner method outside the shared contract fails at load", () => {

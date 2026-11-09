@@ -15,7 +15,7 @@ const OWNER_METHODS = [
   "readThread", "readTurnAssistantReply", "listSkills", "listThreadMcpServers",
   "startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread",
   "setThreadModelSettings", "setThreadExecutionMode",
-  "releaseQueuedTurn", "cancelQueuedTurn",
+  "releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn",
 ];
 export function ownerMethodCapabilities(methods, contract = FEDERATION_BACKEND_METHOD_CAPABILITIES) {
   return Object.fromEntries(methods.map((name) => {
@@ -299,12 +299,18 @@ export class HeadlessBackend {
   }
 
   event(message) {
+    if (message.method === "headless/queueReordered") {
+      this.publish({ backend: "codex", notification: { method: "thread/turnQueue/reordered", params: message.params } }, "transcript");
+      this.invalidate(message.params.threadId, "thread/turnQueue/reordered");
+      return;
+    }
     if (message.method === "headless/queueChanged") {
       const { entry, type, position, turnId, status, error, reason } = message.params;
       const summary = this.queuedTurns(entry.threadId).find(item => item.queueEntryId === entry.id);
       this.publish({ backend: "codex", notification: { method: "thread/turnQueue/updated", params: {
         threadId: entry.threadId, queueEntryId: entry.id, queueEntryCreatedAt: entry.createdAt,
         origin: entry.origin, messageOrigin: entry.messageOrigin, status: type, position, turnId,
+        ...(entry.pauseRevision ? { paused: entry.paused === true, pauseRevision: entry.pauseRevision } : {}),
         ...(summary ? { displayText: summary.displayText, manualReleaseRequired: summary.manualReleaseRequired } : {}),
         ...(error || reason ? { errorMessage: error?.message || reason } : {}), ...(status ? { terminalStatus: status } : {}),
       } } }, "transcript");
@@ -441,6 +447,8 @@ export class HeadlessBackend {
       case "startTurn": return this.startTurn(params, envelope);
       case "releaseQueuedTurn": return this.runtime.releaseQueuedTurn(params);
       case "cancelQueuedTurn": return this.runtime.cancelQueuedTurn(params);
+      case "setQueuedTurnPaused": return this.runtime.setQueuedTurnPaused(params);
+      case "moveQueuedTurn": return this.runtime.moveQueuedTurn(params);
       case "interruptTurn": {
         this.owned(params.threadId);
         const job = this.latest(params.threadId);
