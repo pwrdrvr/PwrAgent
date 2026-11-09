@@ -113,6 +113,42 @@ it.skipIf(process.platform === "win32")("shutdown and recovered jobs never resto
   });
 });
 
+it.skipIf(process.platform === "win32")("shutdown overtaking queued acceptance returns uncertainty immediately and never restores input", async () => {
+  await fixture(async ({ runtime, submit, get, value, active, sent }: any) => {
+    await active();
+    const observer = runtime.onEvent;
+    let stopped: Promise<void> | undefined;
+    runtime.onEvent = (event: any) => {
+      observer(event);
+      if (event.method === "headless/jobChanged" && event.params.status === "queued") stopped = runtime.stop();
+    };
+    const request = value();
+    expect(await submit(request)).toMatchObject({ state: "uncertain" });
+    await stopped;
+    expect(await get(request)).toMatchObject({ state: "uncertain" });
+    expect(runtime.turnQueue.getAllQueuedEntries()).toEqual([]);
+    expect(sent).toHaveLength(1);
+  });
+});
+
+it.skipIf(process.platform === "win32")("receipt admission and claim commit before native dispatch and a provider interruption is cancellation", async () => {
+  await fixture(async ({ runtime, store, submit, get, value }: any) => {
+    const request = value("direct");
+    const native = runtime.codex.startTurn;
+    runtime.codex.startTurn = async (params: any) => {
+      const scope = JSON.stringify(["federation", "issuer", "device"]);
+      const receipt = store.durableTurnRequests.read(scope, request.clientRequest.id);
+      expect(receipt).toMatchObject({ state: "dispatching" });
+      expect(store.get(receipt.queueEntryId).status).toBe("starting");
+      return native(params);
+    };
+    const receipt = await submit(request);
+    runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: receipt.result.turnId, status: "interrupted" } } });
+    await settle();
+    expect(await get(request)).toMatchObject({ state: "completed", outcome: "cancelled" });
+  });
+});
+
 it.skipIf(process.platform === "win32")("durable turn admission writes only at acceptance, claim and queue outcome boundaries", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   try {
