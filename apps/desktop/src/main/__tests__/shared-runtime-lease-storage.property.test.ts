@@ -17,9 +17,10 @@ function read(store: RuntimeLeaseStorage, kind: Kind) {
 }
 function acquire(store: RuntimeLeaseStorage, kind: Kind, instanceId: string, now: number,
   isOwnerAlive: (owner: { instanceId: string }) => boolean, immediate: boolean) {
+  if (kind === "mcp") return store.acquireMcpConnectionsLease({ instanceId, now, isOwnerAlive });
   const params = { instanceId, now, isOwnerAlive, canReclaimOwnerImmediately: () => immediate };
   return kind === "messaging" ? store.acquireMessagingLease(params)
-    : kind === "federation" ? store.acquireFederationLease(params) : store.acquireMcpConnectionsLease(params);
+    : store.acquireFederationLease(params);
 }
 function release(store: RuntimeLeaseStorage, kind: Kind, instanceId: string, now: number) {
   const params = { instanceId, now };
@@ -38,6 +39,28 @@ it("binds desktop construction and state compatibility to the functioning portab
 
 it("does not retain a desktop-only class behind state compatibility exports", () => {
   expect(CompatibilityStore).toBe(SharedStore);
+});
+
+it("keeps the MCP death grace when the shared test driver requests immediate reclamation", () => {
+  const { dbPath, tempDir } = createTempStateDb("shared-mcp-grace-");
+  const db = StateDb.open(dbPath);
+  const store = new SharedStore(db);
+  try {
+    for (const instanceId of ["owner", "challenger"]) store.recordInstanceStart({
+      instanceId, processId: 123, profileName: "fixture", startedAt: 100, desiredMessagingEnabled: true,
+    });
+    expect(acquire(store, "mcp", "owner", 100, () => true, false).acquired).toBe(true);
+    expect(acquire(store, "mcp", "challenger", 100, () => false, true)).toEqual({
+      acquired: false, reason: "held", holder: {
+        ownerInstanceId: "owner", acquiredAt: 100, heartbeatAt: 100,
+        expiresAt: 100 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS, status: "active",
+      },
+    });
+    expect(store.getInstance("owner")?.exitedAt).toBe(100);
+    // A later live PID cannot undo the recorded death or shorten MCP's grace.
+    expect(acquire(store, "mcp", "challenger", 100 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS - 1, () => true, true).acquired).toBe(false);
+    expect(acquire(store, "mcp", "challenger", 100 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS, () => true, true).acquired).toBe(true);
+  } finally { db.close(); removeTempStateDbDir(tempDir); }
 });
 
 // One owner per lease, persisted death cannot be undone by PID reuse, and only
