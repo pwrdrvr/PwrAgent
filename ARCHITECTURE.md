@@ -456,6 +456,13 @@ typed factories retain app-state construction at the original lifecycle sites.
 Profile-secret/HMAC identity, timing-safe comparison, expiry/approval transitions,
 activity payloads/freshness, list/retention bounds and all SQL remain unchanged.
 This storage boundary grants no messaging or federation access.
+Shared `OperatorRequestStore` implements owner-local question and seen storage.
+Its private concrete desktop binding and separate application factory preserve
+service construction at the original lifecycle site. Pending question text is
+retained only while open; closed rows keep identity and times. First-record and
+first-seen identity, batched writes and open question/to-do/review seen retention
+preserve every SQL statement and transaction. Live server requests remain owned
+by the registry, rather than reconstructed from storage.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
