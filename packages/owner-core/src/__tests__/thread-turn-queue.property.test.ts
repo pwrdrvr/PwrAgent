@@ -35,6 +35,30 @@ it("Retry admits only eligible held guidance while preserving the running queue 
   }));
 });
 
+it("Retry preserves review holds behind dispatch gates and never admits after close", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("dispatch", "closed", "close-during-release"), async gate => {
+    let held = false, closeOnRelease = false, sends = 0;
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      canSteerThread: () => true,
+      isDispatchHeld: () => held,
+      startTurn: async () => { throw new Error("Running native owner must not be replaced"); },
+      steerTurn: async () => { sends++; return { ...THREAD, turnId: "native-owner" }; },
+      onLifecycle: event => { if (closeOnRelease && event.type === "queued") queue.close(); },
+    });
+    try {
+      await queue.submitHeld({ ...THREAD, id: "guidance", origin: "manual", delivery: "queued-steer", input: [] }, "review");
+      const before = queue.getQueuedEntries(THREAD);
+      held = gate === "dispatch";
+      closeOnRelease = gate === "close-during-release";
+      if (gate === "closed") queue.close();
+      expect(await queue.releaseEntryWithDisposition("guidance")).toMatchObject({ disposition: "busy" });
+      expect(sends).toBe(0);
+      if (!closeOnRelease) expect(queue.getQueuedEntries(THREAD)).toEqual(before);
+    } finally { queue.close(); }
+  }));
+});
+
 type ModelEntry = { id: string; holds: string[]; paused: boolean };
 type Model = {
   arrivals: string[];
