@@ -10,7 +10,7 @@ export class OutpostThreadRegistry {
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
     this.inventory = new Map((inventory?.list() ?? [])
-      .flatMap(snapshot => snapshot.threads.map(thread => [buildThreadIdentityKey(snapshot.backend, thread.id), { ...thread, observedAt: snapshot.observedAt }])));
+      .flatMap(snapshot => snapshot.threads.map(thread => [buildThreadIdentityKey(snapshot.backend, thread.id), thread])));
   }
 
   identity(identity) {
@@ -22,7 +22,7 @@ export class OutpostThreadRegistry {
   async updateThreadMetadata(identity, patch) { this.identity(identity); return this.storage.updateThreadMetadata(identity, patch); }
 
   seenWatermark(thread) {
-    return thread.seenUpdatedAt ?? this.unreadBaseline[buildThreadIdentityKey("codex", thread.id)] ?? thread.seenAt ?? 0;
+    return thread.seenUpdatedAt ?? this.unreadBaseline[buildThreadIdentityKey(thread.source ?? "codex", thread.id)] ?? thread.seenAt ?? 0;
   }
 
   get(id, backend = "codex") {
@@ -34,7 +34,7 @@ export class OutpostThreadRegistry {
   }
 
   acpThread(session) {
-    return { ...projectAcpSessionThread(session, undefined, session.cwd ? path.basename(session.cwd) : ""), observedAt: Date.now() };
+    return projectAcpSessionThread(session, undefined, session.cwd ? path.basename(session.cwd) : "");
   }
 
   project(id, record, native, backend) {
