@@ -830,8 +830,8 @@ import {
   type ThreadInfoIdentity,
 } from "./thread-info-store";
 import {
-  type ProviderThreadSnapshotStoreLike,
-} from "../storage/provider-thread-snapshot-store";
+  type ProviderThreadSnapshotStorage,
+} from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { GitReadRequest } from "../git-info/read-cache";
 import {
   resolveWorktreeRepositoryDirectory,
@@ -10131,7 +10131,7 @@ export class DesktopBackendRegistry {
    * synchronous and cannot start provider work, so a 500ms UI poll can use one.
    */
   private readonly threadInfoStore = new ThreadInfoStore();
-  private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike;
+  private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStorage;
   private durableStartupThreadHydrationAttempted = false;
   private startupProviderRefreshAttempted = false;
   private startupCodexRefreshFailed = false;
@@ -11146,7 +11146,7 @@ export class DesktopBackendRegistry {
     acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
     acpAvailableCommandsStore?: AcpAvailableCommandsStorage | null;
-    providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike | null;
+    providerThreadSnapshotStore?: ProviderThreadSnapshotStorage | null;
     acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     /**

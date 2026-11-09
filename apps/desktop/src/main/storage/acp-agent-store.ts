@@ -1,6 +1,6 @@
 import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
 import type { AcpBackendId } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db.js";
+import type { StateDb } from "./state-db.js";
 import type {
   AcpInstalledAgentRecord,
   AcpRegistrySnapshot,

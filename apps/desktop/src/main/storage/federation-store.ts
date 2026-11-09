@@ -15,7 +15,7 @@ import type {
   FederationSessionId,
 } from "@pwragent/shared";
 import { isFederationInstanceId } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 const FEDERATION_ENROLLMENT_SECRET_META_KEY =
   "federation_enrollment_secret_v1";

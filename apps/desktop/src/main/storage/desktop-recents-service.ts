@@ -1,6 +1,6 @@
 import type { ModelSettingsRecent, ModelSettingsRecentsScope } from "@pwragent/shared";
 import { getAppStateDb } from "../state/app-state";
-import { listModelSettingsRecents as listModels, recordModelSettingsRecent as recordModel } from "../state/model-settings-recents-store";
+import { listModelSettingsRecents as listModels, recordModelSettingsRecent as recordModel } from "./model-settings-recents-store";
 import { listRecentFileReferencePaths as listFiles, recordRecentFileReferencePaths as recordFiles } from "../state/recent-file-references-store";
 
 export function listModelSettingsRecents(scope: ModelSettingsRecentsScope): ModelSettingsRecent[] {

@@ -14,7 +14,7 @@ import type {
   MessagingPairingScope,
   MessagingPairingStatus,
 } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 const PAIRING_SECRET_META_KEY = "messaging_pairing_secret_v1";
 

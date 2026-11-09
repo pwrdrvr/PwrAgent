@@ -7,7 +7,7 @@ import type {
 import { normalizeCodexAsyncQuestions } from "@pwragent/shared";
 import type { AsyncQuestionStatus, OperatorRequestStorage } from "@pwragent/owner-core/operator-request-storage";
 import { getAppStateDb } from "../state/app-state";
-import type { StateDb } from "../state/state-db.js";
+import type { StateDb } from "./state-db.js";
 
 type AsyncQuestionRow = {
   backend: AppServerBackendKind;

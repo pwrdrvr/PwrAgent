@@ -408,6 +408,46 @@ bindings, the thread overlay (per-thread UI state), and
 `safeStorage`-encrypted secret blobs. Multiple PwrAgent instances may share
 the same profile DB safely thanks to sqlite WAL mode.
 
+`packages/sqlite-storage` owns the profile database opener, schema and migrations,
+including the sub-agent and usage-activity table helpers and write instrumentation.
+The package also owns `AppRuntimeInstanceStore`, implementing owner-core runtime
+lease ports with injected host liveness and the existing PID-owned lease
+transactions. Desktop constructs it through a private `main/storage` binding at
+the existing app-state lifecycle site. Both hosts can use this same storage
+without moving runtime identity observation into the database.
+Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
+ports through private desktop bindings at the existing runtime construction
+sites. The model-settings-recents helper is shared by to-do dispatch and the
+desktop recents service. Their SQL, immediate transactions and write counts
+remain unchanged.
+Shared `SqliteOverlayStore` implements the owner metadata registry and the
+existing PR and remote-target storage ports, with its dependency, pin-order,
+change-version and in-memory output closure. Desktop constructs it through a
+private storage binding at the original app-state site; the application-facing
+`desktop-overlay-store` adapter exposes its public API without its database or
+caches. State compatibility exports resolve to the same implementation.
+Shared `ThreadSearchStore` and `ProviderThreadSnapshotStore` own persisted search
+projections and provider inventory, including FTS query construction and legacy
+inventory scrubbing. Their private desktop bindings retain both runtime factory
+sites and return owner-core ports; no database handle reaches application code.
+Search refresh/prune transactions, retained usage titles and write counts stay
+unchanged.
+Shared `AutomationStore` owns persisted automation definitions, runs and
+artifacts with existing pruning and reconciliation transactions. Its private
+desktop binding injects the two existing warning sites and preserves app-state
+construction. The pure transcript merge policy lives in owner-core and is
+shared with desktop artifact rebuilding. No SQL or write count changes.
+Shared `ScheduledThreadActionStore` retains its file/memory payload closure,
+profile-adjacent immutable files, legacy payload migration, claims/recovery and
+bounded projection cursors. Its private desktop bindings preserve app-state
+construction and the owner-core storage port. SQL and transactions are unchanged.
+Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
+compatibility exports resolve to the same class and schema definitions. Only
+state internals and storage adapters may import this package or its desktop
+binding. Owner/application code continues to use storage ports. The package has
+no host imports; each host supplies `better-sqlite3` for its own runtime through
+the package's peer dependency. There is no shared native binary.
+
 ```mermaid
 graph TB
     Shell["Main process / IPC"]
@@ -534,6 +574,7 @@ graph TB
     DesktopApp["apps/desktop"]
     Outpost["packages/pwragent · src/federation-core.ts"]
     OwnerCore["packages/owner-core"]
+    SqliteStorage["packages/sqlite-storage"]
     Federation["packages/federation"]
     AgentTools["packages/agent-tools"]
     MsgProviders["packages/messaging/providers/*"]
@@ -546,6 +587,7 @@ graph TB
     DesktopApp --> Federation
     DesktopApp --> AgentTools
     DesktopApp --> OwnerCore
+    DesktopApp --> SqliteStorage
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
     Outpost --> Federation
     Outpost --> AgentTools
@@ -553,6 +595,8 @@ graph TB
     Outpost --> MsgInterface
     Outpost -.-> OwnerCore
     OwnerCore --> Shared
+    SqliteStorage --> Shared
+    SqliteStorage --> OwnerCore
     Federation --> Shared
     AgentTools --> Shared
     MsgProviders --> MsgInterface
@@ -578,6 +622,10 @@ reusable libraries and owner-core through its bundle entry; its JavaScript
 consumes the bundle.
 Every package under `packages/` is forbidden from importing `apps/`.
 
+SQLite storage is below the hosts and may depend only on shared contracts and
+owner-core ports. Desktop application modules cannot import it or the raw
+database binding; their storage adapters and state internals own that access.
+
 ## Workspace map
 
 | Path | What's there |
@@ -587,6 +635,7 @@ Every package under `packages/` is forbidden from importing `apps/`.
 | `packages/federation` | Owner contract, federation transport, enrollment, routing and RPC |
 | `packages/agent-tools` | Agent tool definitions, routing and messaging tool contracts |
 | `packages/owner-core` | Shared navigation projection, Attention ordering, and thread-title policy (`@pwragent/owner-core`) |
+| `packages/sqlite-storage` | Portable profile SQLite opening, schema, migrations, table helpers and write accounting |
 | `packages/pwragent` | Headless Outpost daemon and CLI, with reusable libraries bundled through `src/federation-core.ts` |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |

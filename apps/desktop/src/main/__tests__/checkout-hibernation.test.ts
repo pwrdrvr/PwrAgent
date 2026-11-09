@@ -860,10 +860,15 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await snapshotOf(store)).toBeUndefined();
   });
 
-  it("requires every archived external owner's receipt at hibernation admission (Git oracle property)", async ({ signal }) => {
-    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 3 }), async (authorizations) => {
-      signal.throwIfAborted();
-      // A generated case owns its registry, database and Git checkout until
+  // Each case owns its native fixture through afterEach; no generated case
+  // leaves a registry, SQLite connection or Git tree alive for the next one.
+  const archivedOwnerReceiptCases = [1, 2, 3].flatMap((ownerCount) =>
+    Array.from({ length: 2 ** ownerCount }, (_, mask) => ({
+      authorizations: Array.from({ length: ownerCount }, (_, index) => Boolean(mask & (1 << index))),
+    })));
+  it.each(archivedOwnerReceiptCases)("requires every archived external owner's receipt at hibernation admission: $authorizations (Git oracle)", async ({ authorizations }) => {
+    await ownFixtureWork((async () => {
+      // Each exhaustive case owns its registry, database and Git checkout until
       // it settles. None may survive into the next provider inventory.
       expect({ registries: registries.length, databases: databases.length, roots: roots.length })
         .toEqual({ registries: 0, databases: 0, roots: 0 });
@@ -903,7 +908,7 @@ describe("Thread maintenance's hibernate step", () => {
         expect(Boolean(await snapshotOf(store))).toBe(allowed);
         expect(inspected.result.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(allowed);
       } finally { await disposeFixtures(); }
-    }), { numRuns: 5, examples: [[[false]], [[true, false]], [[true, true]]] }));
+    })());
   });
 
   it("reads one Git identity for a checkout shared with one authorized archived owner (shrunk regression)", async () => {
