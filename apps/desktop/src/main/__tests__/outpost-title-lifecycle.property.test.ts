@@ -47,7 +47,9 @@ it("the actual Outpost admits one helper per first turn and explicit rename wins
   ), { numRuns: 25 });
 });
 
-it("actual job preparation rechecks a handoff lock before inference and never replays durable acceptance", async () => {
+// The executable Runtime's private Unix directories support Linux and macOS.
+// Shared title/naming and turn coordination keep their cross-platform suites.
+it.skipIf(process.platform === "win32")("actual job preparation rechecks a handoff lock before inference and never replays durable acceptance", async () => {
   const [{ JobStore }, { Runtime }] = await Promise.all([load("store.js"), load("runtime.js")]);
   await fc.assert(fc.asyncProperty(fc.boolean(), async locked => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-turn-admission-")));

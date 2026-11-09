@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A protocol fixture, not a model/provider. All state is test-owned.
 import assert from "node:assert/strict";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
@@ -23,7 +23,13 @@ const helperControl = () => {
 const records = path.join(directory, "fixture-threads.json");
 let threads;
 try { threads = JSON.parse(readFileSync(records, "utf8")); } catch { threads = {}; }
-const persist = () => writeFileSync(records, JSON.stringify(threads));
+const persist = () => {
+  // Daemon shutdown may kill this fixture during a native-name update. Keep
+  // the preceding complete provider snapshot until its replacement is ready.
+  const temporary = `${records}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify(threads));
+  renameSync(temporary, records);
+};
 const complete = (status) => {
   if (!active) return;
   clearTimeout(active.timer);
