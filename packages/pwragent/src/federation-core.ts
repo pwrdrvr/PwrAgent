@@ -25,13 +25,16 @@ export * from "@pwragent/federation/federation-replacement-receiver";
 export { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
 
 export { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
-export { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
+export { buildThreadIdentityKey, isAppServerBackendKind, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 
 export { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";
 export { patchOwnerThreadMetadata } from "@pwragent/owner-core/thread-storage";
 export { ThreadNamingLifecycle } from "@pwragent/owner-core/thread-naming-lifecycle";
 export { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
+export { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
+import type { AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 
 import path from "node:path";
 import os from "node:os";
@@ -50,7 +53,8 @@ import type { ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provide
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 export { outpostThreadMetadata, outpostThreadProjection } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
 
-type OutpostOwnerStorage = { threads: ImmediateOwnerThreadRegistry; jobs: OwnerJobStorage; inventory: ProviderThreadSnapshotStorage };
+type OutpostOwnerStorage = { threads: ImmediateOwnerThreadRegistry; jobs: OwnerJobStorage; inventory: ProviderThreadSnapshotStorage;
+  acpSessions: Pick<AcpSessionStorage, "getSession" | "listAllSessions"> };
 
 /** Outpost's private host binding. Application code receives only storage ports. */
 export function openOutpostProfileRuntime(params: {
@@ -102,6 +106,7 @@ export function openOutpostProfileRuntime(params: {
       }
       const storage = adoptOutpostOwnerData(db, directory, ownerIdentity);
       const inventory = new ProviderThreadSnapshotStore(db);
+      const acpSessions = new AcpSessionStore(db);
       // Do not expose concrete stores, constructors or the database indirectly.
       return {
         threads: {
@@ -115,6 +120,7 @@ export function openOutpostProfileRuntime(params: {
           save: job => storage.jobs.save(job),
         },
         inventory: { list: () => inventory.list(), replace: snapshot => inventory.replace(snapshot) },
+        acpSessions: { getSession: (backend, id) => acpSessions.getSession(backend, id), listAllSessions: () => acpSessions.listAllSessions() },
       };
     } };
   } catch (error) {

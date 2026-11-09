@@ -181,7 +181,7 @@ it("scrubs legacy inventory once and refuses unsupported or malformed provider r
       const expected = summary(0, 0, 0);
       const insert = db.raw.prepare("INSERT INTO provider_thread_snapshots(backend, schema_version, observed_at, payload) VALUES (?, ?, ?, ?)");
       insert.run("codex", 1, 0, JSON.stringify([{ ...expected, summary: secret, privatePayload: secret }]));
-      insert.run("claude", 1, 0, "[]");
+      insert.run("unsupported-provider", 1, 0, "[]");
       insert.run("acp:invalid-version", 2, 0, "[]");
       insert.run("acp:invalid-json", 1, 0, "{");
       insert.run("acp:wrong-owner", 1, 0, JSON.stringify([expected]));

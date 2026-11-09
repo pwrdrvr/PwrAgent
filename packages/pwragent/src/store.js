@@ -45,6 +45,7 @@ export class JobStore {
     this.storage = storage.jobs;
     this.threadRegistry = storage.threads;
     this.inventory = storage.inventory;
+    this.acpSessions = storage.acpSessions;
     // Existing runtime consumers retain point reads and iteration, without a
     // second mutable registry that could diverge from the profile database.
     this.jobs = {

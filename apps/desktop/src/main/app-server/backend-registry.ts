@@ -15026,7 +15026,15 @@ export class DesktopBackendRegistry {
     this.providerThreadSnapshotStore.replace({
       backend,
       observedAt: Date.now(),
-      threads,
+      threads: backend === "codex" ? threads : threads.map(thread => {
+        // rememberThreadListContexts has already merged this read's reserved
+        // observation sequence. A later native event wins over an older list.
+        const latest = this.threadInfoStore.get({ backend, threadId: thread.id });
+        return { ...thread,
+          ...(latest?.title ? { title: latest.title, titleSource: latest.titleSource ?? thread.titleSource } : {}),
+          ...(latest?.archived === true ? { archivedAt: thread.archivedAt ?? 0 } : {}),
+        };
+      }),
     });
   }
 
@@ -54315,6 +54323,21 @@ export class DesktopBackendRegistry {
             title: { text: threadName.trim(), source, nativeName: threadName.trim() },
           });
         }
+      }
+    }
+    if (event.backend !== "codex" && event.notification.method === "thread/name/updated") {
+      const { threadId, threadName, titleSource } = event.notification.params;
+      const snapshot = this.providerThreadSnapshotStore?.list().find(value => value.backend === event.backend);
+      const thread = snapshot?.threads.find(value => value.id === threadId);
+      const source = titleSource === undefined ? thread?.titleSource ?? "fallback" : normalizeRenamedTitleSource(titleSource);
+      // A name event updates an already discovered provider row. It cannot
+      // manufacture a complete inventory for an undiscovered provider.
+      if (snapshot && thread && typeof threadName === "string" && threadName.trim()
+        && (thread.title !== threadName.trim() || thread.titleSource !== source)) {
+        this.providerThreadSnapshotStore?.replace({ ...snapshot,
+          threads: snapshot.threads.map(value => value.id === threadId
+            ? { ...value, title: threadName.trim(), titleSource: source } : value),
+        });
       }
     }
     this.rememberThreadTitleFromEvent(event);

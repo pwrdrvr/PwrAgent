@@ -408,7 +408,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [], getSessionInfo: async () => undefined });
       try {
         desktop = await startDesktopOwner(null, prepare, claude, root);
-        const expected = new Map<string, unknown>();
+        const expected = new Map<string, Record<string, unknown>>();
         for (const backend of ["claude", acp] as const) {
           const ref = { backend, threadId };
           const registry = desktopOwner.registry as DesktopBackendRegistry;
@@ -440,8 +440,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await desktop.close(); desktop = undefined;
         outpost = await startOutpostDaemon({ profileRoot: root });
         for (const backend of ["claude", acp] as const) {
-          expect((await outpost.client.resolveThread({ backend, threadId })).thread).toMatchObject(expected.get(backend));
-          expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend, threadId } })).thread).toMatchObject(expected.get(backend));
+          expect((await outpost.client.resolveThread({ backend, threadId })).thread).toMatchObject(expected.get(backend)!);
+          expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend, threadId } })).thread).toMatchObject(expected.get(backend)!);
           expect((await outpost.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend,
             query: { kind: "exact", identities: [{ backend, threadId }] } })).entries).toHaveLength(1);
           await expect(outpost.client.startTurn({ backend, threadId, input: [{ type: "text", text: "Must refuse" }] })).rejects.toThrow("executes Codex only");
@@ -450,7 +450,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await outpost.close(); outpost = undefined;
         desktop = await startDesktopOwner(null, prepare, claude, root);
         for (const backend of ["claude", acp] as const) {
-          expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend, threadId } })).thread).toMatchObject(expected.get(backend));
+          expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend, threadId } })).thread).toMatchObject(expected.get(backend)!);
         }
       } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
     }), { numRuns: 3 });

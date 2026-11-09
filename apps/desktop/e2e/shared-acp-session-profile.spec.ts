@@ -1,6 +1,7 @@
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { AcpAvailableCommandsStore } from "@pwragent/sqlite-storage/acp-available-commands-store";
@@ -10,8 +11,15 @@ import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.resolve(specDir, "../../../packages/pwragent/src", file)).href);
+test.beforeAll(() => {
+  execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
+    cwd: path.resolve(specDir, "../../.."), stdio: "pipe",
+  });
+});
 const backend = "acp:gemini" as const;
 const threadId = "portable-acp-session";
 const providerCommands = [{ name: "portable-live", description: "Provider command", aliases: ["live"], input: { hint: "<fixture>" } }];
@@ -109,6 +117,20 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
       expect(JSON.parse(payload)).not.toHaveProperty("transcriptUpdates");
     } finally { raw.close(); }
     await app.closeApplication();
+    const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+    const stateDirectory = path.dirname(stateDbPathForHomeRoot(app.homeRoot));
+    const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: app.homeRoot });
+    try {
+      const store = new JobStore(path.join(stateDirectory, "headless"), { version: 1, workspace: app.homeRoot, codexHome: path.join(app.homeRoot, "codex") }, profile);
+      const owner = new HeadlessBackend({ workspace: app.homeRoot, store, onFailure(error: unknown) { throw error; },
+        projects: { list: () => [] } }, () => {});
+      const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref: { backend, threadId } });
+      expect(detail.identity).toBe("archived");
+      expect(detail.thread).toMatchObject({ id: threadId, source: backend, title: "Desktop renamed portable ACP", titleSource: "explicit" });
+      expect((await owner.handle("lookupArchivedThreads", { backend, threadIds: [threadId] })).threads)
+        .toMatchObject([{ id: threadId, source: backend, title: "Desktop renamed portable ACP" }]);
+      await expect(owner.handle("startTurn", { backend, threadId })).rejects.toThrow("executes Codex only");
+    } finally { profile.close(); }
     const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
     try {
       const sessions = new AcpSessionStore(db);
