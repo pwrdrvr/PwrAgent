@@ -1,0 +1,179 @@
+import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
+import { isAcpBackendId, type AcpBackendId } from "@pwragent/shared";
+import type { StateDb } from "./state-db.js";
+
+type AcpPersistedTranscriptUpdate = {
+  receivedAt: number;
+  update: Record<string, unknown>;
+};
+
+export class AcpSessionStore implements AcpSessionStorage {
+  constructor(private readonly stateDb: StateDb) {}
+
+  listBackendIds(): AcpBackendId[] {
+    return (this.stateDb.raw.prepare("SELECT DISTINCT backend_id FROM acp_sessions").all() as { backend_id: string }[])
+      .map((row) => row.backend_id).filter(isAcpBackendId);
+  }
+
+  upsertSession(metadata: AcpSessionMetadata): void {
+    const persistableMetadata = stripAcpSessionHistory(metadata);
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO acp_sessions(
+           backend_id,
+           session_id,
+           created_at,
+           updated_at,
+           payload
+         )
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        persistableMetadata.backendId,
+        persistableMetadata.sessionId,
+        persistableMetadata.createdAt,
+        persistableMetadata.updatedAt,
+        JSON.stringify(persistableMetadata),
+      );
+  }
+
+  listSessions(
+    backendId: AcpBackendId,
+    params?: { archived?: boolean; includeHidden?: boolean },
+  ): AcpSessionMetadata[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM acp_sessions
+         WHERE backend_id = ?
+         ORDER BY updated_at DESC`,
+      )
+      .all(backendId) as Array<{ payload: string }>;
+    const archived = params?.archived === true;
+    return rows.flatMap((row) => {
+      const parsed = parseJson(row.payload);
+      if (!isSessionMetadata(parsed)) {
+        return [];
+      }
+      if (parsed.hidden && params?.includeHidden !== true) {
+        return [];
+      }
+      return Boolean(parsed.archivedAt) === archived
+        ? [stripAcpSessionHistory(parsed)]
+        : [];
+    });
+  }
+
+  /** Identity-keyset pages omit transcript history and runtime command data. */
+  listArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {
+    archived: boolean;
+    after?: string;
+    limit: number;
+  }): { sessions: AcpSessionMetadata[]; nextCursor?: string } {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT session_id, json_object(
+        'backendId', backend_id, 'sessionId', session_id,
+        'title', '', 'cwd', json_extract(payload, '$.cwd'),
+        'createdAt', created_at, 'updatedAt', updated_at,
+        'executionMode', 'default', 'status', json_extract(payload, '$.status'),
+        'archivedAt', json_extract(payload, '$.archivedAt')
+      ) AS payload
+      FROM acp_sessions
+      WHERE backend_id = ? AND session_id > ?
+      ORDER BY session_id LIMIT ?
+    `).all(backendId, params.after ?? "", params.limit) as Array<{ session_id: string; payload: string }>;
+    const sessions = rows.flatMap((row) => {
+      const value = parseJson(row.payload);
+      return isSessionMetadata(value) && Boolean(value.archivedAt) === params.archived ? [value] : [];
+    });
+    return { sessions, nextCursor: rows.length === params.limit ? rows.at(-1)?.session_id : undefined };
+  }
+
+  deleteSession(backendId: AcpBackendId, sessionId: string): void {
+    this.stateDb.raw.prepare("DELETE FROM acp_sessions WHERE backend_id = ? AND session_id = ?").run(backendId, sessionId);
+  }
+
+  getSession(
+    backendId: AcpBackendId,
+    sessionId: string,
+  ): AcpSessionMetadata | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM acp_sessions
+         WHERE backend_id = ? AND session_id = ?`,
+      )
+      .get(backendId, sessionId) as { payload: string } | undefined;
+    const parsed = row ? parseJson(row.payload) : undefined;
+    return isSessionMetadata(parsed) ? stripAcpSessionHistory(parsed) : undefined;
+  }
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function stripAcpSessionHistory(metadata: AcpSessionMetadata): AcpSessionMetadata {
+  const legacyTranscriptUpdates = readLegacyTranscriptUpdates(metadata);
+  const {
+    transcriptUpdates: _transcriptUpdates,
+    ...metadataWithoutHistory
+  } = metadata as AcpSessionMetadata & {
+    transcriptUpdates?: AcpPersistedTranscriptUpdate[];
+  };
+  const hasConversationHistory =
+    metadata.hasConversationHistory ??
+    (legacyTranscriptUpdates.some(isConversationTranscriptUpdate) || undefined);
+  return {
+    ...metadataWithoutHistory,
+    ...(hasConversationHistory === undefined ? {} : { hasConversationHistory }),
+  };
+}
+
+function readLegacyTranscriptUpdates(
+  metadata: AcpSessionMetadata,
+): AcpPersistedTranscriptUpdate[] {
+  const value = (metadata as { transcriptUpdates?: unknown }).transcriptUpdates;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const record = item as Partial<AcpPersistedTranscriptUpdate>;
+    return typeof record.receivedAt === "number" &&
+      record.update &&
+      typeof record.update === "object" &&
+      !Array.isArray(record.update)
+      ? [{ receivedAt: record.receivedAt, update: record.update }]
+      : [];
+  });
+}
+
+function isConversationTranscriptUpdate(
+  item: AcpPersistedTranscriptUpdate,
+): boolean {
+  const update = item.update;
+  const kind =
+    update.kind ?? update.type ?? update.sessionUpdate ?? update.session_update;
+  return (
+    kind === "pwragent_user_prompt" ||
+    kind === "user_message_chunk" ||
+    kind === "agent_message_chunk"
+  );
+}
+
+function isSessionMetadata(value: unknown): value is AcpSessionMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.backendId === "string" &&
+    record.backendId.startsWith("acp:") &&
+    typeof record.sessionId === "string" &&
+    typeof record.title === "string" &&
+    typeof record.createdAt === "number" &&
+    typeof record.updatedAt === "number"
+  );
+}

@@ -53,6 +53,12 @@ synchronous FULL/immediate receipt and claim commits before dispatch. The prior
 connection durability mode is restored on success or refusal. Receipt SQL,
 caller/request/queue identities, expiry and transaction sites are unchanged.
 
+Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
+ACP session metadata and last-observed command ports. Desktop's private bindings
+retain both explicitly typed runtime factories and their app-state construction
+sites. Stored backend ownership, history stripping and legacy history markers,
+archive identity-keyset pages, command filtering, SQL and write counts remain unchanged.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -114,3 +120,10 @@ and committed claims observed from a second handle before provider dispatch.
 Supported Electron E2E reads portable receipts through the real federation
 owner, reconciles stale claims, deduplicates a new submission and reads the
 persisted results from Node after graceful shutdown.
+
+`shared-acp-session-storage.property.test.ts` compares independent session,
+history-privacy, archive-page and command models across portable/desktop WAL
+connections and reopens. It checks detached reads, malformed and legacy payloads,
+atomic session/command visibility, rollback and exact unchanged write counts.
+Supported Electron E2E reads portable ACP metadata and commands through the real
+desktop services, applies provider/owner updates, and hands them back to Node.
