@@ -376,9 +376,11 @@ through the shared session port, rather than inferred from an older startup
 inventory. That store also owns membership: a deleted or hidden session cannot
 resolve from an older inventory or a retained overlay. Desktop startup hydration
 and refresh publication use actual ACP membership, including agents with no
-installed record. Native titles/provenance, archive state, workspace, times and
-execution mode outrank older overlay facts; live pins, parents, seen watermarks
-and model settings remain shared. Hidden helpers remain excluded. Desktop and Outpost use the same pure
+installed record. Native titles/provenance, workspace, times and execution mode
+outrank older overlay facts. Native archive state applies without a durable
+owner archive/restore observation; a passive stored session cannot supersede
+that observation. Live pins, parents, seen watermarks and model settings remain
+shared. Hidden helpers remain excluded. Desktop and Outpost use the same pure
 ACP summary projection; host path labels stay injected. Unsupported providers
 are listed as unavailable and their execution, transcript and mutation requests
 are refused before reaching Codex. This grants no cross-instance reach.

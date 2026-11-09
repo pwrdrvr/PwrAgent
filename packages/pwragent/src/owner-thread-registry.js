@@ -55,13 +55,19 @@ export class OutpostThreadRegistry {
   project(id, record, native, backend) {
     if (!record && !native) return undefined;
     const actualSession = backend.startsWith("acp:") || (backend === "claude" && this.claudeThreadIds?.has(id));
+    const acpArchiveObservation = backend.startsWith("acp:") && (record?.archivedAt !== undefined
+      || record?.archiveRetentionStartedAt !== undefined || record?.restoredAt !== undefined);
     const thread = record ? outpostThreadProjection(record) : { id };
     if (native) {
       Object.assign(thread, actualSession ? { title: native.title, titleSource: native.titleSource } : projectOwnerThreadTitle(native, record));
       if (record?.title?.nativeName !== undefined && record.title.nativeName !== native.title) thread.titleNativeName = native.title;
       if (actualSession) {
-        Object.assign(thread, { archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
-          createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path });
+        Object.assign(thread, { createdAt: native.createdAt, updatedAt: native.updatedAt,
+          cwd: native.projectKey || native.linkedDirectories[0]?.path });
+        if (!acpArchiveObservation) {
+          thread.archived = native.archivedAt !== undefined;
+          thread.archivedAt = native.archivedAt;
+        }
       } else if (native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.archiveRetentionStartedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
         thread.archived = native.archivedAt !== undefined;
         thread.archivedAt = native.archivedAt;
@@ -74,6 +80,8 @@ export class OutpostThreadRegistry {
       reasoningEffort: native.reasoningEffort, serviceTier: native.serviceTier, fastMode: native.fastMode } : {}),
       ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)), source: backend,
       executionMode: actualSession ? native.executionMode ?? record?.executionMode ?? "default" : record?.executionMode ?? native?.executionMode ?? "default" };
+    if (acpArchiveObservation) projected.archivedAt = projected.archived
+      ? Math.max(record.archivedAt ?? -Infinity, record.archiveRetentionStartedAt ?? -Infinity) : undefined;
     if (projected.title === undefined) {
       projected.title = "Untitled thread";
       projected.titleSource = "fallback";

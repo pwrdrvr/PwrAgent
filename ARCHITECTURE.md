@@ -461,9 +461,11 @@ The actual ACP session store owns membership on both hosts. Desktop startup
 hydration and provider-refresh publication replace retained ACP rows with local
 session records, including backends without an installed agent. Outpost point,
 list, navigation and archive reads cannot recover a deleted or hidden session
-from retained inventories or overlays. Native session titles/provenance, archive
-state, workspace, times and execution mode stay authoritative; overlays still
-supply live pins, parents, seen watermarks and model settings. This projection
+from retained inventories or overlays. Native session titles/provenance,
+workspace, times and execution mode stay authoritative. Native archive state
+applies in the absence of durable owner archive/restore observations; passive
+stored sessions cannot supersede those observations. Overlays still supply
+live pins, parents, seen watermarks and model settings. This projection
 adds no SQLite writes and leaves Codex pending-owner/job identity rules intact.
 Desktop native name events update already published non-Codex inventory rows
 without changing membership freshness. Existing owner observation sequences

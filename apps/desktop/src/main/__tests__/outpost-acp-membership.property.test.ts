@@ -144,11 +144,22 @@ it("keeps durable ACP archive observations authoritative for members while delet
           let present = true;
           let archived = nativeArchived;
           let archiveStamp = native.archivedAt;
+          let retainedAt: number | undefined;
+          let tombstoneAt: number | undefined;
+          let restoredAt: number | undefined;
           for (const [index, command] of commands.entries()) {
             const at = start + index;
-            if (command === "observe") { await overlay.observeArchivedThreads([ref], at); archived = true; archiveStamp = at; }
-            if (command === "archive") { await overlay.setThreadArchiveTombstone({ ...ref, archivedAt: at }); archived = true; archiveStamp = at; }
-            if (command === "restore") { await overlay.setThreadArchiveTombstone({ ...ref, restoredAt: at }); archived = false; archiveStamp = undefined; }
+            if (command === "observe") { await overlay.observeArchivedThreads([ref], at); retainedAt ??= at; }
+            if (command === "archive") { await overlay.setThreadArchiveTombstone({ ...ref, archivedAt: at }); tombstoneAt = at; }
+            if (command === "restore") {
+              await overlay.setThreadArchiveTombstone({ ...ref, restoredAt: at });
+              restoredAt = at; retainedAt = undefined; tombstoneAt = undefined;
+            }
+            if (retainedAt !== undefined || tombstoneAt !== undefined || restoredAt !== undefined) {
+              const latestArchive = Math.max(retainedAt ?? -Infinity, tombstoneAt ?? -Infinity);
+              archived = latestArchive > (restoredAt ?? -Infinity);
+              archiveStamp = archived ? latestArchive : undefined;
+            }
             if (command === "delete") { sessions.deleteSession(ref.backend, ref.threadId); present = false; }
             if (command === "save" || command === "hidden") {
               sessions.upsertSession({ ...native, hidden: command === "hidden" }); present = command === "save";
@@ -170,7 +181,7 @@ it("keeps durable ACP archive observations authoritative for members while delet
             expect(await overlay.getThreadMetadata(ref)).toEqual(before);
           }
         } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
-      }), { numRuns: 25, examples: [[0, false, ["observe"]], [0, true, ["restore"]],
+      }), { numRuns: 25, examples: [[0, false, ["observe"]], [0, true, ["restore"]], [0, false, ["observe", "observe"]],
         [0, false, ["observe", "delete", "save", "restore", "hidden"]]] });
   } finally { vi.unstubAllEnvs(); }
 });
