@@ -388,3 +388,57 @@ it.skipIf(process.platform === "win32")("budgets actual queued acceptance, dispa
     });
   } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
 });
+
+it.skipIf(process.platform === "win32")("actual Outpost refusal covers waiting jobs before its synchronous subscriber cancels the refused head", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  // Freeze only JobStore.updatedAt for its unchanged-payload guard; timers and drains stay real.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-09T14:00:00Z"));
+  try {
+    for (const rejectObserver of [false, true]) await fixture(async (runtime, backend, store, _profile, events) => {
+      let starts = 0, covered = false;
+      runtime.codex = { startTurn: async () => {
+        if (++starts === 2) throw new Error("Provider refused submission");
+        return { threadId: "native", turnId: `turn${starts}` };
+      }, stop: async () => {} };
+      runtime.submit({ id: "original", threadId: "native", prompt: "Original native owner" });
+      await runtime.work;
+      const refused = runtime.submit({ id: "refused", threadId: "native", prompt: "Immutable refused input" });
+      const next = runtime.submit({ id: "next", threadId: "native", prompt: "Immutable waiting input" });
+      let cancellation: Promise<unknown> | undefined;
+      runtime.onEvent = (event: any) => {
+        backend.event(event);
+        if (event.method === "headless/queueChanged" && event.params.type === "blocked" && event.params.entry.id === "refused") {
+          covered = runtime.turnQueue.getAllQueuedEntries().every((entry: any) => entry.manualReleaseRequired === true);
+          cancellation = backend.handle("cancelQueuedTurn", { queueEntryId: "refused" });
+          if (rejectObserver) throw new Error("Synchronous observer refused");
+        }
+      };
+      const { writes } = await measureSqliteWrites(async () => {
+        runtime.notification({ method: "turn/completed", params: { threadId: "native", turn: { id: "turn1", status: "completed" } } });
+        for (let index = 0; index < 12; index++) await tick();
+        await cancellation;
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-refusal-publication-write-budgets.json", scenario: rejectObserver ? "outpost-observer-refusal" : "outpost-refusal-cancellation",
+        note: "Actual native terminal, queued provider refusal and synchronous subscriber cancellation; setup and admission excluded", writes });
+      expect(covered).toBe(true);
+      expect(starts).toBe(2);
+      expect(store.get(refused.id)).toMatchObject({ status: "interrupted", fingerprint: refused.fingerprint });
+      expect(store.get(next.id)).toMatchObject({ status: "queued", fingerprint: next.fingerprint });
+      expect(backend.queuedTurns("native")).toMatchObject([{ queueEntryId: "next", manualReleaseRequired: true }]);
+      const latest = new Map<string, boolean>();
+      for (const event of events) if (event.method === "thread/turnQueue/updated") {
+        const value = event.params;
+        if (["cancelled", "started"].includes(value.status)) latest.delete(value.queueEntryId);
+        else if (["queued", "held", "blocked"].includes(value.status)) latest.set(value.queueEntryId, value.status === "blocked" || value.manualReleaseRequired === true);
+      }
+      expect([...latest.entries()]).toEqual([["next", true]]);
+      expect(await backend.handle("releaseQueuedTurn", { queueEntryId: "next" })).toMatchObject({ disposition: "started" });
+      expect(starts).toBe(3);
+      expect(runtime.active).toBe("next");
+      expect(store.get(next.id)).toMatchObject({ status: "running", fingerprint: next.fingerprint });
+      await runtime.stop();
+      expect(store.get(next.id)).toMatchObject({ status: "unknown", fingerprint: next.fingerprint });
+    });
+  } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
+});

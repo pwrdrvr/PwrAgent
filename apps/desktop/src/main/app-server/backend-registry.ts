@@ -13654,7 +13654,7 @@ export class DesktopBackendRegistry {
       // title they already have. A grouped steer that took another message
       // arrives here untitled, so the larger batch is named again.
       if (!event.entry.title) this.requestQueuedMessageTitle(event.entry);
-    } else {
+    } else if (event.type !== "blocked") {
       this.queuedMessageTitler.forget(event.entry.id);
     }
     const origins = event.type === "queued" && event.inputUpdated

@@ -841,9 +841,9 @@ describe("ThreadTurnQueue", () => {
     expect(events.map((event) => event.type)).toEqual([
       "queued",
       "queued",
+      "held",
+      "held",
       "blocked",
-      "held",
-      "held",
     ]);
 
     rejectBadEntry = false;

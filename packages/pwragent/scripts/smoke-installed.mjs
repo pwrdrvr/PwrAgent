@@ -403,6 +403,38 @@ try {
     assert.equal((await reopenedOwner.handle("backend.releaseQueuedTurn", { queueEntryId: trackedNext.id })).disposition, "started");
     assert.equal(trackedSends, 2);
     await reopened.stop();
+    const refusedRuntime = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
+    let refusalStarts = 0;
+    refusedRuntime.codex = { stop: async () => {}, startTurn: async () => {
+      if (++refusalStarts === 2) throw new Error("Packed provider refused submission");
+      return { threadId, turnId: `packed-refusal-${refusalStarts}` };
+    } };
+    refusedRuntime.loadedThreads.add(threadId);
+    const refusedOwner = new HeadlessBackend(refusedRuntime, () => {}, () => "packed-owner");
+    refusedRuntime.submit({ id: "packed-refusal-original", threadId, prompt: "Packed original" }); await refusedRuntime.work;
+    const refusedJob = refusedRuntime.submit({ id: "packed-refused", threadId, prompt: "Packed immutable refused input" });
+    const refusalNext = refusedRuntime.submit({ id: "packed-refusal-next", threadId, prompt: "Packed immutable next input" });
+    let refusalCancellation, refusalCovered = false;
+    refusedRuntime.onEvent = message => {
+      refusedOwner.event(message);
+      if (message.method === "headless/queueChanged" && message.params.type === "blocked") {
+        refusalCovered = refusedRuntime.turnQueue.getAllQueuedEntries().every(entry => entry.manualReleaseRequired);
+        refusalCancellation = refusedOwner.handle("backend.cancelQueuedTurn", { queueEntryId: refusedJob.id });
+      }
+    };
+    refusedRuntime.notification({ method: "turn/completed", params: { threadId, turn: { id: "packed-refusal-1", status: "completed" } } });
+    for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve));
+    await refusalCancellation;
+    assert.equal(refusalCovered, true);
+    assert.equal(refusalStarts, 2);
+    assert.equal(store.get(refusedJob.id).status, "interrupted");
+    assert.equal(store.get(refusedJob.id).fingerprint, refusedJob.fingerprint);
+    assert.equal(store.get(refusalNext.id).fingerprint, refusalNext.fingerprint);
+    assert.deepEqual(refusedRuntime.turnQueue.getAllQueuedEntries().map(entry => [entry.id, entry.manualReleaseRequired]), [[refusalNext.id, true]]);
+    assert.equal((await refusedOwner.handle("backend.releaseQueuedTurn", { queueEntryId: refusalNext.id })).disposition, "started");
+    assert.equal(refusalStarts, 3);
+    await refusedRuntime.stop();
+    assert.equal(store.get(refusalNext.id).status, "unknown");
     const heldRuntime = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
     const heldSends = [];
     heldRuntime.codex = { stop: async () => {}, startTurn: async ({ input }) => {
