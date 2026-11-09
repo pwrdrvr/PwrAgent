@@ -263,6 +263,15 @@ The generated ownership, reference, restart and snapshot model lives in
   states.
 - Explicit names prevent generated titles from replacing operator intent.
 
+Thread naming lifecycle lives in `owner-core/thread-naming-lifecycle.ts`.
+It serializes renames by backend and thread id, checks conditional renames
+against the current provider name, and owns placeholder eligibility and active
+title attempts. A successful explicit rename retains the owner's intent even
+when its text matches the first prompt. Generated titles recheck eligibility
+inside that same queue. Desktop supplies provider effects, Agent metadata
+storage, cache invalidation and event delivery through host ports; the existing
+provider storage sites and notification ordering stay with those effects.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or

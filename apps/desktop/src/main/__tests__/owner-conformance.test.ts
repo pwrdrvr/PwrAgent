@@ -1,4 +1,5 @@
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
+import fc from "fast-check";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -272,6 +273,41 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         .toEqual(await desktop.client.getNavigationLaunchpadConfig(launchpad));
     } finally { await desktop.close(); }
   });
+
+  it("keeps generated explicit rename sequences and events equal on both real owners", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const hosts = [desktop, outpost];
+      const refs = await Promise.all(hosts.map(async (host) => ({ backend: "codex" as const,
+        threadId: (await host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto" })).threadId,
+      })));
+      await Promise.all(hosts.map(settle));
+      hosts.forEach((host) => { host.events.length = 0; });
+      const titles = fc.sample(fc.integer({ min: 0, max: 1_000_000 }), 25).map((value, index) => `Fixture ${index} ${value}`);
+      for (const title of titles) {
+        await Promise.all(hosts.map((host, index) => host.client.renameThread({ ...refs[index], name: title })));
+        for (const [index, host] of hosts.entries()) {
+          const detail = await host.client.getNavigationSelectedDetail({ protocol: 2, ref: refs[index] });
+          expect(detail.thread?.title, host.name).toBe(title);
+          expect(detail.thread?.titleSource, host.name).toBe("explicit");
+        }
+      }
+      await Promise.all(hosts.map(settle));
+      for (const [index, host] of hosts.entries()) {
+        const names = host.events.flatMap((event) => {
+          if (event.notification.method !== "thread/name/updated"
+            || event.notification.params.threadId !== refs[index].threadId) return [];
+          return [{ name: event.notification.params.threadName, source: event.notification.params.titleSource }];
+        });
+        expect(names, host.name).toEqual(titles.map((name) => ({ name, source: "explicit" })));
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+    }
+  }, 120_000);
 
   it("answer a thread's life the same way, or the baseline records the difference", async () => {
     const desktop = await startDesktopOwner();
