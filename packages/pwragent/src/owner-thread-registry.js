@@ -71,7 +71,7 @@ export class OutpostThreadRegistry {
       sandbox: native.executionMode === "auto" ? "workspace-write" : "read-only", model: native.model,
       reasoningEffort: native.reasoningEffort, serviceTier: native.serviceTier, fastMode: native.fastMode } : {}),
       ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)), source: backend,
-      executionMode: actualClaude ? native.executionMode ?? "default" : record?.executionMode ?? native?.executionMode ?? "default" };
+      executionMode: actualClaude ? native.executionMode ?? record?.executionMode ?? "default" : record?.executionMode ?? native?.executionMode ?? "default" };
     if (projected.title === undefined) {
       projected.title = "Untitled thread";
       projected.titleSource = "fallback";

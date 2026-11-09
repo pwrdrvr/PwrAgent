@@ -1,9 +1,10 @@
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
+import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test } from "./fixtures/electron-test";
@@ -19,6 +20,42 @@ test.beforeAll(() => {
   execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
     cwd: path.resolve(specDir, "../../.."), stdio: "pipe",
   });
+});
+
+test("desktop and Outpost preserve overlay permissions for legacy Claude metadata without an execution mode", async () => {
+  const ref = { backend: "claude" as const, threadId: "00000000-0000-4000-8000-000000000003" };
+  const app = await launchElectronApp({ secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      const state = path.dirname(stateDbPathForHomeRoot(homeRoot));
+      await mkdir(path.join(state, "claude"), { recursive: true, mode: 0o700 });
+      await writeFile(path.join(state, "claude", `${ref.threadId}.json`), JSON.stringify({ cwd: homeRoot,
+        thread: { id: ref.threadId, source: "claude", title: "Legacy Claude permissions", titleSource: "explicit",
+          createdAt: 1, updatedAt: 2, linkedDirectories: [] } }), { mode: 0o600 });
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try { await new SqliteOverlayStore(db).setThreadExecutionMode({ ...ref, executionMode: "auto" }); }
+      finally { db.close(); }
+    },
+  });
+  try {
+    await expect(app.window.getByRole("button", { name: /Legacy Claude permissions/i }).first()).toBeVisible();
+    const desktop = await app.window.evaluate(async ref => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return api.getNavigationSelectedDetail!({ protocol: 2, ref });
+    }, ref);
+    expect(desktop.thread?.executionMode).toBe("auto");
+    await app.closeApplication();
+    const state = path.dirname(stateDbPathForHomeRoot(app.homeRoot));
+    expect(JSON.parse(await readFile(path.join(state, "claude", `${ref.threadId}.json`), "utf8")).thread.executionMode).toBeUndefined();
+    const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+    const profile = openOutpostProfileRuntime({ stateDirectory: state, profileName: "default", cwd: app.homeRoot });
+    try {
+      const store = new JobStore(path.join(state, "headless"), { version: 1, workspace: app.homeRoot, codexHome: path.join(app.homeRoot, "codex") }, profile);
+      const owner = new HeadlessBackend({ workspace: app.homeRoot, store, projects: { list: () => [] },
+        onFailure(error: unknown) { throw error; } }, () => {});
+      const outpost = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
+      expect(outpost.thread.executionMode).toBe(desktop.thread!.executionMode);
+    } finally { profile.close(); }
+  } finally { await app.close(); }
 });
 
 test("desktop Claude metadata edits reach actual Outpost without a startup inventory or provider activation", async () => {

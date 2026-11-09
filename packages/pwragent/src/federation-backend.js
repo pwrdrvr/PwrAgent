@@ -235,10 +235,11 @@ export class HeadlessBackend {
     if (params.cwd) this.runtime.projects.resolve(params.cwd);
     const scope = params.backend ?? "all";
     const readBackend = params.ref?.backend ?? scope;
-    if (RETAINED_READ_METHODS.includes(name) && (readBackend === "all" || readBackend === "claude")) {
+    const retainedNavigationPage = name === "getNavigationQueryPage" && Boolean(params.cursor);
+    if (!retainedNavigationPage && RETAINED_READ_METHODS.includes(name) && (readBackend === "all" || readBackend === "claude")) {
       await this.threads.refreshClaudeThreads();
     }
-    if (this.initialized && (scope === "all" || scope === "codex")
+    if (!retainedNavigationPage && this.initialized && (scope === "all" || scope === "codex")
       && ["listThreads", "getNavigationQueryPage", "lookupArchivedThreads"].includes(name)) await this.refreshThreads();
     switch (name) {
       case "listBackends": return this.listBackends();

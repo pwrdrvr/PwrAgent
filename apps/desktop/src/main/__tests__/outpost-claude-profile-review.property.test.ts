@@ -40,10 +40,11 @@ async function fixture() {
 
 it("publishes Claude membership only after every existing sidecar is readable, retaining facts until recovery", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 5 }), fc.nat(10), fc.constantFrom("{", "null", "{}"),
-    async (count, selected, invalid) => {
-      const f = await fixture();
-      try {
+  const f = await fixture();
+  try {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 5 }), fc.nat(10), fc.constantFrom("{", "null", "{}"),
+      async (count, selected, invalid) => {
+        rmSync(f.claudeRoot, { recursive: true, force: true });
         const records = Array.from({ length: count }, (_, index) => ({ ...thread(index), ...(index % 2 ? { archivedAt: index + 2 } : {}) }));
         await Promise.all(records.map(f.save));
         await f.owner.threads.refreshClaudeThreads();
@@ -66,8 +67,8 @@ it("publishes Claude membership only after every existing sidecar is readable, r
           expect([...f.owner.threads.claudeThreadIds].sort()).toEqual(records.filter(record => record.id !== deleted.id).map(record => record.id).sort());
         });
         expect(recovery.writes).toMatchObject(zeroWrites);
-      } finally { f.close(); }
-    }), { numRuns: 20, examples: [[2, 0, "{"]] });
+      }), { numRuns: 20, examples: [[2, 0, "{"]] });
+  } finally { f.close(); }
 });
 
 it("serves every retained cursor page without rediscovery even when Claude metadata and Codex become unavailable", async () => {
@@ -111,14 +112,14 @@ it("serves every retained cursor page without rediscovery even when Claude metad
 
 it("matches desktop's mode oracle for optional native and canonical Claude execution settings", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  await fc.assert(fc.asyncProperty(fc.option(fc.constantFrom(...modes), { nil: undefined }),
-    fc.option(fc.constantFrom(...modes), { nil: undefined }), async (nativeMode, overlayMode) => {
-      const f = await fixture();
-      try {
+  const f = await fixture();
+  try {
+    await fc.assert(fc.asyncProperty(fc.option(fc.constantFrom(...modes), { nil: undefined }),
+      fc.option(fc.constantFrom(...modes), { nil: undefined }), async (nativeMode, overlayMode) => {
         const native = { ...thread(0), ...(nativeMode !== undefined ? { executionMode: nativeMode } : {}) };
         await f.save(native);
         const ref = { backend: "claude" as const, threadId: native.id };
-        if (overlayMode !== undefined) await f.overlay.setThreadExecutionMode({ ...ref, executionMode: overlayMode });
+        await f.overlay.updateThreadMetadata(ref, { executionMode: overlayMode ?? null });
         const desktop = f.overlay.readNavigationQueryIndex({ backend: "claude", threads: [native] }).threads[0]!;
         expect(desktop.executionMode).toBe(nativeMode ?? overlayMode ?? "default");
         const { writes } = await measureSqliteWrites(async () => {
@@ -129,6 +130,6 @@ it("matches desktop's mode oracle for optional native and canonical Claude execu
           await expect(f.owner.handle("startTurn", { ...ref, input: [{ type: "text", text: "unsupported" }] })).rejects.toThrow("executes Codex only");
         });
         expect(writes).toMatchObject(zeroWrites);
-      } finally { f.close(); }
-    }), { numRuns: 30, examples: [[undefined, "auto"], [undefined, "full-access"], ["default", "auto"]] });
+      }), { numRuns: 30, examples: [[undefined, "auto"], [undefined, "full-access"], ["default", "auto"]] });
+  } finally { f.close(); }
 });

@@ -126,7 +126,7 @@ export function openOutpostProfileRuntime(params: {
         inventory: { list: () => inventory.list(), replace: snapshot => inventory.replace(snapshot) },
         acpSessions: { getSession: (backend, id) => acpSessions.getSession(backend, id), listAllSessions: params => acpSessions.listAllSessions(params) },
         claudeSessions: { listThreads: async () => {
-          return (await claudeSessions.list()).filter(session => !session.ephemeral)
+          return (await claudeSessions.list({ requireComplete: true })).filter(session => !session.ephemeral)
             .map(session => projectProviderThreadSummary(projectClaudeSessionThread(session)));
         } },
       };
