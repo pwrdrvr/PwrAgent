@@ -147,24 +147,55 @@ it.skipIf(process.platform === "win32")("queued controls serialize with admissio
 });
 
 it.skipIf(process.platform === "win32")("concurrent control events never republish a cancelled entry or a superseded FIFO order", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), async reorder => {
-    await fixture(async (runtime, backend, _store, _profile, events) => {
+  const commands = fc.array(fc.constantFrom("pause", "resume", "move-before", "move-back", "cancel"), { minLength: 2, maxLength: 8 });
+  await fc.assert(fc.asyncProperty(fc.boolean(), commands, async (initiallyPaused, commands) => {
+    await fixture(async (runtime, backend, store, _profile, events, sent) => {
       for (const id of ["waiting0", "waiting1"]) runtime.submit({ id, threadId: ref.threadId, prompt: id });
+      if (initiallyPaused) await runtime.handle("pause", { id: "waiting0" });
+      const accepted = store.get("waiting0");
       const offset = events.length;
-      const pause = backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: true });
-      const move = backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting1", beforeQueueEntryId: reorder ? "waiting0" : undefined });
-      const cancel = backend.handle("backend.cancelQueuedTurn", { queueEntryId: "waiting0" });
-      await Promise.all([pause, move, cancel]);
+      await Promise.all(commands.map(command => {
+        if (command === "cancel") return backend.handle("backend.cancelQueuedTurn", { queueEntryId: "waiting0" });
+        if (command.startsWith("move")) return backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting1", beforeQueueEntryId: command === "move-before" ? "waiting0" : undefined });
+        return backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: command === "pause" });
+      }));
       const changes = events.slice(offset);
       const cancelled = changes.findIndex(event => event.method === "thread/turnQueue/updated" && event.params.status === "cancelled");
-      expect(cancelled).toBeGreaterThanOrEqual(0);
-      for (const event of changes.slice(cancelled + 1)) {
-        if (event.method === "thread/turnQueue/updated") expect(event.params.queueEntryId).not.toBe("waiting0");
-        if (event.method === "thread/turnQueue/reordered") expect(event.params.queueEntryIds).not.toContain("waiting0");
+      if (commands.includes("cancel")) {
+        expect(cancelled).toBeGreaterThanOrEqual(0);
+        for (const event of changes.slice(cancelled + 1)) {
+          if (event.method === "thread/turnQueue/updated") expect(event.params.queueEntryId).not.toBe("waiting0");
+          if (event.method === "thread/turnQueue/reordered") expect(event.params.queueEntryIds).not.toContain("waiting0");
+        }
+        expect(store.get("waiting0")).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+      } else expect(store.get("waiting0")).toEqual(accepted);
+      // A viewer applies notifications in delivery order. Its waiting chips
+      // must agree with the owning FIFO, including the latest pause revision.
+      const visible = new Map<string, { paused: boolean; revision: number }>();
+      for (const event of events) {
+        if (event.method !== "thread/turnQueue/updated") continue;
+        const { queueEntryId, status, paused, pauseRevision } = event.params;
+        if (status === "queued" || status === "held") visible.set(queueEntryId, { paused: Boolean(paused), revision: pauseRevision ?? 0 });
+        else visible.delete(queueEntryId);
       }
-      expect(backend.queueProjection({ protocol: 2, ref }).entries.map((entry: any) => entry.queueEntryId)).toEqual(["waiting1"]);
+      const projection = backend.queueProjection({ protocol: 2, ref }).entries;
+      expect([...visible].sort()).toEqual(projection.map((entry: any) => [entry.queueEntryId, { paused: Boolean(entry.paused), revision: entry.pauseRevision ?? 0 }]).sort());
+      expect(sent).toEqual(["active"]);
     });
-  }), { numRuns: 4 });
+  }), { numRuns: 20, examples: [[false, ["pause", "cancel"]], [true, ["resume", "cancel"]], [false, ["pause", "move-before", "cancel"]]] });
+});
+
+it.skipIf(process.platform === "win32")("direct pause/cancel cannot recreate a cancelled waiting chip", async () => {
+  await fixture(async (runtime, backend, store, _profile, events) => {
+    runtime.submit({ id: "waiting", threadId: ref.threadId, prompt: "waiting" });
+    await Promise.all([
+      backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting", paused: true }),
+      backend.handle("backend.cancelQueuedTurn", { queueEntryId: "waiting" }),
+    ]);
+    expect(events.filter(event => event.method === "thread/turnQueue/updated" && event.params.queueEntryId === "waiting").at(-1)?.params.status).toBe("cancelled");
+    expect(backend.queueProjection({ protocol: 2, ref }).entries).toEqual([]);
+    expect(store.get("waiting").status).toBe("interrupted");
+  });
 });
 
 it.skipIf(process.platform === "win32")("a cancellation overtaking an order notification cannot restore its retired identity", async () => {
