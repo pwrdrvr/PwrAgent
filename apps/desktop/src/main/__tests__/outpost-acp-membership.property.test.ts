@@ -143,11 +143,12 @@ it("keeps durable ACP archive observations authoritative for members while delet
           const runtime = { workspace: root, store, projects: { list: () => [] }, onFailure(error: unknown) { throw error; } };
           let present = true;
           let archived = nativeArchived;
+          let archiveStamp = native.archivedAt;
           for (const [index, command] of commands.entries()) {
             const at = start + index;
-            if (command === "observe") { await overlay.observeArchivedThreads([ref], at); archived = true; }
-            if (command === "archive") { await overlay.setThreadArchiveTombstone({ ...ref, archivedAt: at }); archived = true; }
-            if (command === "restore") { await overlay.setThreadArchiveTombstone({ ...ref, restoredAt: at }); archived = false; }
+            if (command === "observe") { await overlay.observeArchivedThreads([ref], at); archived = true; archiveStamp = at; }
+            if (command === "archive") { await overlay.setThreadArchiveTombstone({ ...ref, archivedAt: at }); archived = true; archiveStamp = at; }
+            if (command === "restore") { await overlay.setThreadArchiveTombstone({ ...ref, restoredAt: at }); archived = false; archiveStamp = undefined; }
             if (command === "delete") { sessions.deleteSession(ref.backend, ref.threadId); present = false; }
             if (command === "save" || command === "hidden") {
               sessions.upsertSession({ ...native, hidden: command === "hidden" }); present = command === "save";
@@ -158,6 +159,7 @@ it("keeps durable ACP archive observations authoritative for members while delet
                 const owner = new HeadlessBackend(runtime, () => {});
                 const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
                 expect(detail.identity).toBe(!present ? "unresolved" : archived ? "archived" : "present");
+                expect(detail.thread?.archivedAt).toBe(present && archived ? archiveStamp : undefined);
                 expect((await owner.handle("resolveThread", ref)).thread !== undefined).toBe(present);
                 expect((await owner.handle("listThreads", { backend: ref.backend })).threads).toHaveLength(present && !archived ? 1 : 0);
                 expect((await owner.handle("lookupArchivedThreads", { backend: ref.backend, threadIds: [ref.threadId] })).threads)
