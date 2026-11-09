@@ -96,6 +96,14 @@ requests, monotone destination pointers, keyset pages and attachment outcomes
 preserve their SQL, transactions and write counts. No messaging-interface
 dependency enters this package.
 
+Shared generic `SqliteMessagingStore` implements the existing owner-core
+messaging port over persistence index constraints and injected host policy.
+Desktop's private specialization retains original app-state construction and
+accessor lifetime. Channel/default-Agent lookup, migration, matching, merges,
+credential scrubbing and snapshot versioning stay in the host policy, which
+receives no database handle. The separate in-memory store shares only its pure
+questionnaire predicate. All SQL and transaction sites remain unchanged.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -208,3 +216,12 @@ commits. Supported Electron E2E bundles the original factory with test-owned
 profile selection and its native dependency, observes portable provenance and
 later WAL commits, and returns immutable outcomes to Node after shutdown.
 No messaging adapter or real conversation is activated by that fixture.
+
+`shared-messaging-store.property.test.ts` checks actual app-state construction,
+independent binding/observation/default-Agent/expiry/topic models across WAL
+connections and reopens, callback authorization, browse and revoke cleanup,
+federated identity, malformed reads, legacy migration, serialization/transaction
+refusal and exact unchanged commits. An independent host supplies arbitrary
+channel names, opaque JSON and its own snapshot shape. Supported Electron E2E
+hands portable routes to the actual desktop services, observes later portable
+WAL changes and verifies route retirement and cleanup from Node after shutdown.

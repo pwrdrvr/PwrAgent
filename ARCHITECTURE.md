@@ -480,6 +480,13 @@ desktop specialization injects host admission and routing privacy at the origina
 explicit factory. The storage package receives scalar identity fields and an
 opaque bounded event, without importing messaging-interface. Profile-file
 authority, hash/JSON semantics, SQL, transactions and write counts are unchanged.
+Shared generic `SqliteMessagingStore` implements the existing owner-core messaging
+port with scalar persistence constraints and injected host policy. The private
+desktop specialization keeps original app-state construction and accessor lifetime.
+Conversation/default-Agent policy, migrations, merges, matching, credential
+scrubbing and snapshot versioning remain host-owned without database access.
+The in-memory implementation shares only the pure questionnaire predicate.
+Every SQL statement and transaction site is preserved.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop

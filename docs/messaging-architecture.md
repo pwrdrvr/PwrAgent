@@ -153,6 +153,14 @@ pages return to the outpost as native image content; attachment bytes and
 provider credentials stay on the owner. The existing outpost tool-call ledger
 records outcomes at call boundaries and never replays an uncertain send.
 
+The generic binding, default-Agent, observation, monitor/topic, pending-intent,
+browse, callback and delivery SQL implementation also lives in sqlite-storage.
+Its private desktop specialization injects channel/domain policy at the original
+app-state construction site. The shared store retains the owner-core port and
+all existing SQL/transaction boundaries; host migration, matching, merge and
+privacy helpers remain outside it. The in-memory store remains independent and
+shares only the pure async-questionnaire predicate.
+
 ## Data flow
 
 ### Inbound (user message arrives at the bot)

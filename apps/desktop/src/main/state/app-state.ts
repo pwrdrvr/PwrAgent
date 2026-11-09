@@ -13,7 +13,7 @@ import fs from "node:fs";
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store.js";
 import { AutomationStore } from "../storage/automation-store.js";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store.js";
-import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
+import { SqliteMessagingStore } from "../storage/messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite.js";
 import { type AutoVacuumConversion, StateDb } from "./state-db.js";
 
