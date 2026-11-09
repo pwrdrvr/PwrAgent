@@ -492,6 +492,12 @@ port in shared, alongside its enrollment/audit records. Federation retains its
 narrow transport contract and compatibility exports, keeping both sibling layers
 independent. The private desktop binding retains the original explicit factory
 and peer trust, profile HMACs, expiry, audit collapse and SQL/write behavior.
+Shared `ThreadSandboxStore` implements the existing owner-core thread-resource
+port. Its private desktop binding serves both the guarded event-time gateway
+observer and the original per-call cleanup factory. First-creator ownership,
+native unqualified grants, pending cleanup and stale outcomes retain the same
+SQL and write counts. Viewer-local composer drafts remain a desktop application
+concern and never enter owner projections.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop

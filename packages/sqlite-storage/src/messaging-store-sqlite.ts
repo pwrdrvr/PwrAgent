@@ -1224,19 +1224,19 @@ export class SqliteMessagingStore<Records extends SqliteMessagingStorageRecords<
   }
 
   async readSnapshot(): Promise<Records["snapshot"]> {
-    const bindings: Record<string, Records["binding"]> = {};
+    const bindings: Record<string, Records["binding"]> = Object.create(null);
     const defaultAgentAssignments: Record<
       string,
       Records["defaultAgentAssignment"]
-    > = {};
-    const monitorSubscriptions: Record<string, Records["monitorSubscription"]> = {};
-    const pendingIntents: Record<string, Records["pendingIntent"]> = {};
-    const browseSessions: Record<string, Records["browseSession"]> = {};
-    const callbackHandles: Record<string, Records["callbackHandle"]> = {};
-    const deliveries: Record<string, Records["delivery"]> = {};
-    const topicCleanupProposals: Record<string, Records["topicCleanupProposal"]> = {};
-    const topicLinks: Record<string, Records["threadTopicLink"]> = {};
-    const topics: Record<string, Records["managedTopic"]> = {};
+    > = Object.create(null);
+    const monitorSubscriptions: Record<string, Records["monitorSubscription"]> = Object.create(null);
+    const pendingIntents: Record<string, Records["pendingIntent"]> = Object.create(null);
+    const browseSessions: Record<string, Records["browseSession"]> = Object.create(null);
+    const callbackHandles: Record<string, Records["callbackHandle"]> = Object.create(null);
+    const deliveries: Record<string, Records["delivery"]> = Object.create(null);
+    const topicCleanupProposals: Record<string, Records["topicCleanupProposal"]> = Object.create(null);
+    const topicLinks: Record<string, Records["threadTopicLink"]> = Object.create(null);
+    const topics: Record<string, Records["managedTopic"]> = Object.create(null);
 
     for (const row of this.stateDb.raw
       .prepare("SELECT binding_id, payload FROM bindings")
