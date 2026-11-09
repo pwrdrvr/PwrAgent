@@ -51,18 +51,30 @@ it("binds the actual factory to shared storage and retains its selected profile 
   }), { numRuns: 25 });
 });
 
+function expectAlternateHostJsonRoundTrip(payload: unknown, identity: string): void {
+  const db = openInMemoryStateDb();
+  try {
+    const projection = vi.fn((input: unknown) => ({ event: input, eventId: identity,
+      platform: "alternate-host", actorId: "human", destinationIdentity: "opaque-destination", receivedAt: 42 }));
+    const store = new SharedStore(db.raw, projection);
+    const source = store.remember({ agent, event: payload })!;
+    expect(projection).toHaveBeenCalledWith(payload);
+    // Persisted reads obey JSON's data model, including -0 becoming 0.
+    const expected = clone(source);
+    expect(store.get(source.ref)).toEqual(expected);
+    expect(store.destination(source, source.selector)).toEqual(expected);
+    expect(store.list(source, 99)).toEqual([expected]);
+  } finally { db.close(); }
+}
+
 it("persists arbitrary alternate-host JSON through a projection without messaging channel contracts", () => {
-  fc.assert(fc.property(fc.jsonValue(), fc.string(), (payload, identity) => {
-    const db = openInMemoryStateDb();
-    try {
-      const store = new SharedStore(db.raw, (input: unknown) => ({ event: input, eventId: identity,
-        platform: "alternate-host", actorId: "human", destinationIdentity: "opaque-destination", receivedAt: 42 }));
-      const source = store.remember({ agent, event: payload })!;
-      expect(store.get(source.ref)?.event).toEqual(payload);
-      expect(store.destination(source, source.selector)).toEqual(source);
-      expect(store.list(source, 99)).toEqual([source]);
-    } finally { db.close(); }
-  }), { numRuns: 40 });
+  fc.assert(fc.property(fc.jsonValue(), fc.string(), expectAlternateHostJsonRoundTrip), { numRuns: 40 });
+});
+
+it("persists the shrunk negative-zero payload using JSON number semantics on every read path", () => {
+  const payload = { "": -0 };
+  expectAlternateHostJsonRoundTrip(payload, "");
+  expect(Object.is(payload[""], -0)).toBe(true);
 });
 
 // The oracle derives identities from the persisted profile namespace and models
