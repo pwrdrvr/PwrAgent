@@ -1,9 +1,9 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import { chmod, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -14,14 +14,8 @@ import { McpInitializationTransport } from "../mcp-connections/mcp-initializatio
 import { parseMcpIpcUrl } from "@pwragent/shared";
 import { probeMcpConnectionUrl } from "../mcp-connections/mcp-connection-probe";
 
-const desktop = resolve("apps/desktop");
-const executable = join(desktop, "build/mcp-ipc-relay", `${process.platform}-${process.arch}`, `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`);
-const identityExecutable = join(executable, "..", process.platform === "win32" ? "mcp-ipc-identity-test.exe" : "mcp-ipc-identity-test");
+const { relay: executable, identity: identityExecutable } = inject("nativeHelperFixtures").mcpIpc!;
 const cleanups: (() => Promise<unknown> | void)[] = [];
-beforeAll(() => {
-  execFileSync(process.execPath, [join(desktop, "scripts/build-mcp-ipc-relay.mjs")], { stdio: "pipe" });
-  execFileSync(process.execPath, [join(desktop, "scripts/build-mcp-ipc-relay.mjs"), "--identity-test"], { stdio: "pipe" });
-}, 60_000);
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 async function fixture() {
@@ -102,7 +96,7 @@ async function fixture() {
     await rm(directory, { recursive: true, force: true });
   });
   if (process.platform === "win32") {
-    execFileSync(identityExecutable, ["secure-fixture", path, String(process.pid)], { stdio: "pipe" });
+    execFileSync(identityExecutable!, ["secure-fixture", path, String(process.pid)], { stdio: "pipe" });
   } else {
     await chmod(path, 0o600);
   }
