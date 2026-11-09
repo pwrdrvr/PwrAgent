@@ -10,6 +10,11 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent", file)).href);
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+};
 
 // The executable Runtime's private-directory contract supports Linux/macOS.
 async function fixture(work: (runtime: any, backend: any, store: any, profile: any, events: any[]) => Promise<void>) {
@@ -197,6 +202,118 @@ it.skipIf(process.platform === "win32")("native refusal holds queued input, and 
       expect(sends).toBe(refusal === "lock" ? 1 : 2);
     });
   }), { numRuns: 6 });
+});
+
+it.skipIf(process.platform === "win32")("reopening native creation drains accepted FIFO work after success or refusal, and shutdown keeps it stopped", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("success", "refusal", "shutdown"), fc.integer({ min: 1, max: 3 }), async (outcome, count) => {
+    await fixture(async (runtime, backend, store) => {
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const sent: string[] = [];
+      runtime.codex = {
+        startThread: async () => {
+          entered.resolve();
+          await release.promise;
+          if (outcome === "refusal") throw new Error("Creation refused");
+          return { threadId: "created" };
+        },
+        startTurn: async (params: any) => {
+          sent.push(params.input[0].text);
+          return { threadId: "native", turnId: `turn${sent.length}` };
+        },
+        stop: async () => {},
+      };
+      const creation = backend.startThread({}).then(() => "created", (error: Error) => error.message);
+      try {
+        await entered.promise;
+        for (let i = 0; i < count; i++) expect(runtime.submit({ id: `waiting${i}`, threadId: "native", prompt: `waiting${i}` }).status).toBe("queued");
+        expect(sent).toEqual([]);
+        if (outcome === "shutdown") await runtime.stop();
+      } finally { release.resolve(); }
+      expect(await creation).toBe(outcome === "refusal" ? "Creation refused" : "created");
+      expect(backend.creating).toBe(false);
+      for (let i = 0; i < count; i++) {
+        for (let n = 0; n < 12; n++) await tick();
+        expect(store.get(`waiting${i}`).status).toBe(outcome === "shutdown" ? "unknown" : "running");
+        if (outcome !== "shutdown") runtime.notification({ method: "turn/completed", params: { threadId: "native", turn: { id: `turn${i + 1}`, status: "completed" } } });
+      }
+      expect(sent).toEqual(outcome === "shutdown" ? [] : Array.from({ length: count }, (_, i) => `waiting${i}`));
+    });
+  }), { numRuns: 9, examples: [["success", 1], ["refusal", 1], ["shutdown", 1]] });
+});
+
+it.skipIf(process.platform === "win32")("stable federated retries await their own pending provider dispatch across generated queue admissions", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("enqueue", "retry", "read"), { maxLength: 8 }), fc.boolean(), async (commands, refuse) => {
+    await fixture(async (runtime, backend, store) => {
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      let sends = 0;
+      runtime.codex = { startTurn: async () => {
+        sends++;
+        entered.resolve();
+        await release.promise;
+        if (refuse) throw new Error("Provider refused");
+        return { threadId: "native", turnId: "confirmed" };
+      }, stop: async () => {} };
+      const request = { threadId: "native", input: [{ type: "text", text: "first" }], queueEntryId: "stable" };
+      const envelope = { id: "first", sourceInstanceId: "authenticated" };
+      const settled: any[] = [];
+      const retry = () => backend.startTurn(request, envelope).then((result: any) => { settled.push(result); return result; }, (error: Error) => { settled.push(error.message); return error.message; });
+      const waiting = [retry()];
+      let queued = 0;
+      try {
+        await entered.promise;
+        for (const command of commands) {
+          if (command === "enqueue") {
+            const id = `queued${queued++}`;
+            expect(await backend.startTurn({ ...request, queueEntryId: id, input: [{ type: "text", text: id }] }, { ...envelope, id })).toMatchObject({ queueStatus: "queued" });
+          } else if (command === "retry") waiting.push(retry());
+          else expect(store.get(runtime.active).status).toBe("starting");
+          await tick();
+          expect(settled).toEqual([]);
+        }
+      } finally { release.resolve(); await Promise.all(waiting); }
+      const results = await Promise.all(waiting);
+      for (const result of results) {
+        if (refuse) expect(result).toBe("Provider refused");
+        else expect(result).toMatchObject({ turnId: "confirmed", queueStatus: "started" });
+      }
+      expect(sends).toBe(1);
+    });
+  }), { numRuns: 12, examples: [[["enqueue", "retry"], false], [["enqueue", "retry"], true]] });
+});
+
+it.skipIf(process.platform === "win32")("a refused queued dispatch projects idle without allowing other waiting jobs to replace the active job", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 3 }), fc.integer({ min: 0, max: 2 }), async (sameThread, extra, duplicates) => {
+    await fixture(async (runtime, backend, store) => {
+      const target = sameThread ? "native" : "other";
+      backend.persistCreatedNativeThread({ id: "other", title: "Other", titleSource: "explicit", cwd: runtime.workspace });
+      let sends = 0;
+      runtime.codex = { startTurn: async ({ threadId }: any) => {
+        if (++sends === 2) throw new Error("Native refusal");
+        return { threadId, turnId: "active" };
+      }, stop: async () => {} };
+      runtime.submit({ id: "first", threadId: "native", prompt: "first" }); await runtime.work;
+      const input = { id: "refused", threadId: target, prompt: "refused" };
+      expect(runtime.submit(input).status).toBe("queued");
+      for (let i = 0; i < extra; i++) runtime.submit({ id: `extra${i}`, threadId: target, prompt: `extra${i}` });
+      expect(backend.activeJob({ threadId: "native" }).id).toBe("first");
+      const terminal = { method: "turn/completed", params: { threadId: "native", turn: { id: "active", status: "completed" } } };
+      runtime.notification(terminal);
+      for (let i = 0; i < duplicates; i++) runtime.notification(terminal);
+      for (let n = 0; n < 12; n++) await tick();
+      expect(store.get("refused")).toMatchObject({ status: "queued", reason: "Native refusal" });
+      expect(runtime.active).toBeNull();
+      expect(backend.summary(backend.owned(target)).threadStatus).toBe("idle");
+      expect(await backend.handle("resolveThreadAdmissionState", { threadId: target })).toMatchObject({ threadStatus: "idle" });
+      expect(await backend.handle("resolveThreadAdmissionState", { threadId: target })).not.toHaveProperty("activeTurn");
+      expect(() => backend.activeJob({ threadId: target })).toThrow("Thread has no active turn");
+      expect(backend.queuedTurns(target)[0]).toMatchObject({ queueEntryId: "refused", manualReleaseRequired: true });
+      expect(runtime.submit(input).status).toBe("queued");
+      runtime.turnQueue.drainAll(); await tick();
+      expect(sends).toBe(2);
+    });
+  }), { numRuns: 8, examples: [[true, 0, 0], [false, 1, 1]] });
 });
 
 it.skipIf(process.platform === "win32")("budgets actual queued acceptance, dispatch, cancellation and no-replay recovery boundaries", async () => {
