@@ -1508,6 +1508,21 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it("checks profile owner admission before connecting the provider and can retry after handover", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    let allowed = false;
+    const client = new CodexAppServerClient({ assertOwnerAdmission: () => {
+      if (!allowed) throw new Error("fixture profile owner");
+    } });
+    try {
+      await expect(client.getInitializeResult()).rejects.toThrow("fixture profile owner");
+      expect(MockTransport.instances.flatMap(transport => transport.sentMessages)).toEqual([]);
+      allowed = true;
+      await client.getInitializeResult();
+      expect(MockTransport.instances.flatMap(transport => transport.sentMessages).length).toBeGreaterThan(0);
+    } finally { await client.close(); }
+  });
+
   it.each([
     { version: "0.164.0", parentTurnId: "parent", rootTurnId: "root", expected: { parentTurnId: "parent", rootTurnId: "root" } },
     { version: "0.164.0", parentTurnId: "parent", expected: { parentTurnId: "parent" } },

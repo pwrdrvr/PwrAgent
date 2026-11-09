@@ -9,6 +9,7 @@ import type {
 const RUNTIME_BOOT_TIME_TOLERANCE_MS = 5_000;
 
 export type RuntimeLeaseKind = "messaging" | "federation" | "mcp_connections";
+export type RuntimeLeaseClaim = "runtime" | "thread_owner";
 
 export type RuntimeLeaseHolder = {
   instanceId: string;
@@ -66,6 +67,7 @@ export class RuntimeLeaseManager {
   ) => boolean;
   private readonly systemBootedAt: number;
   private readonly heldLeases = new Set<RuntimeLeaseKind>();
+  private readonly claims = new Map<RuntimeLeaseKind, Set<RuntimeLeaseClaim>>();
   private instanceRecorded = false;
   private instanceExited = false;
 
@@ -118,7 +120,13 @@ export class RuntimeLeaseManager {
     });
   }
 
-  acquire(kind: RuntimeLeaseKind): RuntimeLeaseAcquireResult {
+  acquire(kind: RuntimeLeaseKind, claim: RuntimeLeaseClaim = "runtime"): RuntimeLeaseAcquireResult {
+    // Repeated thread operations only read the held lease. Service acquisition
+    // retains its original persistence lifecycle and write budget.
+    if (claim === "thread_owner" && this.snapshot(kind).leaseHeld) {
+      this.addClaim(kind, claim);
+      return { acquired: true };
+    }
     this.ensureInstanceRecorded();
     const params = {
       instanceId: this.instanceId,
@@ -135,16 +143,24 @@ export class RuntimeLeaseManager {
         : this.store.acquireMcpConnectionsLease(params);
     if (result.acquired) {
       this.heldLeases.add(kind);
+      this.addClaim(kind, claim);
       return { acquired: true };
     }
     this.heldLeases.delete(kind);
+    this.claims.delete(kind);
     return {
       acquired: false,
       holder: this.describeLeaseHolder(result.holder),
     };
   }
 
-  release(kind: RuntimeLeaseKind): boolean {
+  release(kind: RuntimeLeaseKind, claim: RuntimeLeaseClaim = "runtime"): boolean {
+    const claims = this.claims.get(kind);
+    // Keep claims on a statement failure so a later close can retry release.
+    if (claims && [...claims].some(held => held !== claim)) {
+      claims.delete(claim);
+      return false;
+    }
     const now = this.now();
     const params = { instanceId: this.instanceId, now };
     const released = kind === "messaging"
@@ -153,6 +169,7 @@ export class RuntimeLeaseManager {
         ? this.store.releaseFederationLease(params)
         : this.store.releaseMcpConnectionsLease(params);
     this.heldLeases.delete(kind);
+    this.claims.delete(kind);
     return released;
   }
 
@@ -164,6 +181,7 @@ export class RuntimeLeaseManager {
       && this.heldLeases.has(kind);
     if (!leaseHeld) {
       this.heldLeases.delete(kind);
+      this.claims.delete(kind);
     }
     const leaseHolder =
       lease
@@ -222,6 +240,12 @@ export class RuntimeLeaseManager {
       desiredMessagingEnabled: false,
       effectiveMessagingEnabled: false,
     });
+  }
+
+  private addClaim(kind: RuntimeLeaseKind, claim: RuntimeLeaseClaim): void {
+    let claims = this.claims.get(kind);
+    if (!claims) this.claims.set(kind, claims = new Set());
+    claims.add(claim);
   }
 
   private isOwnerAlive(owner: AppRuntimeInstanceRecord): boolean {

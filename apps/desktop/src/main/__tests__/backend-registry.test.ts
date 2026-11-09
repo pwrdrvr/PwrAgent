@@ -3334,6 +3334,27 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it.each([false, true])("retains profile ownership until provider close succeeds (failure=%s)", async failure => {
+    const client = new MockBackendClient({ threads: [] });
+    const entered = Promise.withResolvers<void>();
+    const finished = Promise.withResolvers<void>();
+    vi.spyOn(client, "close").mockImplementation(async () => { entered.resolve(); await finished.promise; });
+    const close = vi.fn();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), ownerAdmission: { assertOwnership: vi.fn(), close } });
+    const closing = registry.close();
+    await entered.promise;
+    expect(close).not.toHaveBeenCalled();
+    if (failure) {
+      finished.reject(new Error("fixture provider close failed"));
+      await expect(closing).rejects.toThrow("Desktop backend registry close failed");
+      expect(close).not.toHaveBeenCalled();
+    } else {
+      finished.resolve();
+      await closing;
+      expect(close).toHaveBeenCalledOnce();
+    }
+  });
+
   it("refuses generated thread/turn admissions before host preparation when another profile owner holds the lease", async () => {
     await fc.assert(fc.asyncProperty(fc.constantFrom("codex", "claude", "acp:kimi"), fc.boolean(), async (backend, turn) => {
       const client = new MockBackendClient({ threads: [] });

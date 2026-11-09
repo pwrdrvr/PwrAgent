@@ -313,6 +313,7 @@ export type AcpBackendAdapterOptions = {
   agentToolMcpServer?: AgentToolMcpServerLike;
   automationInspectionMcpCommand?: string;
   createAcpClient?: AcpClientFactory;
+  assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
@@ -1269,7 +1270,7 @@ export class AcpBackendAdapter {
   private localAgentSnapshot: AcpInstalledAgentRecord[] = [];
   private readonly invalidatedProviderRegistryIds = new Set<string>();
 
-  constructor(options: AcpBackendAdapterOptions) {
+  constructor(private readonly options: AcpBackendAdapterOptions) {
     this.ownsPlanLimits = !options.planLimits;
     this.planLimits = options.planLimits ?? new PlanLimitStore();
     // A summary hides a window once it resets; tell listeners when it does.
@@ -1335,8 +1336,10 @@ export class AcpBackendAdapter {
     this.resolveProviderDependencyFingerprint =
       options.resolveProviderDependencyFingerprint;
     this.createAcpTransport = options.createAcpTransport;
-    this.createAcpClient =
-      options.createAcpClient ?? ((agent) => this.createDefaultClient(agent));
+    this.createAcpClient = (agent) => {
+      options.assertOwnerAdmission?.();
+      return options.createAcpClient?.(agent) ?? this.createDefaultClient(agent);
+    };
   }
 
   async describeInstalledBackends(): Promise<BackendSummary[]> {
@@ -2507,6 +2510,7 @@ export class AcpBackendAdapter {
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
     }
+    this.options.assertOwnerAdmission?.();
     const agent = await this.resolveInstalledAgent(backend);
     if (!agent.launchDescriptor) {
       throw new Error(`ACP backend ${backend} has no launch descriptor`);

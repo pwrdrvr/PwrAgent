@@ -659,6 +659,27 @@ describe("isAcpSessionMissingForProjectError", () => {
 });
 
 describe("AcpBackendAdapter", () => {
+  it("checks profile owner admission before pooled and ephemeral ACP provider startup", async () => {
+    const agent = { ...buildInstalledAgent(), launchDescriptor: {
+      backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
+      command: "/fixture/gemini", args: [], env: {},
+    } };
+    const createAcpClient = vi.fn();
+    const createAcpTransport = vi.fn();
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: { getInstalledAgent: () => agent, listInstalledAgents: () => [agent], upsertInstalledAgent: vi.fn() },
+      captureStores: [], createAcpClient, createAcpTransport,
+      assertOwnerAdmission: () => { throw new Error("fixture profile owner"); },
+      emit: vi.fn(async () => undefined), handleServerRequest: vi.fn(async () => ({})),
+    });
+    try {
+      await expect(adapter.getClient("acp:gemini")).rejects.toThrow("fixture profile owner");
+      await expect(adapter.runEphemeralPrompt("acp:gemini", { cwd: "/fixture", prompt: "fixture" } as never)).rejects.toThrow("fixture profile owner");
+      expect(createAcpClient).not.toHaveBeenCalled();
+      expect(createAcpTransport).not.toHaveBeenCalled();
+    } finally { await adapter.close(); }
+  });
+
   it("excludes retired Claude ACP records from discovery and backend selection", async () => {
     const legacyAgent: AcpInstalledAgentRecord = {
       ...buildInstalledAgent(),

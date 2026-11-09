@@ -5,6 +5,8 @@ import { ThreadSteeringLifecycle, type ThreadSteeringSubmission } from "@pwragen
 import { ThreadSteerSubmissionLifecycle, type PreparedAcpSteer, type PreparedCodexSteer } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
 import { ThreadTitleLifecycle, extractFirstMeaningfulTextInput } from "@pwragent/owner-core/thread-title-lifecycle";
 import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlaceholderTitle, type ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
+import { ProfileThreadOwnerAdmission, type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
+import { getRuntimeLeaseManager } from "../runtime-lease-manager";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
@@ -11129,8 +11131,10 @@ export class DesktopBackendRegistry {
    * it to `state/app-state.getAppStateMode()`.
    */
   private readonly isBootstrapModeFn: () => boolean;
+  private readonly ownerAdmission?: ThreadOwnerAdmission;
 
   constructor(options?: {
+    ownerAdmission?: ThreadOwnerAdmission;
     getThreadArchivePolicy?: () => DesktopThreadArchivePolicy;
     getCheckoutHibernationPolicy?: () => DesktopCheckoutHibernationPolicy;
     codexClient?: BackendClient;
@@ -11251,6 +11255,7 @@ export class DesktopBackendRegistry {
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
+    this.ownerAdmission = options?.ownerAdmission;
     this.activeTurnKeys.onDelete((key) => { this.activeCodexTurnCollaborationModes.delete(key); });
     this.managedMaintenanceRoots = options?.managedWorktreeRoots
       ?? (async () => [userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees")]);
@@ -11618,6 +11623,7 @@ export class DesktopBackendRegistry {
         return cleanup;
       };
       const client = new CodexAppServerClient({
+        assertOwnerAdmission: () => this.assertThreadOwnership(),
         args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
@@ -12023,8 +12029,10 @@ export class DesktopBackendRegistry {
       recordSubAgents: async (params) => await this.recordClaudeSubAgents(params),
       planLimits: this.planLimits,
       ...options?.claudeBackendOptions,
+      assertOwnerAdmission: () => this.assertThreadOwnership(),
     });
     this.acpBackend = new AcpBackendAdapter({
+      assertOwnerAdmission: () => this.assertThreadOwnership(),
       planLimits: this.planLimits,
       acpAgentStore: options?.acpAgentStore,
       acpRolloutStore: options?.acpRolloutStore,
@@ -13419,6 +13427,7 @@ export class DesktopBackendRegistry {
     turnId: string;
   }> {
     this.assertNotBootstrap("startAutomationHeadlessTurn");
+    this.assertThreadOwnership();
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.agentThreadId,
@@ -21132,6 +21141,7 @@ export class DesktopBackendRegistry {
   }
 
   private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation): Promise<PreparedThreadCreation<Pick<StartThreadResponse, "executionMode" | "codexEnvironmentRuntime" | "codexEnvironmentStartupFailure">>> {
+    this.assertThreadOwnership();
     this.assertNotBootstrap("startThread");
     const {
       backend,
@@ -21719,6 +21729,7 @@ export class DesktopBackendRegistry {
     request: BackendRegistryForkThreadRequest,
   ): Promise<ForkThreadResponse> {
     this.assertNotBootstrap("forkThread");
+    this.assertThreadOwnership();
     const backend = request.backend ?? "codex";
     if (backend !== "codex" && backend !== "claude") {
       throw new Error("Thread forking is supported by the Codex and Claude backends.");
@@ -24028,6 +24039,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    this.assertThreadOwnership();
     await this.assertRequestedThreadModelAvailable(params);
     const result = await this.startTurnNow(params);
     await this.publishIncomingWork({ ...params, threadId: result.threadId }, result.turnId);
@@ -24079,6 +24091,7 @@ export class DesktopBackendRegistry {
   }
 
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    this.assertThreadOwnership();
     return await this.threadStarts.run(params, () => this.startTurnWithoutHandoff(params));
   }
 
@@ -25077,6 +25090,7 @@ export class DesktopBackendRegistry {
     trustedSnapshot = false,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
   ): Promise<StartReviewResponse> {
+    this.assertThreadOwnership();
     // Retain terminal evidence only for the lifetime of this start request.
     const terminals = new Map<string, ReviewTerminal>();
     this.pendingReviewTerminals.add(terminals);
@@ -31775,6 +31789,11 @@ export class DesktopBackendRegistry {
     return this.closeOperation;
   }
 
+  private assertThreadOwnership(): void {
+    if (this.closed || this.shutdownRequested) throw new Error("Desktop backend registry is closed");
+    this.ownerAdmission?.assertOwnership();
+  }
+
   private async closeResources(): Promise<void> {
     this.tryCheckpointArchiveCleanupsForQuit("before-drain");
     // Before anything unsubscribes or closes, so each turn's own terminal
@@ -31950,6 +31969,7 @@ export class DesktopBackendRegistry {
           .join(", ")}`,
       );
     }
+    this.ownerAdmission?.close();
   }
 
   private async assertRequestedThreadModelAvailable(params: {
@@ -32472,6 +32492,7 @@ export class DesktopBackendRegistry {
     ) {
       return;
     }
+    this.assertThreadOwnership();
     try {
       await this.tokenMiserLedgerReconciliation;
       await this.tokenMiserHookBridge.start();
@@ -42365,7 +42386,10 @@ export class DesktopBackendRegistry {
   private readonly threadTitles = new ThreadTitleLifecycle(this.threadNaming, {
     canGenerateTitle: (backend) => Boolean(this.threadTitleGenerationService
       && (!this.threadTitleGenerationService.canGenerateTitle || this.threadTitleGenerationService.canGenerateTitle(backend))),
-    generateTitle: async (params) => await this.threadTitleGenerationService?.generateTitle(params),
+    generateTitle: async (params) => {
+      this.assertThreadOwnership();
+      return await this.threadTitleGenerationService?.generateTitle(params);
+    },
     readTitle: async (identity) => await this.findThreadForTitleGeneration(identity),
     prepareHelper: async ({ backend, threadId }) => {
       const runtime = await this.resolveTitleHelperRuntime({ backend, threadId });
@@ -55824,6 +55848,7 @@ export function getDesktopBackendRegistry(): DesktopBackendRegistry {
     // fetch, the managed-Grok install, and the 5-16s binary probe out of the
     // suite even when a test forgets to inject its own discovery stub.
     registry = new DesktopBackendRegistry({
+      ownerAdmission: new ProfileThreadOwnerAdmission(getRuntimeLeaseManager()),
       configStore: getDesktopConfigStore(),
       useMachineAcpDiscovery: true,
       useMachineClaudeDiscovery: true,

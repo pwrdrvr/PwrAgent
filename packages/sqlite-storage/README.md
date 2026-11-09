@@ -18,6 +18,16 @@ messaging leases before starting a provider, recovering jobs or opening a
 listener. Shutdown drains the runtime before releasing leases and closing the
 database. The existing private headless owner lock still guards crash recovery.
 
+Desktop's production registry admits local thread creation, turns, reviews,
+automation and helpers through an owner-core application port, and guards
+Codex connections, Claude session queries and pooled/ephemeral ACP startup.
+The port retains a `thread_owner` claim on the existing federation lease even
+when federation and messaging are disabled. Service shutdown releases only its
+own claim; successful provider shutdown releases the thread-owner claim.
+Failed provider shutdown retains ownership until process exit/dead-owner grace.
+Passive viewers do not claim a lease. Repeated owner admissions only read it;
+no schema, lock file or SQLite heartbeat is added.
+
 `profile-runtime-markers.ts` owns the existing PID/instance/start-time marker
 format, freshness checks and file heartbeat. Desktop retains its profile path
 resolution and process defaults. The marker timer performs no SQLite writes;

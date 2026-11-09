@@ -157,6 +157,14 @@ async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUs
 }
 
 describe("Claude SDK backend", () => {
+  it("checks profile owner admission before starting a Claude session query", async () => {
+    const f = await fixture();
+    const backend = f.openBackend({ ...f.backendOptions, assertOwnerAdmission: () => { throw new Error("fixture profile owner"); } });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await expect(backend.startTurn({ threadId, input: [{ type: "text", text: "fixture" }] })).rejects.toThrow("fixture profile owner");
+    expect(f.run).not.toHaveBeenCalled();
+  });
+
   it("isolates a monitor's MCP configuration from inherited native servers", async () => {
     const f = await fixture();
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "full-access", ephemeral: { title: "Task monitor" } });

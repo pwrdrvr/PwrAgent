@@ -316,6 +316,8 @@ const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
 const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 export type CodexClientOptions = {
+  /** The host admits ownership before opening any provider transport. */
+  assertOwnerAdmission?: () => void;
   authenticationRecovery?: boolean;
   /** The profile's helper model settings, read per helper turn. */
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
@@ -12258,6 +12260,7 @@ export class CodexAppServerClient {
       await this.waitForRestartBackoff();
       assertNotClosed();
       const startedAt = performance.now();
+      this.options.assertOwnerAdmission?.();
       await this.rawConnection.connect();
       assertNotClosed();
       this.host.logger.info("app-server transport connected", {
