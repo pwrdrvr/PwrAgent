@@ -5104,6 +5104,71 @@ describe("DesktopBackendRegistry", () => {
     expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
   });
 
+  async function assertFailedTurnPreparationRetires(threadId: string, text: string, discovery: "none" | "idle" | "provider-active" = "none"): Promise<void> {
+    const client = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const internal = registry as unknown as {
+      registerPendingThreadMessageContext: () => Promise<string | undefined>;
+      threadHasActiveTurn: (threadId: string, backend: AppServerBackendKind) => boolean;
+      emit: (event: AgentEvent) => Promise<void>;
+      reconcileCodexThreadListStatus: (thread: AppServerThreadSummary) => AppServerThreadSummary;
+    };
+    // Inject a host-port rejection during context preparation. Ordinary
+    // attachment helpers retain their existing best-effort I/O handling.
+    vi.spyOn(internal, "registerPendingThreadMessageContext").mockImplementationOnce(async () => {
+      if (discovery !== "none") {
+        await internal.emit({ backend: "codex", notification: {
+          method: "thread/status/changed", params: { threadId, status: { type: "idle" } },
+        } });
+        // A navigation read can project the still-reserved start as active.
+        internal.reconcileCodexThreadListStatus({ id: threadId, source: "codex", title: "Fixture", titleSource: "explicit", linkedDirectories: [], updatedAt: 1, threadStatus: "idle" });
+        if (discovery === "provider-active") await internal.emit({ backend: "codex", notification: {
+          method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } },
+        } });
+      }
+      throw new Error("context rejected");
+    });
+    const request = { backend: "codex" as const, threadId, input: [{ type: "text" as const, text }] };
+    try {
+      await expect(registry.startTurn(request)).rejects.toThrow("context rejected");
+      expect(client.startTurnCallCount).toBe(0);
+      expect(events.filter((event) => event.notification.method.startsWith("turn/")).map((event) => ({
+        method: event.notification.method,
+        turnId: (event.notification.params as { turnId: string }).turnId,
+      }))).toEqual([]);
+      expect(internal.threadHasActiveTurn(threadId, "codex")).toBe(discovery === "provider-active");
+      if (discovery === "provider-active") {
+        await expect(registry.startTurn(request)).rejects.toThrow("already active");
+        expect(client.startTurnCallCount).toBe(0);
+      } else {
+        await expect(registry.startTurn(request)).resolves.toMatchObject({ backend: "codex", threadId, turnId: "turn-1" });
+        expect(client.startTurnCallCount).toBe(1);
+      }
+    } finally {
+      await registry.close();
+    }
+  }
+
+  it("retires every start whose pending context preparation rejects", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("preparing", "same:thread", "pending:source"), fc.string({ minLength: 1, maxLength: 24 }),
+      (threadId, text) => assertFailedTurnPreparationRetires(threadId, text)), { numRuns: 8 });
+  });
+
+  it("allows another turn after context registration rejects", async () => {
+    await assertFailedTurnPreparationRetires("preparing", "Continue");
+  });
+
+  it("releases projected preparation activity while preserving newer provider observations", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("preparing", "same:thread"), fc.constantFrom("idle" as const, "provider-active" as const),
+      (threadId, discovery) => assertFailedTurnPreparationRetires(threadId, "Continue", discovery)), { numRuns: 12 });
+  });
+
+  it("releases an idle status reprojected during start preparation", async () => {
+    await assertFailedTurnPreparationRetires("preparing", "Continue", "idle");
+  });
+
   it("rejects handoff while a turn start is awaiting its provider", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
@@ -50932,6 +50997,66 @@ script = "printf setup"
       threadId: turn.threadId,
       queueEntryId: queued.entry.id,
     })).toMatchObject({ input: queued.entry.input });
+  });
+
+  async function assertPreparedStartOrigin(command: { threadId: string; text: string; providerStarted: boolean; agent: boolean }): Promise<void> {
+    const turnId = "provider-turn";
+    const wireText = `Prepared input: ${command.text}`;
+    const message = { id: "prepared-message", role: "user" as const, text: wireText };
+    const client = new MockBackendClient({ replay: {
+      entries: [{ ...message, type: "message", turn: { id: turnId, status: "completed" } }],
+      messages: [message], pagination: { supportsPagination: false, hasPreviousPage: false },
+    } });
+    const store = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const items: unknown[] = [];
+    registry.onEvent((event) => {
+      const notification = event.notification;
+      if (notification.method === "item/started" || notification.method === "item/completed") items.push(notification.params.item);
+    });
+    const origin: AppServerThreadMessageOrigin = command.agent
+      ? { kind: "agent", sourceThread: { backend: "codex", threadId: "sender" } }
+      : { kind: "messaging" };
+    vi.spyOn(client, "startTurn").mockImplementation(async (params: {
+      threadId: string; onInputTextPrepared?: (text: string | undefined) => void;
+    }) => {
+      if (command.providerStarted) await client.emit({ method: "turn/started", params: {
+        threadId: params.threadId, turnId, turn: { id: turnId, status: "in_progress" },
+      } });
+      params.onInputTextPrepared?.(wireText);
+      // Codex can deliver user items before the start RPC returns, with or
+      // without its own turn/started. Only that provider turn owns the item.
+      for (const method of ["item/started", "item/completed"] as const) await client.emit({ method, params: {
+        threadId: params.threadId, turnId,
+        item: { id: message.id, type: "userMessage", content: [{ type: "text", text: wireText }] },
+      } });
+      return { threadId: params.threadId, turnId };
+    });
+    try {
+      await registry.startTurn({ backend: "codex", threadId: command.threadId,
+        input: [{ type: "text", text: `Review ${command.text}` }], messageOrigin: origin });
+      expect(items).toHaveLength(2);
+      for (const item of items) expect(item).toMatchObject({ id: message.id, origin });
+      expect(store.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+        backend: "codex", threadId: command.threadId, messageId: message.id, origin,
+      });
+      const replay = (await registry.readThread({ backend: "codex", threadId: command.threadId })).replay;
+      expect(replay.entries[0]).toMatchObject({ id: message.id, origin });
+      expect(replay.messages[0]).toMatchObject({ id: message.id, origin });
+    } finally {
+      await registry.close();
+    }
+  }
+
+  it("keeps prepared start provenance with the provider through generated notification orderings", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({
+      threadId: fc.constantFrom("prepared", "same:thread", "pending:source"),
+      text: fc.string({ maxLength: 24 }), providerStarted: fc.boolean(), agent: fc.boolean(),
+    }), assertPreparedStartOrigin), { numRuns: 20 });
+  });
+
+  it("keeps prepared start provenance when user items precede the provider's start reply", async () => {
+    await assertPreparedStartOrigin({ threadId: "prepared", text: "", providerStarted: false, agent: false });
   });
 
   it.each([

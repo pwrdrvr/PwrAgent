@@ -1,9 +1,11 @@
 import path from "node:path";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
+import type { ReplayFixture } from "../src/main/testing/replay-fixture";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
 const turnLifecycleSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -275,6 +277,41 @@ async function createActiveTurnWorkspaceFixture(): Promise<{
     fixturePath,
   };
 }
+
+test("retires a refused optimistic start and admits the next turn", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-refused-start-"));
+  const fixture = JSON.parse(await readFile(path.join(turnLifecycleSpecDir, "fixtures/turn-lifecycle/replay.fixture.json"), "utf8")) as ReplayFixture;
+  fixture.metadata.scenario = "refused-turn-start";
+  const startIndex = fixture.steps.findIndex((step) => step.kind === "response" && step.method === "turn/start");
+  if (startIndex < 0) throw new Error("Missing turn start fixture");
+  fixture.steps.splice(startIndex, 0, { id: "start-refused", kind: "response", method: "turn/start",
+    error: { message: "Fixture provider refused the start" } });
+  const fixturePath = path.join(root, "replay.fixture.json");
+  await writeFile(fixturePath, JSON.stringify(fixture));
+  const app = await launchElectronApp({ fixturePath });
+  try {
+    await app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first().click();
+    await expect(app.window.getByText("lifecycle baseline ready", { exact: true })).toBeVisible();
+    const refused = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return await api.startTurn!({ backend: "codex", threadId: "thread-turn-lifecycle",
+        input: [{ type: "text", text: "Refuse this fixture start" }] })
+        .then(() => "accepted", (error: unknown) => error instanceof Error ? error.message : String(error));
+    });
+    expect(refused).toContain("Fixture provider refused the start");
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Start after the refusal");
+    await app.window.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    for (const step of fixture.steps) {
+      if (step.kind === "notification") await app.advance({ stepId: step.id });
+    }
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("keeps transient turn UI through metadata and premature idle notifications", async () => {
   const app = await launchElectronApp({
