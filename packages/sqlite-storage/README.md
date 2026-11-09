@@ -104,6 +104,13 @@ credential scrubbing and snapshot versioning stay in the host policy, which
 receives no database handle. The separate in-memory store shares only its pure
 questionnaire predicate. All SQL and transaction sites remain unchanged.
 
+Shared `FederationStore` owns profile peer trust, enrollment HMACs and session
+audit persistence. Shared records and the complete handle-free port live in
+`shared`; federation retains its narrow transport port and compatibility exports.
+The private desktop binding and original explicit factory preserve construction,
+revocation/reauthorization, expiry, repeat collapse, SQL and exact write counts.
+No access policy or native binary is shared.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -225,3 +232,9 @@ refusal and exact unchanged commits. An independent host supplies arbitrary
 channel names, opaque JSON and its own snapshot shape. Supported Electron E2E
 hands portable routes to the actual desktop services, observes later portable
 WAL changes and verifies route retirement and cleanup from Node after shutdown.
+
+`shared-federation-storage.property.test.ts` checks the actual factory, independent
+trust/enrollment/audit models, profile HMAC oracles, WAL/reopen, rollback/refusal,
+legacy records, bounded reads and exact writes. Supported Electron E2E hands
+portable trust/audit facts to production IPC services, observes later WAL writes,
+and reads desktop revocation and locally generated invitations back from Node.

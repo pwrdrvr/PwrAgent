@@ -487,6 +487,11 @@ Conversation/default-Agent policy, migrations, merges, matching, credential
 scrubbing and snapshot versioning remain host-owned without database access.
 The in-memory implementation shares only the pure questionnaire predicate.
 Every SQL statement and transaction site is preserved.
+Shared `FederationStore` implements the complete handle-free federation storage
+port in shared, alongside its enrollment/audit records. Federation retains its
+narrow transport contract and compatibility exports, keeping both sibling layers
+independent. The private desktop binding retains the original explicit factory
+and peer trust, profile HMACs, expiry, audit collapse and SQL/write behavior.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
