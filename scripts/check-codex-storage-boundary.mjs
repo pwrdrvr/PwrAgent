@@ -8,6 +8,7 @@ const scanRoots = [
   "apps/desktop/src/main",
   "packages/pwragent/src",
   "packages/owner-core/src",
+  "packages/sqlite-storage/src",
   "scripts",
 ];
 

@@ -801,12 +801,15 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await snapshotOf(store)).toBeUndefined();
   });
 
-  // The 1–3 owner input space has only 14 combinations. Exhaust it with one
-  // fixture lifetime per case, so afterEach closes its registry and database
-  // before another case replaces the provider fixture.
-  it.each([1, 2, 3].flatMap((owners) => Array.from({ length: 2 ** owners }, (_, mask) => ({
-    authorizations: Array.from({ length: owners }, (_, index) => Boolean(mask & (1 << index))),
-  }))))("requires every archived external owner's receipt at hibernation admission: $authorizations (exhaustive Git oracle)", async ({ authorizations }) => {
+  // Each case owns its native fixture through afterEach; no generated case
+  // leaves a registry, SQLite connection or Git tree alive for the next one.
+  const archivedOwnerReceiptCases = [1, 2, 3].flatMap((ownerCount) =>
+    Array.from({ length: 2 ** ownerCount }, (_, mask) => ({
+      authorizations: Array.from({ length: ownerCount }, (_, index) => Boolean(mask & (1 << index))),
+    })));
+  it.each(archivedOwnerReceiptCases)("requires every archived external owner's receipt at hibernation admission: $authorizations (Git oracle)", async ({ authorizations }) => {
+    expect({ registries: registries.length, databases: databases.length, roots: roots.length })
+      .toEqual({ registries: 0, databases: 0, roots: 0 });
     const { registry, store, directory, worktree, call, internal } = await outsideRegistrationFixture();
     vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);

@@ -6,6 +6,7 @@ import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-sto
 import { SqliteThreadReviewStorage } from "./thread-review-storage-sqlite";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import { ThreadTodoStore } from "./thread-todo-store";
+import type { ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { getAppStateDb, getAppRuntimeInstanceStore, getAppStateMode, getBootDecision, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
@@ -54,7 +55,7 @@ export function createThreadDependencyStorage(): ThreadDependencyStorage {
 export function createThreadSandboxStorage(): ThreadSandboxStorage {
   return new ThreadSandboxStore(getAppStateDb().raw);
 }
-export function createProviderThreadSnapshotStorage() {
+export function createProviderThreadSnapshotStorage(): ProviderThreadSnapshotStorage {
   return new ProviderThreadSnapshotStore(getAppStateDb());
 }
 export function createCodexEnvironmentHydrationStorage() {
