@@ -29,10 +29,15 @@ const request = { backend: "codex", threadId: "native", expectedTurnId: "turn", 
 
 const originFrom = (requestId: string) => ({ kind: "messaging", causalMessagingSource: { ownerId: "owner", requestId } });
 const messagingCall = (operation = "send_private_response") => ({ operation, context: { backend: "codex", threadId: "native", turnId: "turn" }, args: {} });
+const gate = () => {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, release };
+};
 
 actualHost("attributed steering fences messaging until native acceptance and durable origin retention settle", async () => {
   await fc.assert(fc.asyncProperty(
-    fc.constantFrom("send_private_response", "send_messaging_file", "read_messaging_pdf", "list_messaging_surfaces"),
+    fc.constantFrom("send_private_response", "send_messaging_file", "inspect_messaging_pdfs", "list_messaging_surfaces"),
     fc.boolean(), fc.boolean(), fc.integer({ min: 1, max: 4 }),
     async (operation, refuseNative, refuseRetention, copies) => {
       await fixture(async (runtime, backend, store) => {
@@ -97,30 +102,26 @@ actualHost("each concurrent attributed steer owns its messaging fence until its 
       runtime.save({ ...store.get("job"), messageOrigin: originFrom("source-a") });
       let forwards = 0;
       runtime.requestMessaging = async () => { forwards++; return { ok: true }; };
-      const decisions = new Map<number, () => void>();
+      const gates = new Map(order.map(id => [id, { started: gate(), decision: gate() }]));
       const pending = new Map<number, Promise<unknown>>();
       const unsettled = new Set(order);
       runtime.codex = { steerTurn: async (params: any) => {
         const id = Number(params.input[0].text);
-        await new Promise<void>(resolve => { decisions.set(id, resolve); });
+        gates.get(id)!.started.release();
+        await gates.get(id)!.decision.promise;
         if (refuseOdd && id % 2) throw new Error("native refused");
         return { threadId: "native", turnId: "turn" };
       } };
       try {
         for (const id of [...order].sort()) {
-          let entered!: () => void;
-          const started = new Promise<void>(resolve => { entered = resolve; });
-          const submit = runtime.codex.steerTurn;
-          runtime.codex.steerTurn = (params: any) => { const result = submit(params); entered(); return result; };
           const result = backend.handle("steerTurn", { ...request, requestId: `steer-${id}`, input: [{ type: "text", text: String(id) }], messageOrigin: originFrom(`source-${id}`) });
           pending.set(id, result);
           void result.catch(() => {});
-          await started;
-          runtime.codex.steerTurn = submit;
+          await gates.get(id)!.started.promise;
         }
         for (const id of order) {
           expect(await runtime.messagingRequest(messagingCall())).toMatchObject({ ok: false, error: { code: "forbidden" } });
-          decisions.get(id)!();
+          gates.get(id)!.decision.release();
           await Promise.allSettled([pending.get(id)!]);
           unsettled.delete(id);
           const result = await runtime.messagingRequest(messagingCall());
@@ -128,11 +129,55 @@ actualHost("each concurrent attributed steer owns its messaging fence until its 
           expect(forwards).toBe(unsettled.size === 0 ? 1 : 0);
         }
       } finally {
-        for (const release of decisions.values()) release();
+        for (const { decision } of gates.values()) decision.release();
         await Promise.allSettled(pending.values());
       }
     });
   }), { numRuns: 16, examples: [[[0, 1], true], [[1, 0], true]] });
+});
+
+actualHost("terminal cleanup and late steer decisions cannot release another active job's messaging fence", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("completed", "failed", "interrupted"), fc.boolean(), async (status, refuseOld) => {
+    await fixture(async (runtime, backend, store) => {
+      const old = { started: gate(), decision: gate() };
+      const next = { started: gate(), decision: gate() };
+      runtime.codex = { steerTurn: async (params: any) => {
+        const boundary = params.expectedTurnId === "turn" ? old : next;
+        boundary.started.release();
+        await boundary.decision.promise;
+        if (boundary === old && refuseOld) throw new Error("late native refusal");
+        return { threadId: "native", turnId: params.expectedTurnId };
+      } };
+      let forwards = 0;
+      runtime.requestMessaging = async () => { forwards++; return { ok: true }; };
+      const pending = [backend.handle("steerTurn", { ...request, messageOrigin: originFrom("old") })];
+      void pending[0].catch(() => {});
+      try {
+        await old.started.promise;
+        runtime.notification({ method: "turn/completed", params: { threadId: "native", turn: { id: "turn", status } } });
+        expect(runtime.pendingSteeringOrigins.size).toBe(0);
+        runtime.save({ ...store.get("job"), id: "next", status: "running", turnId: "next-turn", createdAt: "2030-01-01T00:00:00.000Z", messageOrigin: originFrom("next") });
+        runtime.active = "next";
+        const call = { ...messagingCall(), context: { backend: "codex", threadId: "native", turnId: "next-turn" } };
+        expect(await runtime.messagingRequest(call)).toMatchObject({ ok: true });
+        pending.push(backend.handle("steerTurn", { ...request, expectedTurnId: "next-turn", messageOrigin: originFrom("next-steer") }));
+        void pending[1].catch(() => {});
+        await next.started.promise;
+        old.decision.release();
+        await Promise.allSettled([pending[0]]);
+        expect(await runtime.messagingRequest(call)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+        expect(forwards).toBe(1);
+        next.decision.release();
+        await pending[1];
+        expect(await runtime.messagingRequest(call)).toMatchObject({ ok: true });
+        expect(store.get("job").status).toBe(status);
+        expect(store.get("next").messageOrigin.causalMessagingAmbiguous).toBe(true);
+      } finally {
+        old.decision.release(); next.decision.release();
+        await Promise.allSettled(pending);
+      }
+    });
+  }), { numRuns: 12 });
 });
 
 actualHost("actual Outpost coalesces accepted steering and retries only refused origin completion", async () => {

@@ -112,10 +112,12 @@ export class HeadlessBackend {
       prepareInput: async (request) => [{ type: "text", text: textInput(request.input), text_elements: [] }],
       prepareCodex: async (request, input, origin) => {
         const job = this.activeJob(request);
+        let releaseMessaging;
         return {
           submit: async () => {
             this.assertSteerUnlocked(request);
             if (this.activeJob(request).id !== job.id) throw new Error("Active turn changed");
+            if (origin) releaseMessaging = runtime.fenceSteeringMessaging(job.id);
             const result = await runtime.codex.steerTurn({ threadId: request.threadId, expectedTurnId: request.expectedTurnId, input });
             return { threadId: request.threadId, turnId: result.turnId || job.turnId };
           },
@@ -127,7 +129,9 @@ export class HeadlessBackend {
             const current = runtime.store.get(job.id);
             const messageOrigin = { ...origin, ...mergeCausalMessagingContext([current.messageOrigin, origin]) };
             if (!isDeepStrictEqual(current.messageOrigin, messageOrigin)) runtime.save({ ...current, messageOrigin });
+            releaseMessaging?.();
           },
+          forget: () => releaseMessaging?.(),
         };
       },
     });

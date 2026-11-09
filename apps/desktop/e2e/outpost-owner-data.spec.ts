@@ -103,10 +103,19 @@ test("accepted Outpost steering and interruption survive desktop owner handover 
         const runtime = new Runtime({ workspace, store, home: path.join(homeRoot, "codex"), command: "unused", onFailure() {} });
         let sends = 0;
         let interruptions = 0;
+        const messagingCall = { operation: "send_private_response", context: { backend: "codex", threadId: ref.threadId, turnId: "turn-control" }, args: { text: "Private fixture reply" } };
+        const forwarded: any[] = [];
+        runtime.requestMessaging = async (call: unknown) => { forwarded.push(call); return { ok: true }; };
         runtime.codex = {
           startThread: async () => ({ threadId: ref.threadId }),
           startTurn: async () => ({ threadId: ref.threadId, turnId: "turn-control" }),
-          steerTurn: async () => { sends++; return { threadId: ref.threadId, turnId: "turn-control" }; },
+          steerTurn: async () => {
+            sends++;
+            // Provider tool dispatch precedes the native steering response.
+            expect(await runtime.messagingRequest(messagingCall)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+            expect(forwarded).toHaveLength(1);
+            return { threadId: ref.threadId, turnId: "turn-control" };
+          },
           interruptTurn: async () => {
             interruptions++;
             runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "turn-control", status: "interrupted" } } });
@@ -116,16 +125,24 @@ test("accepted Outpost steering and interruption survive desktop owner handover 
         const backend = new HeadlessBackend(runtime, () => {});
         runtime.onEvent = (event: unknown) => backend.event(event);
         backend.authenticateOrigin = (origin: unknown) => origin;
-        const input = { id: "controlled", prompt: "Replay smoke thread" };
+        const input = { id: "controlled", prompt: "Replay smoke thread", messageOrigin: { kind: "messaging", causalMessagingSource: { ownerId: "fixture", requestId: "sender-a" } } };
         runtime.submit(input);
         await runtime.work;
+        await runtime.messagingRequest(messagingCall);
+        expect(forwarded[0].context.causalMessagingSource).toEqual(input.messageOrigin.causalMessagingSource);
         const save = store.save.bind(store);
         let refuse = true;
         store.save = (job: any) => { if (job.messageOrigin && refuse) { refuse = false; throw new Error("origin refused"); } return save(job); };
-        const request = { ...ref, expectedTurnId: "turn-control", requestId: "one-steer", input: [{ type: "text", text: "Inspect this boundary" }], messageOrigin: { kind: "agent", systemReason: "fixture-steer" } };
+        const request = { ...ref, expectedTurnId: "turn-control", requestId: "one-steer", input: [{ type: "text", text: "Inspect this boundary" }], messageOrigin: { kind: "agent", systemReason: "fixture-steer", causalMessagingSource: { ownerId: "fixture", requestId: "sender-b" } } };
         await expect(backend.handle("steerTurn", request)).rejects.toThrow("origin refused");
+        expect(await runtime.messagingRequest(messagingCall)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+        expect(forwarded).toHaveLength(1);
         const copies = await Promise.all(Array.from({ length: 3 }, () => backend.handle("controlActiveTurn", { ...request, operation: "steer" })));
         for (const result of copies) expect(result).toMatchObject({ ok: true, turnId: "turn-control", disposition: "steered" });
+        await runtime.messagingRequest(messagingCall);
+        expect(forwarded).toHaveLength(2);
+        expect(forwarded[1].context.causalMessagingSource).toBeUndefined();
+        expect(forwarded[1].context.causalMessagingAmbiguous).toBe(true);
         await expect(backend.handle("steerTurn", { ...request, input: [{ type: "text", text: "changed" }] })).rejects.toThrow("reused with different input");
         expect(await backend.handle("controlActiveTurn", { ...ref, expectedTurnId: "turn-control", requestId: "stop", operation: "stop" })).toMatchObject({ ok: true, disposition: "interrupted" });
         expect(runtime.submit(input)).toMatchObject({ status: "interrupted", turnId: "turn-control" });
@@ -147,7 +164,7 @@ test("accepted Outpost steering and interruption survive desktop owner handover 
     const profile = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: workspace });
     try {
       const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(app.homeRoot, "codex") }, profile);
-      expect(store.get("controlled")).toMatchObject({ threadId: ref.threadId, turnId: "turn-control", status: "interrupted", messageOrigin: { kind: "agent", systemReason: "fixture-steer" } });
+      expect(store.get("controlled")).toMatchObject({ threadId: ref.threadId, turnId: "turn-control", status: "interrupted", messageOrigin: { kind: "agent", systemReason: "fixture-steer", causalMessagingAmbiguous: true } });
     } finally { profile.close(); }
   } finally { await app.close(); }
 });

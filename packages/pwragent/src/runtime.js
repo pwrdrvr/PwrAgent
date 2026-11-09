@@ -23,6 +23,7 @@ export class Runtime {
     this.toolLedger = new Map();
     this.toolLedgerCount = readdirSync(this.toolLedgerDirectory).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).length;
     this.loadedThreads = new Set();
+    this.pendingSteeringOrigins = new Map();
     this.onFailure = onFailure;
     this.threadCreations = new ThreadCreationLifecycle();
     this.turnStarts = new ThreadTurnStartLifecycle({
@@ -243,9 +244,24 @@ export class Runtime {
     return result;
   }
 
+  fenceSteeringMessaging(jobId) {
+    const pending = this.pendingSteeringOrigins.get(jobId) || new Set();
+    const token = Symbol();
+    pending.add(token);
+    this.pendingSteeringOrigins.set(jobId, pending);
+    return () => {
+      pending.delete(token);
+      if (!pending.size && this.pendingSteeringOrigins.get(jobId) === pending) this.pendingSteeringOrigins.delete(jobId);
+    };
+  }
+
   async messagingRequest(request) {
     const job = this.active && this.store.get(this.active);
     if (!job || job.threadId !== request.context.threadId || (job.turnId && job.turnId !== request.context.turnId)) return { ok: false, error: { code: "forbidden", message: "Messaging call does not belong to the active outpost turn" } };
+    // Native tools can arrive before a steering RPC resolves. Until every
+    // attributed steer is refused or retained, the durable origin is stale.
+    // Refuse immediately: waiting here could deadlock the provider's RPC.
+    if (this.pendingSteeringOrigins?.get(job.id)?.size) return { ok: false, error: { code: "forbidden", message: "Messaging is unavailable while steering origin acceptance is pending" } };
     const origin = job.messageOrigin;
     const scoped = { ...request, context: { ...request.context, causalMessagingSource: origin?.causalMessagingSource,
       causalMessagingAmbiguous: origin?.causalMessagingAmbiguous } };
@@ -293,6 +309,7 @@ export class Runtime {
   finish(id, status, reason) {
     const confirmed = this.acceptedTurn?.jobId === id ? { threadId: this.acceptedTurn.threadId, turnId: this.acceptedTurn.turnId } : {};
     this.save({ ...this.store.get(id), ...confirmed, status, ...(reason ? { reason: String(reason).slice(0, 4096) } : {}), finishedAt: new Date().toISOString() });
+    this.pendingSteeringOrigins?.delete(id);
     if (this.active === id) this.active = null;
   }
 
