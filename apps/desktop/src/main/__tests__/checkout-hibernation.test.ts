@@ -464,6 +464,7 @@ describe("idle checkout hibernation and restore", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
 
     // A queued send: it is admitted as queued while the restore runs.
+    expect(registries).toHaveLength(0);
     const again = await createFixture();
     const second = again.open();
     await sweep(second.registry);
