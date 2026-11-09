@@ -8,7 +8,6 @@ import {
   type FederationInstanceId,
   type LinkedDirectorySummary,
   type NavigationThreadSummary,
-  type NavigationRow,
   type ThreadLinkRef,
 } from "@pwragent/shared";
 import {
@@ -24,7 +23,7 @@ import {
 } from "react";
 import { getDesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
-import { readThreadLinkRow } from "./thread-link-rows";
+import { observeThreadLinkRows, readThreadLinkRow, type ThreadLinkRow } from "./thread-link-rows";
 
 export type ResolvedThreadLink = {
   backend: AppServerBackendKind;
@@ -302,11 +301,13 @@ class ThreadLinkMetadataStore {
     };
   }
 
-  hydrate(link: ResolvedThreadLink, row: NavigationRow): void {
+  async hydrate(link: ResolvedThreadLink, load: () => Promise<ThreadLinkRow | undefined>): Promise<void> {
     const key = threadLinkKey(link);
+    const previous = this.links.get(key);
+    const row = await load();
     // A navigation page that arrived while this read ran is newer. An
     // unmounted chip must not leave unbounded metadata in this store either.
-    if (this.admittedKeys.has(key) || !this.listeners.has(key)) return;
+    if (!row || this.links.get(key) !== previous || this.admittedKeys.has(key) || !this.listeners.has(key)) return;
     const next: ResolvedThreadLink = {
       ...link,
       // A cached thread name is shared by links to different messages.
@@ -595,6 +596,11 @@ export function ThreadLinkProvider(props: {
   const metadataKey = threadLinkMetadataKey(threads);
 
   useLayoutEffect(() => {
+    const api = getDesktopApi();
+    if (api) observeThreadLinkRows(api, threads, readRendererFederationTarget());
+  }, [threads]);
+
+  useLayoutEffect(() => {
     metadataStore.update(threadsRef.current);
   }, [metadataKey, metadataStore]);
 
@@ -720,8 +726,7 @@ export function ThreadLinkProvider(props: {
       async hydrate(link) {
         const api = getDesktopApi();
         if (!api?.getNavigationQueryPage) return;
-        const row = await readThreadLinkRow(api, link, readRendererFederationTarget());
-        if (row) metadataStore.hydrate(link, row);
+        await metadataStore.hydrate(link, () => readThreadLinkRow(api, link, readRendererFederationTarget()));
       },
       hoverTarget: hoverStore,
       readSummary(link) {

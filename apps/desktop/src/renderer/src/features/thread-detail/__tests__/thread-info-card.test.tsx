@@ -192,6 +192,44 @@ describe("thread chip hover card", () => {
     expect(api.getNavigationQueryPage).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])("retains newer navigation facts after paging out (encounter pending=%s)", async (pending) => {
+    const oldRow = { ...summary({ title: "Old encounter title", threadStatus: "active" }),
+      ref: { backend: "codex", threadId: THREAD_ID } } as NavigationRow;
+    let finish!: (page: NavigationQueryPage) => void;
+    if (pending) api.getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    else api.getNavigationQueryPage.mockResolvedValue({ entries: [{ row: oldRow }] } as NavigationQueryPage);
+    const chip = <ThreadChip link={{ backend: "codex", threadId: THREAD_ID, title: "" }} onOpen={vi.fn()} />;
+    const provider = (threads: NavigationThreadSummary[]) => <ThreadLinkProvider onShowThread={vi.fn()} threads={threads}>
+      {chip}
+    </ThreadLinkProvider>;
+    const view = render(provider([]));
+    await act(async () => {});
+    view.rerender(provider([summary({ title: "New navigation title", threadStatus: "idle", model: "new-model" })]));
+    view.rerender(provider([]));
+    await act(async () => { if (pending) finish({ entries: [{ row: oldRow }] } as NavigationQueryPage); });
+    expect(screen.getByRole("button", { name: "Open thread New navigation title" })).toBeInTheDocument();
+    const card = await openCard();
+    expect(card).toHaveTextContent("Idle");
+    expect(card).toHaveTextContent("new-model");
+    expect(card).not.toHaveTextContent("Running");
+  });
+
+  it("shows last-known offline facts from the viewer cache when the owner read fails", async () => {
+    const row = { ...summary(), ref: { backend: "codex", threadId: THREAD_ID, ownerInstanceId: "lab" },
+      federation: { ref: { backend: "codex", threadId: THREAD_ID, target: { scope: "remote", instanceId: "lab" } },
+        instanceLabel: "Lab", peerStatus: "disconnected" } } as NavigationRow;
+    api.getNavigationQueryPage.mockImplementation(async (request) => {
+      if (request.federationTarget) throw new Error("Peer unavailable");
+      return { entries: [{ row }] } as NavigationQueryPage;
+    });
+    renderChip({ instanceId: "lab", instanceLabel: "Lab" }, []);
+    const card = await openCard();
+    expect(card).toHaveTextContent("offline · last known");
+    expect(card).toHaveTextContent("gpt-6.1-sol");
+    expect(card).toHaveTextContent("Full Access");
+    expect(card).not.toHaveTextContent("not found");
+  });
+
   it("shows a loaded thread's settings, family cost and timeline", async () => {
     renderChip({}, [summary()]);
     const card = await openCard();
