@@ -41,9 +41,9 @@ test("actual Outpost held queue controls hand durable outcomes to desktop withou
         const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(homeRoot, "codex") }, profile);
         const runtime = new Runtime({ workspace, store, home: path.join(homeRoot, "codex"), command: "unused", onFailure() {} });
         let sends = 0;
-        runtime.codex = { startTurn: async () => {
+        runtime.codex = { startTurn: async ({ threadId }: { threadId: string }) => {
           if (++sends === 2) throw new Error("Invented native refusal");
-          return { threadId: ref.threadId, turnId: `queue-turn-${sends}` };
+          return { threadId, turnId: `queue-turn-${sends}` };
         }, stop: async () => {} };
         const backend = new HeadlessBackend(runtime, () => {});
         runtime.onEvent = (event: unknown) => backend.event(event);
@@ -56,7 +56,18 @@ test("actual Outpost held queue controls hand durable outcomes to desktop withou
         runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "queue-turn-1", status: "completed" } } });
         for (let n = 0; n < 12; n++) await new Promise<void>(resolve => setImmediate(resolve));
         expect((await backend.handle("getNavigationQueueProjection", { protocol: 2, ref })).entries).toMatchObject([{ queueEntryId: waiting.id, manualReleaseRequired: true }]);
+        backend.persistCreatedNativeThread({ id: "queue-other", cwd: workspace, title: "Other invented thread", titleSource: "explicit" });
+        let contended = false;
+        runtime.onEvent = (event: any) => {
+          backend.event(event);
+          if (!contended && event.method === "headless/queueChanged" && event.params.type === "queued" && event.params.entry.id === waiting.id) {
+            contended = true;
+            expect(runtime.submit({ id: "queue-competitor", threadId: "queue-other", prompt: "Invented competing input" }).status).toBe("queued");
+          }
+        };
         expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: waiting.id })).toMatchObject({ disposition: "started", turnId: "queue-turn-3" });
+        expect(contended).toBe(true);
+        expect(store.get("queue-competitor")).toMatchObject({ status: "queued" });
         expect(store.get(waiting.id)).toMatchObject({ status: "running", turnId: "queue-turn-3" });
         runtime.submit({ id: "queue-delete", threadId: ref.threadId, prompt: "Invented deleted input" });
         expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: "queue-delete" })).toMatchObject({ disposition: "cancelled", cancelled: true });
@@ -88,6 +99,8 @@ test("actual Outpost held queue controls hand durable outcomes to desktop withou
       expect(store.get("queue-unfinished")).toMatchObject({ status: "unknown", fingerprint });
       expect(store.get("queue-delete")).toMatchObject({ status: "interrupted" });
       expect(store.get("queue-delete")).not.toHaveProperty("turnId");
+      expect(store.get("queue-competitor")).toMatchObject({ status: "unknown", threadId: "queue-other" });
+      expect(store.get("queue-competitor")).not.toHaveProperty("turnId");
     } finally { profile.close(); }
   } finally { await app.close(); }
 });

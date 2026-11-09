@@ -247,6 +247,10 @@ it.skipIf(process.platform === "win32")("cross-thread release contention either 
       const before = backend.queuedTurns("native");
       const accepted = store.get("waiting0");
       const submit = () => runtime.submit({ id: "competitor", threadId: "other", prompt: "competitor" });
+      const finishing = Promise.resolve();
+      runtime.dispatches.add(finishing);
+      expect(runtime.turnQueue.canStartImmediately({ backend: "codex", threadId: "other" })).toBe(false);
+      runtime.dispatches.delete(finishing);
       let submitted = false;
       const observe = runtime.onEvent;
       runtime.onEvent = (event: any) => {
@@ -299,7 +303,7 @@ it.skipIf(process.platform === "win32")("release admission reservations retire a
       }
       expect((await release).disposition).toBe("blocked");
       expect(runtime.dispatches.size).toBe(0);
-      expect(runtime.releaseEntryId).toBeNull();
+      expect(runtime.queueRelease).toBeNull();
       expect(store.get("waiting0").status).toBe(shutdown ? "unknown" : "queued");
       if (!shutdown) {
         expect(backend.queuedTurns("native")[0]).toMatchObject({ queueEntryId: "waiting0", manualReleaseRequired: true });

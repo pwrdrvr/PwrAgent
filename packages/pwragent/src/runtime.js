@@ -28,10 +28,12 @@ export class Runtime {
     // Stable-ID retries await their own provider dispatch, even when another
     // accepted submission has already returned from enqueueing.
     this.dispatches = new Map();
+    this.queueRelease = null;
     this.turnQueue = new ThreadTurnQueue({
       startTurn: entry => this.dispatchJob(this.store.get(entry.id), entry.input[0].text, entry),
       isThreadActive: ({ threadId }) => Boolean(this.active && this.store.get(this.active).threadId === threadId),
-      isDispatchHeld: () => Boolean(this.stopping || this.uncertain || this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()),
+      isDispatchHeld: ({ id }) => Boolean(this.stopping || this.uncertain || this.active
+        || this.dispatches.size > (this.queueRelease && id === this.queueRelease.entryId ? 1 : 0) || this.intakeBusy || this.threadCreationBusy?.()),
       onLifecycle: event => this.queueEvent(event),
     });
     this.threadCreations = new ThreadCreationLifecycle();
@@ -196,14 +198,36 @@ export class Runtime {
       this.assertQueuedIdentity(job, entry);
     }
     catch (error) { return { queueEntryId, disposition: "blocked", errorMessage: error.message }; }
-    const result = await this.turnQueue.releaseEntryWithDisposition(queueEntryId);
-    return { queueEntryId, disposition: result.disposition,
-      ...(result.disposition === "started" ? { turnId: result.turnId } : {}),
-      ...(result.disposition === "blocked" ? { errorMessage: result.error.message } : {}) };
+    // Hold the existing daemon slot before the shared FIFO yields to publish
+    // cleared holds. Only this entry may consume the reservation; other
+    // threads, creation and handoff still observe pending dispatch work.
+    let releaseSlot;
+    const reservation = new Promise(resolve => { releaseSlot = resolve; });
+    this.dispatches.set(queueEntryId, reservation);
+    this.queueRelease = { entryId: queueEntryId, threadId: entry.threadId, done: reservation };
+    try {
+      const result = await this.turnQueue.releaseEntryWithDisposition(queueEntryId);
+      return { queueEntryId, disposition: result.disposition,
+        ...(result.disposition === "started" ? { turnId: result.turnId } : {}),
+        ...(result.disposition === "blocked" ? { errorMessage: result.error.message } : {}) };
+    } finally {
+      this.queueRelease = null;
+      if (this.dispatches.get(queueEntryId) === reservation) this.dispatches.delete(queueEntryId);
+      releaseSlot();
+      this.turnQueue.drainAll();
+    }
   }
 
   async cancelQueuedTurn({ queueEntryId, expectedContentHash }) {
-    const entry = this.queuedEntry(queueEntryId);
+    let entry = this.queuedEntry(queueEntryId);
+    const release = this.queueRelease;
+    // A second suspension of this FIFO could prevent the reserved head from
+    // starting after its holds clear. Let that admission decision finish;
+    // already admitted entries remain immediately observable below.
+    if (entry && release && entry.threadId === release.threadId && this.queuedEntry(release.entryId)) {
+      await release.done;
+      entry = this.queuedEntry(queueEntryId);
+    }
     const cancel = () => {
       const current = this.queuedEntry(queueEntryId);
       if (current) {
@@ -226,7 +250,8 @@ export class Runtime {
 
   dispatchJob(job, prompt, entry) {
     if (this.stopping || this.uncertain) throw new Error("Daemon cannot dispatch work");
-    if (this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) throw new Error("Outpost is busy");
+    if (this.active || this.dispatches.size > (this.queueRelease && job.id === this.queueRelease.entryId ? 1 : 0)
+      || this.intakeBusy || this.threadCreationBusy?.()) throw new Error("Outpost is busy");
     if (job.threadId && this.threadLocked?.(job.threadId)) throw new Error("Thread handoff is in progress");
     if (entry) this.assertQueuedIdentity(job, entry);
     if (!ACTIVE.has(job.status) && job.status !== "queued") throw new Error("Job already has an outcome; no work was replayed");
@@ -257,10 +282,12 @@ export class Runtime {
         throw error;
       }
     }).finally(() => {
-      this.dispatches.delete(job.id);
+      if (this.dispatches.get(job.id) === work) this.dispatches.delete(job.id);
       this.turnQueue.drainAll();
     });
-    this.dispatches.set(job.id, work);
+    // A held release owns this job's pending value through its final queue
+    // decision, so retries and shutdown also await that reservation cleanup.
+    if (job.id !== this.queueRelease?.entryId) this.dispatches.set(job.id, work);
     return work;
   }
 
