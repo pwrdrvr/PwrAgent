@@ -104,6 +104,7 @@ export class Runtime {
           return this.store.get(job.id);
         }
         if (!ACTIVE.has(job.status)) return job;
+        if (job.id !== this.active) throw new Error("This job does not own the active native turn");
         if (!job.turnId) throw new Error("Turn is still starting; retry interrupt after its turn ID is confirmed");
         if (job.status === "interrupting") return job;
         await new ThreadInterruptionLifecycle({ interruptCodex: async (target) => {

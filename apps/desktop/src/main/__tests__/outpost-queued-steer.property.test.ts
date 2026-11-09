@@ -268,14 +268,20 @@ it.skipIf(process.platform === "win32")("budgets individual queued steering at a
           if (job.id !== "active" && job.status === "running") throw new Error("refused confirmation");
           return save(job);
         };
-        await measure(phase, "One actual authenticated agent admission, native target claim and accepted/uncertain outcome, excluding active-turn setup", async () => { await submit(request); await drain(); });
+        let accepted: any;
+        await measure(phase, "One actual authenticated agent admission, native target claim and accepted/uncertain outcome, excluding active-turn setup", async () => { accepted = await submit(request); await drain(); });
         const count = steers.length;
         await measure(`${phase}-100-retries`, "One hundred identical actual startTurn retries and queue reads; no native resend", async () => {
           for (let i = 0; i < 100; i++) { await submit(request); runtime.turnQueue.getAllQueuedEntries(); }
         });
         expect(steers).toHaveLength(count);
         store.save = save;
-        if (phase === "accepted") await measure("native-terminal", "One provider terminal settles the original owner and one accepted interjection", async () => { terminal(); await drain(); });
+        if (phase === "accepted") {
+          await measure("non-owner-interrupt-100", "One hundred attempts to interrupt through an interjection identity; no native control or writes", async () => {
+            for (let i = 0; i < 100; i++) await expect(runtime.handle("interrupt", { id: accepted.queueEntryId })).rejects.toThrow("does not own");
+          });
+          await measure("native-terminal", "One provider terminal settles the original owner and one accepted interjection", async () => { terminal(); await drain(); });
+        }
       });
     }
     await fixture(async ({ runtime, submit, value }: any) => {

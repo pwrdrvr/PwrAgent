@@ -55,6 +55,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "non-owner-interrupt-100": {
+    "commits": 0,
+    "note": "One hundred attempts to interrupt through an interjection identity; no native control or writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "recover": {
     "commits": 1,
     "note": "The existing recovery transaction settles original, steered and waiting jobs without replay",
