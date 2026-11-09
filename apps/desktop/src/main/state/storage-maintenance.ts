@@ -8,14 +8,7 @@ export type { StorageMaintenanceRecord, StorageThreadIdentity } from "@pwragent/
 
 export const STORAGE_GRACE_MS = 7 * STORAGE_INTERVAL_MS;
 export const STORAGE_MAINTENANCE_KEY = "storage_maintenance_v1";
-export const STORAGE_RETENTION_SCHEMA = `
-CREATE TABLE IF NOT EXISTS thread_storage_retention (
-  backend TEXT NOT NULL,
-  thread_id TEXT NOT NULL,
-  archived_at INTEGER NOT NULL,
-  PRIMARY KEY (backend, thread_id)
-);
-`;
+export { STORAGE_RETENTION_SCHEMA } from "@pwragent/sqlite-storage/state-schema";
 export function readStorageMaintenance(db: Database.Database): StorageMaintenanceRecord {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(STORAGE_MAINTENANCE_KEY) as { value: string } | undefined;
   try {

@@ -2,20 +2,7 @@ import type Database from "better-sqlite3";
 import type { ThreadDependency } from "@pwragent/shared";
 import { buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition } from "@pwragent/shared";
 
-export const THREAD_DEPENDENCY_SCHEMA = `
-CREATE TABLE IF NOT EXISTS thread_dependencies (
-  dependency_id TEXT PRIMARY KEY,
-  backend TEXT NOT NULL,
-  thread_id TEXT NOT NULL,
-  status TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_thread_dependencies_consumer
-  ON thread_dependencies(backend, thread_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_thread_dependencies_active
-  ON thread_dependencies(status) WHERE status IN ('waiting', 'ready', 'dispatching');
-`;
+export { THREAD_DEPENDENCY_SCHEMA } from "@pwragent/sqlite-storage/state-schema";
 
 function key(backend: string, threadId: string): string {
   return JSON.stringify([backend, threadId]);

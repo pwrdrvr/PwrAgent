@@ -1,0 +1,24 @@
+# Profile SQLite storage
+
+This package owns PwrAgent's profile `state.db` opener, schema and migration
+ladder. Desktop consumes this implementation through `main/storage`; its
+state-internal compatibility exports contain no second implementation.
+
+The schema remains at `user_version = 80`. Existing SQL, migration transactions,
+convergence checks, lazy payload moves, garbage collection and write metrics
+retain their original lifecycle. `state-schema.ts` also supplies table definitions
+to desktop stores that have not yet moved into this package.
+
+`better-sqlite3` is a peer dependency. Each host installs it for its own runtime;
+this private package carries no native binary. Its development dependency only
+supports this checkout's typechecking and tests.
+
+Storage implementations may import `state-db`, table helpers and schema modules.
+Owner/application code consumes storage ports instead. Fatal dependency rules
+enforce both that privacy boundary and this package's independence from hosts,
+transports and provider adapters. Owner core remains independent of SQLite.
+
+The desktop-main test project runs the native storage tests in its existing fork
+pool. `shared-sqlite-foundation.property.test.ts` checks the pre-extraction schema
+oracle, generated upgrade/reopen sequences, metadata preservation, transaction
+variants, rollback, cross-connection visibility and zero-write reads/reopens.

@@ -1,6 +1,6 @@
 import type { DurableTurnReceipt } from "@pwragent/shared";
 import type { DurableRequestReceipt, DurableTurnRequestStorage } from "../federation/durable-turn-request-storage";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 export class SqliteDurableTurnRequestStore implements DurableTurnRequestStorage {
   constructor(private readonly stateDb: StateDb) {}

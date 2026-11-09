@@ -8,7 +8,7 @@ import type {
   MessagingActivityOrigin,
   MessagingChannelKind,
 } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 500;

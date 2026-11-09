@@ -15,15 +15,7 @@ import { storageProcessAlive } from "./storage-maintenance";
  * entry starts or is discarded, so a second restart before then brings it
  * back again rather than losing it.
  */
-export const RESTART_CONTINUATION_SCHEMA = `
-CREATE TABLE IF NOT EXISTS restart_continuations (
-  entry_id TEXT PRIMARY KEY,
-  owner_instance_id TEXT NOT NULL,
-  owner_pid INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  payload TEXT NOT NULL
-);
-`;
+export { RESTART_CONTINUATION_SCHEMA } from "@pwragent/sqlite-storage/state-schema";
 
 /** Queue settings a saved queued message keeps across the restart. */
 export type StoredRestartQueuedFields = Partial<Pick<ThreadTurnQueueEntry,

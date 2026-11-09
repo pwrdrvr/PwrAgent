@@ -39,7 +39,7 @@ import {
   resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
-import type { StateDb } from "../state/state-db.js";
+import type { StateDb } from "./state-db.js";
 import { mergeTranscriptEvents } from "../automations/transcript-merge.js";
 import type { AutomationStorage, AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";
 export type { AutomationRecord, CreateAutomationInput, UpdateAutomationInput, CreateAutomationRunInput, StartupReconciliationInput, UpsertAutomationRunArtifactInput } from "@pwragent/owner-core/automation-storage";

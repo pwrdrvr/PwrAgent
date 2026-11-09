@@ -17,7 +17,7 @@ import type {
   ThreadTodoResult,
   ThreadTodoStorage,
 } from "@pwragent/owner-core/thread-todo-storage";
-import type { StateDb } from "../state/state-db.js";
+import type { StateDb } from "./state-db.js";
 
 type ThreadTodoRow = {
   todo_id: string;

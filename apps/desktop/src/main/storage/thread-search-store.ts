@@ -10,7 +10,7 @@ import {
   type ThreadSearchResult,
 } from "@pwragent/shared";
 import type { ThreadSearchProjectionSearchRequest, ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 import { buildThreadSearchFtsQuery } from "../thread-search/thread-search-fts-query";
 
 type ThreadSearchDocumentRow = {

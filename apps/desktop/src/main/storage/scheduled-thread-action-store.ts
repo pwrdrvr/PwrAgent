@@ -15,7 +15,7 @@ import type {
   ScheduledThreadActionStorage,
   UpdateScheduledThreadActionRecord,
 } from "@pwragent/owner-core/scheduled-thread-action-storage";
-import type { StateDb } from "../state/state-db.js";
+import type { StateDb } from "./state-db.js";
 import {
   FileScheduledThreadActionPayloadStore,
   MemoryScheduledThreadActionPayloadStore,

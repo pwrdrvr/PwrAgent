@@ -318,6 +318,9 @@ importers:
       '@pwragent/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@pwragent/sqlite-storage':
+        specifier: workspace:*
+        version: link:../../packages/sqlite-storage
       '@pwrdrvr/agent-acp':
         specifier: ^0.16.1
         version: 0.16.1(zod@4.6.7)
@@ -703,6 +706,19 @@ importers:
         version: 0.28.1
 
   packages/shared: {}
+
+  packages/sqlite-storage:
+    dependencies:
+      '@pwragent/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+      better-sqlite3:
+        specifier: ^13.0.3
+        version: 13.0.3
 
 packages:
 

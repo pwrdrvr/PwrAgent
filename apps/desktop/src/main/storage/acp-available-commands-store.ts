@@ -3,7 +3,7 @@ import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
 } from "@pwragent/shared";
-import type { StateDb } from "../state/state-db.js";
+import type { StateDb } from "./state-db.js";
 
 export class AcpAvailableCommandsStore implements AcpAvailableCommandsStorage {
   constructor(private readonly stateDb: StateDb) {}
