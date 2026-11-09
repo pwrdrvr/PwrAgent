@@ -14761,11 +14761,14 @@ export class DesktopBackendRegistry {
     this.durableStartupThreadHydrationAttempted = true;
     const snapshots = this.providerThreadSnapshotStore.list();
     this.startupProviderRefreshStatus ??= { state: "checking" };
-    const nativeThreads = snapshots.flatMap((snapshot) =>
+    // ACP metadata is local and complete. A retained provider snapshot cannot
+    // resurrect a deleted session or hide one whose agent was uninstalled.
+    const nativeThreads = [...snapshots.filter(snapshot => !isAcpBackendId(snapshot.backend)).flatMap((snapshot) =>
       snapshot.backend === "codex" && params.limit !== undefined
         ? snapshot.threads.filter(thread => thread.archivedAt === undefined).slice(0, params.limit)
         : snapshot.threads.filter(thread => thread.archivedAt === undefined),
-    );
+    ), ...(this.acpBackend.listAllSessions() ?? []).filter(session => !session.hidden && !session.archivedAt)
+      .map(session => this.acpBackend.sessionToThreadSummary(session))];
     const codexIds = nativeThreads.filter(thread => thread.source === "codex").map(thread => thread.id);
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlays = codexIds.length ? await readOverlays.call(this.overlayStore, { backend: "codex", threadIds: codexIds }) : {};
@@ -14986,10 +14989,12 @@ export class DesktopBackendRegistry {
       refreshes.flatMap((refresh) => refresh.backends),
     );
     const threads = [
-      ...refreshes.flatMap((refresh) => refresh.threads),
+      ...refreshes.flatMap((refresh) => refresh.threads).filter(thread => !isAcpBackendId(thread.source)),
       ...this.providerThreadSnapshotStore.list()
-        .filter((snapshot) => !refreshedBackends.has(snapshot.backend))
+        .filter((snapshot) => !refreshedBackends.has(snapshot.backend) && !isAcpBackendId(snapshot.backend))
         .flatMap((snapshot) => snapshot.threads),
+      ...(this.acpBackend.listAllSessions() ?? []).filter(session => !session.hidden && !session.archivedAt)
+        .map(session => this.acpBackend.sessionToThreadSummary(session)),
     ]
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
     this.invalidateThreadListCache();
@@ -15509,9 +15514,13 @@ export class DesktopBackendRegistry {
     filter?: string,
     archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
+    const sessions = this.acpBackend.listAllSessions();
+    const backends = sessions
+      ? [...new Set(sessions.map(session => session.backendId))]
+      : (await this.acpBackend.listAvailableAgents()).map(agent => agent.backendId);
     const threadLists = await Promise.all(
-      (await this.acpBackend.listAvailableAgents()).map((agent) =>
-        this.listInstalledAcpThreads(agent.backendId, filter, archived),
+      backends.map((backend) =>
+        this.listInstalledAcpThreads(backend, filter, archived),
       ),
     );
     return threadLists.flat();

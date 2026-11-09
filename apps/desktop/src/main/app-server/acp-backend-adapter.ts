@@ -275,7 +275,7 @@ type AcpAgentStoreLike = AcpAgentStorage<AcpRegistrySnapshot, AcpInstalledAgentR
 
 export type AcpSessionStoreLike =
   Pick<AcpSessionStorage, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStorage, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage" | "listBackendIds">>;
+  Partial<Pick<AcpSessionStorage, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage" | "listBackendIds" | "listAllSessions">>;
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
@@ -1527,6 +1527,11 @@ export class AcpBackendAdapter {
     options?: { archived?: boolean },
   ): AcpSessionMetadata[] {
     return this.acpSessionStore?.listSessions(backendId, options) ?? [];
+  }
+
+  /** The profile's complete local membership, independent of installed agents. */
+  listAllSessions(): AcpSessionMetadata[] | undefined {
+    return this.acpSessionStore?.listAllSessions?.();
   }
 
   listArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {

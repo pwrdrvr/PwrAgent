@@ -29,7 +29,7 @@ it("native ACP retirement costs its existing delete only and repeated absent rea
     const overlay = new SqliteOverlayStore(db);
     await overlay.updateThreadMetadata(ref, { pinnedRank: "1024", parent: { backend: "codex", threadId: "parent" }, seenUpdatedAt: 2 });
     new ProviderThreadSnapshotStore(db).replace({ backend: ref.backend, observedAt: Date.now(), threads: [{ id: ref.threadId,
-      source: ref.backend, title: "Retained older ACP", linkedDirectories: [], archivedAt: 3 }] });
+      source: ref.backend, title: "Retained older ACP", titleSource: "explicit", linkedDirectories: [], archivedAt: 3 }] });
     profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
     const runtime = { workspace: root, store, projects: { list: () => [] }, codex: { listModels: async () => [] },

@@ -457,6 +457,14 @@ ACP. Outpost reads actual active and archived ACP session metadata through the
 shared storage port, including uninstalled agents, with the same pure summary
 projection desktop uses. Hidden helpers stay private. Other provider execution
 and transcripts remain unavailable on Outpost; discovery does not start them.
+The actual ACP session store owns membership on both hosts. Desktop startup
+hydration and provider-refresh publication replace retained ACP rows with local
+session records, including backends without an installed agent. Outpost point,
+list, navigation and archive reads cannot recover a deleted or hidden session
+from retained inventories or overlays. Native session titles/provenance, archive
+state, workspace, times and execution mode stay authoritative; overlays still
+supply live pins, parents, seen watermarks and model settings. This projection
+adds no SQLite writes and leaves Codex pending-owner/job identity rules intact.
 Desktop native name events update already published non-Codex inventory rows
 without changing membership freshness. Existing owner observation sequences
 fence late lists, and startup hydration projects canonical Codex titles through

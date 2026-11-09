@@ -32,7 +32,7 @@ async function checkMembership(id: string, commands: Command[], finalOnly = fals
     title: "Stale inventory", titleSource: "explicit", createdAt: -1, updatedAt: -1, linkedDirectories: [], archivedAt: 1 });
   // A retained snapshot and canonical overlay are metadata, never membership.
   for (const backend of backends) inventory.replace({ backend, observedAt: Date.now() + 100_000, threads: [stale(backend)] });
-  inventory.replace({ backend: "codex", observedAt: 1, threads: [{ id, source: "codex", title: "Colliding Codex", linkedDirectories: [] }] });
+  inventory.replace({ backend: "codex", observedAt: 1, threads: [{ id, source: "codex", title: "Colliding Codex", titleSource: "explicit", linkedDirectories: [] }] });
   const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
   try {
     const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);

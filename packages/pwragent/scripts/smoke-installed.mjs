@@ -132,8 +132,26 @@ try {
     assert.equal(detail.thread.title, "Packed Claude metadata");
     assert.equal(detail.thread.executionMode, "auto");
     assert.ok(!JSON.stringify(detail).includes("private-sdk-id"));
+    const native = new Database(path.join(state, "state.db"));
+    const ref = { backend: "acp:uninstalled", threadId: claudeId };
+    try {
+      native.prepare("INSERT INTO acp_sessions(backend_id, session_id, created_at, updated_at, payload) VALUES (?, ?, ?, ?, ?)")
+        .run(ref.backend, ref.threadId, 1, 2, JSON.stringify({ backendId: ref.backend, sessionId: ref.threadId,
+          title: "Packed actual ACP", titleSource: "derived", cwd: workspace, createdAt: 1, updatedAt: 2,
+          archivedAt: 3, executionMode: "auto", status: "idle" }));
+      await store.threadRegistry.updateThreadMetadata(ref, { pinnedRank: "1024" });
+      store.inventory.replace({ backend: ref.backend, observedAt: Date.now(), threads: [{ id: ref.threadId,
+        source: ref.backend, title: "Packed stale ACP", archivedAt: 3, linkedDirectories: [] }] });
+      assert.equal((await owner.handle("resolveThread", ref)).thread.title, "Packed actual ACP");
+      native.prepare("DELETE FROM acp_sessions WHERE backend_id = ? AND session_id = ?").run(ref.backend, ref.threadId);
+      assert.equal((await owner.handle("resolveThread", ref)).thread, undefined);
+      assert.equal((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity, "unresolved");
+      assert.deepEqual((await owner.handle("lookupArchivedThreads", { backend: ref.backend, threadIds: [ref.threadId], includeParent: true })).parentLinks, []);
+      assert.equal(store.threadRegistry.getThreadMetadata(ref).pinnedRank, "1024");
+      assert.equal((await owner.handle("resolveThread", { backend: "claude", threadId: claudeId })).thread.title, "Packed Claude metadata");
+    } finally { native.close(); }
   } finally { profile.close(); }
-  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission and actual Claude profile discovery");
+  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude discovery and ACP membership retirement");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {
