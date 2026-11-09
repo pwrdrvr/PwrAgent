@@ -748,7 +748,11 @@ describe("Thread maintenance's hibernate step", () => {
     const stages: string[] = [];
     expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true }, (stage) => stages.push(stage))).toBe(true);
     expect(fullDiscovery).not.toHaveBeenCalled();
-    expect(stages).toEqual(["waitingForWorker", "waiting", "checking", "snapshotting", "checking", "verifying", "waiting", "removing", "recording"]);
+    // Windows starts removal before unlinking ignored junctions, then
+    // confirms that stage again at Git's process-tree-owned spawn boundary.
+    // Both callbacks describe one transition into removal.
+    const transitions = stages.filter((stage, index) => stage !== stages[index - 1]);
+    expect(transitions).toEqual(["waitingForWorker", "waiting", "checking", "snapshotting", "checking", "verifying", "waiting", "removing", "recording"]);
     expect(await exists(fixture.worktree)).toBe(false);
     const snapshot = (await snapshotOf(store))!;
     expect(snapshot.state).toBe("hibernated");

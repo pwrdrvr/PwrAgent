@@ -1037,12 +1037,28 @@ describe("archive cleanup pipeline", () => {
   });
 
   it.each(["new owner", "restore", "workspace move", "external overlay", "cross-provider owner", "cross-provider external", "provider failure", "overlay failure", "repeated cursor"] as const)(
-    "rechecks %s without a notification between independent repair removals", async (change) => {
+    "rechecks %s before a parallel repair's removal admission without a notification", async (change) => {
       vi.useFakeTimers();
       const fixture = buildRepair();
       const second = fixture.archived[1]!;
+      let secondStarted = false;
+      let overlapped = false;
+      let releaseSecond!: () => void;
+      const firstFinished = new Promise<void>((resolve) => { releaseSecond = resolve; });
+      const archive = fixture.archiveWorktree.getMockImplementation()!;
+      fixture.archiveWorktree.mockImplementation(async (params) => {
+        if (params.threadId === second.id) {
+          secondStarted = true;
+          // Preparation can overlap, but admission must see changes made
+          // before it starts. A completion callback alone is too late to
+          // order another parallel worker's admission.
+          await firstFinished;
+        }
+        return await archive(params);
+      });
       const repair = fixture.registry.repairArchivedThreadWorktrees({ onProgress: (completed) => {
         if (completed !== 1) return;
+        overlapped = secondStarted;
         if (change === "new owner") fixture.active.push(codexThread({ id: "new-owner", linkedDirectories: second.linkedDirectories }));
         if (change === "restore") fixture.active.push(second);
         if (change === "workspace move") fixture.archived[1] = { ...second, linkedDirectories: [] };
@@ -1064,11 +1080,12 @@ describe("archive cleanup pipeline", () => {
         if (change === "provider failure") fixture.client.listArchiveCleanupThreadsPage.mockRejectedValue(new Error("Inventory unavailable"));
         if (change === "overlay failure") fixture.store.getArchiveCleanupOverlayStates.mockRejectedValue(new Error("Overlay unavailable"));
         if (change === "repeated cursor") fixture.client.listArchiveCleanupThreadsPage.mockResolvedValue({ threads: [], nextCursor: "repeat" });
+        releaseSecond();
       } });
-      await vi.advanceTimersByTimeAsync(100_000);
-      const result = await drivePacer(fixture.registry, repair);
-      expect(result.cleanup[0]?.removedWorktree).toBe(true);
-      expect(result.cleanup[1]?.removedWorktree).toBe(false);
+      const result = await drivePacer(fixture.registry, repair).finally(releaseSecond);
+      expect(overlapped).toBe(true);
+      expect(result.cleanup.find((item) => item.worktreePath === "/contrived/first")?.removedWorktree).toBe(true);
+      expect(result.cleanup.find((item) => item.worktreePath === "/contrived/second")?.removedWorktree).toBe(false);
       expect(fixture.removed.has("/contrived/second")).toBe(false);
     },
   );
