@@ -324,6 +324,52 @@ try {
     assert.equal(store.get("packed-control").status, "interrupted");
     assert.equal(store.get(admitted.queueEntryId).status, "interrupted");
     assert.equal(store.get(admitted.queueEntryId).fingerprint, acceptedGuidance.fingerprint);
+    // The installed native host must retain every failure hold even when a
+    // synchronous subscriber starts cancelling the first published row.
+    const failureOwner = "packed-failure-owner";
+    controlled.save({ version: 1, id: failureOwner, fingerprint: "accepted-failure-owner", threadId, turnId: failureOwner,
+      status: "running", createdAt: new Date().toISOString() });
+    controlled.active = failureOwner;
+    let failureSends = 0;
+    controlled.codex.startTurn = async () => { failureSends++; return { threadId, turnId: "packed-explicit-retry" }; };
+    controlled.codex.stop = async () => {};
+    controlled.loadedThreads.add(threadId);
+    const older = controlled.submit({ id: "packed-failure-older", threadId, prompt: "Packed older input" });
+    const next = controlled.submit({ id: "packed-failure-next", threadId, prompt: "Packed next input" });
+    await controlled.work;
+    let cancellation;
+    controlled.onEvent = message => {
+      controller.event(message);
+      if (message.method === "headless/queueChanged" && message.params.type === "held" && message.params.entry.id === older.id) {
+        cancellation = controller.handle("backend.cancelQueuedTurn", { queueEntryId: older.id });
+      }
+    };
+    controlled.notification({ method: "turn/failed", params: { threadId, turn: { id: failureOwner, status: "failed", error: { message: "Packed review required" } } } });
+    await new Promise(resolve => setImmediate(resolve));
+    await cancellation;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(failureSends, 0);
+    assert.equal(store.get(older.id).status, "interrupted");
+    assert.equal(store.get(next.id).status, "queued");
+    assert.equal(store.get(next.id).fingerprint, next.fingerprint);
+    assert.deepEqual(controlled.turnQueue.getAllQueuedEntries().map(entry => [entry.id, entry.manualReleaseRequired]), [[next.id, true]]);
+    assert.equal((await controller.handle("backend.releaseQueuedTurn", { queueEntryId: next.id })).disposition, "started");
+    assert.equal(failureSends, 1);
+    assert.equal(store.get(next.id).fingerprint, next.fingerprint);
+    const heldAtShutdown = controlled.submit({ id: "packed-failure-shutdown", threadId, prompt: "Packed held at shutdown" });
+    await controlled.work;
+    controlled.notification({ method: "turn/failed", params: { threadId, turn: { id: "packed-explicit-retry", status: "failed", error: { message: "Review before shutdown" } } } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(controlled.turnQueue.getAllQueuedEntries()[0].manualReleaseRequired, true);
+    await controlled.stop();
+    assert.equal(store.get(heldAtShutdown.id).status, "unknown");
+    assert.equal(store.get(heldAtShutdown.id).fingerprint, heldAtShutdown.fingerprint);
+    const reopened = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
+    reopened.codex = { stop: async () => {} };
+    assert.deepEqual(reopened.turnQueue.getAllQueuedEntries(), []);
+    assert.equal(reopened.submit({ id: heldAtShutdown.id, threadId, prompt: "Packed held at shutdown" }).status, "unknown");
+    assert.equal(failureSends, 1);
+    await reopened.stop();
   } finally { profile.close(); }
   console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue and steering receipts/caller isolation/cancellation, shared steering retention/retry and interruption");
 } finally {

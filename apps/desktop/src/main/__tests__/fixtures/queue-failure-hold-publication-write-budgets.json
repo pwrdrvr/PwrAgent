@@ -1,0 +1,9 @@
+{
+  "desktop-failure-and-cancel": {
+    "commits": 1,
+    "note": "Actual provider failure, held-event cancellation and real drain; acceptance/setup excluded; only existing terminal persistence",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  }
+}
