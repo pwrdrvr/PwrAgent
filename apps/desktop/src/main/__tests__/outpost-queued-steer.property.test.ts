@@ -342,6 +342,47 @@ it.skipIf(process.platform === "win32")("a refused steering claim cannot restore
   });
 });
 
+it.skipIf(process.platform === "win32")("explicit Retry of unclaimed held guidance reaches the live native owner exactly once", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("lock", "claim"), fc.integer({ min: 1, max: 4 }), async (refusal, copies) => {
+    await fixture(async ({ runtime, backend, store, steers, starts, submit, value, terminal, events }: any) => {
+      const request = value("retry-guidance", "Invented held guidance");
+      const accepted = await submit(request), id = accepted.queueEntryId;
+      const prior = store.get(id), save = store.save.bind(store);
+      runtime.threadLocked = () => refusal === "lock";
+      store.save = (job: any) => {
+        if (refusal === "claim" && job.id === id && job.status === "starting") throw new Error("claim refused");
+        return save(job);
+      };
+      await drain();
+      expect(store.get(id)).toMatchObject({ status: "queued", fingerprint: prior.fingerprint });
+      expect(store.get(id).turnId).toBeUndefined();
+      expect(backend.queuedTurns(ref.threadId)[0]).toMatchObject({ queueEntryId: id, manualReleaseRequired: true });
+      expect(steers).toEqual([]);
+      runtime.threadLocked = () => false;
+      store.save = save;
+      // Repeating acceptance never releases a review hold. Only Retry does.
+      for (let i = 0; i < copies; i++) await submit(request);
+      await drain();
+      expect(steers).toEqual([]);
+      expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: id })).toMatchObject({ disposition: "started", turnId: "turn-1" });
+      await drain();
+      expect(steers.map((call: any) => ({ input: call.input, turnId: call.expectedTurnId }))).toEqual([{ input: request.input, turnId: "turn-1" }]);
+      expect(starts).toHaveLength(1);
+      expect(runtime.active).toBe("active");
+      expect(backend.activeJob(ref).id).toBe("active");
+      expect(store.get(id)).toMatchObject({ fingerprint: prior.fingerprint, status: "running", turnId: "turn-1", messageOrigin: prior.messageOrigin });
+      expect(events.some((event: any) => event.method === "thread/turnQueue/updated" && event.params.queueEntryId === id && event.params.status === "started")).toBe(true);
+      for (let i = 0; i < copies; i++) {
+        expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: id })).toMatchObject({ disposition: "not_found" });
+        await submit(request);
+      }
+      terminal(); await drain();
+      expect(store.get(id)).toMatchObject({ status: "completed", fingerprint: prior.fingerprint, turnId: "turn-1" });
+      expect(steers).toHaveLength(1);
+    });
+  }), { numRuns: 8 });
+});
+
 it.skipIf(process.platform === "win32")("budgets individual queued steering at acceptance, target claim, terminal and recovery boundaries", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   vi.useFakeTimers({ toFake: ["Date"] });
