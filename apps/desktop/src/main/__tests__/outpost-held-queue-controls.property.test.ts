@@ -238,3 +238,45 @@ it.skipIf(process.platform === "win32")("retry verifies transient input against 
     });
   }), { numRuns: 8 });
 });
+
+it.skipIf(process.platform === "win32")("cross-thread release contention either admits the retry or preserves its manual hold", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 3 }), fc.nat({ max: 2 }), fc.boolean(), async (count, position, competitorFirst) => {
+    await fixture(async (runtime, backend, store) => {
+      const sent = await held(runtime, count);
+      backend.persistCreatedNativeThread({ id: "other", title: "Other", titleSource: "explicit", cwd: runtime.workspace });
+      const before = backend.queuedTurns("native");
+      const accepted = store.get("waiting0");
+      const submit = () => runtime.submit({ id: "competitor", threadId: "other", prompt: "competitor" });
+      let submitted = false;
+      const observe = runtime.onEvent;
+      runtime.onEvent = (event: any) => {
+        observe(event);
+        if (!submitted && event.method === "headless/queueChanged" && event.params.type === "queued"
+          && event.params.entry.id === `waiting${position % count}`) {
+          submitted = true;
+          submit();
+        }
+      };
+      if (competitorFirst) { submitted = true; submit(); await runtime.work; }
+      const result = await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" });
+      expect(submitted).toBe(true);
+      if (result.disposition === "busy") {
+        // A refusal cannot silently spend the operator's Retry decision.
+        expect(backend.queuedTurns("native")).toEqual(before);
+        expect(store.get("waiting0")).toEqual(accepted);
+        runtime.notification({ method: "turn/completed", params: { threadId: "other", turn: { id: store.get("competitor").turnId, status: "completed" } } });
+        await settle();
+        expect(backend.queuedTurns("native")).toEqual(before);
+        expect(sent).toEqual(["first", "competitor"]);
+      } else {
+        expect(result).toMatchObject({ disposition: "started", turnId: "turn3" });
+        expect(store.get("waiting0")).toMatchObject({ status: "running", fingerprint: accepted.fingerprint });
+        expect(store.get("competitor").status).toBe("queued");
+        expect(sent).toEqual(["first", "waiting0"]);
+        terminal(runtime, result.turnId, "failed"); await settle();
+        expect(sent).toEqual(["first", "waiting0", "competitor"]);
+        expect(backend.queuedTurns("native").every((entry: any) => entry.manualReleaseRequired)).toBe(true);
+      }
+    });
+  }), { numRuns: 12, examples: [[1, 0, false], [1, 0, true]] });
+});
