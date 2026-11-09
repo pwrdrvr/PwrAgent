@@ -62,7 +62,10 @@ test("desktop refreshes portable inventory and search projections for the next p
       expect(JSON.parse(payload)).toMatchObject([{ id: "portable-offline", title: "Portable offline inventory" }]);
       expect(payload).not.toContain("Invented legacy prompt");
       expect(JSON.parse(payload)[0]).not.toHaveProperty("summary");
-      expect(JSON.parse(raw.prepare("SELECT payload FROM provider_thread_snapshots WHERE backend = 'codex'").pluck().get() as string))
+      // Transcript/search reads can finish while startup executable discovery
+      // still holds the separate provider-inventory refresh. Observe its
+      // persisted result before closing the owner; reads cannot refresh it.
+      await expect.poll(() => JSON.parse(raw.prepare("SELECT payload FROM provider_thread_snapshots WHERE backend = 'codex'").pluck().get() as string))
         .toMatchObject([{ id: "thread-smoke", title: "Replay smoke thread" }]);
     } finally { raw.close(); }
     await app.closeApplication();
