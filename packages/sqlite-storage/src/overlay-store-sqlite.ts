@@ -1557,6 +1557,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return rows.map((row) => ownerThreadRecord(JSON.parse(row.payload)));
   }
 
+  readUnreadBaseline(): Readonly<Record<string, number>> {
+    return structuredClone(this.readNavigationUnreadBaseline()?.seenUpdatedAt ?? {});
+  }
+
   async updateThreadMetadata(identity: OwnerThreadIdentity, patch: OwnerThreadMetadataPatch): Promise<OwnerThreadRecord> {
     return this.mergeOwnerThreadMetadata(identity, patch);
   }

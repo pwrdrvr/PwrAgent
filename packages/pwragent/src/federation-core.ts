@@ -105,6 +105,7 @@ export function openOutpostProfileRuntime(params: {
           getThreadMetadata: identity => storage.threads.readOwnerThreadMetadata(identity),
           listThreadMetadata: () => storage.threads.readOwnerThreadMetadataList(),
           updateThreadMetadata: (identity, patch) => storage.threads.mergeOwnerThreadMetadata(identity, patch),
+          readUnreadBaseline: () => storage.threads.readUnreadBaseline(),
         },
         jobs: {
           get: id => storage.jobs.get(id), list: () => storage.jobs.list(), count: () => storage.jobs.count(),

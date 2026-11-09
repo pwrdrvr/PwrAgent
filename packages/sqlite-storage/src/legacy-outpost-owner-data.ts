@@ -35,8 +35,9 @@ export function outpostThreadProjection(record: OwnerThreadRecord): OutpostThrea
     sandbox: record.executionMode === "auto" ? "workspace-write" : record.executionMode === "full-access" ? "danger-full-access" : "read-only",
     parentThreadId: record.parent?.threadId, parentThreadBackend: record.parent?.backend, parentThreadInstanceId: record.parent?.instanceId };
   for (const field of FIELDS) if (record[field] !== undefined) thread[field] = structuredClone(record[field]);
-  if (record.archivedAt !== undefined || record.restoredAt !== undefined) {
-    thread.archived = (record.archivedAt ?? -Infinity) > (record.restoredAt ?? -Infinity);
+  if (record.archivedAt !== undefined || record.archiveRetentionStartedAt !== undefined || record.restoredAt !== undefined) {
+    thread.archived = Math.max(record.archivedAt ?? -Infinity, record.archiveRetentionStartedAt ?? -Infinity)
+      > (record.restoredAt ?? -Infinity);
   }
   return thread;
 }

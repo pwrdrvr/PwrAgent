@@ -104,7 +104,7 @@ export class HeadlessBackend {
       reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier,
       pinnedRank: thread.pinnedRank, parentThreadId: thread.parentThreadId, parentThreadBackend: thread.parentThreadBackend,
       parentThreadInstanceId: thread.parentThreadInstanceId, subthreadOrder: thread.subthreadOrder, subthreadsCollapsed: thread.subthreadsCollapsed,
-      inbox: { inInbox: updatedAt > (thread.seenUpdatedAt ?? thread.seenAt ?? 0), reason: "updated-since-seen" },
+      inbox: { inInbox: updatedAt > this.threads.seenWatermark(thread), reason: "updated-since-seen" },
       workspaceHandoff: { available: false, unavailableReason: "Workspace handoff is unavailable on this outpost" } };
   }
 
@@ -241,9 +241,9 @@ export class HeadlessBackend {
           if (params[key] !== undefined && (!Number.isFinite(params[key]) || params[key] < 0)) throw new Error(`Invalid ${key}`);
         }
         // An omitted watermark keeps the stored one (see MarkThreadSeenRequest).
-        // A thread never given one is pinned to the seenAt it was judged by,
+        // A thread never given one is pinned to the baseline/seenAt it was judged by,
         // so recording a new seenAt cannot change its unread state.
-        thread.seenUpdatedAt = params.seenUpdatedAt ?? thread.seenUpdatedAt ?? thread.seenAt ?? 0;
+        thread.seenUpdatedAt = params.seenUpdatedAt ?? this.threads.seenWatermark(thread);
         thread.seenAt = params.seenAt ?? Date.now();
         this.persist(thread);
         this.publish({ backend: "codex", notification: { method: "navigation/thread/seen",

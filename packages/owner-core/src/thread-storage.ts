@@ -67,6 +67,8 @@ export interface ImmediateOwnerThreadRegistry {
   getThreadMetadata(identity: OwnerThreadIdentity): OwnerThreadRecord | undefined;
   listThreadMetadata(): OwnerThreadRecord[];
   updateThreadMetadata(identity: OwnerThreadIdentity, patch: OwnerThreadMetadataPatch): OwnerThreadRecord;
+  /** Detached immutable startup watermarks, keyed by qualified thread identity. */
+  readUnreadBaseline(): Readonly<Record<string, number>>;
 }
 
 export const OWNER_THREAD_METADATA_FIELDS = [
