@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
+import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -32,6 +33,8 @@ it("budgets Claude inventory publication, legacy scrubbing and passive multi-pro
     const scrub = await measureSqliteWrites(() => inventory.list());
     expectSqliteWriteBudget({ budgetFile, scenario: "claude-legacy-inventory-scrub", note: "First read of one older Claude inventory removes transient text in one commit", writes: scrub.writes });
     expect(scrub.result[0]?.threads[0]).not.toHaveProperty("summary");
+    new AcpSessionStore(db).upsertSession({ backendId: "acp:removed", sessionId: "native-acp", title: "Actual ACP metadata",
+      cwd: root, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
     profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
     const owner = new HeadlessBackend({ workspace: root, store, onFailure(error: unknown) { throw error; },
@@ -40,6 +43,7 @@ it("budgets Claude inventory publication, legacy scrubbing and passive multi-pro
     const passive = await measureSqliteWrites(async () => {
       for (let i = 0; i < 1000; i++) {
         expect((await owner.handle("resolveThread", ref)).thread.source).toBe("claude");
+        expect((await owner.handle("resolveThread", { backend: "acp:removed", threadId: "native-acp" })).thread.title).toBe("Actual ACP metadata");
         await owner.handle("listThreads", { backend: "all" });
         await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
         await owner.handle("lookupArchivedThreads", { backend: "claude", threadIds: [ref.threadId] });

@@ -120,7 +120,7 @@ export function openOutpostProfileRuntime(params: {
           save: job => storage.jobs.save(job),
         },
         inventory: { list: () => inventory.list(), replace: snapshot => inventory.replace(snapshot) },
-        acpSessions: { getSession: (backend, id) => acpSessions.getSession(backend, id), listAllSessions: () => acpSessions.listAllSessions() },
+        acpSessions: { getSession: (backend, id) => acpSessions.getSession(backend, id), listAllSessions: params => acpSessions.listAllSessions(params) },
       };
     } };
   } catch (error) {

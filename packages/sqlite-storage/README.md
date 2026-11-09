@@ -346,3 +346,30 @@ These boundaries add no timer. Generated conformance
 runs desktop → actual daemon → desktop → actual daemon over one test-owned
 profile/provider, checking native names, pins, parents, seen watermarks and
 archive/restore. The inherited default and conformance fixtures are unchanged.
+
+Outpost profile reads retain backend-qualified Codex, Claude and ACP identities.
+Claude inventories use the same supported-backend codec as the other providers.
+Actual ACP session metadata (including archives and uninstalled backends) is read
+through the shared session port, rather than inferred from an older startup
+inventory. Hidden helpers remain excluded. Desktop and Outpost use the same pure
+ACP summary projection; host path labels stay injected. Unsupported providers
+are listed as unavailable and their execution, transcript and mutation requests
+are refused before reaching Codex. This grants no cross-instance reach.
+
+Desktop native name events update an existing non-Codex inventory row only when
+its title or provenance changes. They do not create incomplete inventories or
+change membership freshness. Reserved owner observation sequences prevent a late
+provider list from restoring an older name. Desktop startup reads use compact
+overlay batches to project canonical Codex titles over retained inventories;
+only a fresh provider response may contradict a native acknowledgement.
+
+`outpost-provider-read-write-budgets.json` measures one Claude inventory boundary
+as one commit/8,272 WAL bytes (about 0.008272 MB/day at one/day), a one-time legacy
+Claude scrub as one commit/4,120 bytes, and each changed Claude or ACP native name
+as one commit/4,120 bytes (about 0.412 MB/day at 100/day). One thousand repeated
+native events and one thousand rounds of retained profile reads, including actual
+ACP discovery, make zero commits. No timer or schema change is added. Generated
+actual-owner conformance checks colliding Codex/Claude/ACP identities, native
+names, late lists and metadata through desktop → daemon → desktop. Supported
+Electron verifies that desktop ACP renames and archives reach the actual Outpost
+registry without launching an ACP process.

@@ -81,8 +81,11 @@ export class OutpostThreadRegistry {
     const records = this.storage.listThreadMetadata().filter(record => backend === "all" || record.backend === backend);
     const byId = new Map(records.map(record => [buildThreadIdentityKey(record.backend, record.threadId), record]));
     const natives = new Map([...this.inventory].filter(([, thread]) => backend === "all" || thread.source === backend));
-    for (const session of this.acpSessions?.listAllSessions() ?? []) {
-      if (backend === "all" || session.backendId === backend) natives.set(buildThreadIdentityKey(session.backendId, session.sessionId), this.acpThread(session));
+    const sessions = backend === "all" || backend.startsWith("acp:") ? this.acpSessions?.listAllSessions({ includeHidden: true }) ?? [] : [];
+    for (const session of sessions) {
+      const key = buildThreadIdentityKey(session.backendId, session.sessionId);
+      if (session.hidden) { natives.delete(key); byId.delete(key); }
+      else if (backend === "all" || session.backendId === backend) natives.set(key, this.acpThread(session));
     }
     const identities = new Map([...natives].map(([key, thread]) => [key, { backend: thread.source, threadId: thread.id }]));
     for (const [key, record] of byId) identities.set(key, record);

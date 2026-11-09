@@ -50,6 +50,7 @@ it("discovers actual ACP session metadata without an installed agent or a retain
       createdAt: 1, updatedAt: 2, executionMode, status: "idle", ...(archived ? { archivedAt: 3 } : {}) });
     sessions.upsertSession({ backendId: "acp:removed", sessionId: "hidden", title: "Hidden helper", hidden: true,
       createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
+    await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "acp:removed", threadId: "hidden" }, { pinnedRank: "1024" });
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     try {
       const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
@@ -59,6 +60,7 @@ it("discovers actual ACP session metadata without an installed agent or a retain
       expect(detail.identity).toBe(archived ? "archived" : "present");
       expect(detail.thread).toMatchObject({ id: "same-id", source: "acp:removed", title: name, titleSource: "derived", executionMode });
       expect((await owner.handle("resolveThread", { backend: "acp:removed", threadId: "hidden" })).thread).toBeUndefined();
+      expect((await owner.handle("listThreads", { backend: "all" })).threads.some((thread: AppServerThreadSummary) => thread.id === "hidden")).toBe(false);
       sessions.upsertSession({ ...sessions.getSession("acp:removed", "same-id")!, title: `Changed ${name}`, archivedAt: undefined });
       expect((await owner.handle("resolveThread", ref)).thread.title).toBe(`Changed ${name}`);
     } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }

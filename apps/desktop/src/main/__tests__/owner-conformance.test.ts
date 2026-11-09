@@ -432,7 +432,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           release();
           await stale;
           await desktop.client.setThreadPin({ ...ref, pinnedRank: backend === "claude" ? "1024" : "2048" });
-          const before = (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread!;
+          const before = (await registry.listThreads({ backend, forceRefresh: true })).find(thread => thread.id === threadId)!;
           await desktop.client.markThreadSeen({ ...ref, seenAt: 10_000, seenUpdatedAt: before.updatedAt });
           expected.set(backend, { id: threadId, source: backend, title: `${backend === "claude" ? "Claude" : "ACP"} New ${suffix}`,
             titleSource: "explicit", pinnedRank: backend === "claude" ? "1024" : "2048", inbox: { inInbox: false } });

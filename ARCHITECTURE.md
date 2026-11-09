@@ -452,6 +452,15 @@ publishes them through the shared naming lifecycle before discovery completes.
 An acknowledged Outpost rename reaches Codex before owner success. Desktop's
 name-event pipeline retains the same title/provenance fact; a later differing
 native name wins over its old acknowledgement. No transcript is stored.
+Retained profile reads qualify every identity by backend, including Claude and
+ACP. Outpost reads actual active and archived ACP session metadata through the
+shared storage port, including uninstalled agents, with the same pure summary
+projection desktop uses. Hidden helpers stay private. Other provider execution
+and transcripts remain unavailable on Outpost; discovery does not start them.
+Desktop native name events update already published non-Codex inventory rows
+without changing membership freshness. Existing owner observation sequences
+fence late lists, and startup hydration projects canonical Codex titles through
+compact overlay batches before publishing retained rows.
 Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
 ports through private desktop bindings at the existing runtime construction
 sites. The model-settings-recents helper is shared by to-do dispatch and the
