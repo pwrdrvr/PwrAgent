@@ -28,7 +28,7 @@ function desktop(): Fixture {
   };
 }
 
-async function outpost(): Promise<Fixture> {
+async function outpost(records: OwnerThreadRecord[] = []): Promise<Fixture> {
   const url = pathToFileURL(path.join(process.cwd(), "packages/pwragent/src/federation-backend.js")).href;
   const { HeadlessBackend } = await import(/* @vite-ignore */ url);
   const root = mkdtempSync(path.join(os.tmpdir(), "owner-storage-sqlite-"));
@@ -36,6 +36,9 @@ async function outpost(): Promise<Fixture> {
   mkdirSync(directory, { mode: 0o700 });
   const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
   const storage = profile.openOwnerStorage(directory, { version: 1, workspace: root, codexHome: path.join(root, "codex") });
+  for (const { backend, threadId, ...metadata } of records) {
+    storage.threads.updateThreadMetadata({ backend, threadId }, metadata);
+  }
   const runtime = { workspace: root, store: { directory: path.join(directory, "jobs"), jobs: new Map(), threadRegistry: storage.threads },
     onFailure(error: unknown) { throw error; } };
   const open = () => new HeadlessBackend(runtime, () => {}).threadRegistry as OwnerThreadRegistry;
@@ -161,8 +164,40 @@ it("preserves Outpost tool metadata across canonical reopen", async () => {
       seenAt: 20, seenUpdatedAt: 10, archived: true, messagingFileTools: true });
     await registry.updateThreadMetadata(identity, { pinnedRank: "a0" });
     expect(await fixture.reopen().getThreadMetadata(identity)).toMatchObject({ messagingFileTools: true, executionMode: "auto", pinnedRank: "a0" });
-    await expect(registry.getThreadMetadata({ ...identity, backend: "claude" })).rejects.toThrow("Codex threads only");
+    await expect(registry.getThreadMetadata({ ...identity, backend: "claude" })).resolves.toBeUndefined();
+    await expect(registry.updateThreadMetadata({ ...identity, backend: "claude" }, { pinnedRank: "b0" })).rejects.toThrow("Codex threads only");
   } finally { fixture.close(); }
+});
+
+it("reads backend-qualified canonical metadata without enabling unsupported-provider writes", async () => {
+  const metadata = fc.record({
+    title: fc.record({ text: fc.string(), source: fc.constantFrom("derived" as const, "explicit" as const) }),
+    pinnedRank: fc.string(), seenAt: timestamp, seenUpdatedAt: timestamp, archived: fc.boolean(),
+  });
+  await fc.assert(fc.asyncProperty(fc.tuple(metadata, metadata, metadata), async (facts) => {
+    const records: OwnerThreadRecord[] = (["codex", "claude", "acp:fixture"] as const).map((backend, index) => ({
+      ...identity, backend, executionMode: "auto", ...facts[index]!,
+    }));
+    // Seed the owner's port, as a desktop using this same profile would.
+    const fixture = await outpost(records);
+    try {
+      for (const registry of [fixture.registry, fixture.reopen()]) {
+        expect((await registry.listThreadMetadata()).sort((a, b) => a.backend.localeCompare(b.backend)))
+          .toEqual([...records].sort((a, b) => a.backend.localeCompare(b.backend)));
+        for (const record of records) {
+          expect(await registry.getThreadMetadata(record)).toEqual(record);
+          const returned = (await registry.getThreadMetadata(record))!;
+          returned.title!.text = "mutated read";
+          expect(await registry.getThreadMetadata(record)).toEqual(record);
+          if (record.backend !== "codex") {
+            await expect(registry.updateThreadMetadata(record, { title: { text: "Rejected", source: "explicit" } }))
+              .rejects.toThrow("Codex threads only");
+            expect(await registry.getThreadMetadata(record)).toEqual(record);
+          }
+        }
+      }
+    } finally { fixture.close(); }
+  }), { numRuns: 25 });
 });
 
 it("budgets one atomic metadata command and zero writes for unchanged facts and reads", async () => {
