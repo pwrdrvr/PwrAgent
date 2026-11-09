@@ -27,6 +27,114 @@ async function fixture(work: (runtime: any, backend: any, store: any) => Promise
 
 const request = { backend: "codex", threadId: "native", expectedTurnId: "turn", requestId: "steer", input: [{ type: "text", text: "one input" }] };
 
+const originFrom = (requestId: string) => ({ kind: "messaging", causalMessagingSource: { ownerId: "owner", requestId } });
+const messagingCall = (operation = "send_private_response") => ({ operation, context: { backend: "codex", threadId: "native", turnId: "turn" }, args: {} });
+
+actualHost("attributed steering fences messaging until native acceptance and durable origin retention settle", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.constantFrom("send_private_response", "send_messaging_file", "read_messaging_pdf", "list_messaging_surfaces"),
+    fc.boolean(), fc.boolean(), fc.integer({ min: 1, max: 4 }),
+    async (operation, refuseNative, refuseRetention, copies) => {
+      await fixture(async (runtime, backend, store) => {
+        const original = originFrom("source-a");
+        runtime.save({ ...store.get("job"), messageOrigin: original });
+        const forwarded: any[] = [];
+        runtime.requestMessaging = async (call: unknown) => { forwarded.push(call); return { ok: true }; };
+        await runtime.messagingRequest(messagingCall(operation));
+        expect(forwarded[0].context.causalMessagingSource).toEqual(original.causalMessagingSource);
+        let entered!: () => void;
+        const started = new Promise<void>(resolve => { entered = resolve; });
+        let release!: () => void;
+        const decision = new Promise<void>(resolve => { release = resolve; });
+        let sends = 0;
+        runtime.codex = { steerTurn: async () => {
+          sends++; entered(); await decision;
+          if (refuseNative) throw new Error("native refused");
+          return { threadId: "native", turnId: "turn" };
+        } };
+        const save = store.save.bind(store);
+        let refusals = refuseRetention ? 1 : 0;
+        store.save = (job: any) => {
+          if (job.messageOrigin?.causalMessagingAmbiguous && refusals-- > 0) throw new Error("origin refused");
+          return save(job);
+        };
+        const params = { ...request, messageOrigin: originFrom("source-b") };
+        const pending = Promise.allSettled(Array.from({ length: copies }, () => backend.handle("steerTurn", params)));
+        try {
+          await started;
+          // Codex may issue the tool after accepting B but before resolving its RPC.
+          expect(await runtime.messagingRequest(messagingCall(operation))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+          expect(forwarded).toHaveLength(1);
+          expect(store.get("job").messageOrigin).toEqual(original);
+        } finally { release(); await pending; }
+        const outcomes = await pending;
+        if (refuseNative || refuseRetention) expect(outcomes.every(result => result.status === "rejected")).toBe(true);
+        if (!refuseNative && refuseRetention) {
+          expect(await runtime.messagingRequest(messagingCall(operation))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+          expect(forwarded).toHaveLength(1);
+          expect(store.get("job").messageOrigin).toEqual(original);
+          await backend.handle("steerTurn", params);
+        }
+        expect(sends).toBe(1);
+        await runtime.messagingRequest(messagingCall(operation));
+        expect(forwarded).toHaveLength(2);
+        if (refuseNative) {
+          expect(forwarded[1].context.causalMessagingSource).toEqual(original.causalMessagingSource);
+          expect(store.get("job").messageOrigin).toEqual(original);
+        } else {
+          expect(forwarded[1].context.causalMessagingSource).toBeUndefined();
+          expect(forwarded[1].context.causalMessagingAmbiguous).toBe(true);
+          expect(store.get("job").messageOrigin.causalMessagingAmbiguous).toBe(true);
+        }
+      });
+    },
+  ), { numRuns: 20, examples: [["send_private_response", false, true, 2], ["send_private_response", true, false, 1]] });
+});
+
+actualHost("each concurrent attributed steer owns its messaging fence until its own decision settles", async () => {
+  await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 0, max: 3 }), { minLength: 2, maxLength: 4 }), fc.boolean(), async (order, refuseOdd) => {
+    await fixture(async (runtime, backend, store) => {
+      runtime.save({ ...store.get("job"), messageOrigin: originFrom("source-a") });
+      let forwards = 0;
+      runtime.requestMessaging = async () => { forwards++; return { ok: true }; };
+      const decisions = new Map<number, () => void>();
+      const pending = new Map<number, Promise<unknown>>();
+      const unsettled = new Set(order);
+      runtime.codex = { steerTurn: async (params: any) => {
+        const id = Number(params.input[0].text);
+        await new Promise<void>(resolve => { decisions.set(id, resolve); });
+        if (refuseOdd && id % 2) throw new Error("native refused");
+        return { threadId: "native", turnId: "turn" };
+      } };
+      try {
+        for (const id of [...order].sort()) {
+          let entered!: () => void;
+          const started = new Promise<void>(resolve => { entered = resolve; });
+          const submit = runtime.codex.steerTurn;
+          runtime.codex.steerTurn = (params: any) => { const result = submit(params); entered(); return result; };
+          const result = backend.handle("steerTurn", { ...request, requestId: `steer-${id}`, input: [{ type: "text", text: String(id) }], messageOrigin: originFrom(`source-${id}`) });
+          pending.set(id, result);
+          void result.catch(() => {});
+          await started;
+          runtime.codex.steerTurn = submit;
+        }
+        for (const id of order) {
+          expect(await runtime.messagingRequest(messagingCall())).toMatchObject({ ok: false, error: { code: "forbidden" } });
+          decisions.get(id)!();
+          await Promise.allSettled([pending.get(id)!]);
+          unsettled.delete(id);
+          const result = await runtime.messagingRequest(messagingCall());
+          expect(result.ok).toBe(unsettled.size === 0);
+          expect(forwards).toBe(unsettled.size === 0 ? 1 : 0);
+        }
+      } finally {
+        for (const release of decisions.values()) release();
+        await Promise.allSettled(pending.values());
+      }
+    });
+  }), { numRuns: 16, examples: [[[0, 1], true], [[1, 0], true]] });
+});
+
 actualHost("actual Outpost coalesces accepted steering and retries only refused origin completion", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 6 }), fc.boolean(), fc.boolean(), async (copies, refuseOrigin, control) => {
     await fixture(async (runtime, backend, store) => {
