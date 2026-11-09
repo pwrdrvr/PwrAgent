@@ -44,6 +44,60 @@ const queued = async (backend: any, text = "original") => backend.handle("backen
 const replace = (backend: any, queueEntryId: string, text: string, id = "replacement", source = "sender-instance", messageOrigin: any = origin) =>
   backend.handle("backend.replaceQueuedMessage", { ...ref, queueEntryId, input: [{ type: "text", text }], messageOrigin }, envelope(id, source));
 
+it.skipIf(process.platform === "win32")("replacing A before B keeps the new acceptance before its follow-up at the provider", async () => {
+  await fixture(async (runtime, backend, store, _profile, events, sent) => {
+    const original = await queued(backend, "A"), accepted = store.get(original.queueEntryId);
+    runtime.submit({ id: "B", threadId: ref.threadId, prompt: "B" });
+    const replacement = await replace(backend, original.queueEntryId, "A edited");
+    expect(backend.queuedTurns(ref.threadId).map((entry: any) => entry.queueEntryId)).toEqual([replacement.queueEntryId, "B"]);
+    expect(events.findLast(event => event.method === "thread/turnQueue/updated" && event.params.queueEntryId === replacement.queueEntryId)?.params.position).toBe(1);
+    expect(store.get(accepted.id)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+    expect(replacement.queueEntryId).not.toBe(accepted.id);
+    terminal(runtime); await settle();
+    expect(sent).toEqual(["active", "A edited"]);
+    terminal(runtime); await settle();
+    expect(sent).toEqual(["active", "A edited", "B"]);
+  });
+});
+
+it.skipIf(process.platform === "win32")("generated replacements preserve the live FIFO and neighbors across paused and held queues", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 2, maxLength: 5 }), fc.boolean(),
+    fc.array(fc.nat(20), { minLength: 2, maxLength: 6 }), async (pauses, held, replacements) => {
+      await fixture(async (runtime, backend, store, _profile, events, sent) => {
+        const model: Array<{ id: string; prompt: string; paused: boolean }> = [];
+        for (const [index, paused] of pauses.entries()) {
+          const prompt = `waiting-${index}`;
+          const accepted = await backend.handle("backend.startTurn", { ...ref, input: [{ type: "text", text: prompt }], messageOrigin: origin }, envelope(prompt));
+          model.push({ id: accepted.queueEntryId, prompt, paused });
+          if (paused) await runtime.setQueuedTurnPaused({ queueEntryId: accepted.queueEntryId, paused: true });
+        }
+        if (held) { terminal(runtime, "failed"); await settle(); }
+        for (const [step, selected] of replacements.entries()) {
+          const index = selected % model.length, original = model[index]!, accepted = store.get(original.id);
+          const neighbors = model.filter(entry => entry !== original).map(entry => store.get(entry.id));
+          const prompt = `${original.prompt} edited-${step}`;
+          const replacement = await replace(backend, original.id, prompt, `fifo-replacement-${step}`);
+          model[index] = { ...original, id: replacement.queueEntryId, prompt };
+          expect(backend.queuedTurns(ref.threadId).map((entry: any) => ({ id: entry.queueEntryId, paused: Boolean(entry.paused) })))
+            .toEqual(model.map(({ id, paused }) => ({ id, paused })));
+          expect(events.findLast(event => event.method === "thread/turnQueue/updated" && event.params.queueEntryId === replacement.queueEntryId && event.params.status === "queued")?.params.position).toBe(index + 1);
+          expect(store.get(accepted.id)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+          expect(neighbors.map(job => store.get(job.id))).toEqual(neighbors);
+          expect(sent).toEqual(["active"]);
+        }
+        for (const entry of model.filter(entry => entry.paused)) await runtime.setQueuedTurnPaused({ queueEntryId: entry.id, paused: false });
+        if (held) expect(await runtime.releaseQueuedTurn({ queueEntryId: model[0]!.id })).toMatchObject({ disposition: "started" });
+        else { terminal(runtime); await settle(); }
+        for (const [index, entry] of model.entries()) {
+          expect(sent).toEqual(["active", ...model.slice(0, index + 1).map(entry => entry.prompt)]);
+          expect(store.get(entry.id).status).toBe("running");
+          terminal(runtime); await settle();
+        }
+        expect(sent).toEqual(["active", ...model.map(entry => entry.prompt)]);
+      });
+    }), { numRuns: 12 });
+});
+
 it.skipIf(process.platform === "win32")("generated sender replacements cancel immutable acceptance before accepting a new job and never replay old input", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.string({ minLength: 1, maxLength: 400 }).filter(text => Boolean(text.trim())), { minLength: 2, maxLength: 6 }), async edits => {
     await fixture(async (runtime, backend, store, _profile, events, sent) => {
