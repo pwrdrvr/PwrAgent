@@ -1,11 +1,15 @@
 import path from "node:path";
+import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
+import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
+import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,4 +54,53 @@ test("desktop upgrades a profile opened by portable SQLite and retains its owner
     await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("The upgraded profile remains usable.");
     await expect(app.window.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
   } finally { await app.close(); }
+});
+
+
+test("desktop takes over a retired portable profile lease and releases it for the next portable owner", async () => {
+  const retiredAt = Date.now() - RUNTIME_LEASE_DEAD_OWNER_GRACE_MS - 1;
+  const app = await launchElectronApp({
+    secretStorage: "memory",
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot), { profileName: "default" });
+      try {
+        const store = new AppRuntimeInstanceStore(db);
+        store.recordInstanceStart({ instanceId: "portable-owner", processId: process.pid,
+          profileName: "default", startedAt: retiredAt - 1, desiredMessagingEnabled: false });
+        expect(store.acquireFederationLease({ instanceId: "portable-owner", now: retiredAt - 1 }).acquired).toBe(true);
+        store.markInstanceExited({ instanceId: "portable-owner", now: retiredAt });
+      } finally { db.close(); }
+      // Client mode acquires the profile owner lease without opening a listener.
+      await writeFile(configTomlPathForHomeRoot(homeRoot), '[federation]\nmode = "client"\n');
+    },
+  });
+  const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+  const store = new AppRuntimeInstanceStore(db);
+  try {
+    const health = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      await api.setFederationEnabled!(true);
+      return await api.readFederationHealth!();
+    });
+    expect(health.health.enabled, JSON.stringify(health)).toBe(true);
+    expect(store.getFederationLease()?.ownerInstanceId, JSON.stringify({
+      enabled: health.health.enabled, role: health.health.role, status: health.health.status,
+      reason: health.health.unavailableReason, holder: health.health.leaseHolder,
+    })).not.toBe("portable-owner");
+    const lease = store.getFederationLease()!;
+    expect(lease.status).toBe("active");
+    expect(store.getInstance(lease.ownerInstanceId)?.processId).toBe(app.electronApp.process().pid);
+    expect(store.getInstance("portable-owner")?.exitedAt).toBe(retiredAt);
+    store.recordInstanceStart({ instanceId: "portable-challenger", processId: process.pid,
+      profileName: "default", startedAt: Date.now(), desiredMessagingEnabled: false });
+    expect(store.acquireFederationLease({ instanceId: "portable-challenger", now: Date.now(),
+      isOwnerAlive: () => true })).toMatchObject({ acquired: false, holder: { ownerInstanceId: lease.ownerInstanceId } });
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    // Keep the WAL reader open while the supported harness quits Electron.
+    await app.closeApplication();
+    expect(store.getFederationLease()).toMatchObject({ ownerInstanceId: lease.ownerInstanceId, status: "released" });
+    expect(store.acquireFederationLease({ instanceId: "portable-challenger", now: Date.now() }).acquired).toBe(true);
+  } finally { db.close(); await app.close(); }
 });

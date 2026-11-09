@@ -410,7 +410,12 @@ the same profile DB safely thanks to sqlite WAL mode.
 
 `packages/sqlite-storage` owns the profile database opener, schema and migrations,
 including the sub-agent and usage-activity table helpers and write instrumentation.
-Desktop's `main/storage/state-db.ts` binds that implementation; state-internal
+The package also owns `AppRuntimeInstanceStore`, implementing owner-core runtime
+lease ports with injected host liveness and the existing PID-owned lease
+transactions. Desktop constructs it through a private `main/storage` binding at
+the existing app-state lifecycle site. Both hosts can use this same storage
+without moving runtime identity observation into the database.
+Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
 binding. Owner/application code continues to use storage ports. The package has
@@ -565,6 +570,7 @@ graph TB
     Outpost -.-> OwnerCore
     OwnerCore --> Shared
     SqliteStorage --> Shared
+    SqliteStorage --> OwnerCore
     Federation --> Shared
     AgentTools --> Shared
     MsgProviders --> MsgInterface

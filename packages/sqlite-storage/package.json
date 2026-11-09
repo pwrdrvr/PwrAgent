@@ -8,6 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
+    "@pwragent/owner-core": "workspace:*",
     "@pwragent/shared": "workspace:*"
   },
   "peerDependencies": {

@@ -119,11 +119,13 @@ beforeAll(async () => {
     ipcStateCases.push({ from, to, forbidden: true });
   }
   for (const area of ["ipc", "app-server", "future-area", "state", "storage"]) {
-    const to = "apps/desktop/src/main/storage/state-db.ts";
-    const from = `apps/desktop/src/main/${area}/nested/sqlite-binding.ts`;
-    source(to, 'export * from "@pwragent/sqlite-storage";');
-    source(from, 'export * from "../../storage/state-db";');
-    ipcStateCases.push({ from, to, forbidden: !["state", "storage"].includes(area) });
+    for (const binding of ["state-db", "app-runtime-instance-store"]) {
+      const to = `apps/desktop/src/main/storage/${binding}.ts`;
+      const from = `apps/desktop/src/main/${area}/nested/sqlite-binding-${binding}.ts`;
+      source(to, 'export * from "@pwragent/sqlite-storage";');
+      source(from, `export * from "../../storage/${binding}";`);
+      ipcStateCases.push({ from, to, forbidden: !["state", "storage"].includes(area) });
+    }
   }
 
   const settingsService = "apps/desktop/src/main/settings/desktop-settings-service.js";

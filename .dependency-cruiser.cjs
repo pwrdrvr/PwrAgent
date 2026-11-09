@@ -236,7 +236,7 @@ module.exports = {
         path: "^apps/desktop/src/main/(?!__tests__/|state/|storage/)",
       },
       to: {
-        path: "^(?:apps/desktop/src/main/(?:state/|storage/state-db\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
+        path: "^(?:apps/desktop/src/main/(?:state/|storage/(?:state-db|app-runtime-instance-store)\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
       },
     },
     {
