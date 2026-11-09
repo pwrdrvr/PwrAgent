@@ -463,6 +463,12 @@ retained only while open; closed rows keep identity and times. First-record and
 first-seen identity, batched writes and open question/to-do/review seen retention
 preserve every SQL statement and transaction. Live server requests remain owned
 by the registry, rather than reconstructed from storage.
+Shared generic `SqliteTokenMiserStorage` implements owner-core accounting ports
+through a private desktop binding. The existing runtime factory still constructs
+the host service at its original lifecycle site. Object/observation identities,
+ordering, conditional updates, archive generations and immediate transactions
+are unchanged. Safe content projection, legacy filesystem migration/cleanup,
+original-output caches and buffered replay accounting remain with the service.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
