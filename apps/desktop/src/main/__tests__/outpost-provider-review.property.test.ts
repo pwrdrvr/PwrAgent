@@ -13,10 +13,11 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 
 const backends = ["codex", "claude", "acp:removed"] as const;
+const threadId = (index = 0) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
 afterEach(() => vi.unstubAllEnvs());
 
-function native(source: AppServerBackendKind, id = "same-id"): AppServerThreadSummary {
+function native(source: AppServerBackendKind, id = threadId()): AppServerThreadSummary {
   return { id, source, title: `${source} ${id}`, titleSource: "explicit", createdAt: 10, updatedAt: 20,
     threadStatus: "idle", linkedDirectories: [], executionMode: "default" };
 }
@@ -41,7 +42,7 @@ it("provider-scoped lens pages and counts match an independent identity inventor
     await fc.assert(fc.asyncProperty(fc.tuple(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 1, max: 4 }),
       fc.integer({ min: 1, max: 4 })), async sizes => {
       const expected = backends.flatMap((backend, index) => {
-        const threads = Array.from({ length: sizes[index]! }, (_, id) => native(backend, `thread-${id}`));
+        const threads = Array.from({ length: sizes[index]! }, (_, id) => native(backend, threadId(id)));
         f.inventory.replace({ backend, observedAt: 1, threads });
         return threads.map(thread => ({ backend, threadId: thread.id }));
       });
@@ -69,7 +70,7 @@ it("restored provider summaries omit historical archive stamps and remain in act
   try {
     await fc.assert(fc.asyncProperty(fc.nat(10000), fc.integer({ min: 1, max: 10000 }), async (archivedAt, elapsed) => {
       for (const source of ["claude", "acp:removed"] as const) {
-        const ref = { backend: source, threadId: "same-id" };
+        const ref = { backend: source, threadId: threadId() };
         f.inventory.replace({ backend: source, observedAt: 1, threads: [{ ...native(source), archivedAt }] });
         if (source === "acp:removed") f.sessions.upsertSession({ backendId: source, sessionId: ref.threadId,
           title: "ACP archive", titleSource: "explicit", createdAt: 10, updatedAt: 20, status: "idle", executionMode: "default", archivedAt });
@@ -92,7 +93,7 @@ it("restored provider summaries omit historical archive stamps and remain in act
         await f.desktop.setThreadArchiveTombstone({ ...ref, archivedAt: archivedAt + elapsed + 1 });
         expect((await f.reopen().handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity).toBe("archived");
         expect((await f.reopen().handle("lookupArchivedThreads", { backend: source, threadIds: [ref.threadId] })).threads[0].archivedAt)
-          .toBe(archivedAt);
+          .toBe(source === "claude" ? archivedAt + elapsed + 1 : archivedAt);
       }
     }), { numRuns: 20, examples: [[0, 1]] });
   } finally { f.close(); }
@@ -106,21 +107,26 @@ it("retained provider status controls seen Attention membership while Codex keep
       const projected = status === "active" ? "active" : status === "unknown" ? "unknown" : "idle";
       f.inventory.replace({ backend: "codex", observedAt: 1, threads: [{ ...native("codex"), threadStatus: "active" }] });
       f.inventory.replace({ backend: "claude", observedAt: 1, threads: [{ ...native("claude"), threadStatus: projected }] });
-      f.sessions.upsertSession({ backendId: "acp:removed", sessionId: "same-id", title: "ACP status", titleSource: "explicit",
+      f.sessions.upsertSession({ backendId: "acp:removed", sessionId: threadId(), title: "ACP status", titleSource: "explicit",
         createdAt: 10, updatedAt: 20, executionMode: "default", status });
-      await f.desktop.updateThreadMetadata({ backend: "claude", threadId: "metadata-only" }, { executionMode: "default" });
-      for (const backend of backends) await f.desktop.updateThreadMetadata({ backend, threadId: "same-id" }, { seenUpdatedAt: 20 });
+      for (const backend of ["claude", "acp:removed"] as const) {
+        await f.desktop.updateThreadMetadata({ backend, threadId: threadId(9) }, { executionMode: "default" });
+      }
+      for (const backend of backends) await f.desktop.updateThreadMetadata({ backend, threadId: threadId() }, { seenUpdatedAt: 20 });
       const { writes } = await measureSqliteWrites(async () => {
         const owner = f.reopen();
-        expect((await owner.handle("resolveThread", { backend: "claude", threadId: "metadata-only" })).thread.threadStatus).toBe("idle");
-        expect((await owner.handle("resolveThread", { backend: "codex", threadId: "same-id" })).thread.threadStatus).toBe("idle");
+        expect(owner.summary(owner.threads.get(threadId(), "claude")).threadStatus).toBe(projected);
+        expect((await owner.handle("resolveThread", { backend: "claude", threadId: threadId(9) })).thread).toBeUndefined();
+        expect((await owner.handle("resolveThread", { backend: "acp:removed", threadId: threadId(9) })).thread.threadStatus).toBe("idle");
+        expect((await owner.handle("resolveThread", { backend: "codex", threadId: threadId() })).thread.threadStatus).toBe("idle");
         for (const backend of ["claude", "acp:removed"] as const) {
-          const ref = { backend, threadId: "same-id" };
-          expect((await owner.handle("resolveThread", ref)).thread).toMatchObject({ threadStatus: projected, inbox: { inInbox: false } });
-          expect((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).thread.threadStatus).toBe(projected);
+          const ref = { backend, threadId: threadId() };
+          const expectedStatus = backend === "claude" ? "idle" : projected;
+          expect((await owner.handle("resolveThread", ref)).thread).toMatchObject({ threadStatus: expectedStatus, inbox: { inInbox: false } });
+          expect((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).thread.threadStatus).toBe(expectedStatus);
           const attention = await owner.handle("getNavigationQueryPage", { protocol: 2, backend, query: { kind: "lens", lens: "attention" } });
-          expect(attention.counts.active).toBe(status === "active" ? 1 : 0);
-          expect(attention.entries.length).toBe(status === "active" ? 1 : 0);
+          expect(attention.counts.active).toBe(expectedStatus === "active" ? 1 : 0);
+          expect(attention.entries.length).toBe(expectedStatus === "active" ? 1 : 0);
         }
       });
       expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });

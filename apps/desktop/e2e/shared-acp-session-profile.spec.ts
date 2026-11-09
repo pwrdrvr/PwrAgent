@@ -25,7 +25,7 @@ test.beforeAll(() => {
 const backend = "acp:gemini" as const;
 const threadId = "portable-acp-session";
 const baselineId = "portable-baseline-acp";
-const restoredId = "portable-restored-active";
+const restoredId = "00000000-0000-4000-8000-000000000004";
 const providerCommands = [{ name: "portable-live", description: "Provider command", aliases: ["live"], input: { hint: "<fixture>" } }];
 const normalizedCommands = [{ name: "portable-live", description: "Provider command", aliases: ["live"],
   argumentHint: "<fixture>", backend, scope: "session", source: "provider" }];
@@ -164,14 +164,15 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
       expect((await owner.handle("lookupArchivedThreads", { backend, threadIds: [threadId] })).threads)
         .toMatchObject([{ id: threadId, source: backend, title: "Desktop renamed portable ACP" }]);
       for (const source of [backend, "claude"] as const) {
+        const active = source === backend;
         const restored = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref: { backend: source, threadId: restoredId } });
         expect(restored.identity).toBe("present");
-        expect(restored.thread).toMatchObject({ source, threadStatus: "active", inbox: { inInbox: false } });
+        expect(restored.thread).toMatchObject({ source, threadStatus: active ? "active" : "idle", inbox: { inInbox: false } });
         expect(restored.thread.archivedAt).toBeUndefined();
         const attention = await owner.handle("getNavigationQueryPage", { protocol: 2, backend: source, query: { kind: "lens", lens: "attention" } });
-        expect(attention.counts).toMatchObject({ total: 1, active: 1, unread: 0 });
+        expect(attention.counts).toMatchObject({ total: active ? 1 : 0, active: active ? 1 : 0, unread: 0 });
         expect(attention.entries.map((entry: { row: { source: string; id: string } }) => [entry.row.source, entry.row.id]))
-          .toEqual([[source, restoredId]]);
+          .toEqual(active ? [[source, restoredId]] : []);
         expect((await owner.handle("getNavigationQueryPage", { protocol: 2, backend: source, query: { kind: "model-inventory" } })).counts.total).toBe(1);
       }
       await expect(owner.handle("startTurn", { backend, threadId })).rejects.toThrow("executes Codex only");
