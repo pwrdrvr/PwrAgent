@@ -216,6 +216,21 @@ it.skipIf(process.platform === "win32")("a fresh owner settles accepted queued a
   }), { numRuns: 4 });
 });
 
+it.skipIf(process.platform === "win32")("an accepted interjection never becomes a second native interrupt owner", async () => {
+  await fixture(async ({ runtime, backend, store, submit, value }: any) => {
+    const accepted = await submit(value("guidance")); await drain();
+    let interrupts = 0;
+    runtime.codex.interruptTurn = async () => { interrupts++; return {}; };
+    await expect(runtime.handle("interrupt", { id: accepted.queueEntryId })).rejects.toThrow("does not own");
+    expect(interrupts).toBe(0);
+    expect(store.get("active").status).toBe("running");
+    expect(runtime.active).toBe("active");
+    await backend.handle("backend.controlActiveTurn", { ...ref, operation: "stop", expectedTurnId: "turn-1", requestId: "owner-stop" });
+    expect(interrupts).toBe(1);
+    expect(store.get("active").status).toBe("interrupting");
+  });
+});
+
 it.skipIf(process.platform === "win32")("a refused steering claim cannot restore waiting input behind shutdown's cancellation sweep", async () => {
   await fixture(async ({ runtime, store, steers, submit, value }: any) => {
     const request = value("claim-stop");
