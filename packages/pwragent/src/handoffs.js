@@ -100,6 +100,7 @@ export function setupHandoffs(federation, directory) {
         await runtime.codex.archiveThread({ threadId });
         const thread = backend.owned(threadId);
         thread.archived = true;
+        thread.archivedAt = Date.now();
         backend.persist(thread);
         backend.invalidate(threadId);
       },

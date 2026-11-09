@@ -28,6 +28,7 @@ export class OutpostThreadRegistry {
     const thread = record ? outpostThreadProjection(record) : { id };
     return { ...(native ? { id, title: native.title, titleSource: native.titleSource,
       createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path,
+      archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
       sandbox: native.executionMode === "auto" ? "workspace-write" : "read-only", model: native.model,
       reasoningEffort: native.reasoningEffort, serviceTier: native.serviceTier, fastMode: native.fastMode } : {}),
       ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)) };
