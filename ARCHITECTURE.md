@@ -352,6 +352,18 @@ only that callback then revokes grants, once. Later origin or cleanup failures a
 reported without replacing the provider outcome. Desktop retains Claude execution,
 runtime/model/environment/MCP/input setup, active sessions and every storage site.
 
+Thread creation acceptance and finalization live in
+`owner-core/thread-creation-lifecycle.ts`. It selects the provider, limits
+connection revocation and workspace rollback to rejected creation, and hands
+accepted identities to binding, pending navigation, metadata, visibility and
+notification ports in the established order. Independent finalization failures
+are reported without rejecting a thread its provider already created. Parent
+notification follows a successful relationship write; visibility uses that saved
+relationship even if its notification fails. Codex owns its start event. Desktop
+retains workspace/environment/model/MCP preparation, provider execution, pending
+summary construction and all existing storage sites. No request identity or
+retry state is introduced.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or
