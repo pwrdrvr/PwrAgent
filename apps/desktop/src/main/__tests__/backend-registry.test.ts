@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
 import { isolatedGitKeys, isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import { FEDERATION_BACKEND_METHODS, FEDERATION_BACKEND_METHOD_CAPABILITIES, registerFederationBackendHandlers, type FederationBackendOperations } from "../federation/federation-backend-bridge";
@@ -12708,12 +12709,10 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await registry.listThreads({ backend: acpBackendId });
-    await registry["applyGeneratedThreadTitle"]({
-      backend: acpBackendId,
-      threadId: "session-1",
+    await registry["threadNaming"].applyGeneratedTitle({
       title: "Investigate the flaky federation handshake test",
       prompt: "Investigate the flaky federation handshake test",
-      namingAttempt: registry["threadNaming"].beginTitleGeneration({ backend: acpBackendId, threadId: "session-1" }),
+      attempt: registry["threadNaming"].beginTitleGeneration({ backend: acpBackendId, threadId: "session-1" }),
     });
 
     // This reads the information store, not the thread-list cache: the
@@ -12759,12 +12758,10 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await registry.listThreads({ backend: "codex" });
-    await registry["applyGeneratedThreadTitle"]({
-      backend: "codex",
-      threadId: "thread-1",
+    await registry["threadNaming"].applyGeneratedTitle({
       title: "Ship the release runbook",
       prompt: "Ship the release runbook",
-      namingAttempt: registry["threadNaming"].beginTitleGeneration({ backend: "codex", threadId: "thread-1" }),
+      attempt: registry["threadNaming"].beginTitleGeneration({ backend: "codex", threadId: "thread-1" }),
     });
 
     expect(
@@ -30824,6 +30821,62 @@ command = "pnpm dev"
     });
 
     await registry.close();
+  });
+
+  // Completion is an owner barrier: work admitted by a title event is part of
+  // the same drain, regardless of how many generations precede the last one.
+  async function assertTitleWorkCascade(count: number): Promise<void> {
+    const lastStarted = createDeferred<void>();
+    const lastRelease = createDeferred<void>();
+    const threads = Array.from({ length: count }, (_, i) => ({
+      id: `cascade-${i}`, title: "Prompt", titleSource: "derived" as const,
+      source: "codex" as const, linkedDirectories: [],
+    }));
+    const titleService = { generateTitle: vi.fn(async ({ threadId }: { threadId?: string }) => {
+      if (threadId === threads.at(-1)!.id) {
+        lastStarted.resolve();
+        await lastRelease.promise;
+      }
+      return { status: "generated" as const, title: "Generated" };
+    }) };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/name/set"] }, threads,
+      }),
+      overlayStore: createOverlayStoreMock(), threadTitleGenerationService: titleService,
+    });
+    const schedule = (i: number) => registry["scheduleThreadTitleGeneration"]({
+      backend: "codex", threadId: threads[i].id, input: [{ type: "text", text: "Prompt" }],
+    });
+    const stop = registry.onEvent((event) => {
+      if (event.notification.method !== "thread/name/updated") return;
+      const { threadId } = event.notification.params;
+      const i = threads.findIndex((thread) => thread.id === threadId);
+      if (i >= 0 && i + 1 < count) schedule(i + 1);
+    });
+    schedule(0);
+    const completion = registry.whenThreadTitleGenerationSettledForTests();
+    try {
+      expect(await Promise.race([
+        completion.then(() => "settled"), lastStarted.promise.then(() => "last-started"),
+      ])).toBe("last-started");
+      lastRelease.resolve();
+      await completion;
+      expect(titleService.generateTitle).toHaveBeenCalledTimes(count);
+    } finally {
+      lastRelease.resolve();
+      stop();
+      await completion;
+      await registry.close();
+    }
+  }
+
+  it("waits for all 24 title generations in the drain counterexample", async () => {
+    await assertTitleWorkCascade(24);
+  });
+
+  it("waits for the entire generated title work cascade", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 24, max: 30 }), assertTitleWorkCascade), { numRuns: 5 });
   });
 
   it("applies generated Codex thread titles after starting turns", async () => {

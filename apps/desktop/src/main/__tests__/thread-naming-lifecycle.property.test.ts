@@ -39,8 +39,8 @@ async function lateHelperRename(suffix: string): Promise<void> {
       generateTitle: async () => ({ status: "generated", title: "Helper title" }),
     } as never,
   });
-  const applyTitle = registry["applyGeneratedThreadTitle"].bind(registry);
-  registry["applyGeneratedThreadTitle"] = async (params) => {
+  const applyTitle = registry["threadNaming"].applyGeneratedTitle.bind(registry["threadNaming"]);
+  registry["threadNaming"].applyGeneratedTitle = async (params) => {
     readStarted.resolve();
     await finishRead.promise;
     return await applyTitle(params);
