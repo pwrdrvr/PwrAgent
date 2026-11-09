@@ -73,7 +73,7 @@ it.skipIf(process.platform === "win32")("generated sender replacements cancel im
 it.skipIf(process.platform === "win32")("replacement refuses foreign senders, invalid input and unavailable owners before cancelling", async () => {
   await fixture(async (runtime, backend, store, _profile, _events, sent) => {
     const response = await queued(backend), accepted = store.get(response.queueEntryId);
-    for (const [source, messageOrigin] of [["other-instance", origin], ["sender-instance", { ...origin, sourceThread: { ...origin.sourceThread, threadId: "other" } }], ["sender-instance", undefined], ["sender-instance", { kind: "messaging" }]] as const) {
+    for (const [source, messageOrigin] of [["other-instance", origin], ["sender-instance", { ...origin, sourceThread: { ...origin.sourceThread, threadId: "other" } }], ["sender-instance", null], ["sender-instance", { kind: "messaging" }]] as const) {
       await expect(replace(backend, accepted.id, "changed", "replacement", source, messageOrigin)).rejects.toThrow();
     }
     for (const text of [" ", "x".repeat(256 * 1024 + 1)]) await expect(replace(backend, accepted.id, text)).rejects.toThrow();
@@ -85,6 +85,79 @@ it.skipIf(process.platform === "win32")("replacement refuses foreign senders, in
     runtime.threadLocked = () => false; runtime.intakeBusy = false; backend.creating = false; runtime.uncertain = false;
     expect(store.get(accepted.id)).toEqual(accepted);
     expect(backend.queuedTurns(ref.threadId)).toHaveLength(1);
+    expect(sent).toEqual(["active"]);
+  });
+});
+
+it.skipIf(process.platform === "win32")("cancellation and new-acceptance storage refusals never mutate or replay the old fingerprint", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async refuseCancellation => {
+    await fixture(async (runtime, backend, store, _profile, _events, sent) => {
+      const response = await queued(backend), original = store.get(response.queueEntryId);
+      const save = store.save.bind(store);
+      store.save = (job: any) => {
+        if (refuseCancellation ? job.id === original.id && job.status === "interrupted" : job.id !== original.id) throw new Error("Storage refused");
+        return save(job);
+      };
+      await expect(replace(backend, original.id, "changed")).rejects.toThrow("Storage refused");
+      store.save = save;
+      expect(store.get(original.id)).toMatchObject({ fingerprint: original.fingerprint, status: refuseCancellation ? "queued" : "interrupted" });
+      expect(backend.queuedTurns(ref.threadId)).toHaveLength(refuseCancellation ? 1 : 0);
+      if (!refuseCancellation) await expect(replace(backend, original.id, "changed", "retry")).rejects.toThrow();
+      expect(sent).toEqual(["active"]);
+      expect(runtime.uncertain).not.toBe(true);
+    });
+  }), { numRuns: 4 });
+});
+
+it.skipIf(process.platform === "win32")("serialized replacements, cancellation and pause use the live waiting identity", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("replace", "cancel", "pause", "admit", "stop"), async first => {
+    await fixture(async (runtime, backend, store, _profile, _events, sent) => {
+      const response = await queued(backend), original = store.get(response.queueEntryId);
+      let release!: () => void;
+      const lock = runtime.turnQueue.withDispatchSuspended(ref, () => new Promise<void>(resolve => { release = resolve; }));
+      await Promise.resolve();
+      let earlier: Promise<unknown>;
+      if (first === "replace") earlier = replace(backend, original.id, "first", "first");
+      else if (first === "cancel") earlier = runtime.cancelQueuedTurn({ queueEntryId: original.id });
+      else if (first === "pause") earlier = runtime.setQueuedTurnPaused({ queueEntryId: original.id, paused: true });
+      else {
+        release(); await lock;
+        if (first === "stop") await runtime.stop();
+        else { terminal(runtime); await settle(); }
+        earlier = Promise.resolve();
+      }
+      const later = replace(backend, original.id, "later", "later");
+      const results = Promise.allSettled([earlier, later]);
+      release(); await lock;
+      const outcomes = await results;
+      expect(outcomes[1].status).toBe(first === "pause" ? "fulfilled" : "rejected");
+      if (first === "pause") expect(backend.queuedTurns(ref.threadId)[0]).toMatchObject({ paused: true, pauseRevision: 1 });
+      expect(store.get(original.id)).toMatchObject({ fingerprint: original.fingerprint });
+      expect(sent).toEqual(first === "admit" ? ["active", "original"] : ["active"]);
+      expect(store.jobs.size).toBe(first === "replace" || first === "pause" ? 3 : 2);
+    });
+  }), { numRuns: 10 });
+});
+
+it.skipIf(process.platform === "win32")("shutdown during replacement acceptance preserves both outcomes without restoring prompts or replaying jobs", async () => {
+  await fixture(async (runtime, backend, store, profile, _events, sent) => {
+    const response = await queued(backend), original = store.get(response.queueEntryId);
+    const observe = runtime.onEvent;
+    let stopping: Promise<void> | undefined;
+    runtime.onEvent = (event: any) => {
+      observe(event);
+      if (event.method === "headless/jobChanged" && event.params.id !== original.id && event.params.status === "queued") stopping = runtime.stop();
+    };
+    const replacement = await replace(backend, original.id, "changed");
+    await stopping;
+    expect(store.get(original.id)).toMatchObject({ status: "interrupted", fingerprint: original.fingerprint });
+    expect(store.get(replacement.queueEntryId)).toMatchObject({ status: "unknown" });
+    const { JobStore } = await load("store.js");
+    const reopened = new JobStore(path.dirname(store.directory), { version: 1, workspace: runtime.workspace, codexHome: path.join(runtime.workspace, "codex") }, profile);
+    expect(reopened.get(original.id).fingerprint).toBe(original.fingerprint);
+    expect(reopened.get(replacement.queueEntryId).status).toBe("unknown");
+    expect(runtime.turnQueue.getAllQueuedEntries()).toEqual([]);
+    expect(JSON.stringify([...reopened.jobs.values()])).not.toContain('"prompt"');
     expect(sent).toEqual(["active"]);
   });
 });

@@ -122,7 +122,7 @@ export class Runtime {
     }
   }
 
-  submit(params) {
+  submit(params, queuedControls) {
     if (this.stopping) throw new Error("Daemon is stopping");
     const { id, prompt, threadId = null, model = null, sandbox = "read-only", reasoningEffort = null, serviceTier = null } = params;
     if (!validId(id)) throw new Error("Job ID must be 1–80 letters, digits, underscores or hyphens, beginning with a letter or digit");
@@ -162,10 +162,14 @@ export class Runtime {
       this.work = Promise.resolve();
       return job;
     }
-    this.work = threadId ? this.turnQueue.submit({ id, backend: "codex", threadId,
+    const entry = { id, backend: "codex", threadId,
       origin: params.messageOrigin ? "messaging" : "manual", messageOrigin: structuredClone(job.messageOrigin),
       input: [{ type: "text", text: prompt }], createdAt: Date.parse(job.createdAt),
-    }).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
+      ...(queuedControls?.paused ? { paused: true, pauseRevision: queuedControls.pauseRevision } : {}),
+    };
+    this.work = threadId ? (queuedControls?.manualReleaseRequired
+      ? this.turnQueue.submitHeld(entry, queuedControls.holdReason)
+      : this.turnQueue.submit(entry)).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
     // The durable acceptance precedes inference. Socket loss cannot cancel it.
     return job;
   }

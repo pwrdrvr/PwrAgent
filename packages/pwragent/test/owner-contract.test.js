@@ -17,6 +17,7 @@ test("every owner method takes its capability from the shared contract", () => {
 });
 
 test("advertised queue controls register against the shared turn-control contract", () => {
+  assert.equal(METHOD_CAPABILITIES["backend.replaceQueuedMessage"], "turn_control");
   for (const [method, capability] of [["setQueuedTurnPaused", "turn_queue_pause"], ["moveQueuedTurn", "turn_queue_reorder"]]) {
     assert.ok(HEADLESS_CAPABILITIES.includes(capability));
     assert.equal(METHOD_CAPABILITIES[`backend.${method}`], "turn_control");

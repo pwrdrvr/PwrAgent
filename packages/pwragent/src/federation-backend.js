@@ -15,7 +15,7 @@ const OWNER_METHODS = [
   "readThread", "readTurnAssistantReply", "listSkills", "listThreadMcpServers",
   "startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread",
   "setThreadModelSettings", "setThreadExecutionMode",
-  "readQueuedTurn", "releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn",
+  "readQueuedTurn", "replaceQueuedMessage", "releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn",
 ];
 export function ownerMethodCapabilities(methods, contract = FEDERATION_BACKEND_METHOD_CAPABILITIES) {
   return Object.fromEntries(methods.map((name) => {
@@ -445,6 +445,7 @@ export class HeadlessBackend {
       case "startThread": return this.startThread(params);
       case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);
       case "startTurn": return this.startTurn(params, envelope);
+      case "replaceQueuedMessage": return this.replaceQueuedMessage(params, envelope);
       case "readQueuedTurn": return this.runtime.readQueuedTurn(params);
       case "releaseQueuedTurn": return this.runtime.releaseQueuedTurn(params);
       case "cancelQueuedTurn": return this.runtime.cancelQueuedTurn(params);
@@ -613,6 +614,40 @@ export class HeadlessBackend {
     const started = this.runtime.store.get(job.id);
     if (!started.turnId) throw new Error(started.reason || "Turn was not started");
     return { backend: "codex", threadId: thread.id, turnId: started.turnId, queueStatus: "started", queueEntryId: job.id };
+  }
+
+  async replaceQueuedMessage(params, envelope) {
+    if (params.backend !== "codex") throw new Error("This outpost executes Codex only");
+    this.owned(params.threadId);
+    const prompt = textInput(params.input);
+    if (!prompt.trim() || Buffer.byteLength(prompt) > 256 * 1024) throw new Error("Prompt must be nonempty and at most 256 KiB");
+    if (typeof envelope.id !== "string" || !envelope.id || !envelope.sourceInstanceId) throw new Error("Replacement requires an authenticated request identity");
+    const messageOrigin = structuredClone(this.authenticateOrigin?.(params.messageOrigin, envelope));
+    return this.runtime.turnQueue.withDispatchSuspended(params, () => {
+      const runtime = this.runtime;
+      if (runtime.stopping || runtime.uncertain || runtime.intakeBusy || this.creating) throw new Error("Outpost cannot replace queued input now");
+      const entry = runtime.queuedEntry(params.queueEntryId);
+      if (!entry || entry.backend !== params.backend || entry.threadId !== params.threadId) throw new Error("Queued message not found or already started; no new turn was created.");
+      const job = runtime.store.get(entry.id);
+      runtime.assertQueuedIdentity(job, entry);
+      const sender = messageOrigin?.sourceThread, owner = job.messageOrigin?.sourceThread;
+      if (messageOrigin?.kind !== "agent" || job.messageOrigin?.kind !== "agent" || !sender || !owner
+        || sender.backend !== owner.backend || sender.threadId !== owner.threadId || sender.instanceId !== owner.instanceId) {
+        throw new Error("Only the sending thread can replace its own queued agent message.");
+      }
+      const id = `fed-${digest([envelope.sourceInstanceId, envelope.id])}`;
+      if (runtime.store.jobs.get(id)) throw new Error("Replacement requires a new acceptance identity");
+      if (runtime.store.jobs.size >= 10000) throw new Error("Job retention limit reached (10000); use a new profile");
+      // Cancellation commits before removal or fresh acceptance. A refused
+      // cancellation leaves the original waiting; a refused new acceptance
+      // leaves it cancelled. Neither failure may replay the original input.
+      runtime.finish(job.id, "interrupted", "Replaced before dispatch");
+      runtime.turnQueue.cancelEntryWithDisposition(job.id, "Replaced before dispatch");
+      const accepted = runtime.submit({ id, threadId: job.threadId, prompt, messageOrigin,
+        cwd: job.cwd, sandbox: job.sandbox, model: job.model, reasoningEffort: job.reasoningEffort, serviceTier: job.serviceTier }, entry);
+      return { backend: "codex", threadId: job.threadId, turnId: `queued:${accepted.id}`, queueStatus: "queued", queueEntryId: accepted.id,
+        queueEntryCreatedAt: Date.parse(accepted.createdAt) };
+    });
   }
 
   async listBackends() {
