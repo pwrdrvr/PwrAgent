@@ -45,6 +45,7 @@ it("provider-scoped lens pages and counts match an independent identity inventor
     await fc.assert(fc.asyncProperty(fc.tuple(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 1, max: 4 }),
       fc.integer({ min: 1, max: 4 })), async sizes => {
       rmSync(f.claudeRoot, { recursive: true, force: true });
+      for (const session of f.sessions.listAllSessions()) f.sessions.deleteSession(session.backendId, session.sessionId);
       const expected = backends.flatMap((backend, index) => {
         const threads = Array.from({ length: sizes[index]! }, (_, id) => native(backend, threadId(id)));
         f.inventory.replace({ backend, observedAt: 1, threads });
@@ -52,6 +53,10 @@ it("provider-scoped lens pages and counts match an independent identity inventor
       });
       await Promise.all(expected.filter(ref => ref.backend === "claude")
         .map(ref => f.claude.save({ cwd: f.root, thread: native("claude", ref.threadId) })));
+      for (const ref of expected) if (ref.backend === "acp:removed") {
+        f.sessions.upsertSession({ backendId: ref.backend, sessionId: ref.threadId, title: `${ref.backend} ${ref.threadId}`,
+          titleSource: "explicit", createdAt: 10, updatedAt: 20, executionMode: "default", status: "idle" });
+      }
       const owner = f.reopen();
       for (const backend of [...backends, "all", undefined]) {
         const selected = expected.filter(ref => backend === undefined || backend === "all" || ref.backend === backend);
@@ -103,7 +108,7 @@ it("restored provider summaries omit historical archive stamps and remain in act
           thread: { ...native(source), archivedAt: archivedAt + elapsed + 1 } });
         expect((await f.reopen().handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity).toBe("archived");
         expect((await f.reopen().handle("lookupArchivedThreads", { backend: source, threadIds: [ref.threadId] })).threads[0].archivedAt)
-          .toBe(source === "claude" ? archivedAt + elapsed + 1 : archivedAt);
+          .toBe(archivedAt + elapsed + 1);
       }
     }), { numRuns: 20, examples: [[0, 1]] });
   } finally { f.close(); }
