@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
@@ -11,6 +11,7 @@ import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlit
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
 
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
 const backends = ["acp:removed", "acp:other"] as const;
@@ -53,7 +54,7 @@ async function checkMembership(id: string, commands: Command[], finalOnly = fals
         const watermark = command.seen ? 10_000 : 0;
         seen.set(backend, watermark);
         await overlay.updateThreadMetadata(ref, { title: { text: "Stale canonical title", source: "explicit" },
-          createdAt: -2, updatedAt: -2, cwd: "/stale", archivedAt: Date.now() + 200_000,
+          createdAt: -2, updatedAt: -2, cwd: "/stale", archived: true,
           pinnedRank: "1024", parent: { backend: "codex", threadId: "parent" }, subthreadOrder: ["child"], subthreadsCollapsed: true,
           seenAt: 100_000, seenUpdatedAt: watermark, model: "owner-model", reasoningEffort: "high", serviceTier: "flex", fastMode: true });
       } else owner = new HeadlessBackend(runtime, () => {});
@@ -117,4 +118,57 @@ it("actual ACP title, provenance, workspace, times, archive and mode outrank sta
       await checkMembership(id, [{ ...base, operation: "save" }, { ...base, backend: "acp:other", operation: "save" },
         { ...base, operation: "overlay" }], true);
     }), { numRuns: 25 });
+});
+
+it("keeps durable ACP archive observations authoritative for members while deletion always retires membership", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  try {
+    await fc.assert(fc.asyncProperty(fc.nat(100), fc.boolean(),
+      fc.array(fc.constantFrom("observe", "archive", "restore", "delete", "save", "hidden"), { minLength: 1, maxLength: 10 }),
+      async (start, nativeArchived, commands) => {
+        const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+        const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-acp-archive-")));
+        mkdirSync(path.join(root, "headless"), { mode: 0o700 });
+        const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
+        const sessions = new AcpSessionStore(db);
+        const overlay = new SqliteOverlayStore(db);
+        const ref = { backend: "acp:removed" as const, threadId: "member" };
+        const native = { backendId: ref.backend, sessionId: ref.threadId, title: "Native member", titleSource: "derived" as const,
+          createdAt: 0, updatedAt: 1, status: "idle" as const, executionMode: "auto" as const,
+          ...(nativeArchived ? { archivedAt: 7 } : {}) };
+        sessions.upsertSession(native);
+        const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+        try {
+          const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
+          const runtime = { workspace: root, store, projects: { list: () => [] }, onFailure(error: unknown) { throw error; } };
+          let present = true;
+          let archived = nativeArchived;
+          for (const [index, command] of commands.entries()) {
+            const at = start + index;
+            if (command === "observe") { await overlay.observeArchivedThreads([ref], at); archived = true; }
+            if (command === "archive") { await overlay.setThreadArchiveTombstone({ ...ref, archivedAt: at }); archived = true; }
+            if (command === "restore") { await overlay.setThreadArchiveTombstone({ ...ref, restoredAt: at }); archived = false; }
+            if (command === "delete") { sessions.deleteSession(ref.backend, ref.threadId); present = false; }
+            if (command === "save" || command === "hidden") {
+              sessions.upsertSession({ ...native, hidden: command === "hidden" }); present = command === "save";
+            }
+            const before = await overlay.getThreadMetadata(ref);
+            const { writes } = await measureSqliteWrites(async () => {
+              for (let round = 0; round < 3; round++) {
+                const owner = new HeadlessBackend(runtime, () => {});
+                const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
+                expect(detail.identity).toBe(!present ? "unresolved" : archived ? "archived" : "present");
+                expect((await owner.handle("resolveThread", ref)).thread !== undefined).toBe(present);
+                expect((await owner.handle("listThreads", { backend: ref.backend })).threads).toHaveLength(present && !archived ? 1 : 0);
+                expect((await owner.handle("lookupArchivedThreads", { backend: ref.backend, threadIds: [ref.threadId] })).threads)
+                  .toHaveLength(present && archived ? 1 : 0);
+              }
+            });
+            expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
+            expect(await overlay.getThreadMetadata(ref)).toEqual(before);
+          }
+        } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+      }), { numRuns: 25, examples: [[0, false, ["observe"]], [0, true, ["restore"]],
+        [0, false, ["observe", "delete", "save", "restore", "hidden"]]] });
+  } finally { vi.unstubAllEnvs(); }
 });
