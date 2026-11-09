@@ -957,6 +957,7 @@ export class ThreadTurnQueue {
     if (!hold?.reasons.some(shouldRelease)) return false;
     const queue = this.queuedEntries.get(key) ?? [];
     const kept = new Set<string>();
+    const updatedEntries: ThreadTurnQueueEntry[] = [];
     let ahead: string | undefined;
     for (let index = 0; index < queue.length; index += 1) {
       const current = queue[index];
@@ -970,14 +971,22 @@ export class ThreadTurnQueue {
         ? { ...current, holdReason: ahead }
         : { ...current, manualReleaseRequired: undefined, holdReason: undefined };
       queue[index] = updated;
-      await this.emit(ahead
-        ? { type: "held", entry: updated, position: index + 1, reason: ahead }
-        : { type: "queued", entry: updated, position: index + 1 });
+      updatedEntries.push(updated);
     }
+    // Commit this release before publication can admit another independent
+    // hold. Its new reasons and entries must not be replaced by this snapshot.
     // A reason no held entry carries any more has nothing left to hold.
     const reasons = hold.reasons.filter((reason) => kept.has(reason));
     if (reasons.length > 0) this.heldQueues.set(key, { ...hold, reasons });
     else this.heldQueues.delete(key);
+    for (const entry of updatedEntries) {
+      const index = this.queuedEntries.get(key)?.indexOf(entry) ?? -1;
+      // A newer hold, edit or cancellation owns the entry's publication now.
+      if (index < 0) continue;
+      await this.emit(entry.manualReleaseRequired && entry.holdReason !== undefined
+        ? { type: "held", entry, position: index + 1, reason: entry.holdReason }
+        : { type: "queued", entry, position: index + 1 });
+    }
     this.scheduleDrain(key);
     return true;
   }

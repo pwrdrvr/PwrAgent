@@ -7,7 +7,8 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("Electron preserves newer queue review holds across asynchronous Retry publication and cancellation", async () => {
+for (const operation of ["Retry", "unlock"] as const) {
+test(`Electron preserves newer queue review holds across asynchronous ${operation} publication and cancellation`, async () => {
   let queueModule = "";
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
@@ -20,7 +21,7 @@ test("Electron preserves newer queue review holds across asynchronous Retry publ
   try {
     await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
-    const result = await app.electronApp.evaluate(async (_electron, modulePath) => {
+    const result = await app.electronApp.evaluate(async (_electron, { modulePath, operation }) => {
       const { ThreadTurnQueue: Queue } = process.getBuiltinModule("node:module").createRequire(modulePath)(modulePath) as { ThreadTurnQueue: typeof ThreadTurnQueue };
       const identity = { backend: "codex" as const, threadId: "invented-electron-owner" };
       const sends: string[] = [];
@@ -33,7 +34,7 @@ test("Electron preserves newer queue review holds across asynchronous Retry publ
           if (armed && event.type === "queued" && !event.entry.manualReleaseRequired) {
             armed = false;
             // A real host event turn separates publication from the incoming
-            // held result. Dispatch must remain suspended through both.
+            // held result. Its new review must remain actionable afterward.
             await new Promise<void>(resolve => setImmediate(resolve));
             await queue.submitHeld({ ...identity, id: "new-result", origin: "manual", input: [] }, "new review");
           }
@@ -42,7 +43,9 @@ test("Electron preserves newer queue review holds across asynchronous Retry publ
       try {
         for (const id of ["older-0", "older-1", "older-2"]) await queue.submitHeld({ ...identity, id, origin: "manual", input: [] }, "old review");
         armed = true;
-        const retry = await queue.releaseEntryWithDisposition("older-0");
+        const release = operation === "Retry"
+          ? (await queue.releaseEntryWithDisposition("older-0")).disposition
+          : await queue.releaseHold(identity, reason => reason === "old review");
         const held = queue.getQueuedEntries(identity).map(entry => ({ id: entry.id, held: entry.manualReleaseRequired, reason: entry.holdReason }));
         const heldEvents = [...latest.values()];
         queue.cancelEntryWithDisposition("new-result");
@@ -52,10 +55,10 @@ test("Electron preserves newer queue review holds across asynchronous Retry publ
         queue.close();
         await queue.releaseThread({ ...identity, turnId: "older-0", status: "turn/completed" });
         await new Promise<void>(resolve => setImmediate(resolve));
-        return { retry: retry.disposition, held, heldEvents, beforeExplicitRetry, explicitRetry: explicitRetry.disposition, sends };
+        return { release, held, heldEvents, beforeExplicitRetry, explicitRetry: explicitRetry.disposition, sends };
       } finally { queue.close(); }
-    }, queueModule);
-    expect(result.retry).toBe("busy");
+    }, { modulePath: queueModule, operation });
+    expect(result.release).toBe(operation === "Retry" ? "busy" : true);
     expect(result.held).toEqual(["new-result", "older-0", "older-1", "older-2"].map(id => ({ id, held: true, reason: "new review" })));
     expect(result.heldEvents.every(Boolean)).toBe(true);
     expect(result.beforeExplicitRetry).toEqual([]);
@@ -91,3 +94,4 @@ test("Electron preserves newer queue review holds across asynchronous Retry publ
     ] });
   } finally { await app.close(); }
 });
+}

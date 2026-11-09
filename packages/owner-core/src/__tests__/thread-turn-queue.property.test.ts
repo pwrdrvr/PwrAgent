@@ -52,6 +52,89 @@ it("unlock cannot strand an older input after cancelling the new review entry", 
   await unlockWithNewHold(1, 0);
 });
 
+it("unlock completes its old cause before new holds, simultaneous controls and independent release", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), fc.nat(),
+    fc.constantFrom("new review", "old lock", "new failure"), fc.boolean(), fc.boolean(),
+    async (count, offset, reason, cancelPublished, close) => {
+      const starts: string[] = [];
+      const observed = new Map<string, { held: boolean; reason?: string }>();
+      let armed = false, publications = 0, active = true;
+      const queue = new ThreadTurnQueue({
+        isThreadActive: () => active,
+        startTurn: async entry => { starts.push(entry.id); return { ...THREAD, turnId: entry.id }; },
+        onLifecycle: async event => {
+          if (event.type === "queued" || event.type === "held") observed.set(event.entry.id,
+            { held: event.entry.manualReleaseRequired === true, reason: event.entry.holdReason });
+          if (event.type === "cancelled") observed.delete(event.entry.id);
+          if (!armed || event.type !== "queued" || event.entry.manualReleaseRequired || publications++ !== offset % count) return;
+          armed = false;
+          if (cancelPublished) queue.cancelEntryWithDisposition(event.entry.id);
+          if (reason === "new failure") await queue.releaseThread({ ...THREAD, turnId: "prior-turn", status: "turn/failed", errorMessage: reason });
+          else await queue.submitHeld({ ...THREAD, id: "new-review", origin: "manual", input: [] }, reason);
+          // These are real queue controls while unlock's publication awaits.
+          // They cannot move/pause/retry a review held on an occupied thread.
+          const head = queue.getQueuedEntries(THREAD)[0];
+          if (head) {
+            expect((await queue.setEntryPaused(head.id, true)).disposition).toBe("held");
+            expect((await queue.moveEntry(head.id)).disposition).toBe("held");
+            expect((await queue.releaseEntryWithDisposition(head.id)).disposition).toBe("busy");
+          }
+          if (close) queue.close();
+        },
+      });
+      try {
+        for (let index = 0; index < count; index++) await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, "old lock");
+        armed = true;
+        expect(await queue.releaseHold(THREAD, cause => cause === "old lock")).toBe(true);
+        const waiting = queue.getQueuedEntries(THREAD);
+        expect(waiting.map(entry => ({ held: entry.manualReleaseRequired === true, reason: entry.holdReason })))
+          .toEqual(waiting.map(() => ({ held: true, reason })));
+        expect([...observed.entries()].sort()).toEqual(waiting.map(entry => [entry.id, { held: true, reason }]).sort());
+        queue.cancelEntryWithDisposition("new-review");
+        active = false;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(starts).toEqual([]);
+        const remaining = queue.getQueuedEntries(THREAD);
+        if (remaining.length) {
+          // Independent release answers the new cause even when its text
+          // matches the old lock. No obsolete lock may strand other rows.
+          expect(await queue.releaseHold(THREAD, cause => cause === reason)).toBe(true);
+          await new Promise<void>(resolve => setImmediate(resolve));
+          expect(starts).toEqual(close ? [] : [remaining[0]!.id]);
+          expect(queue.getQueuedEntries(THREAD).every(entry => !entry.manualReleaseRequired)).toBe(true);
+        }
+      } finally { queue.close(); }
+    }));
+});
+
+it("unlock publication cannot resurrect a row cancelled or released by a simultaneous control", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.boolean(), async (count, cancel) => {
+    const observed = new Map<string, boolean>();
+    let armed = false;
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      startTurn: async () => { throw new Error("An occupied owner cannot start another turn"); },
+      onLifecycle: async event => {
+        if (event.type === "queued" || event.type === "held") observed.set(event.entry.id, event.entry.manualReleaseRequired === true);
+        if (event.type === "cancelled") observed.delete(event.entry.id);
+        if (armed && event.type === "queued" && !event.entry.manualReleaseRequired) {
+          armed = false;
+          if (cancel) queue.cancelEntryWithDisposition(`older-${count - 1}`);
+          else await queue.releaseHold(THREAD, cause => cause === "other review");
+        }
+      },
+    });
+    try {
+      await queue.submitHeld({ ...THREAD, id: "older-0", origin: "manual", input: [] }, "old lock");
+      for (let index = 1; index < count; index++) await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, "other review");
+      armed = true;
+      await queue.releaseHold(THREAD, cause => cause === "old lock");
+      expect([...observed.entries()].sort()).toEqual(queue.getQueuedEntries(THREAD).map(entry => [entry.id, entry.manualReleaseRequired === true]).sort());
+      expect((await queue.releaseEntryWithDisposition("older-0")).disposition).toBe("not_held");
+    } finally { queue.close(); }
+  }));
+});
+
 async function retryWithNewHold(count: number, publication: number): Promise<void> {
   const started: string[] = [];
   const observed = new Map<string, boolean>();
