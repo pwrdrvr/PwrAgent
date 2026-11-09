@@ -8,7 +8,7 @@ export class OutpostThreadRegistry {
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
     this.inventory = new Map((inventory?.list() ?? []).filter(snapshot => snapshot.backend === "codex")
-      .flatMap(snapshot => snapshot.threads.map(thread => [thread.id, { ...thread, observedAt: snapshot.observedAt }])));
+      .flatMap(snapshot => snapshot.threads.map(thread => [thread.id, thread])));
   }
 
   identity(identity) {
@@ -34,7 +34,9 @@ export class OutpostThreadRegistry {
     if (native) {
       Object.assign(thread, projectOwnerThreadTitle(native, record));
       if (record?.title?.nativeName !== undefined && record.title.nativeName !== native.title) thread.titleNativeName = native.title;
-      if (native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
+      // Only a fresh walk may supersede durable owner archive observations;
+      // the retained inventory is never authority for restoring ownership.
+      if (native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.archiveRetentionStartedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
         thread.archived = native.archivedAt !== undefined;
         thread.archivedAt = native.archivedAt;
       }
