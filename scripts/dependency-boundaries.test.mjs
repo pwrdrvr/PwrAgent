@@ -119,7 +119,7 @@ beforeAll(async () => {
     ipcStateCases.push({ from, to, forbidden: true });
   }
   for (const area of ["ipc", "app-server", "future-area", "state", "storage"]) {
-    for (const binding of ["state-db", "app-runtime-instance-store"]) {
+    for (const binding of ["state-db", "app-runtime-instance-store", "thread-todo-store", "thread-review-storage-sqlite", "model-settings-recents-store"]) {
       const to = `apps/desktop/src/main/storage/${binding}.ts`;
       const from = `apps/desktop/src/main/${area}/nested/sqlite-binding-${binding}.ts`;
       source(to, 'export * from "@pwragent/sqlite-storage";');
