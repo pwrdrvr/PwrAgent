@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
+import { ThreadTodoStore } from "@pwragent/sqlite-storage/thread-todo-store";
+import { SqliteThreadReviewStorage } from "@pwragent/sqlite-storage/thread-review-storage-sqlite";
+import { listModelSettingsRecents, recordModelSettingsRecent } from "@pwragent/sqlite-storage/model-settings-recents-store";
 import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
@@ -103,4 +106,53 @@ test("desktop takes over a retired portable profile lease and releases it for th
     expect(store.getFederationLease()).toMatchObject({ ownerInstanceId: lease.ownerInstanceId, status: "released" });
     expect(store.acquireFederationLease({ instanceId: "portable-challenger", now: Date.now() }).acquired).toBe(true);
   } finally { db.close(); await app.close(); }
+});
+
+test("desktop consumes portable cards, findings and recents and preserves its mutations for the next host", async () => {
+  const identity = { backend: "codex" as const, threadId: "thread-smoke" };
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        new ThreadTodoStore(db).insert({ ...identity, id: "portable-card", kind: "reminder",
+          title: "Check the portable profile", items: [{ id: "step", text: "Verify the handover", checked: false }], now: 100 });
+        const reviews = new SqliteThreadReviewStorage(db);
+        reviews.trackingStartedAt(() => 99);
+        reviews.insert({ ...identity, id: "portable-review", sourceKey: "portable-artifact", origin: "explicit",
+          title: "Portable review", status: "open", createdAt: 100, updatedAt: 100,
+          items: [{ id: "finding", title: "Retain the recorded outcome", status: "open", createdAt: 100, updatedAt: 100 }] });
+        recordModelSettingsRecent(db, "todo-dispatch", { backend: "codex", model: "portable-model", reasoningEffort: "high" });
+      } finally { db.close(); }
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    const stack = app.window.getByRole("region", { name: "To-dos for this thread" });
+    await expect(stack).toContainText("Portable review");
+    await stack.getByRole("button", { name: "Next to-do", exact: true }).click();
+    await expect(stack).toContainText("Check the portable profile");
+    const results = await app.window.evaluate(async identity => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const cards = await api.listThreadTodos!({ ...identity, status: "all" });
+      const reviews = await api.listThreadReviews!({ ...identity, status: "all" });
+      const recents = await api.listModelSettingsRecents!({ scope: "todo-dispatch" });
+      await api.setThreadTodoItemChecked!({ id: "portable-card", itemId: "step", checked: true });
+      await api.resolveThreadTodo!({ id: "portable-card", status: "done" });
+      await api.updateThreadReview!({ id: "portable-review", itemId: "finding", status: "addressed", note: "Verified in Electron." });
+      return { cards, reviews, recents };
+    }, identity);
+    expect(results.cards.todos).toContainEqual(expect.objectContaining({ id: "portable-card", status: "open" }));
+    expect(results.reviews.reviews).toContainEqual(expect.objectContaining({ id: "portable-review", status: "open" }));
+    expect(results.recents.recents).toEqual([{ backend: "codex", model: "portable-model", reasoningEffort: "high" }]);
+    await app.closeApplication();
+    const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+    try {
+      expect(new ThreadTodoStore(db).get("portable-card")).toMatchObject({ status: "done", items: [{ id: "step", checked: true }] });
+      expect(new SqliteThreadReviewStorage(db).get("portable-review"))
+        .toMatchObject({ status: "handled", items: [{ id: "finding", status: "addressed", resolution: { note: "Verified in Electron." } }] });
+      expect(new SqliteThreadReviewStorage(db).trackingStartedAt(() => 999)).toBe(99);
+      expect(listModelSettingsRecents(db, "todo-dispatch")).toEqual(results.recents.recents);
+    } finally { db.close(); }
+  } finally { await app.close(); }
 });
