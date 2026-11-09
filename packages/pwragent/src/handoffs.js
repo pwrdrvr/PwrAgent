@@ -92,7 +92,7 @@ export function setupHandoffs(federation, directory) {
           runtime.loadedThreads.add(id);
           backend.invalidate(id);
           return { threadId: id };
-        } finally { backend.creating = false; }
+        } finally { backend.creating = false; runtime.turnQueue.drainAll(); }
       },
       readThread: async ({ threadId }) => ({ replay: (await backend.readThread(threadId)).replay }),
       archiveThread: async ({ threadId }) => {

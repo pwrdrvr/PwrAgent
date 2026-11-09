@@ -205,7 +205,9 @@ export class HeadlessBackend {
       if (!job.threadId) continue;
       this.threads.retainAcceptedJobThread(job.threadId);
       const previous = this.latestJobs.get(job.threadId);
-      if (job.status !== "queued" && (!previous || previous.id !== this.runtime.active || previous.id === job.id)
+      // Waiting admissions cannot displace provider work. A refusal may still
+      // return that same projected job from starting to held queued state.
+      if ((job.status !== "queued" || previous?.id === job.id) && (!previous || previous.id !== this.runtime.active || previous.id === job.id)
         && (!previous || previous.id === job.id || this.runtime.active === job.id || job.createdAt > previous.createdAt)) this.latestJobs.set(job.threadId, job);
       // Acceptance keeps its existing metadata boundary even when a read-only
       // job projection can already resolve the identity before finalization.
@@ -577,7 +579,7 @@ export class HeadlessBackend {
         failed: (_stage, error) => this.runtime.reportFailure(error),
       });
       return { ...created, executionMode: mode(sandbox) };
-    } finally { this.creating = false; }
+    } finally { this.creating = false; this.runtime.turnQueue.drainAll(); }
   }
 
   async startTurn(params, envelope) {
@@ -595,7 +597,7 @@ export class HeadlessBackend {
       return { backend: "codex", threadId: thread.id, turnId: `queued:${job.id}`, queueStatus: "queued", queueEntryId: job.id,
         ...(entry ? { queueEntryCreatedAt: entry.createdAt } : {}) };
     }
-    await this.runtime.work;
+    await this.runtime.dispatches.get(job.id);
     const started = this.runtime.store.get(job.id);
     if (!started.turnId) throw new Error(started.reason || "Turn was not started");
     return { backend: "codex", threadId: thread.id, turnId: started.turnId, queueStatus: "started", queueEntryId: job.id };

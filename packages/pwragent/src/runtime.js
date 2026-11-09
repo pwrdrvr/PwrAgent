@@ -25,7 +25,9 @@ export class Runtime {
     this.loadedThreads = new Set();
     this.pendingSteeringOrigins = new Map();
     this.onFailure = onFailure;
-    this.dispatches = new Set();
+    // Stable-ID retries await their own provider dispatch, even when another
+    // accepted submission has already returned from enqueueing.
+    this.dispatches = new Map();
     this.turnQueue = new ThreadTurnQueue({
       startTurn: entry => this.dispatchJob(this.store.get(entry.id), entry.input[0].text),
       isThreadActive: ({ threadId }) => Boolean(this.active && this.store.get(this.active).threadId === threadId),
@@ -193,10 +195,10 @@ export class Runtime {
         throw error;
       }
     }).finally(() => {
-      this.dispatches.delete(work);
+      this.dispatches.delete(job.id);
       this.turnQueue.drainAll();
     });
-    this.dispatches.add(work);
+    this.dispatches.set(job.id, work);
     return work;
   }
 
@@ -391,7 +393,7 @@ export class Runtime {
     for (const entry of this.turnQueue.getAllQueuedEntries()) this.turnQueue.cancelEntry(entry.id, "Daemon stopped; no queued work was replayed");
     await this.codex.stop();
     try {
-      await Promise.allSettled([...this.dispatches]);
+      await Promise.allSettled([...this.dispatches.values()]);
       await this.work;
       await this.settleTitles?.();
     } finally {
