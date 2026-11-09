@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessagingBindingRecord, MessagingCallbackHandleRecord, MessagingDefaultAgentAssignmentRecord, MessagingManagedTopicRecord, MessagingPendingIntentRecord } from "@pwragent/messaging-interface";
-import { SqliteMessagingStore as SharedStore, type SqliteMessagingPolicy, type SqliteMessagingStorageRecords } from "@pwragent/sqlite-storage/messaging-store-sqlite";
+import { SqliteMessagingStore as SharedStore, type SqliteMessagingPolicy, type SqliteMessagingSnapshot, type SqliteMessagingStorageRecords } from "@pwragent/sqlite-storage/messaging-store-sqlite";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteMessagingStore as DesktopStore } from "../storage/messaging-store-sqlite";
 import { SqliteMessagingStore as CompatibilityStore } from "../state/messaging-store-sqlite";
@@ -292,11 +292,58 @@ it("persists an alternate host's channel, opaque JSON and snapshot without deskt
       const store = new SharedStore<AlternateRecords>(db, alternatePolicy);
       const row = { id, backend: "alternate-backend", threadId: "thread", channel: { channel: "alternate-channel", conversation: { id, kind: "alternate-surface" } },
         createdAt: 1, updatedAt: 1, payload };
-      expect(await store.upsertBinding(row)).toEqual(row);
-      expect(await store.findActiveBindingForChannel(row.channel)).toEqual(row);
-      expect(await store.readSnapshot()).toEqual({ host: "alternate", bindings: { [id]: row } });
+      // JSON persistence canonicalizes values such as negative zero. Keep the
+      // original input at the boundary and compare with the JSON data model.
+      const persisted = clone(row);
+      expect(await store.upsertBinding(row)).toEqual(persisted);
+      expect(await store.findActiveBindingForChannel(row.channel)).toEqual(persisted);
+      expect(await store.readSnapshot()).toEqual({ host: "alternate", bindings: { [id]: persisted } });
     } finally { db.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 25, examples: [[{}, "__proto__"], [{ "": [-0] }, ""]] });
+});
+
+it("retains arbitrary record ids as own keys in every snapshot dictionary without writes", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  await fc.assert(fc.asyncProperty(fc.oneof(fc.constantFrom("__proto__", "constructor", "toString"), fc.string()), async id => {
+    const db = openInMemoryStateDb();
+    let captured: SqliteMessagingSnapshot<AlternateRecords> | undefined;
+    const store = new SharedStore<AlternateRecords>(db, { ...alternatePolicy, snapshot: records => {
+      captured = records;
+      return alternatePolicy.snapshot(records);
+    } });
+    const timed = { id, createdAt: 1, updatedAt: 2 };
+    const channel = { channel: "alternate", conversation: { id, kind: "alternate" } };
+    const target = { backend: "alternate", threadId: "thread" };
+    const expected: { [Key in keyof SqliteMessagingSnapshot<AlternateRecords>]: SqliteMessagingSnapshot<AlternateRecords>[Key][string] } = {
+      bindings: { ...timed, ...target, channel, payload: {} },
+      defaultAgentAssignments: { ...timed, scope: { kind: "profile" }, target },
+      monitorSubscriptions: { ...timed, channel },
+      topics: { ...timed, channel: channel.channel, supergroupId: "group", topicId: "topic", lifecycle: "active" },
+      topicLinks: { ...timed, ...target, channel: channel.channel, supergroupId: "group", topicRecordId: id },
+      topicCleanupProposals: { ...timed, channel: channel.channel, supergroupId: "group", status: "pending" },
+      pendingIntents: { id, channel, createdAt: 1, expiresAt: 100, allowedActorIds: [], intent: {} },
+      browseSessions: { ...timed, channel, expiresAt: 100, allowedActorIds: [] },
+      callbackHandles: { ...timed, channel, expiresAt: 100, allowedActorIds: [], handle: id },
+      deliveries: { id, deliveredAt: 2 },
+    };
+    try {
+      await store.upsertBinding(expected.bindings);
+      await store.upsertDefaultAgentAssignment(expected.defaultAgentAssignments);
+      await store.upsertMonitorSubscription(expected.monitorSubscriptions);
+      await store.upsertManagedTopic(expected.topics);
+      await store.upsertThreadTopicLink(expected.topicLinks);
+      await store.upsertTopicCleanupProposal(expected.topicCleanupProposals);
+      await store.upsertPendingIntent(expected.pendingIntents);
+      await store.upsertBrowseSession(expected.browseSessions);
+      await store.upsertCallbackHandle(expected.callbackHandles);
+      await store.recordDelivery(expected.deliveries);
+      const read = await measureSqliteWrites(() => store.readSnapshot());
+      expect(read.writes.commits).toBe(0);
+      for (const dictionary of Object.keys(expected) as Array<keyof typeof expected>) {
+        expect(Object.entries(captured![dictionary]), dictionary).toEqual([[id, expected[dictionary]]]);
+      }
+    } finally { db.close(); }
+  }), { numRuns: 25, examples: [["__proto__"]] });
 });
 
 it("models browse-session expiry and channel-versus-binding cleanup while preserving qualified federated bindings", async () => {
