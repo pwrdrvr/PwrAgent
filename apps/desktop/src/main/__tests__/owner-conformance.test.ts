@@ -56,6 +56,7 @@ import { canonicalDurableSteerRequest, canonicalDurableTurnRequest, type SubmitD
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
+import { threadLockRefusalMessage } from "@pwragent/shared";
 
 // Desktop serves peers from process singletons; point them at this owner.
 const desktopOwner = vi.hoisted(() => ({ registry: undefined as unknown }));
@@ -324,6 +325,42 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it.each(["registered unlock", "mutate_thread unlock"] as const)("%s preserves actionable independent review during queue publication", async caller => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.setThreadLock({ ...identity, locked: true, note: "old lock" });
+      const held = (id: string, reason: string) => registry.submitHeldTurn({ ...identity, queueEntryId: id,
+        input: [{ type: "text", text: `Invented result ${id}` }], holdReason: reason });
+      await held("older-result", threadLockRefusalMessage({ note: "old lock" }));
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (event.notification.method !== "thread/turnQueue/updated") return;
+        const params = event.notification.params;
+        if (armed && params.queueEntryId === "older-result" && params.status === "queued" && !params.manualReleaseRequired) {
+          armed = false;
+          await held("new-result", "independent review");
+        }
+      });
+      if (caller === "registered unlock") await host.client.setThreadLock({ ...identity, locked: false });
+      else expect(await registry["threadInspectionHandler"]({ operation: "mutate_thread", args: { ...identity, locked: false } })).toMatchObject({ ok: true });
+      const request = { protocol: 2 as const, ref: identity };
+      expect((await host.client.getNavigationQueueProjection(request)).entries.map(entry => ({ id: entry.queueEntryId, held: entry.manualReleaseRequired })).sort((a, b) => a.id.localeCompare(b.id)))
+        .toEqual([{ id: "new-result", held: true }, { id: "older-result", held: true }]);
+      expect(await host.client.cancelQueuedTurn({ queueEntryId: "new-result" })).toMatchObject({ cancelled: true });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect((await host.client.getNavigationQueueProjection(request)).entries).toMatchObject([{ queueEntryId: "older-result", manualReleaseRequired: true }]);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+      const events = host.events.filter(event => event.notification.method === "thread/turnQueue/updated"
+        && event.notification.params.queueEntryId === "older-result");
+      expect(events.at(-1)?.notification.params).toMatchObject({ status: "held", manualReleaseRequired: true });
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "older-result" })).toMatchObject({ disposition: "started" });
+    } finally { stop(); await host.close(); }
+  });
+
   it("registered desktop Retry preserves a new held result arriving during release publication", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();

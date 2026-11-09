@@ -10,6 +10,48 @@ const THREAD = { backend: "codex" as const, threadId: "model-thread" };
 const REASONS = ["locked", "awaiting-review", "target-ended"] as const;
 const FAILURE = "The previous turn failed. Review the error before retrying queued messages.";
 
+async function unlockWithNewHold(count: number, publication: number): Promise<void> {
+  const started: string[] = [];
+  const observed = new Map<string, boolean>();
+  let armed = false, publications = 0;
+  const queue = new ThreadTurnQueue({
+    startTurn: async entry => { started.push(entry.id); return { ...THREAD, turnId: entry.id }; },
+    onLifecycle: async event => {
+      if (event.type === "queued" || event.type === "held") observed.set(event.entry.id, event.entry.manualReleaseRequired === true);
+      if (armed && event.type === "queued" && !event.entry.manualReleaseRequired && publications++ === publication) {
+        armed = false;
+        await queue.submitHeld({ ...THREAD, id: "new-review", origin: "manual", input: [] }, "independent review");
+      }
+    },
+  });
+  try {
+    for (let index = 0; index < count; index++) {
+      await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, "old lock");
+    }
+    armed = true;
+    expect(await queue.releaseHold(THREAD, reason => reason === "old lock")).toBe(true);
+    // Unlock answers only the old lock. A later review must remain both
+    // visible and actionable after its introducing entry is cancelled.
+    expect(queue.getQueuedEntries(THREAD).every(entry => entry.manualReleaseRequired && entry.holdReason === "independent review")).toBe(true);
+    expect([...observed.values()].every(Boolean)).toBe(true);
+    queue.cancelEntryWithDisposition("new-review");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(started).toEqual([]);
+    expect((await queue.releaseEntryWithDisposition("older-0")).disposition).toBe("started");
+    expect(started).toEqual(["older-0"]);
+  } finally { queue.close(); }
+}
+
+it("unlock publication preserves every newer independent review as an actionable hold", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), fc.nat(), async (count, offset) => {
+    await unlockWithNewHold(count, offset % count);
+  }));
+});
+
+it("unlock cannot strand an older input after cancelling the new review entry", async () => {
+  await unlockWithNewHold(1, 0);
+});
+
 async function retryWithNewHold(count: number, publication: number): Promise<void> {
   const started: string[] = [];
   const observed = new Map<string, boolean>();
