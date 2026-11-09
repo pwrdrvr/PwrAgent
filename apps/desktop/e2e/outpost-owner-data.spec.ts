@@ -86,6 +86,72 @@ test("an Outpost shared helper title reaches the actual desktop renderer and sur
   } finally { await app.close(); }
 });
 
+test("accepted Outpost steering and interruption survive desktop owner handover without replay", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
+  const ref = { backend: "codex" as const, threadId: "thread-smoke" };
+  let headless = "";
+  const app = await launchElectronApp({
+    secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      const workspace = realpathSync(homeRoot);
+      const stateDirectory = path.dirname(stateDbPathForHomeRoot(homeRoot));
+      headless = path.join(stateDirectory, "headless");
+      const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: workspace });
+      try {
+        const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(homeRoot, "codex") }, profile);
+        const runtime = new Runtime({ workspace, store, home: path.join(homeRoot, "codex"), command: "unused", onFailure() {} });
+        let sends = 0;
+        let interruptions = 0;
+        runtime.codex = {
+          startThread: async () => ({ threadId: ref.threadId }),
+          startTurn: async () => ({ threadId: ref.threadId, turnId: "turn-control" }),
+          steerTurn: async () => { sends++; return { threadId: ref.threadId, turnId: "turn-control" }; },
+          interruptTurn: async () => {
+            interruptions++;
+            runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "turn-control", status: "interrupted" } } });
+            return {};
+          },
+        };
+        const backend = new HeadlessBackend(runtime, () => {});
+        runtime.onEvent = (event: unknown) => backend.event(event);
+        backend.authenticateOrigin = (origin: unknown) => origin;
+        const input = { id: "controlled", prompt: "Replay smoke thread" };
+        runtime.submit(input);
+        await runtime.work;
+        const save = store.save.bind(store);
+        let refuse = true;
+        store.save = (job: any) => { if (job.messageOrigin && refuse) { refuse = false; throw new Error("origin refused"); } return save(job); };
+        const request = { ...ref, expectedTurnId: "turn-control", requestId: "one-steer", input: [{ type: "text", text: "Inspect this boundary" }], messageOrigin: { kind: "agent", systemReason: "fixture-steer" } };
+        await expect(backend.handle("steerTurn", request)).rejects.toThrow("origin refused");
+        const copies = await Promise.all(Array.from({ length: 3 }, () => backend.handle("controlActiveTurn", { ...request, operation: "steer" })));
+        for (const result of copies) expect(result).toMatchObject({ ok: true, turnId: "turn-control", disposition: "steered" });
+        await expect(backend.handle("steerTurn", { ...request, input: [{ type: "text", text: "changed" }] })).rejects.toThrow("reused with different input");
+        expect(await backend.handle("controlActiveTurn", { ...ref, expectedTurnId: "turn-control", requestId: "stop", operation: "stop" })).toMatchObject({ ok: true, disposition: "interrupted" });
+        expect(runtime.submit(input)).toMatchObject({ status: "interrupted", turnId: "turn-control" });
+        expect(sends).toBe(1);
+        expect(interruptions).toBe(1);
+      } finally { profile.close(); }
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const thread = await app.window.evaluate(async identity => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return (await api.getNavigationSelectedDetail!({ protocol: 2, ref: identity })).thread;
+    }, ref);
+    expect(thread).toMatchObject({ id: ref.threadId, title: "Replay smoke thread" });
+    await app.closeApplication();
+    const workspace = realpathSync(app.homeRoot);
+    const profile = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: workspace });
+    try {
+      const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(app.homeRoot, "codex") }, profile);
+      expect(store.get("controlled")).toMatchObject({ threadId: ref.threadId, turnId: "turn-control", status: "interrupted", messageOrigin: { kind: "agent", systemReason: "fixture-steer" } });
+    } finally { profile.close(); }
+  } finally { await app.close(); }
+});
+
 test("desktop baseline reads, metadata-only titles and archive observations survive actual Outpost takeover", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
   const identity = { backend: "codex" as const, threadId: "thread-smoke" };

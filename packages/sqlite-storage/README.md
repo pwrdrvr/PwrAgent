@@ -512,3 +512,19 @@ and a new-thread turn as the inherited 6 commits/49,440 bytes (4.944 MB/day at
 the unknown outcome boundary (3.296 MB/day at 100/day). One thousand duplicate
 submissions and owner reads add zero commits and 0 MB/day. There is no SQLite
 timer; all inherited budgets and conformance defaults remain byte-identical.
+
+Outpost steering now uses shared request admission and submission. Native
+acceptance precedes the existing job-origin write; concurrent retries share
+completion and a failed origin write never resends accepted input. Runtime
+interruption uses shared target coordination and retains its existing durable
+interrupting/refusal-restoration sites. Concurrent provider terminals win over
+late restoration or origin completion, and retire steering admission.
+
+`outpost-turn-control-write-budgets.json` measures actual feature boundaries:
+an accepted origin or interrupt commits once (4,120 observed WAL bytes, about
+0.412 MB/day at 100/day). Refused interrupts and interrupts with a concurrent
+terminal commit twice (8,240 bytes, about 0.824 MB/day at 100/day). A refused
+origin write commits zero times; its completion retry commits once. Ordinary
+steering, 1,000 accepted steering retries/reads, and 1,000 repeated pending
+interrupts commit zero times and add no provider sends. Setup is excluded;
+there is no timer, and every inherited budget remains byte-identical.

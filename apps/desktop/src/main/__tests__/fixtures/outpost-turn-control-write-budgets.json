@@ -1,0 +1,11 @@
+{
+  "accepted-duplicate-reads": {"commits": 0, "note": "1000 accepted retries and owner reads; no native replay or writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "accepted-interrupt": {"commits": 1, "note": "Existing durable interrupting transition before native RPC, no retirement before terminal", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "accepted-origin": {"commits": 1, "note": "One accepted native steer's causal origin boundary; setup and native turn creation excluded", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "duplicate-interrupt": {"commits": 0, "note": "1000 repeated interrupts while confirmed interrupt is pending; no native replay or writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "ordinary-steer": {"commits": 0, "note": "Actual ordinary steering; no origin or persistence, zero commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "origin-completion-retry": {"commits": 1, "note": "Retry only the refused origin boundary after native acceptance", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "origin-write-refusal": {"commits": 0, "note": "Refused host retention after native acceptance; no durable write and no provider replay", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "refused-interrupt": {"commits": 2, "note": "Existing interrupting and restoration boundaries after provider refusal", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
+  "terminal-during-interrupt": {"commits": 2, "note": "Interrupting plus confirmed provider terminal; late refusal makes no restoration write", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2}
+}

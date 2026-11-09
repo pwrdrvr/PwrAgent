@@ -1,9 +1,10 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { buildThreadIdentityKey, isAppServerBackendKind, NavigationQueryStore, ThreadNamingLifecycle, projectProviderThreadSummary, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
-import { ThreadCreationLifecycle, ThreadTitleGenerationService, ThreadTitleLifecycle } from "../dist/federation-core.js";
+import { ThreadCreationLifecycle, ThreadSteeringLifecycle, ThreadSteerSubmissionLifecycle, ThreadTitleGenerationService, ThreadTitleLifecycle } from "../dist/federation-core.js";
 
 // The owner methods this outpost serves. Each one's capability comes from the
 // shared owner contract, so a grant means the same here as on desktop.
@@ -106,6 +107,32 @@ export class HeadlessBackend {
     runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
     this.latestJobs = new Map();
     this.syncJobs();
+    this.steerSubmissions = new ThreadSteerSubmissionLifecycle({
+      assertUnlocked: async (request) => this.assertSteerUnlocked(request),
+      prepareInput: async (request) => [{ type: "text", text: textInput(request.input), text_elements: [] }],
+      prepareCodex: async (request, input, origin) => {
+        const job = this.activeJob(request);
+        return {
+          submit: async () => {
+            this.assertSteerUnlocked(request);
+            if (this.activeJob(request).id !== job.id) throw new Error("Active turn changed");
+            const result = await runtime.codex.steerTurn({ threadId: request.threadId, expectedTurnId: request.expectedTurnId, input });
+            return { threadId: request.threadId, turnId: result.turnId || job.turnId };
+          },
+          retain: async () => {
+            if (!origin) return;
+            // Merge at the acceptance boundary against this captured job's
+            // current record. A terminal or another accepted steer may have
+            // arrived while the provider was deciding; neither may be erased.
+            const current = runtime.store.get(job.id);
+            const messageOrigin = { ...origin, ...mergeCausalMessagingContext([current.messageOrigin, origin]) };
+            if (!isDeepStrictEqual(current.messageOrigin, messageOrigin)) runtime.save({ ...current, messageOrigin });
+          },
+        };
+      },
+    });
+    this.steering = new ThreadSteeringLifecycle({ submit: (request, origin) => this.steerSubmissions.submit(request, origin) });
+    runtime.onTurnTerminal = (target) => this.steering.retireTurn(target);
   }
 
   async initialize() {
@@ -191,6 +218,20 @@ export class HeadlessBackend {
 
   latest(id) {
     return this.latestJobs.get(id);
+  }
+
+  activeJob(params) {
+    this.owned(params.threadId);
+    const job = this.latest(params.threadId);
+    if (!job || !ACTIVE.has(job.status) || !job.turnId) throw new Error("Thread has no active turn");
+    if (params.expectedTurnId && params.expectedTurnId !== job.turnId) throw new Error("Active turn changed");
+    return job;
+  }
+
+  assertSteerUnlocked(request) {
+    if (this.runtime.stopping) throw new Error("Daemon is stopping");
+    this.activeJob(request);
+    if (this.runtime.threadLocked?.(request.threadId)) throw new Error("Thread handoff is in progress");
   }
 
   summary(thread) {
@@ -353,23 +394,19 @@ export class HeadlessBackend {
         return { backend: "codex", threadId: params.threadId, turnId: job.turnId };
       }
       case "steerTurn": case "controlActiveTurn": {
-        this.owned(params.threadId);
-        const job = this.latest(params.threadId);
-        if (!job || !ACTIVE.has(job.status) || !job.turnId) throw new Error("Thread has no active turn");
-        if (params.expectedTurnId && params.expectedTurnId !== job.turnId) throw new Error("Active turn changed");
+        const job = this.activeJob(params);
         if (name === "controlActiveTurn" && params.operation === "stop") {
           await this.runtime.handle("interrupt", { id: job.id });
           return { ok: true, backend: "codex", threadId: params.threadId, requestId: params.requestId, turnId: job.turnId, disposition: "interrupted" };
         }
         if (name === "controlActiveTurn" && params.operation !== "steer") throw new Error("Unsupported active-turn operation");
-        const input = [{ type: "text", text: textInput(params.input), text_elements: [] }];
         const incoming = this.authenticateOrigin?.(params.messageOrigin, envelope);
-        if (incoming) {
-          const original = job.messageOrigin;
-          this.runtime.save({ ...job, messageOrigin: { ...incoming, ...mergeCausalMessagingContext([original, incoming]) } });
-        }
-        const result = await this.runtime.codex.steerTurn({ threadId: params.threadId, expectedTurnId: params.expectedTurnId || job.turnId, input });
-        return { backend: "codex", threadId: params.threadId, turnId: result.turnId || job.turnId, disposition: "steered",
+        if (params.requestId !== undefined && (typeof params.requestId !== "string" || !params.requestId || params.requestId.length > 256)) throw new Error("Invalid steer request ID");
+        // Older peers omitted retry identity and/or expected turn. Each such
+        // invocation remains independent; modern peers share the core admission.
+        const result = await this.steering.steerTurn({ ...params, backend: "codex", expectedTurnId: params.expectedTurnId || job.turnId,
+          requestId: params.requestId ?? randomUUID() }, incoming);
+        return { ...result,
           ...(name === "controlActiveTurn" ? { ok: true, requestId: params.requestId } : {}) };
       }
       case "renameThread": {

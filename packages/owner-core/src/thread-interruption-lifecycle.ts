@@ -20,33 +20,38 @@ export interface ThreadInterruptionLifecycleHost {
   reviewInterrupted(parent: ThreadInterruptionTarget, review: ThreadInterruptionTarget): void;
 }
 
+export type ThreadInterruptionLifecyclePorts = Partial<ThreadInterruptionLifecycleHost>;
+
 /** Routes an owner's visible turn to its provider. Active identities stay host-owned. */
 export class ThreadInterruptionLifecycle {
-  constructor(private readonly host: ThreadInterruptionLifecycleHost) {}
+  constructor(private readonly host: ThreadInterruptionLifecyclePorts) {}
 
   async interruptTurn(request: ThreadInterruptionTarget): Promise<ThreadInterruptionTarget> {
-    this.host.cancelTools(request);
+    this.host.cancelTools?.(request);
     // A review owns the parent's visible turn, including a Claude parent whose
     // reviewer runs on another provider. Resolve that ownership before dispatch.
-    const review = this.host.findReview(request);
+    const review = this.host.findReview?.(request);
     const target = review ?? request;
     let result: { threadId: string; turnId: string };
     if (isAcpBackendId(target.backend)) {
+      if (!this.host.interruptAcp) throw new Error("This host cannot interrupt ACP");
       result = await this.host.interruptAcp(target, review !== undefined);
     } else if (target.backend === "claude") {
+      if (!this.host.interruptClaude) throw new Error("This host cannot interrupt Claude");
       result = await this.host.interruptClaude(target);
     } else {
-      const turnId = this.host.readCodexInterruptTurnId(target) ?? target.turnId;
+      if (!this.host.interruptCodex) throw new Error("This host cannot interrupt Codex");
+      const turnId = this.host.readCodexInterruptTurnId?.(target) ?? target.turnId;
       result = await this.host.interruptCodex({ ...target, turnId }, {
         review: review !== undefined,
         requestedTurnId: target.turnId,
       });
       // Reviews retain their visible identity until the provider's terminal
       // event. Ordinary interrupts keep the host's existing retirement site.
-      if (!review) this.host.retireCodexTurn(request, result);
+      if (!review) this.host.retireCodexTurn?.(request, result);
     }
     if (review) {
-      this.host.reviewInterrupted(request, review);
+      this.host.reviewInterrupted?.(request, review);
       return request;
     }
     return { backend: request.backend, ...result };

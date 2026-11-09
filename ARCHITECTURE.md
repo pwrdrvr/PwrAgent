@@ -317,6 +317,17 @@ events retire that turn's admissions. Desktop supplies provider execution and
 causal-origin merging/persistence through host ports, retaining their existing
 locks, storage sites and event order. The core does not infer active turns.
 
+Outpost uses this same admission and submission path for federation steering
+and active-turn steering. Its host resolves the latest active job, rechecks
+handoff locks before native submission, and retains authenticated causal origin
+only after provider acceptance. Retention reads the captured job again, preserving
+concurrent terminal outcomes and other accepted origins. Failed retention retries
+only that effect. Legacy peers without a request id retain independent sends.
+Runtime interruption uses the shared interruption coordinator while keeping its
+durable interrupting/RPC/restoration boundaries; it does not retire steering
+admission until the provider terminal. Sparse ports omit unsupported provider,
+review, attachment and restart effects; desktop retains its complete contracts.
+
 Interruption target coordination lives in
 `owner-core/thread-interruption-lifecycle.ts`. It resolves the reviewer that
 owns a visible parent turn before dispatching to a provider, including reviews
