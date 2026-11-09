@@ -221,7 +221,9 @@ export class HeadlessBackend {
       const earlier = [...this.runtime.store.jobs.values()].some(job => job.threadId === threadId && job.id !== jobId && job.turnId);
       if (!earlier) {
         this.deriveTitle(threadId, prompt);
-        this.titles.schedule({ backend: "codex", threadId, input: [{ type: "text", text: prompt }] });
+        const schedule = () => this.titles.schedule({ backend: "codex", threadId, input: [{ type: "text", text: prompt }] });
+        if (this.runtime.codex.runOptionalTitleWork) this.runtime.codex.runOptionalTitleWork(schedule);
+        else schedule();
       }
       return;
     }

@@ -92,13 +92,17 @@ for (const stalledMethod of ["model/list", "config/read", "thread/start", "mcpSe
     runtime.submit({ id: "user", prompt: "slow" });
     await runtime.work;
     const accepted = runtime.store.get("user");
+    const fallback = backend.owned(accepted.threadId).title;
     const pid = runtime.codex.child.pid;
     await backend.titles.whenSettled();
     assert.ok(calls().some(call => call.method === stalledMethod));
     assert.equal(failures.length, 0, "an optional helper timeout reached daemon onFailure");
     assert.equal(runtime.codex.child?.pid, pid);
     assert.deepEqual(runtime.store.get("user"), accepted, "helper failure changed durable user acceptance/outcome");
-    if (stalledMethod !== "thread/unsubscribe") assert.equal(backend.owned(accepted.threadId).title, "Slow");
+    // Model discovery can still select the configured fallback model; failed
+    // cleanup cannot discard an already completed answer.
+    assert.equal(backend.owned(accepted.threadId).title,
+      ["model/list", "thread/unsubscribe"].includes(stalledMethod) ? "Helper generated title" : fallback);
     await runtime.handle("interrupt", { id: "user" });
     assert.equal(runtime.store.get("user").status, "interrupted");
   });

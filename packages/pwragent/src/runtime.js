@@ -266,8 +266,15 @@ export class Runtime {
   async stop() {
     this.stopping = true;
     await this.codex.stop();
-    await this.work;
-    await this.settleTitles?.();
+    try {
+      await this.work;
+      await this.settleTitles?.();
+    } finally {
+      // An admitted helper can resume async setup after the first close and
+      // initialize Codex again. Drain it before the final provider shutdown,
+      // while the daemon still owns its profile leases and storage.
+      await this.codex.stop();
+    }
     if (this.active) this.finish(this.active, "unknown", "Daemon stopped; inspect the thread before explicitly continuing");
   }
 }
