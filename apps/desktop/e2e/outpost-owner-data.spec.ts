@@ -76,7 +76,9 @@ test("durable Outpost admission appears in the mounted queue and cancelled input
     const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented durable original")).toHaveLength(0);
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented durable changed")).toHaveLength(1);
-  } finally { await app?.close(); await outpost.close(); }
+  } finally {
+    try { await app?.close(); } finally { await outpost.close(); }
+  }
 });
 
 test("an authenticated queued replacement reaches the mounted desktop with a new durable identity and one provider send", async () => {
