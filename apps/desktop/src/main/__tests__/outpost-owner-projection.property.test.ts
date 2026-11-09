@@ -10,6 +10,7 @@ import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlit
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
+import { seedRetainedOutpostUnreadThread } from "../../../e2e/fixtures/outpost-owner-data-seeding";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -35,6 +36,25 @@ async function open(f: ReturnType<typeof fixture>) {
 const identity = { backend: "codex" as const, threadId: "thread" };
 const provider = (updatedAt: number): AppServerThreadSummary => ({ id: identity.threadId, source: "codex",
   title: "Retained desktop thread", titleSource: "explicit", createdAt: 0, updatedAt, linkedDirectories: [] });
+
+it("seeds the retained unread fixture independently of whether startup discovery completes before takeover", async () => {
+  await fc.assert(fc.asyncProperty(fc.nat(10000), fc.boolean(), async (updatedAt, refreshBeforeQuit) => {
+    const f = fixture();
+    let owner: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      const thread = provider(updatedAt);
+      seedRetainedOutpostUnreadThread(f.db, thread);
+      // A visible navigation row does not imply the independent startup
+      // refresh has committed its durable provider inventory before quit.
+      if (refreshBeforeQuit) f.inventory.replace({ backend: "codex", observedAt: 1, threads: [thread] });
+      owner = await open(f);
+      expect(owner.backend.summary(owner.backend.owned(thread.id))).toMatchObject({
+        id: thread.id, title: thread.title, updatedAt, inbox: { inInbox: false },
+      });
+      expect((await f.desktop.getThreadMetadata(identity))?.seenUpdatedAt).toBeUndefined();
+    } finally { owner?.close(); f.close(); }
+  }), { numRuns: 20, examples: [[1, false]] });
+});
 
 it("keeps metadata-only rows filterable without replacing provider or canonical titles", async () => {
   const f = fixture();

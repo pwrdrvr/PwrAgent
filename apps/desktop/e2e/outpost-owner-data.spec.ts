@@ -10,6 +10,7 @@ import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { seedRetainedOutpostUnreadThread } from "./fixtures/outpost-owner-data-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.resolve(specDir, "../../../packages/pwragent/src", file)).href);
@@ -33,7 +34,7 @@ test("desktop baseline reads, metadata-only titles and archive observations surv
         const overlay = new SqliteOverlayStore(db);
         const retained: AppServerThreadSummary = { id: identity.threadId, source: "codex", title: "Replay smoke thread",
           titleSource: "explicit", updatedAt: 1760000000000, linkedDirectories: [] };
-        overlay.initializeNavigationUnreadBaseline(overlay.readNavigationQueryIndex({ backend: "codex", threads: [retained] }).threads);
+        seedRetainedOutpostUnreadThread(db, retained);
         await overlay.setThreadExecutionMode({ backend: "codex", threadId: "metadata-only", executionMode: "auto" });
         await overlay.observeArchivedThreads([{ backend: "codex", threadId: "observed-archive" }], 1);
       } finally { db.close(); }
