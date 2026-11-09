@@ -36,7 +36,7 @@ export type OwnerThreadMetadata = {
   subthreadsCollapsed?: boolean;
   /** Provider thread was created with the messaging file-tool catalog. */
   messagingFileTools?: boolean;
-  /** False confirms native creation; true records complete-discovery retirement. */
+  /** False confirms native membership; true records complete-discovery retirement. */
   nativeMembershipRetired?: boolean;
 };
 

@@ -47,6 +47,26 @@ type Identity = { version: 1; workspace: string; codexHome: string };
 type Manifest = { version: 1; identity: Identity; files: Array<{ name: string; sha256: string }> };
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
+/** Existing adopted profiles carry their provenance in the durable manifest
+ * and byte-exact backup. Reading it neither reimports nor repairs metadata. */
+export function readCommittedOutpostImport(db: StateDb, directory: string): { threadIds: Set<string>; workspace?: string } {
+  const saved = db.getMeta(IMPORT_KEY);
+  if (!saved) return { threadIds: new Set() };
+  const manifest: Manifest = JSON.parse(saved);
+  if (manifest.version !== 1 || manifest.identity?.version !== 1 || !Array.isArray(manifest.files)
+    || typeof manifest.identity.workspace !== "string") throw new Error("Invalid committed owner import");
+  const file = manifest.files.find(file => file.name === "threads.json");
+  if (!file) return { threadIds: new Set(), workspace: manifest.identity.workspace };
+  const bytes = read(path.join(directory, BACKUP_DIRECTORY, "threads.json"));
+  if (!bytes || hash(bytes) !== file.sha256) throw new Error("Legacy owner backup is missing or changed");
+  const data = JSON.parse(bytes.toString("utf8"));
+  if (data.version !== 1 || !Array.isArray(data.threads)
+    || data.threads.some((thread: OutpostThread) => typeof thread?.id !== "string" || !thread.id || thread.id.length > 256)) {
+    throw new Error("Invalid committed owner import identities");
+  }
+  return { threadIds: new Set(data.threads.map((thread: OutpostThread) => thread.id)), workspace: manifest.identity.workspace };
+}
+
 function read(file: string): Buffer | undefined {
   try {
     const stat = fs.lstatSync(file);

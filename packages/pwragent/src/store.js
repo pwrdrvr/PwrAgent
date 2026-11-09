@@ -45,6 +45,7 @@ export class JobStore {
     this.storage = storage.jobs;
     this.threadRegistry = storage.threads;
     this.inventory = storage.inventory;
+    this.retainedOwners = storage.retainedOwners;
     this.acpSessions = storage.acpSessions;
     this.claudeSessions = storage.claudeSessions;
     // Existing runtime consumers retain point reads and iteration, without a

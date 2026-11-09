@@ -32,6 +32,7 @@ import { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { ProviderThreadSnapshotStore } from "../storage/provider-thread-snapshot-store";
+import { RetainedOwnerThreadStore } from "../storage/retained-owner-thread-store";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
@@ -121,6 +122,7 @@ async function startDesktopOwner(
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
     ...(profileRoot ? { providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db) } : {}),
+    ...(profileRoot ? { retainedOwnerThreadStorage: new RetainedOwnerThreadStore(db, path.join(profileRoot, "profiles/t/state/headless")) } : {}),
     ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
     ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
     threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
@@ -615,6 +617,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         writeFileSync(path.join(headless, "identity.json"), JSON.stringify({ version: 1, workspace: path.join(root, "w"), codexHome: path.join(root, "c") }));
         writeFileSync(path.join(headless, "threads.json"), JSON.stringify({ version: 1, threads: [
           { id: "pending-import", title: "Pending imported title", titleSource: "derived", sandbox: "read-only" },
+          { id: "fallback-import", title: "Untitled thread", titleSource: "fallback", sandbox: "read-only" },
         ] }));
         const accepted = { version: 1, id: "confirmed-job", status: "completed", fingerprint: "accepted-input-fingerprint",
           threadId: "accepted-owner", turnId: "accepted-turn", sandbox: "read-only", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:01Z" };
@@ -645,7 +648,13 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           expect((await client.resolveThread({ backend: "codex", threadId: "pending-import" })).thread)
             .toMatchObject({ title: "Pending imported title", titleSource: "derived" });
           expect((await client.resolveThread({ backend: "codex", threadId: "accepted-owner" })).thread).toBeDefined();
-          for (const id of ["pending-import", "accepted-owner"]) {
+          expect((await client.resolveThread({ backend: "codex", threadId: "fallback-import" })).thread)
+            .toMatchObject({ title: "Untitled thread", titleSource: "fallback" });
+          const identities = ["pending-import", "fallback-import", "accepted-owner"].map(id => ({ backend: "codex" as const, threadId: id }));
+          const page = await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend: "codex",
+            query: { kind: "exact", identities } });
+          expect(page.entries.map(entry => entry.row.id).sort()).toEqual(identities.map(ref => ref.threadId).sort());
+          for (const id of ["pending-import", "fallback-import", "accepted-owner"]) {
             expect((await client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: id } })).thread).toBeDefined();
           }
           const db = StateDb.open(path.join(root, "profiles/t/state/state.db"), { profileName: "t" });
@@ -666,6 +675,22 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         desktop = await startDesktopOwner(null, prepare, undefined, root);
         await assertRetired(desktop.client);
         await assertRetained(desktop.client);
+        // A positive native observation confirms even an unnamed fallback
+        // import. After that confirmation, absence cannot make it pending again.
+        writeFileSync(path.join(root, "f/fixture-threads.json"), JSON.stringify({ "fallback-import": {
+          id: "fallback-import", name: "", preview: "", cwd: path.join(root, "w"), createdAt: 1, updatedAt: 2, turns: [], archived,
+        } }));
+        await desktop.close(); desktop = undefined;
+        desktop = await startDesktopOwner(null, prepare, undefined, root);
+        const confirmed = archived
+          ? (await desktop.client.lookupArchivedThreads({ backend: "codex", threadIds: ["fallback-import"] })).threads
+          : (await desktop.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend: "codex",
+            query: { kind: "exact", identities: [{ backend: "codex", threadId: "fallback-import" }] } })).entries.map(entry => entry.row);
+        expect(confirmed.some(thread => thread.id === "fallback-import")).toBe(true);
+        await desktop.close(); desktop = undefined;
+        writeFileSync(path.join(root, "f/fixture-threads.json"), "{}");
+        desktop = await startDesktopOwner(null, prepare, undefined, root);
+        expect((await desktop.client.resolveThread({ backend: "codex", threadId: "fallback-import" })).thread).toBeUndefined();
       } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
     }), { numRuns: 3 });
   }, 60_000);

@@ -184,11 +184,14 @@ it("publishes a pending imported title only after native confirmation, then reti
   await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{1,15}$/), async suffix => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-codex-pending-")));
     mkdirSync(path.join(root, "headless"), { mode: 0o700 });
+    writeFileSync(path.join(root, "headless/threads.json"), JSON.stringify({ version: 1, threads: [
+      { id: "pending", title: `Imported ${suffix}`, titleSource: "derived", sandbox: "read-only" },
+    ] }));
+    writeFileSync(path.join(root, "headless/identity.json"), JSON.stringify({ version: 1, workspace: root, codexHome: path.join(root, "codex") }));
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     try {
       const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
       const ref = { backend: "codex", threadId: "pending" };
-      store.threadRegistry.updateThreadMetadata(ref, { title: { text: `Imported ${suffix}`, source: "derived" } });
       let present = false;
       let nativeName = "Native before publication";
       let renames = 0;

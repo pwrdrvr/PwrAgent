@@ -3,11 +3,12 @@ import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection,
 
 /** Retained provider discovery and live canonical metadata, qualified by backend. */
 export class OutpostThreadRegistry {
-  constructor(storage, inventory, acpSessions, claudeSessions) {
+  constructor(storage, inventory, acpSessions, claudeSessions, retainedOwners) {
     this.storage = storage;
     this.unreadBaseline = storage?.readUnreadBaseline?.() ?? {};
     this.acpSessions = acpSessions;
     this.claudeSessions = claudeSessions;
+    this.retainedOwners = retainedOwners;
     this.acceptedJobThreadIds = new Set();
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
@@ -47,7 +48,10 @@ export class OutpostThreadRegistry {
     if (backend.startsWith("acp:") && (!session || session.hidden)) return undefined;
     const native = session ? this.acpThread(session) : this.inventory.get(buildThreadIdentityKey(backend, id));
     if (backend === "codex" && !native && record?.nativeMembershipRetired && !this.acceptedJobThreadIds.has(id)) return undefined;
-    return this.project(id, record, native, backend);
+    const retained = backend === "codex" && !native && record && !this.acceptedJobThreadIds.has(id)
+      ? this.retainedOwners?.list().find(thread => thread.id === id) : undefined;
+    if (backend === "codex" && !native && !retained && !this.acceptedJobThreadIds.has(id)) return undefined;
+    return this.project(id, record, native ?? retained, backend);
   }
 
   retainAcceptedJobThread(id) { this.acceptedJobThreadIds.add(id); }
@@ -133,11 +137,14 @@ export class OutpostThreadRegistry {
     const natives = new Map([...this.inventory].filter(([, thread]) => !thread.source.startsWith("acp:")
       && (backend === "all" || thread.source === backend)));
     for (const [key, thread] of acpThreads) natives.set(key, thread);
+    const retained = new Map((backend === "all" || backend === "codex" ? this.retainedOwners?.list() ?? [] : [])
+      .map(thread => [buildThreadIdentityKey("codex", thread.id), thread]));
     const identities = new Map([...natives].map(([key, thread]) => [key, { backend: thread.source, threadId: thread.id }]));
+    for (const [key, thread] of retained) identities.set(key, { backend: "codex", threadId: thread.id });
     for (const [key, record] of byId) identities.set(key, record);
     return [...identities].filter(([key, identity]) => identity.backend !== "codex" || natives.has(key)
-      || !byId.get(key)?.nativeMembershipRetired || this.acceptedJobThreadIds.has(identity.threadId))
-      .map(([key, identity]) => this.project(identity.threadId, byId.get(key), natives.get(key), identity.backend)).values();
+      || retained.has(key) || this.acceptedJobThreadIds.has(identity.threadId))
+      .map(([key, identity]) => this.project(identity.threadId, byId.get(key), natives.get(key) ?? retained.get(key), identity.backend)).values();
   }
   set(id, thread) {
     if (id !== thread.id) throw new Error("Thread registry identity changed");

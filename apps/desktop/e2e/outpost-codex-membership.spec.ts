@@ -106,5 +106,18 @@ test("desktop and Outpost retire confirmed native Codex membership while pending
     }, ref);
     expect(absent.identity).toBe("unresolved");
     await expect(reopened.window.getByRole("button", { name: /Replay smoke thread/i })).toHaveCount(0);
+    // The same actual Electron owner must retain both durable identities after
+    // the Outpost retired the separate native member and restarted twice.
+    const retained = await reopened.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const identities = ["pending-import", "accepted-owner"].map(threadId => ({ backend: "codex" as const, threadId }));
+      const details = await Promise.all(identities.map(ref => api.getNavigationSelectedDetail!({ protocol: 2, ref })));
+      const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", backend: "codex",
+        query: { kind: "exact", identities } });
+      return { details, ids: page.entries.map(entry => entry.row.id).sort() };
+    });
+    expect(retained.ids).toEqual(["accepted-owner", "pending-import"]);
+    expect(retained.details[0].thread).toMatchObject({ title: "Pending imported owner", titleSource: "derived" });
+    expect(retained.details[1].thread).toBeDefined();
   } finally { await reopened?.close(); await app.close(); }
 });
