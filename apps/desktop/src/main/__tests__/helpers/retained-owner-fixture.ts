@@ -7,14 +7,15 @@ import { RetainedOwnerThreadStore } from "../../storage/retained-owner-thread-st
 import { adoptOutpostOwnerData } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
 import { SqliteOwnerJobStore } from "@pwragent/sqlite-storage/owner-job-store";
 
-export function retainedOwnerFixture(titled = true, ids = ["imported"]) {
+export function retainedOwnerFixture(titled: boolean | "missing" = true, ids = ["imported"]) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-retained-")));
   const directory = path.join(root, "headless");
   mkdirSync(directory, { mode: 0o700 });
   const identity = { version: 1 as const, workspace: root, codexHome: path.join(root, "codex") };
   writeFileSync(path.join(directory, "identity.json"), JSON.stringify(identity));
   writeFileSync(path.join(directory, "threads.json"), JSON.stringify({ version: 1, threads: ids.map(id =>
-    ({ id, title: titled ? "Pending imported title" : "Untitled thread", titleSource: titled ? "derived" : "fallback", sandbox: "read-only" })) }));
+    ({ id, ...(titled === "missing" ? {} : { title: titled ? "Pending imported title" : "Untitled thread", titleSource: titled ? "derived" : "fallback" }),
+      sandbox: "read-only" })) }));
   const dbPath = path.join(root, "state.db");
   const db = StateDb.open(dbPath, { profileName: "fixture" });
   adoptOutpostOwnerData(db, directory, identity);

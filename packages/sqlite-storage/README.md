@@ -444,3 +444,26 @@ one commit/two statements/two changed rows/16,480 observed WAL bytes (about
 commit, with 16,480 observed WAL bytes. One thousand absent discoveries, late
 events and reads plus ten owner reopens add zero commits and 0 MB/day. There is
 no SQLite timer; the inherited default and conformance fixtures are unchanged.
+
+`RetainedOwnerThreadStore` supplies the same handle-free retention port to desktop
+and Outpost. It reuses the canonical metadata and durable job stores. Pending
+imports require the existing committed manifest and byte-verified PwrAgent backup;
+an arbitrary overlay cannot establish an owner identity. Accepted jobs retain
+their identity even after native retirement, without changing fingerprints,
+confirmed thread/turn IDs or terminal outcomes. The projection stores no prompts or transcripts,
+does not enter native inventories and starts no provider work. Unnamed imports
+retain the same fallback title on both hosts.
+
+Positive desktop native evidence confirms previously pending imports in one
+transaction, checking the current metadata within that transaction so late
+confirmation cannot overwrite retirement. The separate
+`retained-owner-read-write-budgets.json` measures a one-identity confirmation as
+one commit/one statement/one row/12,360 observed WAL bytes, and two identities as
+one commit/two statements/two rows/12,360 bytes. At 100 such boundaries per day,
+the measured cost projects to about 1.236 MB/day. Twenty repeated native
+observations, 1,000 retained reads, ten storage reopens and an actual desktop owner
+list make zero commits and 0 MB/day. No timer or schema change is added. Generated
+models cover acceptance through confirmed thread/turn and terminal boundaries,
+backend collisions, live canonical facts, atomic refusal and late confirmation.
+Actual desktop/enrolled-daemon conformance, supported Electron and the installed
+native package exercise retained reads without replaying accepted work.

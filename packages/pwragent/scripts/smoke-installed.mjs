@@ -169,6 +169,10 @@ try {
       assert.equal((await membership.handle("resolveThread", codexRef)).thread, undefined);
       assert.equal(membership.threads.get("pending-packed").title, "Packed pending import");
       assert.ok(membership.threads.get(store.get("smoke").threadId));
+      const retained = store.retainedOwners.list();
+      assert.equal(retained.find(thread => thread.id === "pending-packed").title, "Packed pending import");
+      assert.ok(retained.some(thread => thread.id === store.get("smoke").threadId));
+      assert.ok(!retained.some(thread => thread.id === codexRef.threadId), "a retired native overlay is not independent retention evidence");
       assert.deepEqual([...store.jobs.values()], acceptedBefore);
       assert.equal((await membership.handle("resolveThread", { backend: "claude", threadId: claudeId })).thread.title, "Packed Claude metadata");
       membership = new HeadlessBackend(runtime, () => {});

@@ -602,6 +602,11 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         seeded = true;
         await new SqliteOverlayStore(db).updateThreadMetadata(ref, { title: { text: "Native confirmed", source: "derived", nativeName: "Native confirmed" },
           pinnedRank: "1024", seenAt: 10, seenUpdatedAt: 2, parent: { backend: "claude", threadId: "parent" }, model: "saved-model", fastMode: true });
+        await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "codex", threadId: "accepted-owner" }, {
+          title: { text: "Accepted canonical title", source: "derived", nativeName: "Accepted canonical title" },
+          nativeMembershipRetired: true, createdAt: 1, updatedAt: 2, cwd: workspace,
+          pinnedRank: "2048", seenAt: 10, seenUpdatedAt: 2, parent: { backend: "claude", threadId: "parent" }, model: "accepted-model", fastMode: true,
+        });
         writeFileSync(path.join(root, "f/fixture-threads.json"), JSON.stringify({ [threadId]: {
           id: threadId, name: "Native confirmed", preview: "", cwd: workspace, createdAt: 1, updatedAt: 2, turns: [], archived,
         } }));
@@ -616,8 +621,10 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         mkdirSync(path.join(headless, "jobs"), { recursive: true, mode: 0o700 });
         writeFileSync(path.join(headless, "identity.json"), JSON.stringify({ version: 1, workspace: path.join(root, "w"), codexHome: path.join(root, "c") }));
         writeFileSync(path.join(headless, "threads.json"), JSON.stringify({ version: 1, threads: [
-          { id: "pending-import", title: "Pending imported title", titleSource: "derived", sandbox: "read-only" },
-          { id: "fallback-import", title: "Untitled thread", titleSource: "fallback", sandbox: "read-only" },
+          { id: "pending-import", title: "Pending imported title", titleSource: "derived", sandbox: "read-only",
+            createdAt: 1, updatedAt: 2, pinnedRank: "3072", seenAt: 10, seenUpdatedAt: 2,
+            parentThreadBackend: "claude", parentThreadId: "parent", model: "imported-model", fastMode: true },
+          { id: "fallback-import", sandbox: "read-only" },
         ] }));
         const accepted = { version: 1, id: "confirmed-job", status: "completed", fingerprint: "accepted-input-fingerprint",
           threadId: "accepted-owner", turnId: "accepted-turn", sandbox: "read-only", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:01Z" };
@@ -646,8 +653,11 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         // complete native absence retires only the separately confirmed member.
         const assertRetained = async (client: FederationRemoteBackendClient) => {
           expect((await client.resolveThread({ backend: "codex", threadId: "pending-import" })).thread)
-            .toMatchObject({ title: "Pending imported title", titleSource: "derived" });
-          expect((await client.resolveThread({ backend: "codex", threadId: "accepted-owner" })).thread).toBeDefined();
+            .toMatchObject({ title: "Pending imported title", titleSource: "derived", pinnedRank: "3072",
+              parentThreadId: "parent", parentThreadBackend: "claude", model: "imported-model", fastMode: true });
+          expect((await client.resolveThread({ backend: "codex", threadId: "accepted-owner" })).thread)
+            .toMatchObject({ title: "Accepted canonical title", titleSource: "derived", pinnedRank: "2048",
+              parentThreadId: "parent", parentThreadBackend: "claude", model: "accepted-model", fastMode: true });
           expect((await client.resolveThread({ backend: "codex", threadId: "fallback-import" })).thread)
             .toMatchObject({ title: "Untitled thread", titleSource: "fallback" });
           const identities = ["pending-import", "fallback-import", "accepted-owner"].map(id => ({ backend: "codex" as const, threadId: id }));

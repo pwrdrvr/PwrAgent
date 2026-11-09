@@ -18,6 +18,17 @@ vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn()
 
 const budgetFile = "retained-owner-read-write-budgets.json";
 
+it("confirms multiple imported native identities in one boundary transaction", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const f = retainedOwnerFixture(false, ["imported", "second"]);
+  try {
+    const confirmed = await measureSqliteWrites(() => f.retained.confirmNativeThreads(["imported", "second"]));
+    expectSqliteWriteBudget({ budgetFile, scenario: "desktop-import-batch-confirmation", writes: confirmed.writes,
+      note: "Two first positive native confirmations share one boundary transaction; no per-item commit or timer" });
+    expect(f.retained.list()).toEqual([]);
+  } finally { f.close(); vi.unstubAllEnvs(); }
+});
+
 it("budgets actual desktop native confirmation once and passive owner retention at zero commits", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const f = retainedOwnerFixture(false);

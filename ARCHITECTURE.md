@@ -454,6 +454,16 @@ and durable accepted-job identities remain independently retained; job request,
 fingerprint, thread and turn identities and restart without replay are preserved.
 Incomplete or failed walks publish no retirement, and late events do not recreate
 retired members. No schema change or SQLite timer is introduced.
+Desktop and Outpost retain readable owner identities separately from that native
+inventory. The shared retention storage port derives pending legacy identities
+from the committed import manifest and byte-verified PwrAgent backup, and accepted
+identities from durable jobs; arbitrary overlays provide neither proof. Both
+hosts read live canonical titles, pins, parents, seen watermarks and settings.
+These projections never enter provider inventories or start provider work.
+Desktop confirms a pending import on positive native evidence, even for an
+unnamed fallback, through one atomic metadata boundary. A later retirement cannot
+be overwritten by a late confirmation. Repeated observations and passive reads
+make no commits. Native forks use the same confirmed-creation boundary as starts.
 Both hosts project canonical title provenance against the last acknowledged
 native name. Imported names without that acknowledgement stay visible; Outpost
 publishes them through the shared naming lifecycle before discovery completes.

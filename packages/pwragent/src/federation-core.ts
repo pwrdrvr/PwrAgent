@@ -33,6 +33,7 @@ export { ThreadNamingLifecycle } from "@pwragent/owner-core/thread-naming-lifecy
 export { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 export { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
+export { retainsOwnerThread } from "@pwragent/owner-core/retained-owner-thread-storage";
 import type { AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { projectClaudeSessionThread, type ClaudeProfileThreadStorage } from "@pwragent/owner-core/claude-profile-storage";

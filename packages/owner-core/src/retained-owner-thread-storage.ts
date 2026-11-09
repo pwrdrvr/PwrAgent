@@ -27,7 +27,7 @@ export function projectRetainedOwnerThread(
   const archived = record?.archivedAt !== undefined || record?.restoredAt !== undefined
     ? (record.archivedAt ?? -Infinity) > (record.restoredAt ?? -Infinity) : record?.archived === true;
   return {
-    id: threadId, source: "codex", title: record?.title?.text ?? `Thread ${threadId.slice(0, 8)}`,
+    id: threadId, source: "codex", title: record?.title?.text ?? (record ? "Untitled thread" : `Thread ${threadId.slice(0, 8)}`),
     titleSource: record?.title?.source ?? "fallback", createdAt, updatedAt,
     projectKey: cwd, linkedDirectories: cwd ? [{ id: cwd, kind: "local", path: cwd, label: cwd.split(/[\\/]/).pop() || cwd }] : [],
     ...(archived ? { archivedAt: record?.archivedAt ?? 0 } : {}),

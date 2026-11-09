@@ -53,6 +53,10 @@ it("every acknowledged Outpost rename changes the native provider name before pu
     const overlay = new SqliteOverlayStore(db);
     const identity = { backend: "codex" as const, threadId: "thread" };
     await overlay.updateThreadMetadata(identity, { title: { text: "Before", source: "explicit" } });
+    // This oracle renames an already-native thread. Presentation metadata
+    // alone is not evidence that an absent provider thread is owned.
+    new ProviderThreadSnapshotStore(db).replace({ backend: "codex", observedAt: 1,
+      threads: [{ id: "thread", source: "codex", title: "Before", titleSource: "explicit", linkedDirectories: [] }] });
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     try {
       let nativeName = "Before";

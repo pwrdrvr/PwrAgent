@@ -9,7 +9,7 @@ import { retainedOwnerFixture } from "./helpers/retained-owner-fixture";
 // The model has two independent reasons for retention: a committed, still
 // unconfirmed import and a durable acceptance with a confirmed thread identity.
 it("models import confirmation and every accepted job boundary against live profile reads and reopen", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), fc.array(fc.constantFrom("facts", "confirm", "retire", "name", "accept", "thread", "turn", "finish", "reopen"),
+  await fc.assert(fc.asyncProperty(fc.constantFrom(true, false, "missing" as const), fc.array(fc.constantFrom("facts", "confirm", "retire", "name", "accept", "thread", "turn", "finish", "reopen"),
     { minLength: 1, maxLength: 18 }), async (titled, generated) => {
     const f = retainedOwnerFixture(titled);
     let confirmed = false;
@@ -28,7 +28,8 @@ it("models import confirmation and every accepted job boundary against live prof
             seenUpdatedAt: seen, model: "saved-model", fastMode: true, parent: { backend: "claude", threadId: "parent" } });
         } else if (operation === "confirm" || operation === "retire") {
           confirmed = true;
-          await f.overlay.updateThreadMetadata({ backend: "codex", threadId: "imported" }, { nativeMembershipRetired: operation === "retire" });
+          if (operation === "confirm") f.retained.confirmNativeThreads(["imported"]);
+          else await f.overlay.updateThreadMetadata({ backend: "codex", threadId: "imported" }, { nativeMembershipRetired: true });
         } else if (operation === "name") {
           named = true;
           await f.overlay.updateThreadMetadata({ backend: "codex", threadId: "imported" }, { title: { text: "Published title", source: "derived", nativeName: "Published title" } });
@@ -51,7 +52,7 @@ it("models import confirmation and every accepted job boundary against live prof
             ...(!confirmed && !named ? ["imported"] : []), ...(acceptedThread ? ["accepted-owner"] : []),
           ].sort());
           if (!confirmed && !named) expect(rows.find(row => row.id === "imported")).toMatchObject({
-            title: titled ? "Pending imported title" : "Untitled thread", titleSource: titled ? "derived" : "fallback",
+            title: titled === true ? "Pending imported title" : "Untitled thread", titleSource: titled === true ? "derived" : "fallback",
             pinnedRank: String(seen), parentThreadId: "parent", parentThreadBackend: "claude", model: "saved-model", fastMode: true,
           });
         };
@@ -66,6 +67,27 @@ it("models import confirmation and every accepted job boundary against live prof
       }
     } finally { f.close(); }
   }), { numRuns: 25 });
+});
+
+it("atomically confirms an imported batch, rolls it back on refusal and fences late confirmation after retirement", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async reverse => {
+    const f = retainedOwnerFixture(false, ["imported", "second"]);
+    const ids = reverse ? ["second", "imported"] : ["imported", "second"];
+    try {
+      const before = await f.overlay.listThreadMetadata();
+      f.db.raw.exec(reverse
+        ? "CREATE TRIGGER refuse_confirmation BEFORE INSERT ON threads WHEN json_extract(NEW.payload, '$.threadId') = 'imported' BEGIN SELECT RAISE(ABORT, 'confirmation refused'); END"
+        : "CREATE TRIGGER refuse_confirmation BEFORE INSERT ON threads WHEN json_extract(NEW.payload, '$.threadId') = 'second' BEGIN SELECT RAISE(ABORT, 'confirmation refused'); END");
+      expect(() => f.retained.confirmNativeThreads(ids)).toThrow("confirmation refused");
+      expect(await f.overlay.listThreadMetadata()).toEqual(before);
+      f.db.raw.exec("DROP TRIGGER refuse_confirmation");
+      f.retained.confirmNativeThreads(ids);
+      expect(f.retained.list()).toEqual([]);
+      await f.overlay.updateThreadMetadata({ backend: "codex", threadId: ids[0]! }, { nativeMembershipRetired: true });
+      f.retained.confirmNativeThreads(ids);
+      expect((await f.overlay.getThreadMetadata({ backend: "codex", threadId: ids[0]! }))?.nativeMembershipRetired).toBe(true);
+    } finally { f.close(); }
+  }), { numRuns: 20 });
 });
 
 it("requires committed, byte-verified import provenance and does not repair a changed backup", () => {
