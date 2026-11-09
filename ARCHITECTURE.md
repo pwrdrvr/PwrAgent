@@ -450,6 +450,12 @@ Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
 ACP metadata and command ports. Their private desktop bindings preserve the
 explicit runtime factories and app-state construction sites. Legacy history
 stripping, archive keyset pages, command filtering and SQL stay unchanged.
+Shared `MessagingPairingStore` and `MessagingActivityLog` implement owner-core
+pairing and activity ports through private desktop bindings. Their explicitly
+typed factories retain app-state construction at the original lifecycle sites.
+Profile-secret/HMAC identity, timing-safe comparison, expiry/approval transitions,
+activity payloads/freshness, list/retention bounds and all SQL remain unchanged.
+This storage boundary grants no messaging or federation access.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
