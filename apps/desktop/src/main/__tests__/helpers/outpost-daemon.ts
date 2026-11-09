@@ -40,6 +40,7 @@ export async function startOutpostDaemon(options: {
   workspaceKind?: "direct" | "symlink";
   capabilities?: FederationCapability[];
   profileRoot?: string;
+  packageRoot?: string;
 } = {}): Promise<OutpostDaemon> {
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
@@ -59,9 +60,10 @@ export async function startOutpostDaemon(options: {
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
   const env = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data };
-  const cli = path.join(OUTPOST_PACKAGE_ROOT, "bin/pwragent.js");
+  const packageRoot = options.packageRoot ?? OUTPOST_PACKAGE_ROOT;
+  const cli = path.join(packageRoot, "bin/pwragent.js");
   const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspaceInput, "--codex-home", home,
-    "--codex-bin", path.join(OUTPOST_PACKAGE_ROOT, "test/fixtures/codex.js")], { env, stdio: ["ignore", "pipe", "pipe"] });
+    "--codex-bin", path.join(packageRoot, "test/fixtures/codex.js")], { env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   let errors = "";
   daemon.stdout.on("data", (chunk) => { output += String(chunk); });

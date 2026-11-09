@@ -29,7 +29,7 @@ test.beforeAll(() => {
 test("an authenticated queued replacement reaches the mounted desktop with a new durable identity and one provider send", async () => {
   test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
   test.setTimeout(120_000);
-  const outpost = await startOutpostDaemon();
+  const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent") });
   const command = async (args: string[]) => JSON.parse((await promisify(execFile)(process.execPath, [outpost.cli, ...args], { env: outpost.env })).stdout);
   let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
   try {
