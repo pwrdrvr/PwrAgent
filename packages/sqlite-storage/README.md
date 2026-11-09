@@ -11,6 +11,13 @@ site. Host liveness remains injected. PID-owned leases, immediate acquisition,
 dead-owner grace and messaging side effects retain the original transactions;
 no heartbeat or new write is introduced.
 
+The shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
+to-do and review storage ports. Their private desktop bindings keep the existing
+construction sites. Model-settings recents move with the to-do dispatch closure;
+the desktop recents service and state compatibility export use the same helper.
+Card edits, checklist/status updates, dispatch preferences, review tracking and
+exclusive transactions retain their existing SQL and write counts.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -36,3 +43,8 @@ points. It covers live identity authority, persisted death and PID reuse, clock
 changes, grace deadlines, all three lease kinds, profile isolation, reopen order,
 atomic rollback and zero-write reads/reopens. The desktop E2E profile test also
 checks Node-created lease takeover by Electron and release back to Node.
+
+`shared-todo-review-storage.property.test.ts` compares public card and review
+records with independent models across portable/desktop WAL connections and
+reopens. It checks backend-qualified ownership, ordering, dispatch recents,
+transaction rollback, zero-write reads and unchanged dispatch commit counts.

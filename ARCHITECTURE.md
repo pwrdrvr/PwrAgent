@@ -415,6 +415,11 @@ lease ports with injected host liveness and the existing PID-owned lease
 transactions. Desktop constructs it through a private `main/storage` binding at
 the existing app-state lifecycle site. Both hosts can use this same storage
 without moving runtime identity observation into the database.
+Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
+ports through private desktop bindings at the existing runtime construction
+sites. The model-settings-recents helper is shared by to-do dispatch and the
+desktop recents service. Their SQL, immediate transactions and write counts
+remain unchanged.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
