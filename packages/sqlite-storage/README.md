@@ -27,6 +27,14 @@ second implementation. The detached PR key policy and remote target port live
 in owner-core without any storage dependency. All overlay SQL and transaction
 bodies are preserved.
 
+Shared `ThreadSearchStore` and `ProviderThreadSnapshotStore` retain compact
+search projections and provider inventories. Desktop's private bindings use
+these implementations at the existing runtime factory sites, returning
+owner-core storage ports. The SQLite FTS query builder lives with its store;
+the provider snapshot record and port live in owner-core. Inventory scrubbing,
+search refresh/prune transactions and retained usage titles keep their existing
+behavior and write counts.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -63,3 +71,8 @@ independent metadata/pin/dependency models over alternating WAL connections,
 reopen order, unchanged-fact/read write counts, cross-store rollback and live
 output boundary writes. The supported profile E2E hands owner metadata from
 Node to Electron's real services and back to Node after graceful shutdown.
+
+`shared-inventory-search-storage.property.test.ts` compares inventory and search
+facts with independent provider models across WAL connections and reopen order.
+It covers backend-qualified identities, filters, pruning, detached results,
+legacy scrubbing, atomic inventory/document/FTS rollback and unchanged writes.
