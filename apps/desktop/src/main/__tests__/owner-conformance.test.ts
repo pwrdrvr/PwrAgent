@@ -1,6 +1,7 @@
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +31,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
@@ -93,11 +95,19 @@ type OwnerHost = {
 async function startDesktopOwner(
   threadTitleGenerationService: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
   prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
+  claudeOptions?: (workspace: string) => NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["claudeBackendOptions"],
+  profileRoot?: string,
 ): Promise<OwnerHost> {
   OwnerConformanceCodexTransport.reset();
-  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
-  const { dbPath, tempDir } = createTempStateDb("pwragent-conformance-db-");
-  const db = StateDb.open(dbPath);
+  const workspace = profileRoot ? path.join(profileRoot, "w") : await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
+  const { dbPath, tempDir } = profileRoot
+    ? { dbPath: path.join(profileRoot, "profiles/t/state/state.db"), tempDir: path.join(profileRoot, "desktop") }
+    : createTempStateDb("pwragent-conformance-db-");
+  if (profileRoot) {
+    for (const dir of [workspace, tempDir, path.join(profileRoot, "f")]) mkdirSync(dir, { recursive: true });
+    OwnerConformanceCodexTransport.recordsFile = path.join(profileRoot, "f/fixture-threads.json");
+  }
+  const db = StateDb.open(dbPath, profileRoot ? { profileName: "t" } : undefined);
   const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
   const overlayStore = new SqliteOverlayStore(db);
   await prepareAcp?.(db, workspace);
@@ -110,6 +120,7 @@ async function startDesktopOwner(
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
     ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
+    ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
     threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
@@ -136,15 +147,22 @@ async function startDesktopOwner(
   const registerHandler = router.registerHandler.bind(router);
   router.registerHandler = (method, handler) => {
     if (method.startsWith("backend.")) methods.add(method);
-    registerHandler(method, handler);
+    registerHandler(method, async envelope => {
+      try { return await handler(envelope); }
+      catch (error) { throw new Error(`${method}: ${error instanceof Error ? error.stack : String(error)}`); }
+    });
   };
   let rpc: FederationRpcEndpoint;
-  router.registerConnection({ peerId: "viewer", capabilities: VIEWER_CAPABILITIES,
+  router.registerConnection({ peerId: "viewer", capabilities: [...VIEWER_CAPABILITIES, "thread_grouping"],
     sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
   const backend = new DesktopFederationRuntime().localBackend();
   // Bind the production admission path to this owner's real scheduler/store;
   // the app's process singleton belongs to an initialized desktop profile.
   backend.steerTurn = (request) => admitSteerTurn(registry, scheduler, request);
+  // This isolated profile has no mounted peers to promote during archive.
+  // Keep archive/restore on its real registry and storage, like the scheduler.
+  backend.archiveThread = (request) => registry.archiveThread(request);
+  backend.restoreThread = (request) => registry.restoreThread(request);
   registerFederationBackendHandlers({ router, backend });
   rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "desktop-owner", defaultTimeoutMs: 5000,
     sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
@@ -160,8 +178,10 @@ async function startDesktopOwner(
       resetDesktopOverlayStoreForTests();
       configStore.dispose();
       db.close();
-      await rm(workspace, { recursive: true, force: true });
-      await rm(tempDir, { recursive: true, force: true });
+      if (!profileRoot) {
+        await rm(workspace, { recursive: true, force: true });
+        await rm(tempDir, { recursive: true, force: true });
+      }
     },
   };
 }
@@ -270,6 +290,93 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+
+  it("projects canonical title provenance until a confirmed native name changes", async () => {
+    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), fc.constantFrom("pending", "acknowledged", "external"), async (suffix, state) => {
+      const nativeName = `Native ${suffix}`;
+      const ownerName = state === "pending" ? `Imported ${suffix}` : state === "external" ? `Previous ${suffix}` : nativeName;
+      const host = await startDesktopOwner(null, async (db, workspace) => {
+        OwnerConformanceCodexTransport.threads.set("imported", { id: "imported", name: nativeName, preview: "", cwd: workspace, createdAt: 1, updatedAt: 1, turns: [] });
+        await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "codex", threadId: "imported" }, {
+          title: { text: ownerName, source: "derived", ...(state !== "pending" ? { nativeName: ownerName } : {}) },
+        });
+      });
+      try {
+        const thread = (await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread;
+        expect(thread).toMatchObject(state === "external" ? { title: nativeName, titleSource: "explicit" } : { title: ownerName, titleSource: "derived" });
+        await host.client.renameThread({ backend: "codex", threadId: "imported", name: `Operator ${suffix}`, expectedName: thread!.title });
+        expect((await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread)
+          .toMatchObject({ title: `Operator ${suffix}`, titleSource: "explicit" });
+      } finally { await host.close(); }
+    }), { numRuns: 12 });
+  });
+
+  it("hands one real profile desktop → daemon → desktop → daemon with native titles and canonical metadata", async () => {
+    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), async suffix => {
+      const root = await realpath(await mkdtemp("/tmp/pa-owner-parity-"));
+      let desktop: OwnerHost | undefined;
+      let outpost: Awaited<ReturnType<typeof startOutpostDaemon>> | undefined;
+      try {
+        desktop = await startDesktopOwner(null, undefined, undefined, root);
+        const parent = await desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, executionMode: "default" });
+        const child = await desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, executionMode: "default" });
+        const archived = await desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, executionMode: "default" });
+        await desktop.client.renameThread({ backend: "codex", threadId: parent.threadId, name: `Parent ${suffix}` });
+        await desktop.client.renameThread({ backend: "codex", threadId: child.threadId, name: `Desktop ${suffix}` });
+        await desktop.client.renameThread({ backend: "codex", threadId: archived.threadId, name: `Archive ${suffix}` });
+        await desktop.client.setThreadPin({ backend: "codex", threadId: parent.threadId, pinnedRank: "8192" });
+        await desktop.client.setThreadParent({ backend: "codex", threadId: child.threadId, parentThreadId: parent.threadId, parentThreadBackend: "codex" });
+        const before = (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread!;
+        await desktop.client.markThreadSeen({ backend: "codex", threadId: child.threadId, seenAt: before.updatedAt! + 100, seenUpdatedAt: before.updatedAt });
+        await desktop.client.archiveThread({ backend: "codex", threadId: archived.threadId });
+        await desktop.close(); desktop = undefined;
+        // A real pre-SQLite Outpost record shares this provider/profile. Its
+        // derived title must reach native Codex and retain provenance on desktop.
+        const headless = path.join(root, "profiles/t/state/headless");
+        mkdirSync(headless, { recursive: true, mode: 0o700 });
+        writeFileSync(path.join(headless, "identity.json"), JSON.stringify({ version: 1, workspace: path.join(root, "w"), codexHome: path.join(root, "c") }), { mode: 0o600 });
+        writeFileSync(path.join(headless, "threads.json"), JSON.stringify({ version: 1, threads: [{ id: "legacy-native", title: `Imported ${suffix}`, titleSource: "derived", cwd: path.join(root, "w"), sandbox: "read-only" }] }), { mode: 0o600 });
+        const records = path.join(root, "f/fixture-threads.json");
+        writeFileSync(records, JSON.stringify({ ...JSON.parse(readFileSync(records, "utf8")), "legacy-native": {
+          id: "legacy-native", name: "Previous native name", cwd: path.join(root, "w"), turns: [], createdAt: 1, updatedAt: 1,
+        } }));
+
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "legacy-native" } })).thread)
+          .toMatchObject({ title: `Imported ${suffix}`, titleSource: "derived" });
+        const page = await inbox({ client: outpost.client } as OwnerHost);
+        expect(page.entries.some(entry => entry.row.id === archived.threadId)).toBe(false);
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread).toMatchObject({ title: `Desktop ${suffix}`, titleSource: "explicit", parentThreadId: parent.threadId, inbox: { inInbox: false } });
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: parent.threadId } })).thread).toMatchObject({ pinnedRank: "8192" });
+        expect((await outpost.client.lookupArchivedThreads({ backend: "codex", threadIds: [archived.threadId] })).threads.map(thread => thread.id)).toEqual([archived.threadId]);
+        await outpost.client.renameThread({ backend: "codex", threadId: child.threadId, name: `Outpost ${suffix}`, expectedName: `Desktop ${suffix}` });
+        const added = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+        await outpost.client.renameThread({ backend: "codex", threadId: added.threadId, name: `New Outpost ${suffix}` });
+        await outpost.client.markThreadSeen({ backend: "codex", threadId: child.threadId, seenAt: before.updatedAt! + 200, seenUpdatedAt: before.updatedAt! - 1 });
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread?.inbox?.inInbox).toBe(true);
+        await outpost.close(); outpost = undefined;
+
+        desktop = await startDesktopOwner(null, undefined, undefined, root);
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "legacy-native" } })).thread)
+          .toMatchObject({ title: `Imported ${suffix}`, titleSource: "derived" });
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread).toMatchObject({ title: `Outpost ${suffix}`, titleSource: "explicit", parentThreadId: parent.threadId });
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: parent.threadId } })).thread).toMatchObject({ pinnedRank: "8192" });
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: added.threadId } })).thread).toMatchObject({ title: `New Outpost ${suffix}`, titleSource: "explicit" });
+        expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: child.threadId } })).thread?.inbox?.inInbox).toBe(true);
+        await desktop.client.restoreThread({ backend: "codex", threadId: archived.threadId });
+        await desktop.close(); desktop = undefined;
+
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        expect((await inbox({ client: outpost.client } as OwnerHost)).entries.some(entry => entry.row.id === archived.threadId)).toBe(true);
+        expect((await outpost.client.lookupArchivedThreads({ backend: "codex", threadIds: [archived.threadId] })).threads).toEqual([]);
+        const native = JSON.parse(readFileSync(path.join(root, "f/fixture-threads.json"), "utf8"));
+        expect(native["legacy-native"].name).toBe(`Imported ${suffix}`);
+        expect(native[child.threadId].name).toBe(`Outpost ${suffix}`);
+        expect(native[added.threadId].name).toBe(`New Outpost ${suffix}`);
+      } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
+    }), { numRuns: 3 });
+  }, 60_000);
+
   it("serves native and remote navigation from the real desktop owner with the same bounded results", async () => {
     const desktop = await startDesktopOwner();
     try {
@@ -438,6 +545,105 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
+  it("rolls back rejected desktop preparation before later desktop and Outpost creations", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    const git = (...args: string[]) => execFileSync("git", ["-C", desktop.workspace, ...args], { encoding: "utf8" });
+    const effects: string[] = [];
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const internal = registry as unknown as {
+      gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
+      readConfiguredCodexMcpServerNames: () => Promise<string[] | undefined>;
+      registerMcpConnections: (ids: string[] | undefined) => Promise<unknown[]>;
+    };
+    let workspaceIndex = 0;
+    let grants = 1;
+    const workspaces: string[] = [];
+    vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockImplementation(async () => {
+      const cwd = path.join(desktop.workspace, `checkout-${++workspaceIndex}`);
+      git("worktree", "add", "--detach", cwd);
+      workspaces.push(cwd);
+      return { cwd, workMode: "worktree", rollback: async () => { effects.push("rollback"); git("worktree", "remove", cwd); } };
+    });
+    const inventory = vi.spyOn(internal, "readConfiguredCodexMcpServerNames");
+    vi.spyOn(internal, "registerMcpConnections").mockImplementation(async (ids) => ids?.length ? Array.from({ length: grants }, (_, i) => ({
+      server: { name: `fixture-${i}`, command: "/fixture/mcp", args: [], env: {} },
+      bindThread: () => { effects.push(`bind:${i}`); },
+      revoke: () => { effects.push(`revoke:${i}`); if (i === 0) throw new Error("fixture grant cleanup refused"); },
+    })) : []);
+    try {
+      git("init", "-b", "main");
+      git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture repository");
+      outpost = await startOutpostOwner();
+      for (const count of [2, ...fc.sample(fc.integer({ min: 1, max: 3 }), 2)]) {
+        grants = count;
+        effects.length = 0;
+        inventory.mockResolvedValueOnce(undefined);
+        const before = OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start").length;
+        const { writes } = await measureSqliteWrites(async () => {
+          await expect(desktop.client.startThread({ backend: "codex", cwd: desktop.workspace, workMode: "worktree",
+            mcpConnectionIds: ["fixture"], mcpProviderServersEnabled: false })).rejects.toThrow();
+        });
+        expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0 });
+        expect(effects).toEqual([...Array.from({ length: count }, (_, i) => `revoke:${i}`), "rollback"]);
+        expect(workspaces.every((cwd) => !existsSync(cwd))).toBe(true);
+        expect(git("worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
+        expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start")).toHaveLength(before);
+        const hosts = [desktop, outpost];
+        const created = await Promise.all(hosts.map((host) => host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto" })));
+        const turns = await Promise.all(hosts.map((host, i) => host.client.startTurn({ backend: "codex", threadId: created[i].threadId, input: [{ type: "text", text: "slow" }] })));
+        expect(turns[0]).toMatchObject({ threadId: created[0].threadId, turnId: turns[1].turnId });
+        await Promise.all(hosts.map((host, i) => host.client.interruptTurn(turns[i])));
+        await Promise.all(hosts.map(settle));
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+      vi.unstubAllEnvs();
+    }
+  }, 120_000);
+
+  it("preserves provider-created identities through real desktop metadata refusal and subsequent turns", async () => {
+    let db!: StateDb;
+    const desktop = await startDesktopOwner(null, async (state) => { db = state; });
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const overlay = new SqliteOverlayStore(db);
+      const failures = [true, false, ...fc.sample(fc.boolean(), 3)];
+      for (const fails of failures) {
+        if (fails) db.raw.exec(`CREATE TRIGGER reject_creation_pr BEFORE INSERT ON threads
+          WHEN json_extract(NEW.payload, '$.backend') = 'codex'
+            AND json_type(NEW.payload, '$.prAutoDispatchEnabled') IS NOT NULL
+          BEGIN SELECT RAISE(ABORT, 'Fixture creation PR metadata refused'); END`);
+        const before = OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start").length;
+        const created = await Promise.all([desktop, outpost].map((host) => host.client.startThread({
+          backend: "codex", cwd: host.workspace, executionMode: "auto",
+        })));
+        for (const result of created) expect(result).toMatchObject({ backend: "codex", threadId: expect.any(String) });
+        expect(OwnerConformanceCodexTransport.requests.filter((request) => request.method === "thread/start")).toHaveLength(before + 1);
+        expect(OwnerConformanceCodexTransport.threads.has(created[0].threadId)).toBe(true);
+        expect((await overlay.getThreadOverlayState({ backend: "codex", threadId: created[0].threadId }))?.executionMode).toBe("auto");
+        if (fails) {
+          expect((await overlay.getThreadOverlayState({ backend: "codex", threadId: created[0].threadId }))?.prAutoDispatchEnabled).toBeUndefined();
+          db.raw.exec("DROP TRIGGER reject_creation_pr");
+        }
+        const turns = await Promise.all([desktop, outpost].map((host, i) => host.client.startTurn({
+          backend: "codex", threadId: created[i].threadId, input: [{ type: "text", text: "slow" }],
+        })));
+        expect(turns[0]).toMatchObject({ threadId: created[0].threadId, turnId: turns[1].turnId });
+        await Promise.all([desktop, outpost].map((host, i) => host.client.interruptTurn(turns[i])));
+        await Promise.all([desktop, outpost].map(settle));
+        const read = await desktop.client.readThread({ backend: "codex", threadId: created[0].threadId });
+        expect(read).toBeDefined();
+      }
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+    }
+  }, 120_000);
+
   it("returns matching accepted turns through desktop finalization failures without resubmitting", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
@@ -483,6 +689,70 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await desktop.close();
     }
   }, 120_000);
+
+  it("preserves real Claude acceptance, session-owned grants and subsequent starts through origin-port rejection", async () => {
+    const desktop = await startDesktopOwner(null, async (_db, workspace) => {
+      await writeFile(path.join(workspace, "claude.js"), readFileSync(path.join(process.cwd(),
+        "apps/desktop/src/main/__tests__/fixtures/claude-owner-cli.cjs")));
+    }, (workspace) => ({
+      store: new ClaudeSessionStore(path.join(workspace, "sessions")),
+      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), authStatus: "signed-in" }),
+      discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [],
+      getSessionInfo: async () => undefined,
+    }));
+    try {
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const internal = registry as unknown as {
+        persistStartingTurnOrigin: () => Promise<void>;
+        startingTurnOrigins: Set<unknown>;
+        registerMcpConnections: () => Promise<Array<{ server: { name: string; command: string; args: string[]; env: Record<string, string> };
+          bindThread: () => void; revoke: () => void }>>;
+      };
+      const grants: Array<{ held: boolean }> = [];
+      vi.spyOn(internal, "registerMcpConnections").mockImplementation(async () => {
+        const grant = { held: true }; grants.push(grant);
+        return [{ server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} }, bindThread: () => {},
+          revoke: () => { expect(grant.held).toBe(true); grant.held = false; } }];
+      });
+      const persist = internal.persistStartingTurnOrigin.bind(registry);
+      let reject = false;
+      vi.spyOn(internal, "persistStartingTurnOrigin").mockImplementation(async () => {
+        if (reject) throw new Error("Fixture Claude accepted origin port rejected");
+        await persist();
+      });
+      const { threadId } = await desktop.client.startThread({ backend: "claude", cwd: desktop.workspace, executionMode: "auto" });
+      const commands = [true, false, ...fc.sample(fc.boolean(), 3)];
+      for (const [index, fails] of commands.entries()) {
+        reject = fails;
+        let turn: Awaited<ReturnType<typeof desktop.client.startTurn>>;
+        try {
+          turn = await desktop.client.startTurn({ backend: "claude", threadId,
+            input: [{ type: "text", text: `Claude fixture ${index}` }], messageOrigin: { kind: "messaging" } });
+          expect(turn).toMatchObject({ backend: "claude", threadId, turnId: expect.any(String) });
+          expect(internal.startingTurnOrigins.size).toBe(0);
+          expect(grants.at(-1)?.held).toBe(true);
+          // A second invocation while this session is live refuses without
+          // revoking either grant. The backend owns both release callbacks.
+          await expect(registry.startTurn({ backend: "claude", threadId,
+            input: [{ type: "text", text: "Refuse while active" }] })).rejects.toThrow("already active");
+          expect(grants.slice(-2).every((grant) => grant.held)).toBe(true);
+          await vi.waitFor(() => expect(readFileSync(path.join(desktop.workspace, "claude-requests.jsonl"), "utf8")
+            .trim().split("\n")).toHaveLength(index + 1));
+        } finally {
+          // This fixture owns provider completion even when the acceptance
+          // assertion fails on old production code. Drain it before close.
+          await writeFile(path.join(desktop.workspace, `release-${index + 1}`), "");
+          await vi.waitFor(() => expect(desktop.events.filter((event) => event.backend === "claude"
+            && event.notification.method === "turn/completed")).toHaveLength(index + 1));
+          await vi.waitFor(() => expect(grants.every((grant) => !grant.held)).toBe(true));
+        }
+        expect(desktop.events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
+        expect(desktop.events.filter((event) => event.notification.method === "turn/completed"
+          && event.notification.params.turnId === turn.turnId)).toHaveLength(1);
+        expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined();
+      }
+    } finally { await desktop.close(); }
+  });
 
   it("returns real ACP provider acceptance through refused SQLite review-context consumption", async () => {
     const backend = "acp:gemini" as const;

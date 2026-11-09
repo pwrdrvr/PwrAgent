@@ -20,20 +20,26 @@ export async function eventually(check, waitMs = timeout) {
   throw new Error("Condition did not become true");
 }
 
-export async function restartAfterCompletedTurn(h, turn, wait = eventually) {
-  // A workspace write can precede saved provider history and turn/completed.
-  // The owning runtime's completed job is the restart readiness boundary.
+export async function runCompletedTurn(h, start, wait = eventually) {
+  const turn = await start();
+  // Tool results and workspace writes precede the owner's turn/completed.
+  // Only that exact job's completion permits the workflow's next action.
   await wait(async () => {
     const job = (await h.rpc("list")).find((job) => job.threadId === turn.threadId && job.turnId === turn.turnId);
     if (!job || ACTIVE.has(job.status)) return false;
-    if (job.status !== "completed") throw new Error(`Expected a completed turn before restart; got ${job.status}`);
+    if (job.status !== "completed") throw new Error(`Expected a completed turn; got ${job.status}`);
     return true;
   });
+  return turn;
+}
+
+export async function restartAfterCompletedTurn(h, turn, wait = eventually) {
+  await runCompletedTurn(h, async () => turn, wait);
   await h.stop(h.daemon);
   return h.start();
 }
 
-export async function setup(t) {
+export async function setup(t, options = {}) {
   // The daemon refuses a socket path over 100 bytes (the Unix sun_path
   // limit), and the socket sits 35 bytes below this root. A root inside the
   // checkout fails in long checkouts such as Sandboxer's ~/pwragent/wt/<sha>,
@@ -75,6 +81,7 @@ export async function setup(t) {
     }
     rmSync(root, { recursive: true, force: true });
   });
+  await options.beforeStart?.({ directory, workspace, home });
   const daemon = await start();
   const rpc = (method, params) => call(directory, method, params);
   const submit = (id, prompt, extra = {}) => rpc("submit", { id, prompt, ...extra });

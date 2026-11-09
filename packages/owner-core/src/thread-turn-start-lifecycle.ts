@@ -40,6 +40,20 @@ export interface CodexTurnStartPreparationHost<Context> {
 
 export type StartedTurn = { threadId: string; turnId: string };
 
+export type ClaudeTurnStartStage = "origin" | "persist-origin" | "dispose-origin" | "revoke-connections";
+
+export interface ClaudeTurnStartHost<Origin, Turn extends StartedTurn> {
+  prepare(): Promise<void>;
+  beginOrigin(): Origin;
+  /** Always consumes release, including a refusal while a session is live. */
+  submit(release: () => void): Promise<Turn>;
+  bindOrigin(origin: Origin | undefined, turn: Turn): void;
+  persistOrigin(origin: Origin | undefined): Promise<void>;
+  disposeOrigin(origin: Origin | undefined): void;
+  revokeConnections(): void;
+  failed(stage: ClaudeTurnStartStage, error: unknown, turn: Turn | undefined): void;
+}
+
 export type AcpTurnStartFinalizationStage = "origin" | "review-contexts" | "pdf" | "title" | "context"
   | "persist-origin" | "attachments" | "forget-context" | "dispose-origin" | "release";
 
@@ -225,6 +239,41 @@ export class ThreadTurnStartLifecycle {
       }
     }
     return { kind: "started", turn };
+  }
+
+  async startClaude<Origin, Turn extends StartedTurn>(host: ClaudeTurnStartHost<Origin, Turn>): Promise<Turn> {
+    let origin: Origin | undefined;
+    let turn: Turn | undefined;
+    let handedOver = false;
+    let revoked = false;
+    const report = (stage: ClaudeTurnStartStage, error: unknown) => {
+      try { host.failed(stage, error, turn); } catch { /* Reporting must preserve the provider outcome. */ }
+    };
+    const effect = (stage: ClaudeTurnStartStage, work: () => void) => {
+      try { work(); } catch (error) { report(stage, error); }
+    };
+    const release = () => {
+      if (revoked) return;
+      revoked = true;
+      effect("revoke-connections", () => host.revokeConnections());
+    };
+    try {
+      await host.prepare();
+      origin = host.beginOrigin();
+      // Claude's submission contract consumes release even on refusal: a live
+      // session shares the thread's grants and alone decides when to revoke.
+      handedOver = true;
+      const accepted = await host.submit(release);
+      turn = accepted;
+      effect("origin", () => host.bindOrigin(origin, accepted));
+      try { await host.persistOrigin(origin); } catch (error) { report("persist-origin", error); }
+      return accepted;
+    } finally {
+      // Before invocation the caller owns grants; afterward only the session
+      // callback does. Neither cleanup nor reporting can replace the outcome.
+      if (!handedOver) release();
+      effect("dispose-origin", () => host.disposeOrigin(origin));
+    }
   }
 
   async startAcp<Context, Origin, Turn extends StartedTurn>(host: AcpTurnStartHost<Context, Origin, Turn>): Promise<Turn> {

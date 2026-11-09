@@ -1,0 +1,8 @@
+{
+  "desktop-native-title": {"commits": 1, "note": "Actual desktop name-event pipeline retains confirmed native title and provenance in one metadata commit", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "desktop-repeated-native-title": {"commits": 0, "note": "1000 identical title notifications reassert metadata without SQLite commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "outpost-fresh-discovery": {"commits": 1, "note": "One complete provider inventory boundary; setup, leases and adoption excluded", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "outpost-native-rename": {"commits": 1, "note": "Acknowledged native rename and title provenance in one canonical metadata commit", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "outpost-pending-title-discovery": {"commits": 2, "note": "One imported owner title reaches the native provider, then one metadata acknowledgement and one complete inventory commit", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "outpost-unchanged-discovery": {"commits": 0, "note": "1000 fresh provider listings and owner reads; transient provider fields are excluded before equality", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

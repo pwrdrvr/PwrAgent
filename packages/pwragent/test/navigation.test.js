@@ -1,3 +1,4 @@
+import { ownerStorage } from "./helpers/owner-storage.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -12,7 +13,9 @@ function backendFixture(t, jobs, published = []) {
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "navigation-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(), store: { directory: path.join(directory, "jobs"), jobs },
+  const owner = ownerStorage(t, directory);
+  const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(), store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, inventory: owner.inventory },
+    codex: { renameThread: async ({ threadId }) => ({ threadId }) },
     onFailure: (error) => { throw error; } };
   return new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
 }
@@ -167,7 +170,7 @@ test("marking seen without a watermark never changes unread state, and is announ
   const published = [];
   const backend = backendFixture(t, new Map([[unseen.id, unseen], [legacy.id, legacy]]), published);
   // A registry written before watermarks existed judged unread by seenAt.
-  Object.assign(backend.owned("legacy"), { seenAt: Date.parse("2026-01-02T00:00:00.000Z") });
+  backend.persist({ ...backend.owned("legacy"), seenAt: Date.parse("2026-01-02T00:00:00.000Z") });
   assert.equal(backend.summary(backend.owned("unseen")).inbox.inInbox, true);
   assert.equal(backend.summary(backend.owned("legacy")).inbox.inInbox, false);
   for (const threadId of ["unseen", "legacy"]) await backend.handle("markThreadSeen", { threadId, seenAt: Date.parse("2026-01-03T00:00:00.000Z") });
@@ -203,7 +206,7 @@ test("continuation cursors retain their snapshot across global count changes and
 test("navigation pages fit the shared byte budget and scope retained cursors to their requester and owner", async (t) => {
   const jobs = new Map(Array.from({ length: 60 }, (_, i) => [`job-${i}`, job(`job-${i}`, `thread-${i}`, "2026-01-01T00:00:00.000Z")]));
   const backend = backendFixture(t, jobs);
-  for (const thread of backend.threads.values()) thread.title = "x".repeat(6000);
+  for (const thread of backend.threads.values()) backend.persist({ ...thread, title: "x".repeat(6000) });
   const request = { protocol: 2, query: { kind: "lens", lens: "inbox" }, pageSize: 100 };
   const envelope = { sourceInstanceId: "viewer-a" };
   let page = await backend.handle("getNavigationQueryPage", request, envelope);

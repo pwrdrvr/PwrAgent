@@ -1,4 +1,5 @@
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import { readFileSync, writeFileSync } from "node:fs";
 
 type FixtureTurn = { id: string; status: string; items: unknown[]; error: { message: string } | null };
 type FixtureThread = {
@@ -9,6 +10,7 @@ type FixtureThread = {
   createdAt: number;
   updatedAt: number;
   turns: FixtureTurn[];
+  archived?: boolean;
 };
 
 /**
@@ -30,6 +32,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static threads = new Map<string, FixtureThread>();
   static requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   static refusedStarts = 0;
+  static recordsFile: string | undefined;
   private static sequence = 0;
   private handler: (message: string) => void = () => {};
   private readonly activeTurns = new Map<string, FixtureTurn>();
@@ -39,6 +42,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.requests = [];
     OwnerConformanceCodexTransport.sequence = 0;
     OwnerConformanceCodexTransport.refusedStarts = 0;
+    OwnerConformanceCodexTransport.recordsFile = undefined;
   }
 
   async connect(): Promise<void> {}
@@ -55,6 +59,14 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     if (request.id === undefined) return;
     const params = request.params ?? {};
     OwnerConformanceCodexTransport.requests.push({ method: request.method, params });
+    const recordsFile = OwnerConformanceCodexTransport.recordsFile;
+    if (recordsFile) {
+      let records: Record<string, FixtureThread> = {};
+      try { records = JSON.parse(readFileSync(recordsFile, "utf8")); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      OwnerConformanceCodexTransport.threads = new Map(Object.entries(records));
+    }
     const threads = OwnerConformanceCodexTransport.threads;
     const wire = (thread: FixtureThread) => ({
       ...thread, sessionId: thread.id, status: this.activeTurns.has(thread.id)
@@ -89,7 +101,10 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       const turns = [...(thread?.turns ?? [])];
       result = { data: params.sortDirection === "desc" ? turns.reverse() : turns, nextCursor: null };
     } else if (request.method === "thread/list") {
-      result = { data: [...threads.values()].map(wire), nextCursor: null, backwardsCursor: null };
+      result = { data: [...threads.values()].filter(thread => Boolean(thread.archived) === (params.archived === true)).map(wire), nextCursor: null, backwardsCursor: null };
+    } else if (request.method === "thread/archive" || request.method === "thread/unarchive") {
+      const thread = threads.get(String(params.threadId));
+      if (thread) thread.archived = request.method === "thread/archive";
     } else if (request.method === "thread/name/set") {
       const thread = threads.get(String(params.threadId));
       if (thread) {
@@ -141,6 +156,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
         followUp = { method: "turn/completed", params: { threadId: params.threadId, turn } };
       }
     }
+    if (recordsFile) writeFileSync(recordsFile, JSON.stringify(Object.fromEntries(threads)));
     this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
     const next = followUp;
     if (next) setTimeout(() => this.notify(next.method, next.params), 0);

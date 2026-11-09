@@ -1,6 +1,14 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
+import type { StartThreadRequest, StartThreadResponse } from "@pwragent/shared";
+import { StateDb } from "../src/main/state/state-db";
+import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
+import type { ReplayFixture } from "../src/main/testing/replay-fixture";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { mastheadAction } from "./fixtures/window-chrome";
@@ -411,6 +419,126 @@ async function createNewThreadFocusFixture(): Promise<{
     },
   };
 }
+
+test("removes a prepared worktree after creation isolation refuses admission", async () => {
+  const fixture = await createNewThreadTranscriptFixture();
+  const repo = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-creation-refusal-")));
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  git("init", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture repository");
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  try {
+    const before = git("worktree", "list", "--porcelain");
+    const error = await app.window.evaluate(async (cwd) => {
+      try {
+        const api = (window as typeof window & { pwragent: { startThread(request: StartThreadRequest): Promise<StartThreadResponse> } }).pwragent;
+        await api.startThread({ backend: "codex", cwd, workMode: "worktree", mcpProviderServersEnabled: false });
+        return "accepted";
+      } catch (failure) { return failure instanceof Error ? failure.message : String(failure); }
+    }, repo);
+    expect(error).toContain("cannot report its configured MCP servers");
+    expect(git("worktree", "list", "--porcelain")).toBe(before);
+    // The refusal precedes the fixture's single-use thread/start response.
+    // A later ordinary send must still create and complete that thread.
+    await mastheadAction(app.window, "New thread").click();
+    await app.window.getByRole("textbox", { name: "New thread" }).fill("Let's test creating a new thread again");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+    await expect.poll(async () => await app.getLastStartTurn()).toMatchObject({ threadId: "thread-new" });
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "turn-completed-1" });
+    await expect(app.window.getByRole("region", { name: "Transcript" }).getByText("The assistant reply finally showed up.")).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("reveals a new root in a collapsed directory when SQLite refuses its parent relationship", async () => {
+  const fixture = await createNewThreadTranscriptFixture();
+  const cwd = path.dirname(fixture.fixturePath);
+  const directoryKey = `directory:${cwd}`;
+  const replay = JSON.parse(await readFile(fixture.fixturePath, "utf8")) as ReplayFixture;
+  for (const step of replay.steps) {
+    if (step.kind === "response" && step.method === "thread/list" && Array.isArray(step.result)) {
+      for (const row of step.result) row.linkedDirectories = [{ id: directoryKey, kind: "local", label: "Creation visibility fixture", path: cwd }];
+    }
+  }
+  await writeFile(fixture.fixturePath, JSON.stringify(replay));
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath, preLaunchHook: async (homeRoot) => {
+    const state = StateDb.open(stateDbPathForHomeRoot(homeRoot), { profileName: "default" });
+    try {
+      const overlay = new SqliteOverlayStore(state);
+      await overlay.setThreadPin({ backend: "codex", threadId: "thread-existing", pinnedRank: "1024" });
+      await overlay.setSubthreadsCollapsed({ backend: "codex", parentThreadId: "thread-existing", collapsed: true });
+      await overlay.setDirectoryThreadsCollapsed({ directoryKey, collapsed: true });
+    } finally { state.close(); }
+  } });
+  const db = new Database(stateDbPathForHomeRoot(app.homeRoot));
+  try {
+    await expect(app.window.getByRole("heading", { level: 2, name: "Existing Codex thread" })).toBeVisible();
+    await app.window.getByRole("tab", { name: "directories" }).click();
+    const directory = app.window.locator(".directory-row").filter({ has: app.window.getByRole("button", { name: /Existing Codex thread/ }) });
+    const pinnedRows = directory.locator('.thread-row-shell[data-thread-pin-state="pinned"]');
+    await expect(pinnedRows).toHaveCount(1);
+    db.exec(`CREATE TRIGGER refuse_creation_parent BEFORE INSERT ON threads
+      WHEN json_extract(NEW.payload, '$.threadId') = 'thread-new'
+        AND json_type(NEW.payload, '$.parentThreadId') IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'Fixture creation parent refused'); END`);
+    const created = await app.window.evaluate(async (cwd) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const request = { backend: "codex" as const, cwd, parentThreadId: "thread-existing", agent: { name: "Accepted root fixture" } };
+      return await api.startThread!(request);
+    }, cwd);
+    expect(created).toMatchObject({ backend: "codex", threadId: "thread-new", pinnedRank: expect.any(String) });
+    await expect(pinnedRows).toHaveCount(2);
+    await expect(directory.getByRole("button", { name: /Accepted root fixture/ }).first()).toBeVisible();
+    const saved = db.prepare("SELECT payload FROM threads WHERE json_extract(payload, '$.threadId') = ?").get("thread-new") as { payload: string };
+    expect(JSON.parse(saved.payload)).not.toHaveProperty("parentThreadId");
+    const parent = db.prepare("SELECT payload FROM threads WHERE json_extract(payload, '$.threadId') = ?").get("thread-existing") as { payload: string };
+    expect(JSON.parse(parent.payload)).toHaveProperty("subthreadsCollapsed", true);
+  } finally {
+    db.close();
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("completes a new thread after SQLite refuses post-creation PR metadata", async () => {
+  const fixture = await createNewThreadTranscriptFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+  const output: string[] = [];
+  const collect = (chunk: Buffer) => { output.push(chunk.toString()); };
+  app.electronApp.process().stdout?.on("data", collect);
+  app.electronApp.process().stderr?.on("data", collect);
+  const db = new Database(stateDbPathForHomeRoot(app.homeRoot));
+  try {
+    db.exec(`CREATE TRIGGER refuse_creation_pr BEFORE INSERT ON threads
+      WHEN json_extract(NEW.payload, '$.threadId') = 'thread-new'
+        AND json_type(NEW.payload, '$.prAutoDispatchEnabled') IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'Fixture creation PR metadata refused'); END`);
+    await mastheadAction(app.window, "New thread").click();
+    await app.window.getByRole("textbox", { name: "New thread" }).fill("Let's test creating a new thread again");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+    await app.window.getByRole("region", { name: "Transcript", exact: true }).waitFor();
+    await expect.poll(async () => await app.getLastStartTurn()).toMatchObject({ threadId: "thread-new" });
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await expect.poll(() => output.join("")).toContain("Fixture creation PR metadata refused");
+    expect(output.join("")).toContain("thread creation lifecycle effect failed");
+    expect(output.join("")).toContain("stage=pr");
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "turn-completed-1" });
+    await expect(app.window.getByRole("region", { name: "Transcript" }).getByText("The assistant reply finally showed up.")).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    await expect(app.window.getByRole("heading", { level: 2, name: "Let's test creating a new thread again" })).toBeVisible();
+  } finally {
+    db.close();
+    await app.close();
+    await fixture.cleanup();
+  }
+});
 
 test("top-level new thread rereads the created thread until the assistant reply is hydrated", async () => {
   const fixture = await createNewThreadTranscriptFixture();

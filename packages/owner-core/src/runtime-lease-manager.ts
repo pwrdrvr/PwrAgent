@@ -1,0 +1,286 @@
+import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "./runtime-lease-storage";
+import type {
+  AppRuntimeInstanceRecord,
+  RuntimeLeaseStorage,
+  AppRuntimeMessagingDisabledReason,
+  MessagingRuntimeLeaseRecord,
+} from "./runtime-lease-storage";
+
+const RUNTIME_BOOT_TIME_TOLERANCE_MS = 5_000;
+
+export type RuntimeLeaseKind = "messaging" | "federation" | "mcp_connections";
+export type RuntimeLeaseClaim = "runtime" | "thread_owner";
+
+export type RuntimeLeaseHolder = {
+  instanceId: string;
+  processId?: number;
+  cwdHint?: string;
+  startedAt?: number;
+};
+
+export type RuntimeLeaseAcquireResult =
+  | { acquired: true }
+  | { acquired: false; holder: RuntimeLeaseHolder };
+
+export type RuntimeLeaseSnapshot = {
+  instanceId: string;
+  leaseHeld: boolean;
+  leaseHolder?: RuntimeLeaseHolder;
+};
+
+export type RuntimeLeaseManagerOptions = {
+  instanceId: string;
+  profileName: string;
+  processId: number;
+  startedAt: number;
+  cwd: string;
+  now?: () => number;
+  store: RuntimeLeaseStorage;
+  runtimeIdentityIsAlive: (owner: AppRuntimeInstanceRecord) => boolean;
+  systemBootedAt: number;
+};
+
+/**
+ * One process-level owner for every profile-scoped runtime lease.
+ *
+ * Ownership is registered once in sqlite and remains valid while the owning
+ * process has a fresh profile marker matching its PID, instance ID, and start
+ * time. A matching live identity remains authoritative across wall-clock
+ * corrections. Once that identity is absent, an owner from before the current
+ * OS boot is conclusively dead and can be replaced immediately. Otherwise the
+ * first challenger persists the absent identity observation; after a one-
+ * minute safety grace, a challenger may replace the dead owner inside the
+ * store's atomic acquisition transaction. This deliberately favors single-
+ * owner safety over taking work away from a process that is alive but
+ * temporarily hung.
+ */
+export class RuntimeLeaseManager {
+  private readonly instanceId: string;
+  private readonly profileName: string;
+  private readonly processId: number;
+  private readonly startedAt: number;
+  private readonly cwd: string;
+  private readonly now: () => number;
+  private readonly store: RuntimeLeaseStorage;
+  private readonly runtimeIdentityIsAlive: (
+    owner: AppRuntimeInstanceRecord,
+  ) => boolean;
+  private readonly systemBootedAt: number;
+  private readonly heldLeases = new Set<RuntimeLeaseKind>();
+  private readonly claims = new Map<RuntimeLeaseKind, Set<RuntimeLeaseClaim>>();
+  private instanceRecorded = false;
+  private instanceExited = false;
+
+  constructor(options: RuntimeLeaseManagerOptions) {
+    this.now = options.now ?? Date.now;
+    this.instanceId = options.instanceId;
+    this.profileName = options.profileName;
+    this.processId = options.processId;
+    this.startedAt = options.startedAt;
+    this.cwd = options.cwd;
+    this.store = options.store;
+    this.systemBootedAt = options.systemBootedAt;
+    this.runtimeIdentityIsAlive = options.runtimeIdentityIsAlive;
+  }
+
+  get id(): string {
+    return this.instanceId;
+  }
+
+  get profile(): string {
+    return this.profileName;
+  }
+
+  recordMessagingState(params: {
+    desiredMessagingEnabled: boolean;
+    effectiveMessagingEnabled: boolean;
+    disabledReason?: AppRuntimeMessagingDisabledReason;
+  }): void {
+    const now = this.now();
+    if (!this.instanceRecorded) {
+      this.store.recordInstanceStart({
+        instanceId: this.instanceId,
+        profileName: this.profileName,
+        processId: this.processId,
+        cwd: this.cwd,
+        startedAt: this.startedAt,
+        desiredMessagingEnabled: params.desiredMessagingEnabled,
+        effectiveMessagingEnabled: params.effectiveMessagingEnabled,
+        disabledReason: params.disabledReason,
+      });
+      this.instanceRecorded = true;
+      return;
+    }
+    this.store.markDesiredMessaging({
+      instanceId: this.instanceId,
+      desiredMessagingEnabled: params.desiredMessagingEnabled,
+      effectiveMessagingEnabled: params.effectiveMessagingEnabled,
+      disabledReason: params.disabledReason,
+      now,
+    });
+  }
+
+  acquire(kind: RuntimeLeaseKind, claim: RuntimeLeaseClaim = "runtime"): RuntimeLeaseAcquireResult {
+    // Repeated thread operations only read the held lease. Service acquisition
+    // retains its original persistence lifecycle and write budget.
+    if (claim === "thread_owner" && this.snapshot(kind).leaseHeld) {
+      this.addClaim(kind, claim);
+      return { acquired: true };
+    }
+    this.ensureInstanceRecorded();
+    const params = {
+      instanceId: this.instanceId,
+      isOwnerAlive: (owner: AppRuntimeInstanceRecord) =>
+        this.isOwnerAlive(owner),
+      canReclaimOwnerImmediately: (owner: AppRuntimeInstanceRecord) =>
+        this.ownerPredatesCurrentBoot(owner),
+      now: this.now(),
+    };
+    const result = kind === "messaging"
+      ? this.store.acquireMessagingLease(params)
+      : kind === "federation"
+        ? this.store.acquireFederationLease(params)
+        : this.store.acquireMcpConnectionsLease(params);
+    if (result.acquired) {
+      this.heldLeases.add(kind);
+      this.addClaim(kind, claim);
+      return { acquired: true };
+    }
+    this.heldLeases.delete(kind);
+    this.claims.delete(kind);
+    return {
+      acquired: false,
+      holder: this.describeLeaseHolder(result.holder),
+    };
+  }
+
+  release(kind: RuntimeLeaseKind, claim: RuntimeLeaseClaim = "runtime"): boolean {
+    const claims = this.claims.get(kind);
+    // Keep claims on a statement failure so a later close can retry release.
+    if (claims && [...claims].some(held => held !== claim)) {
+      claims.delete(claim);
+      return false;
+    }
+    const now = this.now();
+    const params = { instanceId: this.instanceId, now };
+    const released = kind === "messaging"
+      ? this.store.releaseMessagingLease(params)
+      : kind === "federation"
+        ? this.store.releaseFederationLease(params)
+        : this.store.releaseMcpConnectionsLease(params);
+    this.heldLeases.delete(kind);
+    this.claims.delete(kind);
+    return released;
+  }
+
+  snapshot(kind: RuntimeLeaseKind): RuntimeLeaseSnapshot {
+    const lease = this.readLease(kind);
+    const leaseHeld =
+      lease?.status === "active"
+      && lease.ownerInstanceId === this.instanceId
+      && this.heldLeases.has(kind);
+    if (!leaseHeld) {
+      this.heldLeases.delete(kind);
+      this.claims.delete(kind);
+    }
+    const leaseHolder =
+      lease
+      && lease.status === "active"
+      && lease.ownerInstanceId !== this.instanceId
+      && this.holderIsAlive(lease)
+        ? this.describeLeaseHolder(lease)
+        : undefined;
+    return {
+      instanceId: this.instanceId,
+      leaseHeld,
+      ...(leaseHolder ? { leaseHolder } : {}),
+    };
+  }
+
+  getInstance(): AppRuntimeInstanceRecord | undefined {
+    return this.store.getInstance(this.instanceId);
+  }
+
+  /** Avoid repeated acquisition writes while an owner is live or in its grace. */
+  shouldRetryAcquisition(kind: RuntimeLeaseKind): boolean {
+    if (this.instanceExited) return false;
+    const lease = this.readLease(kind);
+    if (!lease || lease.status !== "active") return true;
+    const owner = this.store.getInstance(lease.ownerInstanceId);
+    if (!owner) {
+      return lease.expiresAt === Number.MAX_SAFE_INTEGER || this.now() >= lease.expiresAt;
+    }
+    if (this.isOwnerAlive(owner)) return false;
+    return owner.exitedAt === undefined
+      || this.ownerPredatesCurrentBoot(owner)
+      || this.now() >= owner.exitedAt + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+  }
+
+  private holderIsAlive(lease: MessagingRuntimeLeaseRecord): boolean {
+    const owner = this.store.getInstance(lease.ownerInstanceId);
+    return Boolean(owner && this.isOwnerAlive(owner));
+  }
+
+  markExited(): void {
+    if (!this.instanceRecorded || this.instanceExited) {
+      return;
+    }
+    this.instanceExited = true;
+    this.store.markInstanceExited({
+      instanceId: this.instanceId,
+      now: this.now(),
+    });
+  }
+
+  private ensureInstanceRecorded(): void {
+    if (this.instanceRecorded) {
+      return;
+    }
+    this.recordMessagingState({
+      desiredMessagingEnabled: false,
+      effectiveMessagingEnabled: false,
+    });
+  }
+
+  private addClaim(kind: RuntimeLeaseKind, claim: RuntimeLeaseClaim): void {
+    let claims = this.claims.get(kind);
+    if (!claims) this.claims.set(kind, claims = new Set());
+    claims.add(claim);
+  }
+
+  private isOwnerAlive(owner: AppRuntimeInstanceRecord): boolean {
+    if (owner.exitedAt !== undefined) {
+      return false;
+    }
+    if (owner.processId === this.processId) {
+      return owner.instanceId === this.instanceId;
+    }
+    return this.runtimeIdentityIsAlive(owner);
+  }
+
+  private ownerPredatesCurrentBoot(owner: AppRuntimeInstanceRecord): boolean {
+    return owner.startedAt
+      < this.systemBootedAt - RUNTIME_BOOT_TIME_TOLERANCE_MS;
+  }
+
+  private readLease(kind: RuntimeLeaseKind): MessagingRuntimeLeaseRecord | undefined {
+    return kind === "messaging"
+      ? this.store.getMessagingLease()
+      : kind === "federation"
+        ? this.store.getFederationLease()
+        : this.store.getMcpConnectionsLease();
+  }
+
+  private describeLeaseHolder(
+    lease: MessagingRuntimeLeaseRecord,
+  ): RuntimeLeaseHolder {
+    const holder = this.store.getInstance(lease.ownerInstanceId);
+    return {
+      instanceId: lease.ownerInstanceId,
+      ...(holder?.processId ? { processId: holder.processId } : {}),
+      ...(holder?.cwdHint ? { cwdHint: holder.cwdHint } : {}),
+      ...(holder?.startedAt ? { startedAt: holder.startedAt } : {}),
+    };
+  }
+}
+

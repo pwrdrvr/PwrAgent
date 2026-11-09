@@ -659,6 +659,121 @@ describe("isAcpSessionMissingForProjectError", () => {
 });
 
 describe("AcpBackendAdapter", () => {
+  it("remembers failed ephemeral disposal after the prompt has already settled", async () => {
+    const agent = { ...buildInstalledAgent(), launchDescriptor: {
+      backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
+      command: "/fixture/gemini", args: [], env: {},
+    } };
+    const transport = new FakeAcpAgentTransport({ "session/prompt": { stopReason: "end_turn" } });
+    vi.spyOn(transport, "close").mockRejectedValue(new Error("fixture ephemeral child still running"));
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [], createAcpTransport: () => transport,
+      emit: async () => {}, handleServerRequest: async () => ({}),
+    });
+    vi.spyOn(adapter, "resolveInstalledAgent").mockResolvedValue(agent);
+    await expect(adapter.runEphemeralPrompt("acp:gemini", {
+      cwd: "/fixture", prompt: "fixture", timeoutMs: 5_000, maxOutputChars: 100,
+    })).rejects.toThrow("fixture ephemeral child still running");
+    await expect(adapter.close()).rejects.toThrow("ACP backend close failed");
+    expect(transport.close).toHaveBeenCalledOnce();
+  });
+
+  it("propagates every incomplete pooled shutdown instead of reporting a successful drain", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (fails) => {
+      vi.useFakeTimers();
+      try {
+        const agent = buildInstalledAgent();
+        const dispose = vi.fn(() => fails
+          ? Promise.reject(new Error("fixture dispose failed"))
+          : new Promise<void>(() => undefined));
+        const adapter = createTestAcpBackendAdapter({
+          acpAgentStore: { getInstalledAgent: () => agent, listInstalledAgents: () => [agent], upsertInstalledAgent: vi.fn() },
+          captureStores: [], closeTimeoutMs: 25,
+          createAcpClient: () => ({ initialize: async () => {}, dispose }) as never,
+          emit: async () => {}, handleServerRequest: async () => ({}),
+        });
+        await adapter.getClient("acp:gemini");
+        const result = adapter.close().then(() => "success", () => "incomplete");
+        await vi.advanceTimersByTimeAsync(25);
+        expect(await result).toBe("incomplete");
+        expect(dispose).toHaveBeenCalledOnce();
+      } finally { vi.useRealTimers(); }
+    }), { numRuns: 10 });
+  });
+
+  it("drains admitted ephemeral runs across lookup, prompt and disposal shutdown interleavings", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("lookup", "prompt", "dispose"), async (phase) => {
+      const agent = { ...buildInstalledAgent(), launchDescriptor: {
+        backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
+        command: "/fixture/gemini", args: [], env: {},
+      } };
+      const lookup = Promise.withResolvers<AcpInstalledAgentRecord>();
+      const prompt = Promise.withResolvers<unknown>();
+      const promptEntered = Promise.withResolvers<void>();
+      const disposal = Promise.withResolvers<void>();
+      const disposalEntered = Promise.withResolvers<void>();
+      const transport = new FakeAcpAgentTransport();
+      const rawRequest = transport.request.bind(transport);
+      vi.spyOn(transport, "request").mockImplementation(async (method, ...args) => {
+        if (method === "session/prompt") { promptEntered.resolve(); return await prompt.promise; }
+        return await rawRequest(method, ...args);
+      });
+      vi.spyOn(transport, "close").mockImplementation(async () => {
+        disposalEntered.resolve();
+        prompt.reject(new Error("fixture transport stopped"));
+        await disposal.promise;
+      });
+      const createAcpTransport = vi.fn(() => transport);
+      const adapter = createTestAcpBackendAdapter({
+        captureStores: [], createAcpTransport, emit: async () => {}, handleServerRequest: async () => ({}),
+      });
+      vi.spyOn(adapter, "resolveInstalledAgent").mockImplementation(() => lookup.promise);
+      const run = adapter.runEphemeralPrompt("acp:gemini", {
+        cwd: "/fixture", prompt: "fixture", timeoutMs: 5_000, maxOutputChars: 100,
+      }).catch(error => error);
+      if (phase !== "lookup") {
+        lookup.resolve(agent);
+        await promptEntered.promise;
+      }
+      if (phase === "dispose") {
+        prompt.resolve({ stopReason: "end_turn" });
+        await disposalEntered.promise;
+      }
+      let closed = false;
+      const closing = adapter.close().then(() => { closed = true; });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      if (phase === "lookup") lookup.resolve(agent);
+      disposal.resolve();
+      await run;
+      await closing;
+      expect(createAcpTransport).toHaveBeenCalledTimes(phase === "lookup" ? 0 : 1);
+      expect(transport.close).toHaveBeenCalledTimes(phase === "lookup" ? 0 : 1);
+    }), { numRuns: 15 });
+  });
+
+  it("checks profile owner admission before pooled and ephemeral ACP provider startup", async () => {
+    const agent = { ...buildInstalledAgent(), launchDescriptor: {
+      backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
+      command: "/fixture/gemini", args: [], env: {},
+    } };
+    const createAcpClient = vi.fn();
+    const createAcpTransport = vi.fn();
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: { getInstalledAgent: () => agent, listInstalledAgents: () => [agent], upsertInstalledAgent: vi.fn() },
+      captureStores: [], createAcpClient, createAcpTransport,
+      assertOwnerAdmission: () => { throw new Error("fixture profile owner"); },
+      emit: vi.fn(async () => undefined), handleServerRequest: vi.fn(async () => ({})),
+    });
+    try {
+      await expect(adapter.getClient("acp:gemini")).rejects.toThrow("fixture profile owner");
+      await expect(adapter.runEphemeralPrompt("acp:gemini", { cwd: "/fixture", prompt: "fixture" } as never)).rejects.toThrow("fixture profile owner");
+      expect(createAcpClient).not.toHaveBeenCalled();
+      expect(createAcpTransport).not.toHaveBeenCalled();
+    } finally { await adapter.close(); }
+  });
+
   it("excludes retired Claude ACP records from discovery and backend selection", async () => {
     const legacyAgent: AcpInstalledAgentRecord = {
       ...buildInstalledAgent(),
@@ -4478,11 +4593,11 @@ describe("AcpBackendAdapter", () => {
 
       void adapter.getClient(backendId).catch(() => undefined);
       await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce());
-      const close = adapter.close();
+      const close = adapter.close().then(() => undefined, error => error);
       await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
       await vi.advanceTimersByTimeAsync(25);
 
-      await expect(close).resolves.toBeUndefined();
+      expect(await close).toMatchObject({ message: "ACP backend close timed out" });
       await expect(adapter.getClient(backendId)).rejects.toThrow(
         "ACP backend adapter is closed",
       );

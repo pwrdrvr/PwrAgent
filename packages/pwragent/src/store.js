@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export const ACTIVE = new Set(["starting", "running", "interrupting"]);
@@ -39,39 +39,23 @@ export function atomicJson(file, value) {
 }
 
 export class JobStore {
-  constructor(directory, identity) {
+  constructor(directory, identity, profileRuntime) {
     this.directory = path.join(directory, "jobs");
-    privateDirectory(this.directory);
-    const files = readdirSync(this.directory).filter((file) => file.endsWith(".json"));
-    const identityFile = path.join(directory, "identity.json");
-    try {
-      if (JSON.stringify(JSON.parse(readFileSync(identityFile, "utf8"))) !== JSON.stringify(identity)) {
-        throw new Error("This headless state belongs to a different workspace or Codex home");
-      }
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      if (files.length) throw new Error("Headless identity is missing for an existing job registry", { cause: error });
-      atomicJson(identityFile, identity);
-    }
-    this.jobs = new Map();
-    for (const file of files) {
-      const job = JSON.parse(readFileSync(path.join(this.directory, file), "utf8"));
-      if (job.version !== 1 || !validId(job.id) || file !== `${job.id}.json`
-        || (!ACTIVE.has(job.status) && !TERMINAL.has(job.status))) {
-        throw new Error(`Invalid headless job record: ${file}`);
-      }
-      this.jobs.set(job.id, job);
-      if (ACTIVE.has(job.status)) {
-        this.save({ ...job, status: "unknown", reason: "Daemon stopped before a terminal outcome was recorded; no work was replayed" });
-      }
-    }
+    const storage = profileRuntime.openOwnerStorage(directory, identity);
+    this.storage = storage.jobs;
+    this.threadRegistry = storage.threads;
+    this.inventory = storage.inventory;
+    // Existing runtime consumers retain point reads and iteration, without a
+    // second mutable registry that could diverge from the profile database.
+    this.jobs = {
+      get: id => this.storage.get(id),
+      values: () => this.storage.list().values(),
+      get size() { return storage.jobs.count(); },
+    };
   }
 
   save(job) {
-    const saved = { ...job, updatedAt: new Date().toISOString() };
-    atomicJson(path.join(this.directory, `${job.id}.json`), saved);
-    this.jobs.set(job.id, saved);
-    return saved;
+    return this.storage.save({ ...job, updatedAt: new Date().toISOString() });
   }
 
   get(id) {

@@ -127,6 +127,8 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({});
     } else if (method === "thread/read") {
       reply({ thread: { ...threads[params.threadId], path: `/fixture-provider/${params.threadId}` } });
+    } else if (method === "thread/list") {
+      reply({ data: Object.values(threads).filter(thread => Boolean(thread.archived) === (params.archived === true)), nextCursor: null });
     } else if (method === "thread/turns/list") {
       reply({ data: threads[params.threadId].turns.slice().reverse().map((turn) => ({ ...turn, itemsView: "full" })), nextCursor: null });
     } else if (method === "thread/name/set") {
@@ -148,6 +150,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       threads[params.threadId].archived = true;
       persist();
       reply({});
+    } else if (method === "thread/unarchive") {
+      threads[params.threadId].archived = false;
+      persist();
+      reply({ thread: threads[params.threadId] });
     } else {
       send({ id, error: { code: -32601, message: "Fixture method not found" } });
     }

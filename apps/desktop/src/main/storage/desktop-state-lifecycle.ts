@@ -1,7 +1,7 @@
-import type { AutoVacuumConversion } from "../state/state-db";
+import type { AutoVacuumConversion } from "./state-db";
 import { initializeAppState, type AppStateMode } from "../state/app-state";
 
-export type { AutoVacuumConversion } from "../state/state-db";
+export type { AutoVacuumConversion } from "./state-db";
 export {
   disposeAppState,
   hadExistingAppStateDatabase,

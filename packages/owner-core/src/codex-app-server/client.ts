@@ -315,7 +315,32 @@ const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
 ]);
 const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
+// A second profile runtime may browse through Codex's protocol. Every other
+// request, including future protocol additions, requires the retained owner claim.
+const PASSIVE_CODEX_REQUESTS = new Set([
+  "initialize",
+  "account/rateLimits/read",
+  "account/read",
+  "account/usage/read",
+  "config/read",
+  "mcpServerStatus/list",
+  "model/list",
+  "server/capabilities/read",
+  "skills/list",
+  "thread/backgroundTerminals/list",
+  "thread/items/list",
+  "thread/items/read",
+  "thread/list",
+  "thread/loaded/list",
+  "thread/read",
+  "thread/turns/items/list",
+  "thread/turns/list",
+  "thread/unsubscribe",
+]);
+
 export type CodexClientOptions = {
+  /** The host admits ownership before a mutating protocol request. */
+  assertOwnerAdmission?: () => void;
   authenticationRecovery?: boolean;
   /** The profile's helper model settings, read per helper turn. */
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
@@ -7950,6 +7975,7 @@ export class CodexAppServerClient {
     // any operation, helper or recovery opens or closes.
     const requestBeforeSubscriptionTracking = this.rawConnection.request.bind(this.rawConnection);
     this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+      if (!PASSIVE_CODEX_REQUESTS.has(method)) this.options.assertOwnerAdmission?.();
       try {
         const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
         this.observeThreadSubscription(method, params, result);

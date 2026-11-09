@@ -1,4 +1,4 @@
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 import {
   CONFIG_STORE_DURABLE_SCHEMA_VERSION,
   PROVIDER_IDS,

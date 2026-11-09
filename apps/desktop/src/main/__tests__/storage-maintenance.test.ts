@@ -197,6 +197,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
       return { frames, uniquePages: pages.size, commits, bytes: bytes.length };
     };
     const measured = { deletion: measure(wal), vacuum: measure(vacuumWal) };
+    // v81's owner_jobs table and primary-key index add two pages to VACUUM.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

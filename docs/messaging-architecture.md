@@ -90,6 +90,13 @@ advance this projection. A duplicate event makes no writes. Profile-file
 identity is part of the owner namespace, so copying a database into another
 profile does not transfer attachment authority.
 
+The generic SQL implementation lives in `@pwragent/sqlite-storage`. Desktop's
+private storage specialization injects `messaging-request-projection`, which
+owns event admission, credential scrubbing, the 16 KiB cap and destination
+identity. The original `createMessagingRequestStorage` factory binds it when a
+controller is constructed. Owner/application code keeps the existing generic
+storage port; the SQLite package imports no messaging-interface contracts.
+
 The host carries `causalMessagingSource` through handoffs, correspondence,
 queues, monitors and dependency continuations. The immediate origin retains its
 `agent`, `sub-agent` or `pwragent` kind. Delegation captures the source before
@@ -145,6 +152,14 @@ remote execution identity, turn and human source recorded at intake. Rendered
 pages return to the outpost as native image content; attachment bytes and
 provider credentials stay on the owner. The existing outpost tool-call ledger
 records outcomes at call boundaries and never replays an uncertain send.
+
+The generic binding, default-Agent, observation, monitor/topic, pending-intent,
+browse, callback and delivery SQL implementation also lives in sqlite-storage.
+Its private desktop specialization injects channel/domain policy at the original
+app-state construction site. The shared store retains the owner-core port and
+all existing SQL/transaction boundaries; host migration, matching, merge and
+privacy helpers remain outside it. The in-memory store remains independent and
+shares only the pure async-questionnaire predicate.
 
 ## Data flow
 

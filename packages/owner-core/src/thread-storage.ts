@@ -9,7 +9,7 @@ export type OwnerThreadIdentity = {
 /** Owner facts, independent of provider sessions, job records and file formats. */
 export type OwnerThreadMetadata = {
   /** A title and its provenance are one fact and are replaced together. */
-  title?: { text: string; source: AppServerThreadTitleSource };
+  title?: { text: string; source: AppServerThreadTitleSource; nativeName?: string };
   createdAt?: number;
   updatedAt?: number;
   cwd?: string;
@@ -34,6 +34,8 @@ export type OwnerThreadMetadata = {
   parent?: OwnerThreadIdentity & { instanceId?: string };
   subthreadOrder?: string[];
   subthreadsCollapsed?: boolean;
+  /** Provider thread was created with the messaging file-tool catalog. */
+  messagingFileTools?: boolean;
 };
 
 export type OwnerThreadRecord = OwnerThreadIdentity & OwnerThreadMetadata & { executionMode: ThreadExecutionMode };
@@ -60,11 +62,20 @@ export interface OwnerThreadRegistry {
   updateThreadMetadata(identity: OwnerThreadIdentity, patch: OwnerThreadMetadataPatch): Promise<OwnerThreadRecord>;
 }
 
+/** Immediate storage permits an atomic import with other owner records. */
+export interface ImmediateOwnerThreadRegistry {
+  getThreadMetadata(identity: OwnerThreadIdentity): OwnerThreadRecord | undefined;
+  listThreadMetadata(): OwnerThreadRecord[];
+  updateThreadMetadata(identity: OwnerThreadIdentity, patch: OwnerThreadMetadataPatch): OwnerThreadRecord;
+  /** Detached immutable startup watermarks, keyed by qualified thread identity. */
+  readUnreadBaseline(): Readonly<Record<string, number>>;
+}
+
 export const OWNER_THREAD_METADATA_FIELDS = [
   "title", "createdAt", "updatedAt", "cwd", "pinnedRank", "seenAt", "seenUpdatedAt",
   "executionMode", "model", "reasoningEffort", "serviceTier", "fastMode",
   "executionModeUpdatedAt", "reasoningEffortsByModel", "modelMigrationRevision", "modelSettingsManuallyUpdatedAt",
-  "archived", "archivedAt", "restoredAt", "archiveRetentionStartedAt", "parent", "subthreadOrder", "subthreadsCollapsed",
+  "archived", "archivedAt", "restoredAt", "archiveRetentionStartedAt", "parent", "subthreadOrder", "subthreadsCollapsed", "messagingFileTools",
 ] as const satisfies readonly (keyof OwnerThreadMetadata)[];
 
 /** Storage-only patch semantics; no lifecycle policy or I/O. */
