@@ -2918,6 +2918,7 @@ function createKimiAcpRegistry(options?: {
   startPrompt?: KimiStartPrompt;
   overlayStore?: ReturnType<typeof createOverlayStoreMock>;
   codexClient?: MockBackendClient;
+  ownerAdmission?: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["ownerAdmission"];
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
@@ -3044,6 +3045,7 @@ function createKimiAcpRegistry(options?: {
       : {}),
   };
   const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+    ownerAdmission: options?.ownerAdmission,
     correspondenceStore: options?.correspondenceStore,
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
@@ -3334,6 +3336,18 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("retains the owner claim when its real pooled ACP adapter cannot dispose a provider", async () => {
+    const close = vi.fn();
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({
+      ownerAdmission: { assertOwnership: vi.fn(), close },
+    });
+    const adapter = (registry as unknown as { acpBackend: { getClient(backend: AcpBackendId): Promise<unknown> } }).acpBackend;
+    await adapter.getClient(acpBackendId);
+    acpClient.dispose.mockRejectedValue(new Error("fixture ACP child still running"));
+    await expect(registry.close()).rejects.toThrow("Desktop backend registry close failed");
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("retains profile ownership until provider close succeeds (failure=%s)", async failure => {
     const client = new MockBackendClient({ threads: [] });
     const entered = Promise.withResolvers<void>();
