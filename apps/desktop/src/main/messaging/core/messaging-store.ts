@@ -1,3 +1,5 @@
+import { isAsyncQuestionnaireForThread } from "./messaging-pending-intent-match.js";
+export { isAsyncQuestionnaireForThread } from "./messaging-pending-intent-match.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -1033,21 +1035,6 @@ function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecor
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };
-}
-
-export function isAsyncQuestionnaireForThread(
-  pendingIntent: MessagingPendingIntentRecord,
-  params: {
-    backend: MessagingBindingRecord["backend"];
-    threadId: MessagingBindingRecord["threadId"];
-  },
-): boolean {
-  const intent = pendingIntent.intent;
-  return (
-    intent.kind === "questionnaire"
-    && intent.asyncReply?.backend === params.backend
-    && intent.asyncReply.threadId === params.threadId
-  );
 }
 
 function sanitizePendingIntent(

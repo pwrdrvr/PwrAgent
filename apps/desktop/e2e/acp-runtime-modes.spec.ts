@@ -768,9 +768,15 @@ test("completes an accepted ACP turn after managed-review context persistence re
     expect(output.join("")).toContain("acp_turn_start_finalization_failed");
     expect(output.join("")).toContain("stage=review-contexts");
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
-    await expect(app.window.getByRole("button", { name: "Read README.md", exact: true })).toBeVisible();
-    await expect(app.window.getByRole("region", { name: "Transcript" }).getByText("Done inspecting README.md.", { exact: true })).toBeVisible();
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    await expect(transcript.getByText("Done inspecting README.md.", { exact: true })).toBeVisible();
     await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    // Completion folds the tool into its turn's work group. Inspect the retained
+    // result after that boundary instead of racing the fixture's live interval.
+    await transcript.getByRole("button", { name: "Previous work", exact: true }).click();
+    // The completed replay uses the ACP provider's title.
+    await transcript.getByRole("button", { name: "README.md", exact: true }).click();
+    await expect(transcript.getByText("Read lines 1-80 of 200 from README.md", { exact: true })).toBeVisible();
     db.exec("DROP TRIGGER reject_accepted_acp_review");
     await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Inspect it again.");
     await app.window.getByRole("button", { name: "Send", exact: true }).click();

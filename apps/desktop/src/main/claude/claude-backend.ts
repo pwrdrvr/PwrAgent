@@ -60,6 +60,7 @@ import type { NamedReviewPullRequest } from "../../shared/review-command";
 import { formatReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
 export type ClaudeBackendOptions = {
+  assertOwnerAdmission?: () => void;
   store?: ClaudeSessionStore;
   query?: typeof query;
   getSessionInfo?: typeof getSessionInfo;
@@ -1139,6 +1140,7 @@ export class ClaudeBackend {
           message: { role: "user", content } };
         yield* input;
       }
+      this.options.assertOwnerAdmission?.();
       current.query = (this.options.query ?? query)({ prompt: prompt(), options: sdkOptions });
       // Older PwrAgent metadata has no cost baseline. Read the official
       // session totals before releasing the prompt, so this turn cannot race
@@ -3159,6 +3161,7 @@ export class ClaudeBackend {
     const executable = await this.requireInstallation();
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     const input = new ClaudeInputStream();
+    this.options.assertOwnerAdmission?.();
     const control = (this.options.query ?? query)({
       prompt: input,
       options: {

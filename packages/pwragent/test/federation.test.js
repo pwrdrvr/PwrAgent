@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -175,8 +176,10 @@ test("a thread is named from its first prompt, persists the name and tells subsc
   const cliThread = (await h.finished("cli-job")).threadId;
   v.connection.close();
   await h.stop(h.daemon);
-  const registry = JSON.parse(readFileSync(path.join(h.directory, "threads.json"), "utf8"));
-  assert.deepEqual(registry.threads.map(({ id, title: name, titleSource }) => ({ id, name, titleSource })), [
+  const db = new Database(path.join(path.dirname(h.directory), "state.db"), { readonly: true });
+  const threads = db.prepare("SELECT payload FROM threads ORDER BY rowid").all().map(row => JSON.parse(row.payload));
+  db.close();
+  assert.deepEqual(threads.map(({ threadId: id, title: name, titleSource }) => ({ id, name, titleSource })), [
     { id: created.threadId, name: title, titleSource: "derived" },
     { id: cliThread, name: "Check the release checklist for 1.3.8?", titleSource: "derived" },
   ]);

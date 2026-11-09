@@ -2,25 +2,21 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import fc from "fast-check";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import { scanCargoBuildOutputs, removeCargoBuildOutput } from "../app-server/maintenance-cargo-output";
 import { acquireMaintenanceLock } from "../app-server/maintenance-native-lock";
 
 const exec = promisify(execFile);
 const signal = () => new AbortController().signal;
 const cargoExecutable = process.env.CARGO ?? "cargo";
-let root: string, helperPath: string;
+let root: string;
+const helperPath = inject("nativeHelperFixtures").maintenanceCargo!.relay;
 
 beforeAll(async () => {
   root = await realpath(await mkdtemp(path.join(os.tmpdir(), "maintenance-cargo-")));
-  const builder = pathToFileURL(fileURLToPath(new URL("../../../scripts/build-mcp-ipc-relay.mjs", import.meta.url))).href;
-  const { stdout } = await exec(process.execPath, ["--input-type=module", "-e",
-    `import {buildMcpIpcRelay} from ${JSON.stringify(builder)}; process.stdout.write(buildMcpIpcRelay({outputRoot:process.argv[1]}));`, root]);
-  helperPath = stdout.trim().split(/\r?\n/).at(-1)!;
-}, 30_000);
+});
 afterAll(async () => { if (root) await rm(root, { recursive: true, force: true }); });
 
 async function fixture(targetName = "target", profileName = "debug") {

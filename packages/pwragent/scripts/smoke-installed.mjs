@@ -1,7 +1,7 @@
 // Runs only the installed CLI and a copied provider fixture; no workspace imports.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import net from "node:net";
@@ -68,7 +68,23 @@ try {
     dataListener.dispose();
     if (!terminalExited) terminal.kill();
   }
+  const headless = path.join(env.PWRAGENT_HOME, "profiles/t/state/headless");
+  mkdirSync(path.join(headless, "jobs"), { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(headless, "identity.json"), JSON.stringify({ version: 1, workspace, codexHome }));
+  const legacyThreads = JSON.stringify({ version: 1, threads: [{ id: "legacy-thread", title: "Packed legacy owner", titleSource: "explicit", createdAt: 1, sandbox: "read-only", pinnedRank: "a0" }] });
+  writeFileSync(path.join(headless, "threads.json"), legacyThreads);
+  writeFileSync(path.join(headless, "jobs/legacy.json"), JSON.stringify({ version: 1, id: "legacy", status: "running", fingerprint: "retained", threadId: "legacy-thread", createdAt: "2026-01-01T00:00:00Z" }));
   let daemon = await start();
+  assert.equal(JSON.parse(await command(["show", "--id", "legacy"])).status, "unknown");
+  assert.equal(existsSync(path.join(headless, "threads.json")), false);
+  assert.equal(existsSync(path.join(headless, "jobs/legacy.json")), false);
+  assert.equal(readFileSync(path.join(headless, "legacy-owner-backup-v1/threads.json"), "utf8"), legacyThreads);
+  const Database = installedRequire("better-sqlite3");
+  const reader = new Database(path.join(path.dirname(headless), "state.db"), { readonly: true });
+  try {
+    assert.equal(reader.pragma("user_version", { simple: true }), 81);
+    assert.equal(JSON.parse(reader.prepare("SELECT payload FROM threads WHERE json_extract(payload, '$.threadId') = ?").get("legacy-thread").payload).pinnedRank, "a0");
+  } finally { reader.close(); }
   const status = JSON.parse(await command(["status"]));
   assert.equal(status.activeJob, null);
   assert.equal(status.running.version, manifest.version);
@@ -93,7 +109,7 @@ try {
   const calls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(calls.filter((call) => call.method === "turn/start").length, 1);
   await stop(daemon);
-  console.log("Packed CLI smoke passed: native PTY input/resize/exit, help, mocked turn, transcript, federation, restart and duplicate submission");
+  console.log("Packed CLI smoke passed: native SQLite legacy jobs/threads adoption and retirement, PTY input/resize/exit, mocked turn, transcript, federation, restart and duplicate submission");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {

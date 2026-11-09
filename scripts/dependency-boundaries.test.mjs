@@ -14,8 +14,9 @@ const layers = [
   { path: "agent-tools", imports: ["shared"] },
   { path: "messaging/interface", imports: ["shared"] },
   { path: "owner-core", imports: ["shared"] },
+  { path: "sqlite-storage", imports: ["shared", "owner-core"] },
   ...providers.map((path) => ({ path, imports: ["messaging/interface"] })),
-  { path: "pwragent", imports: [...reusable, "owner-core"] },
+  { path: "pwragent", imports: [...reusable, "owner-core", "sqlite-storage"] },
 ];
 const targets = [
   ...layers.map(({ path }) => ({
@@ -29,6 +30,7 @@ const targets = [
 const cases = [];
 const storageCases = [];
 const ipcStateCases = [];
+const outpostStorageCases = [];
 let root;
 let result;
 
@@ -64,7 +66,7 @@ beforeAll(async () => {
     cases.push({
       from: entry,
       to: target.file,
-      allowed: target.path === "pwragent" || [...reusable, "owner-core"].includes(target.path),
+      allowed: target.path === "pwragent" || [...reusable, "owner-core", "sqlite-storage"].includes(target.path),
     });
   }
 
@@ -89,6 +91,55 @@ beforeAll(async () => {
       source(to, "export const value = 1;\n");
       source(from, `import ${JSON.stringify(relative(dirname(from), to).replaceAll("\\", "/"))};\n`);
       ipcStateCases.push({ from, to, forbidden: ["ipc", "app-server", "federation", "composer-drafts", "operator-requests", "pr-status", "scheduled-actions", "thread-search", "token-miser", "thread-todos", "thread-reviews", "acp", "messaging", "settings", "automations", "mcp-connections", "future-area"].includes(area.split("/")[0]) });
+    }
+  }
+
+  // Moving SQLite below the host must preserve the same privacy for every
+  // import syntax, including future application areas and root consumers.
+  for (const area of ["ipc", "app-server", "federation", "settings", "messaging", "future-area", "state", "storage"]) {
+    const to = "packages/sqlite-storage/src/index.js";
+    for (const [style, statement] of [
+      ["package", 'import "@pwragent/sqlite-storage";'],
+      ["static", `import ${JSON.stringify(relative(`apps/desktop/src/main/${area}/nested`, to).replaceAll("\\", "/"))};`],
+      ["type-import", 'import type { Value } from "@pwragent/sqlite-storage"; export type { Value };'],
+      ["type-expression", 'export type Value = import("@pwragent/sqlite-storage").Value;'],
+      ["type-export", 'export type { Value } from "@pwragent/sqlite-storage";'],
+      ["export", 'export * from "@pwragent/sqlite-storage";'],
+      ["dynamic", 'export const load = () => import("@pwragent/sqlite-storage");'],
+      ["require", 'const value = require("@pwragent/sqlite-storage"); module.exports = value;'],
+    ]) {
+      const from = `apps/desktop/src/main/${area}/nested/sqlite-${style}.ts`;
+      source(from, statement);
+      ipcStateCases.push({ from, to, forbidden: !["state", "storage"].includes(area) });
+    }
+  }
+  for (const consumer of ["index", "runtime-lease-manager", "future-root-service"]) {
+    const to = "packages/sqlite-storage/src/index.js";
+    const from = `apps/desktop/src/main/${consumer}-sqlite.ts`;
+    source(from, 'export * from "@pwragent/sqlite-storage";');
+    ipcStateCases.push({ from, to, forbidden: true });
+  }
+  for (const area of ["ipc", "app-server", "future-area", "state", "storage"]) {
+    for (const binding of ["state-db", "app-runtime-instance-store", "thread-todo-store", "thread-review-storage-sqlite", "model-settings-recents-store", "overlay-store-sqlite", "thread-search-store", "provider-thread-snapshot-store", "automation-store", "scheduled-thread-action-store", "scheduled-thread-action-payload-store", "durable-turn-request-store", "acp-session-store", "acp-available-commands-store", "messaging-pairing-store", "messaging-activity-log", "operator-request-store", "token-miser-storage-sqlite", "acp-agent-store", "messaging-request-store", "messaging-store-sqlite", "federation-store", "thread-sandbox-store"]) {
+      const to = `apps/desktop/src/main/storage/${binding}.ts`;
+      const from = `apps/desktop/src/main/${area}/nested/sqlite-binding-${binding}.ts`;
+      source(to, 'export * from "@pwragent/sqlite-storage";');
+      source(from, `export * from "../../storage/${binding}";`);
+      ipcStateCases.push({ from, to, forbidden: !["state", "storage"].includes(area) });
+    }
+  }
+
+  for (const area of ["daemon", "runtime", "nested/future-owner"]) {
+    for (const [style, statement] of [
+      ["static", 'import "better-sqlite3";'],
+      ["export", 'export * from "better-sqlite3";'],
+      ["dynamic", 'export const load = () => import("better-sqlite3");'],
+      ["require", 'module.exports = require("better-sqlite3");'],
+      ["type", 'export type Value = import("better-sqlite3").Value;'],
+    ]) {
+      const from = `packages/pwragent/src/${area}-${style}.ts`;
+      source(from, statement);
+      outpostStorageCases.push({ from, to: "node_modules/better-sqlite3/index.js" });
     }
   }
 
@@ -190,6 +241,15 @@ describe("workspace dependency layers", () => {
       }
     }
     expect({ count: mismatches.length, first: mismatches.slice(0, 10) }).toEqual({ count: 0, first: [] });
+  });
+
+  it("keeps Outpost application modules out of raw native storage for every import syntax", () => {
+    for (const { from, to } of outpostStorageCases) {
+      const dependency = result.modules.find(module => module.source === from)
+        ?.dependencies.find(dependency => dependency.resolved === to);
+      expect(dependency?.rules?.map(rule => rule.name), `${from} -> ${to}`)
+        .toContain("outpost-application-storage-is-private");
+    }
   });
 
   it("keeps every forbidden rule fatal", () => {

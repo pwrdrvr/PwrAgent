@@ -1,6 +1,8 @@
+import Database from "better-sqlite3";
+import { ownerStorage } from "./helpers/owner-storage.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
@@ -32,20 +34,24 @@ test("registry recovers uncertain work without replay, binds workspace/home and 
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "registry-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const identity = { version: 1, workspace: "/fixture/workspace", codexHome: "/fixture/home" };
-  const store = new JobStore(directory, identity);
+  const owner = ownerStorage(t, directory, "/fixture/workspace");
+  const { identity, profile } = owner;
+  const store = new JobStore(owner.directory, identity, profile);
   store.save({ version: 1, id: "uncertain", status: "running", fingerprint: "fixture", threadId: "thread-fixture" });
-  const reopened = new JobStore(directory, identity);
+  const reopened = new JobStore(owner.directory, identity, profile);
   assert.equal(reopened.get("uncertain").status, "unknown");
-  const before = readFileSync(path.join(directory, "jobs/uncertain.json"), "utf8");
-  new JobStore(directory, identity);
-  assert.equal(readFileSync(path.join(directory, "jobs/uncertain.json"), "utf8"), before, "no idle rewrite");
-  assert.throws(() => new JobStore(directory, { ...identity, codexHome: "/different" }), /different workspace or Codex home/);
-  unlinkSync(path.join(directory, "identity.json"));
-  assert.throws(() => new JobStore(directory, identity), /identity is missing/);
-  writeFileSync(path.join(directory, "identity.json"), JSON.stringify(identity));
-  writeFileSync(path.join(directory, "jobs/uncertain.json"), "{");
-  assert.throws(() => new JobStore(directory, identity), SyntaxError);
+  const before = reopened.get("uncertain");
+  new JobStore(owner.directory, identity, profile);
+  assert.deepEqual(reopened.get("uncertain"), before, "no idle rewrite");
+  assert.throws(() => new JobStore(owner.directory, { ...identity, codexHome: "/different" }, profile), /different workspace or Codex home/);
+  unlinkSync(path.join(owner.directory, "identity.json"));
+  assert.throws(() => new JobStore(owner.directory, identity, profile), /identity is missing/);
+  writeFileSync(path.join(owner.directory, "identity.json"), JSON.stringify(identity));
+  const db = new Database(path.join(directory, "state.db"));
+  try {
+    db.prepare("UPDATE owner_jobs SET payload = ? WHERE job_id = ?").run(JSON.stringify({ version: 2, id: "uncertain" }), "uncertain");
+    assert.throws(() => new JobStore(owner.directory, identity, profile), /Invalid headless job record/);
+  } finally { db.close(); }
 });
 
 for (const [fixture, expected] of [["silent-codex.js", /timeout/], ["invalid-codex.js", /Invalid Codex response/]]) {

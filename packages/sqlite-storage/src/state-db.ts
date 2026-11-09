@@ -1,0 +1,4481 @@
+import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
+import { removeUsageActivityIndex } from "./usage-activity-index";
+import fs from "node:fs";
+import path from "node:path";
+import Database from "better-sqlite3";
+import type BetterSqlite3 from "better-sqlite3";
+import {
+  encodeLegacyThreadIdentityKey,
+  estimateTokenUsageCost,
+  normalizeThreadReview,
+  resolveTokenUsagePriceUnavailableReason,
+  type ThreadReview,
+  type ThreadUsageLineRecord,
+} from "@pwragent/shared";
+import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
+import {
+  THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA,
+  THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA,
+} from "./thread-navigation-relationships.js";
+import { STORAGE_RETENTION_SCHEMA } from "./state-schema.js";
+import { THREAD_DEPENDENCY_SCHEMA } from "./state-schema.js";
+import { PROJECT_HELD_WAKEUP_SCHEMA } from "./state-schema.js";
+import { RESTART_CONTINUATION_SCHEMA } from "./state-schema.js";
+import { MESSAGING_REQUEST_SCHEMA } from "./state-schema.js";
+import { THREAD_SANDBOX_SCHEMA } from "./state-schema.js";
+import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
+import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
+import {
+  ensureThreadSubAgentPanelSchema,
+  ensureThreadSubAgentSchema,
+  THREAD_SUB_AGENTS_MOVED_META_KEY,
+} from "./thread-sub-agents";
+import {
+  ensureThreadUsageActivitySchema,
+  THREAD_USAGE_ACTIVITIES_MOVED_META_KEY,
+} from "./thread-usage-activities";
+import {
+  attachSqliteWriteMetrics,
+  isSqliteWriteMetricsEnabled,
+} from "./sqlite-write-metrics.js";
+
+export const CURRENT_STATE_DB_USER_VERSION = 81;
+export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
+export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
+
+/** `PRAGMA auto_vacuum` result codes, which SQLite reports as bare integers. */
+export const SQLITE_AUTO_VACUUM_NONE = 0;
+export const SQLITE_AUTO_VACUUM_INCREMENTAL = 2;
+
+/**
+ * Outcome of `StateDb.ensureIncrementalAutoVacuum`, reported rather than
+ * logged so `state-db.ts` stays free of an Electron logger import — every
+ * unit test in the suite opens one of these against a temp file.
+ */
+export type AutoVacuumConversion =
+  | { status: "already-incremental" }
+  | {
+      bytesAfter: number;
+      bytesBefore: number;
+      elapsedMs: number;
+      status: "converted";
+    }
+  | { error: Error; status: "failed" };
+
+const SCHEMA_V1 = `
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+INSERT INTO meta(key, value) VALUES ('schema_version', '1');
+INSERT INTO meta(key, value) VALUES ('migrated_from', '');
+INSERT INTO meta(key, value) VALUES ('profile_name', '');
+
+CREATE TABLE bindings (
+  binding_id     TEXT PRIMARY KEY,
+  channel_kind   TEXT NOT NULL,
+  channel_id     TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  revoked_at     INTEGER,
+  payload        TEXT NOT NULL
+);
+CREATE INDEX idx_bindings_thread ON bindings(thread_id);
+CREATE INDEX idx_bindings_channel ON bindings(channel_kind, channel_id);
+
+CREATE TABLE pending_intents (
+  intent_id   TEXT PRIMARY KEY,
+  binding_id  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX idx_pending_intents_expires ON pending_intents(expires_at);
+CREATE INDEX idx_pending_intents_binding ON pending_intents(binding_id);
+
+CREATE TABLE browse_sessions (
+  session_id  TEXT PRIMARY KEY,
+  binding_id  TEXT,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX idx_browse_sessions_expires ON browse_sessions(expires_at);
+
+CREATE TABLE callback_handles (
+  handle_id   TEXT PRIMARY KEY,
+  session_id  TEXT,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX idx_callback_handles_expires ON callback_handles(expires_at);
+CREATE INDEX idx_callback_handles_session ON callback_handles(session_id);
+
+CREATE TABLE deliveries (
+  delivery_id   TEXT PRIMARY KEY,
+  binding_id    TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX idx_deliveries_binding_created ON deliveries(binding_id, created_at);
+
+CREATE TABLE backends (
+  scope       TEXT PRIMARY KEY,
+  payload     TEXT NOT NULL
+);
+
+CREATE TABLE launchpad_defaults (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL
+);
+
+CREATE TABLE directory_launchpads (
+  directory_path  TEXT PRIMARY KEY,
+  payload         TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  settings_touched_at INTEGER
+);
+
+CREATE TABLE threads (
+  thread_id        TEXT PRIMARY KEY,
+  directory_path   TEXT,
+  last_seen_at     INTEGER,
+  dismissed_at     INTEGER,
+  snoozed_until    INTEGER,
+  payload          TEXT NOT NULL
+);
+CREATE INDEX idx_threads_directory ON threads(directory_path);
+CREATE INDEX idx_threads_dismissed ON threads(dismissed_at);
+
+CREATE TABLE secrets (
+  key         TEXT PRIMARY KEY,
+  ciphertext  BLOB NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+`;
+
+const SCHEMA_V2 = `
+CREATE TABLE messaging_activity_log (
+  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform                 TEXT NOT NULL,
+  kind                     TEXT NOT NULL,
+  thread_id                TEXT,
+  binding_id               TEXT,
+  conversation_id          TEXT,
+  conversation_title       TEXT,
+  actor_id                 TEXT,
+  actor_display_name       TEXT,
+  summary                  TEXT NOT NULL,
+  created_at               INTEGER NOT NULL,
+  payload                  TEXT NOT NULL
+);
+CREATE INDEX idx_messaging_activity_log_created
+  ON messaging_activity_log(created_at DESC);
+CREATE INDEX idx_messaging_activity_log_platform_created
+  ON messaging_activity_log(platform, created_at DESC);
+CREATE INDEX idx_messaging_activity_log_thread
+  ON messaging_activity_log(thread_id);
+`;
+
+const SCHEMA_V3 = `
+CREATE TABLE messaging_pairing_tokens (
+  entry_id      TEXT PRIMARY KEY,
+  token_hmac    TEXT NOT NULL UNIQUE,
+  platform      TEXT NOT NULL,
+  instance_id   TEXT NOT NULL,
+  scope         TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  generated_at  INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  observed_at   INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX idx_messaging_pairing_platform_expires
+  ON messaging_pairing_tokens(platform, instance_id, expires_at);
+CREATE INDEX idx_messaging_pairing_status
+  ON messaging_pairing_tokens(status, expires_at);
+`;
+
+const SCHEMA_V4 = `
+CREATE TABLE IF NOT EXISTS monitor_subscriptions (
+  subscription_id  TEXT PRIMARY KEY,
+  channel_kind     TEXT NOT NULL,
+  channel_id       TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL,
+  revoked_at       INTEGER,
+  payload          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_monitor_subscriptions_channel
+  ON monitor_subscriptions(channel_kind, channel_id);
+
+CREATE TABLE IF NOT EXISTS app_runtime_instances (
+  instance_id                 TEXT PRIMARY KEY,
+  profile_name                TEXT NOT NULL,
+  process_id                  INTEGER NOT NULL,
+  cwd_hint                    TEXT,
+  cwd_hash                    TEXT,
+  started_at                  INTEGER NOT NULL,
+  heartbeat_at                INTEGER NOT NULL,
+  exited_at                   INTEGER,
+  desired_messaging_enabled   INTEGER NOT NULL,
+  effective_messaging_enabled INTEGER NOT NULL,
+  disabled_reason             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_heartbeat
+  ON app_runtime_instances(profile_name, heartbeat_at DESC);
+
+CREATE TABLE IF NOT EXISTS messaging_runtime_lease (
+  lease_key         TEXT PRIMARY KEY,
+  owner_instance_id TEXT NOT NULL,
+  acquired_at       INTEGER NOT NULL,
+  heartbeat_at      INTEGER NOT NULL,
+  expires_at        INTEGER NOT NULL,
+  released_at       INTEGER,
+  status            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_runtime_lease_status_expires
+  ON messaging_runtime_lease(status, expires_at);
+`;
+
+const DIRECTORY_GIT_STATUS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS directory_git_status (
+  directory_key        TEXT PRIMARY KEY,
+  directory_path       TEXT,
+  directory_updated_at INTEGER,
+  fetched_at           INTEGER NOT NULL,
+  payload              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_directory_git_status_fetched
+  ON directory_git_status(fetched_at DESC);
+`;
+
+const DIRECTORY_OVERLAY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS directory_overlay (
+  directory_key TEXT PRIMARY KEY,
+  payload       TEXT NOT NULL
+);
+`;
+
+/* Viewer-owned directory display preferences for federation windows. The
+   owning instance's directory overlay remains untouched. */
+const REMOTE_DIRECTORY_OVERLAY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS remote_directory_overlay (
+  instance_id   TEXT NOT NULL,
+  directory_key TEXT NOT NULL,
+  payload       TEXT NOT NULL,
+  PRIMARY KEY(instance_id, directory_key)
+);
+`;
+
+/* Star Map card arrangement: one row per dragged card
+   (entry_key = "<instanceId> <threadKey>"), LWW-merged and synced across
+   the federation. Payload is a StarMapArrangementEntry JSON blob. */
+const STAR_MAP_ARRANGEMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS star_map_arrangement (
+  entry_key TEXT PRIMARY KEY,
+  payload   TEXT NOT NULL
+);
+`;
+
+/* Viewer-owned Star Map desk state. Unlike `star_map_arrangement`, this is
+   local profile state and never crosses federation. One atomic payload keeps
+   the open-card set, z-order, satellite flags, and lens cameras consistent. */
+const STAR_MAP_WORKSPACE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS star_map_workspace (
+  workspace_key TEXT PRIMARY KEY,
+  revision      INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  payload       TEXT NOT NULL
+);
+`;
+
+// Per-worktree git working-state cache (the dirty/unpushed thread-row
+// chips), keyed by a thread's working directory path. Sibling of
+// `directory_git_status`, which caches per-repo branch/sync state.
+const THREAD_GIT_WORKING_STATE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_git_working_state (
+  worktree_path TEXT PRIMARY KEY,
+  fetched_at    INTEGER NOT NULL,
+  payload       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thread_git_working_state_fetched
+  ON thread_git_working_state(fetched_at DESC);
+`;
+
+const COMPOSER_DRAFT_RECOVERY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS composer_draft_latest (
+  scope_key    TEXT PRIMARY KEY,
+  scope_kind   TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  payload      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_composer_draft_latest_updated
+  ON composer_draft_latest(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS composer_draft_journal (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope_key    TEXT NOT NULL,
+  scope_kind   TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  char_count   INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  payload      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_composer_draft_journal_scope_updated
+  ON composer_draft_journal(scope_key, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_composer_draft_journal_updated
+  ON composer_draft_journal(updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_composer_draft_journal_scope_hash_status
+  ON composer_draft_journal(scope_key, content_hash, status);
+`;
+
+const MESSAGING_TOPIC_MANAGEMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_managed_topics (
+  topic_record_id TEXT PRIMARY KEY,
+  channel_kind    TEXT NOT NULL,
+  supergroup_id   TEXT NOT NULL,
+  topic_id        TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  payload         TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messaging_managed_topics_conversation
+  ON messaging_managed_topics(channel_kind, supergroup_id, topic_id);
+CREATE INDEX IF NOT EXISTS idx_messaging_managed_topics_supergroup
+  ON messaging_managed_topics(channel_kind, supergroup_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messaging_thread_topic_links (
+  link_id         TEXT PRIMARY KEY,
+  channel_kind    TEXT NOT NULL,
+  supergroup_id   TEXT NOT NULL,
+  backend         TEXT NOT NULL,
+  thread_id       TEXT NOT NULL,
+  topic_record_id TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  payload         TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messaging_thread_topic_links_unique
+  ON messaging_thread_topic_links(channel_kind, supergroup_id, backend, thread_id);
+
+CREATE TABLE IF NOT EXISTS messaging_topic_cleanup_proposals (
+  proposal_id   TEXT PRIMARY KEY,
+  channel_kind  TEXT NOT NULL,
+  supergroup_id TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  applied_at    INTEGER,
+  expires_at    INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_topic_cleanup_proposals_supergroup
+  ON messaging_topic_cleanup_proposals(channel_kind, supergroup_id, updated_at DESC);
+`;
+
+const ACP_AGENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS acp_registry_cache (
+  cache_key   TEXT PRIMARY KEY,
+  fetched_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_acp_registry_cache_fetched
+  ON acp_registry_cache(fetched_at DESC);
+
+CREATE TABLE IF NOT EXISTS acp_installed_agents (
+  backend_id           TEXT PRIMARY KEY,
+  registry_id          TEXT NOT NULL,
+  version              TEXT,
+  install_status       TEXT NOT NULL,
+  auth_status          TEXT NOT NULL,
+  verification_status  TEXT NOT NULL,
+  installed_at         INTEGER NOT NULL,
+  updated_at           INTEGER NOT NULL,
+  payload              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_acp_installed_agents_registry
+  ON acp_installed_agents(registry_id);
+CREATE INDEX IF NOT EXISTS idx_acp_installed_agents_updated
+  ON acp_installed_agents(updated_at DESC);
+`;
+
+const ACP_SESSION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS acp_sessions (
+  backend_id  TEXT NOT NULL,
+  session_id  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  PRIMARY KEY (backend_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_backend_updated
+  ON acp_sessions(backend_id, updated_at DESC);
+`;
+
+/**
+ * Last-observed ACP `availableCommands` per (agent, repository root).
+ *
+ * ACP agents only advertise their slash commands over a live session, so a
+ * launchpad draft — which has no session and no thread id — has nothing to ask.
+ * Every session that reports commands writes through here keyed by the repo
+ * root behind its cwd, and launchpad requests read it back. Keying on the
+ * repository (not the worktree) is deliberate: commands are a property of the
+ * checkout's command files, so every worktree of a repo shares one row.
+ */
+const ACP_AVAILABLE_COMMANDS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS acp_available_commands (
+  backend_id      TEXT NOT NULL,
+  repository_path TEXT NOT NULL,
+  observed_at     INTEGER NOT NULL,
+  payload         TEXT NOT NULL,
+  PRIMARY KEY (backend_id, repository_path)
+);
+CREATE INDEX IF NOT EXISTS idx_acp_available_commands_observed
+  ON acp_available_commands(observed_at DESC);
+`;
+
+// One row per observed compaction (`thread/compacted` or a ContextCompaction
+// item). Compaction is the only event that
+// bounds how long a preserved tool payload can still be replayed, and it was
+// previously live-only: a compaction seen while the app was closed stopped
+// nothing, and historical accounting had no boundary at all. Persisting it
+// gives Token Miser a durable stop and gives the pricing ledger a name for the
+// cold replay that follows — the whole surviving context re-sent uncached.
+const THREAD_COMPACTION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_compactions (
+  compaction_id          TEXT PRIMARY KEY,
+  backend                TEXT NOT NULL,
+  thread_id              TEXT NOT NULL,
+  turn_id                TEXT,
+  item_id                TEXT,
+  observed_at            INTEGER NOT NULL,
+  cold_usage_line_id     TEXT,
+  cold_uncached_tokens   INTEGER,
+  cold_cost_micros       INTEGER,
+  updated_at             INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_compactions_thread
+  ON thread_compactions(backend, thread_id, observed_at DESC);
+`;
+
+const AUTOMATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS automations (
+  automation_id  TEXT PRIMARY KEY,
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  backlog_policy TEXT NOT NULL,
+  next_run_at    INTEGER,
+  last_run_at    INTEGER,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  deleted_at     INTEGER,
+  payload        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automations_thread
+  ON automations(backend, thread_id, status);
+CREATE INDEX IF NOT EXISTS idx_automations_next_run
+  ON automations(status, next_run_at);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  run_id          TEXT PRIMARY KEY,
+  automation_id  TEXT NOT NULL,
+  backend         TEXT NOT NULL,
+  thread_id       TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  trigger         TEXT NOT NULL,
+  scheduled_for   INTEGER,
+  queued_at       INTEGER,
+  started_at      INTEGER,
+  completed_at    INTEGER,
+  backend_turn_id TEXT,
+  queue_entry_id  TEXT,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  source_event_key TEXT,
+  payload         TEXT NOT NULL,
+  FOREIGN KEY (automation_id) REFERENCES automations(automation_id)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_automation_updated
+  ON automation_runs(automation_id, updated_at DESC);
+-- Replace the original expression index even on already-upgraded databases.
+-- Run readers tolerate corrupt JSON; indexing must preserve that behavior.
+DROP INDEX IF EXISTS idx_automation_runs_execution_thread;
+CREATE INDEX IF NOT EXISTS idx_automation_runs_execution_thread_valid
+  ON automation_runs(
+    CASE WHEN json_valid(payload) THEN json_extract(payload, '$.backendThreadId') END,
+    backend
+  );
+CREATE INDEX IF NOT EXISTS idx_automation_runs_owner_thread
+  ON automation_runs(backend, thread_id);
+-- NOTE: idx_automation_runs_source_event is created in the v23 migration
+-- (ensureAutomationRunSourceEventKey), NOT here. ensureCurrentSchema runs
+-- before migrations, and on an existing DB the source_event_key column does
+-- not exist until the migration's ALTER runs — referencing it here would fail.
+CREATE INDEX IF NOT EXISTS idx_automation_runs_thread_updated
+  ON automation_runs(backend, thread_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_status
+  ON automation_runs(status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_runs_one_pending_scheduled
+  ON automation_runs(automation_id)
+  WHERE trigger = 'scheduled' AND status IN ('pending', 'queued');
+
+CREATE TABLE IF NOT EXISTS automation_run_artifacts (
+  run_id         TEXT PRIMARY KEY,
+  automation_id TEXT NOT NULL,
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  payload       TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES automation_runs(run_id)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_automation_run_artifacts_automation_updated
+  ON automation_run_artifacts(automation_id, updated_at DESC);
+`;
+
+const SCHEDULED_THREAD_ACTION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS scheduled_thread_actions (
+  action_id       TEXT PRIMARY KEY,
+  backend         TEXT NOT NULL,
+  thread_id       TEXT NOT NULL,
+  kind            TEXT NOT NULL,
+  origin          TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  scheduled_for   INTEGER NOT NULL,
+  queue_entry_id  TEXT,
+  turn_id         TEXT,
+  error_message   TEXT,
+  payload_ref     TEXT NOT NULL,
+  claim_owner     TEXT,
+  claim_expires_at INTEGER,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_thread_actions_due
+  ON scheduled_thread_actions(status, scheduled_for, created_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_thread_actions_thread
+  ON scheduled_thread_actions(backend, thread_id, status, scheduled_for);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_thread_actions_queue
+  ON scheduled_thread_actions(queue_entry_id)
+  WHERE queue_entry_id IS NOT NULL;
+`;
+
+// Cards a thread raises for the operator (review, merge, start a proposed
+// thread, or a reminder). Written once per tool call or operator click, never
+// per streamed event. The partial unique index enforces "one open card per
+// key per thread"; a done card frees its key for the next one.
+const THREAD_TODO_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todos (
+  todo_id      TEXT PRIMARY KEY,
+  backend      TEXT NOT NULL,
+  thread_id    TEXT NOT NULL,
+  todo_key     TEXT,
+  kind         TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  detail       TEXT,
+  action_json  TEXT,
+  cwd          TEXT,
+  result_json  TEXT,
+  error        TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  resolved_at  INTEGER,
+  source_project_json TEXT,
+  target_project_json TEXT,
+  items_json   TEXT,
+  dependency_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thread_todos_status_thread
+  ON thread_todos(status, backend, thread_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_todos_open_key
+  ON thread_todos(backend, thread_id, todo_key)
+  WHERE status = 'open' AND todo_key IS NOT NULL;
+`;
+
+/**
+ * The merge method an operator last picked from a to-do card's menu, per
+ * project. Learned state, so it lives here rather than in config.toml; the
+ * configured default is `[git] default_merge_method`.
+ */
+const THREAD_TODO_PROJECT_PREFS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todo_project_prefs (
+  directory_key TEXT PRIMARY KEY,
+  merge_method  TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+`;
+
+/** Additive learned dispatch settings, keyed by the raising thread. */
+const THREAD_TODO_THREAD_PREFS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todo_thread_prefs (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  model_settings_json TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id)
+);
+`;
+
+/** v70: the project a card came from and the one it is for. */
+function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "source_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN source_project_json TEXT");
+  }
+  if (!tableColumnExists(db, "thread_todos", "target_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN target_project_json TEXT");
+  }
+  db.exec(THREAD_TODO_PROJECT_PREFS_SCHEMA);
+}
+
+/**
+ * v73: a card's checklist, as one JSON array on the card's own row. The
+ * steps are always read and written with their card, a list is capped at
+ * 20 short steps, and nothing queries a step on its own, so a child table
+ * would only add a join to every list and a second row to every write. A
+ * tick rewrites this one unindexed column: one row page per commit.
+ */
+function ensureThreadTodoItemsColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "items_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN items_json TEXT");
+  }
+}
+
+/**
+ * v78: the thread dependency that raised a card for the operator. The open
+ * key index frees a key once its card is resolved; this one never does, so a
+ * dependency raises at most one card for its lifetime. Kept out of
+ * THREAD_TODO_SCHEMA, which runs before this column exists on old profiles.
+ */
+function ensureThreadTodoDependencyColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "dependency_id")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN dependency_id TEXT");
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_todos_dependency
+    ON thread_todos(dependency_id) WHERE dependency_id IS NOT NULL`);
+}
+
+// What threads are waiting on the operator for, beyond the registry's live
+// server requests. An async question is an assistant message, so nothing
+// else records that it is still open; a row is written when it arrives and
+// once more when a reply answers it or the operator dismisses it. The text is
+// kept only while the question is open (a pending request, like a pending
+// approval); closing it blanks `questions_json`. Seen marks
+// are written once per item, the first time it is on screen. Neither table
+// is written per streamed event or on a timer.
+/** Tracked review findings; see "Tracked review findings" in docs/thread-history-persistence.md. */
+const THREAD_REVIEW_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_reviews (
+  review_id TEXT PRIMARY KEY,
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'handled', 'dismissed')),
+  updated_at INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_reviews_status_thread
+  ON thread_reviews(status, backend, thread_id);
+`;
+
+const OPERATOR_REQUEST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS operator_async_questions (
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  message_id     TEXT NOT NULL,
+  questions_json TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  PRIMARY KEY (backend, thread_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_operator_async_questions_status
+  ON operator_async_questions(status, created_at);
+CREATE TABLE IF NOT EXISTS operator_seen_items (
+  item_key TEXT PRIMARY KEY,
+  seen_at  INTEGER NOT NULL
+);
+`;
+
+const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_activity_summary (
+  platform         TEXT PRIMARY KEY,
+  last_request_at  INTEGER,
+  last_response_at INTEGER,
+  updated_at       INTEGER NOT NULL
+);
+`;
+
+const MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_default_agent_assignments (
+  assignment_id TEXT PRIMARY KEY,
+  scope_kind    TEXT NOT NULL,
+  scope_key     TEXT NOT NULL,
+  channel_kind  TEXT,
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  revoked_at    INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_default_agent_assignments_scope
+  ON messaging_default_agent_assignments(scope_key, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messaging_default_agent_assignments_active_scope
+  ON messaging_default_agent_assignments(scope_key)
+  WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_messaging_default_agent_assignments_thread
+  ON messaging_default_agent_assignments(backend, thread_id, status);
+`;
+
+const MESSAGING_OBSERVED_SURFACE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_observed_surfaces (
+  surface_key       TEXT PRIMARY KEY,
+  channel_kind      TEXT NOT NULL,
+  conversation_kind TEXT NOT NULL,
+  conversation_id   TEXT NOT NULL,
+  first_seen_at     INTEGER NOT NULL,
+  last_seen_at      INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_observed_surfaces_recent
+  ON messaging_observed_surfaces(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messaging_observed_surfaces_platform_recent
+  ON messaging_observed_surfaces(channel_kind, last_seen_at DESC);
+`;
+
+const THREAD_SEARCH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_search_documents (
+  identity_key            TEXT PRIMARY KEY,
+  backend                 TEXT NOT NULL,
+  thread_id               TEXT NOT NULL,
+  title                   TEXT NOT NULL,
+  title_source            TEXT,
+  summary                 TEXT,
+  project_key             TEXT,
+  created_at              INTEGER,
+  updated_at              INTEGER,
+  archived_at             INTEGER,
+  git_branch              TEXT,
+  git_origin_url          TEXT,
+  model                   TEXT,
+  linked_directories_json TEXT NOT NULL,
+  display_json            TEXT NOT NULL,
+  indexed_at              INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_search_documents_backend_updated
+  ON thread_search_documents(backend, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_search_documents_project_updated
+  ON thread_search_documents(project_key, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_search_documents_archived
+  ON thread_search_documents(archived_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS thread_search_fts USING fts5(
+  identity_key UNINDEXED,
+  title,
+  summary,
+  project_key,
+  directory_labels,
+  directory_paths,
+  git_branch,
+  git_origin_url,
+  model,
+  backend,
+  thread_id,
+  tokenize = "unicode61 remove_diacritics 2 tokenchars '-_./:'"
+);
+`;
+
+const PR_STATUS_CACHE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_status_cache (
+  pr_key     TEXT PRIMARY KEY,
+  provider   TEXT NOT NULL DEFAULT 'github.com',
+  org        TEXT NOT NULL,
+  repo       TEXT NOT NULL,
+  number     INTEGER NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  payload    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pr_status_cache_fetched
+  ON pr_status_cache(fetched_at DESC);
+`;
+
+const PR_LOOKUP_CACHE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_lookup_cache (
+  lookup_key      TEXT PRIMARY KEY,
+  provider        TEXT NOT NULL DEFAULT 'github.com',
+  branch          TEXT NOT NULL,
+  directory_paths TEXT NOT NULL,
+  fetched_at      INTEGER NOT NULL,
+  payload         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pr_lookup_cache_fetched
+  ON pr_lookup_cache(fetched_at DESC);
+`;
+
+const PR_AUTO_DISPATCH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_claims (
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  pr_key        TEXT NOT NULL,
+  fingerprint   TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  scheduled_at  INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  payload       TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id, fingerprint)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_active_thread
+  ON pr_auto_dispatch_claims(backend, thread_id)
+  WHERE status IN ('pending', 'dispatching');
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pending_schedule
+  ON pr_auto_dispatch_claims(status, scheduled_at);
+
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_incidents (
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  pr_key        TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL,
+  active_kinds  TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (backend, thread_id, pr_key)
+);
+
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_candidates (
+  pr_key         TEXT NOT NULL,
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  eligible_since INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  PRIMARY KEY (pr_key, backend, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_winner
+  ON pr_auto_dispatch_candidates(pr_key, eligible_since, backend, thread_id);
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_thread
+  ON pr_auto_dispatch_candidates(backend, thread_id, pr_key);
+`;
+
+const PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pr_fingerprint
+  ON pr_auto_dispatch_claims(pr_key, fingerprint);
+`;
+
+const PR_AUTO_DISPATCH_BUDGET_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_budget (
+  scope      TEXT PRIMARY KEY,
+  tokens     REAL NOT NULL,
+  updated_at INTEGER NOT NULL,
+  paused_at  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_budget_reservations (
+  backend    TEXT NOT NULL,
+  thread_id  TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  reserved_at INTEGER NOT NULL,
+  PRIMARY KEY (backend, thread_id, fingerprint)
+);
+`;
+
+const PR_STATUS_WATCH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_status_watches (
+  watch_id           TEXT PRIMARY KEY,
+  backend            TEXT NOT NULL,
+  thread_id          TEXT NOT NULL,
+  pr_key             TEXT NOT NULL,
+  head_sha           TEXT NOT NULL,
+  notify_on_success  INTEGER NOT NULL,
+  notify_on_failure  INTEGER NOT NULL,
+  notify_on_merged   INTEGER NOT NULL DEFAULT 0,
+  notify_on_closed   INTEGER NOT NULL DEFAULT 0,
+  status             TEXT NOT NULL,
+  attempt_count      INTEGER NOT NULL DEFAULT 0,
+  lease_owner        TEXT,
+  lease_expires_at   INTEGER,
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL,
+  payload            TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_status_watches_active_target
+  ON pr_status_watches(backend, thread_id, pr_key, head_sha)
+  WHERE status IN ('watching', 'dispatching');
+CREATE INDEX IF NOT EXISTS idx_pr_status_watches_active_pr
+  ON pr_status_watches(pr_key, status, lease_expires_at);
+`;
+
+/**
+ * Merge/close interests. A terminal watch is stored with an empty head_sha:
+ * it is not bound to a head, and the active-target unique index then allows
+ * one terminal watch per thread and PR beside its CI watch. Added here rather
+ * than in a numbered step because ensureCurrentSchema runs on every open.
+ */
+function ensurePrStatusWatchTerminalColumns(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "pr_status_watches", "notify_on_merged")) {
+    db.exec("ALTER TABLE pr_status_watches ADD COLUMN notify_on_merged INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!tableColumnExists(db, "pr_status_watches", "notify_on_closed")) {
+    db.exec("ALTER TABLE pr_status_watches ADD COLUMN notify_on_closed INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
+// Finalization is keyed by turn identity, so a replacement usage-line id cannot
+// bypass it. Token intervals establish ordering; wall clocks and replay arrival
+// order do not. The original row owns the marker's lifetime.
+const THREAD_USAGE_FINALIZATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_usage_boundaries (
+  provider TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  usage_line_id TEXT NOT NULL UNIQUE REFERENCES thread_usage_lines(usage_line_id) ON DELETE CASCADE,
+  successor_usage_line_id TEXT NOT NULL,
+  cumulative_total_tokens INTEGER NOT NULL,
+  PRIMARY KEY (provider, backend, thread_id, turn_id)
+);
+INSERT OR IGNORE INTO thread_usage_boundaries
+  (provider, backend, thread_id, turn_id, usage_line_id, successor_usage_line_id, cumulative_total_tokens)
+SELECT older.provider, older.backend, older.thread_id, older.turn_id,
+       older.usage_line_id, newer.usage_line_id, MIN(newer.cumulative_total_tokens - newer.total_tokens)
+FROM thread_usage_lines older
+JOIN thread_usage_lines newer
+  ON newer.provider = older.provider AND newer.backend = older.backend
+ AND newer.thread_id = older.thread_id AND newer.turn_id != older.turn_id
+WHERE older.backend = 'codex'
+  AND older.scope = 'turn' AND newer.scope = 'turn'
+  AND older.status != 'superseded' AND newer.status != 'superseded'
+  AND older.total_tokens >= 0 AND newer.total_tokens >= 0
+  AND (older.total_tokens > 0 OR newer.cumulative_total_tokens > older.cumulative_total_tokens)
+  AND COALESCE(older.turn_usage_attributed, 1) = 1
+  AND COALESCE(newer.turn_usage_attributed, 1) = 1
+  AND older.cumulative_total_tokens >= older.total_tokens
+  AND older.cumulative_total_tokens <= newer.cumulative_total_tokens - newer.total_tokens
+GROUP BY older.provider, older.backend, older.thread_id, older.turn_id;
+
+CREATE TRIGGER IF NOT EXISTS protect_finalized_thread_usage_insert
+BEFORE INSERT ON thread_usage_lines
+WHEN EXISTS (
+  SELECT 1 FROM thread_usage_boundaries f
+  WHERE f.provider = NEW.provider AND f.backend = NEW.backend
+    AND f.thread_id = NEW.thread_id AND f.turn_id = NEW.turn_id
+    AND f.usage_line_id != NEW.usage_line_id
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+
+CREATE TRIGGER IF NOT EXISTS protect_thread_usage_boundary_update
+BEFORE UPDATE ON thread_usage_lines
+WHEN EXISTS (
+  SELECT 1 FROM thread_usage_boundaries f WHERE f.usage_line_id = OLD.usage_line_id
+    AND (
+      NEW.cumulative_total_tokens IS NULL
+      OR NEW.cumulative_total_tokens > f.cumulative_total_tokens
+      OR NEW.cumulative_total_tokens < OLD.cumulative_total_tokens
+      OR (NEW.cumulative_total_tokens - NEW.total_tokens)
+         IS NOT (OLD.cumulative_total_tokens - OLD.total_tokens)
+      OR OLD.usage_line_id IS NOT NEW.usage_line_id OR OLD.turn_id IS NOT NEW.turn_id
+      OR OLD.provider IS NOT NEW.provider OR OLD.backend IS NOT NEW.backend
+      OR OLD.thread_id IS NOT NEW.thread_id OR OLD.parent_thread_id IS NOT NEW.parent_thread_id
+    )
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+
+CREATE TRIGGER IF NOT EXISTS protect_finalized_thread_usage_update
+BEFORE UPDATE ON thread_usage_lines
+WHEN EXISTS (
+  SELECT 1 FROM thread_usage_boundaries f WHERE f.usage_line_id = OLD.usage_line_id
+    AND OLD.cumulative_total_tokens = f.cumulative_total_tokens
+) AND (
+  OLD.usage_line_id IS NOT NEW.usage_line_id OR OLD.turn_id IS NOT NEW.turn_id
+  OR OLD.provider IS NOT NEW.provider OR OLD.backend IS NOT NEW.backend
+  OR OLD.thread_id IS NOT NEW.thread_id OR OLD.parent_thread_id IS NOT NEW.parent_thread_id
+  OR OLD.status IS NOT NEW.status OR OLD.scope IS NOT NEW.scope
+  OR OLD.input_tokens IS NOT NEW.input_tokens
+  OR OLD.cached_input_tokens IS NOT NEW.cached_input_tokens
+  OR OLD.cache_write_input_tokens IS NOT NEW.cache_write_input_tokens
+  OR OLD.uncached_input_tokens IS NOT NEW.uncached_input_tokens
+  OR OLD.output_tokens IS NOT NEW.output_tokens
+  OR OLD.reasoning_output_tokens IS NOT NEW.reasoning_output_tokens
+  OR OLD.total_tokens IS NOT NEW.total_tokens
+  OR OLD.cumulative_input_tokens IS NOT NEW.cumulative_input_tokens
+  OR OLD.cumulative_cached_input_tokens IS NOT NEW.cumulative_cached_input_tokens
+  OR OLD.cumulative_cache_write_input_tokens IS NOT NEW.cumulative_cache_write_input_tokens
+  OR OLD.cumulative_uncached_input_tokens IS NOT NEW.cumulative_uncached_input_tokens
+  OR OLD.cumulative_output_tokens IS NOT NEW.cumulative_output_tokens
+  OR OLD.cumulative_reasoning_output_tokens IS NOT NEW.cumulative_reasoning_output_tokens
+  OR OLD.cumulative_total_tokens IS NOT NEW.cumulative_total_tokens
+  OR (OLD.price_status = 'priced' AND (
+    OLD.total_cost_micros IS NOT NEW.total_cost_micros
+    OR OLD.uncached_input_cost_micros IS NOT NEW.uncached_input_cost_micros
+    OR OLD.cached_input_cost_micros IS NOT NEW.cached_input_cost_micros
+    OR OLD.cache_write_input_cost_micros IS NOT NEW.cache_write_input_cost_micros
+    OR OLD.output_cost_micros IS NOT NEW.output_cost_micros
+    OR OLD.price_status IS NOT NEW.price_status
+    OR OLD.currency IS NOT NEW.currency
+    OR (OLD.model IS NOT NULL AND OLD.model IS NOT NEW.model)
+    OR (OLD.service_tier IS NOT NULL AND OLD.service_tier IS NOT NEW.service_tier)
+    OR (OLD.fast_mode IS NOT NULL AND OLD.fast_mode IS NOT NEW.fast_mode)
+  ))
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+`;
+
+const THREAD_USAGE_PRICING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
+  catalog_id      TEXT NOT NULL,
+  catalog_version TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  currency        TEXT NOT NULL,
+  effective_from  INTEGER NOT NULL,
+  effective_to    INTEGER,
+  source_label    TEXT,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (catalog_id, catalog_version)
+);
+
+CREATE TABLE IF NOT EXISTS pricing_rates (
+  rate_id                         TEXT PRIMARY KEY,
+  catalog_id                      TEXT NOT NULL,
+  catalog_version                 TEXT NOT NULL,
+  provider                        TEXT NOT NULL,
+  currency                        TEXT NOT NULL,
+  model                           TEXT NOT NULL,
+  service_tier                    TEXT NOT NULL,
+  input_micros_per_million        INTEGER NOT NULL,
+  cached_input_micros_per_million INTEGER NOT NULL,
+  output_micros_per_million       INTEGER NOT NULL,
+  display_name                    TEXT NOT NULL,
+  FOREIGN KEY (catalog_id, catalog_version)
+    REFERENCES pricing_catalog_versions(catalog_id, catalog_version)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pricing_rates_lookup
+  ON pricing_rates(provider, model, service_tier, currency);
+
+CREATE TABLE IF NOT EXISTS thread_usage_turns (
+  usage_turn_id       TEXT PRIMARY KEY,
+  provider            TEXT NOT NULL,
+  backend             TEXT NOT NULL,
+  thread_id           TEXT NOT NULL,
+  parent_thread_id    TEXT,
+  turn_id             TEXT,
+  model               TEXT,
+  reasoning_effort    TEXT,
+  service_tier        TEXT,
+  fast_mode           INTEGER,
+  settings_source     TEXT,
+  settings_confidence TEXT,
+  started_at          INTEGER,
+  completed_at        INTEGER,
+  observed_at         INTEGER NOT NULL,
+  observed_cold_replay_count   INTEGER,
+  observed_cold_replay_uncached_tokens INTEGER,
+  observed_hot_replay_cached_tokens    INTEGER,
+  observed_hot_replay_count    INTEGER,
+  final_context_tokens         INTEGER,
+  peak_context_tokens          INTEGER,
+  model_context_window         INTEGER,
+  rate_limit_snapshot          TEXT,
+  completed_at_inferred        INTEGER,
+  updated_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
+  ON thread_usage_turns(provider, backend, thread_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
+  ON thread_usage_turns(provider, backend, thread_id, turn_id);
+
+CREATE TABLE IF NOT EXISTS thread_usage_lines (
+  usage_line_id              TEXT PRIMARY KEY,
+  usage_turn_id              TEXT,
+  provider                   TEXT NOT NULL DEFAULT 'openai',
+  account_key                TEXT,
+  backend                    TEXT NOT NULL,
+  thread_id                  TEXT NOT NULL,
+  parent_thread_id           TEXT,
+  turn_id                    TEXT,
+  source                     TEXT NOT NULL,
+  source_item_id             TEXT,
+  scope                      TEXT NOT NULL,
+  status                     TEXT NOT NULL,
+  created_at                 INTEGER NOT NULL,
+  completed_at               INTEGER,
+  model                      TEXT,
+  reasoning_effort           TEXT,
+  service_tier               TEXT,
+  fast_mode                  INTEGER,
+  turn_usage_attributed      INTEGER,
+  settings_source            TEXT,
+  settings_confidence        TEXT,
+  input_tokens               INTEGER NOT NULL,
+  cache_write_input_tokens   INTEGER NOT NULL DEFAULT 0,
+  cached_input_tokens        INTEGER NOT NULL,
+  uncached_input_tokens      INTEGER NOT NULL,
+  output_tokens              INTEGER NOT NULL,
+  reasoning_output_tokens    INTEGER NOT NULL,
+  total_tokens               INTEGER NOT NULL,
+  cumulative_input_tokens    INTEGER,
+  cumulative_cache_write_input_tokens INTEGER,
+  cumulative_cached_input_tokens INTEGER,
+  cumulative_uncached_input_tokens INTEGER,
+  cumulative_output_tokens   INTEGER,
+  cumulative_reasoning_output_tokens INTEGER,
+  cumulative_total_tokens    INTEGER,
+  price_status               TEXT NOT NULL,
+  price_unavailable_reason   TEXT,
+  currency                   TEXT NOT NULL,
+  pricing_catalog_id         TEXT,
+  pricing_catalog_version    TEXT,
+  pricing_basis              TEXT,
+  pricing_rate_id            TEXT,
+  uncached_input_cost_micros INTEGER NOT NULL,
+  cache_write_input_cost_micros INTEGER NOT NULL DEFAULT 0,
+  cached_input_cost_micros   INTEGER NOT NULL,
+  output_cost_micros         INTEGER NOT NULL,
+  total_cost_micros          INTEGER NOT NULL,
+  cumulative_total_cost_micros INTEGER,
+  -- DEPRECATED (see issue #947): the observed context-replay tally now lives on
+  -- thread_usage_turns. These columns are dual-written only so older locally-run
+  -- builds (which read the tally off the usage line) keep working against a
+  -- shared profile DB during the transition. Remove after the new build is
+  -- stable (~1 week post-merge).
+  observed_cold_replay_count   INTEGER,
+  observed_cold_replay_uncached_tokens INTEGER,
+  observed_hot_replay_cached_tokens    INTEGER,
+  observed_hot_replay_count    INTEGER,
+  updated_at                 INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_thread
+  ON thread_usage_lines(provider, backend, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_parent
+  ON thread_usage_lines(provider, backend, parent_thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_turn
+  ON thread_usage_lines(provider, backend, thread_id, turn_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_source
+  ON thread_usage_lines(provider, backend, thread_id, source, source_item_id);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
+  ON thread_usage_lines(provider, backend, currency, thread_id)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
+  ON thread_usage_lines(provider, backend, currency, parent_thread_id)
+  WHERE status != 'superseded';
+
+-- A navigation search document can be pruned after archive or page omission.
+-- Keep its last observed title only for threads represented in the usage ledger.
+CREATE TABLE IF NOT EXISTS thread_usage_titles (
+  identity_key TEXT PRIMARY KEY,
+  title TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
+  provider                  TEXT NOT NULL DEFAULT 'openai',
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  currency                  TEXT NOT NULL,
+  usage_line_count          INTEGER NOT NULL,
+  priced_usage_line_count   INTEGER NOT NULL,
+  unpriced_usage_line_count INTEGER NOT NULL,
+  input_tokens              INTEGER NOT NULL,
+  cached_input_tokens       INTEGER NOT NULL,
+  uncached_input_tokens     INTEGER NOT NULL,
+  output_tokens             INTEGER NOT NULL,
+  reasoning_output_tokens   INTEGER NOT NULL,
+  total_tokens              INTEGER NOT NULL,
+  total_cost_micros         INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  PRIMARY KEY (provider, backend, thread_id, currency)
+);
+`;
+
+const THREAD_TOOL_ACCOUNTING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_tool_invocations (
+  invocation_id             TEXT PRIMARY KEY,
+  finding_id                TEXT,
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  turn_id                   TEXT,
+  item_id                   TEXT NOT NULL,
+  tool_name                 TEXT NOT NULL,
+  normalized_command        TEXT,
+  category                  TEXT NOT NULL,
+  status                    TEXT NOT NULL,
+  started_at                INTEGER,
+  completed_at              INTEGER,
+  observed_at               INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  session_id                TEXT,
+  process_id                TEXT,
+  exit_code                 INTEGER,
+  output_chars              INTEGER NOT NULL,
+  output_lines              INTEGER NOT NULL,
+  estimated_output_tokens   INTEGER NOT NULL,
+  warning_lines             INTEGER NOT NULL,
+  error_lines               INTEGER NOT NULL,
+  info_lines                INTEGER NOT NULL,
+  debug_lines               INTEGER NOT NULL,
+  output_truncated          INTEGER NOT NULL,
+  output_state              TEXT,
+  source                    TEXT NOT NULL DEFAULT 'live',
+  noisy                     INTEGER NOT NULL,
+  noisy_reason              TEXT,
+  suggested_prompt          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocations_read_thread
+  ON thread_tool_invocations(backend, thread_id, observed_at DESC, invocation_id DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocations_polling
+  ON thread_tool_invocations(backend, thread_id, tool_name, session_id, process_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocations_turn
+  ON thread_tool_invocations(backend, thread_id, turn_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS thread_tool_invocation_alerts (
+  alert_id                  TEXT PRIMARY KEY,
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  turn_id                   TEXT,
+  kind                      TEXT NOT NULL,
+  severity                  TEXT NOT NULL,
+  tool_name                 TEXT NOT NULL,
+  session_id                TEXT,
+  process_id                TEXT,
+  first_observed_at         INTEGER NOT NULL,
+  last_observed_at          INTEGER NOT NULL,
+  invocation_count          INTEGER NOT NULL,
+  invocation_ids            TEXT,
+  total_output_chars        INTEGER NOT NULL,
+  estimated_output_tokens   INTEGER NOT NULL,
+  worst_invocation_id       TEXT,
+  worst_output_chars        INTEGER,
+  average_interval_ms       INTEGER,
+  message                   TEXT NOT NULL,
+  suggested_prompt          TEXT NOT NULL,
+  created_at                INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_tool_invocation_alerts_read_thread
+  ON thread_tool_invocation_alerts(backend, thread_id, updated_at DESC, alert_id DESC);
+
+CREATE TABLE IF NOT EXISTS thread_tool_analysis (
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  analyzer_version          TEXT NOT NULL,
+  analyzed_at               INTEGER NOT NULL,
+  completeness              TEXT NOT NULL,
+  entry_count               INTEGER NOT NULL,
+  invocation_count          INTEGER NOT NULL,
+  missing_output_count      INTEGER NOT NULL,
+  page_count                INTEGER NOT NULL,
+  scanned_through           TEXT,
+  explanation               TEXT,
+  PRIMARY KEY (backend, thread_id)
+);
+`;
+
+const THREAD_MESSAGE_ORIGIN_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_message_origins (
+  backend     TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  message_id  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_thread_message_origins_thread
+  ON thread_message_origins(backend, thread_id, created_at, message_id);
+`;
+
+const REMOTE_THREAD_PIN_SCHEMA = `
+CREATE TABLE IF NOT EXISTS remote_thread_pins (
+  instance_id TEXT NOT NULL,
+  backend     TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  added_at    INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  revoked_at  INTEGER,
+  PRIMARY KEY (instance_id, backend, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_remote_thread_pins_instance
+  ON remote_thread_pins(instance_id, added_at DESC);
+`;
+
+const REMOTE_THREAD_TARGET_SCHEMA = `
+CREATE TABLE IF NOT EXISTS remote_thread_targets (
+  instance_id   TEXT NOT NULL,
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  instance_label TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at  INTEGER NOT NULL,
+  PRIMARY KEY (instance_id, backend, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_remote_thread_targets_thread
+  ON remote_thread_targets(backend, thread_id, last_seen_at DESC);
+`;
+
+/**
+ * `revoked_at` tombstones a pin whose owning instance was revoked or whose
+ * gateway pairing was forgotten. The row stops rendering but survives, so
+ * the very common revoke-then-re-enroll repair cycle restores the operator's
+ * curated list instead of making them re-find every thread.
+ */
+function ensureRemoteThreadPinRevokedAtColumn(
+  db: BetterSqlite3.Database,
+): void {
+  if (!tableColumnExists(db, "remote_thread_pins", "revoked_at")) {
+    db.exec("ALTER TABLE remote_thread_pins ADD COLUMN revoked_at INTEGER");
+  }
+}
+
+export const FEDERATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS federation_peers (
+  peer_id       TEXT PRIMARY KEY,
+  label         TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  last_seen_at  INTEGER,
+  revoked_at    INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_peers_status_updated
+  ON federation_peers(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS federation_enrollment_tokens (
+  enrollment_id  TEXT PRIMARY KEY,
+  token_hmac     TEXT NOT NULL UNIQUE,
+  status         TEXT NOT NULL,
+  generated_at   INTEGER NOT NULL,
+  expires_at     INTEGER NOT NULL,
+  used_at        INTEGER,
+  peer_id        TEXT,
+  payload        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_enrollment_tokens_status_expires
+  ON federation_enrollment_tokens(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_federation_enrollment_tokens_peer
+  ON federation_enrollment_tokens(peer_id);
+
+CREATE TABLE IF NOT EXISTS federation_session_audit (
+  event_id    INTEGER PRIMARY KEY,
+  peer_id     TEXT,
+  session_id  TEXT,
+  kind        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_federation_session_audit_peer_created
+  ON federation_session_audit(peer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_federation_session_audit_session_created
+  ON federation_session_audit(session_id, created_at DESC);
+`;
+
+/**
+ * Secret-free durable projections used to keep startup independent from
+ * provider discovery. These rows are derived state: a newer build may ignore
+ * or replace an incompatible schema version without touching config.toml.
+ */
+const DESKTOP_CONFIG_STORE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS desktop_config_snapshots (
+  snapshot_key      TEXT PRIMARY KEY,
+  schema_version    INTEGER NOT NULL,
+  config_revision   TEXT NOT NULL,
+  content_hash      TEXT NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_discovery_snapshots (
+  provider_id       TEXT PRIMARY KEY,
+  schema_version    INTEGER NOT NULL,
+  dependency_fingerprint TEXT NOT NULL,
+  validated_at      INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_thread_snapshots (
+  backend           TEXT PRIMARY KEY,
+  schema_version    INTEGER NOT NULL,
+  observed_at       INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+`;
+
+/**
+ * Cached ACP slash commands are keyed by (agent, repository root), so a row
+ * outlives the repo it describes — a deleted checkout, a worktree root that
+ * moved, an agent the operator uninstalled. Nothing reads a row this old: a
+ * repo still in use is re-observed by every session that reports commands, and
+ * one that is not gets re-probed for the price of a single hidden session.
+ */
+const ACP_AVAILABLE_COMMANDS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
+const COMPOSER_DRAFT_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const COMPOSER_DRAFT_JOURNAL_CAP = 300;
+/**
+ * Retention for `composer_draft_latest` — one row per composer scope holding
+ * unsent text. The table had no retention of any kind; rows are deleted only
+ * when the renderer clears that scope's composer, so a draft whose thread the
+ * operator can no longer reach stayed forever. Archiving is how that happens:
+ * `archiveThread` cleans up messaging bindings, child threads, and worktrees,
+ * but has never touched drafts, and both the Drafts lens and the thread-row
+ * chip can only mark threads present in the navigation snapshot.
+ *
+ * **The clock tracks edits.** It did not always: `flushComposerDraftSnapshot`
+ * re-saves on composer unmount with no dirty check, so opening a thread and
+ * navigating away used to re-stamp `updated_at` and this sweep only reached
+ * drafts on threads nobody visited. The durable store now compares against the
+ * content hash actually in sqlite and skips writing unchanged content — and
+ * seeds that hash at hydration — so a thread merely opened does not move its
+ * draft's timestamp. Reverting or bypassing that dirty check silently widens
+ * this sweep back to "not opened in 180 days", which is a different and much
+ * narrower rule than what this comment now promises.
+ *
+ * A staleness sweep rather than a row cap, because staleness is the property
+ * an abandoned draft actually has. A count cap does nothing about orphans —
+ * twenty unreachable rows sitting under a five-hundred-row ceiling are never
+ * evicted, since orphans do not move the count — and at the ceiling it would
+ * evict by recency, destroying whichever unsent text happened to be oldest.
+ *
+ * **This still deletes unsent text with no warning and no undo**, and the
+ * journal's own 30-day retention means there is no recoverable copy left by
+ * the time this fires. Staleness makes that loss predictable and remote
+ * instead of triggered by unrelated volume; it does not eliminate it. That
+ * trade is the reason for the length of the window, not a reason to shorten
+ * it later without thinking about what gets destroyed.
+ *
+ * Note this is NOT primarily a disk-space measure: a row is a draft's text
+ * plus its editor document, on the order of a couple of KB, so even thousands
+ * of orphans are single-digit megabytes on one profile. What it buys is that
+ * the Drafts lens stops accumulating threads the operator walked away from
+ * half a year ago — and only from the next window launch, since the renderer
+ * hydrates the lens once at mount.
+ */
+const COMPOSER_DRAFT_LATEST_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
+const PR_STATUS_WATCH_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Per-platform cap for the messaging activity log. Older rows are
+ * evicted FIFO so the table stays small even on busy platforms. Tuned
+ * to ~hours of normal traffic; raise via a future setting if anyone
+ * needs deeper history.
+ */
+const MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP = 500;
+/**
+ * FIFO cap for the federation session audit log, mirroring the messaging
+ * activity cap: keep the newest N rows, evict the rest in the GC pass.
+ * appendAudit collapses identical repeats (reconnect loops) before rows
+ * ever land here, so the cap is depth of distinct history, not minutes
+ * of retry noise.
+ */
+const FEDERATION_SESSION_AUDIT_CAP = 500;
+
+const TOKEN_MISER_SCHEMA = `
+CREATE TABLE IF NOT EXISTS token_miser_objects (
+  object_id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_miser_objects_thread ON token_miser_objects(thread_id, created_at);
+CREATE TABLE IF NOT EXISTS token_miser_observations (
+  observation_id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_miser_observations_thread ON token_miser_observations(thread_id, created_at);
+CREATE TABLE IF NOT EXISTS token_miser_retention (
+  thread_key TEXT PRIMARY KEY,
+  generation TEXT NOT NULL,
+  archived INTEGER NOT NULL
+);
+`;
+
+export class StateDb {
+  private db: BetterSqlite3.Database;
+  private gcTimer: ReturnType<typeof setInterval> | null = null;
+  private initialGcTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private constructor(db: BetterSqlite3.Database) {
+    this.db = db;
+  }
+
+  static open(dbPath: string, options?: { profileName?: string }): StateDb {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const db = new Database(dbPath);
+
+    // FIRST, ahead of every other pragma. SQLite honours `auto_vacuum` only
+    // while the file still has no database header; once one exists the
+    // assignment is silently ignored and the mode can be changed only by a
+    // full VACUUM. `journal_mode = WAL` writes that header, so setting WAL
+    // first — as this did until the fix — left every database PwrAgent has
+    // ever created at NONE. That in turn made the `incremental_vacuum` at the
+    // end of `cleanupExpired` a no-op, so pages freed by the retention sweeps
+    // were never returned to the filesystem and `state.db` only ever grew.
+    //
+    // On a fresh file it takes; on an existing NONE file it is the silent
+    // no-op described above, and `ensureIncrementalAutoVacuum` converts those.
+    //
+    // Read first and assign only on a mismatch. Assigning the mode a file
+    // already has still rewrites page 1, which made every open of a current
+    // database commit one page to the WAL and checkpoint it again on close.
+    // Reading the mode writes no header, so this stays first.
+    if (
+      (db.pragma("auto_vacuum", { simple: true }) as number)
+      !== SQLITE_AUTO_VACUUM_INCREMENTAL
+    ) {
+      db.pragma("auto_vacuum = INCREMENTAL");
+    }
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    db.pragma(`wal_autocheckpoint = ${STATE_DB_WAL_AUTOCHECKPOINT_PAGES}`);
+    db.pragma(`journal_size_limit = ${STATE_DB_JOURNAL_SIZE_LIMIT_BYTES}`);
+    db.pragma("busy_timeout = 5000");
+    db.pragma("foreign_keys = ON");
+
+    const userVersion = db.pragma("user_version", { simple: true }) as number;
+    const freshDatabase = userVersion === 0;
+
+    // Migrations are wrapped in transactions so a partial failure
+    // (mid-DDL crash, transient disk error) rolls back cleanly and the
+    // next launch retries from the previous user_version. Without the
+    // transaction the table could exist with the old user_version, and
+    // the next launch would throw "table already exists" on retry.
+    const applySchema = (): void => {
+      if (freshDatabase) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V1);
+          if (options?.profileName) {
+            db.prepare("UPDATE meta SET value = ? WHERE key = 'profile_name'").run(
+              options.profileName,
+            );
+          }
+          db.pragma("user_version = 1");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 2) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V2);
+          db.pragma("user_version = 2");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 3) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V3);
+          db.pragma("user_version = 3");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 4) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V4);
+          db.pragma("user_version = 4");
+        })();
+      }
+      ensureCurrentSchema(db);
+      if ((db.pragma("user_version", { simple: true }) as number) < 5) {
+        db.transaction(() => {
+          db.pragma("user_version = 5");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 6) {
+        db.transaction(() => {
+          db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
+          db.pragma("user_version = 6");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 7) {
+        db.transaction(() => {
+          // Directory pin persistence — see plan
+          // 2026-05-09-002-feat-directory-pinning-plan.md Unit B.
+          // Additive table, no data migration; the same DDL also
+          // lives in `ensureCurrentSchema` so re-instantiated dbs
+          // converge.
+          db.exec(DIRECTORY_OVERLAY_SCHEMA);
+          db.pragma("user_version = 7");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 8) {
+        db.transaction(() => {
+          db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+          db.pragma("user_version = 8");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 9) {
+        db.transaction(() => {
+          db.exec(ACP_AGENT_SCHEMA);
+          db.pragma("user_version = 9");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 10) {
+        db.transaction(() => {
+          db.exec(ACP_SESSION_SCHEMA);
+          db.pragma("user_version = 10");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 11) {
+        db.transaction(() => {
+          db.exec(AUTOMATION_SCHEMA);
+          db.pragma("user_version = 11");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 12) {
+        db.transaction(() => {
+          db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
+          db.pragma("user_version = 12");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 13) {
+        db.transaction(() => {
+          db.exec(THREAD_SEARCH_SCHEMA);
+          db.pragma("user_version = 13");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 14) {
+        db.transaction(() => {
+          db.exec(PR_STATUS_CACHE_SCHEMA);
+          db.exec(PR_LOOKUP_CACHE_SCHEMA);
+          db.pragma("user_version = 14");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 15) {
+        db.transaction(() => {
+          ensurePullRequestProviderColumns(db);
+          db.pragma("user_version = 15");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 16) {
+        db.transaction(() => {
+          db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
+          db.pragma("user_version = 16");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 17) {
+        db.transaction(() => {
+          db.exec(THREAD_USAGE_PRICING_SCHEMA);
+          db.pragma("user_version = 17");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 18) {
+        db.transaction(() => {
+          ensureThreadUsagePricingProviderScope(db);
+          db.pragma("user_version = 18");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 19) {
+        db.transaction(() => {
+          ensureThreadUsagePricingCumulativeColumns(db);
+          db.pragma("user_version = 19");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 20) {
+        db.transaction(() => {
+          repairThreadUsageLineCreatedAt(db);
+          db.pragma("user_version = 20");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 21) {
+        db.transaction(() => {
+          ensureThreadUsagePricingIndexes(db);
+          db.pragma("user_version = 21");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 22) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 22");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 23) {
+        db.transaction(() => {
+          // Inbound-run idempotency: promote source_event_key to a column +
+          // index so duplicate provider deliveries can be deduped. Additive;
+          // the same column/index also live in AUTOMATION_SCHEMA so
+          // re-instantiated dbs converge.
+          ensureAutomationRunSourceEventKey(db);
+          db.pragma("user_version = 23");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 24) {
+        db.transaction(() => {
+          // Observed context-replay tallies on the usage line. DEPRECATED (see
+          // issue #947): the tally has since moved to thread_usage_turns (v25), but
+          // these columns are still dual-written during the transition so older
+          // locally-run builds keep working. Additive; the same columns also live
+          // in THREAD_USAGE_PRICING_SCHEMA so re-instantiated dbs converge.
+          ensureThreadUsageObservedReplayColumns(db);
+          db.pragma("user_version = 24");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 25) {
+        db.transaction(() => {
+          // Relocate the observed context-replay tally onto thread_usage_turns —
+          // the per-turn record hydration refreshes via COALESCE, immune to the
+          // usage *line* supersession lifecycle. Additive columns that also live in
+          // THREAD_USAGE_PRICING_SCHEMA; the ALTERs are guarded by tableColumnExists
+          // so a fresh db (schema already carries them) no-ops.
+          ensureThreadUsageTurnObservedReplayColumns(db);
+          db.pragma("user_version = 25");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 26) {
+        db.transaction(() => {
+          ensureThreadUsageAttributedColumn(db);
+          db.pragma("user_version = 26");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 27) {
+        db.transaction(() => {
+          db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
+          db.pragma("user_version = 27");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 28) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 28");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 29) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 29");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 30) {
+        db.transaction(() => {
+          ensureThreadMessageOriginSchema(db);
+          db.pragma("user_version = 30");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 31) {
+        db.transaction(() => {
+          ensureThreadMessageOriginSchema(db);
+          db.pragma("user_version = 31");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 32) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 32");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 33) {
+        db.transaction(() => {
+          db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
+          db.pragma("user_version = 33");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 34) {
+        db.transaction(() => {
+          db.exec(PR_AUTO_DISPATCH_SCHEMA);
+          db.pragma("user_version = 34");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 35) {
+        db.transaction(() => {
+          db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
+          backfillObservedMessagingSurfaces(db);
+          db.pragma("user_version = 35");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 36) {
+        db.transaction(() => {
+          db.exec(PR_STATUS_WATCH_SCHEMA);
+          db.exec(`
+            DELETE FROM pr_auto_dispatch_claims
+            WHERE rowid NOT IN (
+              SELECT MIN(rowid)
+              FROM pr_auto_dispatch_claims
+              GROUP BY pr_key, fingerprint
+            );
+          `);
+          db.exec(PR_AUTO_DISPATCH_SCHEMA);
+          db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
+          db.pragma("user_version = 36");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 37) {
+        db.transaction(() => {
+          db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
+          db.pragma("user_version = 37");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 38) {
+        db.transaction(() => {
+          db.exec(FEDERATION_SCHEMA);
+          db.pragma("user_version = 38");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 39) {
+        db.transaction(() => {
+          db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
+          db.pragma("user_version = 39");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 40) {
+        db.transaction(() => {
+          ensureScheduledThreadActionMetadataColumns(db);
+          db.pragma("user_version = 40");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 41) {
+        db.transaction(() => {
+          // Working-state semantics now account for deleted squash-merged PR
+          // heads. Cached pre-v41 counts can therefore show false unpushed
+          // badges indefinitely for worktrees outside the startup probe budget.
+          // This table is derived state and is safe to repopulate lazily.
+          db.prepare("DELETE FROM thread_git_working_state").run();
+          db.pragma("user_version = 41");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 42) {
+        db.transaction(() => {
+          repairReenrolledFederationPeerRevocations(db);
+          db.pragma("user_version = 42");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 43) {
+        db.transaction(() => {
+          // Viewer-owned pins of remote federated threads (Cmd+K "add to my
+          // list"). Deliberately local-only state: the owning instance never
+          // learns it has been pinned.
+          db.exec(REMOTE_THREAD_PIN_SCHEMA);
+          db.pragma("user_version = 43");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 44) {
+        db.transaction(() => {
+          db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
+          db.pragma("user_version = 44");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 45) {
+        db.transaction(() => {
+          // Revoking a peer used to hard-delete its pins. Tombstone them
+          // instead so a re-enrollment can restore the operator's list.
+          ensureRemoteThreadPinRevokedAtColumn(db);
+          db.pragma("user_version = 45");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 46) {
+        db.transaction(() => {
+          // Routing knowledge is broader than the curated pin list: agent tools
+          // also create and discover remote threads that the viewer never pins.
+          db.exec(REMOTE_THREAD_TARGET_SCHEMA);
+          db.exec(`
+  INSERT OR IGNORE INTO remote_thread_targets(
+    instance_id,
+    backend,
+    thread_id,
+    instance_label,
+    first_seen_at,
+    last_seen_at
+  )
+  SELECT
+    remote_thread_pins.instance_id,
+    remote_thread_pins.backend,
+    remote_thread_pins.thread_id,
+    COALESCE(federation_peers.label, remote_thread_pins.instance_id),
+    remote_thread_pins.added_at,
+    remote_thread_pins.added_at
+  FROM remote_thread_pins
+  LEFT JOIN federation_peers
+    ON federation_peers.peer_id = remote_thread_pins.instance_id
+  `);
+          db.pragma("user_version = 46");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 47) {
+        db.transaction(() => {
+          db.exec(REMOTE_DIRECTORY_OVERLAY_SCHEMA);
+          db.pragma("user_version = 47");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 48) {
+        db.transaction(() => {
+          db.pragma("user_version = 48");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 49) {
+        db.transaction(() => {
+          migrateRawThreadIdentityKeysToLegacyStorage(db);
+          db.pragma("user_version = 49");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 50) {
+        db.transaction(() => {
+          // Additive table, no data migration; the same DDL also lives in
+          // `ensureCurrentSchema` so re-instantiated dbs converge.
+          db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
+          db.pragma("user_version = 50");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 51) {
+        db.transaction(() => {
+          ensureThreadToolIncidentExplorerSchema(db);
+          db.pragma("user_version = 51");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 52) {
+        db.transaction(() => {
+          repairCodexTurnUsageFromCumulativeSnapshots(db);
+          db.pragma("user_version = 52");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 53) {
+        db.transaction(() => {
+          db.exec(STAR_MAP_WORKSPACE_SCHEMA);
+          db.pragma("user_version = 53");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 54) {
+        db.transaction(() => {
+          // Additive table, no data migration; the same DDL also lives in
+          // `ensureCurrentSchema` so re-instantiated dbs converge.
+          db.exec(THREAD_COMPACTION_SCHEMA);
+          db.pragma("user_version = 54");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 55) {
+        db.transaction(() => {
+          ensureThreadUsageTurnContextColumns(db);
+          db.pragma("user_version = 55");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 56) {
+        db.transaction(() => {
+          db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
+          db.pragma("user_version = 56");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 57) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 57) {
+            return;
+          }
+          if (!freshDatabase) {
+            repairMisclassifiedHandoffSubAgents(db);
+          }
+          db.pragma("user_version = 57");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 58) {
+        db.transaction(() => {
+          ensureThreadUsageRequestPricingColumns(db);
+          db.pragma("user_version = 58");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 59) {
+        db.transaction(() => {
+          // Multi-request aggregates above a request-scoped band boundary now
+          // price from the turn's context-window ceiling. Reprice rows that
+          // were persisted as "insufficient-token-breakdown" before that rule.
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 59");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 60) {
+        db.transaction(() => {
+          db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
+          db.pragma("user_version = 60");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 61) {
+        db.transaction(() => {
+          // Missing pricing metadata may be filled without changing a priced
+          // row's existing cost. Token and boundary guards remain unchanged.
+          db.exec("DROP TRIGGER IF EXISTS protect_finalized_thread_usage_update");
+          db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
+          db.pragma("user_version = 61");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 62) {
+        db.transaction(() => {
+          db.exec(TOKEN_MISER_SCHEMA);
+          db.pragma("user_version = 62");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 63) {
+        db.transaction(() => {
+          migratePrReferenceIdentities(db);
+          db.pragma("user_version = 63");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 64) {
+        db.transaction(() => {
+          // Another opener may have migrated while this connection waited.
+          // Backfill and triggers become visible together, with no writer gap.
+          if ((db.pragma("user_version", { simple: true }) as number) >= 64) return;
+          if (tableExists(db, "threads") && !tableExists(db, "thread_navigation_relationships")) {
+            db.exec(THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA);
+          }
+          db.pragma("user_version = 64");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 65) {
+        db.transaction(() => {
+          db.exec(STORAGE_RETENTION_SCHEMA);
+          db.pragma("user_version = 65");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 66) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 66) return;
+          // Earlier builds of the unmerged metadata-index PR also used v65.
+          // Converge those profiles with the retention schema shipped at v65.
+          if (!tableExists(db, "thread_storage_retention")) db.exec(STORAGE_RETENTION_SCHEMA);
+          if (tableExists(db, "backends")) db.exec(NAVIGATION_BACKEND_METADATA_SCHEMA);
+          db.pragma("user_version = 66");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 67) {
+        db.transaction(() => {
+          ensureThreadUsageTurnRateLimitColumn(db);
+          db.pragma("user_version = 67");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 68) {
+        db.transaction(() => {
+          ensureThreadUsageTurnInferredCompletionColumn(db);
+          db.pragma("user_version = 68");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 69) {
+        db.transaction(() => {
+          db.exec(THREAD_TODO_SCHEMA);
+          db.pragma("user_version = 69");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 70) {
+        db.transaction(() => {
+          ensureThreadTodoProjectColumns(db);
+          db.pragma("user_version = 70");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 71) {
+        db.transaction(() => {
+          if (tableExists(db, "thread_usage_lines")
+            && !tableColumnExists(db, "thread_usage_lines", "account_key")) {
+            db.exec("ALTER TABLE thread_usage_lines ADD COLUMN account_key TEXT");
+          }
+          db.pragma("user_version = 71");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 72) {
+        db.transaction(() => {
+          db.exec(OPERATOR_REQUEST_SCHEMA);
+          db.pragma("user_version = 72");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 73) {
+        db.transaction(() => {
+          ensureThreadTodoItemsColumn(db);
+          db.pragma("user_version = 73");
+        })();
+      }
+      // ensureCurrentSchema creates durable turn requests (74), tracked
+      // reviews (75) and thread dependencies (77) on every open; these steps
+      // only record the version.
+      if ((db.pragma("user_version", { simple: true }) as number) < 74) {
+        db.pragma("user_version = 74");
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 75) {
+        db.pragma("user_version = 75");
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 76) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 76) return;
+          if (tableExists(db, "thread_navigation_relationships")) {
+            db.exec(THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA);
+          }
+          db.pragma("user_version = 76");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 77) {
+        db.pragma("user_version = 77");
+      }
+      // A development profile that ran the thread-dependency branch while it
+      // claimed v76 skipped the relationship-generation step above. Converge
+      // it the same way. Normal opens only read sqlite_master here.
+      if (tableExists(db, "thread_navigation_relationships")
+        && !tableExists(db, "thread_navigation_relationship_generation")) {
+        db.transaction(() => {
+          db.exec(THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA);
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 78) {
+        db.transaction(() => {
+          ensureThreadTodoDependencyColumn(db);
+          db.pragma("user_version = 78");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 79) {
+        db.transaction(() => {
+          // Another opener may have migrated while this connection waited.
+          if ((db.pragma("user_version", { simple: true }) as number) >= 79) return;
+          // Schema and capture triggers only. Existing cards move out of
+          // `threads.payload` lazily and in a sliced background pass, never
+          // here: in one transaction the move is seconds and >100 MB of WAL
+          // on a large profile.
+          ensureThreadSubAgentSchema(db);
+          // A profile with no overlay rows has nothing to move. Marking it
+          // here saves its first launch the sweep's commits.
+          if (tableExists(db, "threads")) {
+            db.prepare(
+              "INSERT OR IGNORE INTO meta(key, value) SELECT ?, '1' WHERE NOT EXISTS (SELECT 1 FROM threads)",
+            ).run(THREAD_SUB_AGENTS_MOVED_META_KEY);
+          }
+          db.pragma("user_version = 79");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 80) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 80) return;
+          // Schema and capture triggers only, as v79 did for cards. Existing
+          // usage activities move out of `threads.payload` lazily and in a
+          // sliced background pass, never here.
+          ensureThreadUsageActivitySchema(db);
+          if (tableExists(db, "threads")) {
+            db.prepare(
+              "INSERT OR IGNORE INTO meta(key, value) SELECT ?, '1' WHERE NOT EXISTS (SELECT 1 FROM threads)",
+            ).run(THREAD_USAGE_ACTIVITIES_MOVED_META_KEY);
+          }
+          db.pragma("user_version = 80");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 81) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 81) return;
+          db.exec(OWNER_JOB_SCHEMA);
+          db.pragma("user_version = 81");
+        }).immediate();
+      }
+      db.exec(OWNER_JOB_SCHEMA);
+      // Converge a profile whose v79 or v80 came from another branch. On a
+      // current profile every statement is IF NOT EXISTS and writes nothing.
+      ensureThreadSubAgentSchema(db);
+      ensureThreadUsageActivitySchema(db);
+      removeUsageActivityIndex(db);
+      db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
+      // Additive columns on the card tables, with no version of their own so
+      // no branch can claim it: one immediate transaction the first time,
+      // then two table-info reads per open.
+      ensureThreadSubAgentPanelSchema(db);
+      // Keep current-version databases converged without asking pre-v36 profiles
+      // to install the unique index before the migration above removes duplicates.
+      db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
+      // Additive index for current-version profiles too. Partial-schema repair
+      // fixtures may omit threads; normal profiles always have this table.
+      if (tableExists(db, "threads")) {
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_threads_pending_spend_alert
+          ON threads(thread_id)
+          WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'`);
+      }
+
+    };
+
+    // A brand-new file has no previous version to fall back to, so the
+    // per-version commits buy it nothing — they only cost 52 commits, and 52
+    // WAL flushes, to reach a shape one commit could write. Creating inside a
+    // single transaction turns the nested `db.transaction()` calls into
+    // savepoints, so the ladder above stays the one source of truth for the
+    // schema while a fresh database costs one commit. It is also stricter than
+    // the old path: a creation that fails part-way now leaves no half-built
+    // file behind instead of a file stamped with whichever version it reached.
+    //
+    // An upgrade keeps its per-version commits, where the granularity is the
+    // whole point: a partial failure there has a previous user_version to
+    // resume from on the next launch.
+    if (freshDatabase) {
+      db.transaction(applySchema)();
+    } else {
+      applySchema();
+    }
+
+    // Dev-only write accounting, attached only after schema setup so the
+    // report ranks steady-state writes. Creating a database still commits
+    // once, and an upgrade once per version, which on a suite that opens a
+    // temp db per test would otherwise skew the signal toward whichever file
+    // opened the most databases. Off unless
+    // PWRAGENT_DEV_SQLITE_WRITE_METRICS is set, and
+    // `rejectDevOnlyEnvVarsInProduction` clears that variable on packaged
+    // builds before anything reads it, so a shipped app never patches its db.
+    if (isSqliteWriteMetricsEnabled()) {
+      attachSqliteWriteMetrics({ db, dbPath });
+    }
+    return new StateDb(db);
+  }
+
+  get raw(): BetterSqlite3.Database {
+    return this.db;
+  }
+
+  close(): void {
+    this.stopGc();
+    this.db.close();
+  }
+
+  /**
+   * Brings a database created before the `auto_vacuum` ordering fix up to
+   * INCREMENTAL, which is the only thing that makes the `incremental_vacuum`
+   * at the end of `cleanupExpired` reclaim anything.
+   *
+   * Converting an existing database requires a full VACUUM — SQLite offers no
+   * cheaper path once a header exists — so this rewrites the file once, ever.
+   *
+   * **Deliberately NOT a `user_version` migration**, for the reason recorded
+   * on `collapseComposerDraftJournalPrefixChains`: reserving a schema number
+   * for a change that alters no schema makes it unbackportable, because a
+   * release branch that took the number would collide with whatever main
+   * assigns next. It needs no marker of its own either — a converted database
+   * reports `PRAGMA auto_vacuum` as INCREMENTAL, so the guard below IS the
+   * marker, and the pass is self-healing if a database ever reverts.
+   *
+   * Failure is returned, not thrown. VACUUM wants an exclusive lock, and
+   * profiles are deliberately shared between instances over WAL, so a second
+   * window running at the same moment can lose the race and get SQLITE_BUSY
+   * after `busy_timeout`. A full disk fails the same way. Neither is worth
+   * refusing to start over: the database is untouched, still readable, and
+   * the next launch retries.
+   */
+  ensureIncrementalAutoVacuum(): AutoVacuumConversion {
+    if (
+      (this.db.pragma("auto_vacuum", { simple: true }) as number)
+      === SQLITE_AUTO_VACUUM_INCREMENTAL
+    ) {
+      return { status: "already-incremental" };
+    }
+
+    const pageSize = this.db.pragma("page_size", { simple: true }) as number;
+    const sizeBytes = () =>
+      (this.db.pragma("page_count", { simple: true }) as number) * pageSize;
+    const bytesBefore = sizeBytes();
+    // Monotonic: a full VACUUM can run for most of a second, which is long
+    // enough for an NTP step or a resume-from-sleep correction to land inside
+    // it and make a wall-clock delta negative.
+    const startedAt = performance.now();
+    try {
+      this.db.pragma("auto_vacuum = INCREMENTAL");
+      // Takes effect only through the rewrite; the assignment above is the
+      // silent no-op that `open` documents.
+      this.db.exec("VACUUM");
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error : new Error(String(error)),
+        status: "failed",
+      };
+    }
+
+    // Read the mode back rather than trusting that a VACUUM which did not
+    // throw did the job. Reporting an unverified success is what this whole
+    // change exists to undo: without this check, a rewrite that somehow left
+    // the mode at NONE would be logged as a conversion and then repeated in
+    // full on every launch, forever, each one looking like it worked.
+    if (
+      (this.db.pragma("auto_vacuum", { simple: true }) as number)
+      !== SQLITE_AUTO_VACUUM_INCREMENTAL
+    ) {
+      return {
+        error: new Error(
+          "VACUUM completed but auto_vacuum is still not INCREMENTAL",
+        ),
+        status: "failed",
+      };
+    }
+
+    return {
+      bytesAfter: sizeBytes(),
+      bytesBefore,
+      elapsedMs: performance.now() - startedAt,
+      status: "converted",
+    };
+  }
+
+  startGc(intervalMs = 60 * 60 * 1000): AutoVacuumConversion {
+    // A second `startGc` without a `stopGc` would otherwise orphan the first
+    // interval: the handle is overwritten, so `stopGc` can no longer reach it
+    // and it keeps sweeping — against a closed database, once `close` runs.
+    this.stopGc();
+    this.cleanupExpired();
+    // After the first sweep, so the one-time rewrite also drops the pages that
+    // sweep just freed rather than carrying them into the new file.
+    const autoVacuum = this.ensureIncrementalAutoVacuum();
+    this.gcTimer = setInterval(() => this.cleanupExpired(), intervalMs);
+    if (this.gcTimer.unref) this.gcTimer.unref();
+    return autoVacuum;
+  }
+
+  stopGc(): void {
+    if (this.initialGcTimer) {
+      clearTimeout(this.initialGcTimer);
+      this.initialGcTimer = null;
+    }
+    if (this.gcTimer) {
+      clearInterval(this.gcTimer);
+      this.gcTimer = null;
+    }
+  }
+
+  /** Ordinary expiry is independent of optional compaction admission. */
+  startDeferredGc(intervalMs = 60 * 60 * 1000): void {
+    this.stopGc();
+    this.initialGcTimer = setTimeout(() => {
+      this.initialGcTimer = null;
+      this.cleanupExpired(Date.now(), 256);
+    }, 0);
+    this.initialGcTimer.unref?.();
+    this.gcTimer = setInterval(() => this.cleanupExpired(Date.now(), 256), intervalMs);
+    this.gcTimer.unref?.();
+  }
+
+  cleanupExpired(now = Date.now(), reclaimPages?: number): void {
+    const cleanup = this.db.transaction(() => {
+      this.db
+        .prepare("DELETE FROM browse_sessions WHERE expires_at < ?")
+        .run(now);
+      this.db
+        .prepare("DELETE FROM pending_intents WHERE expires_at < ?")
+        .run(now);
+      this.db
+        .prepare("DELETE FROM callback_handles WHERE expires_at < ?")
+        .run(now);
+      this.db
+        .prepare(
+          "UPDATE messaging_pairing_tokens SET status = 'expired' WHERE status IN ('pending', 'observed') AND expires_at < ?",
+        )
+        .run(now);
+      this.db
+        .prepare(
+          "UPDATE messaging_runtime_lease SET status = 'expired' WHERE status = 'active' AND expires_at < ?",
+        )
+        .run(now);
+      this.db
+        .prepare(
+          "DELETE FROM app_runtime_instances WHERE heartbeat_at < ? AND exited_at IS NOT NULL",
+        )
+        .run(now - APP_RUNTIME_INSTANCE_RETENTION_MS);
+      this.db
+        .prepare("DELETE FROM deliveries WHERE created_at < ?")
+        .run(now - DELIVERIES_RETENTION_MS);
+      this.db
+        .prepare("DELETE FROM acp_available_commands WHERE observed_at < ?")
+        .run(now - ACP_AVAILABLE_COMMANDS_RETENTION_MS);
+      // Empty rows are inert — the read path ignores them so a probe can
+      // re-run — but they are never written any more, so any still on disk
+      // came from a build that mistook a timed-out probe for "this agent has
+      // no commands". `upsert` always writes `JSON.stringify(commands)`, so
+      // the empty array is exactly this literal.
+      this.db
+        .prepare("DELETE FROM acp_available_commands WHERE payload = '[]'")
+        .run();
+      this.db
+        .prepare(
+          "DELETE FROM bindings WHERE revoked_at IS NOT NULL AND revoked_at < ?",
+        )
+        .run(now - REVOKED_BINDINGS_RETENTION_MS);
+      // Per-platform FIFO eviction for the activity log: keep the
+      // newest N per platform; delete the rest. A single windowed
+      // DELETE handles every platform at once — the inner subquery
+      // computes a per-platform rank by id-desc, and we delete rows
+      // beyond the cap. Cleaner than the previous distinct-platforms
+      // loop and runs in one statement.
+      this.db
+        .prepare(
+          `DELETE FROM messaging_activity_log
+           WHERE id IN (
+             SELECT id FROM (
+               SELECT
+                 id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY platform
+                   ORDER BY id DESC
+                 ) AS rank
+               FROM messaging_activity_log
+             )
+             WHERE rank > ?
+           )`,
+        )
+        .run(MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP);
+      this.db
+        .prepare(
+          `DELETE FROM federation_session_audit
+           WHERE event_id IN (
+             SELECT event_id FROM federation_session_audit
+             ORDER BY created_at DESC, event_id DESC
+             LIMIT -1 OFFSET ?
+           )`,
+        )
+        .run(FEDERATION_SESSION_AUDIT_CAP);
+      // Before the retention and cap sweeps, so both count post-collapse rows.
+      collapseComposerDraftJournalPrefixChains(this.db);
+      this.db
+        .prepare("DELETE FROM composer_draft_journal WHERE updated_at < ?")
+        .run(now - COMPOSER_DRAFT_JOURNAL_RETENTION_MS);
+      this.db
+        .prepare(
+          `DELETE FROM pr_status_watches
+           WHERE status NOT IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
+             AND updated_at < ?`,
+        )
+        .run(now - PR_STATUS_WATCH_HISTORY_RETENTION_MS);
+      this.db
+        .prepare(
+          `DELETE FROM composer_draft_journal
+           WHERE id IN (
+             SELECT id FROM composer_draft_journal
+             ORDER BY updated_at DESC, id DESC
+             LIMIT -1 OFFSET ?
+           )`,
+        )
+        .run(COMPOSER_DRAFT_JOURNAL_CAP);
+      // Every row here is unsent by construction — `save()` deletes the row
+      // for any other status — so this needs no status filter. Rides the same
+      // transaction as the sweeps above, costing no additional commit.
+      this.db
+        .prepare("DELETE FROM composer_draft_latest WHERE updated_at < ?")
+        .run(now - COMPOSER_DRAFT_LATEST_RETENTION_MS);
+    });
+    cleanup();
+    if (reclaimPages !== 0) this.db.pragma(reclaimPages === undefined ? "incremental_vacuum" : `incremental_vacuum(${Math.max(0, Math.floor(reclaimPages))})`);
+  }
+
+  getMeta(key: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT value FROM meta WHERE key = ?")
+      .get(key) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db
+      .prepare("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)")
+      .run(key, value);
+  }
+
+  getSecret(key: string): Buffer | undefined {
+    const row = this.db
+      .prepare("SELECT ciphertext FROM secrets WHERE key = ?")
+      .get(key) as { ciphertext: Buffer } | undefined;
+    return row?.ciphertext;
+  }
+
+  setSecret(key: string, ciphertext: Buffer): void {
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO secrets(key, ciphertext, updated_at) VALUES (?, ?, ?)",
+      )
+      .run(key, ciphertext, Date.now());
+  }
+
+  deleteSecret(key: string): void {
+    this.db.prepare("DELETE FROM secrets WHERE key = ?").run(key);
+  }
+}
+
+/**
+ * Collapses prefix chains sitting in `composer_draft_journal`.
+ *
+ * Until the fix that ships alongside this, the runtime rule compared
+ * `trimEnd`ed texts with a strict "next must be longer" check, so every typed
+ * space inserted a fresh row instead of extending the previous one — roughly
+ * one row per WORD. Existing profiles carry long runs of near-identical rows,
+ * each a prefix of the next. The code fix only stops NEW ones; without this,
+ * what is already there drains only as the journal's 30-day retention and
+ * 300-row cap catch up.
+ *
+ * **Deliberately NOT a `user_version` migration.** Reserving a schema version
+ * for it would make this change unbackportable: a release branch that took the
+ * number would collide with whatever main assigns next. It needs no schema
+ * change, it is idempotent, and the journal is capped at 300 rows — so it runs
+ * from the hourly `cleanupExpired` pass instead, riding a transaction that is
+ * already open and therefore costing no additional commit. Existing profiles
+ * converge on their first launch after upgrading, and the sweep self-heals if
+ * anything ever reintroduces chains.
+ *
+ * **This deletes rows.** It is deliberately the same rule the runtime now
+ * applies, so it removes exactly what the fixed code would never have written
+ * and nothing else:
+ *
+ * - Only `unsent`/`abandoned` rows participate, matching the runtime's
+ *   previous-row query. `sent` rows are never read and never deleted.
+ * - Within a scope, rows are walked oldest-first and a row is dropped only
+ *   when the NEXT surviving row's trimmed text starts with it — i.e. the later
+ *   row already contains everything the earlier one held. The longest text in
+ *   each chain always survives, so no content is lost, only redundant
+ *   snapshots of the way there.
+ * - A row that is not an extension starts a new chain and both are kept.
+ *   Backspacing and retyping something different is a real branch, and keeping
+ *   it is what a recovery journal is for.
+ *
+ * Idempotent, which is what makes running it every pass safe: once collapsed
+ * there are no chains left, so every subsequent pass deletes nothing and costs
+ * one bounded scan.
+ */
+function collapseComposerDraftJournalPrefixChains(
+  db: BetterSqlite3.Database,
+): void {
+  if (!tableExists(db, "composer_draft_journal")) {
+    return;
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT id, scope_key, payload
+       FROM composer_draft_journal
+       WHERE status IN ('unsent', 'abandoned')
+       ORDER BY scope_key, updated_at, id`,
+    )
+    .all() as Array<{ id: number; payload: string; scope_key: string }>;
+
+  const deleteRow = db.prepare("DELETE FROM composer_draft_journal WHERE id = ?");
+  const superseded: number[] = [];
+  let chainScopeKey: string | undefined;
+  let keeper: { id: number; text: string } | undefined;
+
+  for (const row of rows) {
+    let text: string;
+    try {
+      text = ((JSON.parse(row.payload) as { text?: unknown }).text ?? "") as string;
+    } catch {
+      // An unparseable payload is left strictly alone: it cannot be compared,
+      // so it can neither absorb a neighbour nor be absorbed.
+      chainScopeKey = row.scope_key;
+      keeper = undefined;
+      continue;
+    }
+    if (typeof text !== "string") {
+      chainScopeKey = row.scope_key;
+      keeper = undefined;
+      continue;
+    }
+    const trimmed = text.trimEnd();
+
+    if (row.scope_key !== chainScopeKey) {
+      chainScopeKey = row.scope_key;
+      keeper = { id: row.id, text: trimmed };
+      continue;
+    }
+
+    if (keeper && keeper.text.length > 0 && trimmed.startsWith(keeper.text)) {
+      // This row already contains everything the keeper held, so the keeper is
+      // a redundant waypoint rather than a distinct draft.
+      superseded.push(keeper.id);
+    }
+    keeper = { id: row.id, text: trimmed };
+  }
+
+  for (const id of superseded) {
+    deleteRow.run(id);
+  }
+}
+
+function migrateRawThreadIdentityKeysToLegacyStorage(
+  db: BetterSqlite3.Database,
+): void {
+  const encode = (value: string): string =>
+    encodeLegacyThreadIdentityKey(value) ?? value;
+
+  if (tableExists(db, "threads")) {
+    const threadRows = db
+      .prepare("SELECT thread_id FROM threads")
+      .all() as Array<{ thread_id: string }>;
+    const threadExists = db.prepare(
+      "SELECT 1 FROM threads WHERE thread_id = ?",
+    );
+    const updateThread = db.prepare(
+      "UPDATE threads SET thread_id = ? WHERE thread_id = ?",
+    );
+    const deleteThread = db.prepare("DELETE FROM threads WHERE thread_id = ?");
+    for (const row of threadRows) {
+      const encoded = encode(row.thread_id);
+      if (encoded === row.thread_id) continue;
+      if (threadExists.get(encoded)) {
+        // A v48 process may have created the raw row after an older process
+        // created the encoded row. Prefer the newer representation's payload
+        // while restoring the shared physical key older clients can read.
+        deleteThread.run(encoded);
+      }
+      updateThread.run(encoded, row.thread_id);
+    }
+  }
+
+  if (tableExists(db, "backends")) {
+    const backendRows = db
+      .prepare("SELECT scope, payload FROM backends")
+      .all() as Array<{ payload: string; scope: string }>;
+    const updateBackend = db.prepare(
+      "UPDATE backends SET payload = ? WHERE scope = ?",
+    );
+    for (const row of backendRows) {
+      try {
+        const payload = JSON.parse(row.payload) as {
+          knownThreadKeys?: unknown;
+        };
+        if (!Array.isArray(payload.knownThreadKeys)) continue;
+        const knownThreadKeys = [...new Set(
+          payload.knownThreadKeys.map((value) =>
+            typeof value === "string" ? encode(value) : value
+          ),
+        )];
+        updateBackend.run(
+          JSON.stringify({ ...payload, knownThreadKeys }),
+          row.scope,
+        );
+      } catch {
+        // Leave malformed legacy rows untouched; normal store reads already
+        // treat them as unusable rather than blocking startup.
+      }
+    }
+  }
+
+  if (tableExists(db, "thread_search_documents")) {
+    const searchRows = db
+      .prepare("SELECT identity_key FROM thread_search_documents")
+      .all() as Array<{ identity_key: string }>;
+    const searchDocumentExists = db.prepare(
+      "SELECT 1 FROM thread_search_documents WHERE identity_key = ?",
+    );
+    const updateSearchDocument = db.prepare(
+      `UPDATE thread_search_documents
+       SET identity_key = ?
+       WHERE identity_key = ?`,
+    );
+    const deleteSearchDocument = db.prepare(
+      "DELETE FROM thread_search_documents WHERE identity_key = ?",
+    );
+    const updateSearchFts = tableExists(db, "thread_search_fts")
+      ? db.prepare(
+          `UPDATE thread_search_fts
+           SET identity_key = ?
+           WHERE identity_key = ?`,
+        )
+      : undefined;
+    const deleteSearchFts = tableExists(db, "thread_search_fts")
+      ? db.prepare(
+          "DELETE FROM thread_search_fts WHERE identity_key = ?",
+        )
+      : undefined;
+    for (const row of searchRows) {
+      const encoded = encode(row.identity_key);
+      if (encoded === row.identity_key) continue;
+      if (searchDocumentExists.get(encoded)) {
+        deleteSearchFts?.run(encoded);
+        deleteSearchDocument.run(encoded);
+      }
+      updateSearchFts?.run(encoded, row.identity_key);
+      updateSearchDocument.run(encoded, row.identity_key);
+    }
+  }
+
+  if (!tableExists(db, "star_map_arrangement")) {
+    return;
+  }
+  const arrangementRows = db
+    .prepare("SELECT entry_key, payload FROM star_map_arrangement")
+    .all() as Array<{ entry_key: string; payload: string }>;
+  const readArrangement = db.prepare(
+    "SELECT payload FROM star_map_arrangement WHERE entry_key = ?",
+  );
+  const deleteArrangement = db.prepare(
+    "DELETE FROM star_map_arrangement WHERE entry_key = ?",
+  );
+  const putArrangement = db.prepare(
+    `INSERT OR REPLACE INTO star_map_arrangement(entry_key, payload)
+     VALUES (?, ?)`,
+  );
+  for (const row of arrangementRows) {
+    try {
+      const entry = JSON.parse(row.payload) as {
+        instanceId?: unknown;
+        threadKey?: unknown;
+        updatedAt?: unknown;
+      };
+      if (
+        typeof entry.instanceId !== "string"
+        || typeof entry.threadKey !== "string"
+      ) {
+        continue;
+      }
+      const threadKey = encode(entry.threadKey);
+      const entryKey = `${entry.instanceId} ${threadKey}`;
+      if (threadKey === entry.threadKey && entryKey === row.entry_key) continue;
+
+      const current = readArrangement.get(entryKey) as
+        | { payload: string }
+        | undefined;
+      const currentUpdatedAt = current
+        ? readArrangementUpdatedAt(current.payload)
+        : Number.NEGATIVE_INFINITY;
+      const incomingUpdatedAt =
+        typeof entry.updatedAt === "number"
+          ? entry.updatedAt
+          : Number.NEGATIVE_INFINITY;
+      deleteArrangement.run(row.entry_key);
+      if (!current || incomingUpdatedAt > currentUpdatedAt) {
+        putArrangement.run(
+          entryKey,
+          JSON.stringify({ ...entry, threadKey }),
+        );
+      }
+    } catch {
+      // Preserve malformed rows for the normal defensive reader to ignore.
+    }
+  }
+}
+
+function readArrangementUpdatedAt(payload: string): number {
+  try {
+    const parsed = JSON.parse(payload) as { updatedAt?: unknown };
+    return typeof parsed.updatedAt === "number"
+      ? parsed.updatedAt
+      : Number.NEGATIVE_INFINITY;
+  } catch {
+    return Number.NEGATIVE_INFINITY;
+  }
+}
+
+function repairMisclassifiedHandoffSubAgents(
+  db: BetterSqlite3.Database,
+): void {
+  if (!tableExists(db, "threads")) return;
+
+  const identityKey = (backend: string, threadId: string): string =>
+    JSON.stringify([backend, threadId]);
+  const groupedHandoffThreadKeys = new Set<string>();
+  const handoffRows = db
+    .prepare(
+      `SELECT payload FROM threads
+       WHERE payload LIKE '%"groupingMode":"subthread"%'`,
+    )
+    .all() as Array<{ payload: string }>;
+
+  for (const row of handoffRows) {
+    try {
+      const overlay = JSON.parse(row.payload) as {
+        backend?: unknown;
+        handoffOrigin?: { groupingMode?: unknown };
+        threadId?: unknown;
+      };
+      if (
+        typeof overlay.backend === "string"
+        && typeof overlay.threadId === "string"
+        && overlay.handoffOrigin?.groupingMode === "subthread"
+      ) {
+        groupedHandoffThreadKeys.add(
+          identityKey(overlay.backend, overlay.threadId),
+        );
+      }
+    } catch {
+      // Preserve malformed rows for the normal defensive reader to ignore.
+    }
+  }
+
+  const watcherRows = db
+    .prepare(
+      `SELECT thread_id, payload FROM threads
+       WHERE payload LIKE '%"monitorThreadId"%'`,
+    )
+    .all() as Array<{ payload: string; thread_id: string }>;
+  const updateWatcher = db.prepare(
+    "UPDATE threads SET payload = ? WHERE thread_id = ?",
+  );
+
+  for (const row of watcherRows) {
+    try {
+      const overlay = JSON.parse(row.payload) as {
+        backend?: unknown;
+        subAgents?: unknown;
+      };
+      if (
+        typeof overlay.backend !== "string"
+        || !Array.isArray(overlay.subAgents)
+      ) {
+        continue;
+      }
+
+      const parentBackend = overlay.backend;
+      let changed = false;
+      const subAgents = overlay.subAgents.filter((value) => {
+        if (!value || typeof value !== "object") return true;
+        const subAgent = value as {
+          backend?: unknown;
+          monitorId?: unknown;
+          monitorThreadId?: unknown;
+        };
+        const backend = typeof subAgent.backend === "string"
+          ? subAgent.backend
+          : parentBackend;
+        const monitorThreadId = subAgent.monitorThreadId;
+        if (
+          typeof subAgent.monitorId !== "string"
+          || !subAgent.monitorId.startsWith("codex-native:")
+          || typeof monitorThreadId !== "string"
+          || !groupedHandoffThreadKeys.has(
+            identityKey(backend, monitorThreadId.trim()),
+          )
+        ) {
+          return true;
+        }
+        changed = true;
+        return false;
+      });
+      if (changed) {
+        updateWatcher.run(
+          JSON.stringify({ ...overlay, subAgents }),
+          row.thread_id,
+        );
+      }
+    } catch {
+      // Preserve malformed rows for the normal defensive reader to ignore.
+    }
+  }
+}
+
+function ensureCurrentSchema(db: BetterSqlite3.Database): void {
+  db.transaction(() => {
+    db.exec(SCHEMA_V4);
+    db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
+    db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
+    db.exec(DIRECTORY_OVERLAY_SCHEMA);
+    db.exec(REMOTE_DIRECTORY_OVERLAY_SCHEMA);
+    db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
+    db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+    db.exec(ACP_AGENT_SCHEMA);
+    db.exec(ACP_SESSION_SCHEMA);
+    db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
+    db.exec(THREAD_COMPACTION_SCHEMA);
+    db.exec(AUTOMATION_SCHEMA);
+    db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
+    ensureScheduledThreadActionMetadataColumns(db);
+    db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
+    db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
+    db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
+    db.exec(THREAD_SEARCH_SCHEMA);
+    db.exec(PR_STATUS_CACHE_SCHEMA);
+    db.exec(PR_LOOKUP_CACHE_SCHEMA);
+    db.exec(PR_AUTO_DISPATCH_SCHEMA);
+    db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
+    db.exec(PR_STATUS_WATCH_SCHEMA);
+    ensurePrStatusWatchTerminalColumns(db);
+    db.exec(THREAD_DEPENDENCY_SCHEMA);
+    db.exec(PROJECT_HELD_WAKEUP_SCHEMA);
+    db.exec(RESTART_CONTINUATION_SCHEMA);
+    db.exec(MESSAGING_REQUEST_SCHEMA);
+    db.exec(THREAD_SANDBOX_SCHEMA);
+    ensureThreadSearchFtsThreadIdColumn(db);
+    ensurePullRequestProviderColumns(db);
+    ensureThreadUsagePricingProviderScope(db);
+    ensureThreadUsagePricingCumulativeColumns(db);
+    ensureThreadUsageRequestPricingColumns(db);
+    ensureThreadUsagePricingIndexes(db);
+    db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
+    ensureThreadToolIncidentExplorerSchema(db);
+    ensureThreadMessageOriginSchema(db);
+    db.exec(FEDERATION_SCHEMA);
+    db.exec(REMOTE_THREAD_PIN_SCHEMA);
+    ensureRemoteThreadPinRevokedAtColumn(db);
+    db.exec(REMOTE_THREAD_TARGET_SCHEMA);
+    db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
+    db.exec(STAR_MAP_WORKSPACE_SCHEMA);
+    db.exec(THREAD_TODO_SCHEMA);
+    ensureThreadTodoProjectColumns(db);
+    ensureThreadTodoItemsColumn(db);
+    ensureThreadTodoDependencyColumn(db);
+    db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
+    // Created on every open rather than in their numbered steps: two branches
+    // claimed version 74, so a profile can hold either version without the
+    // other's table. Both are idempotent.
+    db.exec(DURABLE_TURN_REQUEST_SCHEMA);
+    db.exec(THREAD_REVIEW_SCHEMA);
+    ensureThreadReviewFindingStatusNames(db);
+    if ((db.pragma("user_version", { simple: true }) as number) < 4) {
+      db.pragma("user_version = 4");
+    }
+  })();
+
+  if (!tableColumnExists(db, "app_runtime_instances", "cwd_hash")) {
+    db.exec("ALTER TABLE app_runtime_instances ADD COLUMN cwd_hash TEXT");
+  }
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
+  ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
+`);
+}
+
+/**
+ * A finding declined before `declined` had its name was stored `dismissed`.
+ * This renames each in place, in the open's one transaction. The query
+ * selects only rows whose findings still say `dismissed`, so a profile with
+ * none left reads no payload into JavaScript and writes nothing. A dismissed
+ * review keeps its own name. CASE keeps json_each off a malformed payload.
+ */
+function ensureThreadReviewFindingStatusNames(db: BetterSqlite3.Database): void {
+  const rows = db.prepare(
+    `SELECT review_id, payload FROM thread_reviews
+       WHERE CASE WHEN NOT json_valid(payload) THEN 0
+         WHEN json_type(payload, '$.items') IS NOT 'array' THEN 0
+         ELSE EXISTS (SELECT 1 FROM json_each(payload, '$.items')
+           WHERE json_extract(value, '$.status') = 'dismissed') END`,
+  ).all() as Array<{ review_id: string; payload: string }>;
+  if (rows.length === 0) return;
+  const update = db.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?");
+  for (const row of rows) {
+    let stored: ThreadReview;
+    try {
+      stored = JSON.parse(row.payload) as ThreadReview;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(stored.items)) continue;
+    const renamed = normalizeThreadReview(stored);
+    if (renamed !== stored) update.run(JSON.stringify(renamed), row.review_id);
+  }
+}
+
+function ensureThreadToolIncidentExplorerSchema(
+  db: BetterSqlite3.Database,
+): void {
+  const invocationColumns = new Set(
+    (db.prepare("PRAGMA table_info(thread_tool_invocations)").all() as Array<{
+      name: string;
+    }>).map((column) => column.name),
+  );
+  if (!invocationColumns.has("finding_id")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN finding_id TEXT");
+  }
+  if (!invocationColumns.has("output_state")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN output_state TEXT");
+  }
+  if (!invocationColumns.has("source")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN source TEXT NOT NULL DEFAULT 'live'");
+  }
+  if (!invocationColumns.has("suggested_prompt")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN suggested_prompt TEXT");
+  }
+
+  const alertColumns = new Set(
+    (db.prepare("PRAGMA table_info(thread_tool_invocation_alerts)").all() as Array<{
+      name: string;
+    }>).map((column) => column.name),
+  );
+  if (!alertColumns.has("turn_id")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN turn_id TEXT");
+  }
+  if (!alertColumns.has("invocation_ids")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN invocation_ids TEXT");
+  }
+  if (!alertColumns.has("worst_invocation_id")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN worst_invocation_id TEXT");
+  }
+  if (!alertColumns.has("worst_output_chars")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN worst_output_chars INTEGER");
+  }
+  db.exec(`
+CREATE TABLE IF NOT EXISTS thread_tool_analysis (
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  analyzer_version          TEXT NOT NULL,
+  analyzed_at               INTEGER NOT NULL,
+  completeness              TEXT NOT NULL,
+  entry_count               INTEGER NOT NULL,
+  invocation_count          INTEGER NOT NULL,
+  missing_output_count      INTEGER NOT NULL,
+  page_count                INTEGER NOT NULL,
+  scanned_through           TEXT,
+  explanation               TEXT,
+  PRIMARY KEY (backend, thread_id)
+);
+`);
+}
+
+function ensureScheduledThreadActionMetadataColumns(
+  db: BetterSqlite3.Database,
+): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(scheduled_thread_actions)").all() as Array<{
+      name: string;
+    }>).map((column) => column.name),
+  );
+  if (!columns.has("turn_id")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN turn_id TEXT");
+  }
+  if (!columns.has("error_message")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN error_message TEXT");
+  }
+  if (!columns.has("payload_ref")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN payload_ref TEXT");
+  }
+  if (!columns.has("claim_owner")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN claim_owner TEXT");
+  }
+  if (!columns.has("claim_expires_at")) {
+    db.exec(
+      "ALTER TABLE scheduled_thread_actions ADD COLUMN claim_expires_at INTEGER",
+    );
+  }
+}
+
+function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void {
+  const hasUsageLines = tableExists(db, "thread_usage_lines");
+  const hasPricingSummaries = tableExists(db, "thread_pricing_summaries");
+  if (!hasUsageLines || !hasPricingSummaries) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  // This runs on every open, so it converts only what predates provider
+  // scope. Rewriting every ledger row here once cost each launch about 0.8 s
+  // and 35 MB of WAL on a 53,000-turn profile, and replaced every turn's
+  // recorded start and end with values derived from its lines. Every usage
+  // line is now written together with its turn row, so only a database that
+  // predates these columns or the turns table needs the backfill.
+  const backfillUsageTurns =
+    !tableExists(db, "thread_usage_turns")
+    || !tableColumnExists(db, "thread_usage_lines", "provider")
+    || !tableColumnExists(db, "thread_usage_lines", "usage_turn_id");
+
+  db.exec(`
+CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
+  catalog_id      TEXT NOT NULL,
+  catalog_version TEXT NOT NULL,
+  provider        TEXT NOT NULL,
+  currency        TEXT NOT NULL,
+  effective_from  INTEGER NOT NULL,
+  effective_to    INTEGER,
+  source_label    TEXT,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (catalog_id, catalog_version)
+);
+
+CREATE TABLE IF NOT EXISTS pricing_rates (
+  rate_id                         TEXT PRIMARY KEY,
+  catalog_id                      TEXT NOT NULL,
+  catalog_version                 TEXT NOT NULL,
+  provider                        TEXT NOT NULL,
+  currency                        TEXT NOT NULL,
+  model                           TEXT NOT NULL,
+  service_tier                    TEXT NOT NULL,
+  input_micros_per_million        INTEGER NOT NULL,
+  cached_input_micros_per_million INTEGER NOT NULL,
+  output_micros_per_million       INTEGER NOT NULL,
+  display_name                    TEXT NOT NULL,
+  FOREIGN KEY (catalog_id, catalog_version)
+    REFERENCES pricing_catalog_versions(catalog_id, catalog_version)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pricing_rates_lookup
+  ON pricing_rates(provider, model, service_tier, currency);
+
+CREATE TABLE IF NOT EXISTS thread_usage_turns (
+  usage_turn_id       TEXT PRIMARY KEY,
+  provider            TEXT NOT NULL,
+  backend             TEXT NOT NULL,
+  thread_id           TEXT NOT NULL,
+  parent_thread_id    TEXT,
+  turn_id             TEXT,
+  model               TEXT,
+  reasoning_effort    TEXT,
+  service_tier        TEXT,
+  fast_mode           INTEGER,
+  settings_source     TEXT,
+  settings_confidence TEXT,
+  started_at          INTEGER,
+  completed_at        INTEGER,
+  observed_at         INTEGER NOT NULL,
+  observed_cold_replay_count   INTEGER,
+  observed_cold_replay_uncached_tokens INTEGER,
+  observed_hot_replay_cached_tokens    INTEGER,
+  observed_hot_replay_count    INTEGER,
+  updated_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
+  ON thread_usage_turns(provider, backend, thread_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
+  ON thread_usage_turns(provider, backend, thread_id, turn_id);
+`);
+
+  const providerScopedSummaries = Boolean(db.prepare(
+    "SELECT 1 FROM pragma_table_info('thread_pricing_summaries') WHERE name = 'provider' AND pk > 0",
+  ).get());
+  if (!tableColumnExists(db, "thread_usage_lines", "provider")) {
+    db.exec(
+      "ALTER TABLE thread_usage_lines ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
+    );
+  }
+  if (!tableColumnExists(db, "thread_usage_lines", "usage_turn_id")) {
+    db.exec("ALTER TABLE thread_usage_lines ADD COLUMN usage_turn_id TEXT");
+  }
+  if (backfillUsageTurns) {
+    backfillProviderScopedUsageTurns(db);
+  }
+
+  if (!tableColumnExists(db, "thread_pricing_summaries", "provider")) {
+    db.exec(
+      "ALTER TABLE thread_pricing_summaries ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
+    );
+  }
+  if (providerScopedSummaries) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  db.exec("DROP TABLE IF EXISTS thread_pricing_summaries_v2");
+  db.exec(`
+CREATE TABLE thread_pricing_summaries_v2 (
+  provider                  TEXT NOT NULL DEFAULT 'openai',
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  currency                  TEXT NOT NULL,
+  usage_line_count          INTEGER NOT NULL,
+  priced_usage_line_count   INTEGER NOT NULL,
+  unpriced_usage_line_count INTEGER NOT NULL,
+  input_tokens              INTEGER NOT NULL,
+  cached_input_tokens       INTEGER NOT NULL,
+  uncached_input_tokens     INTEGER NOT NULL,
+  output_tokens             INTEGER NOT NULL,
+  reasoning_output_tokens   INTEGER NOT NULL,
+  total_tokens              INTEGER NOT NULL,
+  total_cost_micros         INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  PRIMARY KEY (provider, backend, thread_id, currency)
+)
+`);
+  db.exec(`
+INSERT INTO thread_pricing_summaries_v2
+SELECT
+  COALESCE(NULLIF(provider, ''), 'openai'),
+  backend,
+  thread_id,
+  currency,
+  usage_line_count,
+  priced_usage_line_count,
+  unpriced_usage_line_count,
+  input_tokens,
+  cached_input_tokens,
+  uncached_input_tokens,
+  output_tokens,
+  reasoning_output_tokens,
+  total_tokens,
+  total_cost_micros,
+  updated_at
+FROM thread_pricing_summaries
+`);
+  db.exec("DROP TABLE thread_pricing_summaries");
+  db.exec("ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries");
+  db.exec(THREAD_USAGE_PRICING_SCHEMA);
+}
+
+/** Give pre-provider-scope usage lines a provider, a turn id, and turn rows. */
+function backfillProviderScopedUsageTurns(db: BetterSqlite3.Database): void {
+  db.exec(`
+UPDATE thread_usage_lines
+SET
+  provider = COALESCE(NULLIF(provider, ''), 'openai'),
+  usage_turn_id = COALESCE(
+    NULLIF(usage_turn_id, ''),
+    COALESCE(NULLIF(provider, ''), 'openai') || ':' || backend || ':' || thread_id || ':' || COALESCE(turn_id, usage_line_id)
+  )
+WHERE provider IS NULL OR provider = '' OR usage_turn_id IS NULL OR usage_turn_id = ''
+`);
+
+  db.exec(`
+INSERT INTO thread_usage_turns (
+  usage_turn_id,
+  provider,
+  backend,
+  thread_id,
+  parent_thread_id,
+  turn_id,
+  model,
+  reasoning_effort,
+  service_tier,
+  fast_mode,
+  settings_source,
+  settings_confidence,
+  started_at,
+  completed_at,
+  observed_at,
+  updated_at
+)
+SELECT
+  usage_turn_id,
+  provider,
+  backend,
+  thread_id,
+  parent_thread_id,
+  turn_id,
+  model,
+  reasoning_effort,
+  service_tier,
+  fast_mode,
+  settings_source,
+  settings_confidence,
+  MIN(created_at),
+  MAX(completed_at),
+  MIN(created_at),
+  MAX(updated_at)
+FROM thread_usage_lines AS line
+WHERE usage_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM thread_usage_turns AS turn WHERE turn.usage_turn_id = line.usage_turn_id
+  )
+GROUP BY usage_turn_id
+ON CONFLICT(usage_turn_id) DO NOTHING
+`);
+}
+
+function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "cumulative_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_cached_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_cached_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_uncached_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_uncached_input_tokens INTEGER",
+    },
+    {
+      name: "cumulative_output_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_output_tokens INTEGER",
+    },
+    {
+      name: "cumulative_reasoning_output_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_reasoning_output_tokens INTEGER",
+    },
+    {
+      name: "cumulative_total_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_total_tokens INTEGER",
+    },
+    {
+      name: "cumulative_total_cost_micros",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_total_cost_micros INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+function ensureThreadUsageRequestPricingColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "cache_write_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cache_write_input_tokens INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "cumulative_cache_write_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_cache_write_input_tokens INTEGER",
+    },
+    {
+      name: "cache_write_input_cost_micros",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cache_write_input_cost_micros INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "pricing_basis",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN pricing_basis TEXT",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+// DEPRECATED (see issue #947): observed context-replay tally on the usage line.
+// Kept only to dual-write the columns so older locally-run builds keep working
+// during the transition to thread_usage_turns. Remove with the dual-write.
+function ensureThreadUsageObservedReplayColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "observed_cold_replay_count",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_cold_replay_count INTEGER",
+    },
+    {
+      name: "observed_cold_replay_uncached_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_cold_replay_uncached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_cached_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_hot_replay_cached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_count",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN observed_hot_replay_count INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+function ensureThreadUsageTurnObservedReplayColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "observed_cold_replay_count",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_cold_replay_count INTEGER",
+    },
+    {
+      name: "observed_cold_replay_uncached_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_cold_replay_uncached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_cached_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_hot_replay_cached_tokens INTEGER",
+    },
+    {
+      name: "observed_hot_replay_count",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_hot_replay_count INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_turns", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+function ensureThreadUsageTurnContextColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "final_context_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN final_context_tokens INTEGER",
+    },
+    {
+      name: "peak_context_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN peak_context_tokens INTEGER",
+    },
+    {
+      name: "model_context_window",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN model_context_window INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_turns", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+// The account limits an owner held when a turn completed (JSON). Written by
+// the completion UPDATE the ledger already makes, so it costs no commit.
+function ensureThreadUsageTurnRateLimitColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  if (!tableColumnExists(db, "thread_usage_turns", "rate_limit_snapshot")) {
+    db.exec("ALTER TABLE thread_usage_turns ADD COLUMN rate_limit_snapshot TEXT");
+  }
+}
+
+// Marks a completion time the startup repair estimated from ledger evidence
+// because no terminal event reached any process. An observed end that arrives
+// later replaces it.
+function ensureThreadUsageTurnInferredCompletionColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  if (!tableColumnExists(db, "thread_usage_turns", "completed_at_inferred")) {
+    db.exec("ALTER TABLE thread_usage_turns ADD COLUMN completed_at_inferred INTEGER");
+  }
+}
+
+// Adds the turn_usage_attributed column and backfills the finite set of legacy
+// pre-attribution rows. Live rows built before this field existed recorded no
+// attribution; the ones that were whole-thread summaries masquerading as turns
+// are the live/pending rows with no cumulative breakdown and a >= 1M-token
+// total. This one-shot backfill over already-persisted rows is the ONLY place
+// the old token-count guess still runs — new live rows record attribution
+// explicitly at build time, so the renderer never re-derives it.
+function ensureThreadUsageAttributedColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  if (!tableColumnExists(db, "thread_usage_lines", "turn_usage_attributed")) {
+    db.exec(
+      "ALTER TABLE thread_usage_lines ADD COLUMN turn_usage_attributed INTEGER",
+    );
+  }
+  db.exec(`
+UPDATE thread_usage_lines
+SET turn_usage_attributed = 0
+WHERE turn_usage_attributed IS NULL
+  AND source = 'live'
+  AND status = 'pending'
+  AND cumulative_total_tokens IS NULL
+  AND total_tokens >= 1000000
+`);
+}
+
+function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_search_documents")) {
+    db.exec(THREAD_SEARCH_SCHEMA);
+    return;
+  }
+  if (
+    tableExists(db, "thread_search_fts") &&
+    tableColumnExists(db, "thread_search_fts", "thread_id")
+  ) {
+    return;
+  }
+
+  db.exec("DROP TABLE IF EXISTS thread_search_fts");
+  db.exec(THREAD_SEARCH_SCHEMA);
+
+  const rows = db
+    .prepare(
+      `SELECT
+         identity_key,
+         backend,
+         thread_id,
+         title,
+         summary,
+         project_key,
+         git_branch,
+         git_origin_url,
+         model,
+         linked_directories_json
+       FROM thread_search_documents`,
+    )
+    .all() as Array<{
+    backend: string;
+    git_branch: string | null;
+    git_origin_url: string | null;
+    identity_key: string;
+    linked_directories_json: string;
+    model: string | null;
+    project_key: string | null;
+    summary: string | null;
+    thread_id: string;
+    title: string;
+  }>;
+  const insert = db.prepare(
+    `INSERT INTO thread_search_fts (
+       identity_key, title, summary, project_key, directory_labels,
+       directory_paths, git_branch, git_origin_url, model, backend, thread_id
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  for (const row of rows) {
+    const directories = parseThreadSearchLinkedDirectories(
+      row.linked_directories_json,
+    );
+    insert.run(
+      row.identity_key,
+      row.title,
+      row.summary ?? "",
+      row.project_key ?? "",
+      directories.map((directory) => directory.label).join(" "),
+      directories
+        .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
+        .join(" "),
+      row.git_branch ?? "",
+      row.git_origin_url ?? "",
+      row.model ?? "",
+      row.backend,
+      buildThreadSearchFtsThreadIdText(row.thread_id),
+    );
+  }
+}
+
+function buildThreadSearchFtsThreadIdText(threadId: string): string {
+  const variants = new Set([threadId]);
+  for (const match of threadId.matchAll(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+  )) {
+    variants.add(match[0]);
+  }
+  return [...variants].join(" ");
+}
+
+function parseThreadSearchLinkedDirectories(value: string): Array<{
+  label?: string;
+  path?: string;
+  worktreePath?: string;
+}> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter(
+        (entry): entry is Record<string, unknown> =>
+          Boolean(entry) && typeof entry === "object",
+      )
+      .map((entry) => ({
+        ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+        ...(typeof entry.path === "string" ? { path: entry.path } : {}),
+        ...(typeof entry.worktreePath === "string"
+          ? { worktreePath: entry.worktreePath }
+          : {}),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function repairThreadUsageLineCreatedAt(db: BetterSqlite3.Database): void {
+  if (
+    !tableExists(db, "thread_usage_lines") ||
+    !tableExists(db, "thread_usage_turns") ||
+    !tableColumnExists(db, "thread_usage_lines", "usage_turn_id")
+  ) {
+    return;
+  }
+
+  db.exec(`
+UPDATE thread_usage_lines
+SET created_at = (
+  SELECT MIN(thread_usage_lines.created_at, thread_usage_turns.observed_at)
+  FROM thread_usage_turns
+  WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
+)
+WHERE source = 'live'
+  AND usage_turn_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM thread_usage_turns
+    WHERE thread_usage_turns.usage_turn_id = thread_usage_lines.usage_turn_id
+      AND thread_usage_turns.observed_at < thread_usage_lines.created_at
+  )
+`);
+}
+
+function ensureThreadUsagePricingIndexes(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_thread
+  ON thread_usage_lines(backend, thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_read_parent
+  ON thread_usage_lines(backend, parent_thread_id, created_at DESC, usage_line_id DESC)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_thread
+  ON thread_usage_lines(provider, backend, currency, thread_id)
+  WHERE status != 'superseded';
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_summary_parent
+  ON thread_usage_lines(provider, backend, currency, parent_thread_id)
+  WHERE status != 'superseded';
+`);
+}
+
+function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
+  if (
+    !tableExists(db, "thread_usage_lines") ||
+    !tableExists(db, "thread_pricing_summaries")
+  ) {
+    return;
+  }
+  ensureThreadUsageRequestPricingColumns(db);
+
+  // The turn record carries the provider-reported context window that lets a
+  // multi-request aggregate price inside a request-scoped band. Older
+  // databases reach this repair before that column exists.
+  const hasTurnContextWindow =
+    tableColumnExists(db, "thread_usage_lines", "usage_turn_id")
+    && tableExists(db, "thread_usage_turns")
+    && tableColumnExists(db, "thread_usage_turns", "model_context_window");
+  const now = Date.now();
+  const selectRows = hasTurnContextWindow
+    ? `SELECT
+         lines.usage_line_id,
+         lines.cache_write_input_tokens,
+         lines.cached_input_tokens,
+         lines.created_at,
+         lines.currency,
+         lines.fast_mode,
+         lines.model,
+         lines.output_tokens,
+         lines.price_status,
+         lines.pricing_basis,
+         lines.provider,
+         lines.reasoning_output_tokens,
+         lines.service_tier,
+         lines.scope,
+         lines.uncached_input_tokens,
+         turns.model_context_window
+           AS model_context_window
+       FROM thread_usage_lines AS lines
+       LEFT JOIN thread_usage_turns AS turns ON turns.usage_turn_id = lines.usage_turn_id
+       WHERE lines.provider IN ('openai', 'qwen', 'xai')
+         AND lines.scope != 'fork-baseline'`
+    : `SELECT
+         lines.usage_line_id,
+         lines.cache_write_input_tokens,
+         lines.cached_input_tokens,
+         lines.created_at,
+         lines.currency,
+         lines.fast_mode,
+         lines.model,
+         lines.output_tokens,
+         lines.price_status,
+         lines.pricing_basis,
+         lines.provider,
+         lines.reasoning_output_tokens,
+         lines.service_tier,
+         lines.scope,
+         lines.uncached_input_tokens,
+         NULL
+           AS model_context_window
+       FROM thread_usage_lines AS lines
+       WHERE lines.provider IN ('openai', 'qwen', 'xai')
+         AND lines.scope != 'fork-baseline'`;
+  const rows = db
+    .prepare(selectRows)
+    .all() as Array<{
+      cache_write_input_tokens: number;
+      cached_input_tokens: number;
+      created_at: number;
+      currency: string;
+      fast_mode: number | null;
+      model: string | null;
+      model_context_window: number | null;
+      output_tokens: number;
+      price_status: string;
+      pricing_basis: ThreadUsageLineRecord["pricingBasis"] | null;
+      provider: string;
+      reasoning_output_tokens: number;
+      service_tier: string | null;
+      scope: ThreadUsageLineRecord["scope"];
+      uncached_input_tokens: number;
+      usage_line_id: string;
+    }>;
+  const updateLine = db.prepare(
+    `UPDATE thread_usage_lines
+     SET
+       price_status = @priceStatus,
+       price_unavailable_reason = @priceUnavailableReason,
+       currency = @currency,
+       pricing_catalog_id = @pricingCatalogId,
+       pricing_catalog_version = @pricingCatalogVersion,
+       pricing_rate_id = @pricingRateId,
+       uncached_input_cost_micros = @uncachedInputCostMicros,
+       cache_write_input_cost_micros = @cacheWriteInputCostMicros,
+       cached_input_cost_micros = @cachedInputCostMicros,
+       output_cost_micros = @outputCostMicros,
+       provider = @provider,
+       total_cost_micros = @totalCostMicros,
+       updated_at = @updatedAt
+     WHERE usage_line_id = @usageLineId`,
+  );
+
+  for (const row of rows) {
+    if (row.pricing_basis === "request-components") {
+      continue;
+    }
+    const cost = estimateTokenUsageCost({
+      at: row.created_at,
+      cacheWriteInputTokens: row.cache_write_input_tokens,
+      cachedInputTokens: row.cached_input_tokens,
+      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      inputTokenScope: row.scope === "latest-request" ? "request" : "aggregate",
+      model: row.model ?? undefined,
+      outputTokens: row.output_tokens,
+      reasoningOutputTokens: row.reasoning_output_tokens,
+      requestInputTokenCeiling: row.model_context_window ?? undefined,
+      serviceTier: row.service_tier ?? undefined,
+      uncachedInputTokens: row.uncached_input_tokens,
+    });
+    if (!cost && row.price_status === "priced") {
+      continue;
+    }
+
+    const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | null =
+      cost
+        ? null
+        : resolveTokenUsagePriceUnavailableReason({
+            at: row.created_at,
+            cachedInputTokens: row.cached_input_tokens,
+            fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+            inputTokenScope: row.scope === "latest-request" ? "request" : "aggregate",
+            model: row.model ?? undefined,
+            serviceTier: row.service_tier ?? undefined,
+            uncachedInputTokens: row.uncached_input_tokens,
+          });
+
+    updateLine.run({
+      cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
+      cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+      currency: cost?.currency ?? row.currency,
+      outputCostMicros: cost?.outputCostMicros ?? 0,
+      priceStatus: cost ? "priced" : "unpriced",
+      provider: cost?.provider ?? row.provider,
+      priceUnavailableReason,
+      pricingCatalogId: cost?.catalogId ?? null,
+      pricingCatalogVersion: cost?.catalogVersion ?? null,
+      pricingRateId: cost?.rateId ?? null,
+      totalCostMicros: cost?.totalCostMicros ?? 0,
+      uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+      updatedAt: now,
+      usageLineId: row.usage_line_id,
+    });
+  }
+
+  rebuildThreadPricingSummaries(db, now);
+}
+
+const CODEX_OPENING_USAGE_SNAPSHOT_MAX_AGE_MS = 5 * 60 * 1000;
+
+/**
+ * Repair the late-snapshot failure that priced only Codex `last` usage as a
+ * whole turn. A preceding row is authoritative only when its cumulative total
+ * was refreshed immediately before the next turn began; older snapshots may
+ * hide unobserved turns and are deliberately left alone.
+ */
+function repairCodexTurnUsageFromCumulativeSnapshots(
+  db: BetterSqlite3.Database,
+): void {
+  if (
+    !tableExists(db, "thread_usage_lines")
+    || !tableExists(db, "thread_pricing_summaries")
+    || !tableColumnExists(
+      db,
+      "thread_usage_lines",
+      "cumulative_input_tokens",
+    )
+  ) {
+    return;
+  }
+
+  type CumulativeUsageRow = {
+    cached_input_tokens: number;
+    created_at: number;
+    cumulative_cached_input_tokens: number | null;
+    cumulative_input_tokens: number | null;
+    cumulative_output_tokens: number | null;
+    cumulative_reasoning_output_tokens: number | null;
+    cumulative_total_tokens: number | null;
+    currency: string;
+    fast_mode: number | null;
+    input_tokens: number;
+    model: string | null;
+    output_tokens: number;
+    reasoning_output_tokens: number;
+    service_tier: string | null;
+    thread_id: string;
+    total_tokens: number;
+    updated_at: number;
+    usage_line_id: string;
+  };
+  const rows = db
+    .prepare(
+      `SELECT
+         usage_line_id,
+         thread_id,
+         created_at,
+         updated_at,
+         model,
+         service_tier,
+         fast_mode,
+         currency,
+         input_tokens,
+         cached_input_tokens,
+         output_tokens,
+         reasoning_output_tokens,
+         total_tokens,
+         cumulative_input_tokens,
+         cumulative_cached_input_tokens,
+         cumulative_output_tokens,
+         cumulative_reasoning_output_tokens,
+         cumulative_total_tokens
+       FROM thread_usage_lines
+       WHERE backend = 'codex'
+         AND provider = 'openai'
+         AND source = 'live'
+         AND scope = 'turn'
+         AND status != 'superseded'
+         AND cumulative_input_tokens IS NOT NULL
+       ORDER BY thread_id ASC, created_at ASC, usage_line_id ASC`,
+    )
+    .all() as CumulativeUsageRow[];
+  const updateLine = db.prepare(
+    `UPDATE thread_usage_lines
+     SET
+       input_tokens = @inputTokens,
+       cached_input_tokens = @cachedInputTokens,
+       uncached_input_tokens = @uncachedInputTokens,
+       output_tokens = @outputTokens,
+       reasoning_output_tokens = @reasoningOutputTokens,
+       total_tokens = @totalTokens,
+       price_status = @priceStatus,
+       price_unavailable_reason = @priceUnavailableReason,
+       currency = @currency,
+       pricing_catalog_id = @pricingCatalogId,
+       pricing_catalog_version = @pricingCatalogVersion,
+       pricing_rate_id = @pricingRateId,
+       uncached_input_cost_micros = @uncachedInputCostMicros,
+       cached_input_cost_micros = @cachedInputCostMicros,
+       output_cost_micros = @outputCostMicros,
+       total_cost_micros = @totalCostMicros,
+       updated_at = @updatedAt
+     WHERE usage_line_id = @usageLineId`,
+  );
+
+  let prior: CumulativeUsageRow | undefined;
+  let repairedCount = 0;
+  const now = Date.now();
+  for (const row of rows) {
+    if (prior?.thread_id !== row.thread_id) {
+      prior = row;
+      continue;
+    }
+
+    const openingSnapshotAge = row.created_at - prior.updated_at;
+    const cumulativePairs = [
+      [row.cumulative_input_tokens, prior.cumulative_input_tokens],
+      [row.cumulative_cached_input_tokens, prior.cumulative_cached_input_tokens],
+      [row.cumulative_output_tokens, prior.cumulative_output_tokens],
+      [
+        row.cumulative_reasoning_output_tokens,
+        prior.cumulative_reasoning_output_tokens,
+      ],
+      [row.cumulative_total_tokens, prior.cumulative_total_tokens],
+    ] as const;
+    const hasExactOpeningSnapshot =
+      openingSnapshotAge >= 0
+      && openingSnapshotAge <= CODEX_OPENING_USAGE_SNAPSHOT_MAX_AGE_MS
+      && cumulativePairs.every(
+        ([current, previous]) =>
+          current !== null
+          && previous !== null
+          && current >= previous,
+      );
+    if (!hasExactOpeningSnapshot) {
+      prior = row;
+      continue;
+    }
+
+    const inputTokens =
+      row.cumulative_input_tokens! - prior.cumulative_input_tokens!;
+    const cachedInputTokens =
+      row.cumulative_cached_input_tokens!
+      - prior.cumulative_cached_input_tokens!;
+    const outputTokens =
+      row.cumulative_output_tokens! - prior.cumulative_output_tokens!;
+    const reasoningOutputTokens =
+      row.cumulative_reasoning_output_tokens!
+      - prior.cumulative_reasoning_output_tokens!;
+    const totalTokens =
+      row.cumulative_total_tokens! - prior.cumulative_total_tokens!;
+    const wasUndercounted =
+      inputTokens > row.input_tokens
+      || cachedInputTokens > row.cached_input_tokens
+      || outputTokens > row.output_tokens
+      || reasoningOutputTokens > row.reasoning_output_tokens
+      || totalTokens > row.total_tokens;
+    if (!wasUndercounted) {
+      prior = row;
+      continue;
+    }
+
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+    const cost = estimateTokenUsageCost({
+      at: row.created_at,
+      cachedInputTokens,
+      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      model: row.model ?? undefined,
+      outputTokens,
+      reasoningOutputTokens,
+      serviceTier: row.service_tier ?? undefined,
+      uncachedInputTokens,
+    });
+    const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | null =
+      cost
+        ? null
+        : resolveTokenUsagePriceUnavailableReason({
+            at: row.created_at,
+            cachedInputTokens,
+            fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+            inputTokenScope: "aggregate",
+            model: row.model ?? undefined,
+            serviceTier: row.service_tier ?? undefined,
+            uncachedInputTokens,
+          });
+    updateLine.run({
+      cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+      cachedInputTokens,
+      currency: cost?.currency ?? row.currency,
+      inputTokens,
+      outputCostMicros: cost?.outputCostMicros ?? 0,
+      outputTokens,
+      priceStatus: cost ? "priced" : "unpriced",
+      priceUnavailableReason,
+      pricingCatalogId: cost?.catalogId ?? null,
+      pricingCatalogVersion: cost?.catalogVersion ?? null,
+      pricingRateId: cost?.rateId ?? null,
+      reasoningOutputTokens,
+      totalCostMicros: cost?.totalCostMicros ?? 0,
+      totalTokens,
+      uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+      uncachedInputTokens,
+      updatedAt: now,
+      usageLineId: row.usage_line_id,
+    });
+    repairedCount += 1;
+    prior = row;
+  }
+
+  if (repairedCount > 0) {
+    rebuildThreadPricingSummaries(db, now);
+  }
+}
+
+function rebuildThreadPricingSummaries(db: BetterSqlite3.Database, updatedAt: number): void {
+  db.exec("DELETE FROM thread_pricing_summaries");
+  const rollups = db
+    .prepare(
+      `SELECT DISTINCT
+         provider,
+         backend,
+         currency,
+         COALESCE(NULLIF(parent_thread_id, ''), thread_id) AS thread_id
+       FROM thread_usage_lines
+       WHERE status != 'superseded'`,
+    )
+    .all() as Array<{
+      backend: string;
+      currency: string;
+      provider: string;
+      thread_id: string;
+    }>;
+  const readAggregate = db.prepare(
+    `SELECT
+       COUNT(*) AS usage_line_count,
+       SUM(CASE WHEN price_status = 'priced' THEN 1 ELSE 0 END) AS priced_usage_line_count,
+       SUM(CASE WHEN price_status != 'priced' THEN 1 ELSE 0 END) AS unpriced_usage_line_count,
+       COALESCE(SUM(input_tokens), 0) AS input_tokens,
+       COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+       COALESCE(SUM(uncached_input_tokens), 0) AS uncached_input_tokens,
+       COALESCE(SUM(output_tokens), 0) AS output_tokens,
+       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+       COALESCE(SUM(CASE WHEN price_status = 'priced' THEN total_cost_micros ELSE 0 END), 0)
+         AS total_cost_micros
+     FROM (
+       SELECT *
+       FROM thread_usage_lines
+       WHERE provider = ?
+         AND backend = ?
+         AND currency = ?
+         AND status != 'superseded'
+         AND thread_id = ?
+       UNION ALL
+       SELECT *
+       FROM thread_usage_lines
+       WHERE provider = ?
+         AND backend = ?
+         AND currency = ?
+         AND status != 'superseded'
+         AND parent_thread_id = ?
+         AND thread_id != ?
+     )`,
+  );
+  const insertSummary = db.prepare(
+    `INSERT INTO thread_pricing_summaries (
+      provider,
+      backend,
+      thread_id,
+      currency,
+      usage_line_count,
+      priced_usage_line_count,
+      unpriced_usage_line_count,
+      input_tokens,
+      cached_input_tokens,
+      uncached_input_tokens,
+      output_tokens,
+      reasoning_output_tokens,
+      total_tokens,
+      total_cost_micros,
+      updated_at
+    ) VALUES (
+      @provider,
+      @backend,
+      @threadId,
+      @currency,
+      @usageLineCount,
+      @pricedUsageLineCount,
+      @unpricedUsageLineCount,
+      @inputTokens,
+      @cachedInputTokens,
+      @uncachedInputTokens,
+      @outputTokens,
+      @reasoningOutputTokens,
+      @totalTokens,
+      @totalCostMicros,
+      @updatedAt
+    )`,
+  );
+
+  for (const rollup of rollups) {
+    const aggregate = readAggregate.get(
+      rollup.provider,
+      rollup.backend,
+      rollup.currency,
+      rollup.thread_id,
+      rollup.provider,
+      rollup.backend,
+      rollup.currency,
+      rollup.thread_id,
+      rollup.thread_id,
+    ) as {
+      cached_input_tokens: number | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      priced_usage_line_count: number | null;
+      reasoning_output_tokens: number | null;
+      total_cost_micros: number | null;
+      total_tokens: number | null;
+      uncached_input_tokens: number | null;
+      unpriced_usage_line_count: number | null;
+      usage_line_count: number;
+    };
+
+    if (aggregate.usage_line_count === 0) {
+      continue;
+    }
+
+    insertSummary.run({
+      backend: rollup.backend,
+      cachedInputTokens: aggregate.cached_input_tokens ?? 0,
+      currency: rollup.currency,
+      inputTokens: aggregate.input_tokens ?? 0,
+      outputTokens: aggregate.output_tokens ?? 0,
+      pricedUsageLineCount: aggregate.priced_usage_line_count ?? 0,
+      provider: rollup.provider,
+      reasoningOutputTokens: aggregate.reasoning_output_tokens ?? 0,
+      threadId: rollup.thread_id,
+      totalCostMicros: aggregate.total_cost_micros ?? 0,
+      totalTokens: aggregate.total_tokens ?? 0,
+      uncachedInputTokens: aggregate.uncached_input_tokens ?? 0,
+      unpricedUsageLineCount: aggregate.unpriced_usage_line_count ?? 0,
+      updatedAt,
+      usageLineCount: aggregate.usage_line_count,
+    });
+  }
+}
+
+function tableExists(
+  db: BetterSqlite3.Database,
+  tableName: string,
+): boolean {
+  const row = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { 1: number } | undefined;
+  return Boolean(row);
+}
+
+type BackfillObservedSurface = {
+  channel: {
+    channel: string;
+    conversation: {
+      id: string;
+      kind: "channel" | "dm" | "thread" | "topic";
+      parentId?: string;
+      parentConversationId?: string;
+      workspaceId?: string;
+      title?: string;
+      parentTitle?: string;
+      ancestorTitle?: string;
+    };
+  };
+  firstSeenAt: number;
+  lastSeenAt: number;
+};
+
+function backfillObservedMessagingSurfaces(db: BetterSqlite3.Database): void {
+  const surfaces = new Map<string, BackfillObservedSurface>();
+  const remember = (surface: BackfillObservedSurface) => {
+    const conversation = surface.channel.conversation;
+    const key = [
+      surface.channel.channel,
+      conversation.kind,
+      conversation.parentId ?? "",
+      conversation.id,
+    ].join(":");
+    const current = surfaces.get(key);
+    surfaces.set(key, {
+      channel: {
+        channel: surface.channel.channel,
+        conversation: mergeDefinedObject(
+          current?.channel.conversation,
+          conversation,
+        ),
+      },
+      firstSeenAt: Math.min(
+        current?.firstSeenAt ?? surface.firstSeenAt,
+        surface.firstSeenAt,
+      ),
+      lastSeenAt: Math.max(
+        current?.lastSeenAt ?? surface.lastSeenAt,
+        surface.lastSeenAt,
+      ),
+    });
+  };
+
+  const bindingRows = tableExists(db, "bindings")
+    ? db
+        .prepare("SELECT payload FROM bindings ORDER BY updated_at ASC")
+        .all() as Array<{ payload: string }>
+    : [];
+  for (const row of bindingRows) {
+    try {
+      const binding = JSON.parse(row.payload) as {
+        channel?: BackfillObservedSurface["channel"];
+        createdAt?: number;
+        updatedAt?: number;
+      };
+      if (
+        !binding.channel
+        || typeof binding.createdAt !== "number"
+        || typeof binding.updatedAt !== "number"
+      ) {
+        continue;
+      }
+      remember({
+        channel: binding.channel,
+        firstSeenAt: binding.createdAt,
+        lastSeenAt: binding.updatedAt,
+      });
+    } catch {
+      // Ignore malformed legacy binding payloads during best-effort backfill.
+    }
+  }
+
+  const activityRows = tableExists(db, "messaging_activity_log")
+    ? db
+        .prepare(
+          `SELECT platform, conversation_id, conversation_title, created_at, payload
+           FROM messaging_activity_log
+           WHERE conversation_id IS NOT NULL
+             AND kind IN ('inbound-routed', 'inbound-ignored', 'pairing', 'binding')
+           ORDER BY created_at ASC, id ASC`,
+        )
+        .all() as Array<{
+          platform: string;
+          conversation_id: string;
+          conversation_title: string | null;
+          created_at: number;
+          payload: string;
+        }>
+    : [];
+  for (const row of activityRows) {
+    try {
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      const kind = payload.conversationKind;
+      if (
+        kind !== "channel"
+        && kind !== "dm"
+        && kind !== "thread"
+        && kind !== "topic"
+      ) {
+        continue;
+      }
+      const conversation: BackfillObservedSurface["channel"]["conversation"] = {
+        id: row.conversation_id,
+        kind,
+        ...(row.conversation_title ? { title: row.conversation_title } : {}),
+      };
+      copyStringProperty(payload, conversation, "conversationParentId", "parentId");
+      copyStringProperty(
+        payload,
+        conversation,
+        "conversationParentConversationId",
+        "parentConversationId",
+      );
+      copyStringProperty(
+        payload,
+        conversation,
+        "conversationWorkspaceId",
+        "workspaceId",
+      );
+      copyStringProperty(payload, conversation, "parentTitle", "parentTitle");
+      copyStringProperty(payload, conversation, "ancestorTitle", "ancestorTitle");
+      remember({
+        channel: { channel: row.platform, conversation },
+        firstSeenAt: row.created_at,
+        lastSeenAt: row.created_at,
+      });
+    } catch {
+      // Ignore malformed activity payloads during best-effort backfill.
+    }
+  }
+
+  const insert = db.prepare(
+    `INSERT OR REPLACE INTO messaging_observed_surfaces(surface_key, channel_kind, conversation_kind, conversation_id, first_seen_at, last_seen_at, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const [surfaceKey, surface] of surfaces) {
+    insert.run(
+      surfaceKey,
+      surface.channel.channel,
+      surface.channel.conversation.kind,
+      surface.channel.conversation.id,
+      surface.firstSeenAt,
+      surface.lastSeenAt,
+      JSON.stringify(surface),
+    );
+  }
+}
+
+function mergeDefinedObject<T extends object>(
+  current: T | undefined,
+  next: T,
+): T {
+  const merged = { ...current } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(next)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged as T;
+}
+
+function copyStringProperty<T extends object>(
+  source: Record<string, unknown>,
+  target: T,
+  sourceKey: string,
+  targetKey: keyof T,
+): void {
+  const value = source[sourceKey];
+  if (typeof value === "string" && value) target[targetKey] = value as T[keyof T];
+}
+
+function ensureAutomationRunSourceEventKey(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "automation_runs", "source_event_key")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN source_event_key TEXT");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_automation_runs_source_event ON automation_runs(automation_id, source_event_key)",
+  );
+}
+
+function ensurePullRequestProviderColumns(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "pr_status_cache", "provider")) {
+    db.exec(
+      "ALTER TABLE pr_status_cache ADD COLUMN provider TEXT NOT NULL DEFAULT 'github.com'",
+    );
+  }
+  db.exec(`
+UPDATE pr_status_cache
+SET
+  provider = COALESCE(NULLIF(provider, ''), 'github.com'),
+  pr_key = COALESCE(NULLIF(provider, ''), 'github.com')
+    || '/'
+    || lower(org)
+    || '/'
+    || lower(repo)
+    || '#'
+    || number
+`);
+
+  if (!tableColumnExists(db, "pr_lookup_cache", "provider")) {
+    db.exec(
+      "ALTER TABLE pr_lookup_cache ADD COLUMN provider TEXT NOT NULL DEFAULT 'github.com'",
+    );
+  }
+  db.exec(`
+UPDATE pr_lookup_cache
+SET provider = COALESCE(NULLIF(provider, ''), 'github.com')
+`);
+}
+
+function repairReenrolledFederationPeerRevocations(
+  db: BetterSqlite3.Database,
+): void {
+  // The original federation upsert preserved revoked_at even after a fresh,
+  // verified enrollment changed the peer back to connected. Only clear rows
+  // with durable proof that a one-time invite was consumed after revocation;
+  // genuinely revoked peers and unrelated inconsistent rows stay revoked.
+  db.exec(`
+UPDATE federation_peers
+SET revoked_at = NULL
+WHERE status != 'revoked'
+  AND revoked_at IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM federation_enrollment_tokens
+    WHERE federation_enrollment_tokens.peer_id = federation_peers.peer_id
+      AND federation_enrollment_tokens.status = 'used'
+      AND federation_enrollment_tokens.used_at > federation_peers.revoked_at
+  )
+`);
+}
+
+function tableColumnExists(
+  db: BetterSqlite3.Database,
+  tableName:
+    | "app_runtime_instances"
+    | "automation_runs"
+    | "pr_lookup_cache"
+    | "pr_status_cache"
+    | "pr_status_watches"
+    | "thread_message_origins"
+    | "thread_pricing_summaries"
+    | "remote_thread_pins"
+    | "thread_search_fts"
+    | "thread_todos"
+    | "thread_usage_lines"
+    | "thread_usage_turns",
+  columnName: string,
+): boolean {
+  const rows = readTableInfo(db, tableName);
+  return rows.some((row) => row.name === columnName);
+}
+
+function ensureThreadMessageOriginSchema(db: BetterSqlite3.Database): void {
+  if (
+    tableColumnExists(db, "thread_message_origins", "turn_id")
+    && !tableColumnExists(db, "thread_message_origins", "message_id")
+  ) {
+    // v30 briefly keyed injected-message origins by turn. One turn can contain
+    // several user messages, so those rows cannot be migrated without guessing
+    // which message they describe. Recreate this unreleased metadata table with
+    // the concrete provider message identity instead.
+    db.exec(`
+DROP INDEX IF EXISTS idx_thread_message_origins_thread;
+ALTER TABLE thread_message_origins RENAME TO thread_message_origins_v30;
+`);
+    db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
+    db.exec("DROP TABLE thread_message_origins_v30");
+    return;
+  }
+  db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
+}
+
+function readTableInfo(
+  db: BetterSqlite3.Database,
+  tableName:
+    | "app_runtime_instances"
+    | "automation_runs"
+    | "pr_lookup_cache"
+    | "pr_status_cache"
+    | "pr_status_watches"
+    | "thread_message_origins"
+    | "thread_pricing_summaries"
+    | "remote_thread_pins"
+    | "thread_search_fts"
+    | "thread_todos"
+    | "thread_usage_lines"
+    | "thread_usage_turns",
+): Array<{ name: string }> {
+  switch (tableName) {
+    case "thread_todos":
+      return db.prepare("PRAGMA table_info(thread_todos)").all() as Array<{
+        name: string;
+      }>;
+    case "app_runtime_instances":
+      return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
+        name: string;
+      }>;
+    case "automation_runs":
+      return db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_lookup_cache":
+      return db.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_status_cache":
+      return db.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_status_watches":
+      return db.prepare("PRAGMA table_info(pr_status_watches)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_message_origins":
+      return db.prepare("PRAGMA table_info(thread_message_origins)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_pricing_summaries":
+      return db.prepare("PRAGMA table_info(thread_pricing_summaries)").all() as Array<{
+        name: string;
+      }>;
+    case "remote_thread_pins":
+      return db.prepare("PRAGMA table_info(remote_thread_pins)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_search_fts":
+      return db.prepare("PRAGMA table_info(thread_search_fts)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_usage_lines":
+      return db.prepare("PRAGMA table_info(thread_usage_lines)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_usage_turns":
+      return db.prepare("PRAGMA table_info(thread_usage_turns)").all() as Array<{
+        name: string;
+      }>;
+  }
+}

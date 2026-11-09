@@ -102,12 +102,22 @@ module.exports = {
       },
     },
     {
+      name: "sqlite-storage-only-imports-storage-contracts",
+      severity: "error",
+      comment:
+        "Profile SQLite schema, migrations and stores depend only on shared contracts and storage-agnostic owner ports, never hosts or transports.",
+      from: { path: "^packages/sqlite-storage/" },
+      to: {
+        path: "^(@pwragent/(?!sqlite-storage(?:/|$)|shared(?:/|$)|owner-core(?:/|$))|pwragent(?:/|$)|packages/(?!sqlite-storage/|shared/|owner-core/))",
+      },
+    },
+    {
       name: "owner-core-has-no-storage-format-dependencies",
       severity: "error",
       comment: "Owner storage ports cannot reach host stores, SQLite or file-format modules.",
       from: { path: "^packages/owner-core/" },
       to: {
-        path: "^apps/desktop/src/main/state/|(?:^|/)(?:better-sqlite3|sqlite3|sql\\.js|yaml|js-yaml|toml|smol-toml|json5|jsonfile|write-file-atomic)(?:/|$)|\\.(?:json|jsonl|yaml|yml|toml)$",
+        path: "^(?:apps/desktop/src/main/state/|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))|(?:^|/)(?:better-sqlite3|sqlite3|sql\\.js|yaml|js-yaml|toml|smol-toml|json5|jsonfile|write-file-atomic)(?:/|$)|\\.(?:json|jsonl|yaml|yml|toml)$",
       },
     },
     {
@@ -117,8 +127,15 @@ module.exports = {
         "The Outpost can bundle reusable owner libraries, but cannot depend on messaging provider adapters.",
       from: { path: "^packages/pwragent/" },
       to: {
-        path: "^(@pwragent/(?!shared(?:/|$)|federation(?:/|$)|agent-tools(?:/|$)|messaging-interface(?:/|$)|owner-core(?:/|$))|packages/(?!pwragent/|shared/|federation/|agent-tools/|messaging/interface/|owner-core/))",
+        path: "^(@pwragent/(?!shared(?:/|$)|federation(?:/|$)|agent-tools(?:/|$)|messaging-interface(?:/|$)|owner-core(?:/|$)|sqlite-storage(?:/|$))|packages/(?!pwragent/|shared/|federation/|agent-tools/|messaging/interface/|owner-core/|sqlite-storage/))",
       },
+    },
+    {
+      name: "outpost-application-storage-is-private",
+      severity: "error",
+      comment: "Only the bundle's host binding opens profile storage; Outpost application modules receive handle-free services.",
+      from: { path: "^packages/pwragent/src/(?!federation-core\\.ts$)" },
+      to: { path: "^(?:packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))|(?:^|/)better-sqlite3(?:/|$)" },
     },
     {
       name: "outpost-workspace-imports-use-bundle-entry",
@@ -226,7 +243,7 @@ module.exports = {
         path: "^apps/desktop/src/main/(?!__tests__/|state/|storage/)",
       },
       to: {
-        path: "^apps/desktop/src/main/state/",
+        path: "^(?:apps/desktop/src/main/(?:state/|storage/(?:state-db|app-runtime-instance-store|thread-todo-store|thread-review-storage-sqlite|model-settings-recents-store|overlay-store-sqlite|thread-search-store|provider-thread-snapshot-store|automation-store|scheduled-thread-action-store|scheduled-thread-action-payload-store|durable-turn-request-store|acp-session-store|acp-available-commands-store|messaging-pairing-store|messaging-activity-log|operator-request-store|token-miser-storage-sqlite|acp-agent-store|messaging-request-store|messaging-store-sqlite|federation-store|thread-sandbox-store)\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
       },
     },
     {

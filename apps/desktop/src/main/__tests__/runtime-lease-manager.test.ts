@@ -6,6 +6,7 @@ import {
 } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import fc from "fast-check";
 
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
@@ -56,6 +57,27 @@ afterEach(() => {
 });
 
 describe("RuntimeLeaseManager", () => {
+  it("keeps a thread owner's claim across any number of federation service stops", () => {
+    fc.assert(fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 30 }), commands => {
+      const db = openInMemoryStateDb({ profileName: "dev" });
+      const storage = new AppRuntimeInstanceStore(db);
+      const owner = new RuntimeLeaseManager({ instanceId: "owner", processId: 100, startedAt: 1_000,
+        profileName: "dev", store: storage, systemBootedAt: 0, now: () => 2_000, runtimeIdentityIsAlive: () => true });
+      const challenger = new RuntimeLeaseManager({ instanceId: "challenger", processId: 200, startedAt: 1_000,
+        profileName: "dev", store: storage, systemBootedAt: 0, now: () => 2_000, runtimeIdentityIsAlive: () => true });
+      try {
+        expect(owner.acquire("federation", "thread_owner").acquired).toBe(true);
+        for (const enabled of commands) {
+          if (enabled) owner.acquire("federation");
+          owner.release("federation");
+          expect(challenger.acquire("federation").acquired).toBe(false);
+        }
+        owner.release("federation", "thread_owner");
+        expect(challenger.acquire("federation").acquired).toBe(true);
+      } finally { db.close(); }
+    }), { numRuns: 30 });
+  });
+
   it("uses one process registration for every profile runtime", () => {
     const manager = createManager({
       instanceId: "instance-a",

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { StateDb } from "../state/state-db";
+import type { StateDb } from "./state-db";
 
 const CACHE_META_KEY = "codex_environment_hydration_cache_v1";
 const MAX_CACHE_ENTRIES = 100;

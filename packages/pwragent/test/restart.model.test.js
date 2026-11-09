@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { restartAfterCompletedTurn } from "./helpers.js";
+import { restartAfterCompletedTurn, runCompletedTurn } from "./helpers.js";
 
 function* interleave(left, right) {
   if (!left.length || !right.length) {
@@ -75,5 +75,37 @@ test("restart preserves the completion invariant for every observation ordering"
 test("an unsuccessful or uncertain turn does not satisfy a completed-turn restart", async () => {
   for (const outcome of ["failed", "interrupted", "blocked", "unknown"]) {
     await runRestartModel(["result", "persist", "complete"], outcome);
+  }
+});
+
+test("a tool result cannot admit the next turn before its owning job completes", async () => {
+  const turn = { threadId: "messaging-thread", turnId: "messaging-turn" };
+  for (const commands of interleave(["persist", "complete"], ["poll", "poll", "poll"])) {
+    const model = { toolResult: false, persisted: false, completed: false, nextTurn: false };
+    const h = { rpc: async (method) => {
+      assert.equal(method, "list");
+      return [
+        { ...turn, turnId: "earlier-turn", status: "completed" },
+        { ...turn, threadId: "different-thread", status: "completed" },
+        { ...turn, status: model.completed ? "completed" : "running" },
+      ];
+    } };
+    const wait = async (check) => {
+      for (const command of [...commands, "poll"]) {
+        if (command === "persist") model.persisted = true;
+        if (command === "complete") model.completed = true;
+        if (command === "poll" && await check()) return;
+        assert.equal(model.nextTurn, false);
+      }
+      assert.fail("the workflow never observed its completed turn");
+    };
+    const result = await runCompletedTurn(h, async () => {
+      model.toolResult = true;
+      return turn;
+    }, wait);
+    model.nextTurn = true;
+    assert.ok(model.toolResult && model.persisted && model.completed,
+      "the workflow admitted its next turn before the owning job completed");
+    assert.equal(result, turn);
   }
 });
