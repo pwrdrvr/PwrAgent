@@ -37,9 +37,16 @@ test("accepts duplicate steering once and retains the active turn until provider
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       const request = { backend: "codex" as const, threadId: turn.threadId, expectedTurnId: turn.turnId,
         requestId: "steer-once", input: [{ type: "text" as const, text: "Course correct once" }] };
-      return await Promise.all(Array.from({ length: 3 }, () => api.steerTurn!(request)));
+      const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+      const refused = await api.steerTurn!({ ...request, delivery: "now" }).then(() => undefined, errorMessage);
+      const accepted = await Promise.all(Array.from({ length: 3 }, () => api.steerTurn!(request)));
+      const changed = await api.steerTurn!({ ...request, input: [{ type: "text", text: "Changed input" }] })
+        .then(() => undefined, errorMessage);
+      return { refused, accepted, changed };
     }, turn);
-    expect(results).toEqual(Array(3).fill({ backend: "codex", ...turn, disposition: "steered" }));
+    expect(results.refused).toContain("cannot interrupt a running response");
+    expect(results.accepted).toEqual(Array(3).fill({ backend: "codex", ...turn, disposition: "steered" }));
+    expect(results.changed).toContain("reused with different input");
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     for (const step of fixture.steps.slice(activeIndex + 2)) {
       if (step.kind === "notification") await app.advance({ stepId: step.id });
