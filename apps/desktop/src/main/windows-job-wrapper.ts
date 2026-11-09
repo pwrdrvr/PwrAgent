@@ -19,6 +19,7 @@ const READY_FILE_ENV = "PWRAGENT_JOB_WRAPPER_READY_FILE";
 const EXIT_FILE_ENV = "PWRAGENT_JOB_WRAPPER_EXIT_FILE";
 const STARTED_AT_ENV = "PWRAGENT_JOB_WRAPPER_STARTED_AT";
 const STARTUP_STATUS_FILE_ENV = "PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE";
+const TERMINATE_DESCENDANTS_ENV = "PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS";
 const BASH_EXIT_TRAP =
   "trap 'pwragent_exit=$?; trap - EXIT; set +e; pwragent_exit_file=$(/usr/bin/cygpath.exe -u \"$PWRAGENT_JOB_WRAPPER_EXIT_FILE\"); if [ -n \"$pwragent_exit_file\" ]; then printf \"%s\" \"$pwragent_exit\" > \"$pwragent_exit_file\"; fi; exit \"$pwragent_exit\"' EXIT";
 
@@ -38,12 +39,14 @@ $readyFile = [string]$env:PWRAGENT_JOB_WRAPPER_READY_FILE
 $exitFile = [string]$env:PWRAGENT_JOB_WRAPPER_EXIT_FILE
 $startupStartedAt = [long]$env:PWRAGENT_JOB_WRAPPER_STARTED_AT
 $startupStatusFile = [string]$env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE
+$terminateDescendants = $env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -eq '1'
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_EXECUTABLE -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENTS -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_CWD -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_READY_FILE -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTED_AT -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS -ErrorAction SilentlyContinue
 
 function Write-StartupPhase {
   param(
@@ -228,6 +231,9 @@ public static class PwrAgentWindowsJobRunner
     private static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -330,7 +336,8 @@ public static class PwrAgentWindowsJobRunner
         string workingDirectory,
         string readyFile,
         string startupStatusFile,
-        long startupStartedAt)
+        long startupStartedAt,
+        bool terminateDescendants)
     {
         WriteStartupPhase(startupStatusFile, startupStartedAt, "native-job-started");
         IntPtr job = CreateJobObject(IntPtr.Zero, null);
@@ -442,6 +449,17 @@ public static class PwrAgentWindowsJobRunner
             {
                 ThrowLastWin32Error("WaitForSingleObject");
             }
+            WriteStartupPhase(startupStatusFile, startupStartedAt, "target-exited");
+            // Finite native builds can leave toolchain servers running. Their
+            // driver has finished; retire only this Job's descendants, then
+            // confirm kernel drain before its caller can remove build files.
+            if (terminateDescendants && ReadActiveProcessCount(job) > 0)
+            {
+                if (!TerminateJobObject(job, 0))
+                {
+                    ThrowLastWin32Error("TerminateJobObject");
+                }
+            }
             while (ReadActiveProcessCount(job) > 0)
             {
                 Thread.Sleep(10);
@@ -482,7 +500,8 @@ try {
     $workingDirectory,
     $readyFile,
     $startupStatusFile,
-    $startupStartedAt)
+    $startupStartedAt,
+    $terminateDescendants)
   if (Test-Path -LiteralPath $exitFile) {
     $reportedExitCode = 0
     if ([int]::TryParse(
@@ -716,6 +735,9 @@ export function wrapCommandInWindowsJob(params: {
   command: string;
   cwd?: string;
   env: NodeJS.ProcessEnv;
+  // Only finite drivers whose own exit means completion. A launcher handoff
+  // (for example Git-for-Windows Bash) must keep the default natural drain.
+  terminateDescendantsOnExit?: boolean;
 }): WindowsJobWrappedCommand {
   const stateDirectory = mkdtempSync(
     path.join(os.tmpdir(), "pwragent-windows-job-"),
@@ -779,6 +801,7 @@ export function wrapCommandInWindowsJob(params: {
       [EXIT_FILE_ENV]: exitFilePath,
       [STARTED_AT_ENV]: String(startupStartedAt),
       [STARTUP_STATUS_FILE_ENV]: startupStatusFilePath,
+      [TERMINATE_DESCENDANTS_ENV]: params.terminateDescendantsOnExit ? "1" : "0",
     },
     readyFilePath,
     startupStartedAt,
