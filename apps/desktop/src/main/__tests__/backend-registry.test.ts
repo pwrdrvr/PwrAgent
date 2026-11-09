@@ -16047,6 +16047,79 @@ describe("DesktopBackendRegistry", () => {
     await assertAcceptedThreadCreationSurvives("codex", "workspace");
   });
 
+  async function assertCreationVisibilityUsesSavedParent(backend: AppServerBackendKind, parentBackend: AppServerBackendKind,
+    failure: "write" | "notification" | "none" | "unsupported", explicitParentBackend: boolean): Promise<void> {
+    const temp = createTempStateDb("pwragent-creation-parent-visibility-");
+    const db = StateDb.open(temp.dbPath);
+    const overlayStore = new SqliteOverlayStore(db);
+    const parentId = "same:parent";
+    const threadId = "new:thread";
+    const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-creation-parent-visibility-project"));
+    const directoryKey = `directory:${directoryPath}`;
+    await overlayStore.setThreadPin({ backend: parentBackend, threadId: parentId, pinnedRank: "1024" });
+    await overlayStore.setSubthreadsCollapsed({ backend: parentBackend, parentThreadId: parentId, collapsed: true });
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], startThreadResult: { threadId } }),
+      overlayStore, threadTitleGenerationService: null });
+    const internal = registry as unknown as {
+      claudeBackend: { startThread: () => Promise<{ threadId: string }> };
+      startAcpSession: () => Promise<{ threadId: string }>;
+      emit: (event: AgentEvent) => Promise<void>;
+    };
+    if (backend === "claude") vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId });
+    if (backend.startsWith("acp:")) vi.spyOn(internal, "startAcpSession").mockResolvedValue({ threadId });
+    registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({ backend: "all", fetchedAt: 1000, firstSnapshot: false,
+      directoryOverlayByKey: { [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } },
+      overlayByThreadKey: { [buildThreadIdentityKey(parentBackend, parentId)]: (await overlayStore.getThreadOverlayState({ backend: parentBackend, threadId: parentId }))! },
+      previousKnownThreadKeys: [buildThreadIdentityKey(parentBackend, parentId)],
+      threads: [{ id: parentId, title: "Pinned parent", titleSource: "explicit", source: parentBackend, updatedAt: 1000,
+        linkedDirectories: [{ id: directoryKey, kind: "local", label: "project", path: directoryPath }] }], unchanged: false,
+    }));
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    if (failure === "write") vi.spyOn(overlayStore, "setThreadParent").mockRejectedValueOnce(new Error("parent write refused"));
+    if (failure === "unsupported") Object.defineProperty(overlayStore, "setThreadParent", { value: undefined });
+    if (failure === "notification") {
+      const emit = internal.emit.bind(registry);
+      vi.spyOn(internal, "emit").mockImplementation(async (event) => {
+        if (event.notification.method === "thread/parent/set") throw new Error("parent notification refused");
+        await emit(event);
+      });
+    }
+    try {
+      const response = await registry.startThread({ backend, cwd: directoryPath, parentThreadId: parentId,
+        ...(explicitParentBackend || parentBackend !== backend ? { parentThreadBackend: parentBackend } : {}) });
+      const saved = await overlayStore.getThreadOverlayState({ backend, threadId });
+      const parent = await overlayStore.getThreadOverlayState({ backend: parentBackend, threadId: parentId });
+      // Storage owns the relationship. A root needs its own pin; a saved child
+      // needs the pinned parent's tray, even if announcing that write failed.
+      const isChild = Boolean(saved?.parentThreadId);
+      expect(isChild).toBe(failure === "none" || failure === "notification");
+      expect(Boolean(saved?.pinnedRank)).toBe(!isChild);
+      expect(Boolean(response.pinnedRank)).toBe(!isChild);
+      expect(parent?.subthreadsCollapsed).toBe(!isChild);
+      expect(events.filter((event) => event.notification.method === "thread/parent/set")).toHaveLength(failure === "none" ? 1 : 0);
+      expect(response).toMatchObject({ backend, threadId });
+    } finally {
+      await registry.close();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }
+
+  it("finalizes creation visibility from the persisted parent relationship", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi"),
+      fc.constantFrom<AppServerBackendKind>("codex", "claude"), fc.constantFrom("write" as const, "notification" as const, "none" as const, "unsupported" as const),
+      fc.boolean(), assertCreationVisibilityUsesSavedParent), { numRuns: 25 });
+  });
+
+  it("pins an unparented root after its requested parent write rejects", async () => {
+    await assertCreationVisibilityUsesSavedParent("codex", "codex", "write", false);
+  });
+
+  it("reveals a committed parent's tray when its notification rejects", async () => {
+    await assertCreationVisibilityUsesSavedParent("codex", "codex", "notification", false);
+  });
+
   it.each([true, false])("uses a directory disclosure changed after its navigation snapshot (collapsed: %s)", async (collapsed) => {
     const directoryPath = expectedDir(
       path.join(os.tmpdir(), "pwragent-auto-pin-disclosure-project"),
