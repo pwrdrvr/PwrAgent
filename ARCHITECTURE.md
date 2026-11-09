@@ -280,6 +280,22 @@ helper execution, model resolution, diagnostics and the existing sub-agent and
 usage persistence effects. Completion waits for all admitted work, including
 work admitted by a preceding title event.
 
+Outpost now supplies the same title lifecycle with its existing Codex client's
+structured title helper. The accepted first-turn event retains the immediate
+prompt fallback and admits one helper attempt; duplicate observations do not
+run it again. The naming lifecycle protects explicit renames while a helper is
+pending. The client selects an offered helper model, uses an ephemeral scratch
+thread with hooks, notifications, project instructions and MCP tools disabled,
+and cleans it up without adding it to job or navigation inventories. Outpost's
+host policy explicitly sets approval `never` and read-only sandboxing on both
+primary and legacy helper creation and on its turn. Shutdown settles admitted
+title work before closing owner storage. Unsupported providers gain no execution.
+
+Outpost's real job turn path also uses shared turn-start admission after native
+thread preparation, rechecking a handoff lock before inference. Its durable job
+acceptance, fingerprint and confirmed thread/turn outcomes remain host effects;
+the lifecycle adds no retry identity or replay after restart.
+
 Steer-request admission lives in `owner-core/thread-steering-lifecycle.ts`.
 It qualifies request ids by backend, thread and expected turn, fences changed
 input/origin/delivery, and shares completion across concurrent retries. Provider

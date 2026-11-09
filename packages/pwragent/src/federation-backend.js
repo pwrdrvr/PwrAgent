@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { buildThreadIdentityKey, isAppServerBackendKind, NavigationQueryStore, ThreadNamingLifecycle, projectProviderThreadSummary, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
+import { ThreadTitleGenerationService, ThreadTitleLifecycle } from "../dist/federation-core.js";
 
 // The owner methods this outpost serves. Each one's capability comes from the
 // shared owner contract, so a grant means the same here as on desktop.
@@ -84,6 +85,21 @@ export class HeadlessBackend {
       },
       now: () => Date.now(),
     });
+    const titleGeneration = new ThreadTitleGenerationService({ generators: {
+      codex: { generateTitle: params => runtime.codex.generateTitle(params) },
+    } });
+    this.titles = new ThreadTitleLifecycle(this.naming, {
+      canGenerateTitle: backend => backend === "codex" && !runtime.stopping && typeof runtime.codex?.generateTitle === "function",
+      generateTitle: params => titleGeneration.generateTitle(params),
+      readTitle: async ({ threadId }) => {
+        const thread = this.threads.get(threadId);
+        return thread && !thread.archived ? this.summary(thread) : undefined;
+      },
+      // Outpost has no desktop helper cards or accounting storage. The Codex
+      // client owns ephemeral execution, isolation, model selection and cleanup.
+      prepareHelper: async () => {}, persistHelper: async () => {}, log: () => {},
+    });
+    runtime.settleTitles = () => this.titles.whenSettled();
     runtime.ownsThread = (id) => this.threads.has(id) && !this.threads.get(id).archived;
     runtime.threadCwd = (id) => this.owned(id).cwd || runtime.workspace;
     runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
@@ -201,7 +217,12 @@ export class HeadlessBackend {
   event(message) {
     if (["thread/started", "thread/name/updated", "thread/archived", "thread/unarchived", "turn/completed"].includes(message.method)) this.providerMutationVersion++;
     if (message.method === "headless/turnStarted") {
-      this.titleFromFirstPrompt(message.params);
+      const { threadId, jobId, prompt } = message.params;
+      const earlier = [...this.runtime.store.jobs.values()].some(job => job.threadId === threadId && job.id !== jobId && job.turnId);
+      if (!earlier) {
+        this.deriveTitle(threadId, prompt);
+        this.titles.schedule({ backend: "codex", threadId, input: [{ type: "text", text: prompt }] });
+      }
       return;
     }
     if (message.method === "headless/jobChanged") {
@@ -410,20 +431,12 @@ export class HeadlessBackend {
     this.invalidate(thread.id, "thread/name/updated");
   }
 
-  // The outpost has no helper model, so a thread is named as desktop first
-  // names one: the shortened first user message. Any rename wins over it.
+  // Retain the immediate prompt/read fallback while the shared helper runs.
   deriveTitle(id, text) {
     const thread = this.threads.get(id);
     if (!thread || thread.archived || thread.titleSource !== "fallback" || typeof text !== "string") return;
     const title = shortenDerivedThreadTitle(text)?.slice(0, 200);
     if (title) this.setTitle(thread, title, "derived");
-  }
-
-  titleFromFirstPrompt({ threadId, jobId, prompt }) {
-    // A later turn is not the first message. readThread names that thread
-    // from Codex's preview instead.
-    const earlier = [...this.runtime.store.jobs.values()].some((job) => job.threadId === threadId && job.id !== jobId && job.turnId);
-    if (!earlier) this.deriveTitle(threadId, prompt);
   }
 
   async materializeLaunchpad(params, envelope) {

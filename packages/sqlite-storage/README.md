@@ -470,3 +470,24 @@ models cover acceptance through confirmed thread/turn and terminal boundaries,
 backend collisions, live canonical facts, atomic refusal and late confirmation.
 Actual desktop/enrolled-daemon conformance, supported Electron and the installed
 native package exercise retained reads without replaying accepted work.
+
+Outpost's accepted first turns now use the shared title admission/generation
+and naming lifecycles with the existing Codex structured helper. The immediate
+prompt title retains its existing boundary; an acknowledged helper title uses
+the same owner metadata port. Ephemeral helper threads, prompts and responses
+never become job records or provider inventory. Explicit renames win over late
+helper results; rejected or invalid helpers retain the prompt fallback.
+Outpost's host policy sets approval `never` and a read-only sandbox on primary
+and legacy helper starts and helper turns, without activating another provider.
+
+`outpost-title-lifecycle.property.test.ts` exercises generated completion,
+duplicate observation, explicit rename and handoff-lock orders through actual
+Outpost classes. Actual desktop/enrolled-daemon conformance runs both hosts'
+real structured helper client. Supported Electron and the offline installed
+native package verify title handover and unchanged accepted job identities.
+The separate `outpost-title-write-budgets.json` measures the new acknowledged
+helper title as one commit/one statement/one changed row/12,360 observed WAL
+bytes: about 1.236 MB/day at 100 new-thread titles/day. The immediate fallback
+retains its existing one commit/12,360 bytes; 1,000 repeated turn observations
+and owner reads make zero commits. Admission and shutdown add no write or timer.
+The inherited default budget and conformance baseline remain byte-identical.

@@ -1,5 +1,6 @@
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
+import { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -99,8 +100,10 @@ async function startDesktopOwner(
   prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
   claudeOptions?: (workspace: string) => NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["claudeBackendOptions"],
   profileRoot?: string,
+  protocolHelperTitle?: string,
 ): Promise<OwnerHost> {
   OwnerConformanceCodexTransport.reset();
+  OwnerConformanceCodexTransport.helperTitle = protocolHelperTitle;
   const workspace = profileRoot ? path.join(profileRoot, "w") : await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
   const { dbPath, tempDir } = profileRoot
     ? { dbPath: path.join(profileRoot, "profiles/t/state/state.db"), tempDir: path.join(profileRoot, "desktop") }
@@ -125,7 +128,8 @@ async function startDesktopOwner(
     ...(profileRoot ? { retainedOwnerThreadStorage: new RetainedOwnerThreadStore(db, path.join(profileRoot, "profiles/t/state/headless")) } : {}),
     ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
     ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
-    threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
+    threadTitleGenerationService: protocolHelperTitle ? new ThreadTitleGenerationService({ generators: { codex: codexClient } }) : threadTitleGenerationService,
+    pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
   const scheduler = new ScheduledThreadActionService({ registry, store: new ScheduledThreadActionStore(db) });
@@ -294,6 +298,43 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("both actual owners name first turns through the supported restricted Codex helper without exposing ephemeral threads", async () => {
+    const title = "Repair login regression";
+    const desktop = await startDesktopOwner(null, undefined, undefined, undefined, title);
+    const outpost = await startOutpostDaemon({ capabilities: VIEWER_CAPABILITIES });
+    await writeFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "helper-title.json"), JSON.stringify({ title }));
+    try {
+      for (const host of [desktop, outpost]) {
+        const ref = { backend: "codex" as const, threadId: (await host.client.startThread({ backend: "codex", cwd: host.workspace })).threadId };
+        const first = await host.client.startTurn({ ...ref, input: [{ type: "text", text: "Please fix the login test" }] });
+        await vi.waitFor(async () => expect((await host.client.resolveThread(ref)).thread).toMatchObject({ title, titleSource: "derived" }));
+        await vi.waitFor(async () => expect((await host.client.readThread(ref)).replay.lastAssistantMessage).toBe("Fixture result"));
+        await host.client.renameThread({ ...ref, name: "Operator title" });
+        await host.client.startTurn({ ...ref, input: [{ type: "text", text: "A later message" }] });
+        expect((await host.client.resolveThread(ref)).thread).toMatchObject({ title: "Operator title", titleSource: "explicit" });
+        const listing = await host.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", query: { kind: "lens", lens: "inbox" } });
+        expect(listing.entries?.map(entry => entry.row.id)).toEqual([ref.threadId]);
+        expect(first.turnId).not.toMatch(/^helper/);
+      }
+      const desktopCalls = OwnerConformanceCodexTransport.requests;
+      const outpostCalls = readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8").trim().split("\n")
+        .map(line => JSON.parse(line) as { method: string; params?: Record<string, unknown> });
+      for (const calls of [desktopCalls, outpostCalls]) {
+        const helpers = calls.filter(call => call.method === "thread/start" && call.params?.ephemeral === true);
+        expect(helpers).toHaveLength(1);
+        expect(helpers[0].params).toMatchObject({ config: {
+          project_doc_max_bytes: 0, features: { hooks: false }, notify: [],
+        } });
+        expect(helpers[0].params?.dynamicTools).toBeUndefined();
+        expect(calls.filter(call => call.method === "thread/unsubscribe")).toHaveLength(1);
+      }
+      expect(outpostCalls.find(call => call.method === "thread/start" && call.params?.ephemeral === true)?.params)
+        .toMatchObject({ approvalPolicy: "never", sandbox: "read-only" });
+      expect(outpostCalls.find(call => call.method === "turn/start" && String(call.params?.threadId).startsWith("helper-"))?.params)
+        .toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false } });
+    } finally { await outpost.close(); await desktop.close(); }
+  });
+
 
   it("projects canonical title provenance until a confirmed native name changes", async () => {
     await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), fc.constantFrom("pending", "acknowledged", "external"), async (suffix, state) => {

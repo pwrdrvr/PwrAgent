@@ -1,0 +1,5 @@
+{
+  "helper-title": {"commits": 1, "note": "One acknowledged helper title through actual shared naming and owner metadata; no helper job or transcript persistence", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "prompt-fallback": {"commits": 1, "note": "Existing immediate first-prompt title boundary; setup and job acceptance excluded", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "repeated-title-reads": {"commits": 0, "note": "1000 repeated accepted-turn observations and owner reads; helper admission remains process-local", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

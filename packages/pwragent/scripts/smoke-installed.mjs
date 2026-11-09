@@ -94,6 +94,7 @@ try {
   assert.equal(status.running.version, manifest.version);
   assert.equal(status.restartRequired, false);
   const prompt = path.join(temporary, "prompt.txt");
+  writeFileSync(path.join(data, "helper-title.json"), JSON.stringify({ title: "Packed helper title" }));
   writeFileSync(prompt, "packed-install");
   await command(["submit", "--id", "smoke", "--prompt-file", prompt, "--sandbox", "workspace-write"]);
   assert.equal(JSON.parse(await command(["wait", "--id", "smoke"])).status, "completed");
@@ -111,7 +112,9 @@ try {
   assert.equal(JSON.parse(await command(["show", "--id", "smoke"])).status, "completed");
   await command(["submit", "--id", "smoke", "--prompt-file", prompt, "--sandbox", "workspace-write"]);
   const calls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-  assert.equal(calls.filter((call) => call.method === "turn/start").length, 1);
+  assert.equal(calls.filter((call) => call.method === "turn/start").length, 2, "one user turn and one ephemeral title helper; no replay after restart");
+  assert.equal(calls.filter((call) => call.method === "thread/start" && call.params.ephemeral === true).length, 1);
+  assert.equal(calls.filter((call) => call.method === "thread/unsubscribe").length, 1);
   await stop(daemon);
   // Actual profile discovery must work from the installed bundle with no
   // provider process or retained Claude inventory.
@@ -129,6 +132,7 @@ try {
   const profile = openOutpostProfileRuntime({ stateDirectory: state, profileName: "t", cwd: workspace });
   try {
     const store = new JobStore(headless, { version: 1, workspace, codexHome }, profile);
+    assert.equal(store.threadRegistry.getThreadMetadata({ backend: "codex", threadId: store.get("smoke").threadId }).title.text, "Packed helper title");
     const owner = new HeadlessBackend({ workspace, store, projects: { list: () => [] }, onFailure(error) { throw error; } }, () => {});
     const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref: { backend: "claude", threadId: claudeId } });
     assert.equal(detail.identity, "archived");

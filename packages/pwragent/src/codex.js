@@ -77,7 +77,8 @@ export class Codex extends CodexAppServerClient {
   constructor({ command, home, workspace, onNotification, onRequest, onFailure, timeout = 30000 }) {
     const transport = new OutpostCodexTransport({ command, home, workspace, onFailure,
       onUnexpectedExit: () => {} });
-    super({ env: { ...process.env, CODEX_HOME: home }, requestTimeoutMs: timeout }, {
+    super({ env: { ...process.env, CODEX_HOME: home }, requestTimeoutMs: timeout,
+      helperExecutionPolicy: { approvalPolicy: "never", sandbox: "read-only" } }, {
       createTransport: (callbacks) => { transport.onUnexpectedExit = callbacks.onUnexpectedExit; return transport; },
       clientInfo: { name: "pwragent-headless", title: "PwrAgent Headless" },
       onRequestFailure: (error) => {

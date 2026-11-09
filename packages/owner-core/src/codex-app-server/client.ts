@@ -339,6 +339,8 @@ const PASSIVE_CODEX_REQUESTS = new Set([
 ]);
 
 export type CodexClientOptions = {
+  /** A host can constrain ephemeral helpers independently of interactive turns. */
+  helperExecutionPolicy?: { approvalPolicy: "never"; sandbox: "read-only" };
   /** The host admits ownership before a mutating protocol request. */
   assertOwnerAdmission?: () => void;
   authenticationRecovery?: boolean;
@@ -11444,6 +11446,7 @@ export class CodexAppServerClient {
               serviceTier: null,
               ephemeral: true,
               config: helperConfig,
+              ...this.options.helperExecutionPolicy,
               ...(params.dynamicTools ? { dynamicTools: params.dynamicTools } : {}),
             },
             protocolCompatibility,
@@ -11458,6 +11461,7 @@ export class CodexAppServerClient {
               serviceTier: null,
               ephemeral: true,
               config: legacyHelperConfig,
+              ...this.options.helperExecutionPolicy,
               ...(params.dynamicTools ? { dynamicTools: params.dynamicTools } : {}),
             },
             protocolCompatibility,
@@ -11523,6 +11527,8 @@ export class CodexAppServerClient {
               model: helperModel,
               serviceTier: null,
               reasoningEffort: helperReasoningEffort,
+              ...this.options.helperExecutionPolicy,
+              ...(this.options.helperExecutionPolicy ? { sandboxPolicy: this.buildSandboxPolicy(this.options.helperExecutionPolicy.sandbox, helperWorkspaceDir) } : {}),
               ...(params.schema
                 ? {
                     outputSchema:

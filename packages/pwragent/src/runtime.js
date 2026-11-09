@@ -5,6 +5,7 @@ import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMes
 import { Codex } from "./codex.js";
 import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
+import { ThreadTurnStartLifecycle } from "../dist/federation-core.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
@@ -23,6 +24,14 @@ export class Runtime {
     this.toolLedgerCount = readdirSync(this.toolLedgerDirectory).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).length;
     this.loadedThreads = new Set();
     this.onFailure = onFailure;
+    this.turnStarts = new ThreadTurnStartLifecycle({
+      assertAvailable: () => { if (this.stopping) throw new Error("Daemon is stopping"); },
+      withMutation: async (_identity, work) => await work(),
+      assertUnlocked: async ({ threadId }) => {
+        if (this.threadLocked?.(threadId)) throw new Error("Thread handoff is in progress");
+      },
+      wake: async () => {},
+    });
     this.codex = new Codex({
       command, home, workspace,
       onNotification: (message) => { this.notification(message); this.onEvent?.(message); },
@@ -134,12 +143,12 @@ export class Runtime {
     this.loadedThreads.add(result.threadId);
     this.save({ ...this.store.get(job.id), threadId: result.threadId,
       ...(!job.threadId ? { messagingFileTools: true } : {}) });
-    const turn = await this.codex.startTurn({ ...params, threadId: result.threadId,
+    const turn = await this.turnStarts.run({ backend: "codex", threadId: result.threadId }, () => this.codex.startTurn({ ...params, threadId: result.threadId,
       onTerminalResult: (params) => this.notification({ method: "turn/completed", params }),
       input: [{ type: "text", text: prompt }],
       ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
       ...(job.serviceTier ? { serviceTier: job.serviceTier } : {}),
-    });
+    }));
     if (typeof turn.turnId !== "string" || !turn.turnId || turn.turnId.length > 256 || turn.turnId.startsWith("pending:")) {
       this.onFailure(new Error("Codex returned an invalid turn ID; execution outcome is unknown"));
       return;
@@ -258,6 +267,7 @@ export class Runtime {
     this.stopping = true;
     await this.codex.stop();
     await this.work;
+    await this.settleTitles?.();
     if (this.active) this.finish(this.active, "unknown", "Daemon stopped; inspect the thread before explicitly continuing");
   }
 }
