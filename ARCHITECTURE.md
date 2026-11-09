@@ -430,8 +430,17 @@ before releasing them. Desktop supplies its existing defaults to the same
 owner-core runtime lease manager. Both use the existing profile marker format
 and file heartbeat; no SQLite heartbeat is introduced. The Outpost bundle
 externalizes its own pinned native SQLite dependency, and its application code
-receives only a shutdown port. Desktop's runtime gates observe the same lease
+receives shutdown and handle-free owner storage ports. Desktop's runtime gates observe the same lease
 rows; configured enablement remains separate from effective runtime ownership.
+Outpost's production jobs and thread registry now use that same database. The
+shared v81 migration adds owner-job acceptance/outcome metadata; existing thread
+overlays remain the canonical metadata registry. Its first start validates host
+identity, backs up legacy jobs and threads, imports both in one FULL-durability
+transaction, then retires matching JSON files. A committed manifest makes partial
+retirement restartable without reimport or replay. Active jobs become unknown.
+Private identity, projects, tools and intake ledgers stay host-owned. Outpost
+reads retained provider inventory independently of canonical metadata; SQLite
+contains no provider transcript or prompt text.
 Shared `ThreadTodoStore` and `SqliteThreadReviewStorage` implement owner-core
 ports through private desktop bindings at the existing runtime construction
 sites. The model-settings-recents helper is shared by to-do dispatch and the

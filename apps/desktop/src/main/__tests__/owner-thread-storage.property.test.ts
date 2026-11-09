@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb } from "./sqlite-test-utils";
+import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 
 type Fixture = {
   registry: OwnerThreadRegistry;
@@ -30,11 +31,15 @@ function desktop(): Fixture {
 async function outpost(): Promise<Fixture> {
   const url = pathToFileURL(path.join(process.cwd(), "packages/pwragent/src/federation-backend.js")).href;
   const { HeadlessBackend } = await import(/* @vite-ignore */ url);
-  const directory = mkdtempSync(path.join(os.tmpdir(), "owner-storage-json-"));
-  const runtime = { workspace: directory, store: { directory: path.join(directory, "jobs"), jobs: new Map() },
+  const root = mkdtempSync(path.join(os.tmpdir(), "owner-storage-sqlite-"));
+  const directory = path.join(root, "headless");
+  mkdirSync(directory, { mode: 0o700 });
+  const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+  const storage = profile.openOwnerStorage(directory, { version: 1, workspace: root, codexHome: path.join(root, "codex") });
+  const runtime = { workspace: root, store: { directory: path.join(directory, "jobs"), jobs: new Map(), threadRegistry: storage.threads },
     onFailure(error: unknown) { throw error; } };
   const open = () => new HeadlessBackend(runtime, () => {}).threadRegistry as OwnerThreadRegistry;
-  return { registry: open(), reopen: open, close() { rmSync(directory, { recursive: true, force: true }); } };
+  return { registry: open(), reopen: open, close() { profile.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
 const identity: OwnerThreadIdentity = { backend: "codex", threadId: "thread-a" };
@@ -51,11 +56,11 @@ const patch: fc.Arbitrary<OwnerThreadMetadataPatch> = fc.record({
   archived: optional(fc.boolean()), archivedAt: optional(timestamp), restoredAt: optional(timestamp),
   archiveRetentionStartedAt: optional(timestamp),
   parent: optional(fc.record({ backend: fc.constantFrom("codex" as const, "claude" as const), threadId: fc.string(), instanceId: fc.string() })),
-  subthreadOrder: optional(fc.array(fc.string(), { maxLength: 5 })), subthreadsCollapsed: optional(fc.boolean()),
+  subthreadOrder: optional(fc.array(fc.string(), { maxLength: 5 })), subthreadsCollapsed: optional(fc.boolean()), messagingFileTools: optional(fc.boolean()),
 });
 
 /** One contract, run against each real durable implementation. */
-for (const [name, create] of [["desktop SQLite", desktop], ["Outpost JSON", outpost]] as const) {
+for (const [name, create] of [["desktop SQLite", desktop], ["Outpost profile SQLite", outpost]] as const) {
   describe(`owner storage contract: ${name}`, () => {
     it("matches a metadata map after arbitrary patches and reopen, without aliasing", async () => {
       await fc.assert(fc.asyncProperty(fc.array(fc.record({
@@ -148,33 +153,16 @@ it("preserves SQLite host metadata and isolates identical IDs on different provi
   } finally { fixture.close(); }
 });
 
-it("reads native Outpost fields, preserves job/tool data and rolls back a failed persist", async () => {
-  const url = pathToFileURL(path.join(process.cwd(), "packages/pwragent/src/owner-thread-registry.js")).href;
-  const { OutpostThreadRegistry } = await import(/* @vite-ignore */ url);
-  const native = { id: identity.threadId, title: "Native", titleSource: "derived", sandbox: "workspace-write",
-    seenAt: 20, seenUpdatedAt: 10, archived: true, messagingFileTools: true, jobId: "job-a" };
-  const threads = new Map<string, Record<string, unknown>>([[identity.threadId, native]]);
-  let persists = 0;
-  let fail = false;
-  const registry: OwnerThreadRegistry = new OutpostThreadRegistry({ threads, persist() {
-    if (fail) throw new Error("fixture write failed");
-    persists++;
-  } });
-  expect(await registry.getThreadMetadata(identity)).toEqual({ ...identity, executionMode: "auto",
-    title: { text: "Native", source: "derived" }, seenAt: 20, seenUpdatedAt: 10, archived: true });
-  await registry.updateThreadMetadata(identity, { pinnedRank: "a0" });
-  expect(threads.get(identity.threadId)).toMatchObject({ messagingFileTools: true, jobId: "job-a", sandbox: "workspace-write" });
-  await registry.updateThreadMetadata(identity, { pinnedRank: "a0" });
-  await registry.listThreadMetadata();
-  expect(persists).toBe(1);
-  const before = await registry.getThreadMetadata(identity);
-  fail = true;
-  await expect(registry.updateThreadMetadata(identity, { title: { text: "Failed", source: "explicit" } })).rejects.toThrow("fixture write failed");
-  expect(await registry.getThreadMetadata(identity)).toEqual(before);
-  const missing = { ...identity, threadId: "missing" };
-  await expect(registry.updateThreadMetadata(missing, {})).rejects.toThrow("fixture write failed");
-  expect(await registry.getThreadMetadata(missing)).toBeUndefined();
-  await expect(registry.getThreadMetadata({ ...identity, backend: "claude" })).rejects.toThrow("Codex threads only");
+it("preserves Outpost tool metadata across canonical reopen", async () => {
+  const fixture = await outpost();
+  try {
+    const registry = fixture.registry;
+    await registry.updateThreadMetadata(identity, { title: { text: "Native", source: "derived" }, executionMode: "auto",
+      seenAt: 20, seenUpdatedAt: 10, archived: true, messagingFileTools: true });
+    await registry.updateThreadMetadata(identity, { pinnedRank: "a0" });
+    expect(await fixture.reopen().getThreadMetadata(identity)).toMatchObject({ messagingFileTools: true, executionMode: "auto", pinnedRank: "a0" });
+    await expect(registry.getThreadMetadata({ ...identity, backend: "claude" })).rejects.toThrow("Codex threads only");
+  } finally { fixture.close(); }
 });
 
 it("budgets one atomic metadata command and zero writes for unchanged facts and reads", async () => {

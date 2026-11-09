@@ -74,7 +74,7 @@ it("measures the actual Outpost binding lifecycle and one idle hour separately f
   try {
     const lifecycle = await measureSqliteWrites(async () => {
       const runtime = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
-      expect(Object.keys(runtime)).toEqual(["close"]);
+      expect(Object.keys(runtime)).toEqual(["close", "openOwnerStorage"]);
       const idle = await measureSqliteWrites(() => vi.advanceTimersByTime(3_600_000));
       expectSqliteWriteBudget({ scenario: "outpost-idle-hour", note: "One idle hour, profile markers refreshed; no SQLite heartbeat", budgetFile, writes: idle.writes });
       expect(store.getFederationLease()?.status).toBe("active");

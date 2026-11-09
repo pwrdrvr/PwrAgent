@@ -70,7 +70,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
   try {
     writeFileSync(lock, JSON.stringify({ pid: process.pid }) + "\n");
     profileRuntime = openOutpostProfileRuntime({ stateDirectory: path.dirname(directory), profileName: profile, cwd: workspace });
-    const store = new JobStore(directory, { version: 1, workspace, codexHome: home });
+    const store = new JobStore(directory, { version: 1, workspace, codexHome: home }, profileRuntime);
     runtime = new Runtime({ store, workspace, home, command,
       onFailure: (error) => { console.error(`Headless runtime stopped: ${error.message}`); void stop(error); } });
     process.on("SIGTERM", signalStop);

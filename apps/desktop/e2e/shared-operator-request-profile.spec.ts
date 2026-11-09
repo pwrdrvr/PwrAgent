@@ -5,7 +5,7 @@ import { operatorQuestionItemKey } from "@pwragent/shared";
 import { OperatorRequestStore, OPERATOR_REQUEST_RETENTION_MS } from "@pwragent/sqlite-storage/operator-request-store";
 import { ThreadTodoStore } from "@pwragent/sqlite-storage/thread-todo-store";
 import { SqliteThreadReviewStorage } from "@pwragent/sqlite-storage/thread-review-storage-sqlite";
-import { StateDb } from "@pwragent/sqlite-storage/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "@pwragent/sqlite-storage/state-db";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -81,7 +81,7 @@ test("desktop preserves portable pending questions and old open-work seen marks 
       for (const key of [pendingKey, siblingKey, ...cardKeys]) {
         expect(raw.prepare("SELECT seen_at FROM operator_seen_items WHERE item_key = ?").pluck().get(key)).toBe(old);
       }
-      expect(raw.prepare("PRAGMA user_version").pluck().get()).toBe(80);
+      expect(raw.prepare("PRAGMA user_version").pluck().get()).toBe(CURRENT_STATE_DB_USER_VERSION);
     } finally { raw.close(); }
     await app.closeApplication();
     const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));

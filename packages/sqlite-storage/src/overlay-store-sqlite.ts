@@ -1540,16 +1540,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   async getThreadMetadata(identity: OwnerThreadIdentity): Promise<OwnerThreadRecord | undefined> {
+    return this.readOwnerThreadMetadata(identity);
+  }
+
+  readOwnerThreadMetadata(identity: OwnerThreadIdentity): OwnerThreadRecord | undefined {
     const state = this.getThread(buildThreadIdentityKey(identity.backend, identity.threadId));
     return state ? ownerThreadRecord(state) : undefined;
   }
 
   async listThreadMetadata(): Promise<OwnerThreadRecord[]> {
+    return this.readOwnerThreadMetadataList();
+  }
+
+  readOwnerThreadMetadataList(): OwnerThreadRecord[] {
     const rows = this.stateDb.raw.prepare("SELECT payload FROM threads ORDER BY thread_id").all() as { payload: string }[];
     return rows.map((row) => ownerThreadRecord(JSON.parse(row.payload)));
   }
 
+  readUnreadBaseline(): Readonly<Record<string, number>> {
+    return structuredClone(this.readNavigationUnreadBaseline()?.seenUpdatedAt ?? {});
+  }
+
   async updateThreadMetadata(identity: OwnerThreadIdentity, patch: OwnerThreadMetadataPatch): Promise<OwnerThreadRecord> {
+    return this.mergeOwnerThreadMetadata(identity, patch);
+  }
+
+  mergeOwnerThreadMetadata(identity: OwnerThreadIdentity, patch: OwnerThreadMetadataPatch): OwnerThreadRecord {
     return this.stateDb.raw.transaction(() => {
       const key = buildThreadIdentityKey(identity.backend, identity.threadId);
       const current = this.getThread(key);
@@ -11272,6 +11288,7 @@ function isStampFresh(stored: number | undefined, next: number): boolean {
 }
 
 type OwnerThreadOverlay = ThreadOverlayState & {
+  messagingFileTools?: boolean;
   archived?: boolean;
   title?: string;
   titleSource?: AppServerThreadTitleSource;
@@ -11291,6 +11308,7 @@ const OWNER_OVERLAY_FIELDS = [
   ["archivedAt", "archiveTombstonedAt"], ["restoredAt", "archiveRestoredAt"],
   ["archiveRetentionStartedAt", "archiveRetentionStartedAt"],
   ["subthreadOrder", "subthreadOrder"], ["subthreadsCollapsed", "subthreadsCollapsed"],
+  ["messagingFileTools", "messagingFileTools"],
 ] as const;
 
 function ownerThreadRecord(state: OwnerThreadOverlay): OwnerThreadRecord {

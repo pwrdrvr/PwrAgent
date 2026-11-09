@@ -14,7 +14,7 @@ test("the actual daemon owns the shared profile leases and retires them on grace
   assert.ok(existsSync(file), "a running Outpost must open the profile's shared state.db");
   const db = new Database(file, { readonly: true });
   t.after(() => db.close());
-  assert.equal(db.pragma("user_version", { simple: true }), 80);
+  assert.equal(db.pragma("user_version", { simple: true }), 81);
   const owner = db.prepare("SELECT * FROM app_runtime_instances WHERE process_id = ? AND exited_at IS NULL").get(h.daemon.pid);
   assert.ok(owner, "the running daemon must register its real process identity");
   assert.match(owner.instance_id, /^runtime-v2-/);
@@ -56,16 +56,15 @@ for (const held of ["profile-federation", "profile-messaging"]) {
     const markers = path.join(state, "runtime-instances");
     mkdirSync(markers, { recursive: true });
     writeFileSync(path.join(markers, `${process.pid}-${identity.instanceId}.json`), JSON.stringify({ ...identity, heartbeatAt: Date.now() }));
-    const jobFile = path.join(h.directory, "jobs/retained.json");
-    const job = JSON.parse(readFileSync(jobFile, "utf8"));
-    writeFileSync(jobFile, JSON.stringify({ ...job, status: "running" }));
-    const priorJob = readFileSync(jobFile, "utf8");
+    db.prepare("UPDATE owner_jobs SET payload = json_set(payload, '$.status', 'running') WHERE job_id = ?").run("retained");
+    const readJob = () => db.prepare("SELECT payload FROM owner_jobs WHERE job_id = ?").get("retained").payload;
+    const priorJob = readJob();
     const priorCalls = h.calls();
     const challenger = h.launch(h.serveArgs);
     assert.equal((await challenger.done).code, 1);
     assert.match(challenger.errors, /profile.*lease.*held/i);
     assert.deepEqual(h.calls(), priorCalls, "refusal must precede even provider initialization");
-    assert.equal(readFileSync(jobFile, "utf8"), priorJob, "refusal must precede restart recovery");
+    assert.equal(readJob(), priorJob, "refusal must precede restart recovery");
     assert.equal(existsSync(path.join(h.directory, "owner.lock")), false);
     assert.equal(db.prepare("SELECT owner_instance_id FROM messaging_runtime_lease WHERE lease_key = ? AND status = 'active'").get(held).owner_instance_id,
       identity.instanceId);

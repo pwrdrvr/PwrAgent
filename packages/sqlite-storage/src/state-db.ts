@@ -1,3 +1,4 @@
+import { OWNER_JOB_SCHEMA } from "./owner-job-schema";
 import { removeUsageActivityIndex } from "./usage-activity-index";
 import fs from "node:fs";
 import path from "node:path";
@@ -38,7 +39,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 80;
+export const CURRENT_STATE_DB_USER_VERSION = 81;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2176,6 +2177,14 @@ export class StateDb {
           db.pragma("user_version = 80");
         }).immediate();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 81) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 81) return;
+          db.exec(OWNER_JOB_SCHEMA);
+          db.pragma("user_version = 81");
+        }).immediate();
+      }
+      db.exec(OWNER_JOB_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);

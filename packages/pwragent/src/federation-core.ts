@@ -40,13 +40,21 @@ import {
   isProfileRuntimeIdentityLive,
 } from "@pwragent/sqlite-storage/profile-runtime-markers";
 import { RuntimeLeaseManager } from "@pwragent/owner-core/runtime-lease-manager";
+import { adoptOutpostOwnerData } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
+import type { OwnerJobStorage } from "@pwragent/owner-core/owner-job-storage";
+import type { ImmediateOwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
+import type { ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
+import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
+export { outpostThreadMetadata, outpostThreadProjection } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
 
-/** Outpost's private host binding. Application code receives only shutdown. */
+type OutpostOwnerStorage = { threads: ImmediateOwnerThreadRegistry; jobs: OwnerJobStorage; inventory: ProviderThreadSnapshotStorage };
+
+/** Outpost's private host binding. Application code receives only storage ports. */
 export function openOutpostProfileRuntime(params: {
   stateDirectory: string;
   profileName: string;
   cwd: string;
-}): { close(): void } {
+}): { close(): void; openOwnerStorage(directory: string, identity: { version: 1; workspace: string; codexHome: string }): OutpostOwnerStorage } {
   if (!path.isAbsolute(params.stateDirectory) || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(params.profileName)) {
     throw new Error("Outpost requires an absolute profile state directory and a valid profile name");
   }
@@ -84,7 +92,28 @@ export function openOutpostProfileRuntime(params: {
         throw new Error(`Profile ${kind} lease is held by another runtime (${result.holder.instanceId}); stop that owner before starting Outpost`);
       }
     }
-    return { close };
+    return { close, openOwnerStorage(directory, ownerIdentity) {
+      if (closed) throw new Error("Outpost profile storage is closed");
+      if (path.resolve(directory) !== path.join(params.stateDirectory, "headless") || ownerIdentity.workspace !== params.cwd) {
+        throw new Error("Outpost owner storage must belong to the admitted profile and workspace");
+      }
+      const storage = adoptOutpostOwnerData(db, directory, ownerIdentity);
+      const inventory = new ProviderThreadSnapshotStore(db);
+      // Do not expose concrete stores, constructors or the database indirectly.
+      return {
+        threads: {
+          getThreadMetadata: identity => storage.threads.readOwnerThreadMetadata(identity),
+          listThreadMetadata: () => storage.threads.readOwnerThreadMetadataList(),
+          updateThreadMetadata: (identity, patch) => storage.threads.mergeOwnerThreadMetadata(identity, patch),
+          readUnreadBaseline: () => storage.threads.readUnreadBaseline(),
+        },
+        jobs: {
+          get: id => storage.jobs.get(id), list: () => storage.jobs.list(), count: () => storage.jobs.count(),
+          save: job => storage.jobs.save(job),
+        },
+        inventory: { list: () => inventory.list(), replace: snapshot => inventory.replace(snapshot) },
+      };
+    } };
   } catch (error) {
     close();
     throw error;

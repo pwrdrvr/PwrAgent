@@ -25,8 +25,10 @@ test("real CLI submits once, disconnects, reads results and explicitly continues
   await assert.rejects(h.submit("first", "different"), /different input/);
   assert.equal((await h.rpc("read", { id: "first" })).thread.turns.length, 1);
   assert.equal(statSync(h.directory).mode & 0o777, 0o700);
-  assert.equal(statSync(path.join(h.directory, "jobs/first.json")).mode & 0o777, 0o600);
-  assert.ok(!readFileSync(path.join(h.directory, "jobs/first.json"), "utf8").includes("hello"));
+  assert.equal(existsSync(path.join(h.directory, "jobs/first.json")), false);
+  const reader = new Database(path.join(path.dirname(h.directory), "state.db"), { readonly: true });
+  try { assert.ok(!reader.prepare("SELECT payload FROM owner_jobs WHERE job_id = ?").get("first").payload.includes("hello")); }
+  finally { reader.close(); }
   assert.equal((await h.stop(h.daemon)).code, 0);
   await h.start();
   assert.equal((await h.rpc("show", { id: "first" })).status, "completed");
@@ -44,7 +46,7 @@ test("acceptance survives a socket disappearing before the response", { timeout 
   const socket = net.createConnection(path.join(h.directory, "rpc.sock"));
   await new Promise((resolve) => socket.once("connect", resolve));
   socket.write(JSON.stringify({ version: 1, method: "submit", params: { id: "lost-client", prompt: "hello" } }) + "\n");
-  await eventually(() => existsSync(path.join(h.directory, "jobs/lost-client.json")));
+  await eventually(async () => (await h.rpc("list")).some(job => job.id === "lost-client"));
   socket.destroy();
   assert.equal((await h.finished("lost-client")).status, "completed");
   await h.submit("lost-client", "hello");

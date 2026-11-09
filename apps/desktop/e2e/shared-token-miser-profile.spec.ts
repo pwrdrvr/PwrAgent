@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { SqliteTokenMiserStorage } from "@pwragent/sqlite-storage/token-miser-storage-sqlite";
-import { StateDb } from "@pwragent/sqlite-storage/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "@pwragent/sqlite-storage/state-db";
 import { TokenMiserStore } from "../src/main/token-miser/token-miser-store";
 import type { TokenMiserCodeModeObservation, TokenMiserObjectMetadata } from "../src/main/token-miser/token-miser-types";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
@@ -78,7 +78,7 @@ test("desktop's real usage service sees portable accounting and later WAL commit
         .toEqual({ generation: "portable-archive", archived: 1 });
       expect(raw.prepare("SELECT value FROM meta WHERE key = ?").pluck()
         .get(`token_miser_files_migrated:${createHash("sha256").update(directory).digest("hex")}`)).toBe("complete");
-      expect(raw.prepare("PRAGMA user_version").pluck().get()).toBe(80);
+      expect(raw.prepare("PRAGMA user_version").pluck().get()).toBe(CURRENT_STATE_DB_USER_VERSION);
     } finally { raw.close(); }
     await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
     await app.closeApplication();

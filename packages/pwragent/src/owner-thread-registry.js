@@ -1,68 +1,59 @@
-import { patchOwnerThreadMetadata } from "../dist/federation-core.js";
+import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection } from "../dist/federation-core.js";
 
-const FIELDS = [
-  ["archived", "archived"],
-  ["model", "model"], ["reasoningEffort", "reasoningEffort"], ["serviceTier", "serviceTier"], ["fastMode", "fastMode"],
-  ["executionModeUpdatedAt", "executionModeUpdatedAt"], ["reasoningEffortsByModel", "reasoningEffortsByModel"],
-  ["modelMigrationRevision", "modelMigrationRevision"], ["modelSettingsManuallyUpdatedAt", "modelSettingsManuallyUpdatedAt"],
-  ["createdAt", "createdAt"], ["updatedAt", "updatedAt"], ["cwd", "cwd"],
-  ["pinnedRank", "pinnedRank"], ["seenAt", "seenAt"], ["seenUpdatedAt", "seenUpdatedAt"],
-  ["archivedAt", "archivedAt"], ["restoredAt", "restoredAt"],
-  ["archiveRetentionStartedAt", "archiveRetentionStartedAt"],
-  ["subthreadOrder", "subthreadOrder"], ["subthreadsCollapsed", "subthreadsCollapsed"],
-];
-
-/** Storage view over the backend's live threads.json map; no lifecycle calls. */
+/** Codex host projection over the profile's canonical owner storage port. */
 export class OutpostThreadRegistry {
-  constructor(backend) {
-    this.backend = backend;
+  constructor(storage, inventory) {
+    this.storage = storage;
+    this.unreadBaseline = storage?.readUnreadBaseline?.() ?? {};
+    // Provider discovery is separate from owner metadata. Retain the last
+    // complete provider inventory, with canonical owner facts read live.
+    this.inventory = new Map((inventory?.list() ?? []).filter(snapshot => snapshot.backend === "codex")
+      .flatMap(snapshot => snapshot.threads).map(thread => [thread.id, thread]));
   }
 
   identity(identity) {
     if (identity.backend !== "codex") throw new Error("This outpost stores Codex threads only");
   }
 
-  record(thread) {
-    const patch = {
-      executionMode: thread.sandbox === "workspace-write" ? "auto" : thread.sandbox === "danger-full-access" ? "full-access" : "default",
-      title: thread.title === undefined ? undefined : { text: thread.title, source: thread.titleSource ?? "fallback" },
-      parent: thread.parentThreadId !== undefined ? { backend: thread.parentThreadBackend ?? "codex", threadId: thread.parentThreadId,
-        ...(thread.parentThreadInstanceId !== undefined ? { instanceId: thread.parentThreadInstanceId } : {}) } : undefined,
-    };
-    for (const [field, stored] of FIELDS) patch[field] = thread[stored];
-    return patchOwnerThreadMetadata(undefined, { backend: "codex", threadId: thread.id }, patch);
+  async getThreadMetadata(identity) { this.identity(identity); return this.storage.getThreadMetadata(identity); }
+  async listThreadMetadata() { return this.storage.listThreadMetadata().filter(record => record.backend === "codex"); }
+  async updateThreadMetadata(identity, patch) { this.identity(identity); return this.storage.updateThreadMetadata(identity, patch); }
+
+  seenWatermark(thread) {
+    return thread.seenUpdatedAt ?? this.unreadBaseline[buildThreadIdentityKey("codex", thread.id)] ?? thread.seenAt ?? 0;
   }
 
-  async getThreadMetadata(identity) {
-    this.identity(identity);
-    const thread = this.backend.threads.get(identity.threadId);
-    return thread ? this.record(thread) : undefined;
+  get(id) {
+    const record = this.storage.getThreadMetadata({ backend: "codex", threadId: id });
+    return this.project(id, record, this.inventory.get(id));
   }
 
-  async listThreadMetadata() {
-    return [...this.backend.threads.values()].map((thread) => this.record(thread));
-  }
-
-  async updateThreadMetadata(identity, patch) {
-    this.identity(identity);
-    const thread = this.backend.threads.get(identity.threadId);
-    const current = thread ? this.record(thread) : undefined;
-    const next = patchOwnerThreadMetadata(current, identity, patch);
-    if (!current || JSON.stringify(current) !== JSON.stringify(next)) {
-      const stored = { ...thread, id: identity.threadId, title: next.title?.text, titleSource: next.title?.source,
-        sandbox: next.executionMode === "auto" ? "workspace-write" : next.executionMode === "full-access" ? "danger-full-access" : "read-only",
-        parentThreadId: next.parent?.threadId, parentThreadBackend: next.parent?.backend,
-        parentThreadInstanceId: next.parent?.instanceId };
-      for (const [field, key] of FIELDS) stored[key] = structuredClone(next[field]);
-      // Keep the live registry unchanged if the durable write fails.
-      this.backend.threads.set(identity.threadId, stored);
-      try { this.backend.persist(); }
-      catch (error) {
-        if (thread) this.backend.threads.set(identity.threadId, thread);
-        else this.backend.threads.delete(identity.threadId);
-        throw error;
-      }
+  project(id, record, native) {
+    if (!record && !native) return undefined;
+    const thread = record ? outpostThreadProjection(record) : { id };
+    const projected = { ...(native ? { id, title: native.title, titleSource: native.titleSource,
+      createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path,
+      archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
+      sandbox: native.executionMode === "auto" ? "workspace-write" : "read-only", model: native.model,
+      reasoningEffort: native.reasoningEffort, serviceTier: native.serviceTier, fastMode: native.fastMode } : {}),
+      ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)) };
+    if (projected.title === undefined) {
+      projected.title = "Untitled thread";
+      projected.titleSource = "fallback";
     }
-    return next;
+    return projected;
+  }
+
+  has(id) { return this.get(id) !== undefined; }
+  get size() { return [...this.values()].length; }
+  values() {
+    const records = this.storage.listThreadMetadata().filter(record => record.backend === "codex");
+    const byId = new Map(records.map(record => [record.threadId, record]));
+    const ids = new Set([...this.inventory.keys(), ...byId.keys()]);
+    return [...ids].map(id => this.project(id, byId.get(id), this.inventory.get(id))).values();
+  }
+  set(id, thread) {
+    if (id !== thread.id) throw new Error("Thread registry identity changed");
+    this.storage.updateThreadMetadata({ backend: "codex", threadId: id }, outpostThreadMetadata(thread));
   }
 }

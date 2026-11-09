@@ -39,7 +39,7 @@ export async function restartAfterCompletedTurn(h, turn, wait = eventually) {
   return h.start();
 }
 
-export async function setup(t) {
+export async function setup(t, options = {}) {
   // The daemon refuses a socket path over 100 bytes (the Unix sun_path
   // limit), and the socket sits 35 bytes below this root. A root inside the
   // checkout fails in long checkouts such as Sandboxer's ~/pwragent/wt/<sha>,
@@ -81,6 +81,7 @@ export async function setup(t) {
     }
     rmSync(root, { recursive: true, force: true });
   });
+  await options.beforeStart?.({ directory, workspace, home });
   const daemon = await start();
   const rpc = (method, params) => call(directory, method, params);
   const submit = (id, prompt, extra = {}) => rpc("submit", { id, prompt, ...extra });
