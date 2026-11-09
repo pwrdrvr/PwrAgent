@@ -8,6 +8,8 @@ import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/
 
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
 
+// These properties construct the executable Runtime, whose private directories
+// support Linux/macOS. Shared creation/turn coordinator models remain cross-platform.
 async function fixture(work: (runtime: any, backend: any, store: any, root: string) => Promise<void>) {
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-lifecycle-")));
@@ -22,7 +24,7 @@ async function fixture(work: (runtime: any, backend: any, store: any, root: stri
   } finally { profile.close(); rmSync(root, { recursive: true, force: true }); }
 }
 
-it("native creation acceptance survives each independent host failure and keeps the provider identity", async () => {
+it.skipIf(process.platform === "win32")("native creation acceptance survives each independent host failure and keeps the provider identity", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom("metadata", "event"), fc.boolean(), async (failure, diagnosticsThrow) => {
     await fixture(async (runtime, backend) => {
       const calls: string[] = [];
@@ -41,7 +43,7 @@ it("native creation acceptance survives each independent host failure and keeps 
   }), { numRuns: 12 });
 });
 
-it("durable job acceptance and provider outcomes survive generated observer failures and completion orderings without replay", async () => {
+it.skipIf(process.platform === "win32")("durable job acceptance and provider outcomes survive generated observer failures and completion orderings without replay", async () => {
   await fc.assert(fc.asyncProperty(
     fc.constantFrom("acceptance", "thread", "running", "title", "terminal", "none"),
     fc.constantFrom("before-response", "during-finalization", "after-response"), fc.constantFrom("completed", "failed", "interrupted"),
@@ -95,7 +97,7 @@ it("durable job acceptance and provider outcomes survive generated observer fail
   ), { numRuns: 30 });
 });
 
-it("a refused confirmed-turn write preserves confirmed identity as unknown and never resubmits accepted input", async () => {
+it.skipIf(process.platform === "win32")("a refused confirmed-turn write preserves confirmed identity as unknown and never resubmits accepted input", async () => {
   await fc.assert(fc.asyncProperty(fc.boolean(), async early => {
     await fixture(async (runtime, _backend, store) => {
       let submissions = 0;

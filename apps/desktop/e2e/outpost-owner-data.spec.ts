@@ -25,6 +25,7 @@ test.beforeAll(() => {
 });
 
 test("an Outpost shared helper title reaches the actual desktop renderer and survives owner handover without replay", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
   const ref = { backend: "codex" as const, threadId: "thread-smoke" };
   const title = "Replay smoke thread";

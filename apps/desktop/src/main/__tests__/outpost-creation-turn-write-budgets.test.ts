@@ -10,7 +10,8 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
 const budgetFile = "outpost-creation-turn-write-budgets.json";
 
-it("budgets shared actual native creation and accepted turn boundaries including observer and confirmation refusals", async () => {
+// This budget measures the Linux/macOS executable Runtime, not a portable host.
+it.skipIf(process.platform === "win32")("budgets shared actual native creation and accepted turn boundaries including observer and confirmation refusals", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-lifecycle-writes-")));
