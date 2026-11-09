@@ -28,6 +28,9 @@ import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
+import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
+import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 import { OwnerConformanceCodexTransport } from "./fixtures/owner-conformance-codex-transport";
 import {
   compareStep,
@@ -104,6 +107,9 @@ async function startDesktopOwner(
     threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
+  const scheduler = new ScheduledThreadActionService({ registry, store: new ScheduledThreadActionStore(db) });
+  registry.setScheduledThreadActionCreator((request, options) => scheduler.create(request, options));
+  scheduler.start();
   // A running desktop has reconciled its window's full navigation snapshot
   // before any viewer connects. Until then it puts no thread in Inbox.
   await overlayStore.reconcileNavigationSnapshot({ backend: "all", fetchedAt: Date.now(),
@@ -130,6 +136,9 @@ async function startDesktopOwner(
   router.registerConnection({ peerId: "viewer", capabilities: VIEWER_CAPABILITIES,
     sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
   const backend = new DesktopFederationRuntime().localBackend();
+  // Bind the production admission path to this owner's real scheduler/store;
+  // the app's process singleton belongs to an initialized desktop profile.
+  backend.steerTurn = (request) => admitSteerTurn(registry, scheduler, request);
   registerFederationBackendHandlers({ router, backend });
   rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "desktop-owner", defaultTimeoutMs: 5000,
     sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
@@ -138,6 +147,7 @@ async function startDesktopOwner(
     local: new LocalOwnerNavigationTransport(backend),
     close: async () => {
       stopEvents();
+      scheduler.dispose();
       await registry.close();
       await codexClient.close();
       desktopOwner.registry = undefined;
@@ -323,6 +333,41 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await desktop.close();
     }
   });
+
+  it("keeps generated steering responses equal and coalesces desktop retries at the provider boundary", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const hosts = [desktop, outpost];
+      const turns = await Promise.all(hosts.map(async (host) => {
+        const { threadId } = await host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto" });
+        return await host.client.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "slow" }] });
+      }));
+      const commands = fc.sample(fc.record({ copies: fc.integer({ min: 2, max: 6 }), text: fc.string({ maxLength: 30 }) }), 8);
+      for (const [i, command] of commands.entries()) {
+        const requests = turns.map((turn) => ({ backend: "codex" as const, threadId: turn.threadId,
+          expectedTurnId: turn.turnId, requestId: `steer-${i}`, input: [{ type: "text" as const, text: `Steer ${command.text}` }] }));
+        const before = OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/steer").length;
+        const [desktopResults, outpostResult] = await Promise.all([
+          Promise.all(Array.from({ length: command.copies }, () => desktop.client.steerTurn(requests[0]))),
+          outpost.client.steerTurn(requests[1]),
+        ]);
+        for (const [index, results] of [[0, desktopResults], [1, [outpostResult]]] as const) {
+          for (const result of results) expect(result).toEqual({ backend: "codex", threadId: turns[index].threadId,
+            turnId: turns[index].turnId, disposition: "steered" });
+        }
+        await expect(desktop.client.steerTurn({ ...requests[0], input: [{ type: "text", text: "Changed input" }] }))
+          .rejects.toThrow("reused with different input");
+        expect(OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/steer")).toHaveLength(before + 1);
+      }
+      await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
+      await Promise.all(hosts.map(settle));
+    } finally {
+      await outpost?.close();
+      await desktop.close();
+    }
+  }, 120_000);
 
   it("keeps generated explicit rename sequences and events equal on both real owners", async () => {
     const desktop = await startDesktopOwner();

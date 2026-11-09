@@ -1,13 +1,6 @@
 import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
 
-/** Optional ancestry must not change the identity of an old peer's retry. */
-export function withoutTurnAttribution(
-  origin?: AppServerThreadMessageOrigin,
-): AppServerThreadMessageOrigin | undefined {
-  if (!origin?.sourceThread) return origin;
-  const { turnId: _turnId, rootTurnId: _rootTurnId, ...sourceThread } = origin.sourceThread;
-  return { ...origin, sourceThread };
-}
+export { withoutTurnAttribution } from "@pwragent/owner-core/thread-steering-lifecycle";
 
 /** Attribution only. Grouped work must have one exact invoking turn. */
 export function delegatedTurnAttribution(
