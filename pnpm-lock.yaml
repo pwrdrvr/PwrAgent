@@ -504,7 +504,7 @@ importers:
         version: 4.14.0
       electron:
         specifier: ^44.9.3
-        version: 44.9.3(supports-color@7.2.0)
+        version: 44.10.1(supports-color@7.2.0)
       electron-builder:
         specifier: 26.18.0
         version: 26.18.0(electron-builder-squirrel-windows@26.18.0)(supports-color@7.2.0)
@@ -667,18 +667,18 @@ importers:
 
   packages/owner-core:
     dependencies:
-      '@shutterstock/p-map-iterable':
-        specifier: ^1.2.0
-        version: 1.2.0(aggregate-error@3.1.0)
-      '@pwrdrvr/codex-app-server-protocol':
-        specifier: 0.164.0
-        version: 0.164.0
-      '@pwrdrvr/agent-transport':
-        specifier: ^0.1.7
-        version: 0.1.7
       '@pwragent/shared':
         specifier: workspace:*
         version: link:../shared
+      '@pwrdrvr/agent-transport':
+        specifier: ^0.1.7
+        version: 0.1.7
+      '@pwrdrvr/codex-app-server-protocol':
+        specifier: 0.164.0
+        version: 0.164.0
+      '@shutterstock/p-map-iterable':
+        specifier: ^1.2.0
+        version: 1.2.0(aggregate-error@3.1.0)
 
   packages/pwragent:
     dependencies:
@@ -3412,8 +3412,8 @@ packages:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
 
-  electron@44.9.3:
-    resolution: {integrity: sha512-Cv9/yMnZxNWsMlIe8T4v//NKHdUvbeyoTJoXE3BIcRxus2meeFaO9h/P3zB5d4cBXum51IgAYrT2QjpIDWKpJA==}
+  electron@44.10.1:
+    resolution: {integrity: sha512-CTqxvx02P+xCR/xUxAWBexQEJ42g9Rzy1/0N+ofGAtI/atgSYZKQnTX9/juwzftocWbZtoF2ftEGMGJujJDeBw==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -8652,7 +8652,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@44.9.3(supports-color@7.2.0):
+  electron@44.10.1(supports-color@7.2.0):
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0(supports-color@7.2.0)
