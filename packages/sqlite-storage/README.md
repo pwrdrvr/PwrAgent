@@ -87,6 +87,15 @@ retains the original explicit factory and service/backend construction sites.
 Registry cache replacement, backend identity, NOCASE ordering, JSON failure and
 legacy payload guards, SQL and write counts are unchanged.
 
+Shared generic `SqliteMessagingRequestStore` implements the existing owner-core
+request port over an injected host projection. Messaging admission, bounded
+credential-scrubbed routing snapshots and destination policy remain with the
+host. The private desktop specialization retains the original explicit factory
+and controller construction. Profile-file authority, hash inputs, immutable
+requests, monotone destination pointers, keyset pages and attachment outcomes
+preserve their SQL, transactions and write counts. No messaging-interface
+dependency enters this package.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -190,3 +199,12 @@ legacy guards, malformed/no-repair reads, detached results, atomic rollback and
 exact commit counts. Supported Electron E2E hands portable registry/agent records
 to real Settings services, observes a later portable replacement, and reads
 acknowledged updates back through portable storage after graceful shutdown.
+
+`shared-messaging-request-storage.property.test.ts` checks the actual factory's
+retained binding, arbitrary alternate-host JSON, independent identity and
+latest-human models across WAL connections/reopens, bounded keyset pages,
+copied-profile exclusion, first attachment outcomes, privacy, rollback and exact
+commits. Supported Electron E2E bundles the original factory with test-owned
+profile selection and its native dependency, observes portable provenance and
+later WAL commits, and returns immutable outcomes to Node after shutdown.
+No messaging adapter or real conversation is activated by that fixture.

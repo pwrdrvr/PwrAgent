@@ -90,6 +90,13 @@ advance this projection. A duplicate event makes no writes. Profile-file
 identity is part of the owner namespace, so copying a database into another
 profile does not transfer attachment authority.
 
+The generic SQL implementation lives in `@pwragent/sqlite-storage`. Desktop's
+private storage specialization injects `messaging-request-projection`, which
+owns event admission, credential scrubbing, the 16 KiB cap and destination
+identity. The original `createMessagingRequestStorage` factory binds it when a
+controller is constructed. Owner/application code keeps the existing generic
+storage port; the SQLite package imports no messaging-interface contracts.
+
 The host carries `causalMessagingSource` through handoffs, correspondence,
 queues, monitors and dependency continuations. The immediate origin retains its
 `agent`, `sub-agent` or `pwragent` kind. Delegation captures the source before
