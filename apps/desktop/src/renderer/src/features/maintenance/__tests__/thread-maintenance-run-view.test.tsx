@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type {
   ThreadMaintenanceProblem,
   ThreadMaintenanceRun,
@@ -182,5 +183,36 @@ describe("a parallel run's rows", () => {
     expect(within(dialog).queryByRole("region", { name: "Run progress" })).toBeNull();
     expect(dialog).toHaveTextContent("now: Thread 2");
     expect(within(dialog).getByRole("button", { name: "Stop after this item" })).toBeInTheDocument();
+  });
+
+  it("counts folder errors once beside unrelated operation and step failures", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), fc.integer({ min: 0, max: 3 }), fc.integer({ min: 0, max: 2 }),
+      async (folders, operations, stepFailures) => {
+        try {
+          const { dialog, emit } = await startRun();
+          const rows: ThreadMaintenanceRunItem[] = [{ itemId: "empty", step: "checkouts", action: "removeEmptyFolders",
+            object: "Empty worktree folders", status: "failed", reason: "Folder removal failed" }];
+          const problems: ThreadMaintenanceProblem[] = Array.from({ length: folders }, (_, index) => ({
+            step: "checkouts", kind: "failed", object: `/w/folder-${index}`, path: `/w/folder-${index}`,
+            reason: "Removal failed", detail: `Folder ${index} error`,
+          }));
+          for (let index = 0; index < operations; index++) {
+            rows.push({ itemId: `hibernate:${index}`, step: "hibernate", action: "hibernate", object: `Thread ${index}`,
+              backend: "codex", threadId: `t-${index}`, status: "failed", reason: "Hibernation failed" });
+            problems.push({ step: "hibernate", kind: "failed", object: `Thread ${index}`, backend: "codex", threadId: `t-${index}`,
+              reason: "Hibernation failed" });
+          }
+          for (let index = 0; index < stepFailures; index++) problems.push({ step: "threads", kind: "failed",
+            object: `Provider ${index}`, reason: "Provider unavailable" });
+          emit(run(rows, { running: false, finishedAt: NOW + 1000, problems }));
+          const failures = folders + operations + stepFailures;
+          expect(within(dialog).getByText(`Maintenance finished with ${failures} ${failures === 1 ? "problem" : "problems"}`))
+            .toBeInTheDocument();
+          if (folders > 3) fireEvent.click(within(dialog).getByRole("button", { name: `Show all ${folders}` }));
+          for (let index = 0; index < folders; index++) expect(dialog).toHaveTextContent(`Folder ${index} error`);
+        } finally {
+          cleanup();
+        }
+      }), { numRuns: 15 });
   });
 });

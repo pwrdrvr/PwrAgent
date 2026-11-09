@@ -791,10 +791,11 @@ export class ThreadMaintenanceService {
     const complete = (id: string, allocatedBytesRemoved?: number) => change(id, {
       status: "done", stage: undefined, finishedAt: this.now(), ...(allocatedBytesRemoved !== undefined ? { allocatedBytesRemoved } : {}),
     });
-    const addProblem = (problem: ThreadMaintenanceProblem) => {
+    const addProblem = (problem: ThreadMaintenanceProblem, itemId?: string) => {
       if (problems.length < FAILURE_LIMIT) problems.push(problem);
-      const row = rows.find((item) => item.step === problem.step && (item.status === "running" || item.status === "queued")
-        && (problem.threadId ? item.threadId === problem.threadId && item.backend === problem.backend : item.path === problem.path));
+      const row = itemId !== undefined ? rows.find((item) => item.itemId === itemId)
+        : rows.find((item) => item.step === problem.step && (item.status === "running" || item.status === "queued")
+          && (problem.threadId ? item.threadId === problem.threadId && item.backend === problem.backend : item.path === problem.path));
       if (row) change(row.itemId, { status: problem.kind, stage: undefined, reason: problem.reason, detail: problem.detail, finishedAt: this.now() });
     };
     const stopped = () => this.run?.stopRequested === true || this.abort.signal.aborted;
@@ -875,18 +876,19 @@ export class ThreadMaintenanceService {
     const hibernateStep: ThreadMaintenanceStepResult = { step: "hibernate", ran: hibernateItems.length > 0, done: 0, kept: 0, failed: 0 };
     steps.push(hibernateStep);
     if (hibernateItems.length) await runMaintenanceItems(hibernateItems, async (item, index) => {
+      const itemId = `hibernate:${index}`;
       const entry = retained.hibernate.get(keyOf(item));
       const object = entry?.row.title ?? item.threadId;
       const ids = { backend: item.backend, threadId: item.threadId, ...(entry ? { path: entry.row.worktreePath } : {}),
         ...(entry?.row.space?.allocatedBytes !== undefined ? { bytes: entry.row.space.allocatedBytes } : {}) };
       const keepIt = (reason: string, detail?: string) => {
         hibernateStep.kept += 1;
-        addProblem({ step: "hibernate", kind: "kept", object, reason, ...(detail ? { detail } : {}), ...ids });
+        addProblem({ step: "hibernate", kind: "kept", object, reason, ...(detail ? { detail } : {}), ...ids }, itemId);
       };
-      begin(`hibernate:${index}`);
+      begin(itemId);
       if (!entry || !this.deps.hibernation) {
         hibernateStep.failed += 1;
-        addProblem({ step: "hibernate", kind: "failed", object, reason: "Not in this scan", ...ids });
+        addProblem({ step: "hibernate", kind: "failed", object, reason: "Not in this scan", ...ids }, itemId);
         return;
       }
       if (archivedKeys.has(keyOf(item)) || (entry.row.archiveKey && archivedKeys.has(entry.row.archiveKey))) {
@@ -905,17 +907,17 @@ export class ThreadMaintenanceService {
         }
         const outcome = await this.deps.hibernation.hibernate(refreshed,
           retained.hibernatePolicy ?? { ...this.deps.hibernation.getPolicy(), enabled: true },
-          (stage) => change(`hibernate:${index}`, { stage }));
+          (stage) => change(itemId, { stage }));
         if (outcome === true) {
           hibernateStep.done += 1;
           if (entry.row.space?.allocatedBytes !== undefined) hibernateStep.allocatedBytesRemoved = (hibernateStep.allocatedBytesRemoved ?? 0) + entry.row.space.allocatedBytes;
-          complete(`hibernate:${index}`, entry.row.space?.allocatedBytes);
+          complete(itemId, entry.row.space?.allocatedBytes);
         }
         else keepIt(outcome === false ? "Hibernation cancelled" : outcome);
       } catch (error) {
         hibernateStep.failed += 1;
         this.deps.onError?.(error, { step: "hibernate", threadId: item.threadId });
-        addProblem({ step: "hibernate", kind: "failed", object, reason: "Hibernation failed", detail: errorMessage(error), ...ids });
+        addProblem({ step: "hibernate", kind: "failed", object, reason: "Hibernation failed", detail: errorMessage(error), ...ids }, itemId);
       }
     });
 

@@ -1484,7 +1484,10 @@ function RunView(props: {
   const items = hasRunItems(run.items) ? run.items : undefined;
   // An item row already says what happened to it; only the rest are cards.
   const problems = problemsWithoutItems(run.problems, items);
-  const failedItems = items ? runItemView(items).failed.length : 0;
+  // Empty-folder progress is one batch row; its path-specific problems
+  // below count the actual failures, rather than the batch a second time.
+  const failedItems = items ? runItemView(items).failed
+    .filter((item) => item.action !== "removeEmptyFolders" || item.path !== undefined).length : 0;
   const failed = failedItems + problems.filter((problem) => problem.kind === "failed").length;
   const done = run.steps.reduce((sum, step) => sum + step.done, 0);
   const problemCards = THREAD_MAINTENANCE_SCAN_STEPS.map((step) => (

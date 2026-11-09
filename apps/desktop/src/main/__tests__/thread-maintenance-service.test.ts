@@ -973,6 +973,49 @@ describe("hibernate idle checkouts", () => {
     }), { numRuns: 50 });
   });
 
+  it("attributes each duplicate selection's outcome to its operation while another is active", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 4 }), fc.constantFrom("done", "kept", "failed"), async (count, outcome) => {
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      let observeFailures!: () => void;
+      const failuresObserved = new Promise<void>((resolve) => { observeFailures = resolve; });
+      let failed = 0;
+      const { service, deps } = harness([candidate("same", { cwd: "/w/same" })], {
+        onError: () => { if (++failed === count - 1) observeFailures(); },
+        hibernation: hibernation({ hibernate: async () => {
+          await pending;
+          if (outcome === "failed") throw new Error("Removal failed");
+          return outcome === "done" ? true : "Fixture kept";
+        } }),
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      let refreshes = 0;
+      vi.mocked(deps.refreshCandidate).mockImplementation(async (item) => {
+        const operation = refreshes++;
+        if (operation) throw new Error(`Metadata refresh ${operation} failed`);
+        return item;
+      });
+      const run = service.start({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+        hibernate: Array.from({ length: count }, () => ({ backend: "codex", threadId: "same" })) });
+      try {
+        await failuresObserved;
+        expect(service.getRun()?.items?.map((item) => item.status)).toEqual(["running", ...Array(count - 1).fill("failed")]);
+        release();
+        const result = await run.done;
+        expect(result.items?.map((item) => ({ id: item.itemId, status: item.status, detail: item.detail })))
+          .toEqual(Array.from({ length: count }, (_, index) => ({ id: `hibernate:${index}`, status: index ? "failed" : outcome,
+            detail: index ? `Metadata refresh ${index} failed` : outcome === "failed" ? "Removal failed" : undefined })));
+        expect(result.steps.find((step) => step.step === "hibernate")).toMatchObject({
+          done: outcome === "done" ? 1 : 0, kept: outcome === "kept" ? 1 : 0, failed: count - 1 + (outcome === "failed" ? 1 : 0),
+        });
+      } finally {
+        release();
+        await run.done;
+        service.dispose();
+      }
+    }), { numRuns: 30 });
+  });
+
   it("marks threads the archive step offers, and uses hibernation's own rules even while it is off", async () => {
     const items = [
       candidate("newest", { daysIdle: 30, cwd: "/w/newest" }),
