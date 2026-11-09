@@ -659,6 +659,25 @@ describe("isAcpSessionMissingForProjectError", () => {
 });
 
 describe("AcpBackendAdapter", () => {
+  it("remembers failed ephemeral disposal after the prompt has already settled", async () => {
+    const agent = { ...buildInstalledAgent(), launchDescriptor: {
+      backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
+      command: "/fixture/gemini", args: [], env: {},
+    } };
+    const transport = new FakeAcpAgentTransport({ "session/prompt": { stopReason: "end_turn" } });
+    vi.spyOn(transport, "close").mockRejectedValue(new Error("fixture ephemeral child still running"));
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [], createAcpTransport: () => transport,
+      emit: async () => {}, handleServerRequest: async () => ({}),
+    });
+    vi.spyOn(adapter, "resolveInstalledAgent").mockResolvedValue(agent);
+    await expect(adapter.runEphemeralPrompt("acp:gemini", {
+      cwd: "/fixture", prompt: "fixture", timeoutMs: 5_000, maxOutputChars: 100,
+    })).rejects.toThrow("fixture ephemeral child still running");
+    await expect(adapter.close()).rejects.toThrow("ACP backend close failed");
+    expect(transport.close).toHaveBeenCalledOnce();
+  });
+
   it("propagates every incomplete pooled shutdown instead of reporting a successful drain", async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), async (fails) => {
       vi.useFakeTimers();

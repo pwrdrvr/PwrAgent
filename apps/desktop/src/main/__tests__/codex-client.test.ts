@@ -1525,6 +1525,10 @@ describe("CodexAppServerClient", () => {
       const before = methods();
       await expect(client.startThread({ cwd: "/fixture" })).rejects.toThrow("fixture profile owner");
       await expect(client.startTurn({ threadId: "fixture", input: [{ type: "text", text: "fixture" }] })).rejects.toThrow("fixture profile owner");
+      const connection = (client as unknown as { connection: { request(method: string): Promise<unknown> } }).connection;
+      for (const method of ["thread/resume", "thread/settings/update", "config/value/write", "turn/steer", "future/mutation"]) {
+        await expect(connection.request(method)).rejects.toThrow("fixture profile owner");
+      }
       expect(methods()).toEqual(before);
       allowed = true;
       await client.startThread({ cwd: "/fixture" });

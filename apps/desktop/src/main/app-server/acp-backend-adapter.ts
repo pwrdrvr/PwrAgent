@@ -285,6 +285,12 @@ type AcpClientEntry = {
   disposePromise?: Promise<void>;
 };
 
+type AcpEphemeralRun = {
+  drained: Promise<{ error?: unknown }>;
+  transport?: AcpJsonRpcTransport;
+  closePromise?: Promise<void>;
+};
+
 type AcpLiveTurnUsage = {
   model?: string;
   tokenUsage: AcpTokenUsage;
@@ -1223,6 +1229,9 @@ export class AcpBackendAdapter {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, AcpClientEntry>();
+  // Includes clients still initializing and clients whose disposal failed.
+  private readonly ownedAcpClients = new Map<AcpClientEntry, AcpBackendId>();
+  private readonly ephemeralRuns = new Set<AcpEphemeralRun>();
   private readonly environmentClients = new Map<string, {
     backend: AcpBackendId;
     environmentKey: string;
@@ -1337,6 +1346,7 @@ export class AcpBackendAdapter {
       options.resolveProviderDependencyFingerprint;
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient = (agent) => {
+      if (this.closed) throw new Error("ACP backend adapter is closed");
       options.assertOwnerAdmission?.();
       return options.createAcpClient?.(agent) ?? this.createDefaultClient(agent);
     };
@@ -1665,11 +1675,17 @@ export class AcpBackendAdapter {
     const client = this.createAcpClient(configuredAgent);
     const entry: AcpClientEntry = { client, launchIdentity: acpAgentLaunchIdentity(configuredAgent),
       promise: Promise.resolve(client), supportsSessionLoad: true };
+    this.ownedAcpClients.set(entry, backend);
     try {
-      await client.initialize();
-      if (client.supportsArchivedSessionRestore?.() !== true) throw new Error("This ACP provider cannot reload the archived session.");
-      await client.ensureSession(session);
-      if (this.closed) throw new Error("ACP backend adapter is closed");
+      entry.promise = (async () => {
+        await client.initialize();
+        if (this.closed) throw new Error("ACP backend adapter is closed");
+        if (client.supportsArchivedSessionRestore?.() !== true) throw new Error("This ACP provider cannot reload the archived session.");
+        await client.ensureSession(session);
+        if (this.closed) throw new Error("ACP backend adapter is closed");
+        return client;
+      })();
+      await entry.promise;
       this.environmentClients.set(key, { backend, environmentKey: previous?.environmentKey ?? "[]",
         shellEnvironment: previous?.shellEnvironment, entry });
     } catch (error) {
@@ -2083,15 +2099,19 @@ export class AcpBackendAdapter {
       promise: Promise.resolve(client),
       supportsSessionLoad: true,
     };
+    this.ownedAcpClients.set(entry, backend);
     try {
-      await client.initialize();
-      if (client.supportsSessionLoad?.() === false) {
-        throw new Error("This ACP provider cannot reload an existing session with a new environment.");
-      }
-      await client.ensureSession(session);
-      if (this.closed) {
-        throw new Error("ACP backend adapter is closed");
-      }
+      entry.promise = (async () => {
+        await client.initialize();
+        if (this.closed) throw new Error("ACP backend adapter is closed");
+        if (client.supportsSessionLoad?.() === false) {
+          throw new Error("This ACP provider cannot reload an existing session with a new environment.");
+        }
+        await client.ensureSession(session);
+        if (this.closed) throw new Error("ACP backend adapter is closed");
+        return client;
+      })();
+      await entry.promise;
     } catch (error) {
       await this.disposeAcpClient(entry);
       throw error;
@@ -2259,6 +2279,7 @@ export class AcpBackendAdapter {
       }
       return client;
     })();
+    this.ownedAcpClients.set(entry, backend);
     this.acpClients.set(backend, entry);
     entry.promise.catch(() => {
       if (this.acpClients.get(backend) === entry) {
@@ -2511,20 +2532,47 @@ export class AcpBackendAdapter {
       throw new Error("ACP backend adapter is closed");
     }
     this.options.assertOwnerAdmission?.();
-    const agent = await this.resolveInstalledAgent(backend);
-    if (!agent.launchDescriptor) {
-      throw new Error(`ACP backend ${backend} has no launch descriptor`);
-    }
-    const transport = this.createAcpTransport?.(agent)
-      ?? new AcpStdioJsonRpcTransport({
-        launchDescriptor: agent.launchDescriptor,
-        observer: createProtocolLogObserverFromEnv({ backend }),
-      });
+    const drained = Promise.withResolvers<{ error?: unknown }>();
+    const run: AcpEphemeralRun = { drained: drained.promise };
+    this.ephemeralRuns.add(run);
     try {
-      return await runAcpEphemeralPrompt(transport, request);
+      const agent = await this.resolveInstalledAgent(backend);
+      if (this.closed) throw new Error("ACP backend adapter is closed");
+      if (!agent.launchDescriptor) {
+        throw new Error(`ACP backend ${backend} has no launch descriptor`);
+      }
+      run.transport = this.createAcpTransport?.(agent)
+        ?? new AcpStdioJsonRpcTransport({
+          launchDescriptor: agent.launchDescriptor,
+          observer: createProtocolLogObserverFromEnv({ backend }),
+        });
+      if (this.closed) throw new Error("ACP backend adapter is closed");
+      return await runAcpEphemeralPrompt(run.transport, request);
     } finally {
-      await transport.close?.().catch(() => undefined);
+      await this.drainEphemeralRun(run, drained.resolve);
     }
+  }
+
+  private async drainEphemeralRun(
+    run: AcpEphemeralRun,
+    settle: (result: { error?: unknown }) => void,
+  ): Promise<void> {
+    try {
+      await this.closeEphemeralTransport(run);
+      this.ephemeralRuns.delete(run);
+      settle({});
+    } catch (error) {
+      // Keep failed cleanup visible to adapter shutdown and the profile owner.
+      settle({ error });
+      throw error;
+    }
+  }
+
+  private closeEphemeralTransport(run: AcpEphemeralRun): Promise<void> | undefined {
+    if (run.transport) {
+      run.closePromise ??= Promise.resolve().then(() => run.transport!.close?.());
+    }
+    return run.closePromise;
   }
 
   async supportsLiveWorkspaceHandoff(backend: AcpBackendId): Promise<boolean> {
@@ -2838,17 +2886,9 @@ export class AcpBackendAdapter {
       return await this.closePromise;
     }
     this.closed = true;
-    const acpClients = [
-      ...[...this.environmentClients.values()].map(
-        ({ backend, entry }): [AcpBackendId, AcpClientEntry] => [backend, entry],
-      ),
-      ...this.acpClients.entries(),
-      ...[...this.retainedAcpClients.entries()].flatMap(([backend, entries]) =>
-        [...entries].map(
-          (entry): [AcpBackendId, AcpClientEntry] => [backend, entry],
-        ),
-      ),
-    ];
+    const acpClients = [...this.ownedAcpClients].map(
+      ([entry, backend]): [AcpBackendId, AcpClientEntry] => [backend, entry],
+    );
     this.acpClients.clear();
     this.environmentClients.clear();
     this.retainedAcpClients.clear();
@@ -2885,16 +2925,26 @@ export class AcpBackendAdapter {
         }
         acpBackendAdapterLog.info("acp_client_closed", { backend });
       }),
+      ...[...this.ephemeralRuns].map(async (run) => {
+        const [closed, drained] = await Promise.allSettled([
+          this.closeEphemeralTransport(run), run.drained,
+        ]);
+        if (closed.status === "rejected") throw closed.reason;
+        if (drained.status === "rejected") throw drained.reason;
+        if (drained.value.error !== undefined) throw drained.value.error;
+      }),
       Promise.resolve().then(() => this.agentToolMcpServer?.close()),
     ];
     const cleanup = Promise.allSettled(resources).then((results) => {
+      const errors: unknown[] = [];
       for (const [index, result] of results.entries()) {
         if (result.status === "rejected") {
+          errors.push(result.reason);
           acpBackendAdapterLog.warn("acp_resource_close_failed", {
             resource:
               index < acpClients.length
                 ? acpClients[index]?.[0]
-                : "agent-tool-mcp",
+                : index < resources.length - 1 ? "ephemeral" : "agent-tool-mcp",
             error:
               result.reason instanceof Error
                 ? result.reason.message
@@ -2902,27 +2952,33 @@ export class AcpBackendAdapter {
           });
         }
       }
+      return errors;
     });
     let timer: NodeJS.Timeout | undefined;
-    const timedOut = await Promise.race([
-      cleanup.then(() => false),
-      new Promise<true>((resolve) => {
-        timer = setTimeout(() => resolve(true), this.closeTimeoutMs);
+    const errors = await Promise.race([
+      cleanup,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), this.closeTimeoutMs);
       }),
     ]);
     if (timer) {
       clearTimeout(timer);
     }
-    if (timedOut) {
+    if (!errors) {
       acpBackendAdapterLog.warn("acp_close_timed_out", {
         clientCount: acpClients.length,
         timeoutMs: this.closeTimeoutMs,
       });
+      throw new Error("ACP backend close timed out");
     }
+    if (errors.length > 0) throw new AggregateError(errors, "ACP backend close failed");
   }
 
   private disposeAcpClient(entry: AcpClientEntry): Promise<void> {
-    entry.disposePromise ??= Promise.resolve().then(() => entry.client.dispose());
+    entry.disposePromise ??= Promise.resolve().then(async () => {
+      await entry.client.dispose();
+      this.ownedAcpClients.delete(entry);
+    });
     return entry.disposePromise;
   }
 
