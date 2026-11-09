@@ -12,12 +12,13 @@ import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sql
 const oraclePath = path.join(import.meta.dirname, "fixtures/shared-sqlite-schema-oracle.json");
 const hosts = [DesktopStateDb, SharedStateDb, StateDb];
 
-function schema(db: StateDb): { sha256: string; objects: number; userVersion: number } {
-  const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all();
+function schema(db: StateDb, beforeOwnerJobs = false): { sha256: string; objects: number; userVersion: number } {
+  const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ tbl_name: string }>;
+  const compared = beforeOwnerJobs ? rows.filter(row => row.tbl_name !== "owner_jobs") : rows;
   return {
-    sha256: createHash("sha256").update(JSON.stringify(rows)).digest("hex"),
-    objects: rows.length,
-    userVersion: db.raw.pragma("user_version", { simple: true }) as number,
+    sha256: createHash("sha256").update(JSON.stringify(compared)).digest("hex"),
+    objects: compared.length,
+    userVersion: beforeOwnerJobs ? 80 : db.raw.pragma("user_version", { simple: true }) as number,
   };
 }
 
@@ -39,10 +40,11 @@ function schemaDefinition(db: StateDb): unknown {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("retains the exact pre-extraction SQLite schema, triggers, indexes and version", () => {
+it("retains the exact pre-extraction SQLite schema beneath the additive owner-job migration", () => {
   const db = openFreshStateDb(":memory:");
   try {
-    const actual = schema(db);
+    const actual = schema(db, true);
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(81);
     if (process.env.UPDATE_SHARED_SQLITE_SCHEMA_ORACLE === "1") {
       writeFileSync(oraclePath, JSON.stringify(actual, null, 2) + "\n");
     }
@@ -53,7 +55,7 @@ it("retains the exact pre-extraction SQLite schema, triggers, indexes and versio
 it("binds desktop adapters and state compatibility exports to one portable implementation", () => {
   expect(DesktopStateDb).toBe(SharedStateDb);
   expect(StateDb).toBe(SharedStateDb);
-  expect(CURRENT_STATE_DB_USER_VERSION).toBe(80);
+  expect(CURRENT_STATE_DB_USER_VERSION).toBe(81);
 });
 
 // These are old profile shapes already supported by the versioned ladder.
@@ -65,7 +67,7 @@ const upgrades = [
   { version: 74, sql: "DROP TABLE thread_reviews" },
   { version: 76, sql: "DROP TABLE thread_dependencies" },
   { version: 77, sql: "DROP INDEX idx_thread_todos_dependency; ALTER TABLE thread_todos DROP COLUMN dependency_id" },
-  { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews" },
+  { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews; DROP TABLE owner_jobs" },
 ] as const;
 
 describe.each(upgrades)("shared profile upgrade from v$version: $sql", ({ version, sql }) => {

@@ -217,13 +217,18 @@ Normal shutdown removes it. Abrupt daemon death or a cold boot can leave
 an old writer is gone. For manual recovery, stop the service, inspect the PID
 and Codex PID in `owner.lock`, and establish that the daemon and its process
 group/cgroup have exited. Only then remove those two files from this profile's
-headless directory and restart. Do not remove `identity.json` or `jobs/`, and do
-not remove `threads.json` or `federation.json`, or recover concurrently with another startup. PID reuse is a reason to inspect,
+headless directory and restart. Preserve `identity.json`, `federation.json`,
+the profile `state.db` and `legacy-owner-backup-v1/`. Do not recover concurrently with another startup. PID reuse is a reason to inspect,
 not to kill an unrelated process. Incomplete records become `unknown` at startup.
 
-State is atomically replaced and fsynced only at lifecycle boundaries (normally
-four small job writes per accepted turn), with no SQLite commits, heartbeat,
-per-event writes, or transcript log. Metadata polling does not write. Records
+Job acceptance and outcomes use FULL-durability SQLite commits at lifecycle
+boundaries (normally four job commits per accepted turn). New-thread discovery
+and first-prompt naming add two canonical metadata commits. There is no SQLite
+heartbeat, per-event write or transcript log. Metadata polling does not write.
+The first SQLite start backs up legacy threads/jobs under
+`headless/legacy-owner-backup-v1/`, imports them in one transaction and then
+retires their JSON files. Restart completes any partial retirement without
+reimporting the backups or replaying accepted work. Records
 are capped at 10,000; there is no automatic garbage collection. Prompt input is
 capped at 256 KiB and protocol responses at 32 MiB; oversized history reads fail
 explicitly. A corrupted registry fails startup rather than discarding history.
@@ -298,7 +303,7 @@ grouping, environments or provider extensions are rejected before creation.
 
 A new thread is named from its first user message, shortened the way desktop
 names a thread before any helper-model title. The outpost has no helper model.
-The name is stored in `threads.json`, and subscribed viewers receive
+The name is stored in the profile SQLite owner registry, and subscribed viewers receive
 `thread/name/updated` with `titleSource: derived`, followed by a navigation
 invalidation. A later turn never renames a thread. An explicit `renameThread`
 always wins and is never replaced. A thread that still has a placeholder name,
@@ -308,8 +313,9 @@ it is read. The outpost does not set the Codex thread name.
 ## Identity, compute lifetime and remaining scope
 
 The private `federation.json` stores the retained peer ID, signing/Noise keys,
-pinned gateway, enrollments and peer records. `threads.json` stores owned thread
-metadata. These are separate from desktop configuration and OS secret storage.
+pinned gateway, enrollments and peer records. Owned thread metadata and jobs use
+the profile state.db shared with desktop. The private host identity and transport
+keys remain separate from desktop configuration and OS secret storage.
 Provision each outpost with a dedicated root; do not clone a provisioned
 identity into another running machine or bake it into a template image.
 

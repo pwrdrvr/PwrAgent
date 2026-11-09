@@ -1,0 +1,12 @@
+{
+  "outpost-empty-adoption": {"commits": 1, "note": "One first-adoption marker; schema and identity file excluded from SQLite accounting", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "outpost-job-lifecycle": {"commits": 4, "note": "Durable acceptance, thread identity, turn identity and terminal outcome; one FULL commit per boundary", "observedWalBytes": 20600, "rowsChanged": 4, "statements": 4},
+  "outpost-job-read-reopen": {"commits": 0, "note": "1000 reads and adoption reopen/recovery; no replay or idle writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "outpost-legacy-threads-jobs-import": {"commits": 1, "note": "Two threads, two jobs, active-job recovery and the retirement marker share one FULL-durability transaction; backups and schema excluded", "observedWalBytes": 32960, "rowsChanged": 6, "statements": 6},
+  "outpost-owner-markThreadSeen": {"commits": 1, "note": "One actual owner command merges its changed facts in the canonical overlay transaction", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "outpost-owner-renameThread": {"commits": 1, "note": "One actual owner command merges its changed facts in the canonical overlay transaction", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "outpost-owner-setThreadExecutionMode": {"commits": 1, "note": "One actual owner command merges its changed facts in the canonical overlay transaction", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "outpost-owner-setThreadModelSettings": {"commits": 1, "note": "One actual owner command merges its changed facts in the canonical overlay transaction", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "outpost-runtime-new-thread-turn": {"commits": 6, "note": "Actual submit/start/completion: four job boundaries, canonical thread discovery and first-prompt title; schema/profile setup excluded", "observedWalBytes": 49440, "rowsChanged": 6, "statements": 6},
+  "outpost-streamed-events": {"commits": 0, "note": "1000 actual runtime/backend streamed notifications persist no text and make zero commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

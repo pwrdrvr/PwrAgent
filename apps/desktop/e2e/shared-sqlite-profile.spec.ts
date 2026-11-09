@@ -282,7 +282,7 @@ test("desktop upgrades a profile opened by portable SQLite and retains its owner
     // repair the profile itself and could conceal a missing Electron upgrade.
     const reader = new Database(stateDbPathForHomeRoot(app.homeRoot), { readonly: true });
     try {
-      expect(reader.pragma("user_version", { simple: true })).toBe(80);
+      expect(reader.pragma("user_version", { simple: true })).toBe(81);
       expect(reader.prepare("SELECT name FROM pragma_table_info('durable_turn_requests')").all())
         .toContainEqual({ name: "receipt_json" });
     } finally { reader.close(); }

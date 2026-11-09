@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { buildThreadIdentityKey, NavigationQueryStore, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
-import { ACTIVE, atomicJson, digest } from "./store.js";
+import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
 
 // The owner methods this outpost serves. Each one's capability comes from the
@@ -26,7 +25,6 @@ export const METHOD_CAPABILITIES = ownerMethodCapabilities(OWNER_METHODS);
 // The placeholder title desktop gives a new thread. Viewers recognize this
 // exact text as "no name yet".
 export const PLACEHOLDER_THREAD_TITLE = "Untitled thread";
-const LEGACY_PLACEHOLDER_THREAD_TITLE = "New outpost thread";
 
 function mode(sandbox) { return sandbox === "workspace-write" ? "auto" : "default"; }
 function sandboxFor(params, fallback = "read-only") {
@@ -58,32 +56,21 @@ export class HeadlessBackend {
     };
     // Same headroom as desktop's FEDERATION_RESPONSE_BYTE_BUDGET.
     this.replayByteBudget = FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
-    this.file = path.join(path.dirname(runtime.store.directory), "threads.json");
-    try {
-      const data = JSON.parse(readFileSync(this.file, "utf8"));
-      if (data.version !== 1 || !Array.isArray(data.threads)) throw new Error("Invalid headless thread registry");
-      this.threads = new Map(data.threads.map((thread) => [thread.id,
-        thread.titleSource === "fallback" && thread.title === LEGACY_PLACEHOLDER_THREAD_TITLE
-          ? { ...thread, title: PLACEHOLDER_THREAD_TITLE } : thread]));
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      this.threads = new Map();
-    }
+    this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory);
+    this.threadRegistry = this.threads;
     runtime.ownsThread = (id) => this.threads.has(id) && !this.threads.get(id).archived;
     runtime.threadCwd = (id) => this.owned(id).cwd || runtime.workspace;
     runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
     this.latestJobs = new Map();
     this.syncJobs();
-    this.threadRegistry = new OutpostThreadRegistry(this);
   }
 
-  persist() {
-    try { atomicJson(this.file, { version: 1, threads: [...this.threads.values()] }); }
+  persist(thread) {
+    try { this.threads.set(thread.id, thread); }
     catch (error) { this.runtime.onFailure(error); throw error; }
   }
 
   syncJobs(jobs = this.runtime.store.jobs.values()) {
-    let changed = false;
     for (const job of jobs) {
       if (!job.threadId) continue;
       const previous = this.latestJobs.get(job.threadId);
@@ -91,9 +78,7 @@ export class HeadlessBackend {
       if (this.threads.has(job.threadId)) continue;
       this.threads.set(job.threadId, { id: job.threadId, title: `Thread ${job.threadId.slice(0, 8)}`, titleSource: "fallback",
         createdAt: Date.parse(job.createdAt), messagingFileTools: job.messagingFileTools === true, cwd: job.cwd || this.runtime.workspace, sandbox: job.sandbox, model: job.model });
-      changed = true;
     }
-    if (changed) this.persist();
   }
 
   owned(id) {
@@ -109,13 +94,16 @@ export class HeadlessBackend {
   summary(thread) {
     const cwd = thread.cwd || this.runtime.workspace;
     const job = this.latest(thread.id);
-    const updatedAt = Math.max(thread.updatedAt || thread.createdAt, job ? Date.parse(job.updatedAt) : 0);
+    const createdAt = thread.createdAt ?? 0;
+    const updatedAt = Math.max(thread.updatedAt ?? createdAt, job ? Date.parse(job.updatedAt) : 0);
     return { id: thread.id, title: thread.title, titleSource: thread.titleSource, source: "codex",
-      createdAt: thread.createdAt, updatedAt, projectKey: cwd,
+      createdAt, updatedAt, projectKey: cwd,
       threadStatus: job && ACTIVE.has(job.status) ? "active" : "idle",
       linkedDirectories: [{ id: cwd, kind: "local", path: cwd, label: path.basename(cwd) }],
       executionMode: mode(thread.sandbox), model: thread.model || undefined,
       reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier,
+      pinnedRank: thread.pinnedRank, parentThreadId: thread.parentThreadId, parentThreadBackend: thread.parentThreadBackend,
+      parentThreadInstanceId: thread.parentThreadInstanceId, subthreadOrder: thread.subthreadOrder, subthreadsCollapsed: thread.subthreadsCollapsed,
       inbox: { inInbox: updatedAt > (thread.seenUpdatedAt ?? thread.seenAt ?? 0), reason: "updated-since-seen" },
       workspaceHandoff: { available: false, unavailableReason: "Workspace handoff is unavailable on this outpost" } };
   }
@@ -257,7 +245,7 @@ export class HeadlessBackend {
         // so recording a new seenAt cannot change its unread state.
         thread.seenUpdatedAt = params.seenUpdatedAt ?? thread.seenUpdatedAt ?? thread.seenAt ?? 0;
         thread.seenAt = params.seenAt ?? Date.now();
-        this.persist();
+        this.persist(thread);
         this.publish({ backend: "codex", notification: { method: "navigation/thread/seen",
           params: { threadId: thread.id, ...(params.seenUpdatedAt !== undefined ? { seenUpdatedAt: params.seenUpdatedAt } : {}) } } }, "transcript");
         this.invalidate(thread.id, "navigation/thread/seen");
@@ -267,7 +255,7 @@ export class HeadlessBackend {
       case "setThreadExecutionMode": {
         const thread = this.owned(params.threadId);
         thread.sandbox = sandboxFor({ executionMode: params.executionMode });
-        this.persist();
+        this.persist(thread);
         this.invalidate(thread.id);
         return { backend: "codex", threadId: thread.id, executionMode: mode(thread.sandbox) };
       }
@@ -277,7 +265,7 @@ export class HeadlessBackend {
           if (params[key] !== undefined && (typeof params[key] !== "string" || params[key].length > 200)) throw new Error(`Invalid ${key}`);
           if (params[key] !== undefined) thread[key] = params[key];
         }
-        this.persist();
+        this.persist(thread);
         this.invalidate(thread.id);
         return { backend: "codex", threadId: thread.id, model: thread.model, reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier };
       }
@@ -290,10 +278,10 @@ export class HeadlessBackend {
     this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId, ...(sourceMethod ? { sourceMethod } : {}) } } }, "navigation");
   }
 
-  // threads.json retains owner title provenance, including explicit renames.
+  // The canonical owner record retains title provenance, including explicit renames.
   setTitle(thread, title, titleSource) {
     Object.assign(thread, { title, titleSource });
-    this.persist();
+    this.persist(thread);
     this.publish({ backend: "codex", notification: { method: "thread/name/updated",
       params: { threadId: thread.id, threadName: title, titleSource } } }, "transcript");
     this.invalidate(thread.id, "thread/name/updated");
@@ -353,8 +341,7 @@ export class HeadlessBackend {
       this.runtime.loadedThreads.add(result.threadId);
       const thread = { id: result.threadId, messagingFileTools: true, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
-      this.threads.set(thread.id, thread);
-      this.persist();
+      this.persist(thread);
       this.invalidate(thread.id, "thread/started");
       return { backend: "codex", threadId: thread.id, executionMode: mode(sandbox) };
     } finally { this.creating = false; }

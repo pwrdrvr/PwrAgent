@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -510,10 +511,10 @@ test("older messaging owners and persisted catalogs fail closed for file/PDF con
   assert.deepEqual(requests, [], "old owners receive neither attachment bytes nor file/PDF requests");
   owner.connection.close();
   await h.stop(h.daemon);
-  const registry = path.join(h.directory, "threads.json");
-  const prior = JSON.parse(readFileSync(registry, "utf8"));
-  delete prior.threads.find((item) => item.id === thread.threadId).messagingFileTools;
-  writeFileSync(registry, JSON.stringify(prior));
+  const db = new Database(path.join(path.dirname(h.directory), "state.db"));
+  try {
+    db.prepare("UPDATE threads SET payload = json_remove(payload, '$.messagingFileTools') WHERE json_extract(payload, '$.threadId') = ?").run(thread.threadId);
+  } finally { db.close(); }
   await h.start();
   owner = await peer(h, owner, undefined, oldCapabilities);
   assert.equal(await owner.call("backend.supportsMessagingPdfTools", { backend: "codex", threadId: thread.threadId }), false,

@@ -88,9 +88,8 @@ export function setupHandoffs(federation, directory) {
             cwd, approvalPolicy: "never", sandbox: "read-only" });
           const id = result.threadId;
           if (typeof id !== "string" || !id || backend.threads.has(id)) throw new Error("Invalid forked thread identity");
-          backend.threads.set(id, { id, cwd, title: "Imported thread", titleSource: "fallback", createdAt: Date.now(), sandbox: "read-only" });
+          backend.persist({ id, cwd, title: "Imported thread", titleSource: "fallback", createdAt: Date.now(), sandbox: "read-only" });
           runtime.loadedThreads.add(id);
-          backend.persist();
           backend.invalidate(id);
           return { threadId: id };
         } finally { backend.creating = false; }
@@ -99,8 +98,9 @@ export function setupHandoffs(federation, directory) {
       archiveThread: async ({ threadId }) => {
         backend.owned(threadId);
         await runtime.codex.archiveThread({ threadId });
-        backend.owned(threadId).archived = true;
-        backend.persist();
+        const thread = backend.owned(threadId);
+        thread.archived = true;
+        backend.persist(thread);
         backend.invalidate(threadId);
       },
       renameThread: (request) => backend.handle("backend.renameThread", request),

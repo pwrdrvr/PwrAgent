@@ -12,7 +12,7 @@ dead-owner grace and messaging side effects retain the original transactions;
 no heartbeat or new write is introduced.
 
 The real Outpost daemon also opens the profile database through its
-`federation-core.ts` host binding. That binding returns only shutdown, uses the
+`federation-core.ts` host binding. That binding returns shutdown and handle-free owner storage ports, uses the
 same runtime lease manager as desktop, and holds both profile-federation and
 messaging leases before starting a provider, recovering jobs or opening a
 listener. Shutdown drains the runtime before releasing leases and closing the
@@ -141,7 +141,8 @@ ownership, unqualified native grants, pending-status filters, cleanup ordering
 and stale outcomes keep every SQL statement and exact write count. This does
 not activate a provider or move viewer-local composer drafts into owner state.
 
-The schema remains at `user_version = 80`. Existing SQL, migration transactions,
+The shared schema is at `user_version = 81`; the additive v81 migration installs
+`owner_jobs` for durable job acceptance/outcomes on both hosts. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
 to desktop stores that have not yet moved into this package.
@@ -290,3 +291,33 @@ explicit crash recovery and restart without replay, including the existing
 60-second dead-owner grace. Supported Electron E2E observes an Outpost-held
 lease, refuses its desktop federation runtime, transfers ownership to desktop,
 refuses Outpost startup while desktop holds it, and transfers back after quit.
+
+The production Outpost's JobStore and HeadlessBackend now use shared SQLite.
+The job storage port retains acceptance fingerprints, confirmed thread/turn
+identities and terminal outcomes without prompts or transcripts. Owner metadata
+uses the existing SqliteOverlayStore registry; its synchronous storage methods
+allow an atomic import while the public owner API retains async semantics.
+The Outpost reads desktop's retained provider inventory separately from live
+canonical owner metadata. Its metadata projection includes pins, seen watermarks,
+parents, archive/model settings and creation-time messaging tool capability.
+
+On first adoption the storage package validates the private workspace/Codex-home
+identity, parses both legacy registries, and fsyncs byte-exact backups under
+`headless/legacy-owner-backup-v1`. One FULL-durability immediate transaction merges
+threads, imports jobs, recovers active jobs to unknown without replay, and records
+a manifest. Existing canonical facts win over legacy duplicates. Only after commit
+does it retire the matching legacy files. A restart completes partial retirement
+from that marker, never reimports the backups, and refuses changed sources or
+missing backups. Identity, project, tool-call, federation and intake files remain
+private host data. Job acceptance uses FULL durability and restores the connection's
+prior mode. Native packaging smoke verifies import and restart from an offline
+installation with its own better-sqlite3 dependency.
+
+The separate `outpost-owner-data-write-budgets.json` measures one multi-record
+legacy import as one commit, a job lifecycle as four commits (20,600 WAL bytes),
+and an actual new-thread turn as six commits (49,440 WAL bytes). At 100 such turns
+per day the entire new data path projects to about 4.94 MB/day (the job portion
+2.06 MB/day); 1,000 streamed events and 1,000 passive reads/reopen add zero commits.
+Each changed owner metadata command commits once (12,360 WAL bytes, about
+1.24 MB/day at 100 commands/day). These are boundary costs, with no idle timer.
+The inherited default budget and conformance fixtures remain byte-identical.
