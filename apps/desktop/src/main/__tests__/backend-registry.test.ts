@@ -51334,6 +51334,68 @@ script = "printf setup"
     await assertPreparedStartOrigin({ threadId: "prepared", text: "", providerStarted: false, agent: false });
   });
 
+  async function assertPriorTurnCannotConsumeStart(command: {
+    threadId: string; text: string; priorTurns: number; delayedTurn: number; providerStarted: boolean;
+  }): Promise<void> {
+    const client = new MockBackendClient({});
+    const store = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const origin: AppServerThreadMessageOrigin = { kind: "agent", sourceThread: { backend: "claude", threadId: "sender" } };
+    const items: Array<{ id: string; origin?: unknown }> = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "item/started" || event.notification.method === "item/completed") {
+        items.push(event.notification.params.item as { id: string; origin?: unknown });
+      }
+    });
+    const started = async (turnId: string, threadId = command.threadId) => client.emit({ method: "turn/started", params: {
+      threadId, turnId, turn: { id: turnId, status: "in_progress" },
+    } });
+    const item = async (method: "item/started" | "item/completed", turnId: string, id: string) => client.emit({ method, params: {
+      threadId: command.threadId, turnId, item: { id, type: "userMessage", content: [{ type: "text", text: command.text }] },
+    } });
+    vi.spyOn(client, "startTurn").mockImplementation(async () => {
+      await item("item/completed", `prior-${command.delayedTurn % command.priorTurns}`, "old-message");
+      if (command.providerStarted) await started("new-turn");
+      await item("item/started", "new-turn", "new-message");
+      await item("item/completed", "new-turn", "new-message");
+      await client.emit({ method: "turn/completed", params: { threadId: command.threadId,
+        turnId: "new-turn", turn: { id: "new-turn", status: "completed", output: [] } } });
+      return { threadId: command.threadId, turnId: "new-turn" };
+    });
+    try {
+      // The same provider turn id in a different thread must not fence this
+      // start's real item, even though that observation precedes admission.
+      await started("new-turn", `${command.threadId}:other`);
+      await client.emit({ method: "turn/completed", params: { threadId: `${command.threadId}:other`,
+        turnId: "new-turn", turn: { id: "new-turn", status: "completed", output: [] } } });
+      for (let index = 0; index < command.priorTurns; index += 1) {
+        await started(`prior-${index}`);
+        await client.emit({ method: "turn/completed", params: { threadId: command.threadId,
+          turnId: `prior-${index}`, turn: { id: `prior-${index}`, status: "completed", output: [] } } });
+      }
+      await registry.startTurn({ backend: "codex", threadId: command.threadId,
+        input: [{ type: "text", text: command.text }], messageOrigin: origin });
+      expect(items).toHaveLength(3);
+      expect(items[0]).toEqual({ id: "old-message", type: "userMessage", content: [{ type: "text", text: command.text }] });
+      for (const message of items.slice(1)) expect(message).toMatchObject({ id: "new-message", origin });
+      expect(store.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(expect.objectContaining({ messageId: "old-message" }));
+      expect(store.upsertThreadMessageOrigin).toHaveBeenCalledWith({ backend: "codex", threadId: command.threadId,
+        messageId: "new-message", origin });
+    } finally { await registry.close(); }
+  }
+
+  it("keeps a new start's provenance through generated delayed prior-turn completions with identical text", async () => {
+    await fc.assert(fc.asyncProperty(fc.record({ threadId: fc.constantFrom("same", "same:thread", "pending:source"),
+      text: fc.constantFrom("Continue.", "Continue", "Same prepared input"), priorTurns: fc.integer({ min: 1, max: 4 }),
+      delayedTurn: fc.nat(8), providerStarted: fc.boolean(),
+    }), assertPriorTurnCannotConsumeStart), { numRuns: 20 });
+  });
+
+  it("does not give a delayed previous-turn completion the new start's origin", async () => {
+    await assertPriorTurnCannotConsumeStart({ threadId: "same", text: "Continue.", priorTurns: 1,
+      delayedTurn: 0, providerStarted: true });
+  });
+
   it.each([
     { operation: "start", fileType: "file" },
     { operation: "start", fileType: "localFile" },

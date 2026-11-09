@@ -9068,6 +9068,7 @@ type StartingTurnOrigin = {
 type PendingThreadMessageContext = {
   backend: AppServerBackendKind;
   createdAt: number;
+  admittedCodexTurnSequence?: number;
   id: string;
   messageId?: string;
   imageParts?: AppServerThreadImagePart[];
@@ -9735,6 +9736,8 @@ export class DesktopBackendRegistry {
     string,
     PendingThreadMessageContext
   >();
+  private codexMessageContextTurnSequence = 0;
+  private readonly codexMessageContextTurnObservations = new Map<string, Map<string, number>>();
   /**
    * A provider can call a tool before its turn-start call returns, and so
    * before the turn's origin row is written. The causal lookup reads these
@@ -24610,6 +24613,9 @@ export class DesktopBackendRegistry {
     turnId?: string;
     retainAttachments?: boolean;
   }): Promise<string | undefined> {
+    const admittedCodexTurnSequence = params.backend === "codex" && !params.turnId
+      ? this.codexMessageContextTurnSequence
+      : undefined;
     const imageParts = await pendingThreadMessageImageParts(params.input, params);
     const retainedInput = params.retainAttachments
       ? await stageTurnInputAttachmentsForRetention(
@@ -24631,6 +24637,7 @@ export class DesktopBackendRegistry {
     this.pendingThreadMessageContexts.set(id, {
       backend: params.backend,
       createdAt: Date.now(),
+      ...(admittedCodexTurnSequence !== undefined ? { admittedCodexTurnSequence } : {}),
       id,
       ...(imageParts.length > 0 ? { imageParts } : {}),
       ...(retainedInput.length > 0 ? { retainedInput } : {}),
@@ -24681,6 +24688,9 @@ export class DesktopBackendRegistry {
     text?: string;
     turnId?: string;
   }): PendingThreadMessageContext | undefined {
+    const observedCodexTurnSequence = params.backend === "codex" && params.turnId
+      ? this.codexMessageContextTurnObservations.get(params.threadId)?.get(params.turnId)
+      : undefined;
     const candidates = [...this.pendingThreadMessageContexts.values()]
       .filter(
         (pending) =>
@@ -24698,6 +24708,15 @@ export class DesktopBackendRegistry {
             !pending.turnId
             || !params.turnId
             || pending.turnId === params.turnId
+          )
+          // An unbound start may receive its real user item before the start
+          // response. Identical text from a previously observed turn cannot
+          // claim that context while the new provider identity is unknown.
+          && (
+            pending.turnId
+            || pending.admittedCodexTurnSequence === undefined
+            || observedCodexTurnSequence === undefined
+            || observedCodexTurnSequence > pending.admittedCodexTurnSequence
           ),
       )
       .sort((left, right) => left.createdAt - right.createdAt);
@@ -53713,6 +53732,22 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent, codexStatusSequence?: number): Promise<void> {
+    if (event.backend === "codex") {
+      const params = readRecord(event.notification.params);
+      const threadId = readOptionalString(params, ["threadId"]);
+      const turnId = readOptionalString(params, ["turnId"])
+        ?? readOptionalString(readRecord(params?.turn), ["id"]);
+      if (threadId && turnId && turnId !== `pending:${threadId}`) {
+        let turns = this.codexMessageContextTurnObservations.get(threadId);
+        if (!turns) {
+          turns = new Map();
+          this.codexMessageContextTurnObservations.set(threadId, turns);
+        }
+        // Keep the first observation at ingress: delayed repeats must not
+        // turn an earlier identity into one admitted by a later start.
+        if (!turns.has(turnId)) turns.set(turnId, ++this.codexMessageContextTurnSequence);
+      }
+    }
     this.navigationDirectoryScope.invalidate(event);
     const archiveWorkspaceChanged = this.invalidateArchiveCleanupForNotification(event.backend, event.notification);
     if (event.notification.method === "thread/unarchived" || event.notification.method === "thread/deleted") {
