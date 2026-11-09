@@ -40,6 +40,28 @@ export interface CodexTurnStartPreparationHost<Context> {
 
 export type StartedTurn = { threadId: string; turnId: string };
 
+export type AcpTurnStartFinalizationStage = "origin" | "review-contexts" | "pdf" | "title" | "context"
+  | "persist-origin" | "attachments" | "forget-context" | "dispose-origin" | "release";
+
+export interface AcpTurnStartHost<Context, Origin, Turn extends StartedTurn> {
+  reserve(): void;
+  prepare(): Promise<void>;
+  registerContext(): Promise<Context>;
+  beginOrigin(): Origin;
+  submit(): Promise<Turn>;
+  bindOrigin(origin: Origin | undefined, turn: Turn): void;
+  consumeReviewContexts(): Promise<unknown>;
+  bindPdf(turn: Turn): void;
+  scheduleTitle(turn: Turn): void;
+  bindContext(context: Context | undefined, turn: Turn): void;
+  persistOrigin(origin: Origin | undefined): Promise<void>;
+  retainAttachments(turn: Turn): Promise<void>;
+  forgetContext(context: Context | undefined): void;
+  disposeOrigin(origin: Origin | undefined): void;
+  release(): void;
+  failed(stage: AcpTurnStartFinalizationStage, error: unknown, turn: Turn | undefined): void;
+}
+
 export interface CodexTurnSubmissionHost<Recovered> {
   identity: TurnStartIdentity;
   pendingTurnId: string;
@@ -203,6 +225,47 @@ export class ThreadTurnStartLifecycle {
       }
     }
     return { kind: "started", turn };
+  }
+
+  async startAcp<Context, Origin, Turn extends StartedTurn>(host: AcpTurnStartHost<Context, Origin, Turn>): Promise<Turn> {
+    // Reservation belongs to this call only after admission succeeds. Provider
+    // active-turn ownership remains with the host and its event stream.
+    host.reserve();
+    let context: Context | undefined;
+    let origin: Origin | undefined;
+    let turn: Turn | undefined;
+    const report = (stage: AcpTurnStartFinalizationStage, error: unknown) => {
+      try { host.failed(stage, error, turn); } catch { /* Reporting must preserve the provider outcome. */ }
+    };
+    const effect = (stage: AcpTurnStartFinalizationStage, work: () => void) => {
+      try { work(); } catch (error) { report(stage, error); }
+    };
+    const persist = async (stage: AcpTurnStartFinalizationStage, work: () => Promise<unknown>) => {
+      try { await work(); } catch (error) { report(stage, error); }
+    };
+    try {
+      await host.prepare();
+      context = await host.registerContext();
+      origin = host.beginOrigin();
+      const accepted = await host.submit();
+      turn = accepted;
+      // This is provider acceptance. Later host metadata effects are independent
+      // attempts in their established order, never another provider submission.
+      effect("origin", () => host.bindOrigin(origin, accepted));
+      await persist("review-contexts", () => host.consumeReviewContexts());
+      effect("pdf", () => host.bindPdf(accepted));
+      effect("title", () => host.scheduleTitle(accepted));
+      effect("context", () => host.bindContext(context, accepted));
+      await persist("persist-origin", () => host.persistOrigin(origin));
+      await persist("attachments", () => host.retainAttachments(accepted));
+      return accepted;
+    } finally {
+      // A failing disposer cannot strand the other resources or replace either
+      // provider acceptance or a preparation/submission rejection.
+      effect("forget-context", () => host.forgetContext(context));
+      effect("dispose-origin", () => host.disposeOrigin(origin));
+      effect("release", () => host.release());
+    }
   }
 
   async finalizeCodex(host: CodexTurnFinalizationHost): Promise<TurnStartIdentity & { turnId: string }> {

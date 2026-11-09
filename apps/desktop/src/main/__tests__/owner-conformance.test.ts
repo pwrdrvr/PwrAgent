@@ -28,6 +28,8 @@ import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { AcpAgentStore } from "../storage/acp-agent-store";
+import { AcpSessionStore } from "../storage/acp-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
@@ -86,10 +88,11 @@ type OwnerHost = {
  * Desktop's real owner: the operations its federation runtime serves a peer,
  * over BackendRegistry, the real Codex client and a real state database,
  * registered with the real federation handlers behind a router that enforces
- * the shared capability table. Only Codex is a fixture.
+ * the shared capability table. Provider subprocesses use protocol fixtures.
  */
 async function startDesktopOwner(
   threadTitleGenerationService: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
+  prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
 ): Promise<OwnerHost> {
   OwnerConformanceCodexTransport.reset();
   const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
@@ -97,6 +100,7 @@ async function startDesktopOwner(
   const db = StateDb.open(dbPath);
   const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
   const overlayStore = new SqliteOverlayStore(db);
+  await prepareAcp?.(db, workspace);
   setDesktopOverlayStoreForTests(overlayStore);
   // Desktop lists Codex once discovery has selected an executable. The
   // transport fixture stands in for that executable.
@@ -105,6 +109,7 @@ async function startDesktopOwner(
   const configStore = new DesktopConfigStore({ configPath });
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
+    ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
     threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   desktopOwner.registry = registry;
@@ -478,6 +483,78 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await desktop.close();
     }
   }, 120_000);
+
+  it("returns real ACP provider acceptance through refused SQLite review-context consumption", async () => {
+    const backend = "acp:gemini" as const;
+    const threadId = "accepted-acp";
+    let db!: StateDb;
+    const desktop = await startDesktopOwner(null, async (stateDb, workspace) => {
+      db = stateDb;
+      // Record protocol requests in this test's workspace, never provider storage.
+      const script = `
+        const fs = require("node:fs");
+        const rl = require("node:readline").createInterface({ input: process.stdin });
+        const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+        rl.on("line", (line) => {
+          const message = JSON.parse(line);
+          fs.appendFileSync(${JSON.stringify(path.join(workspace, "acp-requests.jsonl"))}, line + "\\n");
+          let result = {};
+          if (message.method === "initialize") result = { protocolVersion: 1 };
+          if (message.method === "session/prompt") {
+            send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: message.params.sessionId,
+              update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Accepted ACP fixture." } } } });
+          }
+          send({ jsonrpc: "2.0", id: message.id, result });
+        });`;
+      new AcpAgentStore(db).upsertInstalledAgent({ backendId: backend, registryId: "gemini", name: "ACP fixture",
+        distributionKind: "local", distributionSource: "fixture", installStatus: "installed", authStatus: "not-required",
+        verificationStatus: "not-applicable", allowlistRuleId: "fixture", installedAt: 1000, updatedAt: 1000,
+        launchDescriptor: { backendId: backend, registryId: "gemini", distributionKind: "local",
+          command: process.execPath, args: ["-e", script], env: {} },
+      });
+      new AcpSessionStore(db).upsertSession({ backendId: backend, sessionId: threadId, title: "ACP fixture",
+        cwd: workspace, createdAt: 1000, updatedAt: 1000, executionMode: "default", status: "idle" });
+    });
+    try {
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const internal = registry as unknown as { reservedAcpStartThreadKeys: Set<string>; startingTurnOrigins: Set<unknown> };
+      const overlay = new SqliteOverlayStore(db);
+      const failures = [true, false, ...fc.sample(fc.boolean(), 3)];
+      for (const [index, fails] of failures.entries()) {
+        const entryId = `review-${index}`;
+        await overlay.upsertManagedReviewEntry({ backend, threadId, pendingContext: true,
+          entry: { type: "review", id: entryId, review: `Fixture review ${index}`, createdAt: 1000 + index } });
+        if (fails) db.raw.exec(`CREATE TRIGGER reject_acp_review BEFORE UPDATE OF payload ON threads
+          WHEN json_extract(OLD.payload, '$.threadId') = 'accepted-acp'
+            AND json_array_length(json_extract(OLD.payload, '$.pendingManagedReviewContextEntryIds')) > 0
+            AND json_extract(NEW.payload, '$.pendingManagedReviewContextEntryIds') IS NULL
+          BEGIN SELECT RAISE(ABORT, 'Fixture accepted ACP review refused'); END`);
+        try {
+          const turn = await desktop.client.startTurn({ backend, threadId,
+            input: [{ type: "text", text: `Continue ${index}` }], messageOrigin: { kind: "messaging" } });
+          expect(turn).toMatchObject({ backend, threadId, turnId: expect.any(String) });
+          expect(internal.reservedAcpStartThreadKeys.size).toBe(0);
+          expect(internal.startingTurnOrigins.size).toBe(0);
+          await settle(desktop);
+          const requests = readFileSync(path.join(desktop.workspace, "acp-requests.jsonl"), "utf8")
+            .trim().split("\n").map((line) => JSON.parse(line));
+          const prompts = requests.filter((request) => request.method === "session/prompt");
+          expect(prompts).toHaveLength(index + 1);
+          expect(JSON.stringify(prompts.at(-1).params)).toContain(`Fixture review ${index}`);
+          expect(JSON.stringify(prompts.at(-1).params)).toContain(`Continue ${index}`);
+          expect(desktop.events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
+          expect(desktop.events.filter((event) => event.notification.method === "turn/completed"
+            && event.notification.params.turnId === turn.turnId)).toHaveLength(1);
+          const state = await overlay.getThreadOverlayState({ backend, threadId });
+          expect(state?.pendingManagedReviewContextEntryIds?.includes(entryId) ?? false).toBe(fails);
+        } finally {
+          if (fails) db.raw.exec("DROP TRIGGER reject_acp_review");
+        }
+      }
+    } finally {
+      await desktop.close();
+    }
+  });
 
   it("retires protocol-refused desktop submissions through notification rejection before matching Outpost", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");

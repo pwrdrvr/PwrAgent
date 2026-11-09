@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle, type TurnStartIdentity } from "../thread-turn-start-lifecycle";
+import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle, type AcpTurnStartFinalizationStage, type TurnStartIdentity } from "../thread-turn-start-lifecycle";
 
 const identity = fc.record({
   backend: fc.constantFrom("codex" as const, "claude" as const, "acp:grok" as const),
@@ -13,6 +13,109 @@ const noEffects = {
   assertUnlocked: async () => {},
   wake: async () => {},
 };
+
+const acpFinalization = ["origin", "review-contexts", "pdf", "title", "context", "persist-origin", "attachments",
+  "forget-context", "dispose-origin", "release"] as const;
+const acpPreparation = ["reserve", "prepare", "register", "begin-origin", "submit"] as const;
+
+// The provider's return value is the outcome oracle. Host metadata failures
+// cannot change it; preparation/submission failures never run accepted effects.
+it("preserves the ACP provider outcome and ordered resource protocol across independent host failures", async () => {
+  await fc.assert(fc.asyncProperty(identity, fc.string(), fc.constantFrom("none", ...acpPreparation),
+    fc.subarray([...acpFinalization]), fc.boolean(), async (request, turnId, rejection, failures, reportingFails) => {
+      const lifecycle = new ThreadTurnStartLifecycle(noEffects);
+      const context = { identity: request };
+      const origin = { identity: request };
+      const accepted = { ...request, turnId };
+      const refused = new Error(rejection);
+      const effects: string[] = [];
+      const reports: AcpTurnStartFinalizationStage[] = [];
+      let reserved = false;
+      const step = (name: string) => {
+        effects.push(name);
+        if (name === rejection) throw refused;
+        if (failures.includes(name as AcpTurnStartFinalizationStage)) throw new Error(name);
+      };
+      const pending = lifecycle.startAcp({
+        reserve: () => { step("reserve"); reserved = true; },
+        prepare: async () => { step("prepare"); },
+        registerContext: async () => { step("register"); return context; },
+        beginOrigin: () => { step("begin-origin"); return origin; },
+        submit: async () => { step("submit"); return accepted; },
+        bindOrigin: (value, turn) => { expect(value).toBe(origin); expect(turn).toBe(accepted); step("origin"); },
+        consumeReviewContexts: async () => { step("review-contexts"); },
+        bindPdf: (turn) => { expect(turn).toBe(accepted); step("pdf"); },
+        scheduleTitle: (turn) => { expect(turn).toBe(accepted); step("title"); },
+        bindContext: (value, turn) => { expect(value).toBe(context); expect(turn).toBe(accepted); step("context"); },
+        persistOrigin: async (value) => { expect(value).toBe(origin); step("persist-origin"); },
+        retainAttachments: async (turn) => { expect(turn).toBe(accepted); step("attachments"); },
+        forgetContext: (value) => {
+          expect(value).toBe(["none", "begin-origin", "submit"].includes(rejection) ? context : undefined);
+          step("forget-context");
+        },
+        disposeOrigin: (value) => {
+          expect(value).toBe(["none", "submit"].includes(rejection) ? origin : undefined);
+          step("dispose-origin");
+        },
+        release: () => { reserved = false; step("release"); },
+        failed: (stage, error, turn) => {
+          expect((error as Error).message).toBe(stage);
+          expect(turn).toBe(rejection === "none" ? accepted : undefined);
+          reports.push(stage);
+          if (reportingFails) throw new Error("reporting");
+        },
+      });
+      if (rejection === "none") expect(await pending).toBe(accepted);
+      else await expect(pending).rejects.toBe(refused);
+      const expected: string[] = rejection === "none"
+        ? [...acpPreparation, ...acpFinalization]
+        : [...acpPreparation.slice(0, acpPreparation.indexOf(rejection) + 1),
+            ...(rejection === "reserve" ? [] : acpFinalization.slice(-3))];
+      expect(effects).toEqual(expected);
+      expect(reports).toEqual(expected.filter((name) => failures.includes(name as AcpTurnStartFinalizationStage)));
+      expect(reserved).toBe(false);
+    }));
+});
+
+it("keeps overlapping ACP starts and provider terminals qualified by their captured identity", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.record({ identity, terminal: fc.boolean() }), { minLength: 2, maxLength: 8 }),
+    fc.scheduler(), async (commands, scheduler) => {
+      const lifecycle = new ThreadTurnStartLifecycle(noEffects);
+      const active = new Set<object>();
+      const reservations = new Set<object>();
+      const failures: unknown[] = [];
+      const turns = commands.map((command, index) => ({ ...command.identity, turnId: `${index}` }));
+      const pending = commands.map(({ identity: request, terminal }, index) => {
+        const turn = turns[index];
+        return lifecycle.run(request, () => lifecycle.startAcp({
+          reserve: () => { reservations.add(turn); },
+          prepare: async () => { await scheduler.schedule(Promise.resolve()); },
+          registerContext: async () => turn,
+          beginOrigin: () => turn,
+          submit: async () => { active.add(turn); return turn; },
+          bindOrigin: (origin, accepted) => { expect(origin).toBe(turn); expect(accepted).toBe(turn); },
+          consumeReviewContexts: async () => {
+            await scheduler.schedule(Promise.resolve());
+            if (terminal) active.delete(turn);
+          },
+          bindPdf: () => {}, scheduleTitle: () => {}, bindContext: () => {},
+          persistOrigin: async () => {}, retainAttachments: async () => {},
+          forgetContext: (context) => { expect(context).toBe(turn); },
+          disposeOrigin: (origin) => { expect(origin).toBe(turn); },
+          release: () => { reservations.delete(turn); },
+          failed: (_stage, error) => { failures.push(error); },
+        })).then((accepted) => {
+          expect(accepted).toBe(turn);
+          expect(active.has(turn)).toBe(!terminal);
+          expect(reservations.has(turn)).toBe(false);
+        });
+      });
+      await scheduler.waitFor(Promise.all(pending));
+      for (const { identity: request } of commands) expect(lifecycle.hasPending(request)).toBe(false);
+      expect(reservations.size).toBe(0);
+      expect(failures).toEqual([]);
+    }));
+});
 
 it("keeps start and failure event identity and timestamps for generated provider identities", () => {
   fc.assert(fc.property(identity, fc.string(), fc.nat(), fc.string(), fc.boolean(), (request, turnId, now, message, errorObject) => {

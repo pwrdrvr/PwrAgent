@@ -334,6 +334,16 @@ after origin persistence yields. This adds no request identity or retry state.
 Provider calls, repair execution/registry, logging, attachment handling and all
 persistence remain host effects at their existing lifecycle sites.
 
+ACP turn starts use the same lifecycle for reservation, preparation, context
+staging and submission. Once the provider accepts, origin binding, managed-review
+context consumption, PDF/title/context coordination, origin persistence and
+attachment retention run in their established order. Independent host failures
+are reported without rejecting that accepted identity. Context/origin disposal
+and reservation release are attempted independently on both acceptance and
+rejection. The host retains ACP prompt locks, provider active-turn ownership,
+runtime/model/environment setup and every existing storage site. This adds no
+request identity, retry state or persistence.
+
 ### Transcript invariants
 
 - Transcript order is canonical before grouping, collapsing, hydration, or

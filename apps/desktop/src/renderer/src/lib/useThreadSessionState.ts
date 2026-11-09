@@ -509,8 +509,8 @@ function mergeTranscriptEntries(
   let greatestCreatedAtByTurn = new Map<string, number>();
   let greatestSequenceByTurn = new Map<string, number>();
   let terminalTurnIds = new Set<string>();
-  // Turns on the list, and the turn of its last entry that has one. Only the
-  // newest turn can take a row at the end.
+  // Only the turn of the last row can take another row at the end. An unbound
+  // user message is an ordering boundary too, even before its provider id lands.
   let mergedTurnIds = new Set<string>();
   let lastMergedTurnId: string | undefined;
   const rebuildAppendIndexes = (): void => {
@@ -526,8 +526,8 @@ function mergeTranscriptEntries(
       mergedEntryIndexById.set(entry.id, index);
       if (entry.turn?.id) {
         mergedTurnIds.add(entry.turn.id);
-        lastMergedTurnId = entry.turn.id;
       }
+      lastMergedTurnId = entry.turn?.id;
       if (entry.type === "review") {
         const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
         indexes.push(index);
@@ -573,8 +573,8 @@ function mergeTranscriptEntries(
     merged.push(entry);
     if (entry.turn?.id) {
       mergedTurnIds.add(entry.turn.id);
-      lastMergedTurnId = entry.turn.id;
     }
+    lastMergedTurnId = entry.turn?.id;
     if (typeof entry.createdAt === "number") {
       greatestCreatedAt = Math.max(
         greatestCreatedAt ?? entry.createdAt,
