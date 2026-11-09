@@ -1,0 +1,23 @@
+{
+  "passive-owner-read": {
+    "commits": 0,
+    "note": "A passive viewer checks the profile without registering or claiming it",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "profile-owner-lifetime": {
+    "commits": 3,
+    "note": "First owner admission registers the runtime and claims federation; provider shutdown releases it, schema excluded",
+    "observedWalBytes": 37112,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "repeated-owner-admission": {
+    "commits": 0,
+    "note": "One thousand thread/turn/provider admissions after the first claim",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

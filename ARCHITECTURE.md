@@ -403,6 +403,15 @@ below are layered separately so you can read each layer on its own.
 
 ### Desktop state (sqlite WAL)
 
+Local provider ownership is admitted independently of federation/messaging
+service enablement. The production BackendRegistry receives the owner-core
+`ThreadOwnerAdmission` port, whose PID-owned `thread_owner` claim retains the
+existing profile-federation lease through provider shutdown. Service disable
+cannot release that claim. Codex transport connection, Claude session queries,
+ACP pooled/ephemeral startup and registry thread/turn/helper admissions share
+the port. Passive readers remain unclaimed. The Outpost's existing acquisition
+of the same lease excludes these desktop owners without a database lock file.
+
 The desktop main process owns a single sqlite database holding messaging
 bindings, the thread overlay (per-thread UI state), and
 `safeStorage`-encrypted secret blobs. Multiple PwrAgent instances may share

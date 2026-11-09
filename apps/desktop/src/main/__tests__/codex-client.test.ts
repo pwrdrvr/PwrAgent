@@ -1508,6 +1508,34 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it("keeps protocol browsing passive and admits every mutating request before dispatch", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    let allowed = false;
+    const client = new CodexAppServerClient({ assertOwnerAdmission: () => {
+      if (!allowed) throw new Error("fixture profile owner");
+    } });
+    try {
+      await client.listThreads();
+      await client.readThread({ threadId: "fixture" });
+      const methods = () => MockTransport.instances.flatMap(transport => transport.sentMessages)
+        .map(message => (JSON.parse(message) as { method?: string }).method);
+      expect(methods()).toContain("initialize");
+      expect(methods()).toContain("thread/list");
+      expect(methods()).toContain("thread/read");
+      const before = methods();
+      await expect(client.startThread({ cwd: "/fixture" })).rejects.toThrow("fixture profile owner");
+      await expect(client.startTurn({ threadId: "fixture", input: [{ type: "text", text: "fixture" }] })).rejects.toThrow("fixture profile owner");
+      const connection = (client as unknown as { connection: { request(method: string): Promise<unknown> } }).connection;
+      for (const method of ["thread/resume", "thread/settings/update", "config/value/write", "turn/steer", "future/mutation"]) {
+        await expect(connection.request(method)).rejects.toThrow("fixture profile owner");
+      }
+      expect(methods()).toEqual(before);
+      allowed = true;
+      await client.startThread({ cwd: "/fixture" });
+      expect(methods()).toContain("thread/start");
+    } finally { await client.close(); }
+  });
+
   it.each([
     { version: "0.164.0", parentTurnId: "parent", rootTurnId: "root", expected: { parentTurnId: "parent", rootTurnId: "root" } },
     { version: "0.164.0", parentTurnId: "parent", expected: { parentTurnId: "parent" } },

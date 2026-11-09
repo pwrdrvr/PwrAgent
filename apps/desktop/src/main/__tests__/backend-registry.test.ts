@@ -2918,6 +2918,7 @@ function createKimiAcpRegistry(options?: {
   startPrompt?: KimiStartPrompt;
   overlayStore?: ReturnType<typeof createOverlayStoreMock>;
   codexClient?: MockBackendClient;
+  ownerAdmission?: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["ownerAdmission"];
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
@@ -3044,6 +3045,7 @@ function createKimiAcpRegistry(options?: {
       : {}),
   };
   const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+    ownerAdmission: options?.ownerAdmission,
     correspondenceStore: options?.correspondenceStore,
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
@@ -3334,6 +3336,58 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("retains the owner claim when its real pooled ACP adapter cannot dispose a provider", async () => {
+    const close = vi.fn();
+    const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({
+      ownerAdmission: { assertOwnership: vi.fn(), close },
+    });
+    const adapter = (registry as unknown as { acpBackend: { getClient(backend: AcpBackendId): Promise<unknown> } }).acpBackend;
+    await adapter.getClient(acpBackendId);
+    acpClient.dispose.mockRejectedValue(new Error("fixture ACP child still running"));
+    await expect(registry.close()).rejects.toThrow("Desktop backend registry close failed");
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("retains profile ownership until provider close succeeds (failure=%s)", async failure => {
+    const client = new MockBackendClient({ threads: [] });
+    const entered = Promise.withResolvers<void>();
+    const finished = Promise.withResolvers<void>();
+    vi.spyOn(client, "close").mockImplementation(async () => { entered.resolve(); await finished.promise; });
+    const close = vi.fn();
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), ownerAdmission: { assertOwnership: vi.fn(), close } });
+    const closing = registry.close();
+    await entered.promise;
+    expect(close).not.toHaveBeenCalled();
+    if (failure) {
+      finished.reject(new Error("fixture provider close failed"));
+      await expect(closing).rejects.toThrow("Desktop backend registry close failed");
+      expect(close).not.toHaveBeenCalled();
+    } else {
+      finished.resolve();
+      await closing;
+      expect(close).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("refuses generated thread/turn admissions before host preparation when another profile owner holds the lease", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("codex", "claude", "acp:kimi"), fc.boolean(), async (backend, turn) => {
+      const client = new MockBackendClient({ threads: [] });
+      const assertOwnership = vi.fn(() => { throw new Error("fixture profile owner holds the lease"); });
+      const close = vi.fn();
+      const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(),
+        ownerAdmission: { assertOwnership, close } });
+      try {
+        const request = turn
+          ? registry.startTurn({ backend, threadId: "fixture", input: [{ type: "text", text: "fixture" }] })
+          : registry.startThread({ backend, cwd: os.tmpdir() });
+        await expect(request).rejects.toThrow("fixture profile owner holds the lease");
+        expect(assertOwnership).toHaveBeenCalled();
+        expect(client.startTurnCalls).toHaveLength(0);
+      } finally { await registry.close(); }
+      expect(close).toHaveBeenCalledOnce();
+    }), { numRuns: 12 });
+  });
+
   it.each([false, true])("delivers a text final and dispatches Telegram input through the real lifecycle pipeline (legacy=%s)", async (legacy) => {
     const overlayStore = createOverlayStoreMock({ executionMode: "default" });
     const overlay = vi.spyOn(desktopOverlayStore, "getDesktopOverlayStore").mockReturnValue(overlayStore as never);
