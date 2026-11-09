@@ -115,7 +115,7 @@ it.skipIf(process.platform === "win32")("queue pages and revision fences agree w
       expect(first.complete).toBe(false);
       const second = backend.queueProjection({ ...request, cursor: first.nextCursor });
       expect(second.complete).toBe(true);
-      expect([...first.entries, ...second.entries].map(entry => entry.queueEntryId)).toEqual(runtime.turnQueue.getQueuedEntries(request.ref).map(entry => entry.id));
+      expect([...first.entries, ...second.entries].map(entry => entry.queueEntryId)).toEqual(runtime.turnQueue.getQueuedEntries(request.ref).map((entry: { id: string }) => entry.id));
       expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(256 * 1024);
       await runtime.handle("interrupt", { id: "page0" });
       expect(() => backend.queueProjection({ ...request, cursor: first.nextCursor })).toThrow("navigation_cursor_expired");
