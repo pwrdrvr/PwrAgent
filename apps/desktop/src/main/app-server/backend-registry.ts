@@ -35415,15 +35415,22 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private retainedOwnerThreadsMissingFrom(
+    threads: AppServerThreadSummary[],
+    params: { archived?: boolean; filter?: string },
+  ): AppServerThreadSummary[] {
+    const present = new Set(threads.filter(thread => thread.source === "codex").map(thread => thread.id));
+    return this.retainedOwnerThreadStorage?.list().filter(thread => !present.has(thread.id)
+      && (thread.archivedAt !== undefined) === (params.archived === true)
+      && pendingStartedThreadMatchesFilter(thread, params.filter)) ?? [];
+  }
+
   private mergeRetainedOwnerThreads(
     threads: AppServerThreadSummary[],
     params: { archived?: boolean; filter?: string },
     oppositeNativeIds: ReadonlySet<string>,
   ): AppServerThreadSummary[] {
-    const present = new Set(threads.filter(thread => thread.source === "codex").map(thread => thread.id));
-    const retained = this.retainedOwnerThreadStorage?.list().filter(thread => !present.has(thread.id)
-      && !oppositeNativeIds.has(thread.id) && (thread.archivedAt !== undefined) === (params.archived === true)
-      && pendingStartedThreadMatchesFilter(thread, params.filter)) ?? [];
+    const retained = this.retainedOwnerThreadsMissingFrom(threads, params).filter(thread => !oppositeNativeIds.has(thread.id));
     if (!retained.length) return threads;
     return this.inheritIncompleteThreadList([...threads, ...retained]
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)), threads);
@@ -35433,7 +35440,8 @@ export class DesktopBackendRegistry {
     threads: AppServerThreadSummary[],
     params: { archived?: boolean; filter?: string; deadlineAt?: number },
   ): Promise<AppServerThreadSummary[]> {
-    if (!this.retainedOwnerThreadStorage?.list().length) return threads;
+    this.confirmRetainedNativeOwners(threads);
+    if (!this.retainedOwnerThreadsMissingFrom(threads, params).length) return threads;
     // A missing active row may be a native archived member (and vice versa).
     // Retained identity must not manufacture membership in the other collection.
     const opposite = await this.codexClient.listThreads({ archived: params.archived !== true,
@@ -35442,7 +35450,7 @@ export class DesktopBackendRegistry {
       this.incompleteThreadLists.add(threads);
       return [];
     });
-    this.confirmRetainedNativeOwners([...threads, ...opposite]);
+    this.confirmRetainedNativeOwners(opposite);
     // Read retention again after awaiting discovery: a publication or retirement
     // committed while this walk was pending remains authoritative.
     return this.mergeRetainedOwnerThreads(threads, params, new Set(opposite.map(thread => thread.id)));
