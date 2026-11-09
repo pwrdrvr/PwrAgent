@@ -360,6 +360,11 @@ queue operations desktop uses. Pause revisions and independent review holds
 remain in that engine; typed state/order events invalidate the owner projection.
 Local CLI controls use those same runtime methods. The changes stay in memory,
 make no SQLite commits and cannot change accepted input or its fingerprint.
+Outpost also serves the existing queued-input read through the shared
+`thread_detail` capability. It returns a detached input/origin snapshot and its
+content hash, including for editing. The existing viewer Edit flow cancels that
+hash before restoring a viewer-local draft; changed input gets a new acceptance
+identity. Reading never reserves or releases the FIFO and adds no persistence.
 
 Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
 It owns delivery refusal, restart-gate queue admission, native-review admission,

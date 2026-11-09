@@ -1,0 +1,9 @@
+{
+  "queued-input-reads": {
+    "commits": 0,
+    "note": "1000 real owner snapshots (half forEdit) and 1000 stale content-hash cancellation refusals; acceptance excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

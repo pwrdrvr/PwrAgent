@@ -13,7 +13,7 @@ const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join
 const hash = (input: unknown) => createHash("sha256").update(JSON.stringify(input)).digest("hex");
 const ref = { backend: "codex", threadId: "native" };
 const settle = async () => { for (let n = 0; n < 12; n++) await new Promise<void>(resolve => setImmediate(resolve)); };
-const terminal = (runtime: any) => runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "active-turn", status: "completed" } } });
+const terminal = (runtime: any) => runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: runtime.store.get(runtime.active).turnId, status: "completed" } } });
 
 async function fixture(work: (runtime: any, backend: any, store: any, profile: any, events: any[], sent: string[]) => Promise<void>) {
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
@@ -40,36 +40,43 @@ async function fixture(work: (runtime: any, backend: any, store: any, profile: a
 }
 
 it.skipIf(process.platform === "win32")("queued reads are detached snapshots; editing cancels acceptance and needs a new identity", async () => {
-  await fc.assert(fc.asyncProperty(fc.string({ minLength: 1, maxLength: 500 }).filter(text => Boolean(text.trim())), fc.boolean(), async (prompt, forEdit) => {
+  const edits = fc.array(fc.record({ prompt: fc.string({ minLength: 1, maxLength: 500 }).filter(text => Boolean(text.trim())), forEdit: fc.boolean() }), { minLength: 3, maxLength: 8 });
+  await fc.assert(fc.asyncProperty(edits, async commands => {
     await fixture(async (runtime, backend, store, _profile, events, sent) => {
-      const messageOrigin = { kind: "agent", sourceThread: { threadId: "source", backend: "codex" } };
-      const params = { id: "waiting", threadId: ref.threadId, prompt, messageOrigin };
-      const accepted = runtime.submit(params);
-      const request = { ...ref, queueEntryId: accepted.id, forEdit };
-      const revision = backend.queueProjection({ protocol: 2, ref }).revision, eventCount = events.length;
-      const snapshot = await backend.handle("backend.readQueuedTurn", request);
-      const input = [{ type: "text", text: prompt }];
-      expect(snapshot).toEqual({ queueEntryId: accepted.id, input, contentHash: hash(input), messageOrigin });
-      snapshot.input[0].text += " caller mutation";
-      snapshot.messageOrigin.sourceThread.threadId = "forged";
-      expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: accepted.id, expectedContentHash: hash(snapshot.input) })).toMatchObject({ disposition: "content_changed", cancelled: false });
-      expect(await backend.handle("backend.readQueuedTurn", request)).toEqual({ queueEntryId: accepted.id, input, contentHash: hash(input), messageOrigin });
-      expect(backend.queueProjection({ protocol: 2, ref }).revision).toBe(revision);
-      expect(events).toHaveLength(eventCount);
-      expect(store.get(accepted.id)).toEqual(accepted);
-      expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: accepted.id, expectedContentHash: snapshot.contentHash })).toMatchObject({ disposition: "cancelled", cancelled: true });
-      expect(store.get(accepted.id)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
-      expect(runtime.submit(params)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
-      expect(() => runtime.submit({ ...params, prompt: `${prompt} edited` })).toThrow("different input");
-      await expect(backend.handle("backend.readQueuedTurn", request)).rejects.toThrow("no longer waiting");
-      const replacement = runtime.submit({ ...params, id: "replacement", prompt: `${prompt} edited`, messageOrigin: undefined });
-      expect(replacement.fingerprint).not.toBe(accepted.fingerprint);
-      expect(await backend.handle("backend.readQueuedTurn", { ...request, queueEntryId: replacement.id })).not.toHaveProperty("messageOrigin");
-      terminal(runtime); await settle();
-      expect(sent).toEqual(["active", `${prompt} edited`]);
-      expect(store.get(accepted.id)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+      const expected = ["active"];
+      // One admitted host owns the generated edit sequence. Reuse its real
+      // profile rather than migrate and fsync a fresh profile for each edit.
+      for (const [index, { prompt, forEdit }] of commands.entries()) {
+        const messageOrigin = { kind: "agent", sourceThread: { threadId: "source", backend: "codex" } };
+        const params = { id: `waiting${index}`, threadId: ref.threadId, prompt, messageOrigin };
+        const accepted = runtime.submit(params);
+        const request = { ...ref, queueEntryId: accepted.id, forEdit };
+        const revision = backend.queueProjection({ protocol: 2, ref }).revision, eventCount = events.length;
+        const snapshot = await backend.handle("backend.readQueuedTurn", request);
+        const input = [{ type: "text", text: prompt }];
+        expect(snapshot).toEqual({ queueEntryId: accepted.id, input, contentHash: hash(input), messageOrigin });
+        snapshot.input[0].text += " caller mutation";
+        snapshot.messageOrigin.sourceThread.threadId = "forged";
+        expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: accepted.id, expectedContentHash: hash(snapshot.input) })).toMatchObject({ disposition: "content_changed", cancelled: false });
+        expect(await backend.handle("backend.readQueuedTurn", request)).toEqual({ queueEntryId: accepted.id, input, contentHash: hash(input), messageOrigin });
+        expect(backend.queueProjection({ protocol: 2, ref }).revision).toBe(revision);
+        expect(events).toHaveLength(eventCount);
+        expect(store.get(accepted.id)).toEqual(accepted);
+        expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: accepted.id, expectedContentHash: snapshot.contentHash })).toMatchObject({ disposition: "cancelled", cancelled: true });
+        expect(store.get(accepted.id)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+        expect(runtime.submit(params)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+        expect(() => runtime.submit({ ...params, prompt: `${prompt} edited` })).toThrow("different input");
+        await expect(backend.handle("backend.readQueuedTurn", request)).rejects.toThrow("no longer waiting");
+        const replacement = runtime.submit({ ...params, id: `replacement${index}`, prompt: `${prompt} edited`, messageOrigin: undefined });
+        expect(replacement.fingerprint).not.toBe(accepted.fingerprint);
+        expect(await backend.handle("backend.readQueuedTurn", { ...request, queueEntryId: replacement.id })).not.toHaveProperty("messageOrigin");
+        terminal(runtime); await settle();
+        expected.push(`${prompt} edited`);
+        expect(sent).toEqual(expected);
+        expect(store.get(accepted.id)).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+      }
     });
-  }), { numRuns: 20 });
+  }), { numRuns: 6 });
 });
 
 it.skipIf(process.platform === "win32")("queued reads qualify backend and thread and do not release paused or held input", async () => {

@@ -286,11 +286,15 @@ test("owner methods require the same grants as on desktop", { timeout: 15000 }, 
   const navigation = await enroll(["thread_navigation"]);
   assert.equal((await navigation.call("getNavigationQueryPage", { protocol: 2, query: { kind: "lens", lens: "inbox" } })).entries.length, 1);
   for (const [method, params] of [["getNavigationSelectedDetail", { protocol: 2, ref }], ["getNavigationQueueProjection", { protocol: 2, ref }],
-    ["getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace }], ["listBackends", {}]]) {
+    ["getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace }], ["listBackends", {}],
+    ["readQueuedTurn", { ...ref, queueEntryId: "absent", forEdit: true }]]) {
     await assert.rejects(navigation.call(method, params), /capability/i, `${method} needs thread_detail`);
   }
   const detail = await enroll(["thread_navigation", "thread_detail"]);
   assert.equal((await detail.call("getNavigationSelectedDetail", { protocol: 2, ref })).identity, "present");
+  await owner.call("startTurn", { ...ref, input: [{ type: "text", text: "slow" }] });
+  const waiting = await owner.call("startTurn", { ...ref, queueEntryId: "detail-read", input: [{ type: "text", text: "Private queued input" }] });
+  assert.equal((await detail.call("readQueuedTurn", { ...ref, queueEntryId: waiting.queueEntryId, forEdit: true })).input[0].text, "Private queued input");
   for (const method of ["releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn"]) {
     await assert.rejects(detail.call(method, { queueEntryId: "absent" }), /capability/i, `${method} needs turn_control`);
   }

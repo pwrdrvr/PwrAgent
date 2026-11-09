@@ -1,8 +1,9 @@
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
@@ -22,6 +23,84 @@ test.beforeAll(() => {
   execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
     cwd: path.resolve(specDir, "../../.."), stdio: "pipe",
   });
+});
+
+test("a real Outpost queued message becomes a private viewer draft before edited input gets a new acceptance", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  test.setTimeout(120_000);
+  const root = realpathSync(await mkdtemp("/tmp/pa-edit-"));
+  const packageRoot = path.resolve(specDir, "../../../packages/pwragent");
+  const cli = path.join(packageRoot, "bin/pwragent.js");
+  const workspace = path.join(root, "w"), home = path.join(root, "c"), data = path.join(root, "f");
+  for (const directory of [workspace, home, data]) await mkdir(directory);
+  const env = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data };
+  const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspace, "--codex-home", home,
+    "--codex-bin", path.join(packageRoot, "test/fixtures/codex.js")], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const exited = new Promise(resolve => daemon.once("exit", resolve));
+  const command = async (args: string[]) => JSON.parse((await promisify(execFile)(process.execPath, [cli, ...args], { env })).stdout);
+  let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let output = "", errors = "";
+      daemon.stdout.on("data", chunk => { output += String(chunk); if (output.includes('"ready":true')) resolve(); });
+      daemon.stderr.on("data", chunk => { errors += String(chunk); });
+      daemon.once("error", reject);
+      daemon.once("exit", () => reject(new Error(`Outpost stopped before readiness: ${errors}`)));
+    });
+    const promptFile = path.join(root, "input.txt");
+    await writeFile(promptFile, "slow");
+    await command(["submit", "--id", "active", "--prompt-file", promptFile]);
+    await expect.poll(async () => (await command(["show", "--id", "active"])).status).toBe("running");
+    const threadId = (await command(["show", "--id", "active"])).threadId;
+    const prompt = `${"Invented queued Ω text beyond the preview. ".repeat(12)}Private edit tail.`;
+    await writeFile(promptFile, prompt);
+    const accepted = await command(["submit", "--id", "original", "--thread", threadId, "--prompt-file", promptFile]);
+    expect(accepted.status).toBe("queued");
+    const invite = await command(["federation-invite", "--port", "0"]);
+    app = await launchElectronApp({ secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json") });
+    await app.window.evaluate(async encoded => {
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encoded });
+    }, invite.invite);
+    await expect.poll(async () => app!.window.evaluate(async () =>
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status)).toBe("connected");
+    await app.window.evaluate(async ({ instanceId, threadId }) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const target = { scope: "remote" as const, instanceId };
+      await api.renameThread!({ backend: "codex", threadId, name: "Outpost queued edit", federationTarget: target });
+      const ref = { backend: "codex" as const, threadId, target };
+      await api.addRemoteThreadPin!({ ref, instanceLabel: "Invented Outpost", summary: {
+        id: threadId, source: "codex", title: "Outpost queued edit", titleSource: "explicit", linkedDirectories: [],
+        threadStatus: "active", inbox: { inInbox: true }, updatedAt: 2_000,
+        federation: { ref, instanceLabel: "Invented Outpost", peerStatus: "connected" },
+      } });
+    }, { instanceId: invite.instanceId, threadId });
+    await app.window.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Outpost queued edit", exact: true }).click();
+    const queued = app.window.locator(".composer__queued").filter({ hasText: "Invented queued Ω text" });
+    await expect(queued).toHaveCount(1);
+    await queued.getByRole("button", { name: "Edit", exact: true }).click();
+    const reply = app.window.getByLabel("Reply", { exact: true });
+    await expect(reply).toHaveText(prompt);
+    await expect(queued).toHaveCount(0);
+    expect(await command(["show", "--id", "original"])).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+    const edited = `${prompt} Locally changed.`;
+    await reply.fill(edited);
+    expect((await command(["list"])).map((job: { id: string }) => job.id).sort()).toEqual(["active", "original"]);
+    expect(await readFile(path.join(data, "calls.jsonl"), "utf8")).not.toContain("Locally changed.");
+    await app.window.locator(".composer__send-submit-button").click();
+    await expect.poll(async () => (await command(["list"])).length).toBe(3);
+    const replacement = (await command(["list"])).find((job: { id: string }) => !["active", "original"].includes(job.id));
+    expect(replacement).toMatchObject({ status: "queued", threadId });
+    expect(replacement.fingerprint).not.toBe(accepted.fingerprint);
+    await command(["interrupt", "--id", "active"]);
+    expect((await command(["wait", "--id", replacement.id])).status).toBe("completed");
+    const calls = (await readFile(path.join(data, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === prompt)).toHaveLength(0);
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === edited)).toHaveLength(1);
+  } finally {
+    await app?.close();
+    daemon.kill("SIGTERM"); await exited;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("actual Outpost held, paused and ordered queue controls hand durable outcomes to desktop without replay", async () => {

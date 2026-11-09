@@ -15,7 +15,7 @@ const OWNER_METHODS = [
   "readThread", "readTurnAssistantReply", "listSkills", "listThreadMcpServers",
   "startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread",
   "setThreadModelSettings", "setThreadExecutionMode",
-  "releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn",
+  "readQueuedTurn", "releaseQueuedTurn", "cancelQueuedTurn", "setQueuedTurnPaused", "moveQueuedTurn",
 ];
 export function ownerMethodCapabilities(methods, contract = FEDERATION_BACKEND_METHOD_CAPABILITIES) {
   return Object.fromEntries(methods.map((name) => {
@@ -445,6 +445,7 @@ export class HeadlessBackend {
       case "startThread": return this.startThread(params);
       case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);
       case "startTurn": return this.startTurn(params, envelope);
+      case "readQueuedTurn": return this.runtime.readQueuedTurn(params);
       case "releaseQueuedTurn": return this.runtime.releaseQueuedTurn(params);
       case "cancelQueuedTurn": return this.runtime.cancelQueuedTurn(params);
       case "setQueuedTurnPaused": return this.runtime.setQueuedTurnPaused(params);

@@ -564,3 +564,11 @@ one commit/4,120 bytes (0.412 MB/day at 100/day). One thousand duplicate
 release/cancel/projection requests and one thousand gated retries each make
 zero commits and add no provider sends. There is no SQLite timer, schema
 change or change to inherited budgets or the historical conformance snapshot.
+
+Outpost's existing queued-input read now returns detached full text/origin
+snapshots and a content hash. The viewer cancels that hash before editing in its
+local draft and submits changed text with a new identity. The separate
+`outpost-queued-input-write-budgets.json` measures 1,000 actual owner reads
+(including `forEdit`) and 1,000 stale-hash cancellation refusals as zero commits,
+statements, rows and WAL bytes: incremental 0 MB/day. Accepted fingerprints,
+cancellation write costs, shutdown and restart without replay are unchanged.
