@@ -3334,6 +3334,25 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("refuses generated thread/turn admissions before host preparation when another profile owner holds the lease", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("codex", "claude", "acp:kimi"), fc.boolean(), async (backend, turn) => {
+      const client = new MockBackendClient({ threads: [] });
+      const assertOwnership = vi.fn(() => { throw new Error("fixture profile owner holds the lease"); });
+      const close = vi.fn();
+      const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(),
+        ownerAdmission: { assertOwnership, close } });
+      try {
+        const request = turn
+          ? registry.startTurn({ backend, threadId: "fixture", input: [{ type: "text", text: "fixture" }] })
+          : registry.startThread({ backend, cwd: os.tmpdir() });
+        await expect(request).rejects.toThrow("fixture profile owner holds the lease");
+        expect(assertOwnership).toHaveBeenCalled();
+        expect(client.startTurnCalls).toHaveLength(0);
+      } finally { await registry.close(); }
+      expect(close).toHaveBeenCalledOnce();
+    }), { numRuns: 12 });
+  });
+
   it.each([false, true])("delivers a text final and dispatches Telegram input through the real lifecycle pipeline (legacy=%s)", async (legacy) => {
     const overlayStore = createOverlayStoreMock({ executionMode: "default" });
     const overlay = vi.spyOn(desktopOverlayStore, "getDesktopOverlayStore").mockReturnValue(overlayStore as never);
