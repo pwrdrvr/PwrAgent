@@ -119,7 +119,7 @@ beforeAll(async () => {
     ipcStateCases.push({ from, to, forbidden: true });
   }
   for (const area of ["ipc", "app-server", "future-area", "state", "storage"]) {
-    for (const binding of ["state-db", "app-runtime-instance-store", "thread-todo-store", "thread-review-storage-sqlite", "model-settings-recents-store", "overlay-store-sqlite", "thread-search-store", "provider-thread-snapshot-store", "automation-store", "scheduled-thread-action-store", "scheduled-thread-action-payload-store", "durable-turn-request-store", "acp-session-store", "acp-available-commands-store", "messaging-pairing-store", "messaging-activity-log", "operator-request-store", "token-miser-storage-sqlite"]) {
+    for (const binding of ["state-db", "app-runtime-instance-store", "thread-todo-store", "thread-review-storage-sqlite", "model-settings-recents-store", "overlay-store-sqlite", "thread-search-store", "provider-thread-snapshot-store", "automation-store", "scheduled-thread-action-store", "scheduled-thread-action-payload-store", "durable-turn-request-store", "acp-session-store", "acp-available-commands-store", "messaging-pairing-store", "messaging-activity-log", "operator-request-store", "token-miser-storage-sqlite", "acp-agent-store"]) {
       const to = `apps/desktop/src/main/storage/${binding}.ts`;
       const from = `apps/desktop/src/main/${area}/nested/sqlite-binding-${binding}.ts`;
       source(to, 'export * from "@pwragent/sqlite-storage";');
