@@ -168,8 +168,8 @@ export class Runtime {
       ...(queuedControls?.paused ? { paused: true, pauseRevision: queuedControls.pauseRevision } : {}),
     };
     this.work = threadId ? (queuedControls?.manualReleaseRequired
-      ? this.turnQueue.submitHeld(entry, queuedControls.holdReason)
-      : this.turnQueue.submit(entry)).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
+      ? this.turnQueue.submitHeld(entry, queuedControls.holdReason, { queueIndex: queuedControls.queueIndex })
+      : this.turnQueue.submit(entry, { queueIndex: queuedControls?.queueIndex })).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
     // The durable acceptance precedes inference. Socket loss cannot cancel it.
     return job;
   }

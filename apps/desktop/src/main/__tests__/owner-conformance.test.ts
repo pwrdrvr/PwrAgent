@@ -318,6 +318,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", instanceId: "forged" } } };
         const queued = (await handler(request))!;
         expect(queued.queueStatus).toBe("queued");
+        const followupText = "Invented follow-up after the consolidated message";
+        const followup = await host.client.startTurn({ ...identity, input: [{ type: "text", text: followupText }] });
+        expect(followup.queueStatus).toBe("queued");
         await expect(handler({ ...request, replaceQueueEntryId: queued.queueEntryId, messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "other", instanceId: "forged" } } })).rejects.toThrow("Only the sending thread");
         const changed = [{ type: "text" as const, text: "Invented consolidated agent message" }];
         const replacement = (await handler({ ...request, replaceQueueEntryId: queued.queueEntryId, input: changed }))!;
@@ -328,7 +331,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           await expect(handler({ ...request, replaceQueueEntryId: queued.queueEntryId, input: changed })).rejects.toThrow();
         }
         expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: replacement.queueEntryId! })).toMatchObject({ input: changed, messageOrigin: { sourceThread: { threadId: "sender" } } });
-        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([replacement.queueEntryId]);
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([replacement.queueEntryId, followup.queueEntryId]);
         await host.client.interruptTurn(active);
         await vi.waitFor(async () => {
           // These protocol fixtures retain assistant results, not user
@@ -339,6 +342,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
             .flatMap(call => (call.params.input as Array<{ text?: string }>).map(item => item.text ?? ""));
           expect(prompts.filter(text => text.includes(changed[0].text))).toHaveLength(1);
           expect(prompts.some(text => text.includes(request.input[0].text))).toBe(false);
+          expect(prompts.filter(text => text.includes(changed[0].text) || text.includes(followupText)))
+            .toEqual([changed[0].text, followupText]);
         });
       }
     } finally { await outpost?.close(); await desktop.close(); }

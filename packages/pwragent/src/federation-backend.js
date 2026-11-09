@@ -638,13 +638,16 @@ export class HeadlessBackend {
       const id = `fed-${digest([envelope.sourceInstanceId, envelope.id])}`;
       if (runtime.store.jobs.get(id)) throw new Error("Replacement requires a new acceptance identity");
       if (runtime.store.jobs.size >= 10000) throw new Error("Job retention limit reached (10000); use a new profile");
+      // Capture the live position after earlier serialized controls. Insert
+      // fresh acceptance there before its queued event or any later dispatch.
+      const queueIndex = runtime.turnQueue.getQueuedEntries(params).indexOf(entry);
       // Cancellation commits before removal or fresh acceptance. A refused
       // cancellation leaves the original waiting; a refused new acceptance
       // leaves it cancelled. Neither failure may replay the original input.
       runtime.finish(job.id, "interrupted", "Replaced before dispatch");
       runtime.turnQueue.cancelEntryWithDisposition(job.id, "Replaced before dispatch");
       const accepted = runtime.submit({ id, threadId: job.threadId, prompt, messageOrigin,
-        cwd: job.cwd, sandbox: job.sandbox, model: job.model, reasoningEffort: job.reasoningEffort, serviceTier: job.serviceTier }, entry);
+        cwd: job.cwd, sandbox: job.sandbox, model: job.model, reasoningEffort: job.reasoningEffort, serviceTier: job.serviceTier }, { ...entry, queueIndex });
       return { backend: "codex", threadId: job.threadId, turnId: `queued:${accepted.id}`, queueStatus: "queued", queueEntryId: accepted.id,
         queueEntryCreatedAt: Date.parse(accepted.createdAt) };
     });

@@ -38,7 +38,9 @@ test("an authenticated queued replacement reaches the mounted desktop with a new
     const active = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
     const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "invented-sender", instanceId: "forged" } };
     const originalText = "Invented original agent input", changedText = "Invented consolidated agent input";
+    const followupText = "Invented follow-up after consolidated input";
     const original = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: originalText }], messageOrigin });
+    const followup = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: followupText }] });
     const accepted = await command(["show", "--id", original.queueEntryId!]);
     const invite = await command(["federation-invite", "--port", "0"]);
     app = await launchElectronApp({ secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json") });
@@ -62,14 +64,19 @@ test("an authenticated queued replacement reaches the mounted desktop with a new
     expect(replacement.queueEntryId).not.toBe(original.queueEntryId);
     await expect(app.window.locator(".composer__queued").filter({ hasText: originalText })).toHaveCount(0);
     await expect(app.window.locator(".composer__queued").filter({ hasText: changedText })).toHaveCount(1);
+    expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId))
+      .toEqual([replacement.queueEntryId, followup.queueEntryId]);
     expect(await command(["show", "--id", original.queueEntryId!])).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
     expect(await command(["show", "--id", replacement.queueEntryId!])).toMatchObject({ status: "queued", messageOrigin: { sourceThread: { instanceId: outpost.viewerId } } });
     await outpost.client.interruptTurn(active);
     expect((await command(["wait", "--id", replacement.queueEntryId!])).status).toBe("completed");
+    expect((await command(["wait", "--id", followup.queueEntryId!])).status).toBe("completed");
     await expect(app.window.locator(".composer__queued").filter({ hasText: changedText })).toHaveCount(0);
     const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === originalText)).toHaveLength(0);
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === changedText)).toHaveLength(1);
+    expect(calls.filter(call => call.method === "turn/start" && call.params.threadId === identity.threadId)
+      .map(call => call.params.input[0].text).filter(text => text === changedText || text === followupText)).toEqual([changedText, followupText]);
   } finally { await app?.close(); await outpost.close(); }
 });
 
