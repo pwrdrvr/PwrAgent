@@ -68,7 +68,11 @@ function expectAlternateHostJsonRoundTrip(payload: unknown, identity: string): v
 }
 
 it("persists arbitrary alternate-host JSON through a projection without messaging channel contracts", () => {
-  fc.assert(fc.property(fc.jsonValue(), fc.string(), expectAlternateHostJsonRoundTrip), { numRuns: 40 });
+  fc.assert(fc.property(fc.jsonValue(), fc.string(), expectAlternateHostJsonRoundTrip), { numRuns: 40, examples: [
+    [-0, "scalar-negative-zero"],
+    [[-0], "array-negative-zero"],
+    [{ "": { "": -0 } }, "nested-negative-zero"],
+  ] });
 });
 
 it("persists the shrunk negative-zero payload using JSON number semantics on every read path", () => {
