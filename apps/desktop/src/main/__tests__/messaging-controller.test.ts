@@ -1,5 +1,5 @@
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
-import { ThreadTurnQueue } from "../app-server/thread-turn-queue";
+import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

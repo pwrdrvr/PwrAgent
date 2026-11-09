@@ -12,7 +12,7 @@ import {
   durableFederationCallerScope, type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
-import { ThreadTurnQueue } from "../app-server/thread-turn-queue";
+import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";

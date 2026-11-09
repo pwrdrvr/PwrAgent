@@ -3,7 +3,7 @@ import {
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
-} from "../app-server/thread-turn-queue";
+} from "@pwragent/owner-core/thread-turn-queue";
 import {
   OPEN_RESTART_GATE,
   restartGateHolds,

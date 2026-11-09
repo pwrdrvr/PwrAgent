@@ -37,7 +37,7 @@ import type {
   TrustCodexProjectRequest,
   UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
-import type { ThreadTurnQueueSubmissionResult } from "../app-server/thread-turn-queue";
+import type { ThreadTurnQueueSubmissionResult } from "@pwragent/owner-core/thread-turn-queue";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const invalidateExactOwner = vi.hoisted(() => vi.fn());

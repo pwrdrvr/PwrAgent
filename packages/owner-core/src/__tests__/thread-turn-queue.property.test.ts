@@ -4,7 +4,7 @@ import {
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
-} from "../app-server/thread-turn-queue";
+} from "../thread-turn-queue";
 
 const THREAD = { backend: "codex" as const, threadId: "model-thread" };
 const REASONS = ["locked", "awaiting-review", "target-ended"] as const;

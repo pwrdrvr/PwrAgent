@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
+import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
 import { AutomationScheduler } from "../automations/automation-scheduler";
 import { AutomationStore } from "../storage/automation-store";

@@ -9,7 +9,7 @@ import {
   type RestartGateEvent,
   type RestartGateState,
 } from "../app-server/restart-continuation-gate";
-import { ThreadTurnQueue, type ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
+import { ThreadTurnQueue, type ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 
 /**
  * A model of the turn queue behind the quiet-restart gate, wired the way

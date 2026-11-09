@@ -8,7 +8,7 @@ import { automationSuppressesBindingBroadcast } from "@pwragent/shared";
 import type {
   ThreadTurnQueueEntry,
   ThreadTurnQueueSubmissionResult,
-} from "../app-server/thread-turn-queue.js";
+} from "@pwragent/owner-core/thread-turn-queue";
 import { getMainLogger } from "../log.js";
 import { buildAutomationTurnInput } from "./automation-prompt.js";
 import type { AutomationRecord } from "@pwragent/owner-core/automation-storage";

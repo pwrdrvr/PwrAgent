@@ -3,7 +3,7 @@ import type { BrowserWindow } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachRendererProcessRecovery } from "../renderer-process-recovery";
 import { RENDERER_RECOVERY_DELAY_MS } from "../../shared/renderer-recovery";
-import { ThreadTurnQueue } from "../app-server/thread-turn-queue";
+import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 
 const mocks = vi.hoisted(() => ({ showMessageBox: vi.fn(), info: vi.fn(), error: vi.fn() }));
 vi.mock("electron", () => ({ dialog: { showMessageBox: mocks.showMessageBox } }));
