@@ -19,6 +19,32 @@ function fixture(db = openInMemoryStateDb({ profileName: "fixture" })) {
   return { db, store, managers };
 }
 
+// Viewers can be constructed before profile storage is ready. Only the first
+// owner action may resolve it; viewer close must never create an owner.
+it("resolves profile lease storage only for an admitted owner across viewer lifecycles", () => {
+  fc.assert(fc.property(fc.array(fc.constantFrom("read", "admit", "close"), { minLength: 1, maxLength: 40 }), commands => {
+    const { db, managers } = fixture();
+    const resolve = vi.fn(() => managers[0]!);
+    const admission = new ProfileThreadOwnerAdmission(resolve);
+    let closed = false;
+    let admitted = false;
+    try {
+      expect(resolve).not.toHaveBeenCalled();
+      for (const command of commands) {
+        if (command === "admit") {
+          if (closed) expect(() => admission.assertOwnership()).toThrow(/closed/);
+          else { admission.assertOwnership(); admitted = true; }
+        } else if (command === "close") {
+          admission.close();
+          closed = true;
+        }
+        expect(resolve).toHaveBeenCalledTimes(admitted ? 1 : 0);
+        expect(managers[0]!.snapshot("federation").leaseHeld).toBe(admitted && !closed);
+      }
+    } finally { admission.close(); db.close(); }
+  }), { numRuns: 35 });
+});
+
 // The independent owner is the actor with at least one retained claim. Service
 // stops cannot erase a provider claim, and closing providers cannot stop a service.
 it("matches a two-consumer owner model across generated admission and service lifecycles", () => {

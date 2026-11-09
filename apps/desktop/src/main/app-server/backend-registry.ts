@@ -55848,7 +55848,7 @@ export function getDesktopBackendRegistry(): DesktopBackendRegistry {
     // fetch, the managed-Grok install, and the 5-16s binary probe out of the
     // suite even when a test forgets to inject its own discovery stub.
     registry = new DesktopBackendRegistry({
-      ownerAdmission: new ProfileThreadOwnerAdmission(getRuntimeLeaseManager()),
+      ownerAdmission: new ProfileThreadOwnerAdmission(() => getRuntimeLeaseManager()),
       configStore: getDesktopConfigStore(),
       useMachineAcpDiscovery: true,
       useMachineClaudeDiscovery: true,
