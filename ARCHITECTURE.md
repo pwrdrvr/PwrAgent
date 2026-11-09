@@ -432,6 +432,11 @@ inventory scrubbing. Their private desktop bindings retain both runtime factory
 sites and return owner-core ports; no database handle reaches application code.
 Search refresh/prune transactions, retained usage titles and write counts stay
 unchanged.
+Shared `AutomationStore` owns persisted automation definitions, runs and
+artifacts with existing pruning and reconciliation transactions. Its private
+desktop binding injects the two existing warning sites and preserves app-state
+construction. The pure transcript merge policy lives in owner-core and is
+shared with desktop artifact rebuilding. No SQL or write count changes.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop
