@@ -1,0 +1,72 @@
+{
+  "accepted": {
+    "commits": 3,
+    "note": "One explicit Retry of an already accepted unclaimed held steer; setup and original acceptance excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "accepted-100-retries": {
+    "commits": 0,
+    "note": "One hundred repeated acceptances, explicit retries and reads; no extra native send",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "claim-refused": {
+    "commits": 0,
+    "note": "One explicit Retry of an already accepted unclaimed held steer; setup and original acceptance excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "claim-refused-100-retries": {
+    "commits": 0,
+    "note": "One hundred repeated acceptances, explicit retries and reads; no extra native send",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "confirmation-uncertain": {
+    "commits": 3,
+    "note": "One explicit Retry of an already accepted unclaimed held steer; setup and original acceptance excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "confirmation-uncertain-100-retries": {
+    "commits": 0,
+    "note": "One hundred repeated acceptances, explicit retries and reads; no extra native send",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "gated-100-retries": {
+    "commits": 0,
+    "note": "One hundred live-gated retries preserve the hold and make no writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "native-uncertain": {
+    "commits": 2,
+    "note": "One explicit Retry of an already accepted unclaimed held steer; setup and original acceptance excluded",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "native-uncertain-100-retries": {
+    "commits": 0,
+    "note": "One hundred repeated acceptances, explicit retries and reads; no extra native send",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "stop-after-retry": {
+    "commits": 2,
+    "note": "Shutdown settles original and retried guidance without replay",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  }
+}

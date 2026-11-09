@@ -1002,7 +1002,9 @@ export class ThreadTurnQueue {
     }
     const steer = found.entry.delivery === "queued-steer" && this.options.canSteerThread?.(found.entry);
     if (
-      this.admissions.has(found.key)
+      this.closed
+      || this.isDispatchHeld(found.entry)
+      || this.admissions.has(found.key)
       || this.dispatchSuspensions.has(found.key)
       || (!steer && (this.runningEntries.has(found.key)
         || (this.options.isThreadActive?.(found.entry) ?? false)))
@@ -1117,7 +1119,7 @@ export class ThreadTurnQueue {
   }
 
   private async startNext(key: string): Promise<StartNextResult> {
-    if (this.admissions.has(key) || this.dispatchSuspensions.has(key)) return "none";
+    if (this.closed || this.admissions.has(key) || this.dispatchSuspensions.has(key)) return "none";
     const queue = this.queueFor(key);
     const index = nextWaitingIndex(queue);
     const head = queue[index];
