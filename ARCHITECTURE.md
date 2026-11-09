@@ -469,6 +469,11 @@ the host service at its original lifecycle site. Object/observation identities,
 ordering, conditional updates, archive generations and immediate transactions
 are unchanged. Safe content projection, legacy filesystem migration/cleanup,
 original-output caches and buffered replay accounting remain with the service.
+Shared generic `AcpAgentStore` implements the existing ACP agent port with only
+scalar index constraints. Launch descriptors, capabilities and registry policy
+stay host-owned. Its private desktop specialization retains the explicit factory
+and both service/backend construction sites. Cache replacement, NOCASE ordering,
+backend identity, JSON guards and every SQL statement/write count are unchanged.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop

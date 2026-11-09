@@ -80,6 +80,13 @@ payload writes, archive generations, immediate legacy import and exclusive
 transactions keep their original SQL. The service still owns safe accounting
 projection, filesystem migration/cleanup, replay buffers and temporary originals.
 
+Shared generic `AcpAgentStore` implements the existing owner-core ACP agent
+port over scalar index constraints. Registry policy, launch descriptors and
+capabilities remain opaque host payloads. Desktop's private specialization
+retains the original explicit factory and service/backend construction sites.
+Registry cache replacement, backend identity, NOCASE ordering, JSON failure and
+legacy payload guards, SQL and write counts are unchanged.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -175,3 +182,11 @@ Supported Electron E2E reads portable accounting through the real Settings
 service and observes later portable commits through that retained service. The
 profile retains migration markers and archive fences; after Electron shutdown,
 the portable service restores the thread without resurrecting original output.
+
+`shared-acp-agent-storage.property.test.ts` compares independent backend/index,
+latest-cache and ordering models across portable/desktop WAL connections and
+reopens. It checks actual factory binding, arbitrary host payloads, permissive
+legacy guards, malformed/no-repair reads, detached results, atomic rollback and
+exact commit counts. Supported Electron E2E hands portable registry/agent records
+to real Settings services, observes a later portable replacement, and reads
+acknowledged updates back through portable storage after graceful shutdown.
