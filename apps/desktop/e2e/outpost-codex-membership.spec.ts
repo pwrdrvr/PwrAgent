@@ -58,13 +58,30 @@ test("desktop and Outpost retire confirmed native Codex membership while pending
       try {
         const store = new JobStore(path.join(stateDirectory, "headless"), identity, profile);
         const job = store.get("accepted");
+        let entered!: () => void;
+        let release!: () => void;
+        const renaming = new Promise<void>(resolve => { entered = resolve; });
+        const provider = new Promise<void>(resolve => { release = resolve; });
         const owner = new HeadlessBackend({ workspace: app.homeRoot, store, projects: { list: () => [] },
           onFailure(error: unknown) { throw error; }, codex: { listThreads: async ({ archived }: { archived: boolean }) => present
-            ? [{ ...native, id: archived ? "archived-native" : native.id }] : [] } }, () => {});
+            ? [{ ...native, id: archived ? "archived-native" : native.id }] : [],
+          renameThread: async () => { entered(); await provider; return { threadId: ref.threadId }; } } }, () => {});
         await owner.initialize();
         if (round === 0) {
           expect(owner.threads.get(ref.threadId)).toMatchObject({ pinnedRank: "1024" });
           expect(owner.threads.get("archived-native").archived).toBe(true);
+          const rename = owner.handle("renameThread", { ...ref, name: "Renamed native" });
+          try {
+            await renaming;
+            await owner.handle("markThreadSeen", { ...ref, seenAt: 123, seenUpdatedAt: 2 });
+            await owner.handle("setThreadModelSettings", { ...ref, model: "after-model", reasoningEffort: "high", serviceTier: "priority" });
+            await owner.handle("setThreadExecutionMode", { ...ref, executionMode: "auto" });
+            const latest = store.threadRegistry.getThreadMetadata(ref);
+            release();
+            await rename;
+            expect(store.threadRegistry.getThreadMetadata(ref)).toEqual({ ...latest,
+              title: { text: "Renamed native", source: "explicit", nativeName: "Renamed native" } });
+          } finally { release(); await rename; }
           present = false;
           await owner.refreshThreads();
         }
@@ -74,7 +91,8 @@ test("desktop and Outpost retire confirmed native Codex membership while pending
         expect(owner.threads.get("accepted-owner")).toBeDefined();
         expect(store.get("accepted")).toEqual(job);
         expect(job).toMatchObject({ fingerprint: "accepted-input-identity", threadId: "accepted-owner", turnId: "accepted-turn", status: "completed" });
-        expect(store.threadRegistry.getThreadMetadata(ref)).toMatchObject({ pinnedRank: "1024", seenUpdatedAt: 2, model: "retained-model", fastMode: true });
+        expect(store.threadRegistry.getThreadMetadata(ref)).toMatchObject({ pinnedRank: "1024", seenAt: 123, seenUpdatedAt: 2,
+          model: "after-model", reasoningEffort: "high", serviceTier: "priority", executionMode: "auto", fastMode: true });
       } finally { profile.close(); }
     }
     const fixture = JSON.parse(await readFile(path.join(specDir, "fixtures/smoke/replay.fixture.json"), "utf8"));

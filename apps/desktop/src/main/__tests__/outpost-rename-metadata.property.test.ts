@@ -107,3 +107,11 @@ it("provider rename completion preserves every concurrent canonical owner update
 it("acknowledging update 123 during rename never restores the old read watermark 1", async () => {
   await renameWithConcurrentUpdates([{ kind: "seen", value: 123 }], "explicit", false);
 });
+
+it("rename preserves concurrent owner updates at timestamp zero", async () => {
+  await renameWithConcurrentUpdates([{ kind: "owner", value: 0 }], "explicit", false);
+});
+
+it("rename preserves concurrent model settings and execution mode", async () => {
+  await renameWithConcurrentUpdates([{ kind: "model", value: "after" }, { kind: "mode", value: "auto" }], "derived", false);
+});
