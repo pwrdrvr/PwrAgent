@@ -56,8 +56,12 @@ test("durable Outpost steering delivers once to the mounted active turn while it
     }, { instanceId: outpost.ownerInstanceId, threadId: identity.threadId });
     await app.window.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Invented durable steering", exact: true }).click();
     const queued = app.window.locator(".composer__queued").filter({ hasText: "Invented waiting input" });
+    const thinking = app.window.getByRole("img", { name: "Thinking on another instance", exact: true });
     await expect(queued).toHaveCount(1);
-    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await expect(thinking).toHaveCount(1);
+    expect(await outpost.client.resolveThreadAdmissionState({ backend: "codex", threadId: identity.threadId })).toMatchObject({ activeTurn: {
+      backend: "codex", threadId: identity.threadId, turnId: active.turnId,
+    } });
     const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
       request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text: "Invented durable interjection" }] } };
     request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(outpost.ownerInstanceId, request)).digest("hex");
@@ -66,11 +70,14 @@ test("durable Outpost steering delivers once to the mounted active turn while it
     expect(receipt).toMatchObject({ state: "dispatched", operation: "steerTurn", result: { ok: true, turnId: active.turnId, requestId: receipt!.queueEntryId } });
     expect(receipts.every(result => result.queueEntryId === receipt!.queueEntryId)).toBe(true);
     await expect(queued).toHaveCount(1);
-    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    await expect(thinking).toHaveCount(1);
+    expect(await outpost.client.resolveThreadAdmissionState({ backend: "codex", threadId: identity.threadId })).toMatchObject({ activeTurn: {
+      backend: "codex", threadId: identity.threadId, turnId: active.turnId,
+    } });
     expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: { backend: "codex", threadId: identity.threadId } })).entries.map(entry => entry.queueEntryId)).toEqual([waiting.queueEntryId]);
     await outpost.client.interruptTurn(active);
     await expect(queued).toHaveCount(0);
-    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    await expect(thinking).toHaveCount(0);
     expect(await outpost.client.submitSteerRequest(request)).toEqual(receipt);
     const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
     const steers = calls.filter(call => call.method === "turn/steer");
