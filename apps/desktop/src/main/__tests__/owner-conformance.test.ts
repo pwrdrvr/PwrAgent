@@ -337,7 +337,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_steer_requests_v1"] }],
           remoteBackend: () => host.client,
         });
-        const value = (text: string, id = randomUUID()): SubmitDurableSteerRequest => {
+        const value = (text: string, id: string = randomUUID()): SubmitDurableSteerRequest => {
           const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id, createdAt: Date.now(), payloadHash: "" },
             request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text }] } };
           request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(host.ownerInstanceId, request)).digest("hex");

@@ -35,7 +35,7 @@ async function fixture(work: (f: any) => Promise<void>) {
     const envelope = { sourceInstanceId: "issuer", targetInstanceId: federation.state.instanceId, id: "transport" };
     const submit = (value: SubmitDurableSteerRequest, callerScope = "device", sourceInstanceId = "issuer") => backend.handle("backend.submitSteerRequest", { ...value, callerScope }, { ...envelope, sourceInstanceId });
     const get = (value: SubmitDurableSteerRequest, callerScope = "device", sourceInstanceId = "issuer") => backend.handle("backend.getSteerRequest", { ...ref, id: value.clientRequest.id, callerScope }, { ...envelope, sourceInstanceId });
-    const value = (text = "steer", id = randomUUID(), expectedTurnId = "turn-1"): SubmitDurableSteerRequest => {
+    const value = (text = "steer", id: string = randomUUID(), expectedTurnId = "turn-1"): SubmitDurableSteerRequest => {
       const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id, createdAt: Date.now(), payloadHash: "" },
         request: { ...ref, expectedTurnId, input: [{ type: "text", text }] } };
       request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(federation.state.instanceId, request)).digest("hex");
