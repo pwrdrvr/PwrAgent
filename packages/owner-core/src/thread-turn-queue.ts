@@ -1346,16 +1346,21 @@ export class ThreadTurnQueue {
   private async clearQueueHold(key: string): Promise<void> {
     this.heldQueues.delete(key);
     const queue = this.queuedEntries.get(key) ?? [];
-    for (let index = 0; index < queue.length; index += 1) {
-      const current = queue[index];
-      if (!current) continue;
-      const released = {
-        ...current,
-        manualReleaseRequired: undefined,
-        holdReason: undefined,
-      };
-      queue[index] = released;
-      await this.emit({ type: "queued", entry: released, position: index + 1 });
+    // Finish this release before publication yields to another hold. That
+    // hold must cover the whole waiting FIFO without retaining old causes.
+    const released = queue.map((current) => ({
+      ...current,
+      manualReleaseRequired: undefined,
+      holdReason: undefined,
+    }));
+    for (let index = 0; index < released.length; index += 1) queue[index] = released[index]!;
+    for (const [index, entry] of released.entries()) {
+      // Retry answered only the old review. Never publish its release over
+      // a newer hold, or resurrect an entry cancelled during publication.
+      if (this.heldQueues.has(key)) return;
+      const currentIndex = queue[index] === entry ? index : queue.indexOf(entry);
+      if (currentIndex < 0) continue;
+      await this.emit({ type: "queued", entry, position: currentIndex + 1 });
     }
   }
 

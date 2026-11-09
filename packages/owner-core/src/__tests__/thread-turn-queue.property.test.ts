@@ -33,6 +33,7 @@ async function retryWithNewHold(count: number, publication: number): Promise<voi
     // A hold arriving after Retry's release boundary covers every still-waiting
     // input. Removing its introducing entry does not release anyone's review.
     expect(queue.getQueuedEntries(THREAD).every(entry => entry.manualReleaseRequired === true)).toBe(true);
+    expect(queue.getQueuedEntries(THREAD).every(entry => entry.holdReason === "independent new review")).toBe(true);
     expect([...observed.values()].every(Boolean)).toBe(true);
     queue.cancelEntryWithDisposition("new-review");
     await new Promise<void>(resolve => setImmediate(resolve));
@@ -51,6 +52,39 @@ it("Retry cannot release a newer review hold while publishing its older release"
 
 it("cancelling only the new review entry keeps the older input held", async () => {
   await retryWithNewHold(1, 0);
+});
+
+it("new failure holds own every waiting input and can be independently released after Retry yields", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.nat(), fc.boolean(), async (count, offset, cancelPublished) => {
+    let armed = false, publications = 0;
+    const starts: string[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async entry => { starts.push(entry.id); return { ...THREAD, turnId: entry.id }; },
+      onLifecycle: async event => {
+        if (armed && event.type === "queued" && !event.entry.manualReleaseRequired && publications++ === offset % count) {
+          armed = false;
+          if (cancelPublished) queue.cancelEntryWithDisposition(event.entry.id);
+          await queue.releaseThread({ ...THREAD, turnId: "previous-native", status: "turn/failed", errorMessage: "new failure" });
+        }
+      },
+    });
+    try {
+      for (let index = 0; index < count; index++) await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, "old review");
+      armed = true;
+      await queue.releaseEntryWithDisposition("older-0");
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const waiting = queue.getQueuedEntries(THREAD);
+      expect(waiting).toHaveLength(count - Number(cancelPublished));
+      expect(waiting.every(entry => entry.manualReleaseRequired && entry.holdReason === "new failure")).toBe(true);
+      expect(starts).toEqual([]);
+      // Retry already answered the old cause; independently releasing the
+      // newer one must not strand a row carrying an obsolete old cause.
+      await queue.releaseHold(THREAD, reason => reason === "new failure");
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(starts).toEqual([waiting[0]!.id]);
+      expect(queue.getQueuedEntries(THREAD).every(entry => !entry.manualReleaseRequired)).toBe(true);
+    } finally { queue.close(); }
+  }));
 });
 
 it("Retry admits only eligible held guidance while preserving the running queue owner", async () => {

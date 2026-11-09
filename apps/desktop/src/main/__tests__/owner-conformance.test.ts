@@ -37,6 +37,7 @@ import { ProviderThreadSnapshotStore } from "../storage/provider-thread-snapshot
 import { RetainedOwnerThreadStore } from "../storage/retained-owner-thread-store";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
@@ -324,6 +325,7 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
   it("registered desktop Retry preserves a new held result arriving during release publication", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();
     const registry = desktopOwner.registry as DesktopBackendRegistry;
     let stop = () => {};
@@ -344,7 +346,11 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           await held("new-result", "independent new review");
         }
       });
-      expect(await host.client.releaseQueuedTurn({ queueEntryId: "older-result" })).toMatchObject({ disposition: "busy" });
+      const { writes } = await measureSqliteWrites(async () => {
+        expect(await host.client.releaseQueuedTurn({ queueEntryId: "older-result" })).toMatchObject({ disposition: "busy" });
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-retry-hold-publication-write-budgets.json", scenario: "new-review-during-retry",
+        note: "Registered desktop Retry and concurrent held-result admission; original setup excluded; no SQLite writes or native work", writes });
       const request = { protocol: 2 as const, ref: identity };
       const projection = await host.client.getNavigationQueueProjection(request);
       expect(projection.entries.map(entry => ({ id: entry.queueEntryId, held: entry.manualReleaseRequired })))
@@ -357,7 +363,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         && event.notification.params.queueEntryId === "older-result");
       expect(events.at(-1)?.notification.params).toMatchObject({ status: "held", manualReleaseRequired: true });
       expect(await host.client.releaseQueuedTurn({ queueEntryId: "older-result" })).toMatchObject({ disposition: "started" });
-    } finally { stop(); await host.close(); }
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
   });
 
   it("the real desktop caller can Retry held guidance into its still-running native owner", async () => {
