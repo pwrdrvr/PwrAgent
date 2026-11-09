@@ -111,3 +111,6 @@ claims to the real desktop services and reads their mutations after shutdown.
 model across shared/desktop WAL connections and reopens. It checks rollback,
 caller isolation, expiry, write counts, immediate locking, durability restoration
 and committed claims observed from a second handle before provider dispatch.
+Supported Electron E2E reads portable receipts through the real federation
+owner, reconciles stale claims, deduplicates a new submission and reads the
+persisted results from Node after graceful shutdown.

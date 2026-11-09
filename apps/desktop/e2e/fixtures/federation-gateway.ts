@@ -63,6 +63,7 @@ import {
   type FederationPtyProcess,
 } from "../../src/main/federation/federation-pty-service";
 import { FederationRouter } from "../../src/main/federation/federation-router";
+import { FederationRpcEndpoint } from "../../src/main/federation/federation-rpc";
 import { FederationStore } from "../../src/main/storage/federation-store";
 import { FederationGatewayWebSocketServer } from "../../src/main/federation/federation-transport";
 import { removeTempRoot } from "./temp-root-cleanup";
@@ -143,6 +144,8 @@ export type InProcessFederationGateway = {
   waitForConnection: (timeoutMs?: number) => Promise<void>;
   /** Resolves when a connection completes AFTER this call (reconnects). */
   waitForNextConnection: (timeoutMs?: number) => Promise<void>;
+  /** The single authenticated desktop connected to this fixture gateway. */
+  desktopPeer: () => { instanceId: string; rpc: FederationRpcEndpoint };
   /** Stop listening and drop live connections (simulates the peer dying). */
   stop: () => Promise<void>;
   /** Come back up on the SAME port + identity so clients can reconnect. */
@@ -684,6 +687,7 @@ export async function startInProcessFederationGateway(params: {
 
   let connectionCount = 0;
   const connectedPeerIds = new Set<string>();
+  const peerRpcs = new Map<string, FederationRpcEndpoint>();
   const connectionWaiters: (() => void)[] = [];
   const buildServer = (port: number) =>
     new FederationGatewayWebSocketServer({
@@ -696,6 +700,11 @@ export async function startInProcessFederationGateway(params: {
       noiseStatic,
       onConnection: (connection) => {
         connectedPeerIds.add(connection.peerId);
+        peerRpcs.set(connection.peerId, new FederationRpcEndpoint({
+          localInstanceId: gatewayInstanceId,
+          remoteInstanceId: connection.peerId,
+          sendEnvelope: connection.sendEnvelope,
+        }));
         router.registerConnection({
           peerId: connection.peerId,
           capabilities: connection.capabilities,
@@ -711,11 +720,14 @@ export async function startInProcessFederationGateway(params: {
       },
       onDisconnect: (connection) => {
         connectedPeerIds.delete(connection.peerId);
+        peerRpcs.get(connection.peerId)?.rejectAll(new Error("Fixture desktop disconnected"));
+        peerRpcs.delete(connection.peerId);
         router.unregisterConnection(connection.peerId);
         ptyService?.notifyPeerDisconnected(connection.peerId);
         threadServices.disconnect(connection.peerId);
       },
       onEnvelope: (envelope, connection) => {
+        if (peerRpcs.get(connection.peerId)?.receiveEnvelope(envelope)) return;
         void router.routeEnvelope({
           envelope,
           sourcePeerId: connection.peerId,
@@ -803,6 +815,11 @@ export async function startInProcessFederationGateway(params: {
     },
     waitForNextConnection: async (timeoutMs = 60_000) => {
       await waitForConnectionCount(connectionCount + 1, timeoutMs);
+    },
+    desktopPeer: () => {
+      if (peerRpcs.size !== 1) throw new Error("Expected one authenticated fixture desktop");
+      const [instanceId, rpc] = [...peerRpcs][0]!;
+      return { instanceId, rpc };
     },
     stop: async () => {
       await server.stop();

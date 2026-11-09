@@ -152,8 +152,9 @@ it("commits portable and desktop start/steer claims before dispatch and retains 
     const make = () => new DurableTurnRequestService({ storage: new bindings[host]!(db), ownerInstanceId: "owner",
       now: () => now, authorize: async () => {}, dispatch: async () => {
         inspectClaim(); return { backend: "codex", threadId: "thread", turnId: "turn" };
-      }, steer: async () => {
-        inspectClaim(); return { ok: true, backend: "codex", threadId: "thread", turnId: "active-turn", disposition: "steered" };
+      }, steer: async request => {
+        inspectClaim(); return { ok: true, backend: "codex", threadId: "thread", requestId: request.requestId,
+          turnId: "active-turn", disposition: "steered" };
       } });
     const submit = (service: DurableTurnRequestService) => steering
       ? service.submitSteer("caller", request as SubmitDurableSteerRequest) : service.submit("caller", request);
