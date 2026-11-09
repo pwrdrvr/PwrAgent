@@ -90,8 +90,9 @@ it("restored provider summaries omit historical archive stamps and remain in act
         expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
         expect(await f.desktop.getThreadMetadata(ref)).toEqual(before);
         await f.desktop.setThreadArchiveTombstone({ ...ref, archivedAt: archivedAt + elapsed + 1 });
+        expect((await f.reopen().handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity).toBe("archived");
         expect((await f.reopen().handle("lookupArchivedThreads", { backend: source, threadIds: [ref.threadId] })).threads[0].archivedAt)
-          .toBe(archivedAt + elapsed + 1);
+          .toBe(archivedAt);
       }
     }), { numRuns: 20, examples: [[0, 1]] });
   } finally { f.close(); }
@@ -107,9 +108,11 @@ it("retained provider status controls seen Attention membership while Codex keep
       f.inventory.replace({ backend: "claude", observedAt: 1, threads: [{ ...native("claude"), threadStatus: projected }] });
       f.sessions.upsertSession({ backendId: "acp:removed", sessionId: "same-id", title: "ACP status", titleSource: "explicit",
         createdAt: 10, updatedAt: 20, executionMode: "default", status });
+      await f.desktop.updateThreadMetadata({ backend: "claude", threadId: "metadata-only" }, { executionMode: "default" });
       for (const backend of backends) await f.desktop.updateThreadMetadata({ backend, threadId: "same-id" }, { seenUpdatedAt: 20 });
       const { writes } = await measureSqliteWrites(async () => {
         const owner = f.reopen();
+        expect((await owner.handle("resolveThread", { backend: "claude", threadId: "metadata-only" })).thread.threadStatus).toBe("idle");
         expect((await owner.handle("resolveThread", { backend: "codex", threadId: "same-id" })).thread.threadStatus).toBe("idle");
         for (const backend of ["claude", "acp:removed"] as const) {
           const ref = { backend, threadId: "same-id" };

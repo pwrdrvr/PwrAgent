@@ -167,10 +167,12 @@ export class HeadlessBackend {
     const job = backend === "codex" ? this.latest(thread.id) : undefined;
     const createdAt = thread.createdAt ?? 0;
     const updatedAt = Math.max(thread.updatedAt ?? createdAt, job ? Date.parse(job.updatedAt) : 0);
-    return { ...projectProviderThreadSummary({ ...thread, linkedDirectories: thread.linkedDirectories ?? [] }),
+    const projected = projectProviderThreadSummary({ ...thread, linkedDirectories: thread.linkedDirectories ?? [] });
+    if (!(thread.archived ?? thread.archivedAt !== undefined)) delete projected.archivedAt;
+    return { ...projected,
       id: thread.id, title: thread.title ?? "Untitled thread", titleSource: thread.titleSource ?? "fallback", source: backend,
       createdAt, updatedAt, projectKey: cwd,
-      threadStatus: job && ACTIVE.has(job.status) ? "active" : "idle",
+      threadStatus: backend === "codex" ? (job && ACTIVE.has(job.status) ? "active" : "idle") : projected.threadStatus ?? "idle",
       linkedDirectories: thread.linkedDirectories?.length ? thread.linkedDirectories : cwd ? [{ id: cwd, kind: "local", path: cwd, label: path.basename(cwd) }] : [],
       executionMode: thread.executionMode ?? mode(thread.sandbox), model: thread.model || undefined,
       reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier,
@@ -239,7 +241,7 @@ export class HeadlessBackend {
       case "getNavigationQueryPage": {
         if (params.inventory === "viewer") throw new Error("Expected owner navigation protocol 2");
         return this.navigation.readPage({ request: params, scopeKey: envelope.sourceInstanceId || "local",
-          loadIndex: async () => this.navigationIndex() });
+          loadIndex: async () => this.navigationIndex(scope) });
       }
       case "getNavigationLaunchpadConfig": {
         if (params.protocol !== 2) throw new Error("Unsupported navigation protocol");
