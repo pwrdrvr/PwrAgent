@@ -16111,7 +16111,8 @@ describe("DesktopBackendRegistry", () => {
   it("finalizes creation visibility from the persisted parent relationship", async () => {
     await fc.assert(fc.asyncProperty(fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi"),
       fc.constantFrom<AppServerBackendKind>("codex", "claude"), fc.constantFrom("write" as const, "notification" as const, "none" as const, "unsupported" as const),
-      fc.boolean(), assertCreationVisibilityUsesSavedParent), { numRuns: 25 });
+      fc.boolean(), (backend, parentBackend, failure, explicitParentBackend) =>
+        assertCreationVisibilityUsesSavedParent(backend, parentBackend, failure, explicitParentBackend)), { numRuns: 25 });
   });
 
   it("pins an unparented root after its requested parent write rejects", async () => {
