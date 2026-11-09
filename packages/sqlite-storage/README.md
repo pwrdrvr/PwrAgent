@@ -420,3 +420,27 @@ measures the existing native delete as one commit/12,360 WAL bytes (about
 1.236 MB/day at 100 deletions/day), and 1,000 absent read rounds plus ten registry
 reopens as zero commits. Membership projection adds no SQLite write or timer:
 incremental 0 MB/day. The inherited default and conformance fixtures are unchanged.
+
+Complete Codex active/archive discovery now retires previously confirmed native
+identities independently of their retained owner metadata. The existing inventory
+storage port atomically publishes the replacement and records retirement in the
+overlay JSON; no schema changes or raw handles reach the owner. A pin-only row
+cannot resurrect after restart. Native creation records confirmation in its
+existing commit and fences older discoveries. Pending imported owners remain
+retained until native confirmation, and durable accepted jobs retain their owner
+identities and unchanged fingerprints/thread/turn outcomes without replay.
+Failed or incomplete walks publish neither inventory nor retirement; late events
+cannot recreate an absent native member. A fresh positive discovery can restore
+membership while preserving title provenance, pins, parents, seen and settings.
+
+`outpost-codex-membership.property.test.ts` models those transitions through the
+actual profile binding and owner, including overlapping reads and reopen. Actual
+desktop/daemon conformance exercises repeated protocol cursors and both native
+active/archive retirement. Supported Electron and the offline installed package
+verify pending-import and accepted-job retention through handover. The separate
+`outpost-codex-membership-write-budgets.json` records one retirement boundary as
+one commit/two statements/two changed rows/16,480 observed WAL bytes (about
+1.648 MB/day at 100 boundaries/day). Confirmed creation uses its existing one
+commit, with 16,480 observed WAL bytes. One thousand absent discoveries, late
+events and reads plus ten owner reopens add zero commits and 0 MB/day. There is
+no SQLite timer; the inherited default and conformance fixtures are unchanged.
