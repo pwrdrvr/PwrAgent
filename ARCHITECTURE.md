@@ -426,6 +426,12 @@ change-version and in-memory output closure. Desktop constructs it through a
 private storage binding at the original app-state site; the application-facing
 `desktop-overlay-store` adapter exposes its public API without its database or
 caches. State compatibility exports resolve to the same implementation.
+Shared `ThreadSearchStore` and `ProviderThreadSnapshotStore` own persisted search
+projections and provider inventory, including FTS query construction and legacy
+inventory scrubbing. Their private desktop bindings retain both runtime factory
+sites and return owner-core ports; no database handle reaches application code.
+Search refresh/prune transactions, retained usage titles and write counts stay
+unchanged.
 Desktop's `main/storage/state-db.ts` binds the database implementation; state-internal
 compatibility exports resolve to the same class and schema definitions. Only
 state internals and storage adapters may import this package or its desktop

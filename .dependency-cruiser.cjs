@@ -236,7 +236,7 @@ module.exports = {
         path: "^apps/desktop/src/main/(?!__tests__/|state/|storage/)",
       },
       to: {
-        path: "^(?:apps/desktop/src/main/(?:state/|storage/(?:state-db|app-runtime-instance-store|thread-todo-store|thread-review-storage-sqlite|model-settings-recents-store|overlay-store-sqlite)\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
+        path: "^(?:apps/desktop/src/main/(?:state/|storage/(?:state-db|app-runtime-instance-store|thread-todo-store|thread-review-storage-sqlite|model-settings-recents-store|overlay-store-sqlite|thread-search-store|provider-thread-snapshot-store)\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
       },
     },
     {

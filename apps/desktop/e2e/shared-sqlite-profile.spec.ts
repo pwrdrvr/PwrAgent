@@ -10,11 +10,78 @@ import { listModelSettingsRecents, recordModelSettingsRecent } from "@pwragent/s
 import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "@pwragent/owner-core/runtime-lease-storage";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
+import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
+import { ThreadSearchStore } from "@pwragent/sqlite-storage/thread-search-store";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+test("desktop refreshes portable inventory and search projections for the next portable owner", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    preLaunchHook(homeRoot) {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        const portable = { id: "thread-smoke", source: "codex" as const,
+          title: "Obsoleteportableprojection", titleSource: "explicit" as const,
+          linkedDirectories: [], updatedAt: 1 };
+        const inventory = new ProviderThreadSnapshotStore(db);
+        inventory.replace({ backend: "codex", observedAt: 1, threads: [portable] });
+        inventory.replace({ backend: "acp:fixture-offline", observedAt: 1,
+          threads: [{ ...portable, source: "acp:fixture-offline", id: "portable-offline",
+            title: "Portable offline inventory" }] });
+        // An old PwrAgent-owned inventory row needs scrubbing on desktop's
+        // startup read. Inspect it raw afterward so Node cannot repair it.
+        db.raw.prepare("UPDATE provider_thread_snapshots SET payload = json_set(payload, '$[0].summary', ?) WHERE backend = ?")
+          .run("Invented legacy prompt that must be scrubbed", "acp:fixture-offline");
+        const search = new ThreadSearchStore(db);
+        search.upsertThreads([portable, { ...portable, id: "portable-retained-archive",
+          title: "Portablearchivetoken", archivedAt: 2 }]);
+      } finally { db.close(); }
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const results = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const current = await api.searchThreads!({ query: "Replay", contentMode: "metadata",
+        filters: { backend: "codex" } });
+      const obsolete = await api.searchThreads!({ query: "Obsoleteportableprojection",
+        contentMode: "metadata", filters: { backend: "codex" } });
+      return { current, obsolete };
+    });
+    expect(results.current.results).toMatchObject([{ backend: "codex", threadId: "thread-smoke", title: "Replay smoke thread" }]);
+    expect(results.obsolete.results).toEqual([]);
+    const raw = new Database(stateDbPathForHomeRoot(app.homeRoot), { readonly: true });
+    try {
+      const payload = raw.prepare("SELECT payload FROM provider_thread_snapshots WHERE backend = ?")
+        .pluck().get("acp:fixture-offline") as string;
+      expect(JSON.parse(payload)).toMatchObject([{ id: "portable-offline", title: "Portable offline inventory" }]);
+      expect(payload).not.toContain("Invented legacy prompt");
+      expect(JSON.parse(payload)[0]).not.toHaveProperty("summary");
+      // Transcript/search reads can finish while startup executable discovery
+      // still holds the separate provider-inventory refresh. Observe its
+      // persisted result before closing the owner; reads cannot refresh it.
+      await expect.poll(() => JSON.parse(raw.prepare("SELECT payload FROM provider_thread_snapshots WHERE backend = 'codex'").pluck().get() as string))
+        .toMatchObject([{ id: "thread-smoke", title: "Replay smoke thread" }]);
+    } finally { raw.close(); }
+    await app.closeApplication();
+    const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+    try {
+      const search = new ThreadSearchStore(db);
+      expect(search.search({ query: "Replay", limit: 10 })).toMatchObject([{ threadId: "thread-smoke", title: "Replay smoke thread" }]);
+      expect(search.search({ query: "Obsoleteportableprojection", includeArchived: true, limit: 10 })).toEqual([]);
+      expect(search.search({ query: "Portablearchivetoken", includeArchived: true, limit: 10 }))
+        .toMatchObject([{ threadId: "portable-retained-archive", archivedAt: 2 }]);
+      expect(new ProviderThreadSnapshotStore(db).list()).toContainEqual(expect.objectContaining({
+        backend: "codex", threads: [expect.objectContaining({ id: "thread-smoke", title: "Replay smoke thread" })],
+      }));
+    } finally { db.close(); }
+  } finally { await app.close(); }
+});
 
 test("desktop reads portable owner metadata and hands its mutations back to the portable store", async () => {
   const identity = { backend: "codex" as const, threadId: "thread-smoke" };

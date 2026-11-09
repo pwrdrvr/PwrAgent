@@ -188,7 +188,7 @@ import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
-import type { ProviderThreadSnapshot } from "../storage/provider-thread-snapshot-store";
+import type { ProviderThreadSnapshot } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
 import {
   mockSubAgentReads,
