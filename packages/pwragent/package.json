@@ -55,12 +55,15 @@
     "@pwragent/shared": "workspace:*",
     "@pwragent/owner-core": "workspace:*",
     "esbuild": "0.28.2",
-    "@pwragent/agent-tools": "workspace:*"
+    "@pwragent/agent-tools": "workspace:*",
+    "@pwragent/sqlite-storage": "workspace:*"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "node-pty": "1.2.0-beta.15"
   },
   "bundleDependencies": [
+    "better-sqlite3",
     "node-pty"
   ]
 }
