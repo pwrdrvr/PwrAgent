@@ -9,7 +9,7 @@ import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-t
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
-const title = fc.stringMatching(/^[A-Za-z][A-Za-z0-9 ]{0,25}$/);
+const title = fc.stringMatching(/^[A-Za-z][A-Za-z0-9 ]{0,25}$/).map(value => value.trim());
 
 it("fresh provider discovery replaces stale inventory without losing canonical owner facts", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
@@ -21,7 +21,7 @@ it("fresh provider discovery replaces stale inventory without losing canonical o
     const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
     const overlay = new SqliteOverlayStore(db);
     const inventory = new ProviderThreadSnapshotStore(db);
-    inventory.replace({ backend: "codex", observedAt: 1, threads: [{ id: "obsolete", source: "codex", title: "Stale", linkedDirectories: [] }] });
+    inventory.replace({ backend: "codex", observedAt: 1, threads: [{ id: "obsolete", source: "codex", title: "Stale", titleSource: "explicit", linkedDirectories: [] }] });
     await overlay.updateThreadMetadata({ backend: "codex", threadId: "fresh" }, { pinnedRank: "1024", seenAt: seen + 1, seenUpdatedAt: seen,
       parent: { backend: "claude", threadId: "parent" } });
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
@@ -69,5 +69,36 @@ it("every acknowledged Outpost rename changes the native provider name before pu
       }
       expect(published).toEqual(names);
     } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+  }), { numRuns: 15 });
+});
+
+it("a provider listing begun before an acknowledged rename cannot restore the old title", async () => {
+  const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+  await fc.assert(fc.asyncProperty(title, async name => {
+    const root = realpathSync(mkdtempSync("/tmp/pa-title-race-"));
+    mkdirSync(path.join(root, "headless"), { mode: 0o700 });
+    const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+    try {
+      let nativeName = "Before";
+      let wait: Promise<void> | undefined;
+      let release: (() => void) | undefined;
+      const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
+      const runtime = { workspace: root, store, onFailure(error: unknown) { throw error; },
+        projects: { list: () => [{ path: root, label: "fixture" }] },
+        codex: { listThreads: async ({ archived }: { archived: boolean }) => {
+          const snapshot = archived ? [] : [{ id: "thread", source: "codex", title: nativeName, titleSource: "explicit", linkedDirectories: [] }];
+          await wait;
+          return snapshot;
+        }, renameThread: async ({ name }: { name: string }) => { nativeName = name; return { threadId: "thread" }; } } };
+      const backend = new HeadlessBackend(runtime, () => {});
+      await backend.initialize();
+      wait = new Promise<void>(resolve => { release = resolve; });
+      const listing = backend.refreshThreads();
+      await Promise.resolve();
+      await backend.handle("renameThread", { threadId: "thread", name: `After ${name}` });
+      release!();
+      await listing;
+      expect(backend.summary(backend.owned("thread"))).toMatchObject({ title: `After ${name}`, titleSource: "explicit" });
+    } finally { profile.close(); rmSync(root, { recursive: true, force: true }); }
   }), { numRuns: 15 });
 });
