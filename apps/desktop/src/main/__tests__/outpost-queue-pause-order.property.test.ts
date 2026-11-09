@@ -1,0 +1,174 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import fc from "fast-check";
+import { expect, it, vi } from "vitest";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
+import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+
+const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
+const settle = async () => { for (let n = 0; n < 12; n++) await new Promise<void>(resolve => setImmediate(resolve)); };
+const ref = { backend: "codex", threadId: "native" };
+const terminal = (runtime: any, turnId: string, status = "completed") => runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: turnId, status } } });
+
+// Real executable construction and real profile storage; only provider effects
+// are supplied by the fixture. The executable supports Linux and macOS.
+async function fixture(work: (runtime: any, backend: any, store: any, profile: any, events: any[], sent: string[]) => Promise<void>) {
+  const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-order-")));
+  const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+  let runtime: any;
+  try {
+    const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
+    runtime = new Runtime({ store, workspace: root, home: path.join(root, "codex"), command: "unused", onFailure() {} });
+    const sent: string[] = [], events: any[] = [];
+    runtime.codex = { startTurn: async ({ input }: any) => {
+      sent.push(input[0].text);
+      return { threadId: ref.threadId, turnId: `turn-${sent.length}` };
+    }, stop: async () => {} };
+    const backend = new HeadlessBackend(runtime, (event: any) => events.push(event.notification));
+    runtime.onEvent = (event: unknown) => backend.event(event);
+    backend.persistCreatedNativeThread({ id: ref.threadId, title: "Existing", titleSource: "explicit", cwd: root });
+    runtime.submit({ id: "active", threadId: ref.threadId, prompt: "active" }); await runtime.work;
+    await work(runtime, backend, store, profile, events, sent);
+  } finally {
+    if (runtime) await runtime.stop();
+    profile.close(); rmSync(root, { recursive: true, force: true });
+  }
+}
+
+it.skipIf(process.platform === "win32")("actual owner pause and ordering obey an independent waiting-list model without changing acceptance", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.record({ kind: fc.constantFrom("pause", "resume", "move"), from: fc.nat(3), to: fc.nat(5) }), { minLength: 1, maxLength: 18 }), async commands => {
+    await fixture(async (runtime, backend, store, _profile, events, sent) => {
+      const model = Array.from({ length: 4 }, (_, n) => ({ id: `waiting${n}`, paused: false, revision: 0 }));
+      const accepted = model.map(entry => runtime.submit({ id: entry.id, threadId: ref.threadId, prompt: entry.id }));
+      for (const command of commands) {
+        const entry = model.find(entry => entry.id === `waiting${command.from}`)!;
+        const before = backend.queueProjection({ protocol: 2, ref });
+        const eventCount = events.length;
+        if (command.kind === "move") {
+          const anchor = command.to < 4 ? `waiting${command.to}` : command.to === 4 ? undefined : "absent";
+          const from = model.indexOf(entry);
+          const to = anchor === undefined ? model.length : model.findIndex(entry => entry.id === anchor);
+          let disposition = "anchor_not_found";
+          if (to >= 0) {
+            const destination = to > from ? to - 1 : to;
+            disposition = destination === from ? "unchanged" : "moved";
+            if (disposition === "moved") { model.splice(from, 1); model.splice(destination, 0, entry); }
+          }
+          expect(await backend.handle("backend.moveQueuedTurn", { queueEntryId: entry.id, beforeQueueEntryId: anchor })).toEqual({ queueEntryId: entry.id, disposition, queueEntryIds: model.map(entry => entry.id) });
+          if (disposition === "moved") expect(events.slice(eventCount)).toContainEqual({ method: "thread/turnQueue/reordered", params: { threadId: ref.threadId, queueEntryIds: model.map(entry => entry.id) } });
+        } else {
+          const paused = command.kind === "pause", changed = entry.paused !== paused;
+          if (changed) { entry.paused = paused; entry.revision++; }
+          expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: entry.id, paused, messageOrigin: { kind: "agent", sourceInstanceId: "forged" } })).toEqual({ queueEntryId: entry.id, disposition: changed ? "updated" : "unchanged", paused, ...(entry.revision ? { pauseRevision: entry.revision } : {}) });
+          if (changed) expect(events.slice(eventCount)).toContainEqual(expect.objectContaining({ method: "thread/turnQueue/updated", params: expect.objectContaining({ queueEntryId: entry.id, paused, pauseRevision: entry.revision }) }));
+        }
+        const projection = backend.queueProjection({ protocol: 2, ref });
+        expect(projection.entries.map((item: any) => ({ id: item.queueEntryId, paused: Boolean(item.paused), revision: item.pauseRevision ?? 0 }))).toEqual(model);
+        expect(projection.entries.map((item: any) => item.position)).toEqual([0, 1, 2, 3]);
+        expect(projection.revision === before.revision).toBe(events.length === eventCount);
+        expect(accepted.map(job => store.get(job.id))).toEqual(accepted);
+        expect(sent).toEqual(["active"]);
+      }
+      for (const entry of model.filter(entry => !entry.paused)) {
+        terminal(runtime, `turn-${sent.length}`); await settle();
+        expect(sent.at(-1)).toBe(entry.id);
+      }
+      terminal(runtime, `turn-${sent.length}`); await settle();
+      for (const entry of model.filter(entry => entry.paused)) {
+        expect(await runtime.handle("resume", { id: entry.id })).toMatchObject({ disposition: "updated", paused: false, pauseRevision: entry.revision + 1 });
+        await settle(); expect(sent.at(-1)).toBe(entry.id);
+        terminal(runtime, `turn-${sent.length}`); await settle();
+      }
+      expect(sent).toEqual(["active", ...model.filter(entry => !entry.paused).map(entry => entry.id), ...model.filter(entry => entry.paused).map(entry => entry.id)]);
+      expect(new Set(sent).size).toBe(5);
+    });
+  }), { numRuns: 20 });
+});
+
+it.skipIf(process.platform === "win32")("pause and move preserve independent shared holds and their revisions", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async reverse => {
+    await fixture(async (runtime, backend, store, _profile, _events, sent) => {
+      runtime.submit({ id: "waiting0", threadId: ref.threadId, prompt: "waiting0" });
+      runtime.submit({ id: "waiting1", threadId: ref.threadId, prompt: "waiting1" });
+      await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: true });
+      terminal(runtime, "turn-1", "failed"); await settle();
+      // Independent causes are admitted through the actual shared engine;
+      // owner controls must not answer either cause on the operator's behalf.
+      const submit = runtime.turnQueue.submit.bind(runtime.turnQueue);
+      runtime.turnQueue.submit = (entry: any) => runtime.turnQueue.submitHeld(entry, "separate-lock");
+      runtime.submit({ id: "separate", threadId: ref.threadId, prompt: "separate" }); await runtime.work;
+      runtime.turnQueue.submit = submit;
+      const before = structuredClone(runtime.turnQueue.getAllQueuedEntries());
+      const job = store.get("waiting0");
+      expect(await backend.handle("backend.moveQueuedTurn", { queueEntryId: reverse ? "waiting0" : "waiting1", beforeQueueEntryId: reverse ? "waiting1" : "waiting0" })).toMatchObject({ disposition: "held" });
+      expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting1", paused: true })).toMatchObject({ disposition: "held" });
+      expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: false })).toMatchObject({ disposition: "updated", paused: false, pauseRevision: 2 });
+      expect(runtime.turnQueue.getAllQueuedEntries().map(({ id, holdReason, holdRevision, manualReleaseRequired }: any) => ({ id, holdReason, holdRevision, manualReleaseRequired }))).toEqual(before.map(({ id, holdReason, holdRevision, manualReleaseRequired }: any) => ({ id, holdReason, holdRevision, manualReleaseRequired })));
+      await runtime.turnQueue.releaseHold(ref, (reason: string) => reason === "separate-lock"); await settle();
+      expect(sent).toEqual(["active"]);
+      expect(store.get("waiting0")).toEqual(job);
+    });
+  }), { numRuns: 4 });
+});
+
+it.skipIf(process.platform === "win32")("queued controls serialize with admission and shutdown without replaying accepted work", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async stop => {
+    await fixture(async (runtime, backend, store, profile, _events, sent) => {
+      const accepted = runtime.submit({ id: "waiting", threadId: ref.threadId, prompt: "waiting" });
+      let unlock!: () => void, entered!: () => void;
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      const barrier = runtime.turnQueue.withDispatchSuspended(ref, async () => { entered(); await new Promise<void>(resolve => { unlock = resolve; }); });
+      await ready;
+      const pause = backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting", paused: true }).catch((error: Error) => ({ error }));
+      const move = backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting" }).catch((error: Error) => ({ error }));
+      terminal(runtime, "turn-1");
+      if (stop) await runtime.stop();
+      unlock(); await barrier;
+      expect((await pause).disposition).toBe(stop ? "not_found" : "updated");
+      expect((await move).disposition).toBe(stop ? "not_found" : "unchanged");
+      await settle(); expect(sent).toEqual(["active"]);
+      if (!stop) {
+        expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting", paused: false })).toMatchObject({ disposition: "updated" });
+        await settle(); expect(sent).toEqual(["active", "waiting"]);
+        expect(await backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting" })).toMatchObject({ disposition: "not_found" });
+        await runtime.stop();
+      }
+      const { JobStore } = await load("store.js");
+      runtime.store = new JobStore(path.dirname(store.directory), { version: 1, workspace: runtime.workspace, codexHome: path.join(runtime.workspace, "codex") }, profile);
+      runtime.stopping = false;
+      expect(runtime.submit({ id: "waiting", threadId: ref.threadId, prompt: "waiting" })).toMatchObject({ status: "unknown", fingerprint: accepted.fingerprint });
+      expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting", paused: false })).toMatchObject({ disposition: "not_found" });
+    });
+  }), { numRuns: 4 });
+});
+
+it.skipIf(process.platform === "win32")("pause and ordering invalidate paged projections and make zero SQLite commits", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  try {
+    await fixture(async (runtime, backend, store) => {
+      for (let n = 0; n < 101; n++) runtime.submit({ id: `waiting${n}`, threadId: ref.threadId, prompt: `waiting${n}` });
+      const page = backend.queueProjection({ protocol: 2, ref });
+      expect(page.entries).toHaveLength(100); expect(page.complete).toBe(false);
+      const accepted = [...store.jobs.values()];
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let n = 0; n < 100; n++) {
+          await runtime.handle("pause", { id: "waiting0" });
+          await runtime.handle("pause", { id: "waiting0" });
+          await runtime.handle("move", { id: "waiting1", before: "waiting0" });
+          await runtime.handle("resume", { id: "waiting0" });
+          await runtime.handle("move", { id: "waiting0", before: "waiting1" });
+          backend.queueProjection({ protocol: 2, ref });
+        }
+      });
+      expectSqliteWriteBudget({ budgetFile: "outpost-queue-pause-order-write-budgets.json", scenario: "waiting-controls", note: "100 pause/duplicate-pause/resume and two ordering requests plus projections while provider is active; in-memory changes only", writes });
+      expect([...store.jobs.values()]).toEqual(accepted);
+      expect(() => backend.queueProjection({ protocol: 2, ref, cursor: page.nextCursor })).toThrow("Queue changed");
+      await expect(backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: "false" })).rejects.toThrow("boolean");
+      await expect(backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting0", beforeQueueEntryId: 42 })).rejects.toThrow("queue entry");
+    });
+  } finally { vi.unstubAllEnvs(); }
+});
