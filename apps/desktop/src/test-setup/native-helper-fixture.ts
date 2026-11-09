@@ -7,7 +7,7 @@ import { wrapCommandInWindowsJob } from "../main/windows-job-wrapper";
 
 export async function runNativeFixtureCommand(command: string, args: string[]): Promise<void> {
   const launch = process.platform === "win32"
-    ? wrapCommandInWindowsJob({ command, args, env: process.env })
+    ? wrapCommandInWindowsJob({ command, args, env: process.env, terminateDescendantsOnExit: true })
     : { command, args, env: process.env, cleanup: () => {} };
   try {
     const child = spawn(launch.command, launch.args, {

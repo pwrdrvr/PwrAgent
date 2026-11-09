@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TestProject, TestSpecification } from "vitest/node";
 import setup from "../../test-setup/native-helper-fixtures";
 import { runNativeFixtureCommand } from "../../test-setup/native-helper-fixture";
@@ -39,6 +39,9 @@ function projectFixture(selected: string[], lane: string[]) {
 }
 
 describe("native helper preparation", () => {
+  beforeEach(() => { vi.spyOn(console, "info").mockImplementation(() => {}); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
   // The chosen lane is the selection oracle. Every selected consumer owns a
   // distinct directory; other files and other lanes must invoke no compiler.
   it("prepares exactly the consumers in the selected shard and removes only its outputs", async () => {

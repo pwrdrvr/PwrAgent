@@ -48,11 +48,13 @@ describe("native helper fixture ownership", () => {
 
   // The process table and filesystem are independent oracles. The driver
   // exits before its compiler, which closes stdio but still owns main.obj.
+  // Finite Windows builds retire that descendant; POSIX waits for completion.
   it.each([0, 7])("drains a compiler descendant after driver exit %s before publishing readiness or removing files", async (exitCode) => {
     const control = mkdtempSync(path.join(os.tmpdir(), "native-compiler-control-"));
     const entered = path.join(control, "entered"), release = path.join(control, "release");
     const done = path.join(control, "done");
     const driverPid = path.join(control, "driver");
+    const driverExit = path.join(control, "driver-exit");
     const compiler = `
       const fs = require("node:fs");
       const [root, entered, release, done] = process.argv.slice(1);
@@ -75,7 +77,11 @@ describe("native helper fixture ownership", () => {
           ["-e", ${JSON.stringify(compiler)}, ...process.argv.slice(1)],
           { stdio: "ignore", detached: process.platform === "win32" });
         child.unref();
-        process.exitCode = ${exitCode};
+        function finishDriver() {
+          if (!require("node:fs").existsSync(${JSON.stringify(driverExit)})) return setTimeout(finishDriver, 10);
+          process.exitCode = ${exitCode};
+        }
+        finishDriver();
       `;
       await runNativeFixtureCommand(process.execPath, ["-e", driver, root, entered, release, done]);
     });
@@ -85,16 +91,27 @@ describe("native helper fixture ownership", () => {
     try {
       await vi.waitFor(() => {
         expect(existsSync(entered)).toBe(true);
-        expect(isProcessIdAlive(Number(readFileSync(driverPid, "utf8")))).toBe(false);
+        expect(isProcessIdAlive(Number(readFileSync(driverPid, "utf8")))).toBe(true);
       }, { timeout: 5_000 });
       expect(settled).toBe(false);
       cleanup = fixture.dispose();
+      await Promise.resolve();
       expect(existsSync(path.join(fixture.root, "main.obj"))).toBe(true);
+      writeFileSync(driverExit, "driver finished");
+      if (process.platform !== "win32") {
+        await vi.waitFor(() => expect(isProcessIdAlive(Number(readFileSync(driverPid, "utf8")))).toBe(false));
+        expect(settled).toBe(false);
+        writeFileSync(release, "finish compilation");
+      }
+      await vi.waitFor(() => expect(settled).toBe(true), { timeout: 5_000 });
+      await result;
+      expect(isProcessIdAlive(Number(readFileSync(entered, "utf8")))).toBe(false);
+      expect(existsSync(done)).toBe(process.platform !== "win32");
     } finally {
+      writeFileSync(driverExit, "driver finished");
       writeFileSync(release, "finish compilation");
       await result;
       await vi.waitFor(() => {
-        expect(existsSync(done)).toBe(true);
         expect(isProcessIdAlive(Number(readFileSync(entered, "utf8")))).toBe(false);
       }, { timeout: 5_000 });
       await (cleanup ?? fixture.dispose());

@@ -57,10 +57,12 @@ export default async function setup(project: TestProject): Promise<() => Promise
     await Promise.all(required.map(async (consumer) => {
       let fixture = fixtures.get(consumer);
       if (!fixture) {
+        console.info(`[native-helper-fixtures] preparing ${consumer}`);
         fixture = createNativeHelperFixture((root) => buildHelpers(root, consumer === "mcpIpc"));
         fixtures.set(consumer, fixture);
       }
       paths[consumer] = await fixture.ready;
+      console.info(`[native-helper-fixtures] ready ${consumer}`);
     }));
     project.provide("nativeHelperFixtures", { ...paths });
   };

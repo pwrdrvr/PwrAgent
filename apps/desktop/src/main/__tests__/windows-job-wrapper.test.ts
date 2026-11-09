@@ -64,6 +64,28 @@ async function runWrappedCommand(params: {
 }
 
 describe("wrapCommandInWindowsJob", () => {
+  it("retires descendants after driver exit only when the finite-build caller requests it", () => {
+    for (const enabled of [undefined, true]) {
+      const wrapped = wrapCommandInWindowsJob({
+        command: "C:\\tools\\compiler.exe",
+        args: [],
+        env: { SystemRoot: "C:\\Windows" },
+        terminateDescendantsOnExit: enabled,
+      });
+      try {
+        expect(wrapped.env.PWRAGENT_JOB_WRAPPER_TERMINATE_DESCENDANTS).toBe(enabled ? "1" : "0");
+        const script = readFileSync(wrapped.args.at(-1)!, "utf8");
+        const exited = script.indexOf('WriteStartupPhase(startupStatusFile, startupStartedAt, "target-exited")');
+        const terminate = script.indexOf("if (!TerminateJobObject(job, 0))");
+        const drained = script.indexOf("while (ReadActiveProcessCount(job) > 0)");
+        expect(script).toContain("if (terminateDescendants && ReadActiveProcessCount(job) > 0)");
+        expect(exited).toBeGreaterThan(0);
+        expect(terminate).toBeGreaterThan(exited);
+        expect(drained).toBeGreaterThan(terminate);
+      } finally { wrapped.cleanup(); }
+    }
+  });
+
   it("bounds host launch, phase progress, and overall readiness", () => {
     expect(WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS).toBe(20_000);
     expect(WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS).toBe(10_000);
