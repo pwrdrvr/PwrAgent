@@ -59,6 +59,13 @@ retain both explicitly typed runtime factories and their app-state construction
 sites. Stored backend ownership, history stripping and legacy history markers,
 archive identity-keyset pages, command filtering, SQL and write counts remain unchanged.
 
+Shared `MessagingPairingStore` and `MessagingActivityLog` implement owner-core
+pairing and activity ports. Desktop's private bindings retain both original
+explicit factories and app-state construction sites. Profile-secret generation,
+qualified HMACs and timing-safe matching, expiry/approval transitions, activity
+payloads, response freshness, list bounds and retention keep their existing SQL
+and write counts. Sharing storage grants no messaging or federation access.
+
 The schema remains at `user_version = 80`. Existing SQL, migration transactions,
 convergence checks, lazy payload moves, garbage collection and write metrics
 retain their original lifecycle. `state-schema.ts` also supplies table definitions
@@ -127,3 +134,11 @@ connections and reopens. It checks detached reads, malformed and legacy payloads
 atomic session/command visibility, rollback and exact unchanged write counts.
 Supported Electron E2E reads portable ACP metadata and commands through the real
 desktop services, applies provider/owner updates, and hands them back to Node.
+
+`shared-messaging-storage.property.test.ts` compares independent pairing,
+HMAC/security and activity models across portable/desktop WAL connections and
+reopens. It checks profile isolation, transition/expiry gates, detached payloads,
+bounded cursors, monotone freshness, per-origin retention, atomic rollback and
+unchanged write counts. Supported Electron E2E reads portable pairing/activity
+facts through real desktop services, generates and dismisses local requests,
+then hands the persisted mutations back to Node with messaging disabled.
