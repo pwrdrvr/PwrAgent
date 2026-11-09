@@ -264,7 +264,7 @@ test("ungranted mutation capabilities and wrong pinned keys fail closed", { time
   const second = decodeFederationInvite((await h.rpc("federation-invite", { port: Number(new URL(invite.gatewayUrl).port) })).invite);
   await assert.rejects(viewer({ ...second, gatewayPublicKeyPem: generateFederationIdentityKeyPair().publicKeyPem }), /Invalid federation auth challenge/);
   assert.equal(h.calls().filter((message) => message.method === "thread/start").length, 0);
-  const limited = await viewer(second, undefined, "enroll", [...HEADLESS_CAPABILITIES, "durable_turn_requests_v1"]);
+  const limited = await viewer(second, undefined, "enroll", [...HEADLESS_CAPABILITIES, "pending_request_control"]);
   t.after(() => limited.connection.close());
   assert.deepEqual(limited.connection.capabilities, HEADLESS_CAPABILITIES);
   limited.connection.close();
