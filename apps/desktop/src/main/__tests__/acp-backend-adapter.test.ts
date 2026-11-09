@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type {
   AcpAgentUpdateStatus,
   AcpBackendId,
@@ -29,6 +30,19 @@ const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures/acp-transcripts",
 );
+
+it("maintenance inventory includes stored backends after their agents are uninstalled", async () => {
+  await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.constantFrom("acp:grok", "acp:kimi", "acp:gemini")), async (stored) => {
+    const adapter = new AcpBackendAdapter({
+      captureStores: [], discoverLocalAcpAgents: async () => [],
+      acpAgentStore: { getInstalledAgent: () => undefined, listInstalledAgents: () => [], upsertInstalledAgent: () => {} },
+      acpSessionStore: { getSession: () => undefined, listSessions: () => [], listBackendIds: () => stored as AcpBackendId[] },
+      emit: async () => {}, handleServerRequest: async () => ({}),
+    });
+    try { expect((await adapter.archiveCleanupBackendIds()).sort()).toEqual([...stored].sort()); }
+    finally { await adapter.close(); }
+  }));
+});
 
 describe("inputToAcpPrompt", () => {
   it("embeds trusted local image bytes for ACP providers", async () => {

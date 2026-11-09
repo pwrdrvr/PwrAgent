@@ -70,14 +70,10 @@ export function CheckoutHibernationSettings(props: {
             min={1} max={3650} key={`idle:${policy.idleDays}`} defaultValue={policy.idleDays}
             onBlur={(event) => { void save({ idleDays: Number(event.target.value) }); }} />} />
         <SettingsField label="Largest snapshot"
-          sub="A checkout with more uncommitted changes than this is kept."
+          sub="Tracked and non-ignored changes are saved; a checkout with more than this is kept. Ignored files are deleted and not restored."
           control={<Select aria-label="Largest snapshot" className="settings-input select-trigger"
             disabled={disabled} options={SNAPSHOT_OPTIONS} value={String(policy.maxSnapshotMb)}
             onChange={(value) => { void save({ maxSnapshotMb: Number(value) }); }} />} />
-        <SettingsField label="Remove rebuildable output"
-          sub="Ignored folders such as node_modules and build output go with the checkout. Off, any ignored file keeps it."
-          control={<SettingsSwitch label="Remove rebuildable output" checked={policy.removeRebuildableOutput}
-            disabled={disabled} onChange={(removeRebuildableOutput) => { void save({ removeRebuildableOutput }); }} />} />
         <SegmentedField label="Restore the checkout"
           sub="Project environment setup runs again after a restore."
           disabled={disabled}

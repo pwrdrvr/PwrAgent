@@ -275,7 +275,7 @@ type AcpAgentStoreLike = AcpAgentStorage<AcpRegistrySnapshot, AcpInstalledAgentR
 
 export type AcpSessionStoreLike =
   Pick<AcpSessionStorage, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStorage, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage">>;
+  Partial<Pick<AcpSessionStorage, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage" | "listBackendIds">>;
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
@@ -1543,6 +1543,13 @@ export class AcpBackendAdapter {
     for (const registryId of registryIds) {
       this.invalidatedProviderRegistryIds.add(registryId);
     }
+  }
+
+  async archiveCleanupBackendIds(): Promise<AcpBackendId[]> {
+    return [...new Set([
+      ...(await this.listAvailableAgents()).map((agent) => agent.backendId),
+      ...this.acpSessionStore?.listBackendIds?.() ?? [],
+    ])];
   }
 
   listSessions(

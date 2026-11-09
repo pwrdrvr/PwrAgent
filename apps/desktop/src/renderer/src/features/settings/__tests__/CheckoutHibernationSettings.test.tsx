@@ -16,7 +16,11 @@ describe("CheckoutHibernationSettings", () => {
     const limit = screen.getByRole("combobox", { name: "Largest snapshot" });
     expect(limit).toHaveAttribute("data-value", "100");
     expect(selectOptionLabels(limit)).toEqual(["5 MB", "10 MB", "25 MB", "50 MB", "100 MB"]);
-    expect(screen.getByRole("switch", { name: "Remove rebuildable output" })).toBeChecked();
+    // Ignored files never keep a checkout, so there is nothing to switch.
+    expect(screen.queryByRole("switch", { name: /rebuildable|ignored/i })).toBeNull();
+    expect(screen.getByText(/Tracked and non-ignored changes are saved; a checkout with more than this is kept\. Ignored files are deleted and not restored\./))
+      .toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/any ignored file keeps/i);
     expect(screen.getByRole("radio", { name: /On send/ })).toHaveAttribute("aria-checked", "true");
   });
 

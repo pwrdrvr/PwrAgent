@@ -1,5 +1,5 @@
 import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
-import type { AcpBackendId } from "@pwragent/shared";
+import { isAcpBackendId, type AcpBackendId } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db.js";
 
 type AcpPersistedTranscriptUpdate = {
@@ -9,6 +9,11 @@ type AcpPersistedTranscriptUpdate = {
 
 export class AcpSessionStore implements AcpSessionStorage {
   constructor(private readonly stateDb: StateDb) {}
+
+  listBackendIds(): AcpBackendId[] {
+    return (this.stateDb.raw.prepare("SELECT DISTINCT backend_id FROM acp_sessions").all() as { backend_id: string }[])
+      .map((row) => row.backend_id).filter(isAcpBackendId);
+  }
 
   upsertSession(metadata: AcpSessionMetadata): void {
     const persistableMetadata = stripAcpSessionHistory(metadata);

@@ -9,8 +9,10 @@ import {
   buildThreadIdentityKey,
   isCodexChatsDirectory,
   toolWorktreeRootOwner,
+  type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
+import path from "node:path";
 
 export const THREAD_ARCHIVE_SWEEP_INTERVAL_MS = 60 * 60_000;
 export const THREAD_ARCHIVE_SWEEP_START_DELAY_MS = 60_000;
@@ -18,10 +20,16 @@ export const THREAD_ARCHIVE_SWEEP_START_DELAY_MS = 60_000;
 export type ThreadArchiveCandidate = {
   thread: AppServerThreadSummary;
   overlay?: ThreadOverlayState;
+  /** This read verified the attached linked checkout inside a canonical
+   * PwrAgent root or against its explicit operator registration receipt.
+   * Recomputed on the final ownership recheck. */
+  managedWorktreePath?: string;
   /** A sub-agent card on the thread is still pending, running or blocked. */
   activeSubAgent?: boolean;
   /** A PR watch (watching or dispatching) will wake the thread. */
   activePrWatch?: boolean;
+  /** The already-read watches, so maintenance can identify the protecting PR. */
+  activePrWatches?: ThreadPullRequestWatchSummary[];
   /** A Continue After wait holds this thread's merge. */
   mergeHeld?: boolean;
   /** Its overlay or sub-agent state could not be read; fail closed. */
@@ -70,7 +78,6 @@ type SweepPhase = DesktopThreadArchiveSweepFailure["phase"];
 /** Keep reasons Thread Maintenance and hibernation report for a checkout that must stay. */
 export const WORKSPACE_KEEP_REASONS = {
   changes: "Uncommitted changes",
-  ignored: "Ignored files only",
   unretained: "Commits on no branch",
 } as const;
 
@@ -85,7 +92,7 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
     ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
 }
 
-export const CLAUDE_CHECKOUT_KEEP_REASON = "Checkout not created by PwrAgent";
+export const CLAUDE_CHECKOUT_KEEP_REASON = "Checkout ownership not registered";
 
 /** A worktree under PwrAgent's own root (`~/.pwragent/…/worktrees/<id>/<name>`). */
 export function isPwrAgentWorktreePath(value: string | undefined): boolean {
@@ -94,17 +101,18 @@ export function isPwrAgentWorktreePath(value: string | undefined): boolean {
 
 /** The Claude thread works in a PwrAgent worktree, and no directory it uses
  * is marked as someone else's checkout. */
-export function isPwrAgentClaudeCheckout({ thread, overlay }: Pick<ThreadArchiveCandidate, "thread" | "overlay">): boolean {
+export function isPwrAgentClaudeCheckout({ thread, overlay, managedWorktreePath }: Pick<ThreadArchiveCandidate, "thread" | "overlay" | "managedWorktreePath">): boolean {
   const directories = [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []];
   return isPwrAgentWorktreePath(thread.projectKey)
-    && directories.every((directory) => directory.worktreeOwnership !== "external"
+    && directories.every((directory) => (directory.worktreeOwnership !== "external"
+      || (managedWorktreePath && directory.worktreePath && path.resolve(directory.worktreePath) === path.resolve(managedWorktreePath)))
       && (!directory.worktreePath || isPwrAgentWorktreePath(directory.worktreePath)));
 }
 
 /** `allowPinned` is for checkout hibernation, which keeps the thread listed. */
 export function archiveCandidateProtectionReason(
-  { thread, overlay, activeSubAgent, activePrWatch, mergeHeld, unreadable }: ThreadArchiveCandidate,
-  options: { allowPinned?: boolean } = {},
+  { thread, overlay, managedWorktreePath, activeSubAgent, activePrWatch, mergeHeld, unreadable }: ThreadArchiveCandidate,
+  options: { allowPinned?: boolean; allowOwnedClaudeWorktree?: boolean } = {},
 ): string | undefined {
   if (unreadable) return "Thread state unreadable";
   if (!options.allowPinned && (thread.isPinned || overlay?.pinnedRank !== undefined)) return "Pinned thread";
@@ -117,7 +125,13 @@ export function archiveCandidateProtectionReason(
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
   // Claude threads are cleaned up only in a worktree PwrAgent created. A
   // Claude session can also run in a checkout the operator or Claude Code made.
-  if (thread.source === "claude" && !isPwrAgentClaudeCheckout({ thread, overlay })) return CLAUDE_CHECKOUT_KEEP_REASON;
+  if (thread.source === "claude" && !isPwrAgentClaudeCheckout({ thread, overlay, managedWorktreePath })
+    && !(options.allowOwnedClaudeWorktree
+      && thread.linkedDirectories.some((directory) => directory.kind === "worktree" && directory.worktreePath)
+      && [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].every((directory) => directory.worktreeOwnership !== "external"
+        || (managedWorktreePath && directory.worktreePath && path.resolve(directory.worktreePath) === path.resolve(managedWorktreePath))))) {
+    return CLAUDE_CHECKOUT_KEEP_REASON;
+  }
   // The Codex app owns its chat folders' threads; housekeeping leaves them alone.
   if ([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].some(isCodexChatsDirectory)) return "Codex chat folder";
   if (activeSubAgent) return "Active subagent";
@@ -385,8 +399,8 @@ export class ThreadArchiveSweeper {
     }
     for (const candidate of candidates) {
       if (this.abort.signal.aborted) return;
-      // Native sub-agents share their root's checkout.
-      if (candidate.thread.codexNativeSubAgent) continue;
+      // Native children may own an independent checkout. Shared-path rules
+      // protect inherited checkouts, regardless of where the parent lives.
       try {
         const listed = deps.keepReason(candidate, candidates, policy, Date.now());
         if (!listed.target) continue;

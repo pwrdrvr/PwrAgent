@@ -13,7 +13,8 @@ export type DesktopCheckoutHibernationPolicy = {
   idleDays: number;
   /** Largest recovery snapshot hibernation writes. Separate from archive's limit. */
   maxSnapshotMb: number;
-  /** Ignored folders such as node_modules may be removed with the checkout. */
+  /** Legacy config field, normalized to true. Ignored files are excluded
+   * from recovery snapshots and removed with a hibernated checkout. */
   removeRebuildableOutput: boolean;
   restoreOn: "send" | "open";
 };
@@ -48,7 +49,7 @@ export function normalizeCheckoutHibernationPolicy(
     enabled: value?.enabled !== false,
     idleDays,
     maxSnapshotMb,
-    removeRebuildableOutput: value?.removeRebuildableOutput ?? DEFAULT_CHECKOUT_HIBERNATION_POLICY.removeRebuildableOutput,
+    removeRebuildableOutput: true,
     restoreOn: value?.restoreOn === "open" ? "open" : "send",
   };
 }

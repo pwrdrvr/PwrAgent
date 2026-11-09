@@ -1498,7 +1498,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
     expect(second.notifyOn).toEqual(["merged", "closed"]);
   });
 
-  it("records one commit per terminal watch registration and delivery", async () => {
+  it("records registration, terminal observation and delivery boundaries", async () => {
     useMeasuredFileStateDb();
     const { writes: registration } = await measureSqliteWrites(async () => {
       await registerTerminalWatch();
@@ -1513,7 +1513,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
       await harness.coordinator.handleTerminalSnapshot(mergedPr(), now);
     });
     expectSqliteWriteBudget({
-      note: "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
+      note: "observe, claim and finish one merge/close wake: 3 commits/~29 KB WAL per merged PR; ~1.5 MB/day at 50 merges/day, zero idle writes",
       scenario: "pr-terminal-watch-deliver",
       writes: delivery,
     });

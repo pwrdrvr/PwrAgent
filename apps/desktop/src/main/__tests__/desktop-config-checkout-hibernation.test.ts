@@ -13,7 +13,7 @@ describe("checkout hibernation configuration", () => {
     expect(saved).toContain("inactivity_days = 30");
     expect(saved).toMatch(/\[worktrees\.hibernate\][\s\S]*idle_days = 10[\s\S]*max_snapshot_mb = 25[\s\S]*remove_rebuildable_output = false[\s\S]*restore_on = "open"/);
     const parsed = parseDesktopSettingsToml(saved, "test.toml").worktrees;
-    expect(normalizeCheckoutHibernationPolicy(parsed?.hibernate)).toEqual(policy);
+    expect(normalizeCheckoutHibernationPolicy(parsed?.hibernate)).toEqual({ ...policy, removeRebuildableOutput: true });
   });
 
   it("is on when the table is absent, and ignores values it cannot read", () => {

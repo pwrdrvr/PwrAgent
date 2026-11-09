@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import { shell } from "electron";
 import { isToolManagedWorktreePath, type ThreadMaintenanceRun } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
@@ -6,6 +7,8 @@ import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "./app-s
 import { MAX_WORKTREE_SNAPSHOT_BYTES } from "./app-server/worktree-archive-service";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getMainLogger } from "./log";
+import { measureMaintenanceAllocation } from "./app-server/maintenance-disk-usage";
+import { scanCargoBuildOutputs, removeCargoBuildOutput } from "./app-server/maintenance-cargo-output";
 
 const maintenanceLog = getMainLogger("pwragent:thread-maintenance");
 
@@ -18,12 +21,21 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
   return service ??= new ThreadMaintenanceService({
     getPolicy: () => getDesktopBackendRegistry().getThreadArchivePolicy(),
     snapshotLimitBytes: MAX_WORKTREE_SNAPSHOT_BYTES,
-    listCandidates: async () => await getDesktopBackendRegistry().listAutoArchiveCandidates(),
+    listCandidates: async (onProgress) => await getDesktopBackendRegistry().listAutoArchiveCandidates(onProgress),
     listPeerSubthreads: async () => await getDesktopFederationRuntime().peerSubthreadsOfLocalThreads(),
     resolveProject: async (candidate) => await getDesktopBackendRegistry().resolveAutoArchiveProject(candidate),
     refreshCandidate: async (candidate) => await getDesktopBackendRegistry().refreshArchiveCandidate(candidate),
     isBusy: (candidate) => getDesktopBackendRegistry().isArchiveCandidateBusy(candidate),
-    auditArchivedCheckouts: async () => await getDesktopBackendRegistry().auditArchivedCheckouts(),
+    auditArchivedCheckouts: async (onProgress) => await getDesktopBackendRegistry().auditArchivedCheckouts(onProgress),
+    measureAllocation: measureMaintenanceAllocation,
+    buildOutputs: { scan: scanCargoBuildOutputs, remove: removeCargoBuildOutput },
+    isCheckoutOnDisk: async (checkout) => {
+      try { return (await stat(checkout)).isDirectory(); }
+      catch (error) {
+        if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+        throw error;
+      }
+    },
     archiveFamily: async (family, options) => {
       const { thread } = family[0]!;
       const registry = getDesktopBackendRegistry();
@@ -43,7 +55,6 @@ export function getThreadMaintenanceService(): ThreadMaintenanceService {
       return true;
     },
     removeArchivedCheckouts: async (selection) => await getDesktopBackendRegistry().removeArchivedCheckouts(selection),
-    removeUnreferencedCheckouts: async (worktreePaths) => await getDesktopBackendRegistry().removeUnreferencedCheckouts(worktreePaths),
     hibernation: checkoutHibernationReviewDeps(getDesktopBackendRegistry),
     isManagedCheckoutPath: isManagedCheckoutRoot,
     trashItem: async (absolutePath) => await shell.trashItem(absolutePath),
@@ -66,10 +77,11 @@ export function disposeThreadMaintenanceService(): void {
   service = undefined;
 }
 
-/** A checkout folder itself, directly under a PwrAgent or Codex worktree
- * root (`…/worktrees/<id>/<name>`), never a path inside one or the root. */
+/** A checkout folder itself at either supported tool-root depth. Git's
+ * missing-repository probe still proves it is a checkout before Trash. */
 export function isManagedCheckoutRoot(worktreePath: string): boolean {
   const resolved = path.resolve(worktreePath);
-  return isToolManagedWorktreePath(resolved)
-    && path.basename(path.dirname(path.dirname(resolved))) === "worktrees";
+  return (isToolManagedWorktreePath(resolved) || isToolManagedWorktreePath(path.join(resolved, "checkout")))
+    && (path.basename(path.dirname(path.dirname(resolved))) === "worktrees"
+      || path.basename(path.dirname(resolved)) === "worktrees");
 }

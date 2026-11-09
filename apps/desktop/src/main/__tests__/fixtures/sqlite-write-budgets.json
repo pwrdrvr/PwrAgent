@@ -11,6 +11,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "federation-directory-pin-actions": {"commits": 3, "note": "Pin, move and unpin use three owner commits; 100 actions/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes", "observedWalBytes": 24720, "rowsChanged": 3, "statements": 3},
   "hourly-sweep-idle-day": {
     "commits": 0,
     "note": "24 hourly sweeps over a stale Codex thread and a stale ACP session with nothing to hibernate or delete. The sweep archives nothing, so it commits nothing.",
@@ -935,13 +936,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "pr-terminal-watch-deliver": {
-    "commits": 2,
-    "note": "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
-    "observedWalBytes": 24720,
-    "rowsChanged": 2,
-    "statements": 3
-  },
+  "pr-terminal-watch-deliver": {"commits": 3, "note": "observe, claim and finish one merge/close wake: 3 commits/~29 KB WAL per merged PR; ~1.5 MB/day at 50 merges/day, zero idle writes", "observedWalBytes": 28840, "rowsChanged": 3, "statements": 4},
   "pr-terminal-watch-open-polls": {
     "commits": 0,
     "note": "ten polls of an open PR that has a merge/close watch: 0 commits, 0 rows and 0 WAL; the per-poll head/baseline advance only reads when nothing moved, so the watch adds 0 MB/day",
@@ -956,6 +951,8 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "pr-terminal-watch-rename": {"commits": 1, "note": "one pending event renamed and nine unchanged syncs: 1 commit/~8.2 KB WAL per rename, 0 idle writes; ~0.4 MB/day at 50 renames/day", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "pr-terminal-watch-retire": {"commits": 1, "note": "one retirement plus nine duplicate observations: 1 commit/~12.4 KB WAL; ~0.6 MB/day at 50 terminal events/day, zero idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 2},
   "pr-watch-agent-cancel": {
     "commits": 1,
     "note": "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes",
@@ -1611,5 +1608,10 @@
   "checkout-hibernation-restore-with-setup": {"commits": 2, "note": "restore one hibernated checkout and re-run its environment setup", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
   "checkout-hibernation-restore-failed": {"commits": 0, "note": "a refused restore of a hibernated checkout", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "checkout-hibernation-keep-awake-toggle": {"commits": 1, "note": "turn Keep it awake off on an awake thread", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
-  "thread-maintenance-hibernate-one": {"commits": 1, "note": "Thread maintenance hibernates one reviewed checkout", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1}
+  "thread-maintenance-hibernate-one": {"commits": 1, "note": "Thread maintenance hibernates one reviewed checkout", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
+  "worktree-registration-card-approve": {"commits": 2, "note": "One native operator registration card, its questionnaire receipt, and the resulting authorization if approved", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
+  "worktree-registration-card-cancel": {"commits": 1, "note": "One native operator registration card, its questionnaire receipt, and the resulting authorization if approved", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "worktree-registration-inspect": {"commits": 0, "note": "Read and revalidate one persisted registration receipt after reopening SQLite", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "worktree-registration-one": {"commits": 1, "note": "One explicitly approved linked-checkout registration; provider inventory and Git validation are read-only", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "worktree-registration-revoke": {"commits": 1, "note": "Revoke one existing checkout authorization", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1}
 }

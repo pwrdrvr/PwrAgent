@@ -134,6 +134,9 @@ function readApplyRequest(value: unknown): ThreadMaintenanceApplyRequest {
     removeUnreferenced: list("removeUnreferenced").filter((item) => typeof item.worktreePath === "string")
       .map((item) => ({ worktreePath: item.worktreePath as string })),
     removeEmptyFolders: record.removeEmptyFolders === true,
+    ...(list("removeBuildOutputs").length ? { removeBuildOutputs: list("removeBuildOutputs")
+      .filter((item) => typeof item?.outputPath === "string")
+      .map((item) => ({ outputPath: item.outputPath as string })) } : {}),
     hibernate: list("hibernate").filter((item) => typeof item.backend === "string" && typeof item.threadId === "string")
       .map((item) => ({ backend: item.backend as string, threadId: item.threadId as string })),
   };

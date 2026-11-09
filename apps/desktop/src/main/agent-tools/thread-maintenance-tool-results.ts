@@ -2,6 +2,7 @@ import type {
   ApplyThreadMaintenanceToolArgs,
   ThreadMaintenanceApplyRequest,
   ThreadMaintenanceOwnedCheckout,
+  ThreadMaintenanceCoverage,
   ThreadMaintenancePlanToolResult,
   ThreadMaintenanceRun,
   ThreadMaintenanceRunToolResult,
@@ -15,6 +16,23 @@ export const THREAD_MAINTENANCE_TOOL_ROW_LIMIT = 200;
 export const THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT = 100;
 const FAILURE_LIMIT = 20;
 const PROBLEM_LIMIT = 50;
+
+function boundedCoverage(coverage: ThreadMaintenanceCoverage): ThreadMaintenanceCoverage {
+  const rows = (items: NonNullable<ThreadMaintenanceCoverage["keptCheckouts"]>) => items
+    .slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({ ...item,
+      ...(item.threads ? { threads: item.threads.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT) } : {}),
+    }));
+  return { ...coverage,
+    ...(coverage.keptCheckouts ? { keptCheckouts: rows(coverage.keptCheckouts) } : {}),
+    ...(coverage.largestKept ? { largestKept: rows(coverage.largestKept) } : {}),
+  };
+}
+
+function coverageTruncated(coverage: ThreadMaintenanceCoverage | undefined): boolean {
+  return [coverage?.keptCheckouts ?? [], coverage?.largestKept ?? []].some((rows) =>
+    rows.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT
+      || rows.some((row) => (row.threads?.length ?? 0) > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT));
+}
 
 export function summarizeThreadMaintenanceScan(
   scan: ThreadMaintenanceScan,
@@ -40,6 +58,7 @@ export function summarizeThreadMaintenanceScan(
         ...("files" in row.workspace ? { changedFiles: row.workspace.files, changedBytes: row.workspace.bytes } : {}),
         ...(row.worktreePath ? { worktreePath: row.worktreePath } : {}),
         subThreads: row.subThreads,
+        ...(row.space ? { space: row.space } : {}),
       })),
     };
   });
@@ -61,22 +80,38 @@ export function summarizeThreadMaintenanceScan(
       truncated,
     },
     checkouts: {
+      ...(scan.checkouts.buildOutputs ? {
+        buildOutputs: [...new Map(scan.checkouts.buildOutputs.map((item) => [item.outputPath, item])).values()]
+          .sort((a, b) => (b.space?.allocatedBytes ?? -1) - (a.space?.allocatedBytes ?? -1)).slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT),
+        buildOutputCount: new Set(scan.checkouts.buildOutputs.map((item) => item.outputPath)).size,
+        buildOutputSpace: {
+          ...(!scan.checkouts.buildOutputs.length || scan.checkouts.buildOutputs.some((item) => item.space?.allocatedBytes !== undefined)
+            ? { allocatedBytes: [...new Map(scan.checkouts.buildOutputs.map((item) => [item.outputPath, item.space?.allocatedBytes])).values()]
+              .reduce<number>((sum, value) => sum + (value ?? 0), 0) } : {}),
+          ...(scan.checkouts.buildOutputs.some((item) => item.space?.allocatedBytes === undefined || item.space.lowerBound) ? { lowerBound: true } : {}),
+        },
+      } : {}),
       removable: removable.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         backend: item.backend, threadId: item.threadId, worktreePath: item.worktreePath,
         ...(item.workspace ? { workspace: item.workspace.kind } : {}),
+        ...(item.space ? { space: item.space } : {}),
       })),
       repositoryGone: gone.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         worktreePath: item.worktreePath,
         ...(item.missingRepositoryPath ? { missingRepositoryPath: item.missingRepositoryPath } : {}),
+        ...(item.space ? { space: item.space } : {}),
       })),
       // Listed so an agent can tell the operator; only the dialog removes them.
       unreferenced: unreferenced.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         worktreePath: item.worktreePath, workspace: item.workspace.kind,
+        ...(item.space ? { space: item.space } : {}),
       })),
       kept: scan.checkouts.kept,
       emptyFolders: scan.checkouts.emptyFolders,
+      ...(scan.checkouts.coverage ? { coverage: boundedCoverage(scan.checkouts.coverage) } : {}),
       ...(scan.checkouts.skipped ? { skipped: scan.checkouts.skipped } : {}),
-      truncated: [removable, gone, unreferenced].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT),
+      truncated: [removable, gone, unreferenced, scan.checkouts.buildOutputs ?? []].some((items) => items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT)
+        || coverageTruncated(scan.checkouts.coverage),
     },
     ...(scan.hibernate ? {
       hibernate: {
@@ -86,13 +121,15 @@ export function summarizeThreadMaintenanceScan(
         items: scan.hibernate.items.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
           backend: item.backend, threadId: item.threadId, title: item.title, worktreePath: item.worktreePath,
           lastActivityAt: item.lastActivityAt, changedFiles: item.files, changedBytes: item.bytes,
+          ...(item.space ? { space: item.space } : {}),
           ...(item.archiveKey ? { offeredForArchive: true } : {}),
         })),
         ...(scan.hibernate.notIdleYet !== undefined ? { notIdleYet: scan.hibernate.notIdleYet } : {}),
         ...(scan.hibernate.alreadyHibernated !== undefined ? { alreadyHibernated: scan.hibernate.alreadyHibernated } : {}),
         kept: scan.hibernate.kept,
+        ...(scan.hibernate.coverage ? { coverage: boundedCoverage(scan.hibernate.coverage) } : {}),
         ...(scan.hibernate.skipped ? { skipped: scan.hibernate.skipped } : {}),
-        truncated: scan.hibernate.items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT,
+        truncated: scan.hibernate.items.length > THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT || coverageTruncated(scan.hibernate.coverage),
       },
     } : {}),
     expired: scan.expired,
@@ -133,12 +170,17 @@ export function planThreadMaintenanceApply(
   const trashCheckouts = args.trashCheckouts ?? [];
   const removeEmptyFolders = args.removeEmptyFolders === true;
   const hibernate = args.hibernate ?? [];
-  if (!archive.length && !removeCheckouts.length && !trashCheckouts.length && !removeEmptyFolders && !hibernate.length) {
+  const removeBuildOutputs = [...new Map((args.removeBuildOutputs ?? []).map((item) => [item?.outputPath, item])).values()];
+  if (!archive.length && !removeCheckouts.length && !trashCheckouts.length && !removeEmptyFolders && !hibernate.length && !removeBuildOutputs.length) {
     return { error: "Select at least one thread or checkout from the scan." };
   }
   const idle = new Map(scan.threads.projects.flatMap((project) => project.idle)
     .map((row) => [`${row.backend}:${row.threadId}`, row]));
   const checkouts = new Map(scan.checkouts.items.map((item) => [item.worktreePath, item]));
+  const buildOutputs = new Set(scan.checkouts.buildOutputs?.map((item) => item.outputPath));
+  for (const item of removeBuildOutputs) {
+    if (!item || typeof item.outputPath !== "string" || !buildOutputs.has(item.outputPath)) return { error: "Select Cargo build output from this scan." };
+  }
   const snapshotApprovals: ThreadMaintenancePlanToolResult["snapshotApprovals"] = [];
   for (const item of archive) {
     if (!item || typeof item.backend !== "string" || typeof item.threadId !== "string") {
@@ -199,6 +241,7 @@ export function planThreadMaintenanceApply(
       }),
       trashCheckouts: trashCheckouts.map((item) => ({ worktreePath: item.worktreePath })),
       removeEmptyFolders,
+      ...(removeBuildOutputs.length ? { removeBuildOutputs: removeBuildOutputs.map((item) => ({ outputPath: item.outputPath })) } : {}),
       ...(hibernate.length ? { hibernate: hibernate.map((item) => ({ backend: item.backend, threadId: item.threadId })) } : {}),
     },
     summary: {
@@ -206,6 +249,7 @@ export function planThreadMaintenanceApply(
       archive: archive.length,
       removeCheckouts: removeCheckouts.length,
       trashCheckouts: trashCheckouts.length,
+      ...(removeBuildOutputs.length ? { removeBuildOutputs: removeBuildOutputs.length } : {}),
       removeEmptyFolders,
       hibernate: hibernate.length,
       snapshotApprovals,
@@ -220,13 +264,16 @@ export function threadMaintenanceConfirmationQuestion(plan: ThreadMaintenancePla
     plan.hibernate ? `hibernate ${plan.hibernate} idle ${plan.hibernate === 1 ? "checkout" : "checkouts"}` : "",
     plan.removeCheckouts ? `remove ${plan.removeCheckouts} archived ${plan.removeCheckouts === 1 ? "checkout" : "checkouts"}` : "",
     plan.trashCheckouts ? `move ${plan.trashCheckouts} orphaned ${plan.trashCheckouts === 1 ? "checkout" : "checkouts"} to the Trash` : "",
+    plan.removeBuildOutputs ? `clean ${plan.removeBuildOutputs} Cargo build ${plan.removeBuildOutputs === 1 ? "profile" : "profiles"}` : "",
     plan.removeEmptyFolders ? "remove empty worktree folders" : "",
   ].filter(Boolean);
   const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0] ?? "";
   const snapshots = plan.snapshotApprovals.slice(0, 5).map((item) => `${item.title} (${formatBytes(item.bytes)})`);
   const more = plan.snapshotApprovals.length > snapshots.length ? ` and ${plan.snapshotApprovals.length - snapshots.length} more` : "";
-  return `An agent asks to ${list}. Uncommitted changes are saved to recovery snapshots first.`
+  return `An agent asks to ${list}.`
+    + (plan.archive || plan.hibernate || plan.removeCheckouts || plan.trashCheckouts ? " Uncommitted changes are saved to recovery snapshots first." : "")
     + (plan.hibernate ? " A hibernated checkout comes back when its thread gets a message." : "")
+    + (plan.removeBuildOutputs ? " Only compiled Cargo output is deleted; source files and threads stay. The next build compiles that output again." : "")
     + (snapshots.length ? ` It also asks to snapshot changes over the 100 MB limit for ${snapshots.join(", ")}${more}.` : "")
     + " Allow it?";
 }
