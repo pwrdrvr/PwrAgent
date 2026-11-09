@@ -217,7 +217,7 @@ export class Runtime {
   async releaseQueuedTurn({ queueEntryId }) {
     const entry = this.queuedEntry(queueEntryId);
     if (!entry) return { queueEntryId, disposition: "not_found" };
-    if (this.stopping || this.uncertain || this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) {
+    if (this.stopping || this.uncertain || (this.active && !this.canSteerQueued(entry)) || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) {
       return { queueEntryId, disposition: "busy" };
     }
     try {

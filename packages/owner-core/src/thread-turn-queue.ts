@@ -1000,11 +1000,12 @@ export class ThreadTurnQueue {
     if (!this.heldQueues.has(found.key) || !found.entry.manualReleaseRequired) {
       return { disposition: "not_held", entryId };
     }
+    const steer = found.entry.delivery === "queued-steer" && this.options.canSteerThread?.(found.entry);
     if (
       this.admissions.has(found.key)
       || this.dispatchSuspensions.has(found.key)
-      || this.runningEntries.has(found.key)
-      || (this.options.isThreadActive?.(found.entry) ?? false)
+      || (!steer && (this.runningEntries.has(found.key)
+        || (this.options.isThreadActive?.(found.entry) ?? false)))
     ) {
       return { disposition: "busy", entryId };
     }

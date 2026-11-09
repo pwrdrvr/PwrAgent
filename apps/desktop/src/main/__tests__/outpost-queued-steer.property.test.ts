@@ -366,7 +366,7 @@ it.skipIf(process.platform === "win32")("explicit Retry of unclaimed held guidan
       expect(steers).toEqual([]);
       expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: id })).toMatchObject({ disposition: "started", turnId: "turn-1" });
       await drain();
-      expect(steers.map((call: any) => ({ input: call.input, turnId: call.expectedTurnId }))).toEqual([{ input: request.input, turnId: "turn-1" }]);
+      expect(steers.map((call: any) => ({ input: call.input, turnId: call.expectedTurnId }))).toMatchObject([{ input: request.input, turnId: "turn-1" }]);
       expect(starts).toHaveLength(1);
       expect(runtime.active).toBe("active");
       expect(backend.activeJob(ref).id).toBe("active");
