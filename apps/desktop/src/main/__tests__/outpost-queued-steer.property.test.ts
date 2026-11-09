@@ -216,6 +216,25 @@ it.skipIf(process.platform === "win32")("a fresh owner settles accepted queued a
   }), { numRuns: 4 });
 });
 
+it.skipIf(process.platform === "win32")("a refused steering claim cannot restore waiting input behind shutdown's cancellation sweep", async () => {
+  await fixture(async ({ runtime, store, steers, submit, value }: any) => {
+    const request = value("claim-stop");
+    const accepted = await submit(request), save = store.save.bind(store);
+    let stopped: Promise<void> | undefined;
+    runtime.onFailure = () => { stopped ??= runtime.stop(); };
+    store.save = (job: any) => {
+      if (job.id === accepted.queueEntryId && job.status === "starting") throw new Error("claim refused");
+      return save(job);
+    };
+    await drain();
+    await stopped;
+    expect(runtime.stopping).toBe(true);
+    expect(store.get(accepted.queueEntryId).status).toBe("unknown");
+    expect(runtime.turnQueue.getAllQueuedEntries()).toEqual([]);
+    expect(steers).toEqual([]);
+  });
+});
+
 it.skipIf(process.platform === "win32")("budgets individual queued steering at acceptance, target claim, terminal and recovery boundaries", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   vi.useFakeTimers({ toFake: ["Date"] });
