@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
@@ -14,7 +15,7 @@ const title = fc.stringMatching(/^[A-Za-z][A-Za-z0-9 ]{0,25}$/).map(value => val
 it("fresh provider discovery replaces stale inventory without losing canonical owner facts", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
   await fc.assert(fc.asyncProperty(title, fc.nat(10000), async (name, seen) => {
-    const root = realpathSync(mkdtempSync("/tmp/pa-parity-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-parity-")));
     const directory = path.join(root, "headless");
     mkdirSync(directory, { mode: 0o700 });
     const identity = { version: 1 as const, workspace: root, codexHome: path.join(root, "codex") };
@@ -45,7 +46,7 @@ it("fresh provider discovery replaces stale inventory without losing canonical o
 it("every acknowledged Outpost rename changes the native provider name before publishing owner success", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
   await fc.assert(fc.asyncProperty(fc.array(title, { minLength: 1, maxLength: 8 }), async names => {
-    const root = realpathSync(mkdtempSync("/tmp/pa-title-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-title-")));
     const directory = path.join(root, "headless");
     mkdirSync(directory, { mode: 0o700 });
     const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
@@ -75,7 +76,7 @@ it("every acknowledged Outpost rename changes the native provider name before pu
 it("a provider listing begun before an acknowledged rename cannot restore the old title", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
   await fc.assert(fc.asyncProperty(title, async name => {
-    const root = realpathSync(mkdtempSync("/tmp/pa-title-race-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-title-race-")));
     mkdirSync(path.join(root, "headless"), { mode: 0o700 });
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     try {
@@ -106,7 +107,7 @@ it("a provider listing begun before an acknowledged rename cannot restore the ol
 it("fresh complete provider archive membership outranks an unstamped retained owner flag", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
   await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 2, maxLength: 12 }), async states => {
-    const root = realpathSync(mkdtempSync("/tmp/pa-archive-model-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-archive-model-")));
     mkdirSync(path.join(root, "headless"), { mode: 0o700 });
     const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
     await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "codex", threadId: "thread" }, { archived: false });

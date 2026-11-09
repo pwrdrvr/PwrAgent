@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
@@ -16,7 +17,7 @@ const budgetFile = "outpost-profile-parity-write-budgets.json";
 
 it("budgets actual discovery and native-title boundaries without writes on unchanged navigation", async () => {
   const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
-  const root = realpathSync(mkdtempSync("/tmp/pa-parity-writes-"));
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-parity-writes-")));
   const previous = process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS;
   process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS = "1";
   mkdirSync(path.join(root, "headless"), { mode: 0o700 });
