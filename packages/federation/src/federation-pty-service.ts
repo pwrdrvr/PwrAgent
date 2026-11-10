@@ -300,6 +300,9 @@ export class FederationPtyService {
   private readonly pendingOpens = new Set<{ cwd?: string; promise: Promise<FederationPtyOpenResponse> }>();
   private readonly removingWorktrees = new Set<string>();
   private disposed = false;
+  private disposePromise: Promise<void> | undefined;
+  /** Viewer removal does not release ownership of a still-exiting PTY. */
+  private readonly closing = new Set<Promise<void>>();
   private readonly archived = new Map<string, TerminalHistoryRecord>();
   private readonly ready: Promise<void>;
   /** In-flight checkpoints by session id. A snapshot waits only for its own
@@ -452,6 +455,7 @@ export class FederationPtyService {
       });
       onCwd(cwd ?? homedir());
       this.assertWorktreeAvailable(cwd);
+      if (this.disposed) throw new Error("Remote terminal service is shutting down.");
       if (this.options.allowOpen?.() === false) throw new Error("This machine does not allow remote shells.");
       spawned = await this.options.spawnPty({
         cwd,
@@ -470,18 +474,12 @@ export class FederationPtyService {
     // was spawning: nobody can ever learn this sessionId, so a live shell
     // here is a leak, not a session.
     if (this.disposed || this.options.allowOpen?.() === false || (this.peerEpochs.get(peerId) ?? 0) !== epoch) {
-      try {
-        spawned.pty.kill();
-      } catch (error) {
-        this.options.log?.warn("remote pty abort-kill failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      await this.terminatePty(spawned.pty);
       throw new Error("Federation peer disconnected while the terminal was starting.");
     }
     // A second resume of the same history raced this one and won.
     if (resumed && this.sessionsById.has(resumed.summary.sessionId)) {
-      try { spawned.pty.kill(); } catch { /* already gone */ }
+      await this.terminatePty(spawned.pty);
       throw new Error("That terminal was already resumed.");
     }
     const sessionId = resumed?.summary.sessionId ?? randomUUID();
@@ -683,11 +681,19 @@ export class FederationPtyService {
 
   /** Owner shutdown: kill every remote session immediately. */
   disposeAll(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     this.disposed = true;
     for (const session of Array.from(this.sessionsById.values())) {
       this.killSession(session, "owner_shutdown");
     }
-    return Promise.all([...this.checkpoints.values()].flatMap((pending) => [...pending])).then(() => undefined);
+    this.disposePromise = (async () => {
+      // A spawn admitted before shutdown still belongs to this owner. Its
+      // aborted-open path must observe exit before the daemon can retire.
+      await Promise.allSettled([...this.pendingOpens].map((pending) => pending.promise));
+      await Promise.all([...this.closing]);
+      await Promise.all([...this.checkpoints.values()].flatMap((pending) => [...pending]));
+    })();
+    return this.disposePromise;
   }
 
   private requireSession(
@@ -920,10 +926,8 @@ export class FederationPtyService {
     if (reason !== "close") this.checkpoint(session);
     else void this.options.historyStore?.remove(session.sessionId).catch(() => undefined);
     // Drop the session first so the kill's own exit event can't re-notify.
-    this.deleteSession(session, reason);
-    try {
-      session.pty.kill();
-    } catch (error) {
+    const replayDisposed = this.deleteSession(session, reason);
+    void this.terminatePty(session.pty, replayDisposed).catch((error) => {
       this.options.log?.warn("remote pty kill failed", {
         error: error instanceof Error ? error.message : String(error),
         sessionId: session.sessionId,
@@ -932,31 +936,44 @@ export class FederationPtyService {
         sessionId: session.sessionId,
         message: error instanceof Error ? error.message : String(error),
       } satisfies FederationPtyErrorParams);
-    }
+    });
   }
 
   private async closeSessionForWorktreeRemoval(session: FederationPtySession): Promise<void> {
-    let resolveExit!: () => void;
-    const exited = new Promise<void>((resolve) => { resolveExit = resolve; });
-    const exitListener = session.pty.onExit(() => resolveExit());
     session.reapReason = "close";
     this.options.sendNotification(session.peerId, FEDERATION_PTY_EXIT_METHOD, {
       sessionId: session.sessionId, exitCode: null, signal: null,
     } satisfies FederationPtyExitParams);
     const replayDisposed = this.deleteSession(session, "worktree_archive");
     void this.options.historyStore?.remove(session.sessionId).catch(() => undefined);
+    await this.terminatePty(session.pty, replayDisposed);
+  }
+
+  private terminatePty(pty: FederationPtyProcess, replayDisposed = Promise.resolve()): Promise<void> {
+    const closing = this.waitForPtyExit(pty).then(() => replayDisposed);
+    this.closing.add(closing);
+    void closing.then(() => this.closing.delete(closing), () => this.closing.delete(closing));
+    return closing;
+  }
+
+  private async waitForPtyExit(pty: FederationPtyProcess): Promise<void> {
+    // node-pty's kill() only signals the shell. destroy() also closes the
+    // master; onExit observes both waitpid and the master stream closing.
+    // Keep this listener outside the viewer session's disposable listeners.
+    let resolveExit!: () => void;
+    const exited = new Promise<void>((resolve) => { resolveExit = resolve; });
+    const exitListener = pty.onExit(() => resolveExit());
     let forceKill: NodeJS.Timeout | undefined;
     try {
-      if (session.pty.destroy) session.pty.destroy();
-      else session.pty.kill();
+      if (pty.destroy) pty.destroy();
+      else pty.kill();
       if ((this.options.platform ?? process.platform) !== "win32") {
         forceKill = setTimeout(() => {
-          try { session.pty.kill("SIGKILL"); }
-          catch (error) { this.options.log?.warn("remote pty force kill failed", { sessionId: session.sessionId, error: String(error) }); }
+          try { pty.kill("SIGKILL"); }
+          catch (error) { this.options.log?.warn("remote pty force kill failed", { pid: pty.pid, error: String(error) }); }
         }, 500);
       }
       await exited;
-      await replayDisposed;
     } finally {
       if (forceKill) clearTimeout(forceKill);
       exitListener.dispose();
