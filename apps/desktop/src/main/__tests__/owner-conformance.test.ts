@@ -50,6 +50,7 @@ import {
 } from "./helpers/owner-conformance";
 import { OUTPOST_PACKAGE_ROOT, OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpost-daemon";
 import { createTempStateDb } from "./sqlite-test-utils";
+import { createFederatedThreadMessageHandler } from "../federation/federated-thread-message-service";
 
 // Desktop serves peers from process singletons; point them at this owner.
 const desktopOwner = vi.hoisted(() => ({ registry: undefined as unknown }));
@@ -303,6 +304,51 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("the production federated message caller replaces only its sender's waiting input on both registered owners", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      for (const host of [desktop, outpost]) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const peer = { target: { scope: "remote" as const, instanceId: "owner" }, label: "Invented owner", capabilities: ["thread_navigation", "turn_control"] };
+        const handler = createFederatedThreadMessageHandler({ runtime: () => ({ connectedPeerTargets: () => [peer], remoteBackend: () => host.client }) as unknown as DesktopFederationRuntime });
+        const request = { ...identity, instanceId: "owner", input: [{ type: "text" as const, text: "Invented original agent message" }],
+          messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", instanceId: "forged" } } };
+        const queued = (await handler(request))!;
+        expect(queued.queueStatus).toBe("queued");
+        const followupText = "Invented follow-up after the consolidated message";
+        const followup = await host.client.startTurn({ ...identity, input: [{ type: "text", text: followupText }] });
+        expect(followup.queueStatus).toBe("queued");
+        await expect(handler({ ...request, replaceQueueEntryId: queued.queueEntryId, messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "other", instanceId: "forged" } } })).rejects.toThrow("Only the sending thread");
+        const changed = [{ type: "text" as const, text: "Invented consolidated agent message" }];
+        const replacement = (await handler({ ...request, replaceQueueEntryId: queued.queueEntryId, input: changed }))!;
+        expect(replacement.queueStatus).toBe("queued");
+        if (host.name === "outpost") {
+          expect(replacement.queueEntryId).not.toBe(queued.queueEntryId);
+          await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: queued.queueEntryId! })).rejects.toThrow();
+          await expect(handler({ ...request, replaceQueueEntryId: queued.queueEntryId, input: changed })).rejects.toThrow();
+        }
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: replacement.queueEntryId! })).toMatchObject({ input: changed, messageOrigin: { sourceThread: { threadId: "sender" } } });
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([replacement.queueEntryId, followup.queueEntryId]);
+        await host.client.interruptTurn(active);
+        await vi.waitFor(async () => {
+          // These protocol fixtures retain assistant results, not user
+          // transcript items. Their actual provider requests are the oracle.
+          const calls = host.name === "desktop" ? OwnerConformanceCodexTransport.requests
+            : readFileSync(path.resolve(host.workspace, "../f/calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+          const prompts = calls.filter(call => call.method === "turn/start" && call.params?.threadId === identity.threadId)
+            .flatMap(call => (call.params.input as Array<{ text?: string }>).map(item => item.text ?? ""));
+          expect(prompts.filter(text => text.includes(changed[0].text))).toHaveLength(1);
+          expect(prompts.some(text => text.includes(request.input[0].text))).toBe(false);
+          expect(prompts.filter(text => text.includes(changed[0].text) || text.includes(followupText)))
+            .toEqual([changed[0].text, followupText]);
+        });
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
+  }, 120_000);
+
   it("both registered owners read full queued input and fence edit cancellation before accepting a new identity", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
@@ -1499,7 +1545,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         "backend.startTurn [start its first turn] event thread/turnQueue/updated: desktop sends it, outpost does not",
       ]);
       expect(measured.differences.filter(difference => queueConvergence.has(difference))).toEqual([]);
-      const queueControls = ["backend.readQueuedTurn", "backend.cancelQueuedTurn", "backend.releaseQueuedTurn", "backend.setQueuedTurnPaused", "backend.moveQueuedTurn"];
+      const queueControls = ["backend.readQueuedTurn", "backend.replaceQueuedMessage", "backend.cancelQueuedTurn", "backend.releaseQueuedTurn", "backend.setQueuedTurnPaused", "backend.moveQueuedTurn"];
       expect(queueControls.every(method => measured.sharedMethods.includes(method))).toBe(true);
       const change = describeBaselineChange({ ...baseline,
         sharedMethods: [...new Set([...baseline.sharedMethods, ...queueControls])].sort(),

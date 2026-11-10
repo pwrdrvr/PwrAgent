@@ -458,7 +458,11 @@ export class ThreadTurnQueue {
   async submit(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-    options?: { onAdmission?: () => void },
+    options?: {
+      onAdmission?: () => void;
+      /** Zero-based replacement position captured under withDispatchSuspended. */
+      queueIndex?: number;
+    },
   ): Promise<ThreadTurnQueueSubmissionResult> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -477,9 +481,10 @@ export class ThreadTurnQueue {
             holdReason,
           }
         : entry;
-      queue.push(queuedEntry);
+      const index = options?.queueIndex ?? queue.length;
+      queue.splice(index, 0, queuedEntry);
       options?.onAdmission?.();
-      const position = queue.length;
+      const position = index + 1;
       await this.emit({ type: "queued", entry: queuedEntry, position });
       return { status: "queued", entry: queuedEntry, position };
     }
@@ -498,7 +503,11 @@ export class ThreadTurnQueue {
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
     reason: string,
-    options?: { onAdmission?: () => void },
+    options?: {
+      onAdmission?: () => void;
+      /** Zero-based replacement position captured under withDispatchSuspended. */
+      queueIndex?: number;
+    },
   ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -530,9 +539,9 @@ export class ThreadTurnQueue {
     // order they arrived. Otherwise it goes ahead of the turns waiting, and
     // its hold then covers them, though never ahead of a restart continuation.
     const leadingContinuations = queue.findIndex((queued) => !queued.restartContinuation);
-    const index = this.heldQueues.has(key)
+    const index = options?.queueIndex ?? (this.heldQueues.has(key)
       ? queue.length
-      : leadingContinuations < 0 ? queue.length : leadingContinuations;
+      : leadingContinuations < 0 ? queue.length : leadingContinuations);
     this.addHoldReason(key, reason);
     queue.splice(index, 0, entry);
     options?.onAdmission?.();

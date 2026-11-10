@@ -13,6 +13,7 @@ import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { seedRetainedOutpostUnreadThread } from "./fixtures/outpost-owner-data-seeding";
+import { startOutpostDaemon } from "../src/main/__tests__/helpers/outpost-daemon";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.resolve(specDir, "../../../packages/pwragent/src", file)).href);
@@ -23,6 +24,60 @@ test.beforeAll(() => {
   execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
     cwd: path.resolve(specDir, "../../.."), stdio: "pipe",
   });
+});
+
+test("an authenticated queued replacement reaches the mounted desktop with a new durable identity and one provider send", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  test.setTimeout(120_000);
+  const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent") });
+  const command = async (args: string[]) => JSON.parse((await promisify(execFile)(process.execPath, [outpost.cli, ...args], { env: outpost.env })).stdout);
+  let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  try {
+    const identity = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    await outpost.client.renameThread({ ...identity, name: "Invented queued replacement" });
+    const active = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+    const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "invented-sender", instanceId: "forged" } };
+    const originalText = "Invented original agent input", changedText = "Invented consolidated agent input";
+    const followupText = "Invented follow-up after consolidated input";
+    const original = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: originalText }], messageOrigin });
+    const followup = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: followupText }] });
+    const accepted = await command(["show", "--id", original.queueEntryId!]);
+    const invite = await command(["federation-invite", "--port", "0"]);
+    app = await launchElectronApp({ secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json") });
+    await app.window.evaluate(async encoded => {
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encoded });
+    }, invite.invite);
+    await expect.poll(async () => app!.window.evaluate(async () =>
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status)).toBe("connected");
+    await app.window.evaluate(async ({ instanceId, threadId }) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const ref = { backend: "codex" as const, threadId, target: { scope: "remote" as const, instanceId } };
+      await api.addRemoteThreadPin!({ ref, instanceLabel: "Invented Outpost", summary: {
+        id: threadId, source: "codex", title: "Invented queued replacement", titleSource: "explicit", linkedDirectories: [],
+        threadStatus: "active", inbox: { inInbox: true }, updatedAt: 2_000,
+        federation: { ref, instanceLabel: "Invented Outpost", peerStatus: "connected" },
+      } });
+    }, { instanceId: invite.instanceId, threadId: identity.threadId });
+    await app.window.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Invented queued replacement", exact: true }).click();
+    await expect(app.window.locator(".composer__queued").filter({ hasText: originalText })).toHaveCount(1);
+    const replacement = await outpost.client.replaceQueuedMessage({ ...identity, queueEntryId: original.queueEntryId!, input: [{ type: "text", text: changedText }], messageOrigin });
+    expect(replacement.queueEntryId).not.toBe(original.queueEntryId);
+    await expect(app.window.locator(".composer__queued").filter({ hasText: originalText })).toHaveCount(0);
+    await expect(app.window.locator(".composer__queued").filter({ hasText: changedText })).toHaveCount(1);
+    expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId))
+      .toEqual([replacement.queueEntryId, followup.queueEntryId]);
+    expect(await command(["show", "--id", original.queueEntryId!])).toMatchObject({ status: "interrupted", fingerprint: accepted.fingerprint });
+    expect(await command(["show", "--id", replacement.queueEntryId!])).toMatchObject({ status: "queued", messageOrigin: { sourceThread: { instanceId: outpost.viewerId } } });
+    await outpost.client.interruptTurn(active);
+    expect((await command(["wait", "--id", replacement.queueEntryId!])).status).toBe("completed");
+    expect((await command(["wait", "--id", followup.queueEntryId!])).status).toBe("completed");
+    await expect(app.window.locator(".composer__queued").filter({ hasText: changedText })).toHaveCount(0);
+    const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === originalText)).toHaveLength(0);
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === changedText)).toHaveLength(1);
+    expect(calls.filter(call => call.method === "turn/start" && call.params.threadId === identity.threadId)
+      .map(call => call.params.input[0].text).filter(text => text === changedText || text === followupText)).toEqual([changedText, followupText]);
+  } finally { await app?.close(); await outpost.close(); }
 });
 
 test("a real Outpost queued message becomes a private viewer draft before edited input gets a new acceptance", async () => {
@@ -105,7 +160,7 @@ test("a real Outpost queued message becomes a private viewer draft before edited
 
 test("actual Outpost held, paused and ordered queue controls hand durable outcomes to desktop without replay", async () => {
   test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
-  const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
+  const [{ JobStore }, { Runtime }, { HeadlessFederation }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation.js")]);
   const ref = { backend: "codex" as const, threadId: "thread-smoke" };
   let headless = "";
   let fingerprint = "";
@@ -124,12 +179,13 @@ test("actual Outpost held, paused and ordered queue controls hand durable outcom
           if (++sends === 2) throw new Error("Invented native refusal");
           return { threadId, turnId: `queue-turn-${sends}` };
         }, stop: async () => {} };
-        const backend = new HeadlessBackend(runtime, () => {});
+        const backend = new HeadlessFederation({ directory: headless, runtime, profile: "default", onFailure() {} }).backend;
         runtime.onEvent = (event: unknown) => backend.event(event);
         backend.persistCreatedNativeThread({ id: ref.threadId, cwd: workspace, title: "Replay smoke thread", titleSource: "explicit", createdAt: Date.now() });
         runtime.submit({ id: "queue-first", threadId: ref.threadId, prompt: "Invented first input" });
         await runtime.work;
-        const waiting = { id: "queue-second", threadId: ref.threadId, prompt: "Invented waiting input" };
+        const messageOrigin = { kind: "agent", sourceThread: { backend: "codex", threadId: "invented-sender", instanceId: "invented-peer" } };
+        const waiting = { id: "queue-second", threadId: ref.threadId, prompt: "Invented waiting input", messageOrigin };
         expect(runtime.submit(waiting).status).toBe("queued");
         expect((await backend.handle("getNavigationQueueProjection", { protocol: 2, ref })).entries).toMatchObject([{ queueEntryId: waiting.id }]);
         runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "queue-turn-1", status: "completed" } } });
@@ -138,6 +194,7 @@ test("actual Outpost held, paused and ordered queue controls hand durable outcom
         backend.persistCreatedNativeThread({ id: "queue-other", cwd: workspace, title: "Other invented thread", titleSource: "explicit" });
         let contended = false;
         let pauseDuringRelease: Promise<unknown> | undefined, moveDuringRelease: Promise<unknown> | undefined;
+        let replacementDuringRelease: Promise<string> | undefined;
         runtime.onEvent = (event: any) => {
           backend.event(event);
           if (!contended && event.method === "headless/queueChanged" && event.params.type === "queued" && event.params.entry.id === waiting.id) {
@@ -145,12 +202,17 @@ test("actual Outpost held, paused and ordered queue controls hand durable outcom
             expect(runtime.submit({ id: "queue-competitor", threadId: "queue-other", prompt: "Invented competing input" }).status).toBe("queued");
             pauseDuringRelease = backend.handle("backend.setQueuedTurnPaused", { queueEntryId: waiting.id, paused: true });
             moveDuringRelease = backend.handle("backend.moveQueuedTurn", { queueEntryId: waiting.id });
+            replacementDuringRelease = backend.handle("backend.replaceQueuedMessage", { ...ref, queueEntryId: waiting.id,
+              input: [{ type: "text", text: "Invented too-late replacement" }], messageOrigin },
+            { id: "invented-replacement", sourceInstanceId: "invented-peer" }).then(() => "unexpected acceptance", (error: Error) => error.message);
           }
         };
         expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: waiting.id })).toMatchObject({ disposition: "started", turnId: "queue-turn-3" });
         expect(contended).toBe(true);
         expect(await pauseDuringRelease).toMatchObject({ disposition: "not_found" });
         expect(await moveDuringRelease).toMatchObject({ disposition: "not_found" });
+        expect(await replacementDuringRelease).toContain("not found or already started");
+        expect(store.jobs.size).toBe(3);
         expect(store.get("queue-competitor")).toMatchObject({ status: "queued" });
         expect(store.get(waiting.id)).toMatchObject({ status: "running", turnId: "queue-turn-3" });
         runtime.submit({ id: "queue-delete", threadId: ref.threadId, prompt: "Invented deleted input" });

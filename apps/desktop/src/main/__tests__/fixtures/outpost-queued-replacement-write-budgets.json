@@ -1,0 +1,16 @@
+{
+  "queued-replacement": {
+    "commits": 2,
+    "note": "One actual owner replacement: durable cancellation plus new queued acceptance; initial admission and completion excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "replacement-refusals": {
+    "commits": 0,
+    "note": "100 attempts to replace the cancelled acceptance; no replay or new job",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}
