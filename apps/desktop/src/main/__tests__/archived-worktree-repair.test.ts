@@ -4,7 +4,7 @@ import { ARCHIVED_WORKTREE_REPAIR_KEY, runOneTimeArchivedWorktreeRepair } from "
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import type { ArchivedWorktreeRepairReport } from "../app-server/backend-registry";
+import type { ArchivedWorktreeRepairReport } from "../app-server/backend-registry-types";
 
 const databases: StateDb[] = [];
 const roots: string[] = [];

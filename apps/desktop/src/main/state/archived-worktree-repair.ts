@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { ArchivedWorktreeRepairReport } from "../app-server/backend-registry";
+import type { ArchivedWorktreeRepairReport } from "../app-server/backend-registry-types";
 import { storageProcessAlive } from "./storage-maintenance";
 
 export const ARCHIVED_WORKTREE_REPAIR_KEY = "archived_worktree_repair_v1";

@@ -34,7 +34,7 @@ import {
   CodexAppServerClient,
   type CodexThreadMigrationMetadata,
 } from "../codex-app-server/desktop-client";
-import { buildCodexClientArgs } from "./backend-registry";
+import { buildCodexClientArgs } from "./codex-thread-config";
 import { runGitCommand } from "./git-executable";
 
 const migrationLog = getMainLogger("pwragent:thread-migration");

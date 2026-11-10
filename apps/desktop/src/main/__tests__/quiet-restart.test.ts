@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { QuietRestartTarget } from "../app-server/backend-registry";
+import type { QuietRestartTarget } from "../app-server/backend-registry-types";
 import { runQuietRestart, type QuietRestartDependencies } from "../shell/quiet-restart";
 
 const target: QuietRestartTarget = { backend: "codex", threadId: "thread-1", turnId: "turn-1" };
