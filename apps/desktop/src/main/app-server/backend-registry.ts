@@ -1020,9 +1020,8 @@ type InitializeResult = {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 
-/** The held entry's title, by the first prompt's source; a count once it holds more. */
-function selfStartedTurnTitle(source: ClaudeSelfStartedTurnSource, count: number): string {
-  if (count > 1) return `${count} turns Claude started on its own`;
+/** Each immutable held prompt keeps the title of its own source. */
+function selfStartedTurnTitle(source: ClaudeSelfStartedTurnSource): string {
   return source === "task_notification" ? "Claude's answer to a finished background task"
     : source === "loop_wakeup" ? "Claude's /loop wake-up"
     : "Claude's scheduled task";
@@ -22252,10 +22251,10 @@ export class DesktopBackendRegistry {
   /**
    * Holds a turn a backend started inside its own process while the thread
    * is locked: Claude's answer to a finished background task, a /loop
-   * wake-up, or a session cron's fire. Every prompt the lock holds rides one
-   * held entry, in order, so an unlock sends them as one turn, as Claude
-   * batches what queues while it is busy. A recurring wake that fires again
-   * is kept once. False when no lock holds the thread: the backend runs it.
+   * wake-up, or a session cron's fire. Each distinct prompt has its own
+   * immutable held identity, in FIFO order. A recurring wake that fires again
+   * while its prompt still waits is kept once. False when no lock holds the
+   * thread: the backend runs it.
    */
   async holdBackendSelfStartedTurn(params: {
     backend: AppServerBackendKind;
@@ -22263,31 +22262,31 @@ export class DesktopBackendRegistry {
     prompt: string;
     source: ClaudeSelfStartedTurnSource;
   }): Promise<boolean> {
-    const lock = await this.readThreadLock(params.backend, params.threadId);
-    if (!lock) return false;
     const identity = { backend: params.backend, threadId: params.threadId };
-    const queueEntryId = `${SELF_STARTED_TURN_ENTRY_PREFIX}${params.threadId}`;
-    let existing: ThreadTurnQueueEntry | undefined;
-    for (const entry of this.threadTurnQueue.iterateQueuedEntries(identity)) {
-      if (entry.id === queueEntryId) existing = entry;
-    }
-    if (existing) {
-      const prompts = existing.input.flatMap((item) => item.type === "text" ? [item.text] : []);
-      if (prompts.includes(params.prompt)) return true;
-      this.threadTurnQueue.updateQueuedEntryInput(queueEntryId, [...existing.input, { type: "text", text: params.prompt }]);
-      const entry = this.threadTurnQueue.setQueuedEntryTitle(queueEntryId, selfStartedTurnTitle(params.source, prompts.length + 1));
-      if (entry) this.emitQueuedTurnInputUpdated(entry);
+    return await this.admitThreadAttachments({ ...identity, input: [{ type: "text", text: params.prompt }] }, async (input, onAdmission) => {
+      // Deduplicate inside the existing admission reservation. Concurrent hooks
+      // see the first accepted row even while its lifecycle publication awaits.
+      const lock = await this.readThreadLock(params.backend, params.threadId);
+      if (!lock) { onAdmission(); return false; }
+      this.assertThreadNotHandingOff(params.backend, params.threadId);
+      for (const entry of this.threadTurnQueue.iterateQueuedEntries(identity)) {
+        if (entry.id.startsWith(SELF_STARTED_TURN_ENTRY_PREFIX)
+          && entry.messageOrigin?.kind === "pwragent"
+          && entry.input.some(item => item.type === "text" && item.text === params.prompt)) {
+          onAdmission();
+          return true;
+        }
+      }
+      await this.threadTurnQueue.submitHeld({
+        ...identity,
+        id: `${SELF_STARTED_TURN_ENTRY_PREFIX}${randomUUID()}`,
+        input,
+        origin: "manual",
+        messageOrigin: { kind: "pwragent" },
+        title: selfStartedTurnTitle(params.source),
+      }, threadLockRefusalMessage(lock), { onAdmission });
       return true;
-    }
-    await this.submitHeldTurn({
-      ...identity,
-      queueEntryId,
-      input: [{ type: "text", text: params.prompt }],
-      holdReason: threadLockRefusalMessage(lock),
-      messageOrigin: { kind: "pwragent" },
-      title: selfStartedTurnTitle(params.source, 1),
     });
-    return true;
   }
 
   /**

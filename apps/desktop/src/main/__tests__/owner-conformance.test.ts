@@ -328,6 +328,213 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("registered Claude SDK background, loop and cron hooks retain separate immutable held prompts", async () => {
+    const desktop = await startDesktopOwner(null, async (_db, workspace) => {
+      await writeFile(path.join(workspace, "claude.js"), readFileSync(path.join(process.cwd(),
+        "apps/desktop/src/main/__tests__/fixtures/claude-self-started-cli.cjs")));
+    }, workspace => ({ store: new ClaudeSessionStore(path.join(workspace, "sessions")),
+      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), authStatus: "signed-in" }),
+      discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [], getSessionInfo: async () => undefined }));
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const ref = await desktop.client.startThread({ backend: "claude", cwd: desktop.workspace });
+      await desktop.client.startTurn({ ...ref, input: [{ type: "text", text: "Start invented background work" }] });
+      await vi.waitFor(() => expect(desktop.events.some(event => event.backend === "claude"
+        && event.notification.method === "turn/completed")).toBe(true));
+      await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
+      const wakes = [
+        { source: "system", prompt: "Invented task notification" },
+        { source: "loop_wakeup", prompt: "Invented loop fire" },
+        { source: "schedule_wakeup", prompt: "Invented cron fire" },
+        { source: "schedule_wakeup", prompt: "Invented cron fire" },
+      ];
+      const snapshots = new Map<string, Awaited<ReturnType<typeof desktop.client.readQueuedTurn>>>();
+      for (const [index, wake] of wakes.entries()) {
+        const file = path.join(desktop.workspace, "wake-requests.json");
+        await writeFile(`${file}.tmp`, JSON.stringify(wakes.slice(0, index + 1)));
+        await rename(`${file}.tmp`, file);
+        await vi.waitFor(() => expect(existsSync(path.join(desktop.workspace, "hook-results.jsonl"))
+          && readFileSync(path.join(desktop.workspace, "hook-results.jsonl"), "utf8").trim().split("\n").length).toBe(index + 1));
+        const rows = (await desktop.client.getNavigationQueueProjection({ protocol: 2, ref })).entries;
+        expect(rows).toHaveLength(Math.min(index + 1, 3));
+        const id = rows.at(-1)!.queueEntryId;
+        if (index < 3) {
+          expect(snapshots.has(id)).toBe(false);
+          const snapshot = await desktop.client.readQueuedTurn({ ...ref, queueEntryId: id });
+          expect(snapshot.input).toEqual([{ type: "text", text: wake.prompt }]);
+          snapshots.set(id, snapshot);
+        }
+        for (const [queueEntryId, snapshot] of snapshots) {
+          expect(await desktop.client.readQueuedTurn({ ...ref, queueEntryId })).toEqual(snapshot);
+        }
+      }
+      const results = readFileSync(path.join(desktop.workspace, "hook-results.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(results.every(result => result.outputs.some((output: { decision?: string }) => output.decision === "block"))).toBe(true);
+      expect(readFileSync(path.join(desktop.workspace, "native-inputs.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
+      await registry.setThreadLock({ ...ref, locked: false }, { source: "operator" });
+      await vi.waitFor(() => expect(readFileSync(path.join(desktop.workspace, "native-inputs.jsonl"), "utf8").trim().split("\n")).toHaveLength(4));
+      const inputs = readFileSync(path.join(desktop.workspace, "native-inputs.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line).message.content);
+      expect(inputs.slice(1)).toEqual(wakes.slice(0, 3).map(wake => [{ type: "text", text: wake.prompt }]));
+      await vi.waitFor(() => expect(registry.listHeldThreadQueueEntries(ref)).toEqual([]));
+    } finally { await desktop.close(); }
+  });
+
+  it("self-started held admissions preserve every immutable acceptance and deduplicate only waiting prompts", async () => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+    try {
+      await fc.assert(fc.asyncProperty(fc.array(fc.integer({ min: 0, max: 4 }), { minLength: 2, maxLength: 12 }),
+        fc.string({ maxLength: 20 }), async (wakes, suffix) => {
+          const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+          const snapshots = new Map<string, Awaited<ReturnType<typeof host.client.readQueuedTurn>>>();
+          const ids = new Map<string, string>();
+          await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
+          await registry.submitHeldTurn({ ...identity, queueEntryId: `review:${identity.threadId}`,
+            input: [{ type: "text", text: "Independent review" }], holdReason: "Independent review" });
+          const neighbors = structuredClone(queue.getQueuedEntries(identity));
+          try {
+            for (const wake of wakes) {
+              const prompt = `Wake ${wake}: ${suffix}`;
+              expect(await registry.holdBackendSelfStartedTurn({ ...identity, prompt,
+                source: ["task_notification", "loop_wakeup", "cron"][wake % 3] as "task_notification" | "loop_wakeup" | "cron" })).toBe(true);
+              const waiting = queue.getQueuedEntries(identity);
+              if (!ids.has(prompt)) {
+                const entry = waiting.at(-1)!;
+                ids.set(prompt, entry.id);
+                expect(entry.input).toEqual([{ type: "text", text: prompt }]);
+                expect(entry.messageOrigin).toEqual({ kind: "pwragent" });
+                expect(snapshots.has(entry.id)).toBe(false);
+                snapshots.set(entry.id, await host.client.readQueuedTurn({ ...identity, queueEntryId: entry.id }));
+              }
+              expect(waiting.map(entry => entry.id)).toEqual([...neighbors.map(entry => entry.id), ...ids.values()]);
+              expect(waiting.slice(0, neighbors.length)).toEqual(neighbors);
+              for (const [id, snapshot] of snapshots) {
+                expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: id })).toEqual(snapshot);
+              }
+              expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId))
+                .toEqual(waiting.map(entry => entry.id));
+            }
+          } finally {
+            for (const entry of queue.getQueuedEntries(identity)) await host.client.cancelQueuedTurn({ queueEntryId: entry.id });
+          }
+        }), { numRuns: 25, examples: [[[0, 1, 0], ""]] });
+    } finally { await host.close(); }
+  });
+
+  it("self-started identities leave durable neighbors unchanged and never return after desktop shutdown", async () => {
+    const root = await realpath(await mkdtemp(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-self-reopen-")));
+    let host = await startDesktopOwner(null, undefined, undefined, root);
+    try {
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const ref = { backend: "codex" as const, threadId: created.threadId };
+      const active = await host.client.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
+      const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
+      const runtime = Object.assign(new DesktopFederationRuntime(), {
+        connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1"] }], remoteBackend: () => host.client,
+      });
+      const request: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+        request: { ...ref, input: [{ type: "text", text: "Immutable durable neighbor" }] } };
+      request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, request)).digest("hex");
+      const receipt = await runtime.submitDurableTurnRequest("self-started-device", request, target);
+      const snapshot = await host.client.readQueuedTurn({ ...ref, queueEntryId: receipt.queueEntryId });
+      await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
+      for (const prompt of ["First held wake", "Second held wake"]) await registry.holdBackendSelfStartedTurn({ ...ref, prompt, source: "cron" });
+      expect(await host.client.readQueuedTurn({ ...ref, queueEntryId: receipt.queueEntryId })).toEqual(snapshot);
+      expect(await runtime.submitDurableTurnRequest("self-started-device", request, target)).toEqual(receipt);
+      expect((await host.client.resolveThreadAdmissionState(ref)).activeTurn?.turnId).toBe(active.turnId);
+      expect(host.providerSteerCount()).toBe(0);
+      const ids = registry.listHeldThreadQueueEntries(ref).map(entry => entry.entryId).filter(id => id !== receipt.queueEntryId);
+      expect(new Set(ids).size).toBe(2);
+      await host.client.cancelQueuedTurn({ queueEntryId: receipt.queueEntryId, expectedContentHash: snapshot.contentHash });
+      await vi.waitFor(async () => expect(await runtime.getDurableTurnRequest("self-started-device",
+        { ...ref, id: request.clientRequest.id }, target)).toMatchObject({ state: "completed", outcome: "cancelled" }));
+      expect(await runtime.submitDurableTurnRequest("self-started-device", request, target)).toMatchObject({ state: "completed", outcome: "cancelled" });
+      await host.close();
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref })).entries).toEqual([]);
+      for (const queueEntryId of ids) {
+        await expect(host.client.readQueuedTurn({ ...ref, queueEntryId })).rejects.toThrow();
+        expect(await host.client.releaseQueuedTurn({ queueEntryId })).toMatchObject({ disposition: "not_found" });
+      }
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+    } finally { await host.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("concurrent self-started wakes retain independent holds, pause revisions, sender boundaries and fresh cancellation identities", async () => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+    try {
+      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 20 }), fc.boolean(), async (suffix, paused) => {
+        const ref = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
+        const starts = OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start").length;
+        const prompt = `Concurrent wake ${suffix}`;
+        await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
+        // An unrelated sender with the same text must retain its own acceptance.
+        const sender = await queue.submitGroupedSteer({ ...ref, origin: "manual", input: [{ type: "text", text: prompt }],
+          messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "other-sender" } } });
+        if (paused) expect(await host.client.setQueuedTurnPaused({ queueEntryId: sender.entry.id, paused: true })).toMatchObject({ disposition: "updated" });
+        await registry.submitHeldTurn({ ...ref, queueEntryId: `review:${ref.threadId}`, input: [{ type: "text", text: "Review" }], holdReason: "Independent review" });
+        const neighbor = structuredClone(queue.getQueuedEntries(ref).find(entry => entry.id === sender.entry.id));
+        const wake = { ...ref, prompt, source: "cron" as const };
+        expect(await Promise.all(Array.from({ length: 5 }, () => registry.holdBackendSelfStartedTurn(wake)))).toEqual(Array(5).fill(true));
+        const first = queue.getQueuedEntries(ref).at(-1)!;
+        const accepted = await host.client.readQueuedTurn({ ...ref, queueEntryId: first.id });
+        expect(queue.getQueuedEntries(ref)).toHaveLength(3);
+        expect(await host.client.setQueuedTurnPaused({ queueEntryId: first.id, paused: true })).toMatchObject({ disposition: "held" });
+        await registry.holdBackendSelfStartedTurn(wake);
+        expect(queue.getQueuedEntries(ref).at(-1)).toEqual(first);
+        expect(await host.client.readQueuedTurn({ ...ref, queueEntryId: first.id })).toEqual(accepted);
+        expect(queue.getQueuedEntries(ref).find(entry => entry.id === sender.entry.id)).toEqual(neighbor);
+        await registry.setThreadLock({ ...ref, locked: false }, { source: "operator" });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(queue.getQueuedEntries(ref).every(entry => entry.manualReleaseRequired)).toBe(true);
+        expect(OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start")).toHaveLength(starts);
+        await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
+        await host.client.cancelQueuedTurn({ queueEntryId: first.id, expectedContentHash: accepted.contentHash });
+        await registry.holdBackendSelfStartedTurn(wake);
+        const fresh = queue.getQueuedEntries(ref).at(-1)!;
+        expect(fresh.id).not.toBe(first.id);
+        expect(fresh.input).toEqual(accepted.input);
+        await expect(host.client.readQueuedTurn({ ...ref, queueEntryId: first.id })).rejects.toThrow();
+        for (const entry of queue.getQueuedEntries(ref)) await host.client.cancelQueuedTurn({ queueEntryId: entry.id });
+        await host.client.interruptTurn(active);
+      }), { numRuns: 25, examples: [["", true], ["", false]] });
+    } finally { await host.close(); }
+  });
+
+  it("self-started admission, concurrent repeated wakes, reads, pauses and cancellations add no SQLite commits", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+    try {
+      const ref = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
+      await registry.submitHeldTurn({ ...ref, queueEntryId: "budget-review", input: [{ type: "text", text: "Review" }], holdReason: "Independent review" });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let n = 0; n < 100; n++) {
+          const wake = { ...ref, prompt: `Budget wake ${n}`, source: "cron" as const };
+          await Promise.all(Array.from({ length: 3 }, () => registry.holdBackendSelfStartedTurn(wake)));
+          const rows = queue.getQueuedEntries(ref);
+          expect(rows).toHaveLength(2);
+          const id = rows[1]!.id;
+          const snapshot = await host.client.readQueuedTurn({ ...ref, queueEntryId: id });
+          await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: true });
+          expect((await host.client.readQueuedTurn({ ...ref, queueEntryId: id })).contentHash).toBe(snapshot.contentHash);
+          await host.client.cancelQueuedTurn({ queueEntryId: id, expectedContentHash: snapshot.contentHash });
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ scenario: "registered-self-started-admission-100", budgetFile: "desktop-self-started-admission-write-budgets.json",
+        note: "100 fresh held wakes with three concurrent matching hooks each, registered reads, pause and hash cancellation; setup/lock/review excluded; real timers and drains.", writes });
+    } finally { await host.close(); vi.unstubAllEnvs(); }
+  });
+
   it("actual desktop ACP acceptance survives a session-read refusal in started publication", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const backend = "acp:gemini" as const, threadId = "publication-acp";

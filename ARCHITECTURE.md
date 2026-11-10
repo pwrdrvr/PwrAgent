@@ -364,6 +364,11 @@ both hosts. Desktop's ordinary-send and active-control callers each retain one
 queue identity per accepted message, including additional input from the same
 sender. New messages never append to an earlier accepted batch. Existing grouped
 entries retain their read, control and explicit replacement behavior.
+Claude's background-task, loop and cron hooks also admit each distinct locked
+prompt under its own immutable held identity. The existing attachment admission
+reservation deduplicates matching prompts only while they still wait; a new wake
+never changes another acceptance. Unlock preserves FIFO and independent review
+holds, and shutdown never restores these transient prompts.
 Each accepted Outpost job retains its own input and delivery fingerprint;
 accepted messages are never concatenated. At the FIFO head it joins the current
 native turn, or starts a new turn when idle. The existing steering lifecycle

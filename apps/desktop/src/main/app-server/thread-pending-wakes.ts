@@ -80,8 +80,8 @@ export type ThreadPendingWakeReaders = {
 
 export const DEFAULT_PENDING_WAKES_ENDED_LIMIT = 8;
 /**
- * The id of the queue entry that holds the turns a backend started on its
- * own, such as Claude's task follow-ups and wakes, while the thread is locked.
+ * The identity prefix of immutable prompts a backend started on its own,
+ * such as Claude's task follow-ups and wakes, while the thread is locked.
  */
 export const SELF_STARTED_TURN_ENTRY_PREFIX = "self-started:";
 const MONITOR_ID_PREFIX = "monitor-";
