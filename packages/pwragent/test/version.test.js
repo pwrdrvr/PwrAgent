@@ -4,8 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { formatVersion, restartRequired, versionInfo } from "../src/version.js";
-import { setup } from "./helpers.js";
+import { formatVersion, versionInfo } from "../src/version.js";
 
 // PWRAGENT_TEST_CLI points at an installed package; expect its own manifest.
 const cli = process.env.PWRAGENT_TEST_CLI || fileURLToPath(new URL("../bin/pwragent.js", import.meta.url));
@@ -20,11 +19,11 @@ test("--version and version print the package manifest's version without a daemo
   // An invalid profile or missing daemon must not stop a version check.
   const command = run(["version"], { PWRAGENT_PROFILE: "../bad" });
   assert.equal(command.status, 0, command.stderr);
-  assert.deepEqual(JSON.parse(command.stdout), versionInfo(manifest));
-  assert.match(run(["--help"]).stdout, /pwragent --version \| version/);
+  assert.equal(command.stdout.trim(), formatVersion(versionInfo(manifest)));
+  assert.match(run(["--help"]).stdout, /pwragent status \| list \| --version/);
   const badFlags = run(["version", "--id", "x"]);
   assert.equal(badFlags.status, 1);
-  assert.match(badFlags.stderr, /--id does not apply to version/);
+  assert.match(badFlags.stderr, /Unknown option/);
 });
 
 test("release metadata adds the tag and commit; malformed metadata is ignored", () => {
@@ -36,25 +35,4 @@ test("release metadata adds the tag and commit; malformed metadata is ignored", 
   assert.deepEqual(checkout, { name: "pwragent", version: "1.3.8" });
   assert.equal(formatVersion(checkout), "pwragent 1.3.8");
   assert.deepEqual(versionInfo({ name: "pwragent", version: "1.3.8", pwragentRelease: { tag: 7, commit: null } }), checkout);
-});
-
-test("restartRequired compares the running daemon with the installed package", () => {
-  const installed = { version: "1.3.8", release: { tag: "v1.3.8", commit: "a".repeat(40) } };
-  assert.equal(restartRequired(structuredClone(installed), installed), false);
-  assert.equal(restartRequired(undefined, installed), true);
-  assert.equal(restartRequired({ ...installed, version: "1.3.7" }, installed), true);
-  assert.equal(restartRequired({ ...installed, release: { ...installed.release, commit: "b".repeat(40) } }, installed), true);
-  assert.equal(restartRequired({ version: "1.3.8" }, { version: "1.3.8" }), false);
-});
-
-test("status reports the running daemon's version beside the installed one", { timeout: 10000 }, async (t) => {
-  const h = await setup(t);
-  const { name: _name, ...expected } = versionInfo(manifest);
-  assert.deepEqual(JSON.parse(h.daemon.output.split("\n").find((line) => line.includes("\"ready\":true"))).running, expected);
-  const client = h.launch(["status"]);
-  assert.equal((await client.done).code, 0, client.errors);
-  const status = JSON.parse(client.output);
-  assert.deepEqual(status.running, expected);
-  assert.deepEqual(status.installed, expected);
-  assert.equal(status.restartRequired, false);
 });

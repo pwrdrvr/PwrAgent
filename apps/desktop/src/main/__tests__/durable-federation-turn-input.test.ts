@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,4 +107,20 @@ describe.each([false, true])("durable Federation input trust (steering=%s)", (st
     expect(receipt.state).toBe("dispatched");
     expect(steering ? fixture.steer : fixture.dispatch).toHaveBeenCalledWith(expect.objectContaining({ input: value.request.input }), SCOPE);
   });
+});
+
+it("causal messaging authority is checked before any direct or relayed durable receipt is admitted", async () => {
+  const fixture = setup();
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom("messaging", "agent"), async (relayed, kind) => {
+    const value = submission([{ type: "text", text: "Causal fixture" }], false) as SubmitDurableTurnRequest;
+    value.request.messageOrigin = { kind, causalMessagingSource: { ownerId: "source-owner", requestId: randomUUID() } };
+    value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest("owner", value)).digest("hex");
+    const envelope: FederationRequestEnvelope = { id: randomUUID(), kind: "request", protocolVersion: 1, createdAt: NOW,
+      sourceInstanceId: "gateway", targetInstanceId: "owner", ...(relayed ? { hopCount: 1 } : {}),
+      method: FEDERATION_BACKEND_METHODS.submitTurnRequest, params: value };
+    expect(await fixture.router.routeEnvelope({ envelope, sourcePeerId: relayed ? "relay" : "gateway" }))
+      .toMatchObject({ status: "rejected", code: "capability_denied" });
+    expect(fixture.db.raw.prepare("SELECT count(*) AS n FROM durable_turn_requests").get()).toEqual({ n: 0 });
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+  }), { numRuns: 12 });
 });

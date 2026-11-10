@@ -25,7 +25,7 @@ it("both native consumers select the build output in development and resource ou
   });
   for (const host of ["node", "electron"] as const) {
     for (const packaged of [false, true]) {
-      const app = path.join(root, `${host}-${packaged ? "packaged" : "development"}`);
+      const app = path.join(root, "node_modules", `${host}-${packaged ? "packaged" : "development"}`);
       const out = path.join(app, "out", host === "node" ? "headless" : "main");
       const resources = path.join(app, "resources");
       fs.mkdirSync(out, { recursive: true });

@@ -1,3 +1,4 @@
+import { createOutpostRuntimePolicy, type OwnerRuntimePolicy } from "../owner-runtime-policy";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, rename } from "node:fs/promises";
@@ -12,9 +13,12 @@ export function createHeadlessOwnerHostServices(options: {
   runtime: NodeRuntimeMetadata;
   profileDirectory: string;
   onQuit(): void;
+  runtimePolicy?: OwnerRuntimePolicy;
 }): OwnerHostServices {
   const unavailable = (): never => { throw new Error("This operation requires the desktop host."); };
+  const runtimePolicy = options.runtimePolicy ?? createOutpostRuntimePolicy();
   return {
+    runtimePolicy,
     application: {
       getVersion: () => options.runtime.version,
       isPackaged: options.runtime.isPackaged,

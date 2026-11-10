@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { configureBundledGit } from "../bundled-git";
 import { initializeMainLogger, getMainLogger } from "../log";
 import { resolveActiveProfileDir, resolveActiveProfileName, resolveProfileBootDecision } from "../profile";
-import { disposeAppState } from "../storage/desktop-state-lifecycle";
+import { disposeAppState, isAppStateInitialized } from "../storage/desktop-state-lifecycle";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { readNodeRuntimeMetadata, type NodeRuntimeMetadata } from "../runtime-resources";
 import { createHeadlessOwnerHostServices } from "./owner-host-services";
@@ -11,22 +11,29 @@ import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, pre
 
 const log = getMainLogger("pwragent:headless");
 
-export async function startHeadlessHost(runtime = readNodeRuntimeMetadata()) {
+export { canonicalDurableTurnRequest } from "@pwragent/shared";
+export { prepareOutpostProfile, handleOutpostCommand } from "./outpost";
+
+export async function shutdownHeadlessHost(source: string) {
+  prepareOwnerShutdown();
+  try { await disposeOwnerServices(source); }
+  finally { if (isAppStateInitialized()) { disposeOwnerServicesSync(); disposeAppState(); } }
+}
+
+export async function startHeadlessHost(runtime = readNodeRuntimeMetadata(), options: { manageSignals?: boolean } = {}) {
   if (!runtime) throw new Error("The headless runtime manifest is missing. Run build:headless before starting the Node host.");
   const decision = resolveProfileBootDecision();
   if (decision.kind !== "open") throw new Error("The Node host requires an existing PwrAgent profile. Select it with PWRAGENT_PROFILE or --profile.");
   const profileDirectory = resolveActiveProfileDir();
   initializeMainLogger({ profileName: resolveActiveProfileName(), logDirectory: path.join(profileDirectory, "logs") });
   configureBundledGit(runtime.isPackaged ? runtime.resourcesPath : undefined);
-  const shutdown = async (source: string) => {
-    prepareOwnerShutdown();
-    try { await disposeOwnerServices(source); }
-    finally { disposeOwnerServicesSync(); disposeAppState(); }
-  };
+  const shutdown = shutdownHeadlessHost;
   const signal = (name: string) => { void shutdown(name).catch((error) => { log.error("headless shutdown failed", error); process.exitCode = 1; }); };
-  process.on("SIGINT", signal);
-  process.on("SIGTERM", signal);
-  process.once("exit", () => { try { disposeOwnerServicesSync(); } finally { disposeAppState(); } });
+  if (options.manageSignals !== false) {
+    process.on("SIGINT", signal);
+    process.on("SIGTERM", signal);
+  }
+  process.once("exit", () => { if (isAppStateInitialized()) { try { disposeOwnerServicesSync(); } finally { disposeAppState(); } } });
   const host = createHeadlessOwnerHostServices({ runtime, profileDirectory, onQuit: () => signal("owner-request") });
   try {
     const services = await startOwnerServices(host, { bootMode: "active-profile", startedAt: Date.now() });

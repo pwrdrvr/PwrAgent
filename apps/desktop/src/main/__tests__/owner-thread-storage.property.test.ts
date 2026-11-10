@@ -1,7 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { rmSync } from "node:fs";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { OwnerThreadIdentity, OwnerThreadMetadataPatch, OwnerThreadRecord, OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
@@ -10,7 +7,6 @@ import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb } from "./sqlite-test-utils";
-import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 
 type Fixture = {
   registry: OwnerThreadRegistry;
@@ -26,23 +22,6 @@ function desktop(): Fixture {
     reopen() { db.close(); db = StateDb.open(dbPath); return new SqliteOverlayStore(db); },
     close() { db.close(); rmSync(tempDir, { recursive: true, force: true }); },
   };
-}
-
-async function outpost(records: OwnerThreadRecord[] = []): Promise<Fixture> {
-  const url = pathToFileURL(path.join(process.cwd(), "packages/pwragent/src/federation-backend.js")).href;
-  const { HeadlessBackend } = await import(/* @vite-ignore */ url);
-  const root = mkdtempSync(path.join(os.tmpdir(), "owner-storage-sqlite-"));
-  const directory = path.join(root, "headless");
-  mkdirSync(directory, { mode: 0o700 });
-  const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
-  const storage = profile.openOwnerStorage(directory, { version: 1, workspace: root, codexHome: path.join(root, "codex") });
-  for (const { backend, threadId, ...metadata } of records) {
-    storage.threads.updateThreadMetadata({ backend, threadId }, metadata);
-  }
-  const runtime = { workspace: root, store: { directory: path.join(directory, "jobs"), jobs: new Map(), threadRegistry: storage.threads },
-    onFailure(error: unknown) { throw error; } };
-  const open = () => new HeadlessBackend(runtime, () => {}).threadRegistry as OwnerThreadRegistry;
-  return { registry: open(), reopen: open, close() { profile.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
 const identity: OwnerThreadIdentity = { backend: "codex", threadId: "thread-a" };
@@ -63,7 +42,7 @@ const patch: fc.Arbitrary<OwnerThreadMetadataPatch> = fc.record({
 });
 
 /** One contract, run against each real durable implementation. */
-for (const [name, create] of [["desktop SQLite", desktop], ["Outpost profile SQLite", outpost]] as const) {
+for (const [name, create] of [["owner SQLite", desktop]] as const) {
   describe(`owner storage contract: ${name}`, () => {
     it("matches a metadata map after arbitrary patches and reopen, without aliasing", async () => {
       await fc.assert(fc.asyncProperty(fc.array(fc.record({
@@ -154,50 +133,6 @@ it("preserves SQLite host metadata and isolates identical IDs on different provi
     expect((await store.getThreadOverlayState(identity))?.tokenMiserEnabled).toBe(true);
     expect((await store.listThreadMetadata()).map((row) => row.title?.text).sort()).toEqual(["Claude", "Codex"]);
   } finally { fixture.close(); }
-});
-
-it("preserves Outpost tool metadata across canonical reopen", async () => {
-  const fixture = await outpost();
-  try {
-    const registry = fixture.registry;
-    await registry.updateThreadMetadata(identity, { title: { text: "Native", source: "derived" }, executionMode: "auto",
-      seenAt: 20, seenUpdatedAt: 10, archived: true, messagingFileTools: true });
-    await registry.updateThreadMetadata(identity, { pinnedRank: "a0" });
-    expect(await fixture.reopen().getThreadMetadata(identity)).toMatchObject({ messagingFileTools: true, executionMode: "auto", pinnedRank: "a0" });
-    await expect(registry.getThreadMetadata({ ...identity, backend: "claude" })).resolves.toBeUndefined();
-    await expect(registry.updateThreadMetadata({ ...identity, backend: "claude" }, { pinnedRank: "b0" })).rejects.toThrow("Codex threads only");
-  } finally { fixture.close(); }
-});
-
-it("reads backend-qualified canonical metadata without enabling unsupported-provider writes", async () => {
-  const metadata = fc.record({
-    title: fc.record({ text: fc.string(), source: fc.constantFrom("derived" as const, "explicit" as const) }),
-    pinnedRank: fc.string(), seenAt: timestamp, seenUpdatedAt: timestamp, archived: fc.boolean(),
-  });
-  await fc.assert(fc.asyncProperty(fc.tuple(metadata, metadata, metadata), async (facts) => {
-    const records: OwnerThreadRecord[] = (["codex", "claude", "acp:fixture"] as const).map((backend, index) => ({
-      ...identity, backend, executionMode: "auto", ...facts[index]!,
-    }));
-    // Seed the owner's port, as a desktop using this same profile would.
-    const fixture = await outpost(records);
-    try {
-      for (const registry of [fixture.registry, fixture.reopen()]) {
-        expect((await registry.listThreadMetadata()).sort((a, b) => a.backend.localeCompare(b.backend)))
-          .toEqual([...records].sort((a, b) => a.backend.localeCompare(b.backend)));
-        for (const record of records) {
-          expect(await registry.getThreadMetadata(record)).toEqual(record);
-          const returned = (await registry.getThreadMetadata(record))!;
-          returned.title!.text = "mutated read";
-          expect(await registry.getThreadMetadata(record)).toEqual(record);
-          if (record.backend !== "codex") {
-            await expect(registry.updateThreadMetadata(record, { title: { text: "Rejected", source: "explicit" } }))
-              .rejects.toThrow("Codex threads only");
-            expect(await registry.getThreadMetadata(record)).toEqual(record);
-          }
-        }
-      }
-    } finally { fixture.close(); }
-  }), { numRuns: 25 });
 });
 
 it("budgets one atomic metadata command and zero writes for unchanged facts and reads", async () => {

@@ -572,17 +572,19 @@ export type FederationEnvironmentSetupProgressNotification = {
 export function additionalFederationBackendCapabilities(
   envelope: FederationRequestEnvelope,
 ): readonly FederationCapability[] {
+  const required: FederationCapability[] = [];
+  const payload = envelope.params as { messageOrigin?: { kind?: string; causalMessagingSource?: unknown }; request?: { messageOrigin?: { kind?: string; causalMessagingSource?: unknown } } } | undefined;
+  const origin = envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest ? payload?.request?.messageOrigin : payload?.messageOrigin;
+  if (origin?.kind === "messaging" || origin?.causalMessagingSource) required.push("messaging_route");
   if (envelope.method === FEDERATION_BACKEND_METHODS.updateSubthreadOrder
-    && (envelope.params as UpdateSubthreadOrderRequest | undefined)?.archivePromotion) {
-    return ["archive_subthread_promotion_v1"];
-  }
+    && (envelope.params as UpdateSubthreadOrderRequest | undefined)?.archivePromotion) required.push("archive_subthread_promotion_v1");
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
-    || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
+    || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) required.push("durable_turn_requests_v1");
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitSteerRequest
-    || envelope.method === FEDERATION_BACKEND_METHODS.getSteerRequest) return ["durable_steer_requests_v1"];
-  if (envelope.method !== FEDERATION_BACKEND_METHODS.steerTurn) return [];
-  const request = envelope.params as Partial<SteerTurnRequest> | undefined;
-  return request?.fallback ? ["scheduled_actions"] : [];
+    || envelope.method === FEDERATION_BACKEND_METHODS.getSteerRequest) required.push("durable_steer_requests_v1");
+  if (envelope.method === FEDERATION_BACKEND_METHODS.steerTurn
+    && (envelope.params as Partial<SteerTurnRequest> | undefined)?.fallback) required.push("scheduled_actions");
+  return required;
 }
 
 export type FederationBackendOperations = NavigationBackendOperations & {

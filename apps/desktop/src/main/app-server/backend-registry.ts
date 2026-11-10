@@ -1,4 +1,5 @@
-import { applicationHost as app, requestShowThread, ownerNotifications as getDesktopNotificationService } from "../owner-host";
+import { assertOwnerExecutionPolicy } from "../owner-runtime-policy";
+import { applicationHost as app, requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
@@ -1393,6 +1394,15 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
 
   backendRegistryLog.debug(event, payload);
 }
+
+function executionModeSettings(mode: ThreadExecutionMode) {
+  const original = EXECUTION_MODE_SUMMARIES[mode];
+  const policy = getOwnerHostServices().runtimePolicy;
+  if (!policy) return original;
+  if (!policy.executionModes.includes(mode)) throw new Error("Full access is unavailable on this Outpost.");
+  return { ...original, approvalPolicy: policy.approvalPolicy, approvalsReviewer: "user" as const, sandbox: policy.sandboxByMode[mode] ?? original.sandbox };
+}
+
 
 function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
   if (line.priceStatus !== "unpriced") {
@@ -3575,7 +3585,12 @@ export class DesktopBackendRegistry {
     this.resolveCodexRuntimeCommandFn =
       options?.resolveCodexRuntimeCommand
       ?? (settingsService
-        ? async () => await settingsService.resolveCodexCommand()
+        ? async () => {
+              const selected = await settingsService.resolveCodexCommand();
+              const pinned = getOwnerHostServices().runtimePolicy?.codexCommand;
+              if (pinned && selected.command !== pinned) throw new Error("The configured Outpost Codex executable is unavailable; refusing to launch another installation.");
+              return selected;
+            }
         : undefined);
     this.resolveTokenMiserCodexRuntimeFn = settingsService
       ? async () => {
@@ -3615,7 +3630,7 @@ export class DesktopBackendRegistry {
       };
       const client = new CodexAppServerClient({
         assertOwnerAdmission: () => this.assertThreadOwnership(),
-        args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
+        args: settingsService ? undefined : buildCodexClientArgs(codexEnv, [], [], getOwnerHostServices().runtimePolicy),
         command: codexCommand,
         connectionObserver: codexObserver,
         env: codexSpawnEnv,
@@ -3624,6 +3639,7 @@ export class DesktopBackendRegistry {
               env,
               settingsService?.resolveCodexConfigOverrides?.() ?? [],
               settingsService?.resolveCodexModelProviders?.() ?? [],
+              getOwnerHostServices().runtimePolicy,
             );
           if (!provider) return args;
           await cleanup;
@@ -3642,7 +3658,12 @@ export class DesktopBackendRegistry {
           }
         },
         resolveCommand: settingsService
-          ? async () => await settingsService.resolveCodexCommand()
+          ? async () => {
+              const selected = await settingsService.resolveCodexCommand();
+              const pinned = getOwnerHostServices().runtimePolicy?.codexCommand;
+              if (pinned && selected.command !== pinned) throw new Error("The configured Outpost Codex executable is unavailable; refusing to launch another installation.");
+              return selected;
+            }
           : undefined,
         resolveEnv: settingsService
           ? async () => withTokenMiserBridgeDescriptorEnv(
@@ -5417,6 +5438,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }> {
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     this.assertNotBootstrap("startAutomationHeadlessTurn");
     this.assertThreadOwnership();
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -5424,8 +5446,8 @@ export class DesktopBackendRegistry {
       threadId: params.agentThreadId,
     });
     const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
-    const approvalPolicy = executionMode === "auto" ? "on-request" : "never";
+    const modeSettings = executionModeSettings(executionMode);
+    const approvalPolicy = getOwnerHostServices().runtimePolicy?.approvalPolicy ?? (executionMode === "auto" ? "on-request" : "never");
     const sandbox = modeSettings.sandbox;
     const modelSettings = await this.admitNewThreadModelSettings(params.backend, {
       model: params.model ?? overlay?.model,
@@ -5815,17 +5837,18 @@ export class DesktopBackendRegistry {
       request.refreshModels === true || request.refreshModels === "codex"
         ? await this.discoverCodexBackend(discoveryPermit!, observer)
         : this.readCodexBackendSummary();
-    if (request.refreshModels === true || request.refreshModels === "claude") {
+    const policy = getOwnerHostServices().runtimePolicy;
+    if ((!policy || policy.enabledBackends.includes("claude")) && (request.refreshModels === true || request.refreshModels === "claude")) {
       await this.claudeBackend.discover();
     }
     const summaries = [codexSummary, this.claudeBackend.summary()];
-    const acpSummaries = await this.acpBackend.describeInstalledBackends();
+    const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId) ? await this.acpBackend.describeInstalledBackends() : [];
+    const enabled = [...summaries, ...acpSummaries].filter(backend => !policy || policy.enabledBackends.includes(backend.kind))
+      .map(backend => !policy ? backend : { ...backend, executionModes: backend.executionModes.filter(mode => policy.executionModes.includes(mode.mode)) });
 
     return {
       fetchedAt: Date.now(),
-      backends: request.includeUnavailable
-        ? [...summaries, ...acpSummaries]
-        : [...summaries, ...acpSummaries].filter((backend) => backend.available),
+      backends: request.includeUnavailable ? enabled : enabled.filter((backend) => backend.available),
     };
   }
 
@@ -13205,6 +13228,7 @@ export class DesktopBackendRegistry {
     rerunCodexEnvironmentSetup?: boolean;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     return await listingDiagnostics.trace("workflow", { query: "thread-start" }, () => this.startThreadPrepared(params));
   }
 
@@ -13345,7 +13369,7 @@ export class DesktopBackendRegistry {
       })
         ? "full-access"
         : executionMode;
-    const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveExecutionMode];
+    const modeSettings = executionModeSettings(effectiveExecutionMode);
     const acpRuntime = sanitizeAcpRuntimeForExecutionMode({
       backend,
       executionMode: effectiveExecutionMode,
@@ -13812,7 +13836,7 @@ export class DesktopBackendRegistry {
     }
 
     const executionMode = request.executionMode ?? "default";
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modeSettings = executionModeSettings(executionMode);
     const modelSettings = await this.admitNewThreadModelSettings(backend, request);
     const directoryKind =
       request.directoryKind ?? (request.directoryPath?.trim() ? "directory" : "workspace");
@@ -14178,6 +14202,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
@@ -14213,6 +14238,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     input: AppServerTurnInputItem[];
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     return await this.admitThreadAttachments(params, (input, onAdmission) =>
@@ -14238,6 +14264,7 @@ export class DesktopBackendRegistry {
     /** Names the entry in the queue and Waiting for, in place of its text. */
     title?: string;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     // No lock check: a held entry starts nothing until it is released, and
     // the release is refused while the thread is locked. Holding is how a
     // lock pauses a delivery, such as a monitor's result, without losing it.
@@ -16186,6 +16213,7 @@ export class DesktopBackendRegistry {
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
     return await listingDiagnostics.trace("workflow", { query: "submit-acceptance" }, () => this.prepareAndStartTurn(params));
   }
 
@@ -16602,7 +16630,7 @@ export class DesktopBackendRegistry {
             throw new Error("Desktop backend registry closed before turn start");
           }
           const effectiveMode = params.executionMode ?? mode;
-          const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+          const modeSettings = executionModeSettings(effectiveMode);
           const tokenMiserConfig =
             await this.buildSupportedCodexTokenMiserConfig({
               client,
@@ -17634,7 +17662,7 @@ export class DesktopBackendRegistry {
           params.parentThreadId,
         )
       : params.overlay?.executionMode ?? "default";
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modeSettings = executionModeSettings(executionMode);
     const client = this.getClient("codex", executionMode);
     const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
       client,
@@ -20032,7 +20060,7 @@ export class DesktopBackendRegistry {
     });
     const previousApplied = previousOverlay?.executionMode ?? "default";
 
-    const modeSettings = EXECUTION_MODE_SUMMARIES[params.executionMode];
+    const modeSettings = executionModeSettings(params.executionMode);
     const result = await this.withCodexThreadClient(
       params.threadId,
       async (client) => {
@@ -21761,7 +21789,7 @@ export class DesktopBackendRegistry {
     cancelDescription?: string;
   }): Promise<boolean> {
     const normalizedCwd = toDirectoryId(path.resolve(params.cwd));
-    const modeLabel = EXECUTION_MODE_SUMMARIES[params.executionMode].label;
+    const modeLabel = executionModeSettings(params.executionMode).label;
     const requestId = `${params.handoffId}:cwd-trust`;
     const key = buildPendingRequestKey({
       backend: params.backend,
@@ -21939,7 +21967,7 @@ export class DesktopBackendRegistry {
     if (!confirmed) {
       return threadOrchestrationFailure(
         "forbidden",
-        `The operator did not approve adding ${normalizedCwd} to the ${EXECUTION_MODE_SUMMARIES[params.executionMode].label} write scope.`,
+        `The operator did not approve adding ${normalizedCwd} to the ${executionModeSettings(params.executionMode).label} write scope.`,
         { cwd: normalizedCwd },
       );
     }
@@ -31711,7 +31739,7 @@ export class DesktopBackendRegistry {
               serviceTier: overlay?.serviceTier,
               fastMode: overlay?.fastMode,
             });
-            const modeSettings = EXECUTION_MODE_SUMMARIES[mode];
+            const modeSettings = executionModeSettings(mode);
             const admission = {
               threadId, ...settings,
               ...(cwd ? { cwd } : {}),
@@ -39903,7 +39931,7 @@ export class DesktopBackendRegistry {
       && requestedOrInheritedExecutionMode === "auto"
         ? "default"
         : requestedOrInheritedExecutionMode;
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modeSettings = executionModeSettings(executionMode);
 
     if (
       workspaceMode !== "none" &&
@@ -41574,7 +41602,7 @@ export class DesktopBackendRegistry {
               params.context.threadId,
             )?.executionMode ?? "default"
           : "default");
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modeSettings = executionModeSettings(executionMode);
     const cwd =
       params.cwd?.trim() ||
       (await this.resolveThreadEnvironmentCwd(
@@ -42318,7 +42346,7 @@ export class DesktopBackendRegistry {
     record.lastActivityAt = Date.now();
     record.staleInterruptAttempted = false;
     const executionMode = record.executionMode ?? "default";
-    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modeSettings = executionModeSettings(executionMode);
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: record.parentBackend,
       threadId: record.parentThreadId,
@@ -47368,8 +47396,8 @@ export function initializeDesktopBackendRegistry(): DesktopBackendRegistry {
     registry = new DesktopBackendRegistry({
       ownerAdmission: new ProfileThreadOwnerAdmission(() => getRuntimeLeaseManager()),
       configStore: getDesktopConfigStore(),
-      useMachineAcpDiscovery: true,
-      useMachineClaudeDiscovery: true,
+      useMachineAcpDiscovery: !getOwnerHostServices().runtimePolicy || getOwnerHostServices().runtimePolicy!.enabledBackends.some(isAcpBackendId),
+      useMachineClaudeDiscovery: !getOwnerHostServices().runtimePolicy || getOwnerHostServices().runtimePolicy!.enabledBackends.includes("claude"),
     });
   }
 

@@ -1,3 +1,4 @@
+import type { OwnerRuntimePolicy } from "../owner-runtime-policy";
 import { MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY } from "@pwragent/shared";
 import { PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
 import {
@@ -36,6 +37,7 @@ export function buildCodexClientArgs(
   env?: NodeJS.ProcessEnv,
   configOverrides: readonly string[] = [],
   modelProviders: readonly CodexModelProviderSettings[] = [],
+  policy?: OwnerRuntimePolicy,
 ): string[] {
   // A provider's env_key is named only when its key is in this spawn's
   // environment; Codex would otherwise fail every request for a missing key.
@@ -50,9 +52,10 @@ export function buildCodexClientArgs(
       "-c", override,
     ]),
     "-c",
-    'approval_policy="on-request"',
+    `approval_policy=${JSON.stringify(policy?.approvalPolicy ?? "on-request")}`,
     "-c",
-    'sandbox_mode="workspace-write"',
+    `sandbox_mode=${JSON.stringify(policy ? "read-only" : "workspace-write")}`,
+    ...(policy ? ["-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true", "-c", "sandbox_workspace_write.exclude_slash_tmp=true"] : []),
     // PwrAgent already waits for idle before unsubscribing; unload without
     // a second Codex delay once the last subscriber leaves an inactive thread.
     "-c",

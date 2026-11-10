@@ -325,6 +325,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
           await options.shutdown?.closeMessagingStatus?.();
           disposeOwnerMessagingServices();
           await disposeDesktopMessagingRuntime();
+          if (host.runtimePolicy?.exclusiveProfileOwner) getExistingRuntimeLeaseManager()?.release("messaging", "thread_owner");
         },
       },
       {
@@ -351,6 +352,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         run: async () => {
           await options.shutdown?.closeAppServerIpc?.();
           await disposeAppServerOwnerServices();
+          if (host.runtimePolicy?.exclusiveProfileOwner) getExistingRuntimeLeaseManager()?.release("federation", "thread_owner");
         },
       },
       {
@@ -514,6 +516,13 @@ wireOwnerRendererEvents();
   });
   getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
   wireOwnerMessagingServices(messagingRuntime);
+  if (host.runtimePolicy?.exclusiveProfileOwner) {
+    for (const kind of ["federation", "messaging"] as const) {
+      const result = leaseManager.acquire(kind, "thread_owner");
+      if (!result.acquired) throw new Error(`Profile ${kind} lease is held by another runtime (${result.holder.instanceId}); stop that owner before starting Outpost.`);
+    }
+  }
+
 
   if (bootMode === "active-profile") {
     const registry = getDesktopBackendRegistry();
@@ -770,6 +779,11 @@ export function disposeOwnerServicesSync(options: { releaseFederationLease?: boo
   }
 
   getExistingRuntimeMessagingLeaseCoordinator()?.shutdownSync();
+  const manager = getExistingRuntimeLeaseManager();
+  if (manager && getOwnerHostServices().runtimePolicy?.exclusiveProfileOwner) {
+    manager.release("messaging", "thread_owner");
+    if (options.releaseFederationLease !== false) manager.release("federation", "thread_owner");
+  }
   if (options.releaseFederationLease !== false) getExistingRuntimeLeaseManager()?.markExited();
 }
 

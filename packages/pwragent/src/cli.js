@@ -2,140 +2,50 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { setTimeout as delay } from "node:timers/promises";
 import { call } from "./client.js";
 import { serve } from "./daemon.js";
-import { ACTIVE } from "./store.js";
-import { formatVersion, installedVersion, packageVersion, restartRequired } from "./version.js";
+import { formatVersion, packageVersion } from "./version.js";
 
-const help = `PwrAgent Headless (experimental, Linux/macOS, Node 22.14+ (22.x) or >=23.6)
+const commands = new Set(["status", "list", "show", "start-thread", "submit", "receipt", "pause", "resume", "move", "cancel", "release", "interrupt",
+  "federation-status", "federation-join", "federation-invite", "federation-leave", "federation-revoke"]);
+const help = `PwrAgent Outpost (Linux/macOS, Node 24+)
 
-  pwragent serve --workspace /project --codex-home /codex-home --codex-bin /path/to/codex
-  pwragent project-list
-  pwragent project-create --name NAME [--label NAME]
-  pwragent project-clone --name NAME --remote URL [--label NAME]
-  pwragent project-add|project-remove --path /workspace/project
-  pwragent git-auth-configure --config-file /outpost/git-auth-settings.json
-  pwragent status | list
-  pwragent --version | version
-  pwragent submit --id JOB --prompt-file /task.txt [--sandbox read-only|workspace-write]
-                  [--model MODEL] [--thread THREAD_ID] [--cwd /workspace/project]
-  pwragent show|read|interrupt|wait --id JOB
-  pwragent release|cancel --id QUEUED_JOB
-  pwragent pause|resume --id QUEUED_JOB
-  pwragent move --id QUEUED_JOB [--before QUEUED_JOB]
-  pwragent federation-join --invite-file /invite.txt --gateway ws://127.0.0.1:47830 [--label NAME]
-  pwragent federation-invite [--port 47831] [--label NAME]
-  pwragent federation-status | federation-leave
-  pwragent federation-revoke --peer INSTANCE_ID
+  pwragent serve --workspace /projects --codex-home /codex-home --codex-bin /path/to/codex
+  pwragent status | list | --version
+  pwragent COMMAND --params-file /request.json
 
-Use --profile NAME (or PWRAGENT_PROFILE, default: default).
-State: $PWRAGENT_HOME/profiles/NAME/state/headless (default root: ~/.pwragent).
-serve runs in the foreground; use systemd to own its lifetime remotely.
-submit returns durable acceptance. wait exits 0 only for completed, 2 otherwise.
-Approvals are never granted. Job IDs cannot be reused for different input.
-Federation uses private retained identity files and the standard encrypted protocol.
-Continued-thread jobs queue while busy; new-thread jobs require an idle daemon.
-No provisioning, login, automatic replay, or local messaging providers.
+Commands: ${[...commands].join(", ")}
+Parameters use the desktop owner's contracts; see README.md.
+Use --profile NAME or PWRAGENT_PROFILE (default: default).
+State: $PWRAGENT_HOME/profiles/NAME/state (default root: ~/.pwragent).
+serve runs in the foreground. Use systemd or a container to own its lifetime.
 `;
 
 export async function main(args) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: {
-    help: { type: "boolean", short: "h" },
-    version: { type: "boolean" },
-    profile: { type: "string" },
-    workspace: { type: "string" },
-    "codex-home": { type: "string" },
-    "codex-bin": { type: "string" },
-    id: { type: "string" },
-    before: { type: "string" },
-    "prompt-file": { type: "string" },
-    thread: { type: "string" },
-    model: { type: "string" },
-    sandbox: { type: "string" },
-    "invite-file": { type: "string" },
-    gateway: { type: "string" },
-    label: { type: "string" },
-    port: { type: "string" },
-    peer: { type: "string" },
-    name: { type: "string" }, remote: { type: "string" }, path: { type: "string" }, cwd: { type: "string" }, "config-file": { type: "string" },
+    help: { type: "boolean", short: "h" }, version: { type: "boolean" }, profile: { type: "string" },
+    workspace: { type: "string" }, "codex-home": { type: "string" }, "codex-bin": { type: "string" }, "params-file": { type: "string" },
   } });
-  if (values.help) { console.log(help); return 0; }
-  if (values.version) { console.log(formatVersion(packageVersion())); return 0; }
-  if (!positionals.length) { console.log(help); return 0; }
+  if (values.version || positionals[0] === "version") { console.log(formatVersion(packageVersion())); return 0; }
+  if (values.help || !positionals.length) { console.log(help); return 0; }
   if (positionals.length !== 1) throw new Error("Expected one command; see --help");
   const command = positionals[0];
-  const allowed = {
-    serve: ["workspace", "codex-home", "codex-bin"],
-    submit: ["id", "prompt-file", "thread", "model", "sandbox", "cwd"],
-    "project-list": [], "project-create": ["name", "label"], "project-clone": ["name", "remote", "label"],
-    "project-add": ["path", "label"], "project-remove": ["path"], "git-auth-configure": ["config-file"],
-    show: ["id"], read: ["id"], interrupt: ["id"], wait: ["id"], release: ["id"], cancel: ["id"], status: [], list: [], version: [],
-    pause: ["id"], resume: ["id"], move: ["id", "before"],
-    "federation-join": ["invite-file", "gateway", "label"],
-    "federation-invite": ["port", "label"],
-    "federation-status": [], "federation-leave": [], "federation-revoke": ["peer"],
-  };
-  if (!Object.hasOwn(allowed, command)) throw new Error(`Unknown command: ${command}`);
-  for (const option of Object.keys(values)) {
-    if (option !== "profile" && !allowed[command].includes(option)) throw new Error(`--${option} does not apply to ${command}`);
-  }
-  if (command === "version") { console.log(JSON.stringify(packageVersion())); return 0; }
+  if (command !== "serve" && !commands.has(command)) throw new Error(`Unknown command: ${command}; see --help`);
   const profile = values.profile || process.env.PWRAGENT_PROFILE || "default";
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(profile)) throw new Error("Invalid profile name");
   const root = process.env.PWRAGENT_HOME || path.join(homedir(), ".pwragent");
   if (!path.isAbsolute(root)) throw new Error("PWRAGENT_HOME must be absolute");
+  process.env.PWRAGENT_HOME = root;
+  process.env.PWRAGENT_PROFILE = profile;
   const directory = path.join(root, "profiles", profile, "state", "headless");
-  if (command === "serve") {
-    return serve({ directory, workspace: values.workspace, home: values["codex-home"], command: values["codex-bin"], profile });
+  if (command === "serve") return serve({ directory, workspace: values.workspace, home: values["codex-home"], command: values["codex-bin"], profile });
+  let params = {};
+  if (values["params-file"]) {
+    const file = values["params-file"];
+    if (!statSync(file).isFile() || statSync(file).size > 256 * 1024) throw new Error("--params-file must be a JSON file of at most 256 KiB");
+    params = JSON.parse(readFileSync(file, "utf8"));
+    if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error("Expected a JSON parameter object");
   }
-  if (command.startsWith("project-") || command === "git-auth-configure") {
-    let params = { name: values.name, remote: values.remote, path: values.path, label: values.label };
-    if (command === "project-clone" && !values.remote) throw new Error("--remote is required");
-    if (command === "git-auth-configure") {
-      const file = values["config-file"];
-      if (!file || !statSync(file).isFile() || statSync(file).size > 16384) throw new Error("--config-file must name an outpost JSON file of at most 16 KiB");
-      params = JSON.parse(readFileSync(file, "utf8"));
-    }
-    console.log(JSON.stringify(await call(directory, command, params)));
-    return 0;
-  }
-  if (command.startsWith("federation-")) {
-    let invite;
-    if (command === "federation-join") {
-      const file = values["invite-file"];
-      if (!file || !statSync(file).isFile() || statSync(file).size > 64 * 1024) throw new Error("--invite-file must name a file of at most 64 KiB");
-      invite = readFileSync(file, "utf8").trim();
-    }
-    console.log(JSON.stringify(await call(directory, command, { invite, gateway: values.gateway, label: values.label,
-      port: values.port === undefined ? undefined : Number(values.port), peer: values.peer })));
-    return 0;
-  }
-  if (allowed[command].includes("id") && !values.id) throw new Error("--id is required");
-  if (command === "submit") {
-    const file = values["prompt-file"];
-    if (!file || !statSync(file).isFile() || statSync(file).size > 256 * 1024) throw new Error("--prompt-file must name a file of at most 256 KiB");
-    const result = await call(directory, "submit", { id: values.id, prompt: readFileSync(file, "utf8"),
-      threadId: values.thread, cwd: values.cwd, model: values.model, sandbox: values.sandbox });
-    console.log(JSON.stringify(result));
-    return 0;
-  }
-  if (command === "wait") {
-    for (;;) {
-      const job = await call(directory, "show", { id: values.id });
-      if (job.status !== "queued" && !ACTIVE.has(job.status)) {
-        console.log(JSON.stringify(job));
-        return job.status === "completed" ? 0 : 2;
-      }
-      await delay(1000);
-    }
-  }
-  if (command === "status") {
-    const status = await call(directory, "status", {});
-    const installed = installedVersion();
-    console.log(JSON.stringify({ ...status, installed, restartRequired: restartRequired(status.running, installed) }));
-    return 0;
-  }
-  console.log(JSON.stringify(await call(directory, command, { id: values.id, ...(values.before !== undefined ? { before: values.before } : {}) })));
+  console.log(JSON.stringify(await call(directory, command, params)));
   return 0;
 }

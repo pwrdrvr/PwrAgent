@@ -49,3 +49,10 @@ docs/design/pwragent-v2/project/uploads/
 
 # Python release-tool bytecode
 __pycache__/
+
+# Built Node Outpost resources (Git and the IPC relay).
+packages/pwragent/resources/
+packages/pwragent/native/
+packages/pwragent/build/
+packages/pwragent/scripts/stage-runtime.mjs
+packages/pwragent/scripts/build-mcp-ipc-relay.mjs

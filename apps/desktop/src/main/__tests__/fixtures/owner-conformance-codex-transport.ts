@@ -102,7 +102,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       result = { data: [], nextCursor: null };
     } else if (request.method === "thread/unsubscribe" && this.helpers.has(String(params.threadId))) {
       this.helpers.delete(String(params.threadId));
-    } else if (request.method === "thread/start" && params.ephemeral === true && OwnerConformanceCodexTransport.helperTitle) {
+    } else if (request.method === "thread/start" && params.ephemeral === true) {
       const id = `helper-${++OwnerConformanceCodexTransport.sequence}`;
       this.helpers.add(id);
       result = { thread: { id, cwd: params.cwd, ephemeral: true, turns: [] }, instructionSources: [] };

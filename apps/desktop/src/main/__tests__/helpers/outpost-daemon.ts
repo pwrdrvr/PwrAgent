@@ -1,6 +1,8 @@
+import { buildOwnerFixture } from "./built-owner-fixture";
 import { execFile, spawn } from "node:child_process";
+import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -16,7 +18,7 @@ export const OUTPOST_PACKAGE_ROOT = path.join(process.cwd(), "packages/pwragent"
 
 /** Every grant a viewer can hold on an Outpost. */
 export const OUTPOST_VIEWER_CAPABILITIES: FederationCapability[] = ["remote_window", "thread_navigation", "thread_detail",
-  "turn_control", "durable_turn_requests_v1", "durable_steer_requests_v1", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"];
+  "federated_search", "turn_control", "durable_turn_requests_v1", "durable_steer_requests_v1", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"];
 
 export type OutpostDaemon = {
   client: FederationRemoteBackendClient;
@@ -24,6 +26,7 @@ export type OutpostDaemon = {
   /** `backend.event` payloads, in arrival order, once `subscribe` is called. */
   events: AgentEvent[];
   subscribe(eventClasses: string[]): void;
+  waitForEvent(method: string, matches: (event: AgentEvent) => boolean): Promise<AgentEvent>;
   workspace: string;
   cli: string;
   env: NodeJS.ProcessEnv;
@@ -42,6 +45,7 @@ export async function startOutpostDaemon(options: {
   capabilities?: FederationCapability[];
   profileRoot?: string;
   packageRoot?: string;
+  hostKind?: "desktop" | "headless";
 } = {}): Promise<OutpostDaemon> {
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
@@ -60,11 +64,13 @@ export async function startOutpostDaemon(options: {
   // assertions continue to use the canonical project/directory identity.
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
-  const env = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data };
-  const packageRoot = options.packageRoot ?? OUTPOST_PACKAGE_ROOT;
+  const env: NodeJS.ProcessEnv = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
+  const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
+  const guard = options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind);
+  if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
   const cli = path.join(packageRoot, "bin/pwragent.js");
   const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspaceInput, "--codex-home", home,
-    "--codex-bin", path.join(packageRoot, "test/fixtures/codex.js")], { env, stdio: ["ignore", "pipe", "pipe"] });
+    "--codex-bin", path.join(OUTPOST_PACKAGE_ROOT, "test/fixtures/codex.js")], { env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   let errors = "";
   daemon.stdout.on("data", (chunk) => { output += String(chunk); });
@@ -79,14 +85,21 @@ export async function startOutpostDaemon(options: {
   };
   try {
     for (let attempt = 0; !output.includes('"ready":true'); attempt++) {
-      if (daemon.exitCode !== null || attempt >= 200) throw new Error(`Outpost startup failed: ${errors}`);
+      if (daemon.exitCode !== null || attempt >= 200) throw new Error(`Outpost startup failed (${daemon.exitCode}): ${errors} ${output.slice(-3000)}`);
       await delay(20);
     }
-    const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite", "--port", "0"], { env });
+    const inviteParams = path.join(root, "invite-params.json");
+    const reservation = net.createServer();
+    await new Promise<void>((resolve, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", resolve); });
+    const port = (reservation.address() as net.AddressInfo).port;
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+    writeFileSync(inviteParams, JSON.stringify({ port }));
+    const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite", "--params-file", inviteParams], { env });
     const invite = decodeFederationInvite(JSON.parse(issued.stdout).invite);
     const identity = generateFederationIdentityKeyPair();
     const viewerId = randomUUID();
     const events: AgentEvent[] = [];
+    const eventWaiters = new Set<(event: AgentEvent) => void>();
     let rpc: FederationRpcEndpoint;
     connection = await connectFederationClient({ url: invite.gatewayUrl, mode: "enroll", ...identity,
       peerInstanceId: viewerId, role: "client", inviteToken: invite.token,
@@ -95,7 +108,9 @@ export async function startOutpostDaemon(options: {
       capabilities: options.capabilities ?? OUTPOST_VIEWER_CAPABILITIES, deferReceiving: true,
       onEnvelope: (envelope) => {
         if (envelope.kind === "notification" && envelope.method === "backend.event") {
-          events.push(envelope.params as AgentEvent);
+          const event = envelope.params as AgentEvent;
+          events.push(event);
+          for (const waiter of eventWaiters) waiter(event);
           return;
         }
         rpc.receiveEnvelope(envelope);
@@ -107,6 +122,17 @@ export async function startOutpostDaemon(options: {
     connected.startReceiving();
     return {
       client: new FederationRemoteBackendClient(rpc), rpc, events, workspace, cli, env, viewerId, ownerInstanceId: invite.gatewayInstanceId, close,
+      waitForEvent: (method, matches) => {
+        const found = events.find(event => event.notification.method === method && matches(event));
+        if (found) return Promise.resolve(found);
+        return new Promise(resolve => {
+          const waiter = (event: AgentEvent) => {
+            if (event.notification.method !== method || !matches(event)) return;
+            eventWaiters.delete(waiter); resolve(event);
+          };
+          eventWaiters.add(waiter);
+        });
+      },
       subscribe: (eventClasses) => connected.sendEnvelope({ kind: "notification", method: "federation.eventSubscription",
         id: randomUUID(), params: { eventClasses, threadSelection: { kind: "all" } }, protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: viewerId, targetInstanceId: invite.gatewayInstanceId, createdAt: Date.now() }),

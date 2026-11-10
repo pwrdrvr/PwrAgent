@@ -39,21 +39,23 @@ export function observeNavigationAttentionTurn(params: {
   /** This boundary's observation clock value. */
   observedAt?: number;
 }): NavigationAttentionOrder {
+  // Optimistic starts identify admission, not a second provider turn.
+  const turnId = params.turnId?.startsWith("pending:") ? undefined : params.turnId;
   const previous = params.previous.members.get(params.key);
   const observedTurnIds = previous?.observedTurnIds ?? (previous?.eventTurnId ? [previous.eventTurnId] : []);
-  if (params.turnId && params.turnId !== previous?.eventTurnId && observedTurnIds.includes(params.turnId)) return params.previous;
-  if (previous?.active === params.active && (!params.turnId || previous.eventTurnId === params.turnId)) return params.previous;
+  if (turnId && turnId !== previous?.eventTurnId && observedTurnIds.includes(turnId)) return params.previous;
+  if (previous?.active === params.active && (!turnId || previous.eventTurnId === turnId)) return params.previous;
   // An old completion cannot finish a newer live turn.
-  if (!params.active && previous?.active && previous.eventTurnId && params.turnId
-    && previous.eventTurnId !== params.turnId) return params.previous;
-  const newTurn = Boolean(params.turnId && previous?.eventTurnId !== params.turnId);
+  if (!params.active && previous?.active && previous.eventTurnId && turnId
+    && previous.eventTurnId !== turnId) return params.previous;
+  const newTurn = Boolean(turnId && previous?.eventTurnId !== turnId);
   const move = !previous || (params.active ? !previous.active || (newTurn && Boolean(previous.eventTurnId))
     : (!previous.active && newTurn) || params.promoteOnTurnEnd);
   const rank = move ? params.previous.nextRank : previous.rank;
   const members = new Map(params.previous.members);
   members.set(params.key, { active: params.active, rank, updatedAt: previous?.updatedAt ?? 0,
-    observedTurnIds: params.turnId && !observedTurnIds.includes(params.turnId) ? [...observedTurnIds, params.turnId] : observedTurnIds,
-    eventTurnId: params.active ? params.turnId : params.turnId ?? previous?.eventTurnId, eventTracked: true, awaitingBaseline: true,
+    observedTurnIds: turnId && !observedTurnIds.includes(turnId) ? [...observedTurnIds, turnId] : observedTurnIds,
+    eventTurnId: params.active ? turnId : turnId ?? previous?.eventTurnId, eventTracked: true, awaitingBaseline: true,
     ...(params.observedAt !== undefined ? { observedAt: params.observedAt } : {}) });
   let removed = params.previous.removed;
   if (removed?.has(params.key)) {

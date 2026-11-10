@@ -16,21 +16,7 @@ export function packageVersion() {
   return versionInfo(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")));
 }
 
-// The version fields that status compares, without the package name.
-export function installedVersion() {
-  const { name: _name, ...fields } = packageVersion();
-  return fields;
-}
-
 export function formatVersion({ name, version, release }) {
   const details = [release?.tag, release?.commit && `commit ${release.commit}`].filter(Boolean);
   return details.length ? `${name} ${version} (${details.join(", ")})` : `${name} ${version}`;
-}
-
-// A daemon that predates version reporting returns no running version. It is
-// older than this installation, so it needs a restart too.
-export function restartRequired(running, installed) {
-  return !running
-    || running.version !== installed.version
-    || running.release?.commit !== installed.release?.commit;
 }

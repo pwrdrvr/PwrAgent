@@ -3460,7 +3460,7 @@ vi.mock("../settings/config-store/desktop-config-store-singleton", async () => {
 });
 
 vi.mock("../runtime-lease-manager", () => {
-  const manager = { markExited: vi.fn() };
+  const manager = { markExited: vi.fn(), acquire: vi.fn(() => ({ acquired: true })), release: vi.fn() };
   return { initializeRuntimeLeaseManager: () => manager, getRuntimeLeaseManager: () => manager, getExistingRuntimeLeaseManager: () => manager };
 });
 

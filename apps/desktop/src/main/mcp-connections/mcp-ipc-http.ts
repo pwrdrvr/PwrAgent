@@ -63,7 +63,7 @@ function helperPath(): string {
   // Bundled entries execute under out/main or out/headless. Development
   // helpers live under build/; installed helpers live outside ASAR.
   const resources = runtimeResourcesPath();
-  return !isDevelopmentRuntime() && resources && !resources.includes("node_modules")
+  return !isDevelopmentRuntime() && resources
     ? join(resources, "mcp-ipc-relay", filename)
     : resolve(dirname(fileURLToPath(import.meta.url)), "../../build/mcp-ipc-relay", `${process.platform}-${process.arch}`, filename);
 }

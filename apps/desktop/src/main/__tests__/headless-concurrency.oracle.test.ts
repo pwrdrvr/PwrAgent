@@ -9,7 +9,6 @@ import { expect, it, onTestFinished } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
-import { startOutpostDaemon } from "./helpers/outpost-daemon";
 
 type Thread = { backend: AppServerBackendKind; threadId: string };
 type Turn = { turnId: string; queueEntryId?: string; queueStatus?: string };
@@ -18,6 +17,8 @@ type Host = {
   startThread(): Promise<Thread>;
   startTurn(thread: Thread, queueEntryId: string): Promise<Turn>;
   readThread(thread: Thread): Promise<{ threadStatus?: string; replay?: { lastAssistantMessage?: string } }>;
+  policyProbe(): Promise<unknown>;
+  requests(): Promise<Array<{ method: string; params: Record<string, unknown> }>>;
   complete(threads: Thread[], ids: string[]): Promise<QueueEvent[]>;
   close(): Promise<void>;
 };
@@ -69,7 +70,14 @@ async function builtHost(): Promise<Host> {
         if (request.method === "stop") { process.disconnect(); process.emit("SIGTERM", "SIGTERM"); return; }
         try {
           let result;
-          if (request.method === "complete") {
+          if (request.method === "requests") result = app.fixtureCodex.requests;
+          else if (request.method === "policyProbe") {
+            result = [];
+            for (const values of [{ backend: "claude" }, { backend: "codex", executionMode: "full-access" }, { backend: "codex", approvalPolicy: "on-request" }, { backend: "codex", sandbox: "danger-full-access" }]) {
+              try { await services.registry.startThread({ ...values, cwd: ${JSON.stringify(workspace)} }); result.push("admitted"); }
+              catch { result.push("refused"); }
+            }
+          } else if (request.method === "complete") {
             const done = request.ids.map(id => new Promise(resolve => waiting.set(id, resolve)));
             for (const thread of request.threads) app.fixtureCodex.completeHeldTurn(thread.threadId);
             await Promise.all(done);
@@ -119,26 +127,14 @@ async function builtHost(): Promise<Host> {
       return { turnId: turn.turnId ?? turn.entry.id, queueStatus: turn.status, queueEntryId: turn.entry.id };
     },
     readThread: thread => call("readThread", { params: thread }),
+    policyProbe: () => call("policyProbe", {}), requests: () => call("requests", {}),
     complete: (threads, ids) => call("complete", { threads, ids }), close,
   };
 }
 
-// Run this unchanged scenario against the old owner before its deletion:
-// PWRAGENT_CONCURRENCY_BASELINE=legacy pnpm test <this file>
-async function legacyHost(): Promise<Host> {
-  const old = await startOutpostDaemon();
-  onTestFinished(old.close);
-  return {
-    startThread: () => old.client.startThread({ backend: "codex", cwd: old.workspace, executionMode: "auto" }),
-    startTurn: (thread, queueEntryId) => old.client.startTurn({ ...thread, queueEntryId, delivery: "new_turn", input: [{ type: "text", text: "slow" }] }),
-    readThread: thread => old.client.readThread(thread),
-    complete: async () => { throw new Error("The old owner must fail the overlap oracle before completion"); },
-    close: old.close,
-  };
-}
-
 it("admits a new thread and two independently identified turns while both threads are active", async () => {
-  const host = process.env.PWRAGENT_CONCURRENCY_BASELINE === "legacy" ? await legacyHost() : await builtHost();
+  const host = await builtHost();
+  expect(await host.policyProbe()).toEqual(["refused", "refused", "refused", "refused"]);
   const a = await host.startThread();
   const b = await host.startThread();
   const turnA = await host.startTurn(a, "concurrent-a");
@@ -147,6 +143,11 @@ it("admits a new thread and two independently identified turns while both thread
   const active = await Promise.all([host.readThread(a), host.readThread(b)]);
   expect({ queueA: turnA.queueStatus, queueB: turnB.queueStatus, states: active.map(value => value.threadStatus), newThread })
     .toMatchObject({ queueA: "started", queueB: "started", states: ["active", "active"], newThread: { thread: { backend: "codex", threadId: expect.any(String) } } });
+  const providerRequests = await host.requests();
+  for (const request of providerRequests.filter(value => value.method === "turn/start")) {
+    expect(request.params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "workspaceWrite", networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true } });
+  }
+  expect(providerRequests.filter(value => value.method === "turn/start")).toHaveLength(2);
   expect(turnA.queueEntryId).toBeTruthy();
   expect(turnB.queueEntryId).toBeTruthy();
   expect(turnB.queueEntryId).not.toBe(turnA.queueEntryId);
