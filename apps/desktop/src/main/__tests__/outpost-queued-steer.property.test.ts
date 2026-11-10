@@ -99,6 +99,34 @@ it.skipIf(process.platform === "win32")("explicit new turns, all requested setti
   }), { numRuns: 16 });
 });
 
+it.skipIf(process.platform === "win32")("replacing an individual queued steer preserves its live FIFO position and accepts a new immutable identity", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 4 }), fc.integer({ min: 0, max: 3 }), async (count, position) => {
+    await fixture(async ({ runtime, backend, store, steers, starts, submit, value, envelope }: any) => {
+      const accepted: any[] = [], expected = Array.from({ length: count }, (_, index) => `message${index}`);
+      const index = position % count;
+      for (const text of expected) {
+        const request = value(text), result = await submit(request);
+        accepted.push({ request, id: result.queueEntryId, fingerprint: store.get(result.queueEntryId).fingerprint });
+        await runtime.setQueuedTurnPaused({ queueEntryId: result.queueEntryId, paused: true });
+      }
+      const original = accepted[index];
+      expected[index] = "replacement";
+      const replacement = await backend.handle("backend.replaceQueuedMessage", { ...ref, queueEntryId: original.id,
+        input: [{ type: "text", text: expected[index] }], messageOrigin: original.request.messageOrigin }, { ...envelope, id: "replacement" });
+      expect(replacement.queueEntryId).not.toBe(original.id);
+      expect(store.get(original.id)).toMatchObject({ fingerprint: original.fingerprint, status: "interrupted" });
+      expect(store.get(replacement.queueEntryId)).toMatchObject({ status: "queued", delivery: "queued-steer" });
+      expect(runtime.turnQueue.getQueuedEntries(ref).map((entry: any) => entry.input[0].text)).toEqual(expected);
+      for (const { id, fingerprint } of accepted) expect(store.get(id).fingerprint).toBe(fingerprint);
+      for (const entry of runtime.turnQueue.getQueuedEntries(ref)) await runtime.setQueuedTurnPaused({ queueEntryId: entry.id, paused: false });
+      await drain();
+      expect(steers.map((request: any) => request.input[0].text)).toEqual(expected);
+      expect(starts).toHaveLength(1);
+      expect(runtime.active).toBe("active");
+    });
+  }), { numRuns: 8, examples: [[2, 0]] });
+});
+
 it.skipIf(process.platform === "win32")("generated pause/order/cancel commands preserve individual input and dispatch the live FIFO", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 5 }), fc.boolean(), async (count, cancel) => {
     await fixture(async ({ runtime, backend, store, steers, submit, value }: any) => {
