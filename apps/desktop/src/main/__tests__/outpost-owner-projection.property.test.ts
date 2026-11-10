@@ -66,6 +66,8 @@ it("keeps metadata-only rows filterable without replacing provider or canonical 
         await f.desktop.setThreadExecutionMode({ backend: "codex", threadId: "mode-only", executionMode });
         await f.desktop.updateThreadMetadata({ backend: "codex", threadId: "seen-only" }, { seenAt });
         await f.desktop.updateThreadMetadata({ backend: "codex", threadId: "named" }, { title: { text: title, source: "explicit" } });
+        await f.desktop.updateThreadMetadata({ backend: "codex", threadId: "unimported" }, { executionMode });
+        expect(() => owner.backend.owned("unimported")).toThrow("Thread is not owned");
         for (const id of ["mode-only", "seen-only"]) expect(owner.backend.owned(id)).toMatchObject({ title: "Untitled thread", titleSource: "fallback" });
         expect(owner.backend.owned("named")).toMatchObject({ title, titleSource: "explicit" });
         expect(owner.backend.owned("thread")).toMatchObject({ title: "Retained desktop thread", titleSource: "explicit" });
@@ -74,7 +76,7 @@ it("keeps metadata-only rows filterable without replacing provider or canonical 
         });
         expect(filtered.entries.map((entry: { row: { id: string } }) => entry.row.id).sort()).toEqual(["mode-only", "seen-only"]);
         expect((await f.desktop.getThreadMetadata({ backend: "codex", threadId: "mode-only" }))?.title).toBeUndefined();
-      }), { numRuns: 20 });
+      }), { numRuns: 20, examples: [["default", 0, " "]] });
   } finally { owner.close(); f.close(); }
 });
 
