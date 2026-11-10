@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
-import { buildCodexClientArgs } from "../app-server/backend-registry";
+import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 
 const refuseless: CodexModelProviderSettings = {
   id: "refuseless",

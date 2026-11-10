@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexConnectionMcpConfig } from "../app-server/backend-registry";
+import { buildCodexConnectionMcpConfig } from "../app-server/codex-thread-config";
 import type { McpConnectionBridgeRegistration } from "../mcp-connections/mcp-connection-gateway-service";
 
 function registration(name: string): McpConnectionBridgeRegistration {

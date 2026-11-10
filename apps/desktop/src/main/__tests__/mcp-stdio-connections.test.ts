@@ -9,7 +9,7 @@ import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-g
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import { ConnectionRpcClient } from "../mcp-connections/mcp-connection-rpc-client";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
-import { buildCodexConnectionMcpServerName } from "../app-server/backend-registry";
+import { buildCodexConnectionMcpServerName } from "../app-server/codex-thread-config";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
 import { pwrSuiteRelayPath } from "../mcp-connections/pwrsuite-relay";

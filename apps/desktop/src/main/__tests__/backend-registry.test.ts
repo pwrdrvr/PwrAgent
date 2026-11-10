@@ -140,9 +140,9 @@ import {
   QUIET_RESTART_STEER_TEXT,
   getCodexFastModeMismatchWarning,
   reviewStartFailureFingerprint,
-  withTokenMiserBridgeDescriptorEnv,
 } from "../app-server/backend-registry";
 import { CODEX_MISSING_THREAD_EVALUATION_DELAY_MS } from "../app-server/backend-registry-runtime-helpers";
+import { withTokenMiserBridgeDescriptorEnv } from "../app-server/codex-thread-config";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
