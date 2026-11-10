@@ -42,6 +42,7 @@ test("desktop and Outpost retire confirmed native Codex membership while pending
     },
   });
   let reopened: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  let archivedReopened: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
   try {
     await expect(app.window.getByRole("button", { name: /Replay smoke thread/i }).first()).toBeVisible();
     const native = await app.window.evaluate(async identity => {
@@ -106,5 +107,41 @@ test("desktop and Outpost retire confirmed native Codex membership while pending
     }, ref);
     expect(absent.identity).toBe("unresolved");
     await expect(reopened.window.getByRole("button", { name: /Replay smoke thread/i })).toHaveCount(0);
-  } finally { await reopened?.close(); await app.close(); }
+    // The same actual Electron owner must retain both durable identities after
+    // the Outpost retired the separate native member and restarted twice.
+    const retained = await reopened.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const identities = ["pending-import", "accepted-owner"].map(threadId => ({ backend: "codex" as const, threadId }));
+      const details = await Promise.all(identities.map(ref => api.getNavigationSelectedDetail!({ protocol: 2, ref })));
+      const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", backend: "codex",
+        query: { kind: "exact", identities } });
+      return { details, ids: page.entries.map(entry => entry.row.id).sort() };
+    });
+    expect(retained.ids).toEqual(["accepted-owner", "pending-import"]);
+    expect(retained.details[0].thread).toMatchObject({ title: "Pending imported owner", titleSource: "derived" });
+    expect(retained.details[1].thread).toBeDefined();
+    await reopened.closeApplication();
+    // Current owner archive observations also apply to identities retained
+    // independently of native membership, including an exact timestamp zero.
+    const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: app.homeRoot });
+    const retainedRefs = ["pending-import", "accepted-owner"].map(threadId => ({ backend: "codex" as const, threadId }));
+    try {
+      const store = new JobStore(path.join(stateDirectory, "headless"), identity, profile);
+      for (const ref of retainedRefs) store.threadRegistry.updateThreadMetadata(ref, { archiveRetentionStartedAt: 0 });
+      const owner = new HeadlessBackend({ workspace: app.homeRoot, store, projects: { list: () => [] },
+        onFailure(error: unknown) { throw error; }, codex: { listThreads: async () => [] } }, () => {});
+      await owner.initialize();
+      for (const ref of retainedRefs) expect((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity).toBe("archived");
+    } finally { profile.close(); }
+    archivedReopened = await launchElectronApp({ homeRoot: app.homeRoot, secretStorage: "memory", fixturePath: emptyFixture });
+    const archived = await archivedReopened.window.evaluate(async refs => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const details = await Promise.all(refs.map(ref => api.getNavigationSelectedDetail!({ protocol: 2, ref })));
+      const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", backend: "codex",
+        query: { kind: "lens", lens: "recents" } });
+      return { details, activeIds: page.entries.map(entry => entry.row.id).filter(id => refs.some(ref => ref.threadId === id)) };
+    }, retainedRefs);
+    expect(archived.details.map(detail => detail.thread?.archivedAt)).toEqual([0, 0]);
+    expect(archived.activeIds).toEqual([]);
+  } finally { await archivedReopened?.close(); await reopened?.close(); await app.close(); }
 });

@@ -29,6 +29,14 @@ test("desktop baseline reads, metadata-only titles and archive observations surv
   const app = await launchElectronApp({
     secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
     async preLaunchHook(homeRoot) {
+      const stateDirectory = path.dirname(stateDbPathForHomeRoot(homeRoot));
+      const headless = path.join(stateDirectory, "headless");
+      await mkdir(headless, { recursive: true, mode: 0o700 });
+      const ownerIdentity = { version: 1, workspace: homeRoot, codexHome: path.join(homeRoot, "codex") };
+      await writeFile(path.join(headless, "identity.json"), JSON.stringify(ownerIdentity));
+      await writeFile(path.join(headless, "threads.json"), JSON.stringify({ version: 1, threads: [{ id: "metadata-only" }] }));
+      const imported = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: homeRoot });
+      try { new JobStore(headless, ownerIdentity, imported); } finally { imported.close(); }
       const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
       try {
         const overlay = new SqliteOverlayStore(db);

@@ -141,7 +141,7 @@ function serveNewFilesFromTemplate(stateDb: StateDbClass, dir: string): void {
 // Vitest accepts `vi.mock` only at the top level and hoists it, so the
 // factory checks the environment itself. It runs once per test file, and only
 // in a file whose imports reach `state-db.ts`.
-vi.mock(import("../main/state/state-db"), async (importOriginal) => {
+vi.mock(import("@pwragent/sqlite-storage/state-db"), async (importOriginal) => {
   const actual = await importOriginal();
   if (templateDir) serveNewFilesFromTemplate(actual.StateDb, templateDir);
   return actual;

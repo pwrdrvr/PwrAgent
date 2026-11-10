@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -65,6 +65,7 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
         await f.seed(backend, updatedAt, 10000);
         await f.desktop.updateThreadMetadata({ backend, threadId }, { seenAt: 1000, seenUpdatedAt: explicit ?? null });
         await f.desktop.updateThreadMetadata({ backend, threadId: metadataOnlyId }, { executionMode: "default" });
+        await f.desktop.updateThreadMetadata({ backend, threadId: absentId }, { executionMode: "default" });
         if (backend === "acp:removed") {
           f.sessions.upsertSession({ backendId: backend, sessionId: metadataOnlyId, title: "Untitled thread", titleSource: "fallback",
             createdAt: 0, updatedAt: 0, executionMode: "default", status: "idle" });
@@ -76,6 +77,10 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
           await f.desktop.updateThreadMetadata({ backend, threadId: absentId }, { executionMode: "default" });
         }
       }
+      // The Codex fallback row is a real pending import. Other providers use
+      // their actual native stores; unimported overlays remain absent for all.
+      writeFileSync(path.join(f.root, "headless/identity.json"), JSON.stringify({ version: 1, workspace: f.root, codexHome: path.join(f.root, "codex") }));
+      writeFileSync(path.join(f.root, "headless/threads.json"), JSON.stringify({ version: 1, threads: [{ id: metadataOnlyId }] }));
       const owner = await open(f);
       try {
         const before = await f.desktop.listThreadMetadata();
@@ -93,7 +98,7 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
               expect(detail.thread.inbox.inInbox).toBe(desktop.inbox.inInbox);
               expect((await backend.handle("resolveThread", { backend: source, threadId: metadataOnlyId })).thread)
                 .toMatchObject({ title: "Untitled thread", titleSource: "fallback" });
-              if (source !== "codex") expect((await backend.handle("resolveThread", { backend: source, threadId: absentId })).thread).toBeUndefined();
+              expect((await backend.handle("resolveThread", { backend: source, threadId: absentId })).thread).toBeUndefined();
             }
           }
         });

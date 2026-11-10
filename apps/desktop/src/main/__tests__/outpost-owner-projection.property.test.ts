@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -59,6 +59,9 @@ it("seeds the retained unread fixture independently of whether startup discovery
 it("keeps metadata-only rows filterable without replacing provider or canonical titles", async () => {
   const f = fixture();
   f.inventory.replace({ backend: "codex", observedAt: 1, threads: [provider(1)] });
+  // Imported ownership is independent of a native row; an arbitrary overlay is not.
+  writeFileSync(path.join(f.directory, "identity.json"), JSON.stringify({ version: 1, workspace: f.root, codexHome: path.join(f.root, "codex") }));
+  writeFileSync(path.join(f.directory, "threads.json"), JSON.stringify({ version: 1, threads: ["mode-only", "seen-only", "named"].map(id => ({ id })) }));
   const owner = await open(f);
   try {
     await fc.assert(fc.asyncProperty(fc.constantFrom("default" as const, "auto" as const), fc.nat(10000),
@@ -66,6 +69,8 @@ it("keeps metadata-only rows filterable without replacing provider or canonical 
         await f.desktop.setThreadExecutionMode({ backend: "codex", threadId: "mode-only", executionMode });
         await f.desktop.updateThreadMetadata({ backend: "codex", threadId: "seen-only" }, { seenAt });
         await f.desktop.updateThreadMetadata({ backend: "codex", threadId: "named" }, { title: { text: title, source: "explicit" } });
+        await f.desktop.updateThreadMetadata({ backend: "codex", threadId: "unimported" }, { executionMode });
+        expect(() => owner.backend.owned("unimported")).toThrow("Thread is not owned");
         for (const id of ["mode-only", "seen-only"]) expect(owner.backend.owned(id)).toMatchObject({ title: "Untitled thread", titleSource: "fallback" });
         expect(owner.backend.owned("named")).toMatchObject({ title, titleSource: "explicit" });
         expect(owner.backend.owned("thread")).toMatchObject({ title: "Retained desktop thread", titleSource: "explicit" });
@@ -74,7 +79,7 @@ it("keeps metadata-only rows filterable without replacing provider or canonical 
         });
         expect(filtered.entries.map((entry: { row: { id: string } }) => entry.row.id).sort()).toEqual(["mode-only", "seen-only"]);
         expect((await f.desktop.getThreadMetadata({ backend: "codex", threadId: "mode-only" }))?.title).toBeUndefined();
-      }), { numRuns: 20 });
+      }), { numRuns: 20, examples: [["default", 0, " "]] });
   } finally { owner.close(); f.close(); }
 });
 

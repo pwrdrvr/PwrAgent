@@ -7,6 +7,9 @@ import { SqliteThreadReviewStorage } from "./thread-review-storage-sqlite";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import { ThreadTodoStore } from "./thread-todo-store";
 import type { ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
+import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
+import { RetainedOwnerThreadStore } from "./retained-owner-thread-store";
+import { resolveActiveProfilePath } from "../profile";
 import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { ScheduledThreadActionStorage } from "@pwragent/owner-core/scheduled-thread-action-storage";
 import { getAppStateDb, getAppRuntimeInstanceStore, getAppStateMode, getBootDecision, isAppStateInitialized, getAppScheduledThreadActionStore as getScheduledThreadActionStore } from "../state/app-state";
@@ -57,6 +60,10 @@ export function createThreadSandboxStorage(): ThreadSandboxStorage {
 }
 export function createProviderThreadSnapshotStorage(): ProviderThreadSnapshotStorage {
   return new ProviderThreadSnapshotStore(getAppStateDb());
+}
+export function createRetainedOwnerThreadStorage(): RetainedOwnerThreadStorage {
+  const store = new RetainedOwnerThreadStore(getAppStateDb(), resolveActiveProfilePath("state/headless"));
+  return { list: () => store.list(), confirmNativeThreads: ids => store.confirmNativeThreads(ids) };
 }
 export function createCodexEnvironmentHydrationStorage() {
   return new CodexEnvironmentHydrationStore(getAppStateDb());

@@ -1,0 +1,6 @@
+{
+  "desktop-confirmation-repeated": {"commits": 0, "note": "Twenty repeated actual desktop native observations do not rewrite confirmed import metadata; zero commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "desktop-import-batch-confirmation": {"commits": 1, "note": "Two first positive native confirmations share one boundary transaction; no per-item commit or timer", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
+  "desktop-import-native-confirmation": {"commits": 1, "note": "One first positive native observation of a pending fallback import; existing metadata port, one boundary commit, no native-name acknowledgement", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "retained-owner-passive-reopen": {"commits": 0, "note": "1000 committed-provenance/job reads, ten storage reopens and an actual desktop owner list; zero commits and 0 MB/day", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

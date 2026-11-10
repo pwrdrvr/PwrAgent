@@ -12,6 +12,30 @@ import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/
 
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
 
+// An overlay is presentation metadata. Only a native member, a committed
+// legacy import or a durable job can establish an independently readable owner.
+it("does not turn arbitrary stale overlays into retained Codex owner identities", async () => {
+  const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+  await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), async (threadId, titled) => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-overlay-owner-")));
+    const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+    try {
+      const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
+      const ref = { backend: "codex", threadId };
+      const facts = { pinnedRank: "1024", model: "retained-model", fastMode: true,
+        ...(titled ? { title: { text: "Saved overlay title", source: "derived" } } : {}) };
+      store.threadRegistry.updateThreadMetadata(ref, facts);
+      const owner = new HeadlessBackend({ workspace: root, store, projects: { list: () => [] },
+        onFailure(error: unknown) { throw error; }, codex: { listThreads: async () => [] } }, () => {});
+      await owner.initialize();
+      expect((await owner.handle("resolveThread", ref)).thread).toBeUndefined();
+      expect((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity).toBe("unresolved");
+      expect([...owner.threads.values()]).toEqual([]);
+      expect(store.threadRegistry.getThreadMetadata(ref)).toMatchObject(facts);
+    } finally { profile.close(); rmSync(root, { recursive: true, force: true }); }
+  }), { numRuns: 20 });
+});
+
 // A complete provider walk owns native membership. An imported owner not yet
 // confirmed by that provider and a durable acceptance are independent facts.
 it("models complete native Codex retirement without retiring pending imports or accepted-job identity across reopen", async () => {
@@ -160,11 +184,14 @@ it("publishes a pending imported title only after native confirmation, then reti
   await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{1,15}$/), async suffix => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-codex-pending-")));
     mkdirSync(path.join(root, "headless"), { mode: 0o700 });
+    writeFileSync(path.join(root, "headless/threads.json"), JSON.stringify({ version: 1, threads: [
+      { id: "pending", title: `Imported ${suffix}`, titleSource: "derived", sandbox: "read-only" },
+    ] }));
+    writeFileSync(path.join(root, "headless/identity.json"), JSON.stringify({ version: 1, workspace: root, codexHome: path.join(root, "codex") }));
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     try {
       const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
       const ref = { backend: "codex", threadId: "pending" };
-      store.threadRegistry.updateThreadMetadata(ref, { title: { text: `Imported ${suffix}`, source: "derived" } });
       let present = false;
       let nativeName = "Native before publication";
       let renames = 0;

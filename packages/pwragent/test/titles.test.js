@@ -7,15 +7,16 @@ import { fileURLToPath } from "node:url";
 import { fixtureCodexClient } from "./helpers/codex-client.js";
 import { HeadlessBackend, PLACEHOLDER_THREAD_TITLE } from "../src/federation-backend.js";
 
-function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } })) {
+function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } }), legacyThreads) {
   const local = fileURLToPath(new URL("../../../.local/", import.meta.url));
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "titles-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const owner = ownerStorage(t, directory);
+  const owner = ownerStorage(t, directory, directory, legacyThreads);
   const codex = fixtureCodexClient(read);
   const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(),
-    store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, inventory: owner.inventory }, codex, onFailure: (error) => { throw error; } };
+    store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, inventory: owner.inventory,
+      retainedOwners: owner.storage.retainedOwners }, codex, onFailure: (error) => { throw error; } };
   const published = [];
   const backend = new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
   return { backend, published, registry: () => [...backend.threads.values()] };
@@ -26,11 +27,10 @@ function job(id, threadId, extra = {}) {
 }
 
 test("a thread keeps desktop's placeholder title until it is named, including one stored under the old placeholder", (t) => {
-  const { backend } = backendFixture(t, new Map());
-  for (const thread of [
+  const { backend } = backendFixture(t, new Map(), undefined, [
     { id: "legacy", title: "New outpost thread", titleSource: "fallback", createdAt: 1 },
     { id: "named", title: "New outpost thread", titleSource: "explicit", createdAt: 1 },
-  ]) backend.threads.set(thread.id, thread);
+  ]);
   const reopened = new HeadlessBackend(backend.runtime, () => {});
   assert.equal(PLACEHOLDER_THREAD_TITLE, "Untitled thread");
   assert.deepEqual((({ title, titleSource }) => ({ title, titleSource }))(reopened.summary(reopened.owned("legacy"))),

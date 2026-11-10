@@ -58,7 +58,7 @@ export class HeadlessBackend {
     };
     // Same headroom as desktop's FEDERATION_RESPONSE_BYTE_BUDGET.
     this.replayByteBudget = FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
-    this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory, runtime.store.acpSessions, runtime.store.claudeSessions);
+    this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory, runtime.store.acpSessions, runtime.store.claudeSessions, runtime.store.retainedOwners);
     this.threadRegistry = this.threads;
     this.providerMutationVersion = 0;
     this.naming = new ThreadNamingLifecycle({
@@ -116,6 +116,9 @@ export class HeadlessBackend {
         // A legacy/imported owner name has not yet reached Codex. Publish it
         // once, then retain the acknowledgement so a later native rename wins.
         if (title && title.source !== "fallback" && title.nativeName === undefined) {
+          // Both native walks completed. Naming may use this positive member
+          // even when the preceding owner already settled import retention.
+          this.threads.observeCreatedNativeThread(native);
           await this.naming.renameThread({ ...identity, name: title.text, expectedName: title.text }, { titleSource: title.source });
           if (this.providerMutationVersion !== generation + 1) return;
           generation = this.providerMutationVersion;
@@ -142,13 +145,22 @@ export class HeadlessBackend {
     catch (error) { this.runtime.onFailure(error); throw error; }
   }
 
+  persistCreatedNativeThread(thread) {
+    this.persist({ ...thread, nativeMembershipRetired: false });
+    this.providerMutationVersion++;
+    this.threads.observeCreatedNativeThread(this.summary(thread));
+  }
+
   syncJobs(jobs = this.runtime.store.jobs.values()) {
     for (const job of jobs) {
       if (!job.threadId) continue;
       this.threads.retainAcceptedJobThread(job.threadId);
       const previous = this.latestJobs.get(job.threadId);
       if (!previous || previous.id === job.id || job.createdAt > previous.createdAt) this.latestJobs.set(job.threadId, job);
-      if (this.threads.has(job.threadId)) continue;
+      // Acceptance keeps its existing metadata boundary even when a read-only
+      // job projection can already resolve the identity before finalization.
+      if (this.threads.storage.getThreadMetadata({ backend: "codex", threadId: job.threadId })
+        || this.threads.inventory.has(buildThreadIdentityKey("codex", job.threadId))) continue;
       this.threads.set(job.threadId, { id: job.threadId, title: `Thread ${job.threadId.slice(0, 8)}`, titleSource: "fallback",
         createdAt: Date.parse(job.createdAt), messagingFileTools: job.messagingFileTools === true, cwd: job.cwd || this.runtime.workspace, sandbox: job.sandbox, model: job.model });
     }
@@ -452,9 +464,7 @@ export class HeadlessBackend {
       this.runtime.loadedThreads.add(result.threadId);
       const thread = { id: result.threadId, messagingFileTools: true, nativeMembershipRetired: false, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
-      this.persist(thread);
-      this.providerMutationVersion++;
-      this.threads.observeCreatedNativeThread(this.summary(thread));
+      this.persistCreatedNativeThread(thread);
       this.invalidate(thread.id, "thread/started");
       return { backend: "codex", threadId: thread.id, executionMode: mode(sandbox) };
     } finally { this.creating = false; }

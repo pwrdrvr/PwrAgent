@@ -1,13 +1,17 @@
 import path from "node:path";
-import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection, projectOwnerThreadTitle, projectAcpSessionThread } from "../dist/federation-core.js";
+import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection, projectOwnerThreadTitle, projectAcpSessionThread, retainsOwnerThread } from "../dist/federation-core.js";
 
 /** Retained provider discovery and live canonical metadata, qualified by backend. */
 export class OutpostThreadRegistry {
-  constructor(storage, inventory, acpSessions, claudeSessions) {
+  constructor(storage, inventory, acpSessions, claudeSessions, retainedOwners) {
     this.storage = storage;
     this.unreadBaseline = storage?.readUnreadBaseline?.() ?? {};
     this.acpSessions = acpSessions;
     this.claudeSessions = claudeSessions;
+    // The committed import's identities cannot change during this admitted
+    // owner's lifetime. Canonical facts remain live; accepted jobs enter via
+    // the existing syncJobs boundary. Never rescan all jobs/overlays per item.
+    this.retainedOwnerIds = new Set((retainedOwners?.list() ?? []).map(thread => thread.id));
     this.acceptedJobThreadIds = new Set();
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
@@ -47,6 +51,8 @@ export class OutpostThreadRegistry {
     if (backend.startsWith("acp:") && (!session || session.hidden)) return undefined;
     const native = session ? this.acpThread(session) : this.inventory.get(buildThreadIdentityKey(backend, id));
     if (backend === "codex" && !native && record?.nativeMembershipRetired && !this.acceptedJobThreadIds.has(id)) return undefined;
+    if (backend === "codex" && !native && !retainsOwnerThread(record, this.retainedOwnerIds.has(id))
+      && !this.acceptedJobThreadIds.has(id)) return undefined;
     return this.project(id, record, native, backend);
   }
 
@@ -136,7 +142,7 @@ export class OutpostThreadRegistry {
     const identities = new Map([...natives].map(([key, thread]) => [key, { backend: thread.source, threadId: thread.id }]));
     for (const [key, record] of byId) identities.set(key, record);
     return [...identities].filter(([key, identity]) => identity.backend !== "codex" || natives.has(key)
-      || !byId.get(key)?.nativeMembershipRetired || this.acceptedJobThreadIds.has(identity.threadId))
+      || retainsOwnerThread(byId.get(key), this.retainedOwnerIds.has(identity.threadId)) || this.acceptedJobThreadIds.has(identity.threadId))
       .map(([key, identity]) => this.project(identity.threadId, byId.get(key), natives.get(key), identity.backend)).values();
   }
   set(id, thread) {

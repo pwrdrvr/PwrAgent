@@ -215,6 +215,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, promisify } from "node:util";
+import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
   ThreadForkParams as CodexThreadForkParams,
@@ -245,6 +246,7 @@ import {
   createCodexEnvironmentHydrationStorage,
   createProjectHeldWakeupStorage,
   createProviderThreadSnapshotStorage,
+  createRetainedOwnerThreadStorage,
   createRestartContinuationStorage,
   createThreadDependencyStorage,
   createThreadSearchStorage,
@@ -10135,6 +10137,7 @@ export class DesktopBackendRegistry {
    */
   private readonly threadInfoStore = new ThreadInfoStore();
   private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStorage;
+  private readonly retainedOwnerThreadStorage?: RetainedOwnerThreadStorage;
   private durableStartupThreadHydrationAttempted = false;
   private startupProviderRefreshAttempted = false;
   private startupCodexRefreshFailed = false;
@@ -11152,6 +11155,7 @@ export class DesktopBackendRegistry {
     acpSessionStore?: AcpSessionStoreLike | null;
     acpAvailableCommandsStore?: AcpAvailableCommandsStorage | null;
     providerThreadSnapshotStore?: ProviderThreadSnapshotStorage | null;
+    retainedOwnerThreadStorage?: RetainedOwnerThreadStorage | null;
     acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     /**
@@ -11304,6 +11308,8 @@ export class DesktopBackendRegistry {
           ?? (isAppStateInitialized()
             ? createProviderThreadSnapshotStorage()
             : undefined);
+    this.retainedOwnerThreadStorage = options?.retainedOwnerThreadStorage === null ? undefined
+      : options?.retainedOwnerThreadStorage ?? (isAppStateInitialized() ? createRetainedOwnerThreadStorage() : undefined);
     const replayClients = createReplayClientsFromEnv();
     const createsLiveCodexClient =
       !options?.codexClient && !replayClients?.codexClient;
@@ -13983,7 +13989,7 @@ export class DesktopBackendRegistry {
         });
         return [];
       });
-      threads.push(...this.withPendingStartedThreads("codex", codexThreads, params));
+      threads.push(...await this.withRetainedOwnerThreads(this.withPendingStartedThreads("codex", codexThreads, params), params));
     }
     checkDeadline();
     if (!params.backend || params.backend === "claude") {
@@ -14247,7 +14253,13 @@ export class DesktopBackendRegistry {
       enrichDirectories: false,
       forceRefresh: true,
     });
-    return threads.find((thread) => thread.id === threadId);
+    const thread = threads.find((thread) => thread.id === threadId);
+    if (thread || (params.backend && params.backend !== "codex")
+      || !this.retainedOwnerThreadStorage?.list().some(row => row.id === threadId)) return thread;
+    // A retained identity can be archived. Consult native archive authority
+    // through the same read policy rather than treating its metadata as active.
+    return (await this.listThreads({ backend: "codex", archived: true, enrichDirectories: false,
+      callerReason: "thread-id-lookup", forceRefresh: true })).find(row => row.id === threadId);
   }
 
   /**
@@ -14595,7 +14607,7 @@ export class DesktopBackendRegistry {
         params.archived,
       );
       this.persistProviderThreadSnapshot(params.backend, threads, params);
-      return threads;
+      return params.backend === "codex" ? await this.withRetainedOwnerThreads(threads, params) : threads;
     }
 
     const [codexThreads, acpThreads, claudeThreads] = await Promise.all([
@@ -14769,16 +14781,19 @@ export class DesktopBackendRegistry {
         : snapshot.threads.filter(thread => thread.archivedAt === undefined),
     ), ...await this.readAcpThreadsForCache()];
     if (this.closed) return [];
+    this.confirmRetainedNativeOwners(snapshots.flatMap(snapshot => snapshot.backend === "codex" ? [...snapshot.threads] : []));
     const codexIds = nativeThreads.filter(thread => thread.source === "codex").map(thread => thread.id);
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlays = codexIds.length ? await readOverlays.call(this.overlayStore, { backend: "codex", threadIds: codexIds }) : {};
     // A retained inventory predates handover. It cannot contradict the latest
     // canonical acknowledgement the way a fresh provider response can.
-    const threads = nativeThreads.map(thread => thread.source === "codex"
+    const titledThreads = nativeThreads.map(thread => thread.source === "codex"
       ? { ...thread, ...projectOverlayThreadTitle(thread, {
           title: overlays[thread.id]?.title, titleSource: overlays[thread.id]?.titleSource,
         }) } : thread)
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    const threads = this.mergeRetainedOwnerThreads(titledThreads, params, new Set(snapshots.flatMap(snapshot =>
+      snapshot.backend === "codex" ? snapshot.threads.filter(thread => thread.archivedAt !== undefined).map(thread => thread.id) : [])));
     this.rememberThreadListContexts(
       threads,
       displayMetadataObservationSequence,
@@ -14992,7 +15007,7 @@ export class DesktopBackendRegistry {
     );
     const acpThreads = await this.readAcpThreadsForCache();
     if (this.closed) return;
-    const threads = [
+    const providerThreads = [
       ...refreshes.flatMap((refresh) => refresh.threads).filter(thread => !isAcpBackendId(thread.source)),
       ...this.providerThreadSnapshotStore.list()
         .filter((snapshot) => !refreshedBackends.has(snapshot.backend) && !isAcpBackendId(snapshot.backend))
@@ -15000,6 +15015,8 @@ export class DesktopBackendRegistry {
       ...acpThreads,
     ]
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    const threads = this.mergeRetainedOwnerThreads(providerThreads, {}, new Set(this.providerThreadSnapshotStore.list()
+      .flatMap(snapshot => snapshot.backend === "codex" ? snapshot.threads.filter(thread => thread.archivedAt !== undefined).map(thread => thread.id) : [])));
     this.invalidateThreadListCache();
     this.rememberThreadListContexts(
       threads,
@@ -35396,6 +35413,52 @@ export class DesktopBackendRegistry {
       });
       return {};
     }
+  }
+
+  private retainedOwnerThreadsMissingFrom(
+    threads: AppServerThreadSummary[],
+    params: { archived?: boolean; filter?: string },
+  ): AppServerThreadSummary[] {
+    const present = new Set(threads.filter(thread => thread.source === "codex").map(thread => thread.id));
+    return this.retainedOwnerThreadStorage?.list().filter(thread => !present.has(thread.id)
+      && (thread.archivedAt !== undefined) === (params.archived === true)
+      && pendingStartedThreadMatchesFilter(thread, params.filter)) ?? [];
+  }
+
+  private mergeRetainedOwnerThreads(
+    threads: AppServerThreadSummary[],
+    params: { archived?: boolean; filter?: string },
+    oppositeNativeIds: ReadonlySet<string>,
+  ): AppServerThreadSummary[] {
+    const retained = this.retainedOwnerThreadsMissingFrom(threads, params).filter(thread => !oppositeNativeIds.has(thread.id));
+    if (!retained.length) return threads;
+    return this.inheritIncompleteThreadList([...threads, ...retained]
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)), threads);
+  }
+
+  private async withRetainedOwnerThreads(
+    threads: AppServerThreadSummary[],
+    params: { archived?: boolean; filter?: string; deadlineAt?: number },
+  ): Promise<AppServerThreadSummary[]> {
+    this.confirmRetainedNativeOwners(threads);
+    if (!this.retainedOwnerThreadsMissingFrom(threads, params).length) return threads;
+    // A missing active row may be a native archived member (and vice versa).
+    // Retained identity must not manufacture membership in the other collection.
+    const opposite = await this.codexClient.listThreads({ archived: params.archived !== true,
+      enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true, deadlineAt: params.deadlineAt },
+    { callerReason: "retained-owner-membership", ownerId: this.threadListCacheOwnerId }).catch(() => {
+      this.incompleteThreadLists.add(threads);
+      return [];
+    });
+    this.confirmRetainedNativeOwners(opposite);
+    // Read retention again after awaiting discovery: a publication or retirement
+    // committed while this walk was pending remains authoritative.
+    return this.mergeRetainedOwnerThreads(threads, params, new Set(opposite.map(thread => thread.id)));
+  }
+
+  private confirmRetainedNativeOwners(threads: readonly AppServerThreadSummary[]): void {
+    if (this.closed || !threads.length) return;
+    this.retainedOwnerThreadStorage?.confirmNativeThreads(threads.filter(thread => thread.source === "codex").map(thread => thread.id));
   }
 
   private withPendingStartedThreads(
