@@ -1,4 +1,4 @@
-import { runtimeResourcesPath } from "../runtime-resources";
+import { runtimeResourcesPath, isDevelopmentRuntime } from "../runtime-resources";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ export type MaintenanceLock = { assertHeld: () => void; release: () => Promise<v
 export function maintenanceLockHelperPath(): string {
   const filename = `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`;
   const resources = runtimeResourcesPath();
-  return resources && !resources.includes("node_modules")
+  return !isDevelopmentRuntime() && resources && !resources.includes("node_modules")
     ? path.join(resources, "mcp-ipc-relay", filename)
     : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../build/mcp-ipc-relay", `${process.platform}-${process.arch}`, filename);
 }

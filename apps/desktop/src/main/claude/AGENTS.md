@@ -25,7 +25,7 @@ does not, the two directories differ.
 - Compare them with `claudeSessionReadsSee` before an SDK session read.
 - When they differ, read through `openClaudeSessionReader`
   ([claude-session-reader.ts](claude-session-reader.ts)). It runs the reads
-  in a utility process started with Claude's launch environment. Close it
+  in a Node child process started with Claude's launch environment. Close it
   when done.
 - Never set `process.env.CLAUDE_CONFIG_DIR` in the main process, even
   briefly: it races other SDK calls and every child inherits it.

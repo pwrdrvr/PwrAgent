@@ -1,4 +1,4 @@
-// Utility-process entry for openClaudeSessionReader. The main process starts
+// Node child-process entry for openClaudeSessionReader. The main process starts
 // it with the environment Claude launches with, so the SDK reads the sessions
 // of that CLAUDE_CONFIG_DIR.
 import { getSessionInfo, getSessionMessages } from "@anthropic-ai/claude-agent-sdk";

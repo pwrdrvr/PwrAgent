@@ -13,7 +13,7 @@ export class ClaudeSessionReaderError extends Error {}
 const CLAUDE_SESSION_READ_TIMEOUT_MS = 30_000;
 
 /**
- * Run the SDK's session reads in a utility process started with `env`.
+ * Run the SDK's session reads in a Node child process started with `env`.
  *
  * The SDK reads sessions under its own process's CLAUDE_CONFIG_DIR, not the
  * environment Claude launches with, and has no option to point it elsewhere.

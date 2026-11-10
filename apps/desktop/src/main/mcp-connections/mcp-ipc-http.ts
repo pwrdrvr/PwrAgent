@@ -1,4 +1,4 @@
-import { runtimeResourcesPath } from "../runtime-resources";
+import { runtimeResourcesPath, isDevelopmentRuntime } from "../runtime-resources";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Agent, request } from "node:http";
 import type { Socket } from "node:net";
@@ -60,10 +60,10 @@ export function validateMcpIpcPlatform(endpoint: McpIpcEndpoint, platform = proc
 
 function helperPath(): string {
   const filename = `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`;
-  // Both the bundled main and bridge execute under out/main. The installed
-  // helper lives outside ASAR and is compiled for each packaging architecture.
+  // Bundled entries execute under out/main or out/headless. Development
+  // helpers live under build/; installed helpers live outside ASAR.
   const resources = runtimeResourcesPath();
-  return resources && !resources.includes("node_modules")
+  return !isDevelopmentRuntime() && resources && !resources.includes("node_modules")
     ? join(resources, "mcp-ipc-relay", filename)
     : resolve(dirname(fileURLToPath(import.meta.url)), "../../build/mcp-ipc-relay", `${process.platform}-${process.arch}`, filename);
 }
