@@ -4766,7 +4766,10 @@ export function useThreadNavigation(
           }, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS);
         }
         if (!background && completion.error) setArchiveThreadError({ message: completion.error, ...context,
-          worktreePaths: completion.cleanup.flatMap((item) => item.worktreePath ? [item.worktreePath] : []) });
+          worktreePaths: [...new Set([
+            ...(context.worktreePaths ?? []),
+            ...completion.cleanup.flatMap((item) => item.worktreePath ? [item.worktreePath] : []),
+          ])] });
         const notice = background ? undefined : formatArchiveCleanupNotice(completion.cleanup, context);
         if (notice) setArchiveThreadNotice(notice);
         const receivedAt = Date.now();
