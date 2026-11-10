@@ -1,0 +1,577 @@
+import { ipcMain, shell } from "electron";
+import fs from "node:fs";
+import type {
+  CreateDesktopPwrAgentProfileRequest,
+  CreateDesktopPwrAgentProfileResponse,
+  DeleteDesktopPwrAgentProfileRequest,
+  DeleteDesktopPwrAgentProfileResponse,
+  GraduateDesktopBootstrapConfigToProfileRequest,
+  GraduateDesktopBootstrapConfigToProfileResponse,
+  ListDesktopPwrAgentProfilesResponse,
+  OpenDesktopPwrAgentProfileRequest,
+  OpenDesktopPwrAgentProfileResponse,
+  ReorderDesktopPwrAgentProfilesRequest,
+  ReorderDesktopPwrAgentProfilesResponse,
+  SetDesktopPwrAgentProfileCodexProfileRequest,
+  SetDesktopPwrAgentProfileCodexProfileResponse,
+  SetDefaultDesktopPwrAgentProfileRequest,
+  SetDefaultDesktopPwrAgentProfileResponse,
+  SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  SetDesktopPwrAgentProfileMenuVisibilityResponse,
+  WriteDesktopSecretsToProfileRequest,
+  WriteDesktopSecretsToProfileResponse,
+} from "@pwragent/shared";
+import {
+  PROFILES_CREATE_CHANNEL,
+  PROFILES_DELETE_CHANNEL,
+  PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
+  PROFILES_LIST_CHANNEL,
+  PROFILES_OPEN_CHANNEL,
+  PROFILES_REORDER_CHANNEL,
+  PROFILES_SET_CODEX_PROFILE_CHANNEL,
+  PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_SET_MENU_VISIBILITY_CHANNEL,
+  PROFILES_WRITE_SECRETS_CHANNEL,
+} from "../../../shared/ipc";
+import { spawnDetachedProcess } from "../../detached-launch";
+import {
+  PWRAGENT_PROFILE_ENV,
+  assertProfileCanBeDeleted,
+  deleteProfile,
+  ensureProfileExists,
+  ensureNamedProfileExists,
+  forgetDeletedProfile,
+  normalizeProfileName,
+  readProfilesRegistry,
+  requestProfileInstanceFocus,
+  resolveActiveProfileName,
+  resolveBootstrapProfilePath,
+  resolveDefaultProfileName,
+  resolveProfileDir,
+  setDefaultProfileName,
+  writeProfilesRegistry,
+  type ProfileEntry,
+} from "../../profile";
+import { resolveDesktopConfigPath } from "../../settings/desktop-config";
+import {
+  readProfileConfigFile,
+  writeProfileConfigPatch,
+} from "../../settings/config-store/profile-config-file";
+import { discoverCodexAuthProfiles } from "@pwrdrvr/codex-discovery";
+import { isBootstrapProfile } from "../../profile-service";
+import { writeDesktopSecretsToProfile } from "../../settings/profile-secret-service";
+
+export { writeDesktopSecretsToProfile } from "../../settings/profile-secret-service";
+
+type ProfilesIpcHandlerOptions = {
+  onProfilesChanged?: () => void;
+};
+
+export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesResponse {
+  const activeProfile = resolveActiveProfileName();
+  const defaultProfile = resolveDefaultProfileName();
+
+  return {
+    activeProfile,
+    defaultProfile,
+    profiles: listOrderedProfileEntries().map((profile) => ({
+      name: profile.name,
+      displayName: profile.display_name,
+      lastUsed: profile.last_used,
+      active: profile.name === activeProfile,
+      default: profile.name === defaultProfile,
+      profileDir: resolveProfileDir(profile.name),
+      canDelete: profile.name !== activeProfile && profile.name !== "default",
+      codexProfile: readPwrAgentProfileCodexProfile(profile.name),
+      showInMenu: profile.show_in_menu !== false,
+    })),
+  };
+}
+
+/**
+ * Every listed profile in the operator's order, which is the registry's own
+ * order. `ensureNamedProfileExists` appends each new profile, so the order
+ * starts as creation order and a new profile lands at the bottom: adding one
+ * never renumbers another profile's menu shortcut.
+ */
+function listOrderedProfileEntries(): ProfileEntry[] {
+  const activeProfile = resolveActiveProfileName();
+  const defaultProfile = resolveDefaultProfileName();
+  // First entry wins, as the Map this replaced did: a name the registry
+  // repeats (two instances racing an append) must list once, or every
+  // reorder would be refused as stale.
+  const entries: ProfileEntry[] = [];
+  const listed = new Set<string>();
+  for (const entry of readProfilesRegistry().profiles) {
+    if (!listed.has(entry.name)) {
+      entries.push(entry);
+      listed.add(entry.name);
+    }
+  }
+  if (!listed.has(activeProfile)) {
+    entries.push({ name: activeProfile });
+    listed.add(activeProfile);
+  }
+  // Pre-#524, this code unconditionally added a "default" entry
+  // because the silent boot-time mkdir guaranteed `~/.pwragent/profiles/default/`
+  // always existed. After #524, `default` is just a name — it only
+  // appears on disk when the operator explicitly chose Shared mode
+  // OR the install pre-dates the change (migration path). Listing
+  // a phantom entry misleads the operator into thinking they have
+  // a profile they didn't ask for. Only surface `default` (or any
+  // other not-in-registry profile name) when the directory is
+  // actually present.
+  if (
+    !listed.has(defaultProfile)
+    && fs.existsSync(resolveProfileDir(defaultProfile))
+  ) {
+    entries.push({ name: defaultProfile });
+  }
+  return entries;
+}
+
+export function reorderDesktopPwrAgentProfiles(
+  request: ReorderDesktopPwrAgentProfilesRequest,
+): ReorderDesktopPwrAgentProfilesResponse {
+  const current = listOrderedProfileEntries();
+  const byName = new Map(current.map((profile) => [profile.name, profile]));
+  const order = Array.isArray(request.order) ? request.order : [];
+  // Another window or instance can add or delete a profile between this
+  // renderer's list and its drop. Writing a partial order would silently
+  // move a profile the operator never saw, so the request must name the
+  // current set exactly, once each.
+  if (
+    order.length !== current.length
+    || new Set(order).size !== order.length
+    || order.some((name) => !byName.has(name))
+  ) {
+    throw new Error(
+      "The profile list changed while you were reordering it. Review the current order and try again.",
+    );
+  }
+
+  const registry = readProfilesRegistry();
+  registry.profiles = order.map((name) => byName.get(name)!);
+  writeProfilesRegistry(registry);
+  return { order };
+}
+
+export function setDesktopPwrAgentProfileMenuVisibility(
+  request: SetDesktopPwrAgentProfileMenuVisibilityRequest,
+): SetDesktopPwrAgentProfileMenuVisibilityResponse {
+  const profile = normalizeProfileName(request.profile);
+  const current = listOrderedProfileEntries();
+  if (!current.some((entry) => entry.name === profile)) {
+    throw new Error(`Profile "${request.profile}" does not exist.`);
+  }
+  const showInMenu = request.showInMenu !== false;
+
+  // Rewrite from the listed order, not the bare registry, so a listed
+  // profile the registry never recorded (an on-disk `default`) keeps the
+  // place the operator saw it in.
+  const registry = readProfilesRegistry();
+  registry.profiles = current.map((entry) => {
+    if (entry.name !== profile) return entry;
+    const { show_in_menu: _previous, ...rest } = entry;
+    return showInMenu ? rest : { ...rest, show_in_menu: false };
+  });
+  writeProfilesRegistry(registry);
+  return { profile, showInMenu };
+}
+
+function readPwrAgentProfileCodexProfile(profileName: string) {
+  let configuredProfile: string | undefined;
+  try {
+    const config = readProfileConfigFile(
+      resolveDesktopConfigPath({ cliProfile: profileName }),
+    );
+    configuredProfile = config.models?.codex?.profile;
+  } catch {
+    configuredProfile = undefined;
+  }
+  const discovery = discoverCodexAuthProfiles({ configuredProfile });
+  return discovery.profiles.find((profile) => profile.selected)
+    ?? discovery.profiles[0]!;
+}
+
+export function openDesktopPwrAgentProfile(
+  request: OpenDesktopPwrAgentProfileRequest,
+): OpenDesktopPwrAgentProfileResponse {
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
+  }
+
+  const activeProfile = resolveActiveProfileName();
+  // Bootstrap has no active profile runtime of its own. Its requested
+  // profile name can match the profile the wizard just graduated, but that
+  // real profile still needs to be launched before bootstrap can quit.
+  if (!isBootstrapProfile() && profile === activeProfile) {
+    return { opened: false, profile, reason: "active" };
+  }
+
+  if (requestProfileInstanceFocus(profile)) {
+    return { opened: false, profile, reason: "focused" };
+  }
+
+  ensureProfileExists({
+    env: {
+      ...process.env,
+      [PWRAGENT_PROFILE_ENV]: profile,
+    },
+  });
+
+  const args = replaceProfileLaunchArgs(
+    process.defaultApp ? process.argv.slice(1) : [],
+    profile,
+  );
+  // Deliberately retain ELECTRON_RENDERER_URL here. This is not a general
+  // child execution context: it relaunches PwrAgent itself, whose development
+  // main process needs electron-vite's renderer endpoint to render correctly.
+  // The new instance outlives this one, so it must not keep this process's
+  // open files (see spawnDetachedProcess).
+  spawnDetachedProcess(process.execPath, args, {
+    ...process.env,
+    [PWRAGENT_PROFILE_ENV]: profile,
+  });
+
+  return { opened: true, profile };
+}
+
+export function replaceProfileLaunchArgs(
+  args: readonly string[],
+  profile: string,
+): string[] {
+  const nextArgs: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--profile") {
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith("--profile=")) {
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+  nextArgs.push("--profile", profile);
+  return nextArgs;
+}
+
+export function createDesktopPwrAgentProfile(
+  request: CreateDesktopPwrAgentProfileRequest,
+): CreateDesktopPwrAgentProfileResponse {
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
+  }
+  const result = ensureNamedProfileExists(profile);
+
+  // First-run wizard path: when the wizard provisions a paired profile
+  // (Isolated or Multiple mode), the operator has *just* gone through
+  // onboarding to create this profile. Seed `onboarding.completed =
+  // true` on the new profile's config so the wizard doesn't auto-fire
+  // again the moment the operator switches into it. The default of
+  // `false` (per #500) still applies to profiles created from any
+  // other surface (Settings → Profiles, `PWRAGENT_PROFILE=<new>`, etc.).
+  if (request.seedOnboardingCompleted) {
+    writeProfileConfigPatch(
+      resolveDesktopConfigPath({ cliProfile: profile }),
+      {
+        onboarding: { completed: true, completedSource: "wizard" },
+      },
+    );
+  }
+  return {
+    profile,
+    profileDir: result.profileDir,
+    created: result.created,
+  };
+}
+
+export function setDefaultDesktopPwrAgentProfile(
+  request: SetDefaultDesktopPwrAgentProfileRequest,
+): SetDefaultDesktopPwrAgentProfileResponse {
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
+  }
+  return { profile: setDefaultProfileName(profile) };
+}
+
+export async function deleteDesktopPwrAgentProfile(
+  request: DeleteDesktopPwrAgentProfileRequest,
+): Promise<DeleteDesktopPwrAgentProfileResponse> {
+  const profile = normalizeProfileName(request.profile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
+  }
+  const profileDir = assertProfileCanBeDeleted(profile);
+  let movedToTrash = false;
+  if (process.platform === "darwin" && fs.existsSync(profileDir)) {
+    await shell.trashItem(profileDir);
+    movedToTrash = true;
+    forgetDeletedProfile(profile);
+  } else {
+    deleteProfile(profile);
+  }
+  return { deleted: true, movedToTrash, profile };
+}
+
+/**
+ * Graduate the bootstrap profile's settings into a real profile.
+ *
+ * Called by the wizard's Finish path. Safe to call unconditionally:
+ * when the main process isn't in bootstrap mode, this returns
+ * `{ graduated: false, reason: "not-bootstrap-mode" }` and does
+ * nothing. The wizard always calls it; the main process figures out
+ * whether there's actually anything to graduate.
+ *
+ * What gets copied:
+ *   - `general` (developerMode, appearance, codexProfileModel,
+ *     messagingAcknowledgment)
+ *   - `experimental`, `imageUploads`, `updates`, `messaging` —
+ *     everything the operator might have set in the wizard or
+ *     bootstrap session.
+ *
+ * What does NOT get copied:
+ *   - `onboarding` — the target profile was just created by the
+ *     wizard via `createPwrAgentProfile({ seedOnboardingCompleted:
+ *     true })`, which already wrote `[onboarding] completed = true`.
+ *     Copying the bootstrap profile's `completed = false` over that
+ *     would re-fire the wizard on the next launch.
+ *   - **Secrets.** The wizard buffers typed messaging credentials in
+ *     renderer memory and graduates them via
+ *     the separate `writeSecretsToProfile` IPC. This IPC's name is
+ *     intentionally scoped (`Config`, not `Bootstrap`) so a future
+ *     caller can't graduate config and silently lose the operator's
+ *     secrets by calling only this primitive. The wizard's order is
+ *     `writeSecretsToProfile` THEN
+ *     `graduateBootstrapConfigToProfile` — reverse it and secrets
+ *     land in `.bootstrap/` before it gets reaped.
+ *   - Per-profile state (state.db rows, runtime markers). Bootstrap
+ *     state.db is intentionally throwaway.
+ *
+ * On success: also writes `profiles.toml::default_profile =
+ * targetProfile`, so the next boot opens directly into the chosen
+ * profile without re-firing the wizard. The `.bootstrap/` directory
+ * stays on disk; the next boot's `cleanupBootstrapProfile()` call
+ * removes it.
+ */
+export function graduateDesktopBootstrapConfigToProfile(
+  request: GraduateDesktopBootstrapConfigToProfileRequest,
+): GraduateDesktopBootstrapConfigToProfileResponse {
+  const targetProfile = normalizeProfileName(request.targetProfile);
+  if (!targetProfile) {
+    throw new Error(
+      `Profile name "${request.targetProfile}" must contain at least one letter or number.`,
+    );
+  }
+
+  if (!isBootstrapProfile()) {
+    return {
+      graduated: false,
+      reason: "not-bootstrap-mode",
+      targetProfile,
+    };
+  }
+
+  const bootstrapConfigPath = resolveBootstrapProfilePath("config.toml");
+  if (!fs.existsSync(bootstrapConfigPath)) {
+    return {
+      graduated: false,
+      reason: "no-bootstrap-config",
+      targetProfile,
+    };
+  }
+
+  // Ensure the target profile dir exists (idempotent if the wizard
+  // already called createPwrAgentProfile during the name step).
+  ensureNamedProfileExists(targetProfile);
+
+  // Strip the onboarding section — the target profile already has
+  // the right marker seeded by createPwrAgentProfile(seedOnboardingCompleted).
+  const bootstrapConfig = readProfileConfigFile(bootstrapConfigPath);
+  const { onboarding: _drop, ...patch } = bootstrapConfig;
+  void _drop;
+
+  writeProfileConfigPatch(
+    resolveDesktopConfigPath({ cliProfile: targetProfile }),
+    patch,
+  );
+
+  // The chosen profile becomes the registry default so the next
+  // boot opens directly into it (no wizard, no .bootstrap/ re-fire).
+  setDefaultProfileName(targetProfile);
+
+  return { graduated: true, targetProfile };
+}
+
+export async function setDesktopPwrAgentProfileCodexProfile(
+  request: SetDesktopPwrAgentProfileCodexProfileRequest,
+): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> {
+  const profile = normalizeProfileName(request.profile);
+  const codexProfile = normalizeProfileName(request.codexProfile);
+  if (!profile) {
+    throw new Error(
+      `Profile name "${request.profile}" must contain at least one letter or number.`,
+    );
+  }
+  if (request.codexProfile.trim() && !codexProfile) {
+    throw new Error(
+      `Codex profile name "${request.codexProfile}" must contain at least one letter or number.`,
+    );
+  }
+
+  ensureProfileExists({
+    env: {
+      ...process.env,
+      [PWRAGENT_PROFILE_ENV]: profile,
+    },
+  });
+  writeProfileConfigPatch(resolveDesktopConfigPath({ cliProfile: profile }), {
+    models: { codex: { profile: codexProfile } },
+  });
+
+  return { profile, codexProfile };
+}
+
+export function registerProfilesIpcHandlers(
+  options: ProfilesIpcHandlerOptions = {},
+): void {
+  ipcMain.removeHandler(PROFILES_LIST_CHANNEL);
+  ipcMain.handle(
+    PROFILES_LIST_CHANNEL,
+    async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
+      listDesktopPwrAgentProfiles(),
+  );
+
+  ipcMain.removeHandler(PROFILES_OPEN_CHANNEL);
+  ipcMain.handle(
+    PROFILES_OPEN_CHANNEL,
+    async (
+      _event,
+      request: OpenDesktopPwrAgentProfileRequest,
+    ): Promise<OpenDesktopPwrAgentProfileResponse> =>
+      openDesktopPwrAgentProfile(request),
+  );
+
+  ipcMain.removeHandler(PROFILES_CREATE_CHANNEL);
+  ipcMain.handle(
+    PROFILES_CREATE_CHANNEL,
+    async (
+      _event,
+      request: CreateDesktopPwrAgentProfileRequest,
+    ): Promise<CreateDesktopPwrAgentProfileResponse> => {
+      const response = createDesktopPwrAgentProfile(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
+  ipcMain.handle(
+    PROFILES_SET_DEFAULT_CHANNEL,
+    async (
+      _event,
+      request: SetDefaultDesktopPwrAgentProfileRequest,
+    ): Promise<SetDefaultDesktopPwrAgentProfileResponse> => {
+      const response = setDefaultDesktopPwrAgentProfile(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
+  ipcMain.handle(
+    PROFILES_DELETE_CHANNEL,
+    async (
+      _event,
+      request: DeleteDesktopPwrAgentProfileRequest,
+    ): Promise<DeleteDesktopPwrAgentProfileResponse> => {
+      const response = await deleteDesktopPwrAgentProfile(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_REORDER_CHANNEL);
+  ipcMain.handle(
+    PROFILES_REORDER_CHANNEL,
+    async (
+      _event,
+      request: ReorderDesktopPwrAgentProfilesRequest,
+    ): Promise<ReorderDesktopPwrAgentProfilesResponse> => {
+      const response = reorderDesktopPwrAgentProfiles(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_SET_MENU_VISIBILITY_CHANNEL);
+  ipcMain.handle(
+    PROFILES_SET_MENU_VISIBILITY_CHANNEL,
+    async (
+      _event,
+      request: SetDesktopPwrAgentProfileMenuVisibilityRequest,
+    ): Promise<SetDesktopPwrAgentProfileMenuVisibilityResponse> => {
+      const response = setDesktopPwrAgentProfileMenuVisibility(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);
+  ipcMain.handle(
+    PROFILES_SET_CODEX_PROFILE_CHANNEL,
+    async (
+      _event,
+      request: SetDesktopPwrAgentProfileCodexProfileRequest,
+    ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
+      await setDesktopPwrAgentProfileCodexProfile(request),
+  );
+
+  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL);
+  ipcMain.handle(
+    PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
+    async (
+      _event,
+      request: GraduateDesktopBootstrapConfigToProfileRequest,
+    ): Promise<GraduateDesktopBootstrapConfigToProfileResponse> => {
+      const response = graduateDesktopBootstrapConfigToProfile(request);
+      if (response.graduated) {
+        options.onProfilesChanged?.();
+      }
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_WRITE_SECRETS_CHANNEL);
+  ipcMain.handle(
+    PROFILES_WRITE_SECRETS_CHANNEL,
+    async (
+      _event,
+      request: WriteDesktopSecretsToProfileRequest,
+    ): Promise<WriteDesktopSecretsToProfileResponse> =>
+      writeDesktopSecretsToProfile(request),
+  );
+}
+
+export function disposeProfilesIpcHandlers(): void {
+  ipcMain.removeHandler(PROFILES_LIST_CHANNEL);
+  ipcMain.removeHandler(PROFILES_OPEN_CHANNEL);
+  ipcMain.removeHandler(PROFILES_CREATE_CHANNEL);
+  ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
+  ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
+  ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);
+  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL);
+  ipcMain.removeHandler(PROFILES_WRITE_SECRETS_CHANNEL);
+}

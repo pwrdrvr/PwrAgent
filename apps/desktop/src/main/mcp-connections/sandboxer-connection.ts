@@ -1,7 +1,7 @@
+import { externalLinks as shell } from "../owner-host";
 import { execFile } from "node:child_process";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { shell } from "electron";
 import {
   SANDBOXER_CLI_PATH,
   SANDBOXER_LINKS,

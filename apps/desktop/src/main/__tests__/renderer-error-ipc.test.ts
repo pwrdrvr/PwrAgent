@@ -30,7 +30,7 @@ describe("renderer error ipc", () => {
   });
 
   afterEach(async () => {
-    const { disposeRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { disposeRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     disposeRendererErrorIpcHandlers();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -40,7 +40,7 @@ describe("renderer error ipc", () => {
     const {
       registerRendererErrorIpcHandlers,
       disposeRendererErrorIpcHandlers,
-    } = await import("../ipc/renderer-error");
+    } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     const report: RendererErrorReport = {
       componentStack: "at App",
@@ -75,7 +75,7 @@ describe("renderer error ipc", () => {
   });
 
   it("logs update history separately, bounded and deduplicated even without a stack", async () => {
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     registerRendererErrorIpcHandlers();
     const report = {
@@ -113,7 +113,7 @@ describe("renderer error ipc", () => {
   });
 
   it("ignores malformed update history while preserving the error report", async () => {
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     registerRendererErrorIpcHandlers();
     await expect(handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, {
@@ -128,7 +128,7 @@ describe("renderer error ipc", () => {
     const {
       registerRendererErrorIpcHandlers,
       disposeRendererErrorIpcHandlers,
-    } = await import("../ipc/renderer-error");
+    } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
 
     const stack = `Error: Deep stack${"\n    at frame".repeat(2000)}`;
@@ -156,7 +156,7 @@ describe("renderer error ipc", () => {
     const {
       registerRendererErrorIpcHandlers,
       disposeRendererErrorIpcHandlers,
-    } = await import("../ipc/renderer-error");
+    } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     const report: RendererErrorReport = {
       href: "http://localhost:5173/",
@@ -194,7 +194,7 @@ describe("renderer error ipc", () => {
 
   it("bounds raw IPC bursts including summaries and diagnostics serialization", async () => {
     vi.useFakeTimers();
-    const { registerRendererErrorIpcHandlers, disposeRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers, disposeRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     const serialization = vi.spyOn(JSON, "stringify");
     const events = vi.fn(() => []);
@@ -227,7 +227,7 @@ describe("renderer error ipc", () => {
 
   it("never suppresses explicit automatic, stopped or manual recovery reports", async () => {
     vi.useFakeTimers();
-    const { registerRendererErrorIpcHandlers, disposeRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers, disposeRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     registerRendererErrorIpcHandlers();
     for (const action of ["automatic-remount", "automatic-remount", "stopped", "manual-remount"]) {
@@ -245,7 +245,7 @@ describe("renderer error ipc", () => {
 
   it("links renderer repeat batches without delaying the next minute's failure snapshot", async () => {
     vi.useFakeTimers();
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     registerRendererErrorIpcHandlers();
     const first = {
@@ -280,7 +280,7 @@ describe("renderer error ipc", () => {
   it("admits a new renderer window and its diagnostics when IPC latency decreases", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     registerRendererErrorIpcHandlers();
     const first = {
@@ -313,7 +313,7 @@ describe("renderer error ipc", () => {
   it("merges delayed repeat batches using their occurrence range rather than receipt time", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(120_000);
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     registerRendererErrorIpcHandlers();
     const report = {
@@ -343,7 +343,7 @@ describe("renderer error ipc", () => {
     const {
       registerRendererErrorIpcHandlers,
       disposeRendererErrorIpcHandlers,
-    } = await import("../ipc/renderer-error");
+    } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
 
     registerRendererErrorIpcHandlers();
@@ -367,7 +367,7 @@ describe("renderer error ipc", () => {
   });
 
   it("bounds the remembered fault identities without suppressing new stacks", async () => {
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     const report = (frame: number): RendererErrorReport => ({
       href: "http://localhost:5173/",
@@ -389,7 +389,7 @@ describe("renderer error ipc", () => {
   });
 
   it("logs different faults even when their component stacks are identical", async () => {
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     const report: RendererErrorReport = {
       href: "http://localhost:5173/",
@@ -407,7 +407,7 @@ describe("renderer error ipc", () => {
   });
 
   it("preserves full multiline stack frames through the real compact log formatter", async () => {
-    const { registerRendererErrorIpcHandlers } = await import("../ipc/renderer-error");
+    const { registerRendererErrorIpcHandlers } = await import("../shell/ipc/renderer-error");
     const { RENDERER_ERROR_REPORT_CHANNEL } = await import("../../shared/ipc");
     const { compactStructuredLogData, formatAppLogLine } = await vi.importActual<typeof import("../log")>("../log");
     const stack = `Error: Maximum update depth exceeded\n${Array.from({ length: 20 }, (_, index) =>

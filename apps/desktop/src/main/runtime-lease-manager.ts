@@ -51,7 +51,7 @@ export class RuntimeLeaseManager extends OwnerRuntimeLeaseManager {
 
 let manager: RuntimeLeaseManager | null = null;
 
-export function getRuntimeLeaseManager(): RuntimeLeaseManager {
+export function initializeRuntimeLeaseManager(): RuntimeLeaseManager {
   if (!manager) {
     manager = new RuntimeLeaseManager();
   }
@@ -66,4 +66,10 @@ export function setRuntimeLeaseManagerForTests(
   next: RuntimeLeaseManager | null,
 ): void {
   manager = next;
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getRuntimeLeaseManager(): RuntimeLeaseManager {
+  if (!manager) throw new Error("getRuntimeLeaseManager is unavailable before startOwnerServices().");
+  return manager;
 }

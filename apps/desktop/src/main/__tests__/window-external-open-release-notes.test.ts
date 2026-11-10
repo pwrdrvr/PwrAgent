@@ -36,7 +36,7 @@ vi.mock("electron", () => ({
   shell: { openExternal: (url: string) => openExternal(url) },
 }));
 
-const { applyWindowSecurityHardening } = await import("../window");
+const { applyWindowSecurityHardening } = await import("../shell/window");
 
 type NavigateEvent = { preventDefault: () => void };
 

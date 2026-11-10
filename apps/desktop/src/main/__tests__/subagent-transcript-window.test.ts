@@ -32,12 +32,12 @@ vi.mock("electron", () => ({ BrowserWindow: mocks.BrowserWindow }));
 vi.mock("../log", () => ({
   getMainLogger: () => ({ debug: vi.fn() }),
 }));
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   applyWindowSecurityHardening: mocks.applyWindowSecurityHardening,
   rendererPreloadWebPreferences: () => ({ preload: "/preload.js", nodeIntegrationInSubFrames: true }),
   getRendererEntry: () => ({ kind: "file", value: "/renderer.html" }),
 }));
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   WINDOW_KIND_SUB_AGENT_TRANSCRIPT: "sub-agent-transcript",
   registerWindowChannels: mocks.registerWindowChannels,
 }));
@@ -45,17 +45,17 @@ vi.mock("../settings/appearance-bootstrap", () => ({
   readBootstrapAppearance: () => ({ theme: "dark" }),
   themedWindowAdditionalArguments: () => ["--appearance=dark"],
 }));
-vi.mock("../native-appearance", () => ({
+vi.mock("../shell/native-appearance", () => ({
   themedWindowBackgroundColor: () => "#000000",
 }));
-vi.mock("../auxiliary-window-chrome", () => ({
+vi.mock("../shell/auxiliary-window-chrome", () => ({
   auxiliaryWindowChromeOptions: () => ({ frame: true }),
   hideAuxiliaryWindowMenuBar: vi.fn(),
   registerAuxiliaryWindowTitle: vi.fn(),
   showAndFocusAuxiliaryWindow: vi.fn(),
   showAuxiliaryWindowWhenReady: vi.fn(),
 }));
-vi.mock("../window-placement", () => ({
+vi.mock("../shell/window-placement", () => ({
   placementForSourceDisplay: () => ({ x: 10, y: 20 }),
   positionWindowForSourceDisplay: vi.fn(),
 }));
@@ -70,7 +70,7 @@ describe("sub-agent transcript window", () => {
 
   it("routes a peer child to its owner without colliding with a local child id", async () => {
     const { showSubAgentTranscriptWindow } = await import(
-      "../subagent-transcript-window"
+      "../shell/subagent-transcript-window"
     );
     showSubAgentTranscriptWindow({
       backend: "codex",

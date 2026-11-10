@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyWindowControl,
   type ControllableWindow,
-} from "../window-controls-bridge";
+} from "../shell/window-controls-bridge";
 
 function windowStub(
   overrides: Partial<{ destroyed: boolean; maximized: boolean }> = {},

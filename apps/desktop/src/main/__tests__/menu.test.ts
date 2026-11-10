@@ -4,7 +4,7 @@ import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
 import {
   buildApplicationMenuTemplate,
   type ApplicationMenuActions,
-} from "../menu";
+} from "../shell/menu";
 
 function buildTemplate(
   developerMode: boolean,

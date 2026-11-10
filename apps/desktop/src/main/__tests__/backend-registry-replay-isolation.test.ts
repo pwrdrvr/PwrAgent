@@ -1,3 +1,5 @@
+import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
+import { createReplayClientsFromEnv } from "../shell/testing/replay-runtime";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -137,6 +139,7 @@ function createOverlayStoreMock() {
 }
 
 beforeEach(() => {
+  installOwnerHostServices({ ...getOwnerHostServices(), replayClients: createReplayClientsFromEnv });
   constructorState.codexCount = 0;
   constructorState.codexArgs = [];
   constructorState.codexEnvs = [];

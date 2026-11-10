@@ -1,5 +1,5 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -140,6 +140,19 @@ describe("Cargo output cleanup", () => {
     expect((await git("diff", "--cached", "--binary")).stdout).toBe(before);
     await expect(lstat(path.join(profile, "deps"))).rejects.toMatchObject({ code: "ENOENT" });
     expect((await scanCargoBuildOutputs([repo], signal(), undefined, { helperPath })).items).toEqual([]);
+  });
+
+  it("reports allocation removed while an external hardlink retains the file data", async () => {
+    const { repo, profile } = await fixture();
+    const artifact = path.join(profile, "deps", "fixture.rmeta");
+    const retained = path.join(root, `retained-${path.basename(repo)}`);
+    await link(artifact, retained);
+    const { items } = await scanCargoBuildOutputs([repo], signal(), undefined, { helperPath });
+    const bytes = items[0]!.row.space!.allocatedBytes!;
+    expect(bytes).toBeGreaterThan(0);
+    expect(await removeCargoBuildOutput(items[0]!, signal(), { helperPath })).toEqual({ allocatedBytesRemoved: bytes });
+    expect(await readFile(retained)).toEqual(Buffer.alloc(8192));
+    expect((await lstat(retained)).nlink).toBe(1);
   });
 
   it("refuses a lock held by another process at scan and again at apply", async () => {

@@ -32,7 +32,7 @@ vi.mock("../messaging/rbac-policy-service", () => ({
   getRbacPolicyService: () => ({}),
 }));
 
-import { registerMessagingRbacIpcHandlers } from "../ipc/messaging-rbac";
+import { registerMessagingRbacIpcHandlers } from "../shell/ipc/messaging-rbac";
 
 describe("messaging RBAC IPC", () => {
   it("reads known subjects from the messaging domain snapshot", async () => {

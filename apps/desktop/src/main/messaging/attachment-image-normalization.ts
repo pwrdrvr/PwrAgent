@@ -1,4 +1,4 @@
-import { nativeImage } from "electron";
+import { imageCodec as nativeImage, type HostImage } from "../owner-host";
 import {
   DEFAULT_IMAGE_UPLOAD_QUALITY_PROFILE,
   IMAGE_UPLOAD_QUALITY_PROFILES,
@@ -20,7 +20,7 @@ export type MessagingNormalizedImage = {
 };
 
 export type MessagingImageNormalizationDependencies = {
-  createImageFromBuffer: (buffer: Buffer) => Electron.NativeImage;
+  createImageFromBuffer: (buffer: Buffer) => HostImage;
 };
 
 const DEFAULT_DEPENDENCIES: MessagingImageNormalizationDependencies = {

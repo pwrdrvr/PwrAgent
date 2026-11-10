@@ -2,8 +2,27 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ThreadMaintenanceSpace } from "@pwragent/shared";
+import { maintenanceLockHelperPath } from "./maintenance-native-lock";
 
 const execute = promisify(execFile);
+
+async function measureWindowsAllocation(paths: string[], signal: AbortSignal, helperPath: string): Promise<ThreadMaintenanceSpace | undefined> {
+  try {
+    const { stdout } = await execute(helperPath, ["--maintenance-allocation", ...paths.map((value) => path.resolve(value))], {
+      signal, timeout: 30_000, maxBuffer: 8192, windowsHide: true,
+    });
+    const result: unknown = JSON.parse(stdout);
+    if (!result || typeof result !== "object" || !("allocatedBytes" in result)) return undefined;
+    const bytes = result.allocatedBytes;
+    if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) return undefined;
+    if ("lowerBound" in result && typeof result.lowerBound !== "boolean") return undefined;
+    return { allocatedBytes: bytes, ...("lowerBound" in result && result.lowerBound ? { lowerBound: true } : {}) };
+  } catch {
+    // Missing helper, inaccessible files, cancellation and unsupported native
+    // queries are unknown. Never substitute logical lengths or zero.
+    return undefined;
+  }
+}
 
 /** Native allocation accounting, with bounded output and lifetime. du does
  * not follow symlinks and counts hardlinks once within each checkout. APFS
@@ -12,8 +31,9 @@ const execute = promisify(execFile);
 export async function measureMaintenanceAllocation(
   checkout: string,
   signal: AbortSignal,
+  options: { helperPath?: string } = {},
 ): Promise<ThreadMaintenanceSpace | undefined> {
-  if (process.platform === "win32") return undefined;
+  if (process.platform === "win32") return measureWindowsAllocation([checkout], signal, options.helperPath ?? maintenanceLockHelperPath());
   try {
     const { stdout } = await execute("/usr/bin/du", ["-sk", path.resolve(checkout)], {
       signal, timeout: 30_000, maxBuffer: 8192,
@@ -28,10 +48,12 @@ export async function measureMaintenanceAllocation(
   }
 }
 
-/** One du process counts hardlinks once across all selected children. */
-export async function measureMaintenanceAllocationPaths(paths: string[], signal: AbortSignal): Promise<ThreadMaintenanceSpace | undefined> {
+/** One native invocation counts hardlinks once across all selected children. */
+export async function measureMaintenanceAllocationPaths(paths: string[], signal: AbortSignal,
+  options: { helperPath?: string } = {}): Promise<ThreadMaintenanceSpace | undefined> {
   if (!paths.length) return { allocatedBytes: 0 };
-  if (process.platform === "win32" || paths.length > 1000) return undefined;
+  if (paths.length > 1000) return undefined;
+  if (process.platform === "win32") return measureWindowsAllocation(paths, signal, options.helperPath ?? maintenanceLockHelperPath());
   try {
     const { stdout } = await execute("/usr/bin/du", ["-skc", ...paths.map((value) => path.resolve(value))], {
       signal, timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, BLOCK_SIZE: "1024", LC_ALL: "C" },

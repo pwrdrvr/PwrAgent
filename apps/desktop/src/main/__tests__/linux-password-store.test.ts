@@ -10,7 +10,7 @@ import {
   relaunchForLinuxSecretStore,
   type CommandExec,
   type SecretServiceProbe,
-} from "../linux-password-store";
+} from "../shell/linux-password-store";
 
 const roots: string[] = [];
 

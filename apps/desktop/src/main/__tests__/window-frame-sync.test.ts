@@ -5,7 +5,7 @@ import {
   attachWindowFrameSync,
   installWindowFrameSync,
   type WindowCreatingApp,
-} from "../window-frame-sync";
+} from "../shell/window-frame-sync";
 
 type Handler = () => void;
 

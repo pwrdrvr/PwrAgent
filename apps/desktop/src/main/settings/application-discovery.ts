@@ -1,3 +1,4 @@
+import { imageCodec as nativeImage } from "../owner-host";
 import {
   execFile as execFileCallback,
   spawn as spawnProcess,
@@ -710,7 +711,6 @@ async function readApplicationIconDataUrl(appPath: string): Promise<string | und
   }
 
   try {
-    const { nativeImage } = await import("electron");
 
     // `nativeImage.createFromPath()` returns an EMPTY image for `.icns`
     // files, so decode the container ourselves: a modern `.icns` embeds a

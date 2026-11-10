@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadImagePart } from "@pwragent/shared";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { claudeToolResultContent } from "../claude/claude-tool-activity";
-import { materializeTranscriptImageUrlsForRenderer, toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { materializeTranscriptImageUrlsForRenderer, toTranscriptImageProtocolUrl } from "../shell/transcript-image-protocol";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();

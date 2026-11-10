@@ -7,34 +7,34 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../quit-manager", () => ({
+vi.mock("../shell/quit-manager", () => ({
   getCurrentQuitBlockers: vi.fn(),
   readQuitBlockerQueueSnapshot: vi.fn(),
 }));
 
-vi.mock("../ipc/integrated-terminal", () => ({
+vi.mock("../shell/ipc/integrated-terminal", () => ({
   revealIntegratedTerminal: vi.fn(),
 }));
 
-vi.mock("../window-show-thread", () => ({
+vi.mock("../shell/window-show-thread", () => ({
   requestShowThread: vi.fn(),
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(),
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: vi.fn(),
 }));
 
 import type { WebContents } from "electron";
-import { getCurrentQuitBlockers } from "../quit-manager";
-import { revealIntegratedTerminal } from "../ipc/integrated-terminal";
-import { requestShowThread } from "../window-show-thread";
-import { subscribersForChannel } from "../window-channels";
-import { isFederationWindowWebContents } from "../window";
-import { revealCurrentQuitBlocker } from "../ipc/quit-blockers";
+import { getCurrentQuitBlockers } from "../shell/quit-manager";
+import { revealIntegratedTerminal } from "../shell/ipc/integrated-terminal";
+import { requestShowThread } from "../shell/window-show-thread";
+import { subscribersForChannel } from "../shell/window-channels";
+import { isFederationWindowWebContents } from "../shell/window";
+import { revealCurrentQuitBlocker } from "../shell/ipc/quit-blockers";
 
 describe("quit blocker IPC", () => {
   const sender = { id: 10 } as unknown as WebContents;

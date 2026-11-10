@@ -1,3 +1,4 @@
+import { applicationHost as app, requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
@@ -206,7 +207,6 @@ import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { PendingEnvironmentLaunchStore, type PendingEnvironmentLaunch } from "./pending-environment-launch-store";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
-import { app } from "electron";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -263,8 +263,7 @@ import type {
   DesktopOwnerStorage,
   WorktreeGitWorkingStateCacheEntry,
 } from "../storage/desktop-overlay-store";
-import { requestShowThread } from "../window-show-thread";
-import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-images";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import { MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS, MCP_CONNECTION_STARTUP_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
@@ -815,7 +814,7 @@ import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-captu
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
-import { createReplayClientsFromEnv } from "../testing/replay-runtime";
+const createReplayClientsFromEnv = () => getOwnerHostServices().replayClients();
 import {
   GitDirectoryService,
   UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
@@ -938,7 +937,6 @@ import {
   ONBOARDING_CODEX_GATE_ENABLED,
   type ManagedCodexSelectionChange,
 } from "../settings/desktop-settings-service";
-import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import {
   BackendModelCatalog,
@@ -56090,7 +56088,7 @@ export function getExistingDesktopBackendRegistry(): DesktopBackendRegistry | nu
   return registry;
 }
 
-export function getDesktopBackendRegistry(): DesktopBackendRegistry {
+export function initializeDesktopBackendRegistry(): DesktopBackendRegistry {
   if (!registry) {
     // The one construction that wants the operator's real machine. Every other
     // `new DesktopBackendRegistry(...)` in the tree is a test, and defaults to
@@ -56223,4 +56221,10 @@ function messagingDynamicToolCategoryForCatalog(
     default:
       return undefined;
   }
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getDesktopBackendRegistry(): DesktopBackendRegistry {
+  if (!registry) throw new Error("getDesktopBackendRegistry is unavailable before startOwnerServices().");
+  return registry;
 }

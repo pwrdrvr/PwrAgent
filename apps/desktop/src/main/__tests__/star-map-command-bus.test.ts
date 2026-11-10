@@ -12,7 +12,7 @@ import {
   resetStarMapCommandBus,
   resolveStarMapCommand,
   sendStarMapCommand,
-} from "../star-map/star-map-command-bus";
+} from "../shell/star-map/star-map-command-bus";
 
 type FakeMap = WebContents & {
   send: ReturnType<typeof vi.fn>;

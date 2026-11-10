@@ -10,10 +10,12 @@ import { isProcessIdAlive } from "../process-tree";
 describe("native helper fixture ownership", () => {
   it("requires only the native helpers used by the selected files", () => {
     const cargo = path.resolve("apps/desktop/src/main/__tests__/maintenance-cargo-output.property.test.ts");
+    const allocation = path.resolve("apps/desktop/src/main/__tests__/maintenance-disk-usage.property.test.ts");
     const ipc = path.resolve("apps/desktop/src/main/__tests__/mcp-ipc-http.test.ts");
-    fc.assert(fc.property(fc.array(fc.constantFrom(cargo, ipc, path.resolve("unrelated.test.ts"))), (files) => {
+    fc.assert(fc.property(fc.array(fc.constantFrom(cargo, allocation, ipc, path.resolve("unrelated.test.ts"))), (files) => {
       expect(nativeHelperConsumers(files)).toEqual([
         ...(files.includes(cargo) ? ["maintenanceCargo"] : []),
+        ...(files.includes(allocation) ? ["maintenanceAllocation"] : []),
         ...(files.includes(ipc) ? ["mcpIpc"] : []),
       ]);
     }));

@@ -10,7 +10,7 @@ const runtime = vi.hoisted(() => ({
   setRemoteWindowEventSubscription: vi.fn(),
 }));
 
-vi.mock("../window", () => ({ createMainWindow }));
+vi.mock("../shell/window", () => ({ createMainWindow }));
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => runtime,
 }));
@@ -78,7 +78,7 @@ describe("federation window", () => {
   it("reuses one instance-wide viewer when the same peer is opened twice", async () => {
     const window = createWindow(7);
     createMainWindow.mockReturnValue(window);
-    const { createFederationWindow } = await import("../federation/federation-window");
+    const { createFederationWindow } = await import("../shell/federation/federation-window");
     const initialThread = {
       backend: "codex" as const,
       threadId: "thread-opened-during-load",
@@ -104,7 +104,7 @@ describe("federation window", () => {
   it("reuses a viewer shown through the non-mac fallback milestone", async () => {
     const window = createWindow(8);
     createMainWindow.mockReturnValue(window);
-    const { createFederationWindow } = await import("../federation/federation-window");
+    const { createFederationWindow } = await import("../shell/federation/federation-window");
     createFederationWindow({ peer });
     // createMainWindow emits show from either ready-to-show or its non-mac
     // did-finish-load fallback. No ready-to-show event reaches this registry.
@@ -134,7 +134,7 @@ describe("federation window", () => {
   it("opens the launchpad in a reused viewer", async () => {
     const window = createWindow(9);
     createMainWindow.mockReturnValue(window);
-    const { createFederationWindow } = await import("../federation/federation-window");
+    const { createFederationWindow } = await import("../shell/federation/federation-window");
     createFederationWindow({ peer });
     window.emit("show");
     await Promise.resolve();
@@ -151,7 +151,7 @@ describe("federation window", () => {
   it("refreshes remote event subscriptions from the latest peer capabilities", async () => {
     const window = createWindow(14);
     createMainWindow.mockReturnValue(window);
-    const { createFederationWindow } = await import("../federation/federation-window");
+    const { createFederationWindow } = await import("../shell/federation/federation-window");
     createFederationWindow({ peer });
     window.emit("show");
     await Promise.resolve();
@@ -181,7 +181,7 @@ describe("federation window", () => {
     createMainWindow
       .mockReturnValueOnce(firstWindow)
       .mockReturnValueOnce(secondWindow);
-    const { createFederationWindow } = await import("../federation/federation-window");
+    const { createFederationWindow } = await import("../shell/federation/federation-window");
     createFederationWindow({ peer });
 
     firstWindow.emit("closed");
@@ -201,7 +201,7 @@ describe("federation window", () => {
     createMainWindow
       .mockReturnValueOnce(firstWindow)
       .mockReturnValueOnce(secondWindow);
-    const { createFederationWindow } = await import("../federation/federation-window");
+    const { createFederationWindow } = await import("../shell/federation/federation-window");
 
     const first = createFederationWindow({ peer });
     const second = createFederationWindow({
@@ -220,7 +220,7 @@ describe("federation window", () => {
     const window = createWindow(7);
     createMainWindow.mockReturnValue(window);
     const { createFederationWindow, refreshFederationWindowTitles } = await import(
-      "../federation/federation-window"
+      "../shell/federation/federation-window"
     );
 
     createFederationWindow({

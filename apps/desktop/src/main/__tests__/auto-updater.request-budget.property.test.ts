@@ -101,7 +101,7 @@ vi.mock("electron", () => ({
   ipcMain: { handle: () => {}, removeHandler: () => {} },
 }));
 vi.mock("electron-updater", () => ({ default: { autoUpdater: nativeUpdater } }));
-vi.mock("../linux-package-updater", () => ({
+vi.mock("../shell/linux-package-updater", () => ({
   createLinuxPackageUpdater: (updater: unknown) => updater,
   authorizeLinuxPackageUpdate: () => true,
 }));
@@ -112,13 +112,13 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   }),
 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ info: () => {}, warn: () => {} }) }));
-vi.mock("../update-install-state", () => ({
+vi.mock("../shell/update-install-state", () => ({
   markUpdateInstallInProgress: () => {},
   markUpdateInstallUpdaterQuitReady: () => {},
   prepareForUpdateInstall: async () => {},
 }));
 
-type Updater = typeof import("../auto-updater");
+type Updater = typeof import("../shell/auto-updater");
 type World = { updater: Updater; firstLaunchAt: number };
 type Model = Record<string, never>;
 
@@ -135,7 +135,7 @@ async function launch(world: World): Promise<void> {
   vi.clearAllTimers();
   vi.setSystemTime(now);
   vi.resetModules();
-  world.updater = await import("../auto-updater");
+  world.updater = await import("../shell/auto-updater");
   world.updater.initAutoUpdater();
   await settle();
 }

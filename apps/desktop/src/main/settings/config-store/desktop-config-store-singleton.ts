@@ -6,7 +6,7 @@ import { DesktopConfigStore } from "./desktop-config-store";
 
 let desktopConfigStore: DesktopConfigStore | undefined;
 
-export function getDesktopConfigStore(): DesktopConfigStore {
+export function initializeDesktopConfigStore(): DesktopConfigStore {
   if (!desktopConfigStore) {
     const bootstrap = getAppStateMode() === "bootstrap";
     const configPath = bootstrap
@@ -32,4 +32,10 @@ export function getExistingDesktopConfigStore(): DesktopConfigStore | undefined 
 export function disposeDesktopConfigStore(): void {
   desktopConfigStore?.dispose();
   desktopConfigStore = undefined;
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getDesktopConfigStore(): DesktopConfigStore {
+  if (!desktopConfigStore) throw new Error("getDesktopConfigStore is unavailable before startOwnerServices().");
+  return desktopConfigStore;
 }

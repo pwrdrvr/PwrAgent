@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import type { NavigationQueryPage, NavigationThreadSummary, RemoteThreadPin, UpdateSubthreadOrderRequest,
   UpdateSubthreadOrderResponse } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
-import { DesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { DesktopFederationRuntime, initializeDesktopFederationRuntime, disposeDesktopFederationRuntime, getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { setDesktopOverlayStoreForTests, resetDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -79,6 +79,7 @@ describe("Federation nested archive placement", () => {
   };
 
   beforeEach(async () => {
+    initializeDesktopFederationRuntime();
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     for (const owner of new Set(owners.values())) {
       const temp = createTempStateDb("federation-archive-");
@@ -133,7 +134,8 @@ describe("Federation nested archive placement", () => {
       updateSubthreadOrder: (request: UpdateSubthreadOrderRequest) => remoteUpdate(target.instanceId, request),
     }) as never);
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await disposeDesktopFederationRuntime();
     resetDesktopOverlayStoreForTests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();

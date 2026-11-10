@@ -11,7 +11,7 @@ import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL,
 } from "../../shared/ipc";
-import { mainWindowEventChannels } from "../main-window-channels";
+import { mainWindowEventChannels } from "../shell/main-window-channels";
 
 const viewer = mainWindowEventChannels({ scope: "remote", instanceId: "pwr_owner" });
 const local = mainWindowEventChannels();

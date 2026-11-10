@@ -6,7 +6,7 @@ import {
   lockMainWindowTitle,
   mainWindowTitle,
   updateLockedMainWindowTitle,
-} from "../main-window-title";
+} from "../shell/main-window-title";
 
 type TestBrowserWindow = BrowserWindow & {
   emitPageTitleUpdated: (title: string) => { defaultPrevented: boolean };

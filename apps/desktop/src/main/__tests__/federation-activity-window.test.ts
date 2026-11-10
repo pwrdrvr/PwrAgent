@@ -20,28 +20,28 @@ vi.mock("electron", () => ({
     constructor(public options: Record<string, unknown>) { state.windows.push(this); }
   },
 }));
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   applyWindowSecurityHardening: vi.fn(), rendererPreloadWebPreferences: () => ({ preload: "/fixture/preload.js", nodeIntegrationInSubFrames: true }),
   getRendererEntry: () => ({ kind: "file", value: "/fixture/index.html" }),
 }));
-vi.mock("../window-channels", () => ({ WINDOW_KIND_FEDERATION_ACTIVITY: "federation-activity", registerWindowChannels: vi.fn() }));
+vi.mock("../shell/window-channels", () => ({ WINDOW_KIND_FEDERATION_ACTIVITY: "federation-activity", registerWindowChannels: vi.fn() }));
 vi.mock("../settings/appearance-bootstrap", () => ({ readBootstrapAppearance: () => ({}), themedWindowAdditionalArguments: () => [] }));
-vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "theme-background" }));
-vi.mock("../auxiliary-window-chrome", () => ({
+vi.mock("../shell/native-appearance", () => ({ themedWindowBackgroundColor: () => "theme-background" }));
+vi.mock("../shell/auxiliary-window-chrome", () => ({
   auxiliaryWindowChromeOptions: () => ({ titleBarStyle: "hiddenInset" }),
   hideAuxiliaryWindowMenuBar: vi.fn(), registerAuxiliaryWindowTitle: vi.fn(),
   setAuxiliaryWindowAlwaysOnTop: (window: { setAlwaysOnTop: (enabled: boolean) => void }, enabled: boolean) => window.setAlwaysOnTop(enabled),
   showAndFocusAuxiliaryWindow: vi.fn(), showAuxiliaryWindowWhenReady: vi.fn(),
 }));
-vi.mock("../window-placement", () => ({ placementForSourceDisplay: () => ({}), positionWindowForSourceDisplay: vi.fn() }));
+vi.mock("../shell/window-placement", () => ({ placementForSourceDisplay: () => ({}), positionWindowForSourceDisplay: vi.fn() }));
 
 beforeEach(() => { state.windows.length = 0; vi.resetModules(); });
 
 describe("Federation Activity native window", () => {
   it("creates one independent secure themed window and focuses it on repeated open", async () => {
-    const { showFederationActivityWindow } = await import("../federation-activity-window");
-    const { showAndFocusAuxiliaryWindow } = await import("../auxiliary-window-chrome");
-    const { registerWindowChannels } = await import("../window-channels");
+    const { showFederationActivityWindow } = await import("../shell/federation-activity-window");
+    const { showAndFocusAuxiliaryWindow } = await import("../shell/auxiliary-window-chrome");
+    const { registerWindowChannels } = await import("../shell/window-channels");
     showFederationActivityWindow();
     showFederationActivityWindow();
     expect(state.windows).toHaveLength(1);
@@ -61,7 +61,7 @@ describe("Federation Activity native window", () => {
   });
 
   it("only lets the activity renderer change its own topmost state", async () => {
-    const { showFederationActivityWindow, setFederationActivityTopmost } = await import("../federation-activity-window");
+    const { showFederationActivityWindow, setFederationActivityTopmost } = await import("../shell/federation-activity-window");
     expect(() => setFederationActivityTopmost(1, true)).toThrow("not the caller");
     showFederationActivityWindow();
     expect(() => setFederationActivityTopmost(999, true)).toThrow("not the caller");

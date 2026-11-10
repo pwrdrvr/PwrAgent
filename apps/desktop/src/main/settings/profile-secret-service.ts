@@ -1,4 +1,4 @@
-import { safeStorage } from "electron";
+import { secretEncryption as safeStorage } from "../owner-host";
 import fs from "node:fs";
 import path from "node:path";
 import type { WriteDesktopSecretsToProfileRequest, WriteDesktopSecretsToProfileResponse } from "@pwragent/shared";

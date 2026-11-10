@@ -1,0 +1,124 @@
+import { BrowserWindow } from "electron";
+import { getMainLogger } from "../log";
+import {
+  applyWindowSecurityHardening,
+  rendererPreloadWebPreferences,
+  getRendererEntry,
+} from "./window";
+import {
+  WINDOW_KIND_MESSAGING_ACTIVITY,
+  registerWindowChannels,
+} from "./window-channels";
+import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
+import {
+  readBootstrapAppearance,
+  themedWindowAdditionalArguments,
+} from "../settings/appearance-bootstrap";
+import { themedWindowBackgroundColor } from "./native-appearance";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
+  showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
+} from "./auxiliary-window-chrome";
+import {
+  placementForSourceDisplay,
+  positionWindowForSourceDisplay,
+  type WindowPlacementSource,
+} from "./window-placement";
+
+const log = getMainLogger("pwragent:activity-window");
+const ACTIVITY_WINDOW_TITLE = "Messaging Activity";
+const ACTIVITY_WINDOW_WIDTH = 980;
+const ACTIVITY_WINDOW_HEIGHT = 720;
+
+/**
+ * Hash that the renderer (`main.tsx`) reads to decide whether to mount
+ * the full app shell or just the messaging-activity surface. Loaded
+ * windows pass through unchanged on reload, so the hash survives DevTools
+ * refreshes and renderer crashes.
+ */
+const ACTIVITY_HASH = "messaging-activity";
+
+let activityWindow: BrowserWindow | undefined;
+
+/**
+ * Spawn (or focus, if already open) the dedicated Messaging Activity
+ * window. The window reuses the same renderer bundle as the main
+ * window — `main.tsx` reads `window.location.hash` and mounts a
+ * standalone activity surface instead of the full app shell.
+ *
+ * Distinct OS window: own traffic lights, own focus, own lifecycle.
+ * Closing the window does NOT affect the main window. Reopening
+ * focuses the existing window when one is already open.
+ */
+export function showMessagingActivityWindow(
+  source: WindowPlacementSource = {},
+): void {
+  if (activityWindow && !activityWindow.isDestroyed()) {
+    positionWindowForSourceDisplay(activityWindow, source);
+    showAndFocusAuxiliaryWindow(activityWindow);
+    return;
+  }
+
+  const appearance = readBootstrapAppearance();
+  const window = new BrowserWindow({
+    ...placementForSourceDisplay(
+      ACTIVITY_WINDOW_WIDTH,
+      ACTIVITY_WINDOW_HEIGHT,
+      source,
+    ),
+    width: ACTIVITY_WINDOW_WIDTH,
+    height: ACTIVITY_WINDOW_HEIGHT,
+    minWidth: 640,
+    minHeight: 480,
+    show: false,
+    title: ACTIVITY_WINDOW_TITLE,
+    ...auxiliaryWindowChromeOptions(),
+    backgroundColor: themedWindowBackgroundColor(appearance),
+    webPreferences: {
+      ...rendererPreloadWebPreferences(),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      additionalArguments: themedWindowAdditionalArguments(appearance),
+    },
+  });
+  registerAuxiliaryWindowTitle(window, ACTIVITY_WINDOW_TITLE);
+  hideAuxiliaryWindowMenuBar(window);
+
+  applyWindowSecurityHardening(window);
+  // The activity window does not subscribe to any push events today
+  // — its `MessagingActivityScreen` polls via `listMessagingActivity`
+  // every 5s. Register the window with no channels so the messaging
+  // broadcasters skip it. If the window starts wanting push updates,
+  // add the channels here.
+  // Subscribe to appearance broadcasts so the renderer can re-apply
+  // <html data-theme/data-density> when the user changes the theme from
+  // Settings in another window. Otherwise this surface stays stuck on
+  // whatever theme it bootstrapped with at window creation.
+  registerWindowChannels(window, WINDOW_KIND_MESSAGING_ACTIVITY, [
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
+  ]);
+
+  const rendererEntry = getRendererEntry();
+  if (rendererEntry.kind === "url") {
+    void window.loadURL(`${rendererEntry.value}#${ACTIVITY_HASH}`);
+  } else {
+    void window.loadFile(rendererEntry.value, { hash: ACTIVITY_HASH });
+  }
+
+  showAuxiliaryWindowWhenReady(window);
+
+  window.on("closed", () => {
+    // The top-of-function "already-open" guard prevents two activity
+    // windows from coexisting, so the singleton always points at the
+    // window that just closed. No need to compare references.
+    activityWindow = undefined;
+    log.debug("activity window closed");
+  });
+
+  activityWindow = window;
+  log.debug("activity window created");
+}

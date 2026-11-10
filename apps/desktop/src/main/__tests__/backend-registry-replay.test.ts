@@ -3,7 +3,7 @@ import type { AppServerBackendKind } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
-import { ReplayClient } from "../testing/replay-client";
+import { ReplayClient } from "../shell/testing/replay-client";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 
 function createOverlayStoreMock() {

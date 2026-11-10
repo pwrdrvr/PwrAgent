@@ -1,3 +1,4 @@
+import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import fc from "fast-check";
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
 import { isolatedGitKeys, isolateProcessGitEnvironment } from "./helpers/isolated-git";
@@ -24,7 +25,7 @@ import { launchpadStorageKey } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
-import * as transcriptImageProtocol from "../transcript-image-protocol";
+import * as transcriptImageProtocol from "../shell/transcript-image-protocol";
 import * as gitExecutable from "../app-server/git-executable";
 import * as gitHeadBranch from "../app-server/git-head-branch";
 import { resolveActiveProfilePath } from "../profile";
@@ -265,14 +266,14 @@ const desktopNotificationServiceMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../notifications/desktop-notification-service", () => ({
+vi.mock("../shell/notifications/desktop-notification-service", () => ({
   getDesktopNotificationService:
     desktopNotificationServiceMock.getDesktopNotificationService,
 }));
 
 const requestShowThreadMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../window-show-thread", () => ({
+vi.mock("../shell/window-show-thread", () => ({
   requestShowThread: requestShowThreadMock,
 }));
 
@@ -3321,6 +3322,10 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 // (`answerAcpSessionCancel`, `interruptEndsTurn`).
 let restoreGitEnvironment: () => void;
 beforeEach(() => {
+  installOwnerHostServices({
+    ...getOwnerHostServices(),
+    notifications: desktopNotificationServiceMock.getDesktopNotificationService(),
+  });
   // Branch proofs read process.env, while setup Git uses gitTestEnv. Keep
   // both inside the fixture: inherited config/location overrides correctly
   // defer a production probe to owned Git, but are not part of these repos.

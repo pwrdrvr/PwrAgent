@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { BrowserWindow } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attachRendererProcessRecovery } from "../renderer-process-recovery";
+import { attachRendererProcessRecovery } from "../shell/renderer-process-recovery";
 import { RENDERER_RECOVERY_DELAY_MS } from "../../shared/renderer-recovery";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 

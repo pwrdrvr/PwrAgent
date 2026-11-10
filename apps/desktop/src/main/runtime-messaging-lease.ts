@@ -325,7 +325,7 @@ function hasCustomLeaseManagerOptions(
 
 let coordinator: RuntimeMessagingLeaseCoordinator | null = null;
 
-export function getRuntimeMessagingLeaseCoordinator(): RuntimeMessagingLeaseCoordinator {
+export function initializeRuntimeMessagingLeaseCoordinator(): RuntimeMessagingLeaseCoordinator {
   if (!coordinator) {
     coordinator = new RuntimeMessagingLeaseCoordinator();
   }
@@ -359,4 +359,10 @@ function runtimeDisabledReasonMessage(
     case "runtime_stopped":
       return "Messaging is stopped for this app instance.";
   }
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getRuntimeMessagingLeaseCoordinator(): RuntimeMessagingLeaseCoordinator {
+  if (!coordinator) throw new Error("getRuntimeMessagingLeaseCoordinator is unavailable before startOwnerServices().");
+  return coordinator;
 }

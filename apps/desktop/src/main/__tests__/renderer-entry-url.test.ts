@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { isAppRendererUrl, type RendererEntry } from "../renderer-entry-url";
+import { isAppRendererUrl, type RendererEntry } from "../shell/renderer-entry-url";
 
 const BUNDLE_ENTRY: RendererEntry = {
   kind: "file",

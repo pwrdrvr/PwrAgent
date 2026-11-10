@@ -22,20 +22,20 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   readStarMapView,
   resetStarMapViewRegistry,
-} from "../star-map/star-map-view-registry";
-import { registerStarMapIpcHandlers } from "../ipc/star-map";
+} from "../shell/star-map/star-map-view-registry";
+import { registerStarMapIpcHandlers } from "../shell/ipc/star-map";
 import {
   resetStarMapCommandBus,
   sendStarMapCommand,
-} from "../star-map/star-map-command-bus";
-import { isFederationWindowWebContents } from "../window";
-import { subscribersForChannel } from "../window-channels";
-import { requestShowThread } from "../window-show-thread";
-import { showStarMapWindow, starMapWindowWebContents } from "../star-map-window";
+} from "../shell/star-map/star-map-command-bus";
+import { isFederationWindowWebContents } from "../shell/window";
+import { subscribersForChannel } from "../shell/window-channels";
+import { requestShowThread } from "../shell/window-show-thread";
+import { showStarMapWindow, starMapWindowWebContents } from "../shell/star-map-window";
 import {
   attemptStarMapInstanceFocus,
   requestStarMapInstanceFocus,
-} from "../star-map/star-map-instance-focus";
+} from "../shell/star-map/star-map-instance-focus";
 
 const { handlers, fromWebContentsMock } = vi.hoisted(() => ({
   handlers: new Map<
@@ -75,20 +75,20 @@ vi.mock("../app-server/turn-input-attachment-files", () => ({
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: vi.fn(),
 }));
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: vi.fn(),
 }));
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(),
 }));
-vi.mock("../window-show-thread", () => ({
+vi.mock("../shell/window-show-thread", () => ({
   requestShowThread: vi.fn(),
 }));
-vi.mock("../star-map/star-map-instance-focus", () => ({
+vi.mock("../shell/star-map/star-map-instance-focus", () => ({
   attemptStarMapInstanceFocus: vi.fn(),
   requestStarMapInstanceFocus: vi.fn(),
 }));
-vi.mock("../star-map-window", () => ({
+vi.mock("../shell/star-map-window", () => ({
   showStarMapWindow: vi.fn(),
   starMapWindowWebContents: vi.fn(),
   isStarMapWindowWebContents: (contents: { id?: number } | undefined) =>

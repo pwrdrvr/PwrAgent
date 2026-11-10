@@ -1,3 +1,4 @@
+import { applicationHost as electronApp, externalLinks as shell } from "../owner-host";
 import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { rename, rm } from "node:fs/promises";
@@ -5,7 +6,6 @@ import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import { app as electronApp, shell } from "electron";
 import type {
   PwrSuiteAppId,
   PwrSuiteInstallerActionResult,

@@ -23,7 +23,7 @@ vi.mock("electron", () => ({
     handle: (channel: string, handler: (event: unknown, request: ReceivingFolderRequest) => Promise<ReceivingFolderResponse>) => mocks.handlers.set(channel, handler),
   },
 }));
-import { registerReceivingFolderIpc } from "../ipc/receiving-folder";
+import { registerReceivingFolderIpc } from "../shell/ipc/receiving-folder";
 
 describe("receiving folder settings IPC", () => {
   let directory: string;

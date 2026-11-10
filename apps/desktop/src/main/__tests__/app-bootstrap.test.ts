@@ -39,7 +39,7 @@ const appBuildMetadata = {
   buildIdentity: { kind: "packaged" as const },
 };
 const resolveAppBuildMetadataMock = vi.fn(async () => appBuildMetadata);
-vi.mock("../app-build-metadata", () => ({
+vi.mock("../shell/app-build-metadata", () => ({
   // Build identity runs Git in development. These tests own profiler lifecycle,
   // so metadata must not depend on child-process startup on the host.
   resolveAppBuildMetadata: resolveAppBuildMetadataMock,
@@ -53,7 +53,7 @@ vi.mock("../diagnostics/hot-cpu-profile-session", () => ({
 vi.mock("../diagnostics/main-process-hot-cpu-target", () => ({
   createMainProcessHotCpuTarget: () => mainHotTarget,
 }));
-vi.mock("../diagnostics/hot-cpu-profiler", () => ({
+vi.mock("../shell/diagnostics/hot-cpu-profiler", () => ({
   HotCpuProfiler: vi.fn(function (options: { target: unknown }) {
     return options.target === mainHotTarget
       ? { start: hotMainStart, stop: hotMainStop }
@@ -267,11 +267,11 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 describe("createMainWindow", () => {
-  let stopDiagnostics: typeof import("../window").stopWindowDiagnostics | undefined;
+  let stopDiagnostics: typeof import("../shell/window").stopWindowDiagnostics | undefined;
   const releaseDiagnostics: Array<() => void> = [];
 
   async function loadWindowModule() {
-    const windowModule = await import("../window");
+    const windowModule = await import("../shell/window");
     // Capture this module's registry before the next test resets the cache.
     stopDiagnostics = windowModule.stopWindowDiagnostics;
     return windowModule;
@@ -339,7 +339,7 @@ describe("createMainWindow", () => {
   });
 
   it("reloads a stalled first load, then shows the window and sends its initial thread", async () => {
-    const { MAIN_WINDOW_APPEAR_TIMEOUT_MS } = await import("../main-window-startup-watchdog");
+    const { MAIN_WINDOW_APPEAR_TIMEOUT_MS } = await import("../shell/main-window-startup-watchdog");
     const { WINDOW_SHOW_THREAD_CHANNEL } = await import("../../shared/ipc");
     const { createMainWindow } = await loadWindowModule();
     vi.useFakeTimers();
@@ -496,7 +496,7 @@ describe("createMainWindow", () => {
 
   it("registers the main window for messaging push-event channels", async () => {
     const { createMainWindow } = await loadWindowModule();
-    const { debugListRegisteredWindows } = await import("../window-channels");
+    const { debugListRegisteredWindows } = await import("../shell/window-channels");
     const {
       AGENT_EVENT_CHANNEL,
       MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,

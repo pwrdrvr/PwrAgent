@@ -53,7 +53,7 @@ describe("app icon drag", () => {
   });
 
   it("prefers the packaged icon, and falls back to the checkout's master", async () => {
-    const { resolvePwragentAppIconPath } = await import("../ipc/app-icon-drag");
+    const { resolvePwragentAppIconPath } = await import("../shell/ipc/app-icon-drag");
     const packaged = join(resourcesDir, "pwragent-app-icon.png");
     writeFileSync(packaged, "png");
 
@@ -68,7 +68,7 @@ describe("app icon drag", () => {
 
   it("starts an OS file drag of the icon from the sender", async () => {
     const { registerAppIconDragIpcHandlers, disposeAppIconDragIpcHandlers } = await import(
-      "../ipc/app-icon-drag"
+      "../shell/ipc/app-icon-drag"
     );
     const { SETTINGS_START_APP_ICON_DRAG_CHANNEL } = await import("../../shared/ipc");
     const packaged = join(resourcesDir, "pwragent-app-icon.png");

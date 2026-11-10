@@ -16,18 +16,18 @@ vi.mock("../thread-maintenance-runtime", () => ({
   onThreadMaintenanceRun: vi.fn(() => () => undefined),
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(() => []),
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: vi.fn(() => false),
 }));
 
 import { ipcMain } from "electron";
 import { THREAD_MAINTENANCE_SCAN_STEPS } from "@pwragent/shared";
 import { APP_SERVER_APPLY_THREAD_MAINTENANCE_CHANNEL, APP_SERVER_SCAN_THREAD_MAINTENANCE_CHANNEL } from "../../shared/ipc";
-import { registerThreadMaintenanceIpc } from "../ipc/thread-maintenance-ipc";
+import { registerThreadMaintenanceIpc } from "../shell/ipc/thread-maintenance-ipc";
 
 function scanHandler(): (event: unknown, request?: unknown) => Promise<unknown> {
   registerThreadMaintenanceIpc();

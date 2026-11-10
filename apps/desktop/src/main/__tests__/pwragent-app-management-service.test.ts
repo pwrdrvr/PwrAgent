@@ -1,3 +1,4 @@
+import { getOwnerHostServices } from "../owner-host";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const appMock = {
@@ -14,18 +15,18 @@ vi.mock("electron", () => ({
   app: appMock,
 }));
 
-vi.mock("../auto-updater", () => ({
-  checkForAppUpdatesNow: checkForAppUpdatesNowMock,
-  installDownloadedAppUpdate: installDownloadedAppUpdateMock,
-  readAppUpdateStatus: readAppUpdateStatusMock,
-}));
 
-vi.mock("../quit-manager", () => ({
-  requestQuit: requestQuitMock,
-}));
+
+
 
 describe("PwrAgent app management service", () => {
   beforeEach(() => {
+    getOwnerHostServices().updates = {
+      check: checkForAppUpdatesNowMock,
+      read: readAppUpdateStatusMock,
+      install: installDownloadedAppUpdateMock,
+      requestQuit: requestQuitMock,
+    };
     appMock.getVersion.mockReturnValue("1.2.3");
     appMock.quit.mockReset();
     appMock.relaunch.mockReset();

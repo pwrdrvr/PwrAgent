@@ -6,6 +6,7 @@ import { createNativeHelperFixture, runNativeFixtureCommand } from "./native-hel
 const desktop = fileURLToPath(new URL("../..", import.meta.url));
 const consumers = {
   maintenanceCargo: "maintenance-cargo-output.property.test.ts",
+  maintenanceAllocation: "maintenance-disk-usage.property.test.ts",
   mcpIpc: "mcp-ipc-http.test.ts",
 } as const;
 type Consumer = keyof typeof consumers;

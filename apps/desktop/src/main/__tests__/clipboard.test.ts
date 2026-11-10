@@ -56,7 +56,7 @@ describe("clipboard ipc", () => {
   });
 
   it("writes text and rich text to the system clipboard outside E2E", async () => {
-    const { registerClipboardIpcHandlers } = await import("../ipc/clipboard");
+    const { registerClipboardIpcHandlers } = await import("../shell/ipc/clipboard");
     const {
       CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
       CLIPBOARD_WRITE_TEXT_CHANNEL,
@@ -79,7 +79,7 @@ describe("clipboard ipc", () => {
   });
 
   it("rejects the IPC call when the system clipboard write fails", async () => {
-    const { registerClipboardIpcHandlers } = await import("../ipc/clipboard");
+    const { registerClipboardIpcHandlers } = await import("../shell/ipc/clipboard");
     const {
       CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
       CLIPBOARD_WRITE_TEXT_CHANNEL,
@@ -101,7 +101,7 @@ describe("clipboard ipc", () => {
 
   it("keeps clipboard writes in memory during local E2E", async () => {
     process.env.PWRAGENT_E2E = "1";
-    const { registerClipboardIpcHandlers } = await import("../ipc/clipboard");
+    const { registerClipboardIpcHandlers } = await import("../shell/ipc/clipboard");
     const {
       CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
       CLIPBOARD_WRITE_TEXT_CHANNEL,
@@ -126,7 +126,7 @@ describe("clipboard ipc", () => {
   it("records clipboard writes in memory while exercising the system clipboard in CI", async () => {
     process.env.CI = "true";
     process.env.PWRAGENT_E2E = "1";
-    const { registerClipboardIpcHandlers } = await import("../ipc/clipboard");
+    const { registerClipboardIpcHandlers } = await import("../shell/ipc/clipboard");
     const {
       CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
       CLIPBOARD_WRITE_TEXT_CHANNEL,

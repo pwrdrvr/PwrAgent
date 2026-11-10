@@ -8,7 +8,7 @@ vi.mock("../app-server/navigation-directory-index", () => ({
   readLocalNavigationDirectoryIndex: vi.fn(async () => []),
 }));
 
-import { assertEditableEnvironmentProject } from "../ipc/codex-environment-editor-ipc";
+import { assertEditableEnvironmentProject } from "../shell/ipc/codex-environment-editor-ipc";
 
 describe("environment editor project guard", () => {
   let root: string;

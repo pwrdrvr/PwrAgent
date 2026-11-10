@@ -6,6 +6,14 @@ dependency rules that keep the codebase navigable. For the user-facing
 pitch, see [README.md](README.md). For day-to-day development setup, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Desktop owners start in `apps/desktop/src/main/owner-services.ts`. This composition
+root constructs the process instances, installs tool and peer handlers before
+accepting work, and owns their shutdown order. Owner getters throw before the
+root starts. The root takes host ports for presentation, broadcasts, secrets,
+images and operating-system services; it imports no Electron or window code.
+`src/main/index.ts` delegates to the Electron bootstrap under `src/main/shell/`.
+IPC adapters and other window services live in that directory.
+
 ## Process model
 
 PwrAgent is an Electron app whose coding-agent runtimes execute outside

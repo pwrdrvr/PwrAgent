@@ -69,7 +69,7 @@ describe("native appearance", () => {
     const {
       themedTitleBarOverlay,
       themedWindowBackgroundColor,
-    } = await import("../native-appearance");
+    } = await import("../shell/native-appearance");
 
     expect(themedWindowBackgroundColor(appearanceMocks.appearance)).toBe(
       "#fdfcfa",
@@ -93,7 +93,7 @@ describe("native appearance", () => {
   });
 
   it("keeps explicit themes independent of the OS appearance", async () => {
-    const { themedTitleBarOverlay } = await import("../native-appearance");
+    const { themedTitleBarOverlay } = await import("../shell/native-appearance");
 
     electronMocks.systemUsesDarkColors = true;
     appearanceMocks.appearance.theme = "light";
@@ -112,7 +112,7 @@ describe("native appearance", () => {
     const {
       themedTitleBarOverlay,
       themedWindowBackgroundColor,
-    } = await import("../native-appearance");
+    } = await import("../shell/native-appearance");
 
     appearanceMocks.appearance.darkTheme = "solarized-dark";
     appearanceMocks.appearance.lightTheme = "catppuccin-latte";
@@ -133,7 +133,7 @@ describe("native appearance", () => {
   });
 
   it("matches every color theme's window colors to its app.css block", async () => {
-    const { COLOR_THEME_WINDOW_COLORS } = await import("../native-appearance");
+    const { COLOR_THEME_WINDOW_COLORS } = await import("../shell/native-appearance");
     const css = readFileSync(
       path.resolve(
         path.dirname(fileURLToPath(import.meta.url)),
@@ -163,7 +163,7 @@ describe("native appearance", () => {
       },
     ]);
     const { installWindowsTitleBarAppearanceSync } = await import(
-      "../native-appearance"
+      "../shell/native-appearance"
     );
 
     installWindowsTitleBarAppearanceSync();

@@ -1,6 +1,29 @@
 module.exports = {
   forbidden: [
     {
+      name: "desktop-owner-does-not-import-shell",
+      severity: "error",
+      comment: "Desktop owners depend on owner-defined host ports. index.ts is the thin Electron entry, outside the owner layer.",
+      from: {
+        path: "^apps/desktop/src/main/(?!shell/|index\\.ts$)",
+        pathNot: "(?:^|/)__tests__/|\\.test\\.[cm]?tsx?$",
+      },
+      to: { path: "^apps/desktop/src/main/shell/" },
+    },
+    {
+      name: "desktop-electron-is-shell-only",
+      severity: "error",
+      comment: "Only the main-process shell imports Electron. Owners receive host capabilities.",
+      from: {
+        path: "^apps/desktop/src/main/(?!shell/)",
+        pathNot: "(?:^|/)__tests__/|\\.test\\.[cm]?tsx?$",
+      },
+      to: { path: "(^|/)electron($|/)" },
+    },
+    // desktop-shell-does-not-wire-owners is a call-site rule, not an import
+    // rule. scripts/check-desktop-owner-wiring.mjs enforces it in the same
+    // lint:boundaries command, with AST negative samples in desktop-main.
+    {
       name: "desktop-ui-has-no-native-git-access",
       severity: "error",
       comment: "UI Git reads must use IPC and the main-process stores; no native process or Git implementation access.",
