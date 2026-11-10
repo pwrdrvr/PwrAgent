@@ -122,6 +122,7 @@ jobs:
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
+            apps/desktop/scripts/electron-runtime-cache.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
@@ -343,6 +344,7 @@ jobs:
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
+            apps/desktop/scripts/electron-runtime-cache.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
@@ -814,6 +816,7 @@ jobs:
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
+            apps/desktop/scripts/electron-runtime-cache.mjs
           sparse-checkout-cone-mode: false
 
       # Only populate the dependency cache on a miss. The parallel consumers

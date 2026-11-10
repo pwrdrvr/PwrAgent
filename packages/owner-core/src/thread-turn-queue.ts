@@ -1314,7 +1314,9 @@ export class ThreadTurnQueue {
       this.drainTimers.delete(key);
       void this.startNext(key);
     });
-    timer.unref?.();
+    // Admitted work owns this event-loop turn. An unreferenced immediate can
+    // wait for an unrelated timer or I/O event instead of dispatching the head.
+    // close() explicitly cancels drains when the owner shuts down.
     this.drainTimers.set(key, timer);
   }
 
