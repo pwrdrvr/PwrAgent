@@ -1,0 +1,23 @@
+{
+  "direct": {
+    "commits": 0,
+    "note": "Actual resumed FIFO, held admission and review-row cancellation during queued publication with real drains; setup excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "outpost": {
+    "commits": 2,
+    "note": "Actual Runtime/HeadlessBackend resumed FIFO, held job acceptance and synchronous review cancellation plus real drains; setup excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "scheduled": {
+    "commits": 3,
+    "note": "Actual resumed FIFO, held admission and review-row cancellation during queued publication with real drains; setup excluded",
+    "observedWalBytes": 45320,
+    "rowsChanged": 3,
+    "statements": 3
+  }
+}

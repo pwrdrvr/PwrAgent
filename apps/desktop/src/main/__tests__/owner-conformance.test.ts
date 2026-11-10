@@ -96,6 +96,7 @@ type OwnerHost = {
   workspace: string;
   providerSteerCount(): number;
   local?: LocalOwnerNavigationTransport;
+  scheduler?: ScheduledThreadActionService;
   close(): Promise<void>;
 };
 
@@ -201,7 +202,7 @@ async function startDesktopOwner(
   return {
     name: "desktop", ownerInstanceId: "desktop-owner", client: new FederationRemoteBackendClient(rpc), methods, events, workspace,
     providerSteerCount: () => OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/steer").length,
-    local: new LocalOwnerNavigationTransport(backend),
+    local: new LocalOwnerNavigationTransport(backend), scheduler,
     close: async () => {
       stopEvents();
       scheduler.dispose();
@@ -325,6 +326,59 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it.each(["direct", "scheduled"] as const)("actual desktop %s held admission covers resumed waiting input before its new review row is cancelled", async caller => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const root = await realpath(await mkdtemp("/tmp/pa-held-"));
+    let host = await startDesktopOwner(null, undefined, undefined, root);
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      for (const id of ["older", "next"]) {
+        await host.client.startTurn({ ...identity, queueEntryId: id, delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+        await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: true });
+      }
+      await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+      await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/completed"
+        && event.notification.params.turnId === active.turnId)).toBe(true));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const reviewId = caller === "scheduled" ? "scheduled-turn:held-review" : "review";
+      if (caller === "scheduled") await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
+        manualReleaseRequired: true, displayText: "Invented target-ended guidance",
+        turn: { input: [{ type: "text", text: "Invented target-ended guidance" }] } }, { id: "held-review" });
+      stop = registry.onEvent(async event => {
+        if (event.notification.method === "thread/turnQueue/updated" && event.notification.params.queueEntryId === reviewId
+          && event.notification.params.status === "queued") {
+          expect(await host.client.cancelQueuedTurn({ queueEntryId: reviewId })).toMatchObject({ cancelled: true });
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+      });
+      // The registered Resume controls schedule real drains. Held admission
+      // must protect that pre-existing FIFO before its queued event yields.
+      const { writes } = await measureSqliteWrites(async () => {
+        for (const id of ["older", "next"]) await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: false });
+        if (caller === "scheduled") await host.scheduler!.sendNow({ id: "held-review" });
+        else await registry.submitHeldTurn({ ...identity, queueEntryId: reviewId, origin: "scheduled",
+          input: [{ type: "text", text: "Invented target-ended guidance" }], holdReason: "Target turn ended; review required" });
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-held-admission-write-budgets.json", scenario: caller,
+        note: "Actual resumed FIFO, held admission and review-row cancellation during queued publication with real drains; setup excluded", writes });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+        .toMatchObject(["older", "next"].map(queueEntryId => ({ queueEntryId, manualReleaseRequired: true })));
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "older" })).toMatchObject({ disposition: "started" });
+      stop();
+      await host.close();
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "next" })).toMatchObject({ disposition: "not_found" });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+    } finally { stop(); await host.close(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
+  });
+
   it("actual desktop tracked terminal publication cannot dispatch an unreviewed successor", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();
