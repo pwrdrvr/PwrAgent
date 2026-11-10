@@ -328,6 +328,35 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("explicit waiting identities name one immutable acceptance across registered caller retries", async () => {
+    const host = await startDesktopOwner();
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 30 }), fc.boolean(), async (suffix, local) => {
+        const queueEntryId = `explicit:${randomUUID()}`;
+        const request = { ...identity, queueEntryId, delivery: "new_turn" as const,
+          input: [{ type: "text" as const, text: `Original acceptance ${suffix}` }] };
+        const call = (value: typeof request) => local
+          ? (desktopOwner.registry as DesktopBackendRegistry).submitTurn(value)
+          : host.client.startTurn(value);
+        try {
+          await call(request);
+          const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+          const offset = host.events.length;
+          await expect(call({ ...request, input: [{ type: "text", text: `Different acceptance ${suffix}` }] }))
+            .rejects.toThrow(/reused|identity/i);
+          await call(request);
+          expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
+          expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries
+            .filter(entry => entry.queueEntryId === queueEntryId)).toHaveLength(1);
+          expect(host.events.slice(offset).filter(event => event.notification.method === "thread/turnQueue/updated"
+            && event.notification.params.queueEntryId === queueEntryId)).toEqual([]);
+        } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
+      }), { numRuns: 6 });
+    } finally { await host.close(); }
+  });
+
   it("registered Claude SDK background, loop and cron hooks retain separate immutable held prompts", async () => {
     const desktop = await startDesktopOwner(null, async (_db, workspace) => {
       await writeFile(path.join(workspace, "claude.js"), readFileSync(path.join(process.cwd(),
