@@ -338,9 +338,12 @@ try {
     const next = controlled.submit({ id: "packed-failure-next", threadId, prompt: "Packed next input" });
     await controlled.work;
     let cancellation;
+    let nextHeld = false;
     controlled.onEvent = message => {
       controller.event(message);
+      if (message.method === "headless/queueChanged" && message.params.type === "held" && message.params.entry.id === next.id) nextHeld = true;
       if (message.method === "headless/queueChanged" && message.params.type === "held" && message.params.entry.id === older.id) {
+        controlled.turnQueue.setQueuedEntryTitle(next.id, "Packed generated title");
         cancellation = controller.handle("backend.cancelQueuedTurn", { queueEntryId: older.id });
       }
     };
@@ -352,6 +355,8 @@ try {
     assert.equal(store.get(older.id).status, "interrupted");
     assert.equal(store.get(next.id).status, "queued");
     assert.equal(store.get(next.id).fingerprint, next.fingerprint);
+    assert.equal(nextHeld, true);
+    assert.equal(controlled.turnQueue.getAllQueuedEntries()[0].title, "Packed generated title");
     assert.deepEqual(controlled.turnQueue.getAllQueuedEntries().map(entry => [entry.id, entry.manualReleaseRequired]), [[next.id, true]]);
     assert.equal((await controller.handle("backend.releaseQueuedTurn", { queueEntryId: next.id })).disposition, "started");
     assert.equal(failureSends, 1);

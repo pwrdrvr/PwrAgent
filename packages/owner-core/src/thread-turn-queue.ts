@@ -934,9 +934,10 @@ export class ThreadTurnQueue {
       if (index === -1) continue;
       const current = queue[index];
       if (!current) return undefined;
-      const updated = { ...current, title };
-      queue[index] = updated;
-      return updated;
+      // Display metadata does not replace the entry's lifecycle identity.
+      // Pending hold/release events still belong to this same queued input.
+      current.title = title;
+      return current;
     }
     return undefined;
   }
