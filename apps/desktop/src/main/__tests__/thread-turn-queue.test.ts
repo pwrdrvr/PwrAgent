@@ -1334,12 +1334,12 @@ describe("grouped queued steering", () => {
     const first = await queue.submitGroupedSteer(senderEntry("alice", "old"));
     await queue.submitGroupedSteer(senderEntry("bob", "bob evidence"));
     await queue.submitGroupedSteer(senderEntry("alice", "overlapping update"));
-    const updated = queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "consolidated" }], senderEntry("alice").messageOrigin.sourceThread);
+    const updated = await queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "consolidated" }], senderEntry("alice").messageOrigin.sourceThread);
     expect(updated?.agentMessages?.map((message) => message.input)).toEqual([
       [{ type: "text", text: "consolidated" }], [{ type: "text", text: "bob evidence" }],
     ]);
-    expect(updated?.id).toBe(first.entry.id);
-    expect(queue.replaceQueuedAgentInput(first.entry.id, [], { backend: "codex", threadId: "intruder" })).toBeUndefined();
+    expect(updated?.id).not.toBe(first.entry.id);
+    expect(await queue.replaceQueuedAgentInput(updated!.id, [], { backend: "codex", threadId: "intruder" })).toBeUndefined();
     queue.close();
   });
 
@@ -1352,7 +1352,7 @@ describe("grouped queued steering", () => {
         : { causalMessagingAmbiguous: true }),
     } };
     const first = await queue.submitGroupedSteer(attributed);
-    const updated = queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "unrelated replacement" }],
+    const updated = await queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "unrelated replacement" }],
       sender.messageOrigin.sourceThread, sender.messageOrigin);
     expect(updated?.agentMessages?.[0]?.origin).toEqual(sender.messageOrigin);
     expect(updated?.messageOrigin?.causalMessagingSource).toBeUndefined();
@@ -1370,7 +1370,7 @@ describe("grouped queued steering", () => {
       causalMessagingSource: { ...source, requestId: "alice-request", surfaceSelector: "alice-topic" } } });
     await queue.submitGroupedSteer({ ...bob, messageOrigin: { ...bob.messageOrigin, causalMessagingSource: source } });
     expect(queue.getQueuedEntries(target)[0]?.messageOrigin?.causalMessagingAmbiguous).toBe(true);
-    const updated = queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "same request as Bob" }],
+    const updated = await queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "same request as Bob" }],
       alice.messageOrigin.sourceThread, { ...alice.messageOrigin, causalMessagingSource: source });
     expect(updated?.messageOrigin?.causalMessagingSource).toEqual(source);
     expect(updated?.messageOrigin?.causalMessagingAmbiguous).toBeUndefined();
@@ -1387,7 +1387,7 @@ describe("grouped queued steering", () => {
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ id: first.entry.id, delivery: "queued-steer", input: edited });
     expect(entries[1]?.agentMessages).toHaveLength(1);
-    expect(queue.replaceQueuedAgentInput(first.entry.id, [], senderEntry("alice").messageOrigin.sourceThread)).toBeUndefined();
+    expect(await queue.replaceQueuedAgentInput(first.entry.id, [], senderEntry("alice").messageOrigin.sourceThread)).toBeUndefined();
     queue.close();
   });
 

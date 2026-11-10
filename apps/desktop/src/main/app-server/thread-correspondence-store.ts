@@ -101,11 +101,10 @@ export class ThreadCorrespondenceStore {
     records.set(id, { ...record, ...status });
   }
 
-  replaceQueuedInput(
+  cancelQueuedInput(
     source: ThreadRef,
     destination: ThreadRef,
     queueEntryId: string,
-    input: AppServerTurnInputItem[],
   ): CorrespondenceRecord | undefined {
     const record = [...this.load(source).values()].find((candidate) =>
       candidate.queueEntryId === queueEntryId
@@ -113,8 +112,8 @@ export class ThreadCorrespondenceStore {
       && candidate.destination.threadId === destination.threadId
       && candidate.destination.instanceId === destination.instanceId);
     if (!record) return undefined;
-    const updated = { ...record, input };
-    this.record(updated);
+    const updated = { ...record, state: "cancelled" as const };
+    this.update(source, record.id, { state: "cancelled" });
     return updated;
   }
 

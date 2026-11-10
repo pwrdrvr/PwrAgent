@@ -1097,6 +1097,80 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     ), { numRuns: 4, examples: [[["!"]]] });
   });
 
+  it("desktop replacement retires its durable new-turn receipt without retargeting it to changed input", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const root = await realpath(await mkdtemp("/tmp/pa-replace-reopen-"));
+    let host = await startDesktopOwner(null, undefined, undefined, root);
+    let oldId = "", replacementId = "";
+    let identity!: { backend: "codex"; threadId: string };
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      identity = { backend: "codex", threadId: created.threadId };
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender" } };
+      const request: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+        request: { ...identity, delivery: "new_turn", input: [{ type: "text", text: "Original durable input" }], messageOrigin } };
+      request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, request)).digest("hex");
+      const receipt = await host.client.submitTurnRequest(request);
+      oldId = receipt.queueEntryId;
+      for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve));
+      const { result: replacement, writes } = await measureSqliteWrites(async () => {
+        const result = await host.client.replaceQueuedMessage({ ...identity, queueEntryId: oldId, input: [{ type: "text", text: "Fresh agent input" }], messageOrigin });
+        for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve));
+        return result;
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-queued-agent-replacement-write-budgets.json", scenario: "durable-replacement",
+        note: "Actual registered replacement cancels one original durable new_turn receipt before fresh transient admission; setup/native/receipt admission excluded", writes });
+      replacementId = replacement.queueEntryId!;
+      expect(replacementId).not.toBe(oldId);
+      expect(await host.client.getTurnRequest({ ...identity, id: request.clientRequest.id })).toMatchObject({ queueEntryId: oldId, state: "completed", outcome: "cancelled" });
+      expect(await host.client.submitTurnRequest(request)).toMatchObject({ queueEntryId: oldId, state: "completed", outcome: "cancelled" });
+      await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: oldId })).rejects.toThrow();
+      expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: replacementId })).toMatchObject({ input: [{ type: "text", text: "Fresh agent input" }] });
+      // Explicit new_turn still waits on its original native turn; replacement
+      // cannot acquire interrupt or steering ownership from that receipt.
+      expect(host.providerSteerCount()).toBe(0);
+      expect(await host.client.cancelQueuedTurn({ queueEntryId: oldId })).toMatchObject({ cancelled: false });
+      await host.client.interruptTurn(active);
+      await vi.waitFor(() => expect(OwnerConformanceCodexTransport.requests.filter(call => call.method === "turn/start")).toHaveLength(2));
+      const prompts = OwnerConformanceCodexTransport.requests.filter(call => call.method === "turn/start")
+        .flatMap(call => (call.params.input as Array<{ text?: string }>).map(item => item.text));
+      expect(prompts).not.toContain("Original durable input");
+      expect(prompts).toContain("Fresh agent input");
+      await host.close();
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect(OwnerConformanceCodexTransport.requests.filter(call => call.method === "turn/start")).toEqual([]);
+      for (const queueEntryId of [oldId, replacementId]) await expect(host.client.readQueuedTurn({ ...identity, queueEntryId })).rejects.toThrow();
+      expect(await host.client.submitTurnRequest(request)).toMatchObject({ queueEntryId: oldId, state: "completed", outcome: "cancelled" });
+    } finally { await host.close(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
+  });
+
+  it("desktop replacement admission, stale retries and reads add no SQLite commits", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender" } };
+      let accepted = await host.client.startTurn({ ...identity, delivery: "new_turn", input: [{ type: "text", text: "Original accepted input" }], messageOrigin });
+      for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve));
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let n = 0; n < 100; n++) {
+          const oldId = accepted.queueEntryId!;
+          accepted = await host.client.replaceQueuedMessage({ ...identity, queueEntryId: oldId, input: [{ type: "text", text: `Fresh input ${n}` }], messageOrigin });
+          expect(accepted.queueEntryId).not.toBe(oldId);
+          await expect(host.client.replaceQueuedMessage({ ...identity, queueEntryId: oldId, input: [{ type: "text", text: "Stale retry" }], messageOrigin })).rejects.toThrow();
+          await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! });
+        }
+        await host.client.cancelQueuedTurn({ queueEntryId: accepted.queueEntryId! });
+        for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-queued-agent-replacement-write-budgets.json", scenario: "registered-replacement",
+        note: "100 actual registered replacements, stale retries, immutable reads and final cancellation; native setup/admission excluded", writes });
+      await host.client.interruptTurn(active);
+    } finally { await host.close(); vi.unstubAllEnvs(); }
+  });
+
   it("the production federated message caller replaces only its sender's waiting input on both registered owners", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
@@ -1118,11 +1192,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const changed = [{ type: "text" as const, text: "Invented consolidated agent message" }];
         const replacement = (await handler({ ...request, replaceQueueEntryId: queued.queueEntryId, input: changed }))!;
         expect(replacement.queueStatus).toBe("queued");
-        if (host.name === "outpost") {
-          expect(replacement.queueEntryId).not.toBe(queued.queueEntryId);
-          await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: queued.queueEntryId! })).rejects.toThrow();
-          await expect(handler({ ...request, replaceQueueEntryId: queued.queueEntryId, input: changed })).rejects.toThrow();
-        }
+        expect(replacement.queueEntryId).not.toBe(queued.queueEntryId);
+        await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: queued.queueEntryId! })).rejects.toThrow();
+        await expect(handler({ ...request, replaceQueueEntryId: queued.queueEntryId, input: changed })).rejects.toThrow();
         expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: replacement.queueEntryId! })).toMatchObject({ input: changed, messageOrigin: { sourceThread: { threadId: "sender" } } });
         expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([replacement.queueEntryId, followup.queueEntryId]);
         await host.client.interruptTurn(active);

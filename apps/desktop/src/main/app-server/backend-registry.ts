@@ -23225,8 +23225,8 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<StartTurnResponse & { queueStatus: "queued" }> {
     const input = await ownThreadInputAttachments(request.input, request, this.localFilePrivateStorageRoots);
-    // No await between lookup, ownership check, and replacement: admission
-    // cannot consume the entry between validation and the edit.
+    // The shared replacement rechecks waiting identity and sender ownership
+    // after earlier FIFO controls settle, then cancels before fresh admission.
     const entry = this.threadTurnQueue.getQueuedEntries(request)
       .find((candidate) => candidate.id === request.queueEntryId);
     if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
@@ -23248,17 +23248,14 @@ export class DesktopBackendRegistry {
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
-    const updated = entry.agentMessages
-      ? this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender, request.messageOrigin)
-      : this.threadTurnQueue.updateQueuedEntryInput(entry.id, input, sender);
+    const updated = await this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender, request.messageOrigin);
     if (!updated) throw new Error("The sender's queued message is no longer waiting.");
-    this.emitQueuedTurnInputUpdated(updated);
     return {
-      backend: entry.backend,
-      threadId: entry.threadId,
-      turnId: entry.id,
+      backend: updated.backend,
+      threadId: updated.threadId,
+      turnId: updated.id,
       queueStatus: "queued",
-      queueEntryId: entry.id,
+      queueEntryId: updated.id,
     };
   }
 
@@ -47139,10 +47136,16 @@ export class DesktopBackendRegistry {
       };
       if (request.args.replaceQueueEntryId) {
         try {
-          const replaced = this.correspondenceStore.replaceQueuedInput(source, {
+          const replaced = this.correspondenceStore.cancelQueuedInput(source, {
             backend, threadId, ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
-          }, request.args.replaceQueueEntryId, input);
+          }, request.args.replaceQueueEntryId);
           if (replaced) this.publishCorrespondenceMessage(source, replaced.id);
+          this.correspondenceStore.record({
+            id: correspondenceId, source, destination: { ...threadLinkRef, title: targetTitle },
+            input, createdAt: Date.now(), state: "sending",
+            sourceTurnId: request.context.turnId ?? this.getActiveTurnForThread(source)?.turnId,
+            sourceItemId: request.context.callId,
+          });
         } catch (error) {
           // The recipient already accepted the edit. A sender-side log failure
           // must not encourage another send of the same findings.
@@ -47150,7 +47153,8 @@ export class DesktopBackendRegistry {
             error: error instanceof Error ? error.message : String(error),
           });
         }
-      } else this.updateCorrespondenceStatus(source, correspondenceId, {
+      }
+      this.updateCorrespondenceStatus(source, correspondenceId, {
         state: turn.queueStatus === "queued" ? "queued" : "started",
         destination: { ...threadLinkRef, title: targetTitle },
         queueEntryId: turn.queueEntryId,
