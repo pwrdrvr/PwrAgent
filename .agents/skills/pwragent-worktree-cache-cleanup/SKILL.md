@@ -10,6 +10,11 @@ Python 3.9+ on macOS. Resolve script paths relative to this skill's directory.
 This skill lives only in PwrAgent's `.agents/skills/`. Its script can audit
 worktrees on older branches when invoked from a checkout containing this skill.
 
+Run the skill's fixture tests directly on macOS with
+`python3 tests/test_cleanup.py` from this skill's directory. They exercise Git,
+APFS and process-ownership oracles in disposable directories. These tests are
+operator-run and are not part of product CI.
+
 For Electron, prefer conversion to verified shared clones: use `audit-share`
 and then `share` with an approved report. This includes busy worktrees when the
 runtime itself is unused. A loaded runtime is preserved. Existing runtime bytes,
