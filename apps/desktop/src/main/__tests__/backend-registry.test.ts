@@ -50083,6 +50083,52 @@ script = "printf setup"
     }), { numRuns: 8, examples: [[""]] });
   });
 
+  it("replacement correspondence agrees with cancellation during its queued lifecycle publication", async () => {
+    await fc.assert(fc.asyncProperty(fc.string({ minLength: 1, maxLength: 40 }), fc.boolean(), async (suffix, defer) => {
+      const correspondenceStore = new ThreadCorrespondenceStore();
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] },
+        threads: ["sender", "recipient"].map(id => ({ id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] })),
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+      try {
+        for (const threadId of ["sender", "recipient"]) await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started", params: { threadId, turnId: `active:${threadId}`, turn: { id: `active:${threadId}` } },
+        } });
+        const send = async (prompt: string, replaceQueueEntryId?: string) => {
+          const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+            threadId: "sender", turnId: "active:sender", callId: `review:${prompt}`, requestId: `review:${prompt}`,
+            namespace: "pwragent", tool: "send_message_to_thread", arguments: { backend: "codex", threadId: "recipient", prompt,
+              ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}) },
+          } } as AppServerPendingRequestNotification);
+          expect(response).toMatchObject({ success: true });
+          return JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+        };
+        const first = await send("Original accepted evidence");
+        let cancelled = false;
+        registry.onEvent(async event => {
+          if (event.notification.method === "thread/turnQueue/updated" && event.notification.params.status === "queued"
+            && event.notification.params.queueEntryId !== first.queueEntryId) {
+            if (defer) await Promise.resolve();
+            cancelled = registry.cancelQueuedTurn(event.notification.params.queueEntryId);
+          }
+        });
+        const replacement = await send(`Fresh evidence ${suffix}`, first.queueEntryId);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(cancelled).toBe(true);
+        expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] ?? []).toEqual([]);
+        const replay = correspondenceStore.appendToReplay({ backend: "codex", threadId: "sender" }, {
+          entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+        });
+        expect(replay.messages).toHaveLength(2);
+        expect(replay.messages[0]!.text).toContain("Original accepted evidence");
+        expect(replay.messages[1]!.text).toContain(`Fresh evidence ${suffix}`);
+        expect(replay.messages[1]!.text).toContain("Cancelled");
+        expect(replay.messages[1]!.text).not.toContain("Queued");
+        await expect(registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: replacement.queueEntryId })).rejects.toThrow();
+      } finally { await registry.close(); }
+    }), { numRuns: 8, examples: [["!", false], ["!", true]] });
+  });
+
   it("consolidates only the sender's queued message without adding a turn", async () => {
     const correspondenceStore = new ThreadCorrespondenceStore();
     const codexClient = new MockBackendClient({

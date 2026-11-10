@@ -151,3 +151,35 @@ it("serialized replacement rereads earlier controls and cannot restore cancelled
     } finally { queue.close(); }
   }), { numRuns: 25 });
 });
+
+it("untouched grouped senders retain their returned replacement handles through arbitrary peer replacements", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("alice", "bob", "carol"), { minLength: 2, maxLength: 12 }), async senders => {
+    const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async entry => ({ ...ref, turnId: entry.id }) });
+    const handles = new Map<string, string>(), expected = new Map<string, string>();
+    try {
+      for (const sender of ["alice", "bob", "carol"]) {
+        const accepted = await queue.submitGroupedSteer({ ...ref, origin: "manual", input: input(sender), messageOrigin: origin(sender) });
+        handles.set(sender, accepted.entry.id); expected.set(sender, sender);
+      }
+      for (const [index, sender] of senders.entries()) {
+        const previous = queue.getQueuedEntries(ref)[0]!, snapshot = structuredClone(previous);
+        const text = `${sender}-${index}`, oldHandle = handles.get(sender)!;
+        const next = await queue.replaceQueuedAgentInput(oldHandle, input(text), origin(sender).sourceThread, origin(sender));
+        expect(next, `${sender}'s returned handle still names its waiting contribution`).toBeDefined();
+        handles.set(sender, next!.id); expected.set(sender, text);
+        expect(next!.id).not.toBe(previous.id);
+        expect(previous).toEqual(snapshot);
+        expect(queue.getQueuedEntries(ref).find(entry => entry.id === previous.id)).toBeUndefined();
+        expect(queue.cancelEntry(previous.id)).toBeUndefined();
+        expect(new Map(next!.agentMessages!.map(message => [message.origin!.sourceThread!.threadId,
+          message.input.flatMap(item => item.type === "text" ? [item.text] : []).join("")]))).toEqual(expected);
+        expect(await queue.replaceQueuedAgentInput(oldHandle, input("stale own retry"), origin(sender).sourceThread)).toBeUndefined();
+        expect(await queue.replaceQueuedAgentInput(handles.get("bob")!, input("forged"), { ...origin("bob").sourceThread, instanceId: "wrong-instance" })).toBeUndefined();
+      }
+      queue.cancelEntry(queue.getQueuedEntries(ref)[0]!.id);
+      for (const [sender, handle] of handles) expect(await queue.replaceQueuedAgentInput(handle, input("retired"), origin(sender).sourceThread)).toBeUndefined();
+      await drain();
+      expect(queue.getQueuedEntries(ref)).toEqual([]);
+    } finally { queue.close(); }
+  }), { numRuns: 30, examples: [[["alice", "bob", "alice", "carol", "bob"]]] });
+});

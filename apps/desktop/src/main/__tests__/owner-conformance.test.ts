@@ -2572,3 +2572,35 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 });
+
+it("the actual desktop federated caller retains untouched senders' original replacement handles", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("alice", "bob"), { minLength: 2, maxLength: 6 }), async edits => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await registry.submitHeldTurn({ ...identity, queueEntryId: "handle-review", input: [{ type: "text", text: "Independent review" }], holdReason: "Independent review" });
+      const peer = { target: { scope: "remote" as const, instanceId: "owner" }, label: "Invented owner", capabilities: ["thread_navigation", "turn_control"] };
+      const handler = createFederatedThreadMessageHandler({ runtime: () => ({ connectedPeerTargets: () => [peer], remoteBackend: () => host.client }) as unknown as DesktopFederationRuntime });
+      const request = (sender: string, text: string, replaceQueueEntryId?: string) => ({ ...identity, instanceId: "owner",
+        input: [{ type: "text" as const, text }], ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}),
+        messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: sender } } });
+      const handles = new Map<string, string>();
+      for (const sender of ["alice", "bob"]) handles.set(sender, (await handler(request(sender, `Original ${sender}`)))!.queueEntryId!);
+      expect(handles.get("alice")).toBe(handles.get("bob"));
+      for (const [index, sender] of edits.entries()) {
+        const oldId = handles.get(sender)!;
+        const replacement = (await handler(request(sender, `${sender} revised ${index}`, oldId)))!;
+        expect(replacement.queueEntryId).not.toBe(oldId);
+        handles.set(sender, replacement.queueEntryId!);
+        await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: oldId })).rejects.toThrow();
+        expect(await host.client.cancelQueuedTurn({ queueEntryId: oldId })).toMatchObject({ cancelled: false });
+        const queued = await host.client.readQueuedTurn({ ...identity, queueEntryId: replacement.queueEntryId! });
+        expect(queued.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n")).toContain(`${sender} revised ${index}`);
+      }
+      expect(OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
+    } finally { await host.close(); }
+  }), { numRuns: 3, examples: [[["alice", "bob", "alice"]]] });
+});
