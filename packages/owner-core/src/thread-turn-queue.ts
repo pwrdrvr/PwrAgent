@@ -1216,16 +1216,18 @@ export class ThreadTurnQueue {
       // and require an explicit retry instead of looping on idle signals.
       restoreAfter(this.queueFor(key), next, previousId);
       const normalized = error instanceof Error ? error : new Error(String(error));
-      this.addHoldReason(key, normalized.message);
-      await this.emit({
-        type: "blocked",
-        entry: next,
-        error: normalized,
-      });
       // It holds the entry it could not start and anything not yet held.
       // Entries behind it keep their own reasons: a lock's refusal must not
       // turn a stale steer's hold into one that unlocking releases.
+      // Cover every waiting input before a blocked observer can cancel this
+      // row and await a drain, including when that observer rejects.
       await this.holdQueue(key, normalized.message, { keepHeld: true });
+      const held = this.findQueuedEntry(next.id)?.entry;
+      // Hold observers can cancel, release or replace this row's review.
+      // Their newer publication must not be overwritten by the old refusal.
+      if (held?.manualReleaseRequired && held.holdReason === normalized.message) {
+        await this.emit({ type: "blocked", entry: held, error: normalized });
+      }
       return "blocked";
     }
   }

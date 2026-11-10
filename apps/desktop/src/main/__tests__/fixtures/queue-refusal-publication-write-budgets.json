@@ -1,0 +1,23 @@
+{
+  "desktop-refusal-cancellation": {
+    "commits": 1,
+    "note": "Actual queued provider refusal, blocked-event cancellation and real drains; setup and acceptance excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "outpost-observer-refusal": {
+    "commits": 5,
+    "note": "Actual native terminal, queued provider refusal and synchronous subscriber cancellation; setup and admission excluded",
+    "observedWalBytes": 16480,
+    "rowsChanged": 4,
+    "statements": 5
+  },
+  "outpost-refusal-cancellation": {
+    "commits": 5,
+    "note": "Actual native terminal, queued provider refusal and synchronous subscriber cancellation; setup and admission excluded",
+    "observedWalBytes": 16480,
+    "rowsChanged": 4,
+    "statements": 5
+  }
+}

@@ -326,6 +326,60 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("actual desktop provider refusal holds waiting input before blocked-event cancellation drains it", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const root = await realpath(await mkdtemp("/tmp/pa-refuse-"));
+    let host = await startDesktopOwner(null, undefined, undefined, root);
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/started"
+        && (event.notification.params.turn as { id?: string } | undefined)?.id === active.turnId)).toBe(true));
+      for (const id of ["refused", "next"]) {
+        await host.client.startTurn({ ...identity, queueEntryId: id, delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+        await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: true });
+      }
+      await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+      await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/completed"
+        && event.notification.params.turnId === active.turnId)).toBe(true));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      let published!: () => void;
+      const publication = new Promise<void>(resolve => { published = resolve; });
+      stop = registry.onEvent(async event => {
+        if (event.notification.method === "thread/turnQueue/updated" && event.notification.params.queueEntryId === "refused"
+          && event.notification.params.status === "blocked") {
+          expect(await host.client.cancelQueuedTurn({ queueEntryId: "refused" })).toMatchObject({ cancelled: true });
+          await new Promise<void>(resolve => setImmediate(resolve));
+          published();
+        }
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        OwnerConformanceCodexTransport.refusedStarts = 1;
+        for (const id of ["refused", "next"]) await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: false });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        await publication;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-refusal-publication-write-budgets.json", scenario: "desktop-refusal-cancellation",
+        note: "Actual queued provider refusal, blocked-event cancellation and real drains; setup and acceptance excluded", writes });
+      // Exactly the original native turn and the refused request reached Codex.
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(2);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+        .toMatchObject([{ queueEntryId: "next", manualReleaseRequired: true }]);
+      expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: "next" })).input).toEqual([{ type: "text", text: "slow" }]);
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "next" })).toMatchObject({ disposition: "started" });
+      stop();
+      await host.close();
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "next" })).toMatchObject({ disposition: "not_found" });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+    } finally { stop(); await host.close(); await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs(); }
+  });
+
   it.each(["direct", "scheduled"] as const)("actual desktop %s held admission covers resumed waiting input before its new review row is cancelled", async caller => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const root = await realpath(await mkdtemp("/tmp/pa-held-"));
