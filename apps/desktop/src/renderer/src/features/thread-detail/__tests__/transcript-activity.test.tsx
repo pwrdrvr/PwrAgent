@@ -11,6 +11,33 @@ describe("TranscriptActivity", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows unavailable tool images as text without loading them", () => {
+    render(
+      <TranscriptActivity
+        entry={{
+          type: "activity",
+          id: "tool-images",
+          summary: "Screenshot",
+          details: [{
+            id: "tool-images:detail",
+            kind: "read",
+            label: "Screenshot",
+            images: [
+              { type: "image", url: "pwrsnap://capture/cap_1/composite", unavailableReason: "Session ended." },
+              { type: "image", url: "http://127.0.0.1:51729/media?grant=old&signature=old" },
+              { type: "image", url: "data:image/png;base64,AQID", alt: "Shown" },
+            ],
+          }],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Session ended.")).toBeInTheDocument();
+    expect(screen.getByText("PwrSnap image unavailable.")).toBeInTheDocument();
+    expect(document.querySelectorAll("img")).toHaveLength(1);
+    expect(screen.getByAltText("Shown")).toBeInTheDocument();
+  });
+
   it.each([false, true])("renders a title-only tool once without an empty expansion (command: %s)", (withCommand) => {
     render(
       <TranscriptActivity

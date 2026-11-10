@@ -17,6 +17,7 @@ import {
   stripCodexGitActionDirectives,
   summarizeThreadDependencyPrompt,
   threadTodoMessageOriginFromUnknown,
+  transcriptImageUnavailableReason,
 } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
@@ -1143,6 +1144,20 @@ export function TranscriptImageTile(props: {
     () => formatTranscriptImageSourceLabel(props.imagePart.url),
     [props.imagePart.url]
   );
+
+  // Nothing can serve these bytes here, so `url` is never loaded.
+  const unavailableReason = transcriptImageUnavailableReason(props.imagePart);
+  if (unavailableReason) {
+    return (
+      <div className="transcript-message__image-fallback">
+        <div className="transcript-message__image-fallback-main">
+          <span className="transcript-message__image-fallback-title">
+            {unavailableReason}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   if (failed) {
     return (

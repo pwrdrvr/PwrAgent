@@ -7713,7 +7713,8 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("attaches loopback image exports from MCP results to the final assistant message", async () => {
+  // PwrSnap before 1.3. The desktop shows the part as unavailable.
+  it("keeps legacy PwrSnap loopback exports from MCP results as image parts", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl =
       "http://127.0.0.1:51729/media?grant=signed-image&signature=signed-media";
@@ -7773,10 +7774,9 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("projects typed MCP resource links into transcript image parts", async () => {
+  it("projects PwrSnap image resource links into transcript image parts", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
-    const imageUrl =
-      "http://127.0.0.1:51729/media?grant=full-image&signature=signed-media";
+    const imageUrl = "pwrsnap://capture/example/composite";
     MockTransport.readThreadResultByThreadId.set("thread-mcp-resource-link", {
       thread: {
         turns: [
@@ -7792,8 +7792,7 @@ describe("CodexAppServerClient", () => {
                 status: "completed",
                 result: {
                   structuredContent: {
-                    resourceUri: "pwrsnap://capture/example/composite",
-                    signedUrl: imageUrl,
+                    resourceUri: imageUrl,
                     mimeType: "image/png",
                     widthPx: 2_880,
                     heightPx: 1_920,
@@ -7809,6 +7808,19 @@ describe("CodexAppServerClient", () => {
                       name: "composite capture",
                       mimeType: "image/png",
                       size: 10,
+                    },
+                    // Not images, or not PwrSnap's: never transcript images.
+                    {
+                      type: "resource_link",
+                      uri: "pwrsnap://sizzle/project/preview/render",
+                      name: "preview",
+                      mimeType: "video/mp4",
+                    },
+                    {
+                      type: "resource_link",
+                      uri: "https://example.com/capture.png",
+                      name: "elsewhere",
+                      mimeType: "image/png",
                     },
                   ],
                 },

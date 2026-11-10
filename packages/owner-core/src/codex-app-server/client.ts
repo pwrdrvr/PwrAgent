@@ -33,6 +33,8 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
+  isLegacyPwrSnapMediaUrl,
+  isPwrSnapResourceUri,
   readCodexNativeSubAgentName,
   estimateTokenUsageCost,
   formatSearchCommandActionLabel,
@@ -100,7 +102,6 @@ import type {
   CodexMcpServerSummary,
   LinkedDirectorySummary,
 } from "@pwragent/shared";
-import { isPwrSnapSignedMediaUrl } from "../pwrsnap-media-url";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,
@@ -4349,6 +4350,11 @@ function buildMcpContentImagePart(
   };
 }
 
+/**
+ * PwrSnap before 1.3 put a signed loopback URL in `structuredContent`. The
+ * part is kept so the transcript can say the image is unavailable; nothing
+ * requests that URL.
+ */
 function buildMcpSignedImagePart(
   structuredContent: Record<string, unknown>,
 ): AppServerThreadImagePart | undefined {
@@ -4357,15 +4363,12 @@ function buildMcpSignedImagePart(
   if (
     !signedUrl
     || !mimeType?.toLowerCase().startsWith("image/")
-    || !isPwrSnapSignedMediaUrl(signedUrl)
+    || !isLegacyPwrSnapMediaUrl(signedUrl)
   ) {
     return undefined;
   }
 
-  const imagePart = buildImagePartFromUrl(signedUrl);
-  if (!imagePart) {
-    return undefined;
-  }
+  const imagePart: AppServerThreadImagePart = { type: "image", url: signedUrl };
 
   const alt = pickString(structuredContent, ["alt", "altText", "alt_text", "title", "name"]);
   if (alt) {
@@ -4391,15 +4394,14 @@ function extractMcpResourceLinkImageParts(content: unknown): AppServerThreadImag
         type !== "resourcelink"
         || !uri
         || !mimeType?.toLowerCase().startsWith("image/")
-        || !isPwrSnapSignedMediaUrl(uri)
+        || !(isPwrSnapResourceUri(uri) || isLegacyPwrSnapMediaUrl(uri))
       ) {
         return [];
       }
 
-      const imagePart = buildImagePartFromUrl(uri);
-      if (!imagePart) {
-        return [];
-      }
+      // The desktop reads a `pwrsnap://` link's bytes through the MCP session
+      // that returned it, and shows a legacy loopback URL as unavailable.
+      const imagePart: AppServerThreadImagePart = { type: "image", url: uri };
 
       const alt = pickString(resourceLink, [
         "name",

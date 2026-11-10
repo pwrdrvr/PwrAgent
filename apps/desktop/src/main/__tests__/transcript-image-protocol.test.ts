@@ -113,7 +113,7 @@ describe("transcript image protocol", () => {
     }
   });
 
-  it("drops unsafe or missing native images without fetching URLs or losing the activity", async () => {
+  it("drops unsafe or missing native images without reading media or losing the activity", async () => {
     const { materializeTranscriptImageEventForRenderer } = await import("../shell/transcript-image-protocol");
     const approved = path.join(tempDir, "worktree");
     await mkdir(approved);
@@ -121,34 +121,34 @@ describe("transcript image protocol", () => {
     await writeFile(privateFile, Buffer.from([1]));
     const linkedFile = path.join(approved, "linked.png");
     await symlink(privateFile, linkedFile);
-    const fetch = vi.fn();
+    const readPwrSnapMedia = vi.fn();
     for (const file of [privateFile, linkedFile, path.join(approved, "missing.png"), "relative.png", "https://example.com/image.png"]) {
       const event: AgentEvent = { backend: "codex", notification: { method: "item/completed", params: {
         threadId: "unsafe-thread", item: { type: "imageView", id: file, path: file },
       } } };
       const result = await materializeTranscriptImageEventForRenderer(event, {
-        resolveRoot: () => path.join(tempDir, "cache"), fetch,
+        resolveRoot: () => path.join(tempDir, "cache"), readPwrSnapMedia,
       }, { approvedLocalImageRoots: [approved] });
       expect(result.rendererImageParts).toEqual([]);
       expect(result.notification).toBe(event.notification);
     }
-    expect(fetch).not.toHaveBeenCalled();
+    expect(readPwrSnapMedia).not.toHaveBeenCalled();
   });
 
   it("does no image work for deltas, plain paths, code examples, or external Markdown images", async () => {
     const { materializeTranscriptImageEventForRenderer } = await import("../shell/transcript-image-protocol");
     const resolveApprovedLocalImageRoots = vi.fn(async () => []);
     const writeFile = vi.fn();
-    const fetch = vi.fn();
+    const readPwrSnapMedia = vi.fn();
     const delta: AgentEvent = { backend: "codex", notification: { method: "item/agentMessage/delta", params: { threadId: "thread", itemId: "reply", delta: "![Preview](/tmp/image.png)" } } };
-    expect(await materializeTranscriptImageEventForRenderer(delta, { writeFile, fetch }, { resolveApprovedLocalImageRoots })).toBe(delta);
+    expect(await materializeTranscriptImageEventForRenderer(delta, { writeFile, readPwrSnapMedia }, { resolveApprovedLocalImageRoots })).toBe(delta);
     const event: AgentEvent = { backend: "claude", notification: { method: "item/completed", params: {
       threadId: "thread", item: { id: "reply", type: "agentMessage", text: "`/tmp/image.png`\n`![Example](/tmp/image.png)`\n![Remote](https://example.com/image.png)" },
     } } };
-    expect(await materializeTranscriptImageEventForRenderer(event, { writeFile, fetch }, { resolveApprovedLocalImageRoots })).toBe(event);
+    expect(await materializeTranscriptImageEventForRenderer(event, { writeFile, readPwrSnapMedia }, { resolveApprovedLocalImageRoots })).toBe(event);
     expect(resolveApprovedLocalImageRoots).not.toHaveBeenCalled();
     expect(writeFile).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(readPwrSnapMedia).not.toHaveBeenCalled();
   });
 
   it("keeps missing and disallowed live references readable", async () => {
@@ -373,7 +373,7 @@ describe("transcript image protocol", () => {
     });
   });
 
-  it("rewrites owner-local image URLs into lazy federation protocol URLs", async () => {
+  it("rewrites only owner-local image URLs into lazy federation protocol URLs", async () => {
     const {
       rewriteFederatedTranscriptImageUrlsForRenderer,
       toFederatedTranscriptImageProtocolUrl,
@@ -381,8 +381,17 @@ describe("transcript image protocol", () => {
     const ownerUrl = toProtocolUrl(
       "/Users/owner/.pwragent/profiles/default/state/image-inputs/image.png",
     );
-    const signedPwrSnapUrl =
+    // The owner materializes a live PwrSnap link into a local file before it
+    // serves the thread. One still in the transcript had no session behind
+    // it, and the viewer has no session either, so neither is routed.
+    const pwrSnapUri = "pwrsnap://capture/cap_1/composite";
+    const legacyUrl =
       "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
+    const parts = [
+      { type: "image" as const, url: ownerUrl },
+      { type: "image" as const, url: pwrSnapUri, unavailableReason: "ended" },
+      { type: "image" as const, url: legacyUrl, unavailableReason: "legacy" },
+    ];
 
     const response = rewriteFederatedTranscriptImageUrlsForRenderer({
       backend: "codex",
@@ -390,27 +399,10 @@ describe("transcript image protocol", () => {
       threadId: "thread-images",
       replay: {
         entries: [
-          {
-            type: "message",
-            id: "entry-1",
-            role: "user",
-            text: "what's in this?",
-            parts: [
-              { type: "image", url: ownerUrl },
-              { type: "image", url: signedPwrSnapUrl },
-            ],
-          },
+          { type: "message", id: "entry-1", role: "assistant", text: "Shown.", parts },
         ],
         messages: [
-          {
-            id: "message-1",
-            role: "user",
-            text: "what's in this?",
-            parts: [
-              { type: "image", url: ownerUrl },
-              { type: "image", url: signedPwrSnapUrl },
-            ],
-          },
+          { id: "message-1", role: "assistant", text: "Shown.", parts },
         ],
         pagination: {
           supportsPagination: false,
@@ -419,26 +411,13 @@ describe("transcript image protocol", () => {
       },
     }, "owner_one");
 
-    const expectedUrl = toFederatedTranscriptImageProtocolUrl(
-      "owner_one",
-      ownerUrl,
-    );
-    const expectedPwrSnapUrl = toFederatedTranscriptImageProtocolUrl(
-      "owner_one",
-      signedPwrSnapUrl,
-    );
-    expect(response.replay.entries[0]).toMatchObject({
-      parts: [
-        { type: "image", url: expectedUrl },
-        { type: "image", url: expectedPwrSnapUrl },
-      ],
-    });
-    expect(response.replay.messages[0]).toMatchObject({
-      parts: [
-        { type: "image", url: expectedUrl },
-        { type: "image", url: expectedPwrSnapUrl },
-      ],
-    });
+    const expected = [
+      { type: "image", url: toFederatedTranscriptImageProtocolUrl("owner_one", ownerUrl) },
+      parts[1],
+      parts[2],
+    ];
+    expect(response.replay.entries[0]).toMatchObject({ parts: expected });
+    expect(response.replay.messages[0]).toMatchObject({ parts: expected });
   });
 
   it("serves federation protocol URLs through the remote image resolver", async () => {
@@ -472,19 +451,17 @@ describe("transcript image protocol", () => {
       new Uint8Array([1, 2, 3]),
     );
 
-    const signedPwrSnapUrl =
-      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
     resolveFederatedImage.mockClear();
-    await handler({
-      url: toFederatedTranscriptImageProtocolUrl(
-        "owner_one",
-        signedPwrSnapUrl,
-      ),
-    });
-    expect(resolveFederatedImage).toHaveBeenCalledWith({
-      instanceId: "owner_one",
-      url: signedPwrSnapUrl,
-    });
+    for (const url of [
+      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature",
+      "pwrsnap://capture/cap_1/composite",
+    ]) {
+      const refused = await handler({
+        url: toFederatedTranscriptImageProtocolUrl("owner_one", url),
+      });
+      expect(refused.status).toBeGreaterThanOrEqual(400);
+    }
+    expect(resolveFederatedImage).not.toHaveBeenCalled();
   });
 
   it("serves SVG images with a restrictive content policy", async () => {
@@ -597,127 +574,105 @@ describe("transcript image protocol", () => {
     await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 
-  it("materializes signed PwrSnap loopback images into thread-scoped files", async () => {
+  it("materializes live PwrSnap resource links into thread-scoped files", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../shell/transcript-image-protocol"
     );
-    const signedUrl =
-      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
-    const bytes = new Uint8Array([4, 5, 6]);
-    const fetch = vi.fn(async () => ({
-      ok: true,
-      headers: {
-        get: (name: string) => {
-          if (name === "content-type") {
-            return "image/jpeg";
-          }
-          if (name === "content-length") {
-            return String(bytes.byteLength);
-          }
-          return null;
-        },
-      },
-      arrayBuffer: async () => bytes.buffer,
+    const uri = "pwrsnap://capture/cap_1/composite";
+    const readPwrSnapMedia = vi.fn(async () => ({
+      ok: true as const,
+      mimeType: "image/jpeg",
+      dataBase64: Buffer.from([4, 5, 6]).toString("base64"),
     }));
-
-    const response = await materializeTranscriptImageUrlsForRenderer(
-      {
-        backend: "codex",
-        fetchedAt: 1,
-        threadId: "codex:thread/signed-image",
-        replay: {
-          entries: [
-            {
-              type: "message",
-              id: "entry-1",
-              role: "assistant",
-              text: "Shown.",
-              parts: [
-                { type: "text", text: "Shown." },
-                { type: "image", url: signedUrl },
-              ],
-            },
-          ],
-          messages: [
-            {
-              id: "message-1",
-              role: "assistant",
-              text: "Shown.",
-              parts: [{ type: "image", url: signedUrl }],
-            },
-          ],
-          pagination: {
-            supportsPagination: false,
-            hasPreviousPage: false,
-          },
-        },
-      },
-      {
-        fetch,
-        resolveRoot: () => path.join(tempDir, "thread-images"),
-      }
+    const root = path.join(tempDir, "thread-images");
+    const read = async () => await materializeTranscriptImageUrlsForRenderer(
+      pwrSnapReply("codex:thread/pwrsnap-image", uri),
+      { readPwrSnapMedia, resolveRoot: () => root },
     );
 
+    const response = await read();
     const entryPart = response.replay.entries[0]?.type === "message"
       ? response.replay.entries[0].parts?.[1]
       : undefined;
-    const messagePart = response.replay.messages[0]?.parts?.[0];
     expect(entryPart).toMatchObject({
       type: "image",
       url: expect.stringMatching(/^pwragent-image:\/\/file\//),
     });
-    expect(messagePart).toEqual(entryPart);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch).toHaveBeenCalledWith(
-      signedUrl,
-      expect.objectContaining({
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    expect(response.replay.messages[0]?.parts?.[0]).toEqual(entryPart);
+    // One read for both copies of the link, on the transcript's own thread.
+    expect(readPwrSnapMedia).toHaveBeenCalledTimes(1);
+    expect(readPwrSnapMedia).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "codex:thread/pwrsnap-image",
+      uri,
+    });
     const materializedPath =
       entryPart?.type === "image" ? filePathFromProtocolUrl(entryPart.url) : "";
-    expect(path.basename(materializedPath)).toMatch(/^[a-f0-9]{64}\.jpg$/);
+    expect(path.basename(materializedPath)).toBe(
+      `pwrsnap-${createHash("sha256").update(uri).digest("hex")}.jpg`,
+    );
     await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([4, 5, 6]));
+
+    // After the session ends, the cached copy still renders and nothing is read.
+    readPwrSnapMedia.mockResolvedValue({ ok: false, reason: "session-ended" } as never);
+    readPwrSnapMedia.mockClear();
+    const later = await read();
+    expect(later.replay.messages[0]?.parts?.[0]).toEqual(entryPart);
+    expect(readPwrSnapMedia).not.toHaveBeenCalled();
   });
 
-  it("reads signed PwrSnap loopback images for federation transport", async () => {
-    const { readTranscriptImageProtocolRequest } = await import(
+  it("shows PwrSnap links it cannot read as unavailable instead of retrying", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../shell/transcript-image-protocol"
     );
-    const signedUrl =
-      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
-    const bytes = new Uint8Array([7, 8, 9]);
-    const fetch = vi.fn(async () => ({
-      ok: true,
-      headers: {
-        get: (name: string) => {
-          if (name === "content-type") {
-            return "image/png";
-          }
-          if (name === "content-length") {
-            return String(bytes.byteLength);
-          }
-          return null;
-        },
-      },
-      arrayBuffer: async () => bytes.buffer,
-    }));
+    const uri = "pwrsnap://capture/cap_2/original";
+    for (const [read, reason] of [
+      [{ ok: false, reason: "session-ended" }, /session that returned it has ended/],
+      [{ ok: false, reason: "failed" }, /could not provide/],
+      [{ ok: true, mimeType: "video/mp4", dataBase64: "AAAA" }, /could not provide/],
+      [{ ok: true, mimeType: "image/png", dataBase64: "" }, /could not provide/],
+    ] as const) {
+      const readPwrSnapMedia = vi.fn(async () => read);
+      const writeFile = vi.fn();
+      const response = await materializeTranscriptImageUrlsForRenderer(
+        pwrSnapReply("thread-unavailable", uri),
+        { readPwrSnapMedia, writeFile, resolveRoot: () => path.join(tempDir, "unavailable") },
+      );
+      expect(response.replay.messages[0]?.parts).toEqual([
+        { type: "image", url: uri, unavailableReason: expect.stringMatching(reason) },
+      ]);
+      expect(readPwrSnapMedia).toHaveBeenCalledTimes(1);
+      expect(writeFile).not.toHaveBeenCalled();
+    }
+  });
 
-    await expect(
-      readTranscriptImageProtocolRequest(
-        signedUrl,
-        undefined,
-        { fetch },
-      ),
-    ).resolves.toEqual({
-      dataBase64: Buffer.from(bytes).toString("base64"),
-      mimeType: "image/png",
-    });
-    expect(fetch).toHaveBeenCalledWith(
-      signedUrl,
-      expect.objectContaining({ redirect: "error" }),
-    );
+  it("shows legacy PwrSnap loopback media as unavailable without requesting it", async () => {
+    const { materializeTranscriptImageUrlsForRenderer, readTranscriptImageProtocolRequest } =
+      await import("../shell/transcript-image-protocol");
+    const legacyUrl =
+      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
+    const readPwrSnapMedia = vi.fn();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const response = await materializeTranscriptImageUrlsForRenderer(
+        pwrSnapReply("thread-legacy", legacyUrl),
+        { readPwrSnapMedia, resolveRoot: () => path.join(tempDir, "legacy") },
+      );
+      expect(response.replay.messages[0]?.parts).toEqual([
+        {
+          type: "image",
+          url: legacyUrl,
+          unavailableReason: expect.stringMatching(/no longer serves/),
+        },
+      ]);
+      // A peer cannot ask this owner to request it either.
+      await expect(readTranscriptImageProtocolRequest(legacyUrl)).rejects.toThrow();
+      expect(readPwrSnapMedia).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not fetch arbitrary HTTP image URLs", async () => {
@@ -725,7 +680,7 @@ describe("transcript image protocol", () => {
       "../shell/transcript-image-protocol"
     );
     const externalUrl = "https://example.com/untrusted-image.png";
-    const fetch = vi.fn();
+    const readPwrSnapMedia = vi.fn();
 
     const response = await materializeTranscriptImageUrlsForRenderer(
       {
@@ -748,25 +703,24 @@ describe("transcript image protocol", () => {
           },
         },
       },
-      { fetch },
+      { readPwrSnapMedia },
     );
 
     expect(response.replay.messages[0]?.parts).toEqual([
       { type: "image", url: externalUrl },
     ]);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(readPwrSnapMedia).not.toHaveBeenCalled();
   });
 
-  it("does not fetch unsigned or untrusted loopback image URLs", async () => {
+  it("leaves other loopback image URLs alone", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../shell/transcript-image-protocol"
     );
     const imageUrls = [
-      "http://127.0.0.1:51729/media?grant=missing-signature",
       "http://127.0.0.1:51730/media?grant=other-service&signature=signature",
       "http://localhost:51729/media?grant=wrong-origin&signature=signature",
     ];
-    const fetch = vi.fn();
+    const readPwrSnapMedia = vi.fn();
 
     const response = await materializeTranscriptImageUrlsForRenderer(
       {
@@ -789,13 +743,13 @@ describe("transcript image protocol", () => {
           },
         },
       },
-      { fetch },
+      { readPwrSnapMedia },
     );
 
     expect(response.replay.messages[0]?.parts).toEqual(
       imageUrls.map((url) => ({ type: "image", url })),
     );
-    expect(fetch).not.toHaveBeenCalled();
+    expect(readPwrSnapMedia).not.toHaveBeenCalled();
   });
 
   it.each(["png", "svg"])("snapshots approved worktree Markdown %s links into transcript galleries", async (extension) => {
@@ -1319,4 +1273,39 @@ function filePathFromProtocolUrl(protocolUrl: string): string {
   const parsed = new URL(protocolUrl);
   const encodedSource = parsed.pathname.replace(/^\//, "");
   return fileURLToPath(decodeURIComponent(encodedSource));
+}
+
+/** An assistant reply holding one MCP image, as the Codex client projects it. */
+function pwrSnapReply(threadId: string, url: string) {
+  return {
+    backend: "codex" as const,
+    fetchedAt: 1,
+    threadId,
+    replay: {
+      entries: [
+        {
+          type: "message" as const,
+          id: "entry-1",
+          role: "assistant" as const,
+          text: "Shown.",
+          parts: [
+            { type: "text" as const, text: "Shown." },
+            { type: "image" as const, url },
+          ],
+        },
+      ],
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant" as const,
+          text: "Shown.",
+          parts: [{ type: "image" as const, url }],
+        },
+      ],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    },
+  };
 }

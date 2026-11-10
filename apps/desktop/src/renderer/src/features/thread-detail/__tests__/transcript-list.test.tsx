@@ -2385,6 +2385,71 @@ Implementation notes remain in a readable bubble.`;
     });
   });
 
+  it("shows an unavailable image's reason without loading its URL", () => {
+    const onOpenImage = vi.fn();
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "Here it is.",
+            parts: [
+              { type: "text", text: "Here it is." },
+              {
+                type: "image",
+                url: "pwrsnap://capture/cap_1/composite",
+                alt: "composite capture",
+                unavailableReason: "PwrSnap image unavailable. The PwrSnap session that returned it has ended.",
+              },
+            ],
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+        onOpenImage={onOpenImage}
+      />
+    );
+
+    expect(screen.getByText(
+      "PwrSnap image unavailable. The PwrSnap session that returned it has ended.",
+    )).toBeInTheDocument();
+    expect(screen.queryByAltText("composite capture")).toBeNull();
+    expect(document.querySelector('img[src^="pwrsnap:"]')).toBeNull();
+    expect(screen.queryByRole("button", { name: /Expand transcript image/ })).toBeNull();
+  });
+
+  // An older federation peer forwards these raw, without a reason.
+  it("never loads a raw PwrSnap or legacy loopback image URL", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "Here it is.",
+            parts: [
+              { type: "text", text: "Here it is." },
+              { type: "image", url: "http://127.0.0.1:51729/media?grant=old&signature=old", alt: "old capture" },
+              { type: "image", url: "pwrsnap://capture/cap_1/composite", alt: "new capture" },
+            ],
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getAllByText("PwrSnap image unavailable.")).toHaveLength(2);
+    expect(document.querySelectorAll("img")).toHaveLength(0);
+  });
+
   it("shows the owner path when a federated inline image fails to load", async () => {
     const fileUrl =
       "file:///Users/owner/.pwragent/profiles/default/state/image-inputs/missing.png";

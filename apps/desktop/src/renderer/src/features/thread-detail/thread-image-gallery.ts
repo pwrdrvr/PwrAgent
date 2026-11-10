@@ -1,3 +1,4 @@
+import { transcriptImageUnavailableReason } from "@pwragent/shared";
 import type { AppServerThreadEntry, AppServerThreadImagePart } from "@pwragent/shared";
 
 export function collectThreadImageGallery(
@@ -9,7 +10,8 @@ export function collectThreadImageGallery(
 
   const appendImage = (image: AppServerThreadImagePart): void => {
     if (
-      seenUrls.has(image.url)
+      transcriptImageUnavailableReason(image)
+      || seenUrls.has(image.url)
       || (image.sourceUrl ? seenSourceUrls.has(image.sourceUrl) : false)
     ) {
       return;
