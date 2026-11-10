@@ -446,6 +446,14 @@ protocol discovery. Navigation refreshes that inventory without writing unchange
 snapshots; provider mutations fence older in-flight discoveries. Fresh provider
 archive membership outranks an unstamped retained flag, while newer canonical
 archive/restore timestamps still fence older retained inventory.
+Complete discovery also atomically records retirement of previously confirmed
+native Codex identities with its inventory replacement. Retained metadata cannot
+resurrect those members after restart. Native creation retains confirmation in
+its existing commit and fences older discoveries. Unconfirmed imported owners
+and durable accepted-job identities remain independently retained; job request,
+fingerprint, thread and turn identities and restart without replay are preserved.
+Incomplete or failed walks publish no retirement, and late events do not recreate
+retired members. No schema change or SQLite timer is introduced.
 Both hosts project canonical title provenance against the last acknowledged
 native name. Imported names without that acknowledgement stay visible; Outpost
 publishes them through the shared naming lifecycle before discovery completes.

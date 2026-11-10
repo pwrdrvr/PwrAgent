@@ -123,7 +123,7 @@ export function openOutpostProfileRuntime(params: {
           get: id => storage.jobs.get(id), list: () => storage.jobs.list(), count: () => storage.jobs.count(),
           save: job => storage.jobs.save(job),
         },
-        inventory: { list: () => inventory.list(), replace: snapshot => inventory.replace(snapshot) },
+        inventory: { list: () => inventory.list(), replace: (snapshot, retiredThreadIds) => inventory.replace(snapshot, retiredThreadIds) },
         acpSessions: { getSession: (backend, id) => acpSessions.getSession(backend, id), listAllSessions: params => acpSessions.listAllSessions(params) },
         claudeSessions: { listThreads: async () => {
           return (await claudeSessions.list({ requireComplete: true })).filter(session => !session.ephemeral)

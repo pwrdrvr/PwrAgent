@@ -1,0 +1,5 @@
+{
+  "codex-confirmed-creation": {"commits": 1, "note": "Actual native thread/start confirmation retains its membership fact in the existing creation commit; no extra transaction", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "codex-native-retirement": {"commits": 1, "note": "One complete active/archive boundary atomically marks native retirement and replaces inventory; one commit per boundary, no timer", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "codex-retirement-passive": {"commits": 0, "note": "1000 complete absent discoveries/late-name events/point reads and ten owner reopens; zero commits and 0 MB/day", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

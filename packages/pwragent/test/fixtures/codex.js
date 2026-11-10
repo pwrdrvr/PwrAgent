@@ -128,7 +128,15 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     } else if (method === "thread/read") {
       reply({ thread: { ...threads[params.threadId], path: `/fixture-provider/${params.threadId}` } });
     } else if (method === "thread/list") {
-      reply({ data: Object.values(threads).filter(thread => Boolean(thread.archived) === (params.archived === true)), nextCursor: null });
+      // Other owners/tests can retire native records between complete walks.
+      // This file belongs to the fixture; no provider storage is inspected.
+      try { threads = JSON.parse(readFileSync(records, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      let control;
+      try { control = JSON.parse(readFileSync(path.join(directory, "discovery-control.json"), "utf8")); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+      reply(control?.repeatArchived === (params.archived === true)
+        ? { data: [], nextCursor: "fixture-repeated-cursor" }
+        : { data: Object.values(threads).filter(thread => Boolean(thread.archived) === (params.archived === true)), nextCursor: null });
     } else if (method === "thread/turns/list") {
       reply({ data: threads[params.threadId].turns.slice().reverse().map((turn) => ({ ...turn, itemsView: "full" })), nextCursor: null });
     } else if (method === "thread/name/set") {

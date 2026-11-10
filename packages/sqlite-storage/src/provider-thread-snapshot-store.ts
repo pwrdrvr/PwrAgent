@@ -5,6 +5,7 @@ import type {
 import { isAppServerBackendKind } from "@pwragent/shared";
 import { projectProviderThreadSummary as toDurableThreadSummary, type ProviderThreadSnapshot, type ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { StateDb } from "./state-db";
+import { SqliteOverlayStore } from "./overlay-store-sqlite";
 
 export const PROVIDER_THREAD_SNAPSHOT_SCHEMA_VERSION = 1;
 
@@ -57,7 +58,15 @@ implements ProviderThreadSnapshotStorage {
     });
   }
 
-  replace(snapshot: ProviderThreadSnapshot): void {
+  replace(snapshot: ProviderThreadSnapshot, retiredThreadIds?: readonly string[]): void {
+    if (retiredThreadIds?.length) {
+      this.stateDb.raw.transaction(() => {
+        const overlay = new SqliteOverlayStore(this.stateDb);
+        for (const threadId of retiredThreadIds) overlay.mergeOwnerThreadMetadata({ backend: snapshot.backend, threadId }, { nativeMembershipRetired: true });
+        this.replace(snapshot);
+      })();
+      return;
+    }
     this.stateDb.raw
       .prepare(
         `INSERT INTO provider_thread_snapshots(

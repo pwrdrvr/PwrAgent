@@ -126,9 +126,10 @@ export class HeadlessBackend {
         }
       }
       if (generation !== this.providerMutationVersion) return;
+      const retiredThreadIds = this.threads.absentConfirmedCodexThreadIds(threads);
       const previous = this.runtime.store.inventory.list().find(snapshot => snapshot.backend === "codex");
-      if (!isDeepStrictEqual(previous?.threads, threads)) {
-        this.runtime.store.inventory.replace({ backend: "codex", observedAt, threads });
+      if (retiredThreadIds.length || !isDeepStrictEqual(previous?.threads, threads)) {
+        this.runtime.store.inventory.replace({ backend: "codex", observedAt, threads }, retiredThreadIds);
       }
       this.threads.replaceInventory(threads, observedAt);
     };
@@ -144,6 +145,7 @@ export class HeadlessBackend {
   syncJobs(jobs = this.runtime.store.jobs.values()) {
     for (const job of jobs) {
       if (!job.threadId) continue;
+      this.threads.retainAcceptedJobThread(job.threadId);
       const previous = this.latestJobs.get(job.threadId);
       if (!previous || previous.id === job.id || job.createdAt > previous.createdAt) this.latestJobs.set(job.threadId, job);
       if (this.threads.has(job.threadId)) continue;
@@ -448,9 +450,11 @@ export class HeadlessBackend {
       const result = await this.runtime.codex.startThread({ cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
       if (!result?.threadId || typeof result.threadId !== "string" || result.threadId.length > 256) throw new Error("Invalid thread/start response");
       this.runtime.loadedThreads.add(result.threadId);
-      const thread = { id: result.threadId, messagingFileTools: true, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
+      const thread = { id: result.threadId, messagingFileTools: true, nativeMembershipRetired: false, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
       this.persist(thread);
+      this.providerMutationVersion++;
+      this.threads.observeCreatedNativeThread(this.summary(thread));
       this.invalidate(thread.id, "thread/started");
       return { backend: "codex", threadId: thread.id, executionMode: mode(sandbox) };
     } finally { this.creating = false; }

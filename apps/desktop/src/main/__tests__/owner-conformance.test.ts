@@ -1,7 +1,7 @@
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -585,6 +585,82 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           await assertAbsent(desktop.client);
         } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
       }
+    }), { numRuns: 3 });
+  }, 60_000);
+
+  it("retires confirmed native Codex members through the actual daemon and desktop without losing imported owners or accepted jobs", async () => {
+    await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), async (threadId, archived) => {
+      const root = await realpath(await mkdtemp(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-codex-retire-")));
+      const ref = { backend: "codex" as const, threadId };
+      let desktop: OwnerHost | undefined;
+      let outpost: Awaited<ReturnType<typeof startOutpostDaemon>> | undefined;
+      let seeded = false;
+      const prepare = async (db: StateDb, workspace: string) => {
+        if (seeded) return;
+        seeded = true;
+        await new SqliteOverlayStore(db).updateThreadMetadata(ref, { title: { text: "Native confirmed", source: "derived", nativeName: "Native confirmed" },
+          pinnedRank: "1024", seenAt: 10, seenUpdatedAt: 2, parent: { backend: "claude", threadId: "parent" }, model: "saved-model", fastMode: true });
+        writeFileSync(path.join(root, "f/fixture-threads.json"), JSON.stringify({ [threadId]: {
+          id: threadId, name: "Native confirmed", preview: "", cwd: workspace, createdAt: 1, updatedAt: 2, turns: [], archived,
+        } }));
+      };
+      try {
+        desktop = await startDesktopOwner(null, prepare, undefined, root);
+        const before = archived ? (await desktop.client.lookupArchivedThreads({ backend: "codex", threadIds: [threadId] })).threads[0]
+          : (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread;
+        expect(before?.title).toBe("Native confirmed");
+        await desktop.close(); desktop = undefined;
+        const headless = path.join(root, "profiles/t/state/headless");
+        mkdirSync(path.join(headless, "jobs"), { recursive: true, mode: 0o700 });
+        writeFileSync(path.join(headless, "identity.json"), JSON.stringify({ version: 1, workspace: path.join(root, "w"), codexHome: path.join(root, "c") }));
+        writeFileSync(path.join(headless, "threads.json"), JSON.stringify({ version: 1, threads: [
+          { id: "pending-import", title: "Pending imported title", titleSource: "derived", sandbox: "read-only" },
+        ] }));
+        const accepted = { version: 1, id: "confirmed-job", status: "completed", fingerprint: "accepted-input-fingerprint",
+          threadId: "accepted-owner", turnId: "accepted-turn", sandbox: "read-only", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:01Z" };
+        writeFileSync(path.join(headless, "jobs/confirmed-job.json"), JSON.stringify(accepted));
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread).toMatchObject({ title: "Native confirmed", pinnedRank: "1024" });
+        // A repeated cursor is an incomplete protocol discovery, not an empty
+        // authoritative inventory. Neither active nor archive failure retires.
+        for (const repeatArchived of [false, true]) {
+          writeFileSync(path.join(root, "f/discovery-control.json"), JSON.stringify({ repeatArchived }));
+          await expect(outpost.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend: "codex",
+            query: { kind: "exact", identities: [ref] } })).rejects.toThrow("incomplete");
+          expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread?.title).toBe("Native confirmed");
+        }
+        unlinkSync(path.join(root, "f/discovery-control.json"));
+        writeFileSync(path.join(root, "f/fixture-threads.json"), "{}");
+        const assertRetired = async (client: FederationRemoteBackendClient) => {
+          const page = await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend: "codex",
+            query: { kind: "exact", identities: [ref] } });
+          expect(page.entries).toEqual([]);
+          expect((await client.resolveThread(ref)).thread).toBeUndefined();
+          expect((await client.getNavigationSelectedDetail({ protocol: 2, ref })).identity).toBe("unresolved");
+          expect((await client.lookupArchivedThreads({ backend: "codex", threadIds: [threadId], includeParent: true })).threads).toEqual([]);
+        };
+        const assertRetained = async () => {
+          expect((await outpost!.client.resolveThread({ backend: "codex", threadId: "pending-import" })).thread)
+            .toMatchObject({ title: "Pending imported title", titleSource: "derived" });
+          expect((await outpost!.client.resolveThread({ backend: "codex", threadId: "accepted-owner" })).thread).toBeDefined();
+          const db = StateDb.open(path.join(root, "profiles/t/state/state.db"), { profileName: "t" });
+          try {
+            expect(await new SqliteOverlayStore(db).getThreadMetadata(ref)).toMatchObject({ pinnedRank: "1024", seenUpdatedAt: 2,
+              parent: { backend: "claude", threadId: "parent" }, model: "saved-model", fastMode: true });
+            const job = db.raw.prepare("SELECT payload FROM owner_jobs WHERE job_id = ?").get(accepted.id) as { payload: string };
+            expect(JSON.parse(job.payload)).toMatchObject(accepted);
+          } finally { db.close(); }
+        };
+        await assertRetired(outpost.client);
+        await assertRetained();
+        await outpost.close(); outpost = undefined;
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        await assertRetired(outpost.client);
+        await assertRetained();
+        await outpost.close(); outpost = undefined;
+        desktop = await startDesktopOwner(null, prepare, undefined, root);
+        await assertRetired(desktop.client);
+      } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
     }), { numRuns: 3 });
   }, 60_000);
 

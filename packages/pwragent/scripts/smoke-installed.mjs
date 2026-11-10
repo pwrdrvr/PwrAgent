@@ -72,7 +72,10 @@ try {
   const headless = path.join(env.PWRAGENT_HOME, "profiles/t/state/headless");
   mkdirSync(path.join(headless, "jobs"), { recursive: true, mode: 0o700 });
   writeFileSync(path.join(headless, "identity.json"), JSON.stringify({ version: 1, workspace, codexHome }));
-  const legacyThreads = JSON.stringify({ version: 1, threads: [{ id: "legacy-thread", title: "Packed legacy owner", titleSource: "explicit", createdAt: 1, sandbox: "read-only", pinnedRank: "a0" }] });
+  const legacyThreads = JSON.stringify({ version: 1, threads: [
+    { id: "legacy-thread", title: "Packed legacy owner", titleSource: "explicit", createdAt: 1, sandbox: "read-only", pinnedRank: "a0" },
+    { id: "pending-packed", title: "Packed pending import", titleSource: "derived", sandbox: "read-only" },
+  ] });
   writeFileSync(path.join(headless, "threads.json"), legacyThreads);
   writeFileSync(path.join(headless, "jobs/legacy.json"), JSON.stringify({ version: 1, id: "legacy", status: "running", fingerprint: "retained", threadId: "legacy-thread", createdAt: "2026-01-01T00:00:00Z" }));
   let daemon = await start();
@@ -150,8 +153,29 @@ try {
       assert.equal(store.threadRegistry.getThreadMetadata(ref).pinnedRank, "1024");
       assert.equal((await owner.handle("resolveThread", { backend: "claude", threadId: claudeId })).thread.title, "Packed Claude metadata");
     } finally { native.close(); }
+    const codexRef = { backend: "codex", threadId: claudeId };
+    await store.threadRegistry.updateThreadMetadata(codexRef, { title: { text: "Packed native Codex", source: "derived", nativeName: "Packed native Codex" }, pinnedRank: "2048" });
+    const acceptedBefore = [...store.jobs.values()];
+    let present = true;
+    const runtime = { workspace, store, projects: { list: () => [] }, onFailure(error) { throw error; },
+      codex: { listThreads: async ({ archived }) => present && !archived
+        ? [{ id: claudeId, source: "codex", title: "Packed native Codex", titleSource: "explicit", linkedDirectories: [] }] : [] } };
+    let membership = new HeadlessBackend(runtime, () => {});
+    await membership.initialize();
+    assert.equal((await membership.handle("resolveThread", codexRef)).thread.pinnedRank, "2048");
+    present = false;
+    await membership.refreshThreads();
+    for (let round = 0; round < 2; round++) {
+      assert.equal((await membership.handle("resolveThread", codexRef)).thread, undefined);
+      assert.equal(membership.threads.get("pending-packed").title, "Packed pending import");
+      assert.ok(membership.threads.get(store.get("smoke").threadId));
+      assert.deepEqual([...store.jobs.values()], acceptedBefore);
+      assert.equal((await membership.handle("resolveThread", { backend: "claude", threadId: claudeId })).thread.title, "Packed Claude metadata");
+      membership = new HeadlessBackend(runtime, () => {});
+      await membership.initialize();
+    }
   } finally { profile.close(); }
-  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude discovery and ACP membership retirement");
+  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery and native Codex retirement with pending imports/accepted jobs retained");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {

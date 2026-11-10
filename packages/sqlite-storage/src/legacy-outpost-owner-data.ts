@@ -11,7 +11,7 @@ const IMPORT_KEY = "outpost_owner_json_import_v1";
 const BACKUP_DIRECTORY = "legacy-owner-backup-v1";
 const FIELDS = ["archived", "model", "reasoningEffort", "serviceTier", "fastMode", "executionModeUpdatedAt",
   "reasoningEffortsByModel", "modelMigrationRevision", "modelSettingsManuallyUpdatedAt", "createdAt", "updatedAt", "cwd",
-  "pinnedRank", "seenAt", "seenUpdatedAt", "archivedAt", "restoredAt", "archiveRetentionStartedAt", "subthreadOrder", "subthreadsCollapsed", "messagingFileTools"] as const;
+  "pinnedRank", "seenAt", "seenUpdatedAt", "archivedAt", "restoredAt", "archiveRetentionStartedAt", "subthreadOrder", "subthreadsCollapsed", "messagingFileTools", "nativeMembershipRetired"] as const;
 export type OutpostThread = Record<string, unknown> & { id: string };
 
 /** The old host projection maps to the same canonical owner facts desktop uses. */

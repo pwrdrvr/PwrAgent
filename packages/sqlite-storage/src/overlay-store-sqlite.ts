@@ -11289,6 +11289,7 @@ function isStampFresh(stored: number | undefined, next: number): boolean {
 
 type OwnerThreadOverlay = ThreadOverlayState & {
   messagingFileTools?: boolean;
+  nativeMembershipRetired?: boolean;
   archived?: boolean;
   createdAt?: number;
   updatedAt?: number;
@@ -11307,6 +11308,7 @@ const OWNER_OVERLAY_FIELDS = [
   ["archiveRetentionStartedAt", "archiveRetentionStartedAt"],
   ["subthreadOrder", "subthreadOrder"], ["subthreadsCollapsed", "subthreadsCollapsed"],
   ["messagingFileTools", "messagingFileTools"],
+  ["nativeMembershipRetired", "nativeMembershipRetired"],
 ] as const;
 
 function ownerThreadRecord(state: OwnerThreadOverlay): OwnerThreadRecord {
