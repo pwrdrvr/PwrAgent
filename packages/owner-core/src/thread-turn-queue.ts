@@ -415,7 +415,7 @@ export class ThreadTurnQueue {
   async submitSteer(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "delivery" | "agentMessages"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-    options?: { onAdmission?: () => void },
+    options?: { deferStart?: boolean; onAdmission?: () => void },
   ): Promise<ThreadTurnQueueSubmissionResult> {
     return await this.withDispatchSuspended(input, async () => {
       const key = this.keyFor(input);
@@ -429,7 +429,8 @@ export class ThreadTurnQueue {
         ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
       };
       if (
-        !hasWaitingEntry(queue)
+        !options?.deferStart
+        && !hasWaitingEntry(queue)
         && this.dispatchSuspensions.get(key) === 1
         && !this.admissions.has(key)
         && !this.runningEntries.has(key)

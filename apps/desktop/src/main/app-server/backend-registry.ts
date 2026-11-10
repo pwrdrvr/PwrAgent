@@ -22190,7 +22190,7 @@ export class DesktopBackendRegistry {
     return await this.admitThreadAttachments(entry, (input, onAdmission) => {
       const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin };
       return entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings
-        ? this.threadTurnQueue.submitGroupedSteer(prepared, { onAdmission })
+        ? this.threadTurnQueue.submitSteer(prepared, { onAdmission })
         : this.threadTurnQueue.submit(prepared, { onAdmission });
     });
   }
@@ -26331,7 +26331,7 @@ export class DesktopBackendRegistry {
           };
         }
         if (request.messageOrigin?.kind === "agent") {
-          const queued = await this.admitThreadAttachments({ ...request, input: request.input ?? [] }, (input, onAdmission) => this.threadTurnQueue.submitGroupedSteer({
+          const queued = await this.admitThreadAttachments({ ...request, input: request.input ?? [] }, (input, onAdmission) => this.threadTurnQueue.submitSteer({
             backend: request.backend,
             threadId: request.threadId,
             input,

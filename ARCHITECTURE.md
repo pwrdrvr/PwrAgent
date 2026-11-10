@@ -360,7 +360,11 @@ rejects. Buffered native terminals still settle ownership and install failure
 holds; observer failures cannot restore accepted start or steering input.
 Ordinary authenticated agent messages without requested settings or explicit
 `new_turn` delivery use the same queue's individual `submitSteer` admission on
-Outpost. Each accepted job retains its own input and delivery fingerprint;
+both hosts. Desktop's ordinary-send and active-control callers each retain one
+queue identity per accepted message, including additional input from the same
+sender. New messages never append to an earlier accepted batch. Existing grouped
+entries retain their read, control and explicit replacement behavior.
+Each accepted Outpost job retains its own input and delivery fingerprint;
 accepted messages are never concatenated. At the FIFO head it joins the current
 native turn, or starts a new turn when idle. The existing steering lifecycle
 receives that job's exact request identity and captured native target. A durable

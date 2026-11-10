@@ -1,0 +1,9 @@
+{
+  "individual-agent-admissions": {
+    "commits": 0,
+    "note": "100 actual desktop agent admissions, immutable registered reads, pause and cancellation; native setup and independent review admission excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

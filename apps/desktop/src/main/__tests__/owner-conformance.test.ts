@@ -1185,7 +1185,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           label: "Invented owner", capabilities: ["thread_navigation", "turn_control"] };
         const handler = createFederatedThreadMessageHandler({ runtime: () => ({ connectedPeerTargets: () => [peer],
           remoteBackend: () => host.client }) as unknown as DesktopFederationRuntime });
-        const accepted = [];
+        const accepted: Array<{ id: string; input: Array<{ type: "text"; text: string }>; snapshot: Awaited<ReturnType<FederationRemoteBackendClient["readQueuedTurn"]>> }> = [];
         for (const [bob, suffix] of messages) {
           const input = [{ type: "text" as const, text: `Invented ${bob ? "Bob" : "Alice"} acceptance ${suffix}` }];
           const response = (await handler({ backend: "codex", threadId: identity.threadId,
@@ -1206,6 +1206,78 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await host.client.interruptTurn(active);
       } finally { await host.close(); }
     }), { numRuns: 12, examples: [[[[false, "!"], [true, "!"]]], [[[false, "!"], [false, "!"]]]] });
+  });
+
+  it("additional desktop admissions, reads and controls preserve acceptances without SQLite writes", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await registry.submitHeldTurn({ ...identity, queueEntryId: "admission-budget-review",
+        input: [{ type: "text", text: "Independent review" }], holdReason: "Review required" });
+      const { writes } = await measureSqliteWrites(async () => {
+        const accepted: Array<{ id: string; input: Array<{ type: "text"; text: string }> }> = [];
+        for (let index = 0; index < 100; index++) {
+          const input = [{ type: "text" as const, text: `Invented acceptance ${index}` }];
+          const entry = await registry.submitTurn({ ...identity, input,
+            messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: index % 2 ? "alice" : "bob" } } });
+          accepted.push({ id: entry.entry.id, input });
+        }
+        expect(new Set(accepted.map(entry => entry.id)).size).toBe(100);
+        for (const entry of accepted) {
+          expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: entry.id })).input).toEqual(entry.input);
+          await registry.setQueuedTurnPaused({ queueEntryId: entry.id, paused: true });
+          expect(registry.cancelQueuedTurnWithDisposition(entry.id).cancelled).toBe(true);
+        }
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-agent-admission-write-budgets.json", scenario: "individual-agent-admissions",
+        note: "100 actual desktop agent admissions, immutable registered reads, pause and cancellation; native setup and independent review admission excluded", writes });
+      await host.client.interruptTurn(active);
+    } finally { await host.close(); vi.unstubAllEnvs(); }
+  });
+
+  it("additional real caller admissions preserve each owner's durable neighbor and original native controls", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      for (const host of [desktop, outpost]) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
+        const runtime = Object.assign(new DesktopFederationRuntime(), {
+          connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1", "thread_navigation"] }],
+          remoteBackend: () => host.client,
+        });
+        const request: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+          request: { backend: "codex", threadId: identity.threadId, input: [{ type: "text", text: "Immutable durable neighbor" }] } };
+        request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, request)).digest("hex");
+        const receipt = await runtime.submitDurableTurnRequest("admission-device", request, target);
+        const durable = await host.client.readQueuedTurn({ ...identity, queueEntryId: receipt.queueEntryId });
+        const handler = createFederatedThreadMessageHandler({ runtime: () => runtime });
+        const accepted: Array<{ id: string; input: Array<{ type: "text"; text: string }> }> = [];
+        for (const sender of ["alice", "bob", "alice"]) {
+          const input = [{ type: "text" as const, text: `Invented ${sender} acceptance ${accepted.length}` }];
+          const response = (await handler({ backend: "codex", threadId: identity.threadId, instanceId: host.ownerInstanceId, input,
+            messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: sender } } }))!;
+          accepted.push({ id: response.queueEntryId!, input });
+        }
+        expect(new Set(accepted.map(entry => entry.id)).size, host.name).toBe(3);
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: receipt.queueEntryId })).toEqual(durable);
+        expect(await runtime.submitDurableTurnRequest("admission-device", request, target)).toEqual(receipt);
+        for (const entry of accepted) expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: entry.id })).input).toEqual(entry.input);
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId))
+          .toEqual([receipt.queueEntryId, ...accepted.map(entry => entry.id)]);
+        expect((await host.client.resolveThreadAdmissionState(identity)).activeTurn?.turnId).toBe(active.turnId);
+        expect(host.providerSteerCount()).toBe(0);
+        for (const entry of accepted) await host.client.cancelQueuedTurn({ queueEntryId: entry.id });
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: receipt.queueEntryId })).toEqual(durable);
+        await host.client.cancelQueuedTurn({ queueEntryId: receipt.queueEntryId });
+        await host.client.interruptTurn(active);
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
   });
 
   it("the production federated message caller replaces only its sender's waiting input on both registered owners", async () => {
