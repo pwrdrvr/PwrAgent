@@ -11,7 +11,7 @@ import {
   publishStarMapView,
   readStarMapView,
   resetStarMapViewRegistry,
-} from "../star-map/star-map-view-registry";
+} from "../shell/star-map/star-map-view-registry";
 
 function snapshot(surface: "window" | "in-app" = "window"): StarMapViewSnapshot {
   return {

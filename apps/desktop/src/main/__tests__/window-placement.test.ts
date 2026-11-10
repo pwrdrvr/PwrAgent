@@ -40,7 +40,7 @@ describe("window placement", () => {
       workArea: { x: 1920, y: 0, width: 1920, height: 1080 },
     });
 
-    const { placementForSourceDisplay } = await import("../window-placement");
+    const { placementForSourceDisplay } = await import("../shell/window-placement");
 
     expect(
       placementForSourceDisplay(920, 760, { sourceBounds }),
@@ -61,7 +61,7 @@ describe("window placement", () => {
       workArea: { x: 3840, y: 0, width: 1920, height: 1080 },
     });
 
-    const { placementForSourceDisplay } = await import("../window-placement");
+    const { placementForSourceDisplay } = await import("../shell/window-placement");
 
     expect(
       placementForSourceDisplay(1040, 760, { sourceWindowId: 41 }),
@@ -90,7 +90,7 @@ describe("window placement", () => {
       workArea: { x: 1920, y: 0, width: 1920, height: 1080 },
     });
 
-    const { positionWindowForSourceDisplay } = await import("../window-placement");
+    const { positionWindowForSourceDisplay } = await import("../shell/window-placement");
     positionWindowForSourceDisplay(targetWindow as unknown as BrowserWindow, {
       sourceWindow: sourceWindow as unknown as BrowserWindow,
     });
@@ -105,7 +105,7 @@ describe("window placement", () => {
       workArea: { x: 3840, y: 0, width: 1920, height: 1080 },
     });
 
-    const { placementForCursorDisplay } = await import("../window-placement");
+    const { placementForCursorDisplay } = await import("../shell/window-placement");
 
     expect(placementForCursorDisplay(1440, 960)).toEqual({
       x: 4080,
@@ -121,7 +121,7 @@ describe("window placement", () => {
       workArea: { x: 0, y: 0, width: 1152, height: 696 },
     });
 
-    const { boundsForCursorDisplay } = await import("../window-placement");
+    const { boundsForCursorDisplay } = await import("../shell/window-placement");
 
     expect(boundsForCursorDisplay(1440, 960)).toEqual({
       x: 0,

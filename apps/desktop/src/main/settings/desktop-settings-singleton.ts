@@ -3,8 +3,8 @@ import { codexAuthState } from "../codex-auth-state";
 import { app, safeStorage } from "electron";
 import { DesktopSettingsService } from "./desktop-settings-service";
 import { createDesktopSecretStorage, getAppStateMode } from "../storage/desktop-settings-storage";
-import { broadcastAppearanceChange } from "../appearance-broadcast";
-import { syncThemedDockIcon } from "../themed-dock-icon";
+import { broadcastAppearanceChange } from "../shell/appearance-broadcast";
+import { syncThemedDockIcon } from "../shell/themed-dock-icon";
 import { resolveBootstrapProfilePath } from "../profile";
 import {
   isE2eMemorySecretStorageEnabled,
@@ -13,7 +13,7 @@ import {
 import { ensureManagedCodexRuntime, retainManagedCodexCommand } from "../codex-managed-runtime";
 import { resolveActiveManagedGrokCommand } from "../acp/grok-managed-runtime";
 import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
-import { subscribersForChannel } from "../window-channels";
+import { subscribersForChannel } from "../shell/window-channels";
 import {
   disposeDesktopConfigStore,
   getDesktopConfigStore,

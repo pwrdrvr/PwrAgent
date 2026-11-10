@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { toTranscriptImageProtocolUrl } from "../shell/transcript-image-protocol";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";

@@ -38,7 +38,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 describe("image normalization ipc", () => {
   it("converts HEIC with Electron when native decode succeeds", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } = await import("../shell/ipc/image-normalization");
 
     await expect(
       convertImageUploadFallback(
@@ -62,7 +62,7 @@ describe("image normalization ipc", () => {
   });
 
   it("falls back to sips on macOS when Electron cannot decode HEIC", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } = await import("../shell/ipc/image-normalization");
     let outputPath = "";
     const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
       outputPath = args.at(-1) ?? "";
@@ -101,7 +101,7 @@ describe("image normalization ipc", () => {
   });
 
   it("falls back to sips on macOS when Electron probing throws", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } = await import("../shell/ipc/image-normalization");
     const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
       await writeFile(args.at(-1) ?? "", Buffer.from([7, 8, 9]));
       return { stdout: "", stderr: "" };
@@ -145,7 +145,7 @@ describe("image normalization ipc", () => {
       expectedError: "only supports HEIC/HEIF",
     },
   ])("$name", async ({ fileName, mimeType, platform, expectedError }) => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } = await import("../shell/ipc/image-normalization");
 
     await expect(
       convertImageUploadFallback(
@@ -165,7 +165,7 @@ describe("image normalization ipc", () => {
   });
 
   it("cleans up temporary files when sips fails", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
+    const { convertImageUploadFallback } = await import("../shell/ipc/image-normalization");
     let outputPath = "";
     const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
       outputPath = args.at(-1) ?? "";

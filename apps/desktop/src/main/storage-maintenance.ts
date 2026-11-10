@@ -6,10 +6,10 @@ import { storageHistoryPolicy, storageMaintenanceDue, type StorageThreadIdentity
 import { storageProcessAlive } from "./storage/desktop-storage-maintenance";
 import { STORAGE_MAINTENANCE_CHANNEL, STORAGE_MAINTENANCE_EVENT, type StorageMaintenanceCommand, type StorageMaintenanceStatus } from "../shared/storage-maintenance";
 import { readBootstrapAppearance, themedWindowAdditionalArguments } from "./settings/appearance-bootstrap";
-import { themedWindowBackgroundColor } from "./native-appearance";
-import { auxiliaryWindowChromeOptions } from "./auxiliary-window-chrome";
+import { themedWindowBackgroundColor } from "./shell/native-appearance";
+import { auxiliaryWindowChromeOptions } from "./shell/auxiliary-window-chrome";
 import { getMainLogger } from "./log";
-import { describeWebContentsLoad } from "./window-load-diagnostics";
+import { describeWebContentsLoad } from "./shell/window-load-diagnostics";
 
 const storageLog = getMainLogger("pwragent:storage-maintenance");
 

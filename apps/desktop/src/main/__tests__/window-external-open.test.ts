@@ -6,7 +6,7 @@ vi.mock("electron", () => ({
   shell: { openExternal: vi.fn() },
 }));
 
-const { isSafeExternalOpenUrl } = await import("../window");
+const { isSafeExternalOpenUrl } = await import("../shell/window");
 
 describe("isSafeExternalOpenUrl", () => {
   it("allows the schemes the renderer is expected to hand to the OS", () => {

@@ -20,9 +20,9 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => mocks.runtime }));
 vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsService: () => mocks.service }));
-vi.mock("../federation/federation-window", () => ({ createFederationWindow: vi.fn() }));
+vi.mock("../shell/federation/federation-window", () => ({ createFederationWindow: vi.fn() }));
 vi.mock("../federation/federation-tailscale", () => ({ getFederationTailscaleService: () => ({}) }));
-vi.mock("../federation-activity-window", () => ({ showFederationActivityWindow: mocks.show, setFederationActivityTopmost: mocks.topmost }));
+vi.mock("../shell/federation-activity-window", () => ({ showFederationActivityWindow: mocks.show, setFederationActivityTopmost: mocks.topmost }));
 
 beforeEach(async () => {
   vi.resetModules();
@@ -33,7 +33,7 @@ beforeEach(async () => {
   mocks.runtime.restart.mockResolvedValue(undefined);
   mocks.service.readFederationConfig.mockReturnValue({ mode: "dual" });
   mocks.service.writeConfigPatchTargeted.mockResolvedValue({});
-  const { registerFederationIpcHandlers } = await import("../ipc/federation");
+  const { registerFederationIpcHandlers } = await import("../shell/ipc/federation");
   registerFederationIpcHandlers();
 });
 const invoke = (channel: string, request?: unknown) => mocks.handlers.get(channel)!({ sender: { id: 42 } }, request);

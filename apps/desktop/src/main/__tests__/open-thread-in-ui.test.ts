@@ -2,11 +2,11 @@ import { EventEmitter } from "node:events";
 import type { WebContents } from "electron";
 import type { OperatorFocusSnapshot } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createOpenThreadInUi } from "../native-voice/open-thread-in-ui";
-import { publishOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
+import { createOpenThreadInUi } from "../shell/native-voice/open-thread-in-ui";
+import { publishOperatorFocus, resetOperatorFocusRegistry } from "../shell/native-voice/operator-focus-registry";
 
-vi.mock("../primary-main-window", () => ({ primaryMainWindowWebContents: () => undefined }));
-vi.mock("../window-show-thread", () => ({ requestShowThread: vi.fn() }));
+vi.mock("../shell/primary-main-window", () => ({ primaryMainWindowWebContents: () => undefined }));
+vi.mock("../shell/window-show-thread", () => ({ requestShowThread: vi.fn() }));
 
 function windowContents(id = 1): WebContents {
   return Object.assign(new EventEmitter(), { id, isDestroyed: () => false }) as unknown as WebContents;

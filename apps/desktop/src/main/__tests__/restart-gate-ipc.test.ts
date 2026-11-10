@@ -17,11 +17,11 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => registry,
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(),
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: vi.fn(),
 }));
 
@@ -32,9 +32,9 @@ import {
   RESTART_GATE_STATUS_CHANNEL,
 } from "../../shared/ipc";
 import type { RestartGateStatus } from "../../shared/restart-gate";
-import { subscribersForChannel } from "../window-channels";
-import { isFederationWindowWebContents } from "../window";
-import { disposeRestartGateIpcHandlers, registerRestartGateIpcHandlers } from "../ipc/restart-gate";
+import { subscribersForChannel } from "../shell/window-channels";
+import { isFederationWindowWebContents } from "../shell/window";
+import { disposeRestartGateIpcHandlers, registerRestartGateIpcHandlers } from "../shell/ipc/restart-gate";
 
 type Handler = (event: { sender: WebContents }) => unknown;
 

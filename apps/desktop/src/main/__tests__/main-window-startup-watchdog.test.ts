@@ -16,7 +16,7 @@ vi.mock("../log", () => ({
 import {
   MAIN_WINDOW_APPEAR_TIMEOUT_MS,
   watchMainWindowStartup,
-} from "../main-window-startup-watchdog";
+} from "../shell/main-window-startup-watchdog";
 
 class FakeContents extends EventEmitter {
   reload = vi.fn();

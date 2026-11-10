@@ -49,7 +49,7 @@ import {
   resetThemedDockIconForTests,
   syncThemedDockIcon,
   themedDockIconFile,
-} from "../themed-dock-icon";
+} from "../shell/themed-dock-icon";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const iconsDir = path.resolve(testDir, "../../../build/dock-icons");

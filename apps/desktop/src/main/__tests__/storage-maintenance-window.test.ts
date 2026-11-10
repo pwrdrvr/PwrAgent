@@ -52,7 +52,7 @@ vi.mock("../profile", () => ({
 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ info: vi.fn(), warn: fixture.warn, error: vi.fn() }) }));
 vi.mock("../settings/appearance-bootstrap", () => ({ readBootstrapAppearance: () => ({ theme: "dark" }), themedWindowAdditionalArguments: () => [] }));
-vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "black", themedTitleBarOverlay: () => ({}) }));
+vi.mock("../shell/native-appearance", () => ({ themedWindowBackgroundColor: () => "black", themedTitleBarOverlay: () => ({}) }));
 import { runStartupStorageMaintenance, STORAGE_WINDOW_LOAD_TIMEOUT_MS } from "../storage-maintenance";
 
 const write = vi.fn((_key: string, value: string) => { fixture.record = JSON.parse(value); });

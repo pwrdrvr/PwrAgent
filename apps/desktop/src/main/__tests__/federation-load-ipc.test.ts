@@ -37,7 +37,7 @@ vi.mock("../federation/federation-runtime", () => ({
 vi.mock("../federation/federation-tailscale", () => ({
   getFederationTailscaleService: () => ({}),
 }));
-vi.mock("../federation/federation-window", () => ({
+vi.mock("../shell/federation/federation-window", () => ({
   createFederationWindow,
 }));
 
@@ -59,7 +59,7 @@ const remoteLoad: FederationLoadStatus = {
 };
 
 async function invokeReadInstanceLoad(request?: unknown): Promise<unknown> {
-  const { registerFederationIpcHandlers } = await import("../ipc/federation");
+  const { registerFederationIpcHandlers } = await import("../shell/ipc/federation");
   registerFederationIpcHandlers();
   return await handlers.get(FEDERATION_READ_INSTANCE_LOAD_CHANNEL)!(
     {},
@@ -89,7 +89,7 @@ describe("federation read-instance-load ipc", () => {
   });
 
   it("preserves class-specific renderer demand through IPC and owns cleanup", async () => {
-    const { registerFederationIpcHandlers } = await import("../ipc/federation");
+    const { registerFederationIpcHandlers } = await import("../shell/ipc/federation");
     registerFederationIpcHandlers();
     runtime.connectedPeerTargets.mockReturnValue([{
       target: { scope: "remote", instanceId: "owner_one" },
@@ -196,7 +196,7 @@ describe("federation read-instance-load ipc", () => {
       capabilities: ["remote_window", "thread_navigation"],
     };
     runtime.connectedPeerTargets.mockReturnValue([peer]);
-    const { registerFederationIpcHandlers } = await import("../ipc/federation");
+    const { registerFederationIpcHandlers } = await import("../shell/ipc/federation");
     registerFederationIpcHandlers();
 
     await expect(
@@ -223,7 +223,7 @@ describe("federation read-instance-load ipc", () => {
       capabilities: ["remote_window", "thread_navigation"],
     };
     runtime.connectedPeerTargets.mockReturnValue([peer]);
-    const { registerFederationIpcHandlers } = await import("../ipc/federation");
+    const { registerFederationIpcHandlers } = await import("../shell/ipc/federation");
     registerFederationIpcHandlers();
 
     await handlers.get(FEDERATION_OPEN_WINDOW_CHANNEL)!({}, {

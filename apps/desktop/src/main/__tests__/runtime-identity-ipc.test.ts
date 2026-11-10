@@ -26,7 +26,7 @@ describe("runtime identity ipc", () => {
 
   it("resolves cwd and the current git branch", async () => {
     runGitMock.mockResolvedValue({ stdout: "codex/show-runtime-identity\n" });
-    const { resolveRuntimeIdentity } = await import("../ipc/runtime-identity");
+    const { resolveRuntimeIdentity } = await import("../shell/ipc/runtime-identity");
 
     expect(await resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
       branch: "codex/show-runtime-identity",
@@ -46,7 +46,7 @@ describe("runtime identity ipc", () => {
         throw new Error("not symbolic");
       })
       .mockResolvedValueOnce({ stdout: "ab12cd3344556677889900aabbccddeeff001122\n" });
-    const { resolveRuntimeIdentity } = await import("../ipc/runtime-identity");
+    const { resolveRuntimeIdentity } = await import("../shell/ipc/runtime-identity");
 
     expect(await resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
       commitSha: "ab12cd3344556677889900aabbccddeeff001122",
@@ -58,7 +58,7 @@ describe("runtime identity ipc", () => {
   it("registers and disposes the IPC handler", async () => {
     runGitMock.mockResolvedValue({ stdout: "main\n" });
     const { registerRuntimeIdentityIpcHandlers, disposeRuntimeIdentityIpcHandlers } =
-      await import("../ipc/runtime-identity");
+      await import("../shell/ipc/runtime-identity");
     const { RUNTIME_IDENTITY_CHANNEL } = await import("../../shared/ipc");
 
     registerRuntimeIdentityIpcHandlers();

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createReplayClientsFromEnv } from "../testing/replay-runtime";
+import { createReplayClientsFromEnv } from "../shell/testing/replay-runtime";
 
 const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 

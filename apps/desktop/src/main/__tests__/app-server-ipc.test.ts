@@ -1112,7 +1112,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(() => [
     {
       isDestroyed: () => false,
@@ -1121,7 +1121,7 @@ vi.mock("../window-channels", () => ({
   ]),
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: (
     webContents: { id?: number } | undefined,
   ) => webContents?.id === 999,
@@ -1391,7 +1391,7 @@ const {
   disposeAppServerIpcHandlers,
   registerAppServerIpcHandlers,
   resetAppServerServiceForTests,
-} = await import("../ipc/app-server");
+} = await import("../shell/ipc/app-server");
 
 describe("app server ipc", () => {
   it("routes remote directory pins and moves to the selected owner", async () => {
@@ -1415,7 +1415,7 @@ describe("app server ipc", () => {
   });
 
   it("keeps the selected owner and original cause in remote directory mark-read failures", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const target = { scope: "remote" as const, instanceId: "pwr_laptop" };
     const cause = "Owner state changed during the directory check (codex, thread/status/changed, thread busy-thread).";
     federationMock.runtime.remoteMarkNavigationDirectorySeen.mockRejectedValueOnce(new Error(cause));
@@ -1444,7 +1444,7 @@ describe("app server ipc", () => {
   });
 
   it("forwards the global search archive scope to peers as well as the local search", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const local: ThreadSearchResponse = {
       backend: "all", contentMode: "available", fetchedAt: 1, filters: {}, query: "archived example",
       results: [], searchedScopes: ["metadata"], semanticMode: "disabled", unavailableScopes: [],
@@ -1476,14 +1476,14 @@ describe("app server ipc", () => {
 
   // Historical owner materialization coverage is deliberately separate from IPC.
   const readLegacyOwnerMaterialization = async (_event: unknown, request?: GetNavigationSnapshotRequest) =>
-    (await import("../ipc/app-server")).appServerService.getNavigationSnapshot(request);
+    (await import("../shell/ipc/app-server")).appServerService.getNavigationSnapshot(request);
   const refreshOwnerMetadata = async () => {
     getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
-    await (await import("../ipc/app-server")).startAppServerOwnerNavigation();
+    await (await import("../shell/ipc/app-server")).startAppServerOwnerNavigation();
   };
 
   it("does not prime GitHub discovery while that forge is disabled", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       primeDiscoveryBranchLookups: (contexts: { branch: string; directoryPaths: string[] }[]) => Promise<void>;
       getPrGraphqlClient: () => unknown;
@@ -1771,8 +1771,8 @@ describe("app server ipc", () => {
 
   it("routes notice acknowledgement only from a subscribed renderer", async () => {
     const { GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL } = await import("../../shared/ipc");
-    const { subscribersForChannel } = await import("../window-channels");
-    const { appServerService } = await import("../ipc/app-server");
+    const { subscribersForChannel } = await import("../shell/window-channels");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const sender = subscribersForChannel("test")[0]!;
     const acknowledge = vi.spyOn(appServerService, "acknowledgeGithubPrAuthenticationNotice")
       .mockImplementation(() => {});
@@ -1986,7 +1986,7 @@ describe("app server ipc", () => {
   });
 
   it("lists every active registration for sidebar status", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     registerAppServerIpcHandlers();
     const handler = handlers.get("thread:dependencies")!;
@@ -2007,7 +2007,7 @@ describe("app server ipc", () => {
   });
 
   it.each(["completed", "interrupted", "cancelled", undefined] as const)("uses prerequisite terminal status %s instead of the completion method", async (status) => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     const { StateDb } = await import("../state/state-db");
     const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
@@ -2051,7 +2051,7 @@ describe("app server ipc", () => {
   });
 
   it("retries a ready continuation when its locked consumer is unlocked", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     const handleThreadEvent = vi.fn(async () => undefined);
     const agent = { handleThreadEvent } as unknown as import("../app-server/thread-dependency-coordinator").ThreadDependencyCoordinator;
@@ -2073,7 +2073,7 @@ describe("app server ipc", () => {
   });
 
   it.each(["stale-registration", "busy-consumer"])("admits %s on an unchanged fresh CI poll without idle writes", async (scenario) => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const { StateDb } = await import("../state/state-db");
     const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
     const { ThreadDependencyCoordinator } = await import("../app-server/thread-dependency-coordinator");
@@ -2390,7 +2390,7 @@ describe("app server ipc", () => {
   });
 
   it.each([false, true])("initializes owner PR tracking without a navigation page (fork: %s)", async (fork) => {
-    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     const { buildPullRequestStatusKey } = await import("@pwragent/shared");
     const pr = githubPr({ number: 91, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Off-page PR",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/91",
@@ -2410,7 +2410,7 @@ describe("app server ipc", () => {
   });
 
   it("starts owner tracking when providers finish after startup without opening navigation", async () => {
-    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     const { buildPullRequestStatusKey } = await import("@pwragent/shared");
     const pr = githubPr({ number: 92, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Provider PR",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/92" });
@@ -2426,7 +2426,7 @@ describe("app server ipc", () => {
   });
 
   it("does not repopulate owner metadata when startup finishes after shutdown", async () => {
-    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     let finish!: (threads: never[]) => void;
     const pending = new Promise<never[]>((resolve) => { finish = resolve; });
     listThreads.mockImplementationOnce(async () => await pending);
@@ -2442,7 +2442,7 @@ describe("app server ipc", () => {
   });
 
   it("reconciles a newer canonical PR event instead of applying an older startup inventory", async () => {
-    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     // The production store is a singleton. Keep this test's owner identity
     // stable so the service loop can reuse the fresh replacement index.
@@ -2533,7 +2533,7 @@ describe("app server ipc", () => {
     });
     const prKey = buildPullRequestStatusKey(pr);
     registerAppServerIpcHandlers();
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
       rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
@@ -2812,7 +2812,7 @@ describe("app server ipc", () => {
   });
 
   it("resolves activity titles without depending on retained navigation rows or refreshing thread lists", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const { PrActivityJournal } = await import("../pr-status/pr-activity");
     const journal = new PrActivityJournal();
     const service = appServerService as unknown as { prActivity: typeof journal };
@@ -2847,7 +2847,7 @@ describe("app server ipc", () => {
     const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
     const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
     const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("paused-pr-lookups-");
     const db = StateDb.open(temp.dbPath);
@@ -2906,7 +2906,7 @@ describe("app server ipc", () => {
     const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
     const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
     const { runGitCommand } = await import("../app-server/git-executable");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("legacy-pr-discovery-");
     const db = StateDb.open(temp.dbPath);
@@ -3233,7 +3233,7 @@ describe("app server ipc", () => {
     const { StateDb } = await import("../state/state-db");
     const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
     const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const headSha = "a".repeat(40);
     const failedCheckUrl = "https://github.com/pwrdrvr/PwrAgent/actions/runs/42/job/1";
     // Attempt 1 failed. The cache read it seconds ago, well inside the window
@@ -3329,7 +3329,7 @@ describe("app server ipc", () => {
   });
 
   it("records a GitLab pipeline retry so the next watch waits past the failure it replaced", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const headSha = "f".repeat(40);
     const failing: PrSummary = {
       ...githubPr({
@@ -3391,7 +3391,7 @@ describe("app server ipc", () => {
   });
 
   it("records a re-run only for the calling thread's open PRs at the run's head", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const failing = githubPr({
       number: 3176, org: "pwrdrvr", repo: "PwrAgent", state: "failing",
       headSha: "a".repeat(40), url: "https://github.com/pwrdrvr/PwrAgent/pull/3176",
@@ -3440,7 +3440,7 @@ describe("app server ipc", () => {
     // The re-run read only the attachments the navigation refresh fills in.
     // A thread outside every snapshot recorded nothing, and its watch call
     // then saw the replaced failure as final (#3174).
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const headSha = "4".repeat(40);
     const failing = githubPr({
       number: 3192, org: "pwrdrvr", repo: "PwrAgent", state: "failing", headSha,
@@ -3533,7 +3533,7 @@ describe("app server ipc", () => {
   it("names the running re-run's attempt on a watch armed after its checks started", async () => {
     // No final outcome yet means no baseline. The attempt used to ride only
     // on the baseline, so this watch never showed it.
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const headSha = "5".repeat(40);
     const running = githubPr({
       number: 3194, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headSha,
@@ -3690,7 +3690,7 @@ describe("app server ipc", () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { ScheduledThreadActionStore } = await import("../storage/scheduled-thread-action-store");
     const scheduler = await import("../scheduled-actions/scheduled-thread-action-service");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     const { openInMemoryStateDb } = await import("./sqlite-test-utils");
     const db = openInMemoryStateDb();
@@ -3741,7 +3741,7 @@ describe("app server ipc", () => {
 
   it("lists, explains, and stops PR watches over thread:prWatches, and sends a peer's to its owner", async () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     const { openInMemoryStateDb } = await import("./sqlite-test-utils");
     const db = openInMemoryStateDb();
@@ -3861,7 +3861,7 @@ describe("app server ipc", () => {
 
   it("lets an agent list and cancel its own thread's PR watches, ending one as stopped by the agent", async () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const { openInMemoryStateDb } = await import("./sqlite-test-utils");
     const db = openInMemoryStateDb();
     const store = new SqliteOverlayStore(db);
@@ -3951,7 +3951,7 @@ describe("app server ipc", () => {
   });
 
   it("arms the operator's Watch CI with the agent tool's own logic over thread:prWatches", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const headSha = "8".repeat(40);
     const running = githubPr({
       number: 3196, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headSha,
@@ -4032,7 +4032,7 @@ describe("app server ipc", () => {
     const { StateDb } = await import("../state/state-db");
     const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
     const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pr-watch-auto-fix-");
@@ -4150,7 +4150,7 @@ describe("app server ipc", () => {
     });
     expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
 
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
     };
@@ -4183,7 +4183,7 @@ describe("app server ipc", () => {
   });
 
   it("changes Forge Automation only for a Directories project", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const automation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true };
     await expect(appServerService.setProjectForgeAutomation({ directoryKey: "workspace:/Users/fixture/.pwragent/projects", automation }))
       .rejects.toThrow("Directories project");
@@ -4219,7 +4219,7 @@ describe("app server ipc", () => {
     });
 
     it("saves it on the owner, sending no target, and keeps nothing here", async () => {
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       const automation = { ...DEFAULT_PROJECT_FORGE_AUTOMATION, paused: true, pausedAt: 5 };
 
       const response = await appServerService.setProjectForgeAutomation({ directoryKey, automation, federationTarget });
@@ -4234,7 +4234,7 @@ describe("app server ipc", () => {
     });
 
     it("lists and resolves held wake-ups on the owner", async () => {
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       const resolutions = [{ entryId: "held-1", backend: "codex" as const, threadId: "thread-1", action: "send" as const }];
 
       await expect(appServerService.listProjectHeldWakeups({ directoryKey, federationTarget }))
@@ -4251,7 +4251,7 @@ describe("app server ipc", () => {
     });
 
     it("refuses an owner that does not advertise project_forge_automation without asking it", async () => {
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(false);
 
       await expect(appServerService.setProjectForgeAutomation({
@@ -4265,7 +4265,7 @@ describe("app server ipc", () => {
     });
 
     it("refuses an owner that grants this machine no turn control without asking it", async () => {
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       federationMock.runtime.remoteTargetSupportsCapability.mockImplementation(
         (...args: unknown[]) => args[1] !== "turn_control",
       );
@@ -4279,7 +4279,7 @@ describe("app server ipc", () => {
     });
 
     it("answers a peer's requests for this instance's project here, where polling and dispatch read it", async () => {
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
       onTestFinished(() => resetProjectForgeAutomationIndexForTests());
       registerAppServerIpcHandlers();
       const handler = setProjectForgeAutomationHandler.mock.calls.at(-1)?.[0] as {
@@ -4318,7 +4318,7 @@ describe("app server ipc", () => {
     });
 
     it("sends a remote window's requests to the peer it fronts, whatever target the renderer stamped", async () => {
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
       const {
         NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
         NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
@@ -4341,7 +4341,7 @@ describe("app server ipc", () => {
   });
 
   it("cancels the project's pending repairs on pause, and polls and re-offers its PR watches on resume", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     onTestFinished(() => resetProjectForgeAutomationIndexForTests());
     const project = "directory:/repo/PwrAgent";
@@ -4402,7 +4402,7 @@ describe("app server ipc", () => {
     { name: "discards", wakeupPolicy: "discard", locked: false },
     { name: "leaves Lock to hold", wakeupPolicy: "discard", locked: true },
   ] as const)("$name a turn_completed dependency into a paused project", async ({ wakeupPolicy, locked }) => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const appState = await import("../state/app-state");
     const { StateDb } = await import("../state/state-db");
     const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
@@ -4509,7 +4509,7 @@ describe("app server ipc", () => {
     const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
     expect(owner(buildPullRequestStatusKey(attached))).toBe(true);
 
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
       rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
@@ -4584,7 +4584,7 @@ describe("app server ipc", () => {
       data: { pullRequestWatch: { watch: { prKey: "github.com/pwrdrvr/pwragent#3179", notifyOn: ["failure"] } } },
     });
     expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     expect(appServerService.readPrimaryGitRepository("codex", "thread-1")).toBe("github.com/pwrdrvr/pwragent");
   });
 
@@ -4628,7 +4628,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
     await refreshOwnerMetadata();
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     expect(appServerService.readPrimaryGitRepository("claude", "thread-new")).toBeUndefined();
 
     const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
@@ -4684,7 +4684,7 @@ describe("app server ipc", () => {
     });
 
     async function startMovedThread(options: { newWorkspaceRepo?: string } = {}) {
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       readPrStatusCache.mockResolvedValueOnce(Object.fromEntries([oldProjectPr, newProjectPr].map((pr) => [
         buildPullRequestStatusKey(pr),
         { provider: "github.com", prKey: buildPullRequestStatusKey(pr), fetchedAt: Date.now() - 60_000, pr },
@@ -4891,7 +4891,7 @@ describe("app server ipc", () => {
     const { FederationPeerUnavailableError } = await import(
       "../federation/federation-peer-unavailable-error"
     );
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "peer_navigation_stale",
@@ -4954,7 +4954,7 @@ describe("app server ipc", () => {
   // the operator asked for a snapshot, and losing a name costs a thread id in
   // a quit dialog somewhere, not this window's contents.
   it("remembers remote thread names without letting that break the snapshot", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "peer_remembers_names",
@@ -5012,7 +5012,7 @@ describe("app server ipc", () => {
   });
 
   it("routes every local navigation read through one owner dispatcher with window-owned demand", async () => {
-    const { registerAppServerIpcHandlers, appServerService } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers, appServerService } = await import("../shell/ipc/app-server");
     registerAppServerIpcHandlers();
     const dispatch = handlers.get("owner:request");
     expect(dispatch).toBeTypeOf("function");
@@ -5038,7 +5038,7 @@ describe("app server ipc", () => {
   });
 
   it("admits native demand before allocating an Attention lease", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { NavigationAttentionViewLeases } = await import("../app-server/navigation-attention-view-leases");
     const qualify = vi.spyOn(NavigationAttentionViewLeases.prototype, "qualify");
     registerAppServerIpcHandlers();
@@ -5054,7 +5054,7 @@ describe("app server ipc", () => {
   });
 
   it.skipIf(!process.env.PWRAGENT_NAVIGATION_BENCHMARK)("measures local sidebar navigation read latency", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     listThreads.mockResolvedValue(Array.from({ length: 1000 }, (_, index) => ({ id: `benchmark-${index}`,
       source: "codex", title: `Benchmark thread ${index}`, titleSource: "explicit", updatedAt: index,
       createdAt: index, linkedDirectories: [] })) as never);
@@ -5081,7 +5081,7 @@ describe("app server ipc", () => {
   });
 
   it("carries renderer causes across IPC into the physical owner and index reads", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
     listThreads.mockResolvedValueOnce([]);
     readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [] });
@@ -5106,7 +5106,7 @@ describe("app server ipc", () => {
 
   it("reconciles compact saved pins through the owner cache before projecting viewer Attention", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "saved-active", instanceId: "peer-idle" });
     const saved: NavigationThreadSummary = { id: ref.threadId, source: "codex", title: "Saved active", titleSource: "explicit",
       threadStatus: "active", updatedAt: 1, linkedDirectories: [], inbox: { inInbox: false },
@@ -5132,7 +5132,7 @@ describe("app server ipc", () => {
 
   it("rescues an existing summaryless mount when its exact owner row loads", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "child", instanceId: "peer" });
     const row = { id: "child", source: "codex", title: "Child", titleSource: "explicit", linkedDirectories: [],
       inbox: { inInbox: false }, ref: { backend: "codex", threadId: "child", ownerInstanceId: "peer" },
@@ -5153,7 +5153,7 @@ describe("app server ipc", () => {
 
   it("projects a mounted remote child beneath its local parent through viewer IPC", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const parent: NavigationThreadSummary = { id: "local-parent", source: "codex", title: "Parent", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false } };
     const child: NavigationThreadSummary = { ...parent, id: "remote-child", parentThreadId: parent.id,
@@ -5174,7 +5174,7 @@ describe("app server ipc", () => {
 
   it.each(["main-sidebar", "exact-link"] as const)("reads viewer exact rows without waiting on a peer (consumer=%s)", async (consumer) => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const base = { source: "codex" as const, titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } };
     const localParent: NavigationThreadSummary = { ...base, id: "local-parent", title: "Local parent" };
     const localDraft: NavigationThreadSummary = { ...base, id: "local-draft", title: "Local draft" };
@@ -5218,7 +5218,7 @@ describe("app server ipc", () => {
 
   it("resolves a selected peer draft's local project", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const ref = buildFederatedThreadRef({ backend: "codex", threadId: "peer-draft", instanceId: "peer-a" });
     const peerDraft: NavigationThreadSummary = { source: "codex", id: "peer-draft", title: "Peer draft", titleSource: "explicit",
       linkedDirectories: [{ path: "/peer/src/PwrAgent", label: "PwrAgent", kind: "local" }], inbox: { inInbox: false },
@@ -5239,7 +5239,7 @@ describe("app server ipc", () => {
   });
 
   it("never sends an owner-resolved read to a remote owner", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     federationMock.runtime.remoteNavigationQueryPage.mockClear();
     registerAppServerIpcHandlers();
     await expect(navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90205, once: vi.fn() } }, {
@@ -5250,7 +5250,7 @@ describe("app server ipc", () => {
   });
 
   it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     registerAppServerIpcHandlers();
     const handler = navigationReadHandler("backend.getNavigationQueryPage")!;
     const event = { sender: { id: 90009, once: vi.fn() } };
@@ -5267,7 +5267,7 @@ describe("app server ipc", () => {
   });
 
   it("returns a Federation-wrapped owner read race without rejecting the Electron handler", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     registerAppServerIpcHandlers();
     const error = Object.assign(new Error("handler_failed: [navigation_busy] Navigation changed during its owner read. Refresh the retained range."), {
       code: "handler_failed",
@@ -5280,7 +5280,7 @@ describe("app server ipc", () => {
   });
 
   it("overlays only a bounded remote page's viewer directory preferences without accepting owner-only unchanged proof", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const federationTarget = { scope: "remote" as const, instanceId: "peer_v2_disclosure" };
     const directoryKey = "directory:/remote/project";
     readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } });
@@ -5324,7 +5324,7 @@ describe("app server ipc", () => {
   });
 
   it("refreshes viewer federation metadata when unchanged owner pages are expanded", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { stampRemoteNavigationQueryPage } = await import("../federation/federation-navigation-query");
     const target: FederationRemoteTarget = { scope: "remote", instanceId: "peer-metadata" };
     let metadata: { instanceLabel: string; capabilities: FederationCapability[];
@@ -5372,7 +5372,7 @@ describe("app server ipc", () => {
   });
 
   it("shares exact owner reads across native windows and aborts only after the last window releases", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
     let finish!: (value: unknown) => void;
     federationMock.runtime.remoteNavigationSelectedDetail.mockReset().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
@@ -5400,7 +5400,7 @@ describe("app server ipc", () => {
   });
 
   it.each(["detail", "queue"])("quietly cancels a Star Map %s waiting for owner read capacity", async (kind) => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
     const finish: Array<() => void> = [];
     federationMock.runtime.remoteNavigationSelectedDetail.mockReset().mockImplementation((_target, request) =>
@@ -5429,7 +5429,7 @@ describe("app server ipc", () => {
   });
 
   it("overlays viewer-owned directory disclosure state on remote snapshots", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "peer_navigation_preferences",
@@ -5482,7 +5482,7 @@ describe("app server ipc", () => {
   });
 
   it("stores a remote directory disclosure on the viewer without publishing it", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -5512,7 +5512,7 @@ describe("app server ipc", () => {
   });
 
   it("keeps unexpected remote navigation failures actionable", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     federationMock.runtime.remoteNavigationSnapshot.mockRejectedValueOnce(
       new Error("invalid remote navigation payload"),
     );
@@ -5915,7 +5915,7 @@ describe("app server ipc", () => {
   });
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     const ref = buildFederatedThreadRef({
@@ -6617,7 +6617,7 @@ describe("app server ipc", () => {
   );
 
   it("rejects malformed pin refs at the service boundary", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const {
       NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
       NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
@@ -6794,7 +6794,7 @@ describe("app server ipc", () => {
     expect(response).toMatchObject({ threads: [{
       id: "thread-1", primaryGitRepository: "github.com/pwrdrvr/pwrdisk",
     }] });
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     expect(appServerService.readPrimaryGitRepository("codex", "thread-1"))
       .toBe("github.com/pwrdrvr/pwrdisk");
   });
@@ -7159,7 +7159,7 @@ describe("app server ipc", () => {
   });
 
   it("routes Agent and Token Miser mutations to the owner without accessing the local registry", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const federationTarget = { scope: "remote" as const, instanceId: "owner-one" };
     backendRegistryLifecycle.get.mockClear();
     for (const agent of [{ name: "Manager" }, null]) {
@@ -7183,7 +7183,7 @@ describe("app server ipc", () => {
   });
 
   it("routes output inspection to the owning instance without using the local store", async () => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const target = { scope: "remote" as const, instanceId: "owner-one" };
     const request = { backend: "codex" as const, threadId: "thread-1", objectId: "object-1", source: "summary" as const, offset: 0 };
     backendRegistryLifecycle.get.mockClear();
@@ -10164,7 +10164,7 @@ describe("app server ipc", () => {
     const { StateDb } = await import("../state/state-db");
     const { SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
     const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb(prefix);
     const db = StateDb.open(temp.dbPath);
@@ -10266,7 +10266,7 @@ describe("app server ipc", () => {
     // GitLab follows the old path's redirect, so the poll answers under the
     // current path. Without learning the rename, the thread that attached the
     // MR by its old path never matched the answer and its status froze.
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       prRepositoryAliases: { canonicalizeUrl: (url: string) => string; clear: () => void };
       primaryPrThreadsByKey: { has: (prKey: string) => boolean };
@@ -10444,7 +10444,7 @@ describe("app server ipc", () => {
 
   it("shows a PR attached under its new name after its old name was detached", async () => {
     await withRenamedRepositoryStore("renamed-repo-reattached-", async ({ store, refresh }) => {
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       const request = {
         backend: "codex",
         threadId: "renamed-repo-reattached",
@@ -10477,7 +10477,7 @@ describe("app server ipc", () => {
 
   it("detaches a renamed PR's row still stored under the old name", async () => {
     await withRenamedRepositoryStore("renamed-repo-detach-both-", async ({ store, refresh }) => {
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       const request = {
         backend: "codex",
         threadId: "renamed-repo-detach-both",
@@ -10564,7 +10564,7 @@ describe("app server ipc", () => {
       // Collapsed, the finished thread short-circuits again.
       fetchPullRequestByUrl.mockClear();
       detectPullRequestsForThread.mockClear();
-      const { appServerService } = await import("../ipc/app-server");
+      const { appServerService } = await import("../shell/ipc/app-server");
       await expect(appServerService.refreshThreadPullRequests(request)).resolves.toMatchObject({
         prs: [expect.objectContaining({ url: RENAMED_PR_URL })],
         shortCircuited: true,
@@ -10579,7 +10579,7 @@ describe("app server ipc", () => {
    * a registry that can start the wake turns watches and dependencies send.
    */
   async function renamedRepositoryService() {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       backgroundPrPollingEnabled: boolean;
       ownerNavigationActive: boolean;
@@ -10873,7 +10873,7 @@ describe("app server ipc", () => {
         expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
 
         // A new dependency typed with the old URL is saved under the new name.
-        const { appServerService } = await import("../ipc/app-server");
+        const { appServerService } = await import("../shell/ipc/app-server");
         await appServerService.manageThreadDependencies({
           action: "create", backend: "codex", threadId: "second-consumer",
           conditions: [{ backend: "codex", threadId: "prerequisite", when: "pr_merged", prUrl: PRE_RENAME_PR_URL }],
@@ -12344,7 +12344,7 @@ describe("app server ipc", () => {
   });
 
   it.each(["open", "closed", "merged"] as const)("passes published %s PR heads into working-state probes", async (lifecycleState) => {
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const mergedPrSha = "a".repeat(40);
 
     listThreads.mockResolvedValueOnce([
@@ -12387,7 +12387,7 @@ describe("app server ipc", () => {
   });
 
   it("passes detached merged PR commit SHAs into working-state probes", async () => {
-    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { startAppServerOwnerNavigation } = await import("../shell/ipc/app-server");
     const mergedPrSha = "b".repeat(40);
     const detachedPr = githubPr({
       number: 807,
@@ -12478,7 +12478,7 @@ describe("app server ipc", () => {
 
   it.each([false, true])("forge branch refresh preserves whether GitHub answered (%s)", async (answered) => {
     const { ForgePrFetcher } = await vi.importActual<typeof import("../pr-status/forge-pr-fetcher")>("../pr-status/forge-pr-fetcher");
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     const repos = [{ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }];
     const fetchPullRequestsForBranches = vi.fn(async () => new Map<string, PrSummary[]>(
       answered ? [["pwrdrvr/pwragent#topic", []]] : [],
@@ -12724,7 +12724,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
     await refreshOwnerMetadata();
-    const { appServerService } = await import("../ipc/app-server");
+    const { appServerService } = await import("../shell/ipc/app-server");
     expect(appServerService.readPrimaryGitRepository("claude", "claude-new")).toBeUndefined();
 
     listThreads.mockResolvedValue([newThread] as never);

@@ -20,9 +20,9 @@ import {
   isAppServerBackendKind,
 } from "@pwragent/shared";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
-import { sendStarMapCommand } from "./star-map-command-bus";
-import { readStarMapView } from "./star-map-view-registry";
-import { readOperatorFocus } from "../native-voice/operator-focus-registry";
+import { sendStarMapCommand } from "../shell/star-map/star-map-command-bus";
+import { readStarMapView } from "../shell/star-map/star-map-view-registry";
+import { readOperatorFocus } from "../shell/native-voice/operator-focus-registry";
 
 const FOCUS_NOT_PUBLISHED_MESSAGE =
   "No main PwrAgent window has reported what the operator is looking at. Ask the operator which thread they mean.";

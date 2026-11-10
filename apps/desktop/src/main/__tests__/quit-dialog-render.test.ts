@@ -7,10 +7,10 @@ vi.mock("electron", () => ({
   BrowserWindow: vi.fn(),
   nativeTheme: { shouldUseDarkColors: true },
 }));
-vi.mock("../ipc/integrated-terminal", () => ({
+vi.mock("../shell/ipc/integrated-terminal", () => ({
   revealIntegratedTerminal: vi.fn(),
 }));
-vi.mock("../window-show-thread", () => ({ requestShowThread: vi.fn() }));
+vi.mock("../shell/window-show-thread", () => ({ requestShowThread: vi.fn() }));
 vi.mock("../settings/appearance-bootstrap", () => ({
   readBootstrapAppearance: () => ({ theme: "dark" }),
 }));
@@ -22,7 +22,7 @@ import {
   estimateQuitDialogHeight,
   quitDialogHeightCap,
   type QuitBlockerItem,
-} from "../quit-confirmation-dialog";
+} from "../shell/quit-confirmation-dialog";
 
 const items: QuitBlockerItem[] = [
   {

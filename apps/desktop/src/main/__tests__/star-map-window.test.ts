@@ -35,12 +35,12 @@ vi.mock("electron", () => ({ BrowserWindow: mocks.BrowserWindow }));
 vi.mock("../log", () => ({
   getMainLogger: () => ({ debug: vi.fn() }),
 }));
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   applyWindowSecurityHardening: vi.fn(),
   rendererPreloadWebPreferences: () => ({ preload: "/preload.js", nodeIntegrationInSubFrames: true }),
   getRendererEntry: () => ({ kind: "file", value: "/renderer.html" }),
 }));
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   WINDOW_KIND_STAR_MAP: "star-map",
   registerWindowChannels: mocks.registerWindowChannels,
 }));
@@ -48,21 +48,21 @@ vi.mock("../settings/appearance-bootstrap", () => ({
   readBootstrapAppearance: () => ({ theme: "dark" }),
   themedWindowAdditionalArguments: () => ["--appearance=dark"],
 }));
-vi.mock("../native-appearance", () => ({
+vi.mock("../shell/native-appearance", () => ({
   themedWindowBackgroundColor: () => "#000000",
 }));
-vi.mock("../auxiliary-window-chrome", () => ({
+vi.mock("../shell/auxiliary-window-chrome", () => ({
   auxiliaryWindowChromeOptions: () => ({ frame: true }),
   hideAuxiliaryWindowMenuBar: vi.fn(),
   registerAuxiliaryWindowTitle: vi.fn(),
   showAndFocusAuxiliaryWindow: vi.fn(),
   showAuxiliaryWindowWhenReady: vi.fn(),
 }));
-vi.mock("../window-placement", () => ({
+vi.mock("../shell/window-placement", () => ({
   placementForSourceDisplay: () => ({ x: 10, y: 20 }),
   positionWindowForSourceDisplay: vi.fn(),
 }));
-vi.mock("../window-fullscreen-sync", () => ({
+vi.mock("../shell/window-fullscreen-sync", () => ({
   attachWindowFullscreenSync: vi.fn(),
 }));
 
@@ -75,7 +75,7 @@ describe("star map window", () => {
   });
 
   it("subscribes to mention-source changes from other windows", async () => {
-    const { showStarMapWindow } = await import("../star-map-window");
+    const { showStarMapWindow } = await import("../shell/star-map-window");
 
     showStarMapWindow();
 
@@ -89,7 +89,7 @@ describe("star map window", () => {
   });
 
   it("follows keyboard shortcut changes, so the Find chip shows the current chord", async () => {
-    const { showStarMapWindow } = await import("../star-map-window");
+    const { showStarMapWindow } = await import("../shell/star-map-window");
 
     showStarMapWindow();
 

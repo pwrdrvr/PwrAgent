@@ -54,7 +54,7 @@ import {
   stageLocalTurnInputAttachment,
 } from "./turn-input-attachment-files";
 import type { ThreadAssetOwner } from "./thread-assets";
-import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { toTranscriptImageProtocolUrl } from "../shell/transcript-image-protocol";
 import {
   acpRuntimeSupportsHttpMcp,
   buildAutomationInspectionAcpMcpServers,
@@ -136,8 +136,8 @@ import {
   resolveActiveProfilePath,
   resolveBootstrapProfilePath,
 } from "../profile";
-import type { ProtocolCaptureStore } from "../testing/capture-store";
-import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
+import type { ProtocolCaptureStore } from "../shell/testing/capture-store";
+import { createProtocolCaptureFromEnv } from "../shell/testing/protocol-capture";
 import {
   createCompositeJsonRpcObserver,
   createProtocolLogObserverFromEnv,

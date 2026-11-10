@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { watchSystemShutdown } from "../system-shutdown";
+import { watchSystemShutdown } from "../shell/system-shutdown";
 
 const mocks = vi.hoisted(() => ({
   app: { quit: vi.fn(), exit: vi.fn(), on: vi.fn() },

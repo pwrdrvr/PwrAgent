@@ -4,7 +4,7 @@ import { ListingDiagnostics, listingDiagnostics, listingRequestFields } from "..
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationIndexReadPool } from "../app-server/navigation-index-read-pool";
 import { readRendererListingDiagnostics } from "../diagnostics/renderer-listing-diagnostics";
-import type { HotCpuTarget } from "../diagnostics/hot-cpu-profiler";
+import type { HotCpuTarget } from "../shell/diagnostics/hot-cpu-profiler";
 
 const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
   diagnostic: { origin: "68ca84ce-8d32-4230-a10f-76bc96eb2f33", view: 1, effect: 2, logical: 3, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 } };

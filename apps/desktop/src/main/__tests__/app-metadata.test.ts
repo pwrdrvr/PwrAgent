@@ -46,16 +46,16 @@ vi.mock("../app-logs", () => ({
   subscribeAppLogEntries: vi.fn(() => () => undefined),
 }));
 
-vi.mock("../app-log-window", () => ({ showAppLogWindow: vi.fn() }));
+vi.mock("../shell/app-log-window", () => ({ showAppLogWindow: vi.fn() }));
 vi.mock("../app-version", () => ({
   resolveApplicationVersion: vi.fn((version: string) => version),
 }));
 vi.mock("../app-build-identity", () => ({ readAppBuildIdentity }));
-vi.mock("../changelog-window", () => ({ showChangelogWindow: vi.fn() }));
-vi.mock("../license-document-window", () => ({
+vi.mock("../shell/changelog-window", () => ({ showChangelogWindow: vi.fn() }));
+vi.mock("../shell/license-document-window", () => ({
   showThirdPartyNoticesWindow: vi.fn(),
 }));
-vi.mock("../window-channels", () => ({ subscribersForChannel: vi.fn(() => []) }));
+vi.mock("../shell/window-channels", () => ({ subscribersForChannel: vi.fn(() => []) }));
 
 describe("app metadata", () => {
   beforeEach(() => {
@@ -76,8 +76,8 @@ describe("app metadata", () => {
     };
     readAppBuildIdentity.mockResolvedValueOnce(startupIdentity)
       .mockResolvedValueOnce({ ...startupIdentity, branch: "later-branch" });
-    const { registerAppMetadataIpcHandlers, resolveAppMetadata } = await import("../ipc/app-metadata");
-    const { resolveAppBuildMetadata } = await import("../app-build-metadata");
+    const { registerAppMetadataIpcHandlers, resolveAppMetadata } = await import("../shell/ipc/app-metadata");
+    const { resolveAppBuildMetadata } = await import("../shell/app-build-metadata");
     registerAppMetadataIpcHandlers();
     expect(readAppBuildIdentity).toHaveBeenCalledOnce();
     expect(readAppBuildIdentity).toHaveBeenCalledWith(false, "/repo/apps/desktop");
@@ -91,7 +91,7 @@ describe("app metadata", () => {
   });
 
   it("reports the Codex home pinned for the running process", async () => {
-    const { resolveAppMetadata } = await import("../ipc/app-metadata");
+    const { resolveAppMetadata } = await import("../shell/ipc/app-metadata");
 
     const metadata = await resolveAppMetadata(4101);
 
@@ -108,7 +108,7 @@ describe("app metadata", () => {
 
   it("reports the system-default Codex home when no named profile is pinned", async () => {
     resolveStartupCodexHome.mockReturnValue(undefined);
-    const { resolveAppMetadata } = await import("../ipc/app-metadata");
+    const { resolveAppMetadata } = await import("../shell/ipc/app-metadata");
 
     const metadata = await resolveAppMetadata(4101);
 

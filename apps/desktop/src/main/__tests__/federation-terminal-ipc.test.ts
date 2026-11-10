@@ -129,7 +129,7 @@ vi.mock("../terminal/integrated-terminal-service", async (importOriginal) => ({
   },
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: (webContents: { id: number } | undefined) =>
     webContents ? mocks.federationWindowIds.has(webContents.id) : false,
   federationWindowTargetForWebContents: (
@@ -137,7 +137,7 @@ vi.mock("../window", () => ({
   ) => (webContents ? mocks.federationTargets.get(webContents.id) : undefined),
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: () => mocks.channelSubscribers,
 }));
 
@@ -176,7 +176,7 @@ import {
   getIntegratedTerminalQuitSnapshot,
   registerIntegratedTerminalIpcHandlers,
   revealIntegratedTerminal,
-} from "../ipc/integrated-terminal";
+} from "../shell/ipc/integrated-terminal";
 
 function fakeWebContents(id: number): WebContents {
   return {

@@ -87,7 +87,7 @@ vi.mock("electron-updater", () => ({
     AppImageUpdater: class {},
   },
 }));
-vi.mock("../linux-package-updater", () => ({
+vi.mock("../shell/linux-package-updater", () => ({
   createLinuxPackageUpdater: (updater: unknown) => updater,
   authorizeLinuxPackageUpdate: () => true,
 }));
@@ -112,7 +112,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 vi.mock("../log", () => ({
   getMainLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
 }));
-vi.mock("../update-install-state", () => ({
+vi.mock("../shell/update-install-state", () => ({
   markUpdateInstallInProgress: vi.fn(),
   markUpdateInstallUpdaterQuitReady: vi.fn(),
   prepareForUpdateInstall: async () => undefined,
@@ -174,7 +174,7 @@ function offerDownload(version: string) {
 async function bootWithDownloaded() {
   feed("1.0.1");
   const first = offerDownload("1.0.1");
-  const updater = await import("../auto-updater");
+  const updater = await import("../shell/auto-updater");
   updater.initAutoUpdater();
   await vi.waitFor(() => expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1));
   mocks.updaterEvents.emit("update-downloaded", { version: "1.0.1" });
@@ -281,7 +281,7 @@ describe("a newer release replaces a downloaded update", () => {
   it("keeps a downloaded update whose version does not parse rather than downloading again", async () => {
     feed("1.0.1");
     const first = offerDownload("1.0.1");
-    const updater = await import("../auto-updater");
+    const updater = await import("../shell/auto-updater");
     updater.initAutoUpdater();
     await vi.waitFor(() => expect(mocks.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1));
     mocks.updaterEvents.emit("update-downloaded", { version: "nightly" });
@@ -469,7 +469,7 @@ describe("a newer release replaces a downloaded update", () => {
     mocks.autoUpdater.currentVersion = { version: "1.1.0" };
     feed("1.0.1");
     const first = offerDownload("1.0.1");
-    const updater = await import("../auto-updater");
+    const updater = await import("../shell/auto-updater");
     updater.initAutoUpdater();
     // The startup check holds a switch back for a check the operator asks for.
     await vi.waitFor(() => expect(updater.readAppUpdateStatus().status).toBe("no-update"));

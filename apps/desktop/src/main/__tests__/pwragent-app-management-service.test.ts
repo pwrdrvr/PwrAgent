@@ -14,13 +14,13 @@ vi.mock("electron", () => ({
   app: appMock,
 }));
 
-vi.mock("../auto-updater", () => ({
+vi.mock("../shell/auto-updater", () => ({
   checkForAppUpdatesNow: checkForAppUpdatesNowMock,
   installDownloadedAppUpdate: installDownloadedAppUpdateMock,
   readAppUpdateStatus: readAppUpdateStatusMock,
 }));
 
-vi.mock("../quit-manager", () => ({
+vi.mock("../shell/quit-manager", () => ({
   requestQuit: requestQuitMock,
 }));
 

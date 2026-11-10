@@ -67,9 +67,9 @@ vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsSer
 vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: fixture.loadIndex }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
-import { registerThreadTodoIpcHandlers } from "../ipc/thread-todos-ipc";
-import { mainWindowEventChannels } from "../main-window-channels";
-import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../window-channels";
+import { registerThreadTodoIpcHandlers } from "../shell/ipc/thread-todos-ipc";
+import { mainWindowEventChannels } from "../shell/main-window-channels";
+import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../shell/window-channels";
 
 // The real registry, fed the channels createMainWindow registers, so a
 // window missing a channel misses its broadcasts here as it does in the app.

@@ -455,7 +455,7 @@ vi.mock("electron", () => ({
 // `BrowserWindow.getAllWindows()`. The test pretends a single
 // subscriber exists for any channel, which routes back to the
 // shared `send` mock above.
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   federationTargetForChannelSubscriber: (webContents: { id: number }) =>
     channelSubscriberTargets.get(webContents.id),
   subscribersForChannel: () => channelSubscribers,
@@ -547,7 +547,7 @@ describe("agent ipc", () => {
   });
 
   it("never promotes serialized PR snapshot flags to the internal release argument", async () => {
-    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_START_REVIEW_CHANNEL } = await import("../../shared/ipc");
     registerAgentIpcHandlers();
     const request = {
@@ -560,7 +560,7 @@ describe("agent ipc", () => {
   });
 
   it("fences only the checked thread's selected detail after a local or remote branch probe", async () => {
-    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex" as const,
@@ -596,7 +596,7 @@ describe("agent ipc", () => {
   });
 
   it("moves a queued turn in the local queue or on the owning peer", async () => {
-    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_MOVE_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = { scope: "remote" as const, instanceId: "client_one" };
     registerAgentIpcHandlers();
@@ -622,7 +622,7 @@ describe("agent ipc", () => {
   });
 
   it("refuses a move for a peer that does not advertise reordering, without asking it", async () => {
-    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_MOVE_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
     const { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } = await import("../federation/federation-backend-bridge");
     federationMock.runtime.remoteTargetSupportsCapability.mockImplementation(
@@ -642,7 +642,7 @@ describe("agent ipc", () => {
   });
 
   it("pauses a queued turn in the local queue or on the owning peer", async () => {
-    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = { scope: "remote" as const, instanceId: "client_one" };
     federationMock.remoteBackend.setQueuedTurnPaused.mockClear();
@@ -668,7 +668,7 @@ describe("agent ipc", () => {
   });
 
   it("refuses a pause for a peer that does not advertise pausing, without asking it", async () => {
-    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL } = await import("../../shared/ipc");
     const { QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE } = await import("../federation/federation-backend-bridge");
     federationMock.remoteBackend.setQueuedTurnPaused.mockClear();
@@ -691,7 +691,7 @@ describe("agent ipc", () => {
 
   it("routes remote thread controls through federation without leaking the target", async () => {
     const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
-      "../ipc/agent-ipc"
+      "../shell/ipc/agent-ipc"
     );
     const {
       AGENT_CANCEL_QUEUED_TURN_CHANNEL,
@@ -1080,7 +1080,7 @@ describe("agent ipc", () => {
   });
 
   it("finishes environment selection without sending progress to a closed window", async () => {
-    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL, CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL } = await import("../../shared/ipc");
     let destroyed = false;
     const sender = {
@@ -1119,9 +1119,9 @@ describe("agent ipc", () => {
   });
 
   it("preserves directly renderable queued images from a federation peer", async () => {
-    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_READ_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
-    const { toTranscriptImageProtocolUrl, toFederatedTranscriptImageProtocolUrl } = await import("../transcript-image-protocol");
+    const { toTranscriptImageProtocolUrl, toFederatedTranscriptImageProtocolUrl } = await import("../shell/transcript-image-protocol");
     const ownerUrl = toTranscriptImageProtocolUrl("file:///tmp/fixture.png");
     const imageParts = [
       { type: "image", url: "data:image/png;base64,AQID", alt: "Inline diagram" },
@@ -1151,7 +1151,7 @@ describe("agent ipc", () => {
 
   it("loads backend summaries from the selected federation peer", async () => {
     const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
-      "../ipc/agent-ipc"
+      "../shell/ipc/agent-ipc"
     );
     const { BACKEND_LIST_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
@@ -1177,7 +1177,7 @@ describe("agent ipc", () => {
 
   it("refuses to apply this instance's model migration to a remote thread", async () => {
     const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
-      "../ipc/agent-ipc"
+      "../shell/ipc/agent-ipc"
     );
     const { AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL } = await import(
       "../../shared/ipc"
@@ -1210,7 +1210,7 @@ describe("agent ipc", () => {
     const {
       registerAgentIpcHandlers,
       disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    } = await import("../shell/ipc/agent-ipc");
     const {
       AGENT_EVENT_CHANNEL,
       AGENT_CANCEL_QUEUED_TURN_CHANNEL,
@@ -1403,7 +1403,7 @@ describe("agent ipc", () => {
   });
 
   it("hands an off-screen reply to the thread's FIFO and says how it was taken", async () => {
-    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_SUBMIT_THREAD_REPLY_CHANNEL } = await import("../../shared/ipc");
     registerAgentIpcHandlers();
     const input = [{ type: "text" as const, text: "Use the staging bucket" }];
@@ -1422,7 +1422,7 @@ describe("agent ipc", () => {
   });
 
   it.each([false, true])("routes offscreen replies to the owner with no local fallback (remote window=%s)", async (remoteWindow) => {
-    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { registerAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
     const { AGENT_SUBMIT_THREAD_REPLY_CHANNEL } = await import("../../shared/ipc");
     registerAgentIpcHandlers();
     const target = { scope: "remote" as const, instanceId: "owner" };
@@ -1442,7 +1442,7 @@ describe("agent ipc", () => {
   });
 
   it("routes remote events only to subscribed windows for the owning instance", async () => {
-    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { broadcastAgentEvent } = await import("../shell/ipc/agent-ipc");
     const localSend = vi.fn();
     const ownerSend = vi.fn();
     const unrelatedSend = vi.fn();
@@ -1489,7 +1489,7 @@ describe("agent ipc", () => {
   });
 
   it("delivers process-owned shutdown notices to remote windows without thread demand", async () => {
-    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { broadcastAgentEvent } = await import("../shell/ipc/agent-ipc");
     const localSend = vi.fn();
     const remoteSend = vi.fn();
     channelSubscribers = [{ id: 1, send: localSend }, { id: 2, send: remoteSend }];
@@ -1501,7 +1501,7 @@ describe("agent ipc", () => {
   });
 
   it("delivers local authentication health changes to remote windows without thread demand", async () => {
-    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { broadcastAgentEvent } = await import("../shell/ipc/agent-ipc");
     const localSend = vi.fn();
     const remoteSend = vi.fn();
     channelSubscribers = [{ id: 1, send: localSend }, { id: 2, send: remoteSend }];
@@ -1513,7 +1513,7 @@ describe("agent ipc", () => {
   });
 
   it.each(["disconnected", "connected"])("delivers process-owned %s status without thread demand", async (status) => {
-    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { broadcastAgentEvent } = await import("../shell/ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     const localSend = vi.fn();
     const ownerSend = vi.fn();
@@ -1543,7 +1543,7 @@ describe("agent ipc", () => {
   });
 
   it("hydrates live message provenance before broadcasting it", async () => {
-    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { broadcastAgentEvent } = await import("../shell/ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
       (event: AgentEvent) => ({
@@ -1621,7 +1621,7 @@ describe("agent ipc", () => {
   it.each(["item/agentMessage/delta", "item/completed"])(
     "preserves full message Markdown in %s events",
     async (method) => {
-      const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+      const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../shell/ipc/agent-ipc");
       const markdown = "| Finding | Test |\n| --- | --- |\n"
         + "| Preserve content | Keep every table row |\n".repeat(1_000);
       const notification = {
@@ -1646,7 +1646,7 @@ describe("agent ipc", () => {
     const {
       registerAgentIpcHandlers,
       disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    } = await import("../shell/ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     const oversizedOutput =
       `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
@@ -1698,7 +1698,7 @@ describe("agent ipc", () => {
     const {
       registerAgentIpcHandlers,
       disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    } = await import("../shell/ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     const oversizedDiff =
       `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
@@ -1753,7 +1753,7 @@ describe("agent ipc", () => {
     const {
       registerAgentIpcHandlers,
       disposeAgentIpcHandlers,
-    } = await import("../ipc/agent-ipc");
+    } = await import("../shell/ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     const diff = [
       "diff --git a/src/example.ts b/src/example.ts",
@@ -1810,7 +1810,7 @@ describe("agent ipc", () => {
 
   it("withholds a peer's PR status from windows that monitor the PR locally", async () => {
     const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
-      "../ipc/agent-ipc"
+      "../shell/ipc/agent-ipc"
     );
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
 

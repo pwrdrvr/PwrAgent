@@ -346,7 +346,7 @@ describe("settings ipc", () => {
     const {
       registerSettingsIpcHandlers,
       disposeSettingsIpcHandlers,
-    } = await import("../ipc/settings");
+    } = await import("../shell/ipc/settings");
     const {
       SETTINGS_READ_BOOTSTRAP_CHANNEL,
       SETTINGS_READ_CHANNEL,
@@ -489,7 +489,7 @@ describe("settings ipc", () => {
       effectiveCodexHome: codexHome,
       profiles: [],
     });
-    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL } = await import("../../shared/ipc");
     registerSettingsIpcHandlers(service);
 
@@ -549,7 +549,7 @@ describe("settings ipc", () => {
       env: {},
       secretStore: new MemoryDesktopSecretStore(),
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
     registerSettingsIpcHandlers(service);
 
@@ -619,7 +619,7 @@ describe("settings ipc", () => {
       env: {},
       secretStore: new MemoryDesktopSecretStore(),
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
     registerSettingsIpcHandlers(service);
 
@@ -659,7 +659,7 @@ describe("settings ipc", () => {
       env: {},
       secretStore: new MemoryDesktopSecretStore(),
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
     registerSettingsIpcHandlers(service);
 
@@ -695,7 +695,7 @@ describe("settings ipc", () => {
       disabledReasonKind: "lease_held",
       leaseHolder: { instanceId: "other-instance" },
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_READ_MESSAGING_CHANNEL } = await import("../../shared/ipc");
 
     registerSettingsIpcHandlers(service);
@@ -731,7 +731,7 @@ describe("settings ipc", () => {
       detail: "api.telegram.org",
       observedAt: 1234,
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL } = await import("../../shared/ipc");
 
     registerSettingsIpcHandlers(service);
@@ -772,7 +772,7 @@ describe("settings ipc", () => {
     const onConfigPatchWritten = vi.fn(async (_patch, previous) => {
       store.applyProviderModelDefaults(previous, service.resolveProviderModelDefaults());
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
     registerSettingsIpcHandlers(service, { onConfigPatchWritten });
     const patch = { models: { providerDefaults: after } };
@@ -792,7 +792,7 @@ describe("settings ipc", () => {
       secretStore: new MemoryDesktopSecretStore(),
       now: () => 20,
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
     const refreshCodexDiscovery = vi.spyOn(service, "refreshCodexDiscovery");
 
@@ -892,7 +892,7 @@ describe("settings ipc", () => {
       resolveGrokApiKey: vi.fn(),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_TEST_CREDENTIALS_CHANNEL } = await import("../../shared/ipc");
 
@@ -918,7 +918,7 @@ describe("settings ipc", () => {
       readSettings: vi.fn(),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL } = await import("../../shared/ipc");
 
@@ -946,7 +946,7 @@ describe("settings ipc", () => {
       readSettings: vi.fn(),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL } = await import("../../shared/ipc");
 
@@ -982,7 +982,7 @@ describe("settings ipc", () => {
       readSettings: vi.fn(),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL } = await import("../../shared/ipc");
 
@@ -1016,7 +1016,7 @@ describe("settings ipc", () => {
       resolveSlackAppTokenSync,
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL } = await import("../../shared/ipc");
 
@@ -1048,7 +1048,7 @@ describe("settings ipc", () => {
       resolveSlackBotTokenSync: vi.fn(() => "xoxb-fake-bot-token"),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL } = await import("../../shared/ipc");
 
@@ -1092,7 +1092,7 @@ describe("settings ipc", () => {
       resolveSlackBotTokenSync: vi.fn(() => "xoxb-fake-bot-token"),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL } = await import("../../shared/ipc");
     const appLink = "slack://app?team=T0FAKETEAM1&id=A0FAKEAPP01&tab=messages";
@@ -1143,7 +1143,7 @@ describe("settings ipc", () => {
       resolveSlackBotTokenSync: vi.fn(() => "xoxb-fake-bot-token"),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const { SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL } = await import("../../shared/ipc");
 
@@ -1199,7 +1199,7 @@ describe("settings ipc", () => {
       status: "ok",
     });
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const {
       SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1297,7 +1297,7 @@ describe("settings ipc", () => {
       resolveCodexCommand: vi.fn(async () => ({ command: "codex", source: "config" })),
       readCodexProfiles: vi.fn(() => ({ effectiveCodexHome: root.replace(/\\/g, "/") })),
     } as unknown as DesktopSettingsService;
-    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL } = await import("../../shared/ipc");
     registerSettingsIpcHandlers(service);
     refreshCodexAfterAuthenticationMock.mockRejectedValueOnce(new Error("Thread refresh failed"));
@@ -1346,7 +1346,7 @@ describe("settings ipc", () => {
       });
     });
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const {
       SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
@@ -1406,7 +1406,7 @@ describe("settings ipc", () => {
       return child;
     });
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const {
       SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
@@ -1458,7 +1458,7 @@ describe("settings ipc", () => {
       });
     });
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
-      "../ipc/settings"
+      "../shell/ipc/settings"
     );
     const {
       SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
@@ -1515,7 +1515,7 @@ describe("settings ipc", () => {
       secretStore,
       now: () => 20,
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
 
     registerSettingsIpcHandlers(service);
@@ -1562,7 +1562,7 @@ describe("settings ipc", () => {
       secretStore,
       now: () => 20,
     });
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const {
       SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
     } = await import("../../shared/ipc");
@@ -1668,7 +1668,7 @@ describe("settings ipc", () => {
       },
     });
     const { initializeAppState, disposeAppState } = await import("../state/app-state");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -1797,7 +1797,7 @@ describe("settings ipc", () => {
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
     const { initializeAppState, disposeAppState, getAppStateDb } = await import("../state/app-state");
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -1837,7 +1837,7 @@ describe("settings ipc", () => {
       "../state/app-state"
     );
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -1940,7 +1940,7 @@ describe("settings ipc", () => {
       "../state/app-state"
     );
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     // The pin has to be a real configured override, because that is the cause
     // `pinnedBehind` reports. A bare tag mismatch is not enough.
@@ -2058,7 +2058,7 @@ describe("settings ipc", () => {
       "../state/app-state"
     );
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -2161,7 +2161,7 @@ describe("settings ipc", () => {
       "../state/app-state"
     );
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -2254,7 +2254,7 @@ describe("settings ipc", () => {
     const { initializeAppState, disposeAppState } = await import(
       "../state/app-state"
     );
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -2302,7 +2302,7 @@ describe("settings ipc", () => {
     const { initializeAppState, disposeAppState } = await import(
       "../state/app-state"
     );
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -2363,7 +2363,7 @@ describe("settings ipc", () => {
     const { initializeAppState, disposeAppState } = await import(
       "../state/app-state"
     );
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -2423,7 +2423,7 @@ describe("settings ipc", () => {
       "../state/app-state"
     );
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: profileConfigPath,
@@ -2545,7 +2545,7 @@ describe("settings ipc", () => {
     const { initializeAppState, disposeAppState } = await import(
       "../state/app-state"
     );
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -2681,7 +2681,7 @@ describe("settings ipc", () => {
     const { initializeAppState, disposeAppState } = await import(
       "../state/app-state"
     );
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
@@ -2834,7 +2834,7 @@ describe("settings ipc", () => {
       "../state/app-state"
     );
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const {
       PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
       PROVIDER_CATALOG_REFRESH_READ_CHANNEL,
@@ -2929,7 +2929,7 @@ describe("settings ipc", () => {
       "../state/app-state"
     );
     const { AcpAgentStore } = await import("../storage/acp-agent-store");
-    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
     const { ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -3017,7 +3017,7 @@ describe("settings ipc", () => {
         secretStore: new MemoryDesktopSecretStore(),
       });
       const onConfigPatchWritten = vi.fn(async () => undefined);
-      const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+      const { registerSettingsIpcHandlers } = await import("../shell/ipc/settings");
       registerSettingsIpcHandlers(service, { onConfigPatchWritten });
       return { configPath, onConfigPatchWritten };
     }

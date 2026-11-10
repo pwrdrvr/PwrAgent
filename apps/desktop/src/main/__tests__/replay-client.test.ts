@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ReplayClient } from "../testing/replay-client";
+import { ReplayClient } from "../shell/testing/replay-client";
 
 function buildFixture() {
   return {

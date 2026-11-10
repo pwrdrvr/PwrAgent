@@ -20,28 +20,28 @@ vi.mock("electron", () => ({
     constructor(public options: Record<string, unknown>) { state.windows.push(this); }
   },
 }));
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   applyWindowSecurityHardening: vi.fn(), rendererPreloadWebPreferences: () => ({ preload: "/fixture/preload.js", nodeIntegrationInSubFrames: true }),
   getRendererEntry: () => ({ kind: "file", value: "/fixture/index.html" }),
 }));
-vi.mock("../window-channels", () => ({ WINDOW_KIND_USAGE_ACTIVITY: "usage-activity", registerWindowChannels: vi.fn() }));
+vi.mock("../shell/window-channels", () => ({ WINDOW_KIND_USAGE_ACTIVITY: "usage-activity", registerWindowChannels: vi.fn() }));
 vi.mock("../settings/appearance-bootstrap", () => ({ readBootstrapAppearance: () => ({}), themedWindowAdditionalArguments: () => [] }));
-vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "theme-background" }));
-vi.mock("../auxiliary-window-chrome", () => ({
+vi.mock("../shell/native-appearance", () => ({ themedWindowBackgroundColor: () => "theme-background" }));
+vi.mock("../shell/auxiliary-window-chrome", () => ({
   auxiliaryWindowChromeOptions: () => ({ titleBarStyle: "hiddenInset" }),
   hideAuxiliaryWindowMenuBar: vi.fn(), registerAuxiliaryWindowTitle: vi.fn(),
   setAuxiliaryWindowAlwaysOnTop: (window: { setAlwaysOnTop: (enabled: boolean) => void }, enabled: boolean) => window.setAlwaysOnTop(enabled),
   showAndFocusAuxiliaryWindow: vi.fn(), showAuxiliaryWindowWhenReady: vi.fn(),
 }));
-vi.mock("../window-placement", () => ({ placementForSourceDisplay: () => ({}), positionWindowForSourceDisplay: vi.fn() }));
+vi.mock("../shell/window-placement", () => ({ placementForSourceDisplay: () => ({}), positionWindowForSourceDisplay: vi.fn() }));
 
 beforeEach(() => { state.windows.length = 0; vi.resetModules(); });
 
 describe("Usage Activity native window", () => {
   it("creates one independent secure themed window and focuses it on repeated open", async () => {
-    const { showUsageActivityWindow } = await import("../usage-activity-window");
-    const { showAndFocusAuxiliaryWindow } = await import("../auxiliary-window-chrome");
-    const { registerWindowChannels } = await import("../window-channels");
+    const { showUsageActivityWindow } = await import("../shell/usage-activity-window");
+    const { showAndFocusAuxiliaryWindow } = await import("../shell/auxiliary-window-chrome");
+    const { registerWindowChannels } = await import("../shell/window-channels");
     showUsageActivityWindow();
     showUsageActivityWindow();
     expect(state.windows).toHaveLength(1);
@@ -61,7 +61,7 @@ describe("Usage Activity native window", () => {
   });
 
   it("opens on a provider's limits, and tells an open window to focus another", async () => {
-    const { showUsageActivityWindow } = await import("../usage-activity-window");
+    const { showUsageActivityWindow } = await import("../shell/usage-activity-window");
     showUsageActivityWindow({}, { provider: "anthropic" });
     expect(state.windows[0].loadFile).toHaveBeenCalledWith("/fixture/index.html", { hash: "usage-activity?provider=anthropic" });
     expect(state.windows[0].webContents.send).not.toHaveBeenCalled();

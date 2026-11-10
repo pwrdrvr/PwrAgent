@@ -14,8 +14,8 @@ import {
   checkForAppUpdatesNow,
   installDownloadedAppUpdate,
   readAppUpdateStatus,
-} from "../auto-updater";
-import { requestQuit } from "../quit-manager";
+} from "../shell/auto-updater";
+import { requestQuit } from "../shell/quit-manager";
 import type {
   CodexAppServerProcessSample,
   CodexAppServerRecycleSettings,

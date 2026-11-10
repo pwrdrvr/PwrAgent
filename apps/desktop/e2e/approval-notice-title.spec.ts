@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures/electron-test";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
-import type { ReplayFixture } from "../src/main/testing/replay-fixture";
+import type { ReplayFixture } from "../src/main/shell/testing/replay-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 test("names an approval outside the loaded page and updates it on rename", async ({ browserName: _browserName }, testInfo) => {

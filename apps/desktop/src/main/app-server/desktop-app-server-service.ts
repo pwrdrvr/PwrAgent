@@ -313,7 +313,7 @@ import {
 import {
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
-import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
+import { materializeTranscriptImageUrlsForRenderer } from "../shell/transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins, rejectNonUserDirectoryKey } from "./local-directory-pins";
@@ -347,7 +347,7 @@ import {
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
 } from "../../shared/ipc";
 import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
-import { subscribersForChannel } from "../window-channels";
+import { subscribersForChannel } from "../shell/window-channels";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,

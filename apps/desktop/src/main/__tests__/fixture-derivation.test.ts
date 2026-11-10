@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   deriveReplayFixtureFromCapture,
   exportSessionCapture,
-} from "../testing/fixture-derivation";
+} from "../shell/testing/fixture-derivation";
 
 async function createTempDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-fixture-derivation-"));

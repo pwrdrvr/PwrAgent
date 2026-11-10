@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { analyzeCodexThreadProtocolCapture } from "../testing/codex-thread-protocol-analysis";
+import { analyzeCodexThreadProtocolCapture } from "../shell/testing/codex-thread-protocol-analysis";
 
 describe("analyzeCodexThreadProtocolCapture", () => {
   it("characterizes thread list payloads and identity fields", async () => {

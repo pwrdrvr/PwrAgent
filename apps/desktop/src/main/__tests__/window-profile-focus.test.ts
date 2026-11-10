@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserWindow } from "electron";
-import { selectWindowForProfileFocus } from "../window-profile-focus";
+import { selectWindowForProfileFocus } from "../shell/window-profile-focus";
 
 function window(options: {
   children?: BrowserWindow[];

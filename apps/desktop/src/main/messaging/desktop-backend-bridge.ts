@@ -105,7 +105,7 @@ import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-env
 import {
   materializeFederatedTranscriptMessageImagesForMessaging,
   materializeTranscriptMessageImagesForMessaging,
-} from "../transcript-image-protocol";
+} from "../shell/transcript-image-protocol";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { searchFederatedThreadsOnOwner } from "../federation/federated-search-service";
 import {

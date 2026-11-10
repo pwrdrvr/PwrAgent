@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildIntegratedTerminalContextMenuTemplate } from "../terminal/integrated-terminal-context-menu";
+import { buildIntegratedTerminalContextMenuTemplate } from "../shell/terminal/integrated-terminal-context-menu";
 
 describe("integrated terminal context menu", () => {
   it.each([

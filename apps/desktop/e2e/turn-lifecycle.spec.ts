@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
-import type { ReplayFixture } from "../src/main/testing/replay-fixture";
+import type { ReplayFixture } from "../src/main/shell/testing/replay-fixture";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
 const turnLifecycleSpecDir = path.dirname(fileURLToPath(import.meta.url));

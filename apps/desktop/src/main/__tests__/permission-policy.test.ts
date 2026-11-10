@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RendererEntry } from "../renderer-entry-url";
+import type { RendererEntry } from "../shell/renderer-entry-url";
 
 const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: mocks.warn, info: vi.fn() }) }));
 
-const { createPermissionPolicy, installPermissionPolicy } = await import("../permission-policy");
+const { createPermissionPolicy, installPermissionPolicy } = await import("../shell/permission-policy");
 
 const ENTRY: RendererEntry = { kind: "file", value: "/fixture/app/out/renderer/index.html" };
 const APP_URL = `${pathToFileURL(ENTRY.value).href}#star-map`;

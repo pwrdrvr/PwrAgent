@@ -263,8 +263,8 @@ import type {
   DesktopOwnerStorage,
   WorktreeGitWorkingStateCacheEntry,
 } from "../storage/desktop-overlay-store";
-import { requestShowThread } from "../window-show-thread";
-import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { requestShowThread } from "../shell/window-show-thread";
+import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../shell/transcript-image-protocol";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import { MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS, MCP_CONNECTION_STARTUP_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
@@ -813,9 +813,9 @@ import {
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-capture";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
-import type { ProtocolCaptureStore } from "../testing/capture-store";
-import { createReplayClientsFromEnv } from "../testing/replay-runtime";
+import { createProtocolCaptureFromEnv } from "../shell/testing/protocol-capture";
+import type { ProtocolCaptureStore } from "../shell/testing/capture-store";
+import { createReplayClientsFromEnv } from "../shell/testing/replay-runtime";
 import {
   GitDirectoryService,
   UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
@@ -938,7 +938,7 @@ import {
   ONBOARDING_CODEX_GATE_ENABLED,
   type ManagedCodexSelectionChange,
 } from "../settings/desktop-settings-service";
-import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
+import { getDesktopNotificationService } from "../shell/notifications/desktop-notification-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import {
   BackendModelCatalog,

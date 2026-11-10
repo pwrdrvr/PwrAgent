@@ -329,7 +329,7 @@ import {
   rewriteFederatedTranscriptImageUrlForRenderer,
   rewriteFederatedTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
-} from "../transcript-image-protocol";
+} from "../shell/transcript-image-protocol";
 import {
   readThreadForPeer,
   readTurnAssistantReplyForPeer,

@@ -5,7 +5,7 @@ import { test } from "vitest";
 const require = createRequire(import.meta.url);
 
 test.each(["Deb", "Rpm", "Pacman"])("managed %s installation permits authorization retry without scheduling relaunch or quit", async (format) => {
-  const updaters = await import("../src/main/linux-package-updater.ts");
+  const updaters = await import("../src/main/shell/linux-package-updater.ts");
   const Updater = updaters[`Managed${format}Updater`];
   const sequence = [];
   const updater = new Updater(null, {
@@ -45,7 +45,7 @@ test.each(["rpm", "dnf", "yum", "zypper"].flatMap((manager) => [
   { manager, downgrade: true },
   { manager, downgrade: false },
 ]))("managed RPM uses the $manager command with downgrade=$downgrade", async ({ manager, downgrade }) => {
-  const { ManagedRpmUpdater } = await import("../src/main/linux-package-updater.ts");
+  const { ManagedRpmUpdater } = await import("../src/main/shell/linux-package-updater.ts");
   const { LinuxUpdater } = require("electron-updater/out/LinuxUpdater");
   const originalRunner = LinuxUpdater.prototype.runCommandWithSudoIfNeeded;
   const commands = [];

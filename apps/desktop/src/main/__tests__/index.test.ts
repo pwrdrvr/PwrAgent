@@ -7,7 +7,7 @@ import type { BrowserWindow } from "electron";
 import type {
   applyRememberedLinuxPasswordStore,
   relaunchForLinuxSecretStore,
-} from "../linux-password-store";
+} from "../shell/linux-password-store";
 import { ElectronQuitModel } from "./helpers/electron-quit-model";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
@@ -345,12 +345,12 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../linux-password-store", () => ({
+vi.mock("../shell/linux-password-store", () => ({
   applyRememberedLinuxPasswordStore: applyRememberedLinuxPasswordStoreMock,
   relaunchForLinuxSecretStore: relaunchForLinuxSecretStoreMock,
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   createMainWindow: createMainWindowMock,
   getRendererEntry: () => ({ kind: "file", value: "/fixture/renderer/index.html" }),
   isFederationWindowWebContents: vi.fn(() => false),
@@ -363,29 +363,29 @@ vi.mock("../windows-job-wrapper", () => ({
   prewarmWindowsJobWrapper: prewarmWindowsJobWrapperMock,
 }));
 
-vi.mock("../app-menu-bridge", () => ({
+vi.mock("../shell/app-menu-bridge", () => ({
   wireAppMenuBridge: vi.fn(),
 }));
 
 // Both reach `ipcMain` / `app.on`, which the electron mock above does not
 // carry; they have their own tests.
-vi.mock("../window-controls-bridge", () => ({
+vi.mock("../shell/window-controls-bridge", () => ({
   wireWindowControlsBridge: wireWindowControlsBridgeMock,
 }));
 
-vi.mock("../window-frame-sync", () => ({
+vi.mock("../shell/window-frame-sync", () => ({
   installWindowFrameSync: installWindowFrameSyncMock,
 }));
 
-vi.mock("../window-open-settings", () => ({
+vi.mock("../shell/window-open-settings", () => ({
   requestOpenSettings: requestOpenSettingsMock,
 }));
 
-vi.mock("../window-open-new-thread", () => ({
+vi.mock("../shell/window-open-new-thread", () => ({
   requestOpenNewThread: requestOpenNewThreadMock,
 }));
 
-vi.mock("../quit-manager", () => ({
+vi.mock("../shell/quit-manager", () => ({
   appQuitManager: {
     allowImmediateQuit: allowImmediateQuitMock,
     isQuitAllowed: isQuitAllowedMock,
@@ -393,7 +393,7 @@ vi.mock("../quit-manager", () => ({
   requestQuit: requestQuitMock,
 }));
 
-vi.mock("../ipc/app-server", () => ({
+vi.mock("../shell/ipc/app-server", () => ({
   appServerService: {
     archiveThread: appServerArchiveThreadMock,
     setThreadPin: appServerSetThreadPinMock,
@@ -404,33 +404,33 @@ vi.mock("../ipc/app-server", () => ({
   disposeAppServerIpcHandlers: disposeAppServerIpcHandlersMock,
 }));
 
-vi.mock("../ipc/agent-ipc", () => ({
+vi.mock("../shell/ipc/agent-ipc", () => ({
   registerAgentIpcHandlers: registerAgentIpcHandlersMock,
   disposeAgentIpcHandlers: disposeAgentIpcHandlersMock,
 }));
 
-vi.mock("../ipc/native-voice", () => ({
+vi.mock("../shell/ipc/native-voice", () => ({
   nativeVoiceMediaRules: nativeVoiceMediaRulesFixture,
   registerNativeVoiceIpcHandlers: registerNativeVoiceIpcHandlersMock,
 }));
 
-vi.mock("../permission-policy", () => ({
+vi.mock("../shell/permission-policy", () => ({
   installPermissionPolicy: installPermissionPolicyMock,
 }));
 
-vi.mock("../ipc/thread-todos-ipc", () => ({
+vi.mock("../shell/ipc/thread-todos-ipc", () => ({
   registerThreadTodoIpcHandlers: vi.fn(),
 }));
 
-vi.mock("../ipc/codex-environment-editor-ipc", () => ({
+vi.mock("../shell/ipc/codex-environment-editor-ipc", () => ({
   registerCodexEnvironmentEditorIpcHandlers: vi.fn(),
 }));
 
-vi.mock("../ipc/operator-requests-ipc", () => ({
+vi.mock("../shell/ipc/operator-requests-ipc", () => ({
   registerOperatorRequestIpcHandlers: vi.fn(),
 }));
 
-vi.mock("../ipc/scheduled-actions-ipc", () => ({
+vi.mock("../shell/ipc/scheduled-actions-ipc", () => ({
   registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
   disposeScheduledActionIpcHandlers: disposeScheduledActionIpcHandlersMock,
 }));
@@ -439,32 +439,32 @@ vi.mock("../scheduled-actions/scheduled-thread-action-service", () => ({
   disposeScheduledThreadActionService: disposeScheduledThreadActionServiceMock,
 }));
 
-vi.mock("../ipc/applications", () => ({
+vi.mock("../shell/ipc/applications", () => ({
   registerApplicationIpcHandlers: registerApplicationIpcHandlersMock,
   disposeApplicationIpcHandlers: disposeApplicationIpcHandlersMock,
 }));
 
-vi.mock("../ipc/automation-ipc", () => ({
+vi.mock("../shell/ipc/automation-ipc", () => ({
   registerAutomationIpcHandlers: registerAutomationIpcHandlersMock,
   disposeAutomationIpcHandlers: disposeAutomationIpcHandlersMock,
 }));
 
-vi.mock("../ipc/app-metadata", () => ({
+vi.mock("../shell/ipc/app-metadata", () => ({
   registerAppMetadataIpcHandlers: registerAppMetadataIpcHandlersMock,
   disposeAppMetadataIpcHandlers: disposeAppMetadataIpcHandlersMock,
 }));
 
-vi.mock("../ipc/clipboard", () => ({
+vi.mock("../shell/ipc/clipboard", () => ({
   registerClipboardIpcHandlers: registerClipboardIpcHandlersMock,
   disposeClipboardIpcHandlers: disposeClipboardIpcHandlersMock,
 }));
 
-vi.mock("../ipc/app-icon-drag", () => ({
+vi.mock("../shell/ipc/app-icon-drag", () => ({
   registerAppIconDragIpcHandlers: registerAppIconDragIpcHandlersMock,
   disposeAppIconDragIpcHandlers: disposeAppIconDragIpcHandlersMock,
 }));
 
-vi.mock("../auto-updater", () => ({
+vi.mock("../shell/auto-updater", () => ({
   checkForAppUpdatesNow: checkForAppUpdatesNowMock,
   registerAppUpdateIpcHandlers: registerAppUpdateIpcHandlersMock,
   disposeAppUpdateIpcHandlers: disposeAppUpdateIpcHandlersMock,
@@ -474,37 +474,37 @@ vi.mock("../auto-updater", () => ({
 const isUpdateInstallInProgressMock = vi.fn(() => false);
 const isUpdateInstallUpdaterQuitReadyMock = vi.fn(() => false);
 const setUpdateInstallPreparationHandlerMock = vi.fn();
-vi.mock("../update-install-state", () => ({
+vi.mock("../shell/update-install-state", () => ({
   isUpdateInstallInProgress: () => isUpdateInstallInProgressMock(),
   isUpdateInstallUpdaterQuitReady: () =>
     isUpdateInstallUpdaterQuitReadyMock(),
   setUpdateInstallPreparationHandler: setUpdateInstallPreparationHandlerMock,
 }));
 
-vi.mock("../app-log-window", () => ({
+vi.mock("../shell/app-log-window", () => ({
   showAppLogWindow: showAppLogWindowMock,
 }));
 
-vi.mock("../changelog-window", () => ({
+vi.mock("../shell/changelog-window", () => ({
   showChangelogWindow: showChangelogWindowMock,
 }));
 
-vi.mock("../license-document-window", () => ({
+vi.mock("../shell/license-document-window", () => ({
   showLicenseWindow: showLicenseWindowMock,
   showThirdPartyNoticesWindow: showThirdPartyNoticesWindowMock,
 }));
 
-vi.mock("../ipc/image-normalization", () => ({
+vi.mock("../shell/ipc/image-normalization", () => ({
   registerImageNormalizationIpcHandlers: registerImageNormalizationIpcHandlersMock,
   disposeImageNormalizationIpcHandlers: disposeImageNormalizationIpcHandlersMock,
 }));
 
-vi.mock("../ipc/integrated-terminal", () => ({
+vi.mock("../shell/ipc/integrated-terminal", () => ({
   registerIntegratedTerminalIpcHandlers: registerIntegratedTerminalIpcHandlersMock,
   disposeIntegratedTerminalIpcHandlers: disposeIntegratedTerminalIpcHandlersMock,
 }));
 
-vi.mock("../ipc/diagnostics", () => ({
+vi.mock("../shell/ipc/diagnostics", () => ({
   registerDiagnosticsIpcHandlers: registerDiagnosticsIpcHandlersMock,
   disposeDiagnosticsIpcHandlers: disposeDiagnosticsIpcHandlersMock,
 }));
@@ -514,76 +514,76 @@ vi.mock("../app-server/codex-environment-runtime", () => ({
     stopAllCodexEnvironmentDetachedCommandsMock,
 }));
 
-vi.mock("../ipc/composer-drafts", () => ({
+vi.mock("../shell/ipc/composer-drafts", () => ({
   registerComposerDraftIpcHandlers: registerComposerDraftIpcHandlersMock,
   disposeComposerDraftIpcHandlers: disposeComposerDraftIpcHandlersMock,
 }));
 
-vi.mock("../ipc/federation", () => ({
+vi.mock("../shell/ipc/federation", () => ({
   registerFederationIpcHandlers: registerFederationIpcHandlersMock,
   disposeFederationIpcHandlers: disposeFederationIpcHandlersMock,
 }));
 
-vi.mock("../ipc/star-map", () => ({
+vi.mock("../shell/ipc/star-map", () => ({
   registerStarMapIpcHandlers: registerStarMapIpcHandlersMock,
   disposeStarMapIpcHandlers: disposeStarMapIpcHandlersMock,
 }));
 
-vi.mock("../ipc/preload-log", () => ({
+vi.mock("../shell/ipc/preload-log", () => ({
   registerPreloadLogIpcHandlers: registerPreloadLogIpcHandlersMock,
   disposePreloadLogIpcHandlers: disposePreloadLogIpcHandlersMock,
 }));
 
-vi.mock("../ipc/profiles", () => ({
+vi.mock("../shell/ipc/profiles", () => ({
   registerProfilesIpcHandlers: registerProfilesIpcHandlersMock,
   disposeProfilesIpcHandlers: disposeProfilesIpcHandlersMock,
   listDesktopPwrAgentProfiles: listDesktopPwrAgentProfilesMock,
   openDesktopPwrAgentProfile: openDesktopPwrAgentProfileMock,
 }));
 
-vi.mock("../ipc/renderer-error", () => ({
+vi.mock("../shell/ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
   disposeRendererErrorIpcHandlers: disposeRendererErrorIpcHandlersMock,
 }));
 
-vi.mock("../ipc/boot-info", () => ({
+vi.mock("../shell/ipc/boot-info", () => ({
   registerBootInfoIpcHandlers: registerBootInfoIpcHandlersMock,
   disposeBootInfoIpcHandlers: disposeBootInfoIpcHandlersMock,
 }));
 
-vi.mock("../ipc/quit-blockers", () => ({
+vi.mock("../shell/ipc/quit-blockers", () => ({
   registerQuitBlockerIpcHandlers: registerQuitBlockerIpcHandlersMock,
   disposeQuitBlockerIpcHandlers: disposeQuitBlockerIpcHandlersMock,
 }));
 
-vi.mock("../ipc/restart-gate", () => ({
+vi.mock("../shell/ipc/restart-gate", () => ({
   registerRestartGateIpcHandlers: vi.fn(),
   disposeRestartGateIpcHandlers: vi.fn(),
 }));
 
-vi.mock("../ipc/launchpad-access-notice", () => ({
+vi.mock("../shell/ipc/launchpad-access-notice", () => ({
   registerLaunchpadAccessNoticeIpcHandlers: vi.fn(),
   disposeLaunchpadAccessNoticeIpcHandlers: vi.fn(),
 }));
 
-vi.mock("../ipc/runtime-identity", () => ({
+vi.mock("../shell/ipc/runtime-identity", () => ({
   registerRuntimeIdentityIpcHandlers: registerRuntimeIdentityIpcHandlersMock,
   disposeRuntimeIdentityIpcHandlers: disposeRuntimeIdentityIpcHandlersMock,
 }));
 
-vi.mock("../ipc/settings", () => ({
+vi.mock("../shell/ipc/settings", () => ({
   registerSettingsIpcHandlers: registerSettingsIpcHandlersMock,
   disposeSettingsIpcHandlers: disposeSettingsIpcHandlersMock,
 }));
 
-vi.mock("../ipc/keybindings", () => ({
+vi.mock("../shell/ipc/keybindings", () => ({
   registerKeybindingsIpcHandlers: vi.fn(),
   disposeKeybindingsIpcHandlers: vi.fn(),
   getKeybindingsSnapshot: vi.fn(() => ({ overrides: {}, filePath: "/tmp/keybindings.toml" })),
   onKeybindingsChanged: vi.fn(() => () => undefined),
 }));
 
-vi.mock("../ipc/window-pointer", () => ({
+vi.mock("../shell/ipc/window-pointer", () => ({
   registerWindowPointerIpcHandlers: registerWindowPointerIpcHandlersMock,
   disposeWindowPointerIpcHandlers: disposeWindowPointerIpcHandlersMock,
 }));
@@ -720,12 +720,12 @@ vi.mock("../app-server/backend-registry", () => ({
   })),
 }));
 
-vi.mock("../ipc/messaging-status", () => ({
+vi.mock("../shell/ipc/messaging-status", () => ({
   registerMessagingStatusIpcHandlers: registerMessagingStatusIpcHandlersMock,
   disposeMessagingStatusIpcHandlers: disposeMessagingStatusIpcHandlersMock,
 }));
 
-vi.mock("../ipc/mcp-connections", () => ({
+vi.mock("../shell/ipc/mcp-connections", () => ({
   registerMcpConnectionIpcHandlers: registerMcpConnectionIpcHandlersMock,
   disposeMcpConnectionIpcHandlers: disposeMcpConnectionIpcHandlersMock,
 }));
@@ -737,11 +737,11 @@ vi.mock("../mcp-connections/mcp-connection-gateway-service", () => ({
   })),
 }));
 
-vi.mock("../ipc/messaging-rbac", () => ({
+vi.mock("../shell/ipc/messaging-rbac", () => ({
   registerMessagingRbacIpcHandlers: registerMessagingRbacIpcHandlersMock,
 }));
 
-vi.mock("../diagnostics/startup-cpu-profiler", () => ({
+vi.mock("../shell/diagnostics/startup-cpu-profiler", () => ({
   StartupCpuProfiler: StartupCpuProfilerMock,
 }));
 
@@ -1050,7 +1050,7 @@ describe("bootstrapApp", () => {
   beforeAll(async () => {
     resetBootstrapHarness();
     try {
-      await import("../index");
+      await import("../shell/index");
       await flushMicrotasks();
     } finally {
       restoreBootstrapHarness();
@@ -1069,7 +1069,7 @@ describe("bootstrapApp", () => {
     vi.stubGlobal("process", Object.create(process, { platform: { value: platform } }));
     vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", disabled);
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(applyRememberedLinuxPasswordStoreMock).not.toHaveBeenCalled();
@@ -1083,7 +1083,7 @@ describe("bootstrapApp", () => {
     vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
     vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", value);
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(applyRememberedLinuxPasswordStoreMock).not.toHaveBeenCalled();
@@ -1097,7 +1097,7 @@ describe("bootstrapApp", () => {
     vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
     vi.stubEnv("PWRAGENT_E2E", "1");
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(applyRememberedLinuxPasswordStoreMock).not.toHaveBeenCalled();
@@ -1118,7 +1118,7 @@ describe("bootstrapApp", () => {
     isEncryptionAvailableMock.mockReturnValue(false);
     getSelectedStorageBackendMock.mockReturnValue("kwallet6");
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(applyRememberedLinuxPasswordStoreMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -1148,7 +1148,7 @@ describe("bootstrapApp", () => {
       return true;
     });
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(relaunchForLinuxSecretStoreMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -1172,7 +1172,7 @@ describe("bootstrapApp", () => {
       return new Promise((resolve) => { select = resolve; });
     });
     runStartupStorageMaintenanceMock.mockImplementation(async (options) => { await options.discover(); });
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     expect(listThreadsMock).not.toHaveBeenCalled();
     expect(createMainWindowMock).not.toHaveBeenCalled();
@@ -1190,7 +1190,7 @@ describe("bootstrapApp", () => {
       await expect(options.discover()).rejects.toThrow("No Codex selection");
       expect(listThreadsMock).not.toHaveBeenCalled();
     });
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     expect(runStartupStorageMaintenanceMock).toHaveBeenCalledOnce();
     expect(createMainWindowMock).toHaveBeenCalledOnce();
@@ -1199,7 +1199,7 @@ describe("bootstrapApp", () => {
   it("continues startup after the storage job, including when its window closes", async () => {
     let finish!: () => void;
     runStartupStorageMaintenanceMock.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     expect(runStartupStorageMaintenanceMock).toHaveBeenCalledWith(expect.objectContaining({
       existingDatabase: true, onboardingCompleted: true,
@@ -1221,7 +1221,7 @@ describe("bootstrapApp", () => {
         }),
     );
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(StartupCpuProfilerMock).toHaveBeenCalledTimes(1);
@@ -1277,7 +1277,7 @@ describe("bootstrapApp", () => {
 
   it("synchronizes live provider runtimes after executable settings change", async () => {
     startupProfilerInstance.start.mockResolvedValue();
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     const registration = registerSettingsIpcHandlersMock.mock.calls[0]?.[1] as
       | {
@@ -1302,7 +1302,7 @@ describe("bootstrapApp", () => {
     vi.useFakeTimers();
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -1316,7 +1316,7 @@ describe("bootstrapApp", () => {
   it("surfaces an actual startup rejection before the main window shows", async () => {
     whenReadyMock.mockReturnValue(Promise.reject(new Error("startup exploded")));
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(showMessageBoxSyncMock).toHaveBeenCalledWith(
@@ -1337,9 +1337,9 @@ describe("bootstrapApp", () => {
     }
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
-    const { developmentDockIconPath } = await import("../themed-dock-icon");
+    const { developmentDockIconPath } = await import("../shell/themed-dock-icon");
 
     // The glass or flat tile by this Mac's version; themed-dock-icon.test.ts
     // covers the choice.
@@ -1362,7 +1362,7 @@ describe("bootstrapApp", () => {
       },
     });
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(mainLogWarnMock).toHaveBeenCalledWith(
@@ -1384,7 +1384,7 @@ describe("bootstrapApp", () => {
       },
     });
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(mainLogInfoMock).toHaveBeenCalledWith(
@@ -1399,7 +1399,7 @@ describe("bootstrapApp", () => {
       autoVacuum: { status: "already-incremental" },
     });
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     // The steady state for every launch after the first: no log line at all.
@@ -1420,7 +1420,7 @@ describe("bootstrapApp", () => {
       throw new Error("cache is read-only");
     });
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(mainLogWarnMock).toHaveBeenCalledWith(
@@ -1435,7 +1435,7 @@ describe("bootstrapApp", () => {
     startupProfilerInstance.start.mockResolvedValue();
     messagingLeaseStartMock.mockReturnValue(new Promise(() => {}));
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(messagingLeaseStartMock).toHaveBeenCalledTimes(1);
@@ -1453,7 +1453,7 @@ describe("bootstrapApp", () => {
     // quietly skips those steps.
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const actions = setAgentThreadActionsMock.mock.calls[0]?.[0] as
@@ -1497,7 +1497,7 @@ describe("bootstrapApp", () => {
     // painted window hairline stays on over a maximized window.
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const { app } = await import("electron");
@@ -1508,7 +1508,7 @@ describe("bootstrapApp", () => {
   it.each(["oom", "crashed", "killed", "abnormal-exit", "launch-failed", "integrity-failure", "memory-eviction", "clean-exit"])(
     "retains main-owned resources after renderer %s", async (reason) => {
       startupProfilerInstance.start.mockResolvedValue();
-      await import("../index");
+      await import("../shell/index");
       await flushMicrotasks();
       requestQuitMock.mockClear();
       mainRenderer.emit("render-process-gone", {}, { reason, exitCode: 1 });
@@ -1525,7 +1525,7 @@ describe("bootstrapApp", () => {
 
   it("renderer loss does not approve an unanswered quit confirmation", async () => {
     startupProfilerInstance.start.mockResolvedValue();
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     requestQuitMock.mockReturnValue(new Promise(() => {}));
     mainWindowHandlers.get("close")!({ preventDefault: vi.fn() });
@@ -1539,7 +1539,7 @@ describe("bootstrapApp", () => {
   it("quits the app when the main window is closed", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const closeHandler = mainWindowHandlers.get("close");
@@ -1566,7 +1566,7 @@ describe("bootstrapApp", () => {
   it("lets the main window close once a quit is already allowed", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const closeHandler = mainWindowHandlers.get("close");
@@ -1590,7 +1590,7 @@ describe("bootstrapApp", () => {
   it("releases the quit hold when the close-triggered quit request rejects", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const closeHandler = mainWindowHandlers.get("close");
@@ -1626,7 +1626,7 @@ describe("bootstrapApp", () => {
   it("lets the updater drive relaunch when window-all-closed fires during an update install", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     // quitAndInstall() closes every window as the first step of the Squirrel.Mac
@@ -1645,7 +1645,7 @@ describe("bootstrapApp", () => {
   it("does not intercept the updater-owned before-quit event", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     isUpdateInstallInProgressMock.mockReturnValue(true);
@@ -1669,7 +1669,7 @@ describe("bootstrapApp", () => {
       }),
     );
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     isUpdateInstallInProgressMock.mockReturnValue(true);
@@ -1691,7 +1691,7 @@ describe("bootstrapApp", () => {
   it("creates a main window when a profile focus request arrives without one", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const watcherCalls = startProfileFocusRequestWatcherMock.mock.calls as unknown as Array<
@@ -1718,9 +1718,9 @@ describe("bootstrapApp", () => {
     vi.stubGlobal("process", Object.create(process, { platform: { value: "darwin" } }));
     try {
       startupProfilerInstance.start.mockResolvedValue();
-      await import("../index");
+      await import("../shell/index");
       await flushMicrotasks();
-      const { isFederationWindowWebContents } = await import("../window");
+      const { isFederationWindowWebContents } = await import("../shell/window");
       const local = Object.assign(new EventEmitter(), { webContents: { id: 101 } });
       const remote = Object.assign(new EventEmitter(), { webContents: { id: 102 } });
       vi.mocked(isFederationWindowWebContents).mockImplementation(
@@ -1751,9 +1751,9 @@ describe("bootstrapApp", () => {
 
   it.each([0, 1])("raises only the last selected profile window (index %s)", async (selected) => {
     startupProfilerInstance.start.mockResolvedValue();
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
-    const { registerWindowChannels, WINDOW_KIND_MAIN } = await import("../window-channels");
+    const { registerWindowChannels, WINDOW_KIND_MAIN } = await import("../shell/window-channels");
     const { WINDOW_OPEN_SETTINGS_CHANNEL } = await import("../../shared/ipc");
     const windows = [0, 1].map(() => Object.assign(new EventEmitter(), {
       webContents: { isDestroyed: () => false },
@@ -1798,7 +1798,7 @@ describe("bootstrapApp", () => {
     refreshStartupDiscoveryMock.mockReturnValue(new Promise(() => {}));
     listThreadsMock.mockReturnValue(new Promise(() => {}));
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
@@ -1817,7 +1817,7 @@ describe("bootstrapApp", () => {
   it("starts the archive sweeper after provider refresh without delaying the first window", async () => {
     let finishRefresh!: () => void;
     refreshProvidersAtStartupMock.mockReturnValue(new Promise<void>((resolve) => { finishRefresh = resolve; }));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     expect(createMainWindowMock).toHaveBeenCalled();
     expect(startThreadArchiveSweeperMock).not.toHaveBeenCalled();
@@ -1835,7 +1835,7 @@ describe("bootstrapApp", () => {
     }));
     listThreadsMock.mockResolvedValue([]);
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(listThreadsMock).toHaveBeenCalledWith({
@@ -1858,7 +1858,7 @@ describe("bootstrapApp", () => {
   it("refreshes degraded provider state when Codex selection fails", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     resolveCodexCommandMock.mockRejectedValue(new Error("No Codex executable"));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
   });
@@ -1881,7 +1881,7 @@ describe("bootstrapApp", () => {
     } else {
       refreshProvidersAtStartupMock.mockReturnValue(dependency);
     }
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     const admitted = refreshProvidersAtStartupMock.mock.calls.length;
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
@@ -1908,7 +1908,7 @@ describe("bootstrapApp", () => {
     } else {
       refreshProvidersAtStartupMock.mockReturnValue(dependency);
     }
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     let finishConfirmation!: () => void;
@@ -1935,7 +1935,7 @@ describe("bootstrapApp", () => {
     isCodexBootstrapDeferredMock.mockReturnValue(true);
     listThreadsMock.mockReturnValue(new Promise(() => {}));
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
@@ -1948,7 +1948,7 @@ describe("bootstrapApp", () => {
   it("wires release help links to PwrAgent destinations and bundled notices", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     type TemplateItem = {
@@ -2058,7 +2058,7 @@ describe("bootstrapApp", () => {
       ],
     });
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const template = buildFromTemplateMock.mock.calls[0]?.[0] as
@@ -2092,7 +2092,7 @@ describe("bootstrapApp", () => {
     startupProfilerInstance.start.mockResolvedValue();
     listThreadsMock.mockRejectedValue(new Error("codex unavailable"));
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
@@ -2108,7 +2108,7 @@ describe("bootstrapApp", () => {
   });
 
   it("routes File -> New Thread through the shared main-window request helper", async () => {
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const template = buildFromTemplateMock.mock.calls[0]?.[0] as
@@ -2175,7 +2175,7 @@ describe("bootstrapApp", () => {
           isVisible: () => false,
         });
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     type TestMenuItem = {
@@ -2210,7 +2210,7 @@ describe("bootstrapApp", () => {
       _resetWindowChannelsForTests,
       registerWindowChannels,
       WINDOW_KIND_MAIN,
-    } = await import("../window-channels");
+    } = await import("../shell/window-channels");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
     _resetWindowChannelsForTests();
     registerWindowChannels(
@@ -2220,8 +2220,8 @@ describe("bootstrapApp", () => {
       peer.target,
     );
     const { broadcastAgentEvent } = await vi.importActual<
-      typeof import("../ipc/agent-ipc")
-    >("../ipc/agent-ipc");
+      typeof import("../shell/ipc/agent-ipc")
+    >("../shell/ipc/agent-ipc");
     const liveEvent = {
       backend: "codex",
       federationTarget: peer.target,
@@ -2263,7 +2263,7 @@ describe("bootstrapApp", () => {
     startupProfilerInstance.start.mockResolvedValue();
     messagingLeaseStartMock.mockRejectedValue(new Error("config load failed"));
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
@@ -2281,7 +2281,7 @@ describe("bootstrapApp", () => {
   it("reuses the same startup CPU profiler on app activate", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const activateHandler = appEventHandlers.get("activate");
@@ -2304,7 +2304,7 @@ describe("bootstrapApp", () => {
   it("does not recreate a window from Dock activation after quit teardown begins", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     appEventHandlers.get("before-quit")?.();
@@ -2317,7 +2317,7 @@ describe("bootstrapApp", () => {
   it("does not recreate a window from Dock activation during an update install", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     // The update install closes every window without flipping quitInProgress;
@@ -2334,7 +2334,7 @@ describe("bootstrapApp", () => {
   it("does not recreate a window from profile focus after quit begins", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const watcherCalls = startProfileFocusRequestWatcherMock.mock.calls as unknown as Array<
@@ -2356,7 +2356,7 @@ describe("bootstrapApp", () => {
   it("does not resume window creation when profiler startup finishes during quit", async () => {
     let finishStart!: () => void;
     startupProfilerInstance.start.mockReturnValue(new Promise<void>((resolve) => { finishStart = resolve; }));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     expect(startupProfilerInstance.start).toHaveBeenCalledOnce();
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
@@ -2372,7 +2372,7 @@ describe("bootstrapApp", () => {
     let finishHot!: () => void;
     startupProfilerInstance.stop.mockReturnValue(new Promise<void>((resolve) => { finishStartup = resolve; }));
     stopWindowDiagnosticsMock.mockReturnValue(new Promise<void>((resolve) => { finishHot = resolve; }));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     getAllWindowsMock.mockClear();
     const event = { preventDefault: vi.fn() };
@@ -2401,7 +2401,7 @@ describe("bootstrapApp", () => {
       resolveStop = resolve;
       rejectStop = reject;
     }));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     const event = { preventDefault: vi.fn() };
     appEventHandlers.get("before-quit")?.(event);
@@ -2432,7 +2432,7 @@ describe("bootstrapApp", () => {
     mainLogWarnMock.mockImplementation((message) => {
       if (message === "shutdown phase failed") throw new Error("logger failed");
     });
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
     await vi.waitFor(() => expect(stopWindowDiagnosticsMock).toHaveBeenCalledOnce());
@@ -2447,7 +2447,7 @@ describe("bootstrapApp", () => {
     stopWindowDiagnosticsMock.mockReturnValue(new Promise<void>(() => {}));
     disposeIntegratedTerminalIpcHandlersMock.mockReturnValue(new Promise<void>(() => {}));
     disposeDesktopMessagingRuntimeMock.mockReturnValue(new Promise<void>(() => {}));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
     await vi.advanceTimersByTimeAsync(13_999);
@@ -2461,7 +2461,7 @@ describe("bootstrapApp", () => {
   it.each([false, true])("lets the updater own a pending diagnostics flush (normal quit first: %s)", async (normalQuitFirst) => {
     vi.useFakeTimers();
     stopWindowDiagnosticsMock.mockReturnValue(new Promise<void>(() => {}));
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     if (normalQuitFirst) appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
     isUpdateInstallInProgressMock.mockReturnValue(true);
@@ -2496,7 +2496,7 @@ describe("bootstrapApp", () => {
     });
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
@@ -2520,7 +2520,7 @@ describe("bootstrapApp", () => {
     );
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const event = { preventDefault: vi.fn() };
@@ -2569,7 +2569,7 @@ describe("bootstrapApp", () => {
       finishDiscovery = resolve;
     }));
     startupProfilerInstance.start.mockResolvedValue();
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const event = { preventDefault: vi.fn() };
@@ -2605,7 +2605,7 @@ describe("bootstrapApp", () => {
     getAllWindowsMock.mockReturnValue([window]);
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const event = { preventDefault: vi.fn() };
@@ -2671,7 +2671,7 @@ describe("bootstrapApp", () => {
     ]);
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
@@ -2708,7 +2708,7 @@ describe("bootstrapApp", () => {
     );
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const event = { preventDefault: vi.fn() };
@@ -2738,7 +2738,7 @@ describe("bootstrapApp", () => {
       new Error("adapter stop failed"),
     );
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
@@ -2757,7 +2757,7 @@ describe("bootstrapApp", () => {
   it("routes closing the last window through the shared quit flow", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     appEventHandlers.get("window-all-closed")?.();
@@ -2778,7 +2778,7 @@ describe("bootstrapApp", () => {
     );
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     appEventHandlers.get("window-all-closed")?.();
@@ -2802,7 +2802,7 @@ describe("bootstrapApp", () => {
     });
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     appEventHandlers.get("before-quit")?.(event);
@@ -2826,7 +2826,7 @@ describe("bootstrapApp", () => {
     async function bootWithElectronQuitModel(
       options: { quitAllowed?: boolean } = {},
     ): Promise<ElectronQuitModel> {
-      await import("../index");
+      await import("../shell/index");
       await flushMicrotasks();
       const model = new ElectronQuitModel(["main"]);
       let quitAllowed = options.quitAllowed ?? false;
@@ -2898,7 +2898,7 @@ describe("bootstrapApp", () => {
   it("initializes app state in active-profile mode when boot decision is open", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(initializeMainLoggerMock).toHaveBeenCalledWith({
@@ -2921,7 +2921,7 @@ describe("bootstrapApp", () => {
     });
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(initializeMainLoggerMock).toHaveBeenCalledWith({
@@ -2967,7 +2967,7 @@ describe("bootstrapApp", () => {
     });
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(initializeMainLoggerMock).toHaveBeenCalledWith({
@@ -2984,7 +2984,7 @@ describe("bootstrapApp", () => {
     vi.stubEnv("NODE_ENV", "production");
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
@@ -3017,7 +3017,7 @@ describe("bootstrapApp", () => {
       startupProfilerInstance.start.mockImplementation(() => new Promise<void>((resolve) => {
         finishStart = resolve;
       }));
-      await import("../index");
+      await import("../shell/index");
       await flushMicrotasks();
 
       // Registration must precede the first asynchronous startup operation.
@@ -3060,7 +3060,7 @@ describe("bootstrapApp", () => {
     getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(null);
     getExistingRuntimeFederationLeaseCoordinatorMock.mockReturnValue(null);
 
-    await import("../index");
+    await import("../shell/index");
 
     const sigtermHandler = processEventHandlers.get("SIGTERM");
     expect(sigtermHandler).toBeTypeOf("function");
@@ -3082,7 +3082,7 @@ describe("bootstrapApp", () => {
   it("releases the messaging and federation leases synchronously on SIGTERM", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const sigtermHandler = processEventHandlers.get("SIGTERM");
@@ -3107,7 +3107,7 @@ describe("bootstrapApp", () => {
   it("stops the federation runtime before releasing its lease on graceful shutdown", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const sigtermHandler = processEventHandlers.get("SIGTERM");
@@ -3146,7 +3146,7 @@ describe("bootstrapApp", () => {
       ? Promise.reject(new Error("stop failed"))
       : new Promise<void>(() => {}));
     startupProfilerInstance.start.mockResolvedValue();
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
     processEventHandlers.get("SIGTERM")?.("SIGTERM");
     await vi.advanceTimersByTimeAsync(13_000);
@@ -3165,7 +3165,7 @@ describe("bootstrapApp", () => {
     startupProfilerInstance.start.mockResolvedValue();
     disposeDesktopFederationRuntimeMock.mockRejectedValue(new Error("boom"));
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const sigtermHandler = processEventHandlers.get("SIGTERM");
@@ -3194,7 +3194,7 @@ describe("bootstrapApp", () => {
       new Promise(() => {}),
     );
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     const sigtermHandler = processEventHandlers.get("SIGTERM");
@@ -3222,7 +3222,7 @@ describe("bootstrapApp", () => {
     vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
     startupProfilerInstance.start.mockResolvedValue();
 
-    await import("../index");
+    await import("../shell/index");
     await flushMicrotasks();
 
     expect(messagingRuntimeStartMock).not.toHaveBeenCalled();

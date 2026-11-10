@@ -8,7 +8,7 @@ import type {
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getMainLogger } from "../log";
 import { findAssistantMessageForText } from "../messaging/find-assistant-reply-message";
-import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
+import { materializeTranscriptImageUrlsForRenderer } from "../shell/transcript-image-protocol";
 import type {
   FederationReadTurnAssistantReplyRequest,
   FederationReadTurnAssistantReplyResponse,

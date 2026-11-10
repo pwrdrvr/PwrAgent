@@ -22,7 +22,7 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => registry,
 }));
 
-vi.mock("../diagnostics/manual-heap-snapshot", () => ({
+vi.mock("../shell/diagnostics/manual-heap-snapshot", () => ({
   captureHeapSnapshot: vi.fn(),
 }));
 
@@ -30,7 +30,7 @@ vi.mock("../profile", () => ({
   resolveActiveProfilePath: vi.fn(() => "/diagnostics"),
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(() => []),
 }));
 
@@ -41,7 +41,7 @@ describe("diagnostics ipc", () => {
   });
 
   afterEach(async () => {
-    const { disposeDiagnosticsIpcHandlers } = await import("../ipc/diagnostics");
+    const { disposeDiagnosticsIpcHandlers } = await import("../shell/ipc/diagnostics");
     disposeDiagnosticsIpcHandlers();
   });
 
@@ -63,7 +63,7 @@ describe("diagnostics ipc", () => {
     registry.startCodexProtocolCapture.mockResolvedValue(active);
     registry.stopCodexProtocolCapture.mockResolvedValue(result);
 
-    const { registerDiagnosticsIpcHandlers } = await import("../ipc/diagnostics");
+    const { registerDiagnosticsIpcHandlers } = await import("../shell/ipc/diagnostics");
     const {
       DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
       DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,

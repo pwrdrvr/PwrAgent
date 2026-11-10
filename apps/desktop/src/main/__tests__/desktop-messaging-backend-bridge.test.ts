@@ -20,7 +20,7 @@ import {
 import {
   toFederatedTranscriptImageProtocolUrl,
   toTranscriptImageProtocolUrl,
-} from "../transcript-image-protocol";
+} from "../shell/transcript-image-protocol";
 
 const {
   getThreadOverlayState,

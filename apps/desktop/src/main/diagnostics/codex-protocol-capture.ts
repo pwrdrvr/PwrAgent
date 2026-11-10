@@ -7,11 +7,11 @@ import type {
 } from "../../shared/codex-protocol-capture";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
-import { ProtocolCaptureStore } from "../testing/capture-store";
+import { ProtocolCaptureStore } from "../shell/testing/capture-store";
 import {
   buildProtocolCaptureId,
   createProtocolCaptureObserver,
-} from "../testing/protocol-capture";
+} from "../shell/testing/protocol-capture";
 
 const protocolCaptureLog = getMainLogger("pwragent:protocol-capture");
 

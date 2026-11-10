@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { disposeMcpConnectionIpcHandlers, registerMcpConnectionIpcHandlers } from "../ipc/mcp-connections";
+import { disposeMcpConnectionIpcHandlers, registerMcpConnectionIpcHandlers } from "../shell/ipc/mcp-connections";
 import type {
   PwrGitConnectionStatus,
   McpConnectionStatus,
@@ -59,11 +59,11 @@ vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => ({ remoteBackend: mocks.remoteBackend }),
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: () => mocks.subscribers,
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   federationWindowTargetForWebContents: (sender: unknown) =>
     sender === remoteSender ? federationTarget : undefined,
 }));

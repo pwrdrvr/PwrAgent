@@ -1,9 +1,9 @@
 import type { WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL } from "../../shared/ipc";
-import { requestCopyLocalDiagnosticsInfo } from "../window-copy-local-diagnostics-info";
-import { subscribersForChannel } from "../window-channels";
-import { isFederationWindowWebContents } from "../window";
+import { requestCopyLocalDiagnosticsInfo } from "../shell/window-copy-local-diagnostics-info";
+import { subscribersForChannel } from "../shell/window-channels";
+import { isFederationWindowWebContents } from "../shell/window";
 
 const { getFocusedWindowMock } = vi.hoisted(() => ({
   getFocusedWindowMock: vi.fn(),
@@ -15,11 +15,11 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(),
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: vi.fn(),
 }));
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { retryQuitAfterDispatch } from "../quit-retry";
+import { retryQuitAfterDispatch } from "../shell/quit-retry";
 import { ElectronQuitModel } from "./helpers/electron-quit-model";
 
 /** Defer the first quit at `stage`, then retry it the way `retry` says. */

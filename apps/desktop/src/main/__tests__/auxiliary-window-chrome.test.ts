@@ -70,7 +70,7 @@ describe("auxiliary window chrome", () => {
   it("trades native fullscreen for windowed zoom on macOS secondary windows", async () => {
     setPlatform("darwin");
     const { auxiliaryWindowChromeOptions } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
 
     const options = auxiliaryWindowChromeOptions();
@@ -85,7 +85,7 @@ describe("auxiliary window chrome", () => {
   it("does not constrain fullscreen/maximize on Linux secondary windows", async () => {
     setPlatform("linux");
     const { auxiliaryWindowChromeOptions } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
 
     const options = auxiliaryWindowChromeOptions();
@@ -98,7 +98,7 @@ describe("auxiliary window chrome", () => {
     vi.useFakeTimers();
     setPlatform("linux");
     const { showAndFocusAuxiliaryWindow } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
     const window = createWindow();
 
@@ -126,7 +126,7 @@ describe("auxiliary window chrome", () => {
     vi.useFakeTimers();
     setPlatform("darwin");
     const { showAndFocusAuxiliaryWindow } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
     const window = createWindow();
 
@@ -143,7 +143,7 @@ describe("auxiliary window chrome", () => {
     vi.useFakeTimers();
     setPlatform("darwin");
     const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
     const window = createWindow();
 
@@ -165,7 +165,7 @@ describe("auxiliary window chrome", () => {
     vi.useFakeTimers();
     setPlatform("darwin");
     const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
     const window = createWindow();
 
@@ -182,7 +182,7 @@ describe("auxiliary window chrome", () => {
     vi.useFakeTimers();
     setPlatform("darwin");
     const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
     const window = createWindow();
 
@@ -198,7 +198,7 @@ describe("auxiliary window chrome", () => {
     vi.useFakeTimers();
     setPlatform("darwin");
     const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
     const window = createWindow();
 
@@ -215,7 +215,7 @@ describe("auxiliary window chrome", () => {
     vi.useFakeTimers();
     setPlatform("darwin");
     const { showAuxiliaryWindowWhenReady } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
     const window = createWindow();
 
@@ -234,7 +234,7 @@ describe("auxiliary window chrome", () => {
 it("keeps an explicit topmost choice after a pending Linux raise pulse", async () => {
   vi.useFakeTimers();
   setPlatform("linux");
-  const { showAndFocusAuxiliaryWindow, setAuxiliaryWindowAlwaysOnTop } = await import("../auxiliary-window-chrome");
+  const { showAndFocusAuxiliaryWindow, setAuxiliaryWindowAlwaysOnTop } = await import("../shell/auxiliary-window-chrome");
   const window = createWindow();
   showAndFocusAuxiliaryWindow(window);
   vi.advanceTimersByTime(100);

@@ -126,11 +126,11 @@ vi.mock("../log", () => ({
   })),
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(() => []),
 }));
 
-vi.mock("../messaging-activity-window", () => ({
+vi.mock("../shell/messaging-activity-window", () => ({
   showMessagingActivityWindow: vi.fn(),
 }));
 
@@ -141,14 +141,14 @@ vi.mock("../messaging/messaging-routes-service", () =>
 );
 
 describe("messaging status ipc", () => {
-  type MessagingStatusIpcModule = typeof import("../ipc/messaging-status");
+  type MessagingStatusIpcModule = typeof import("../shell/ipc/messaging-status");
   let registerMessagingStatusIpcHandlers:
     MessagingStatusIpcModule["registerMessagingStatusIpcHandlers"];
 
   beforeAll(async () => {
     // Import after the hoisted mocks exist, but before an individual test can
     // pay the cold module-graph evaluation cost.
-    const messagingStatusIpc = await import("../ipc/messaging-status");
+    const messagingStatusIpc = await import("../shell/ipc/messaging-status");
     registerMessagingStatusIpcHandlers =
       messagingStatusIpc.registerMessagingStatusIpcHandlers;
   });

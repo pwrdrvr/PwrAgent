@@ -42,7 +42,7 @@ describe("transcript image protocol", () => {
   });
 
   it.each(["codex", "claude"] as const)("retains completed %s previews once and reopens them after source removal", async (backend) => {
-    const { materializeTranscriptImageEventForRenderer, materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageEventForRenderer, materializeTranscriptImageUrlsForRenderer } = await import("../shell/transcript-image-protocol");
     const worktree = path.join(tempDir, "worktree");
     const temporary = await mkdtemp(path.join(os.tmpdir(), "pwragent-live-preview-"));
     await mkdir(worktree);
@@ -76,7 +76,7 @@ describe("transcript image protocol", () => {
   });
 
   it.each(["worktree", "temporary"])("retains a native imageView from %s for identical live and reopened previews", async (location) => {
-    const { materializeTranscriptImageEventForRenderer, materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageEventForRenderer, materializeTranscriptImageUrlsForRenderer } = await import("../shell/transcript-image-protocol");
     const sourceRoot = location === "temporary"
       ? await mkdtemp(path.join(path.sep === "/" ? "/tmp" : os.tmpdir(), "pwragent-native-image-"))
       : path.join(tempDir, "worktree");
@@ -114,7 +114,7 @@ describe("transcript image protocol", () => {
   });
 
   it("drops unsafe or missing native images without fetching URLs or losing the activity", async () => {
-    const { materializeTranscriptImageEventForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageEventForRenderer } = await import("../shell/transcript-image-protocol");
     const approved = path.join(tempDir, "worktree");
     await mkdir(approved);
     const privateFile = path.join(tempDir, "private.png");
@@ -136,7 +136,7 @@ describe("transcript image protocol", () => {
   });
 
   it("does no image work for deltas, plain paths, code examples, or external Markdown images", async () => {
-    const { materializeTranscriptImageEventForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageEventForRenderer } = await import("../shell/transcript-image-protocol");
     const resolveApprovedLocalImageRoots = vi.fn(async () => []);
     const writeFile = vi.fn();
     const fetch = vi.fn();
@@ -152,7 +152,7 @@ describe("transcript image protocol", () => {
   });
 
   it("keeps missing and disallowed live references readable", async () => {
-    const { materializeTranscriptImageEventForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageEventForRenderer } = await import("../shell/transcript-image-protocol");
     const resolveLocalImageLink = vi.fn(async () => ({ ok: false as const, status: 403, message: "Forbidden" }));
     const dependencies = { resolveRoot: () => path.join(tempDir, "cache"), resolveLocalImageLink };
     const event: AgentEvent = { backend: "codex", notification: { method: "item/completed", params: {
@@ -166,7 +166,7 @@ describe("transcript image protocol", () => {
   it("promotes legacy image references and resolves them after the shared source is removed", async () => {
     vi.stubEnv("PWRAGENT_HOME", tempDir);
     vi.stubEnv("PWRAGENT_PROFILE", "test");
-    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../shell/transcript-image-protocol");
     const bytes = Buffer.from([1, 2, 3]);
     const digest = createHash("sha256").update(bytes).digest("hex");
     const legacyPath = path.join(tempDir, "profiles", "test", "state", "turn-input-attachments", digest, "image.png");
@@ -194,7 +194,7 @@ describe("transcript image protocol", () => {
   it("does no retention work for images already owned by the displayed thread", async () => {
     vi.stubEnv("PWRAGENT_HOME", tempDir);
     vi.stubEnv("PWRAGENT_PROFILE", "test");
-    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../shell/transcript-image-protocol");
     const retainLocalImage = vi.fn(async () => { throw new Error("Unexpected retention work"); });
     const url = pathToFileURL(path.join(tempDir, "profiles", "test", "state", "thread-assets", "codex", "fast-thread", "digest", "image.png")).toString();
     const input = {
@@ -211,7 +211,7 @@ describe("transcript image protocol", () => {
   });
 
   it.each(["file:///tmp/100%image.png", "file:///tmp/image%2Fname.png"])("preserves the conversation when one image has a malformed file URL: %s", async (url) => {
-    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../shell/transcript-image-protocol");
     const validPath = path.join(tempDir, "good.png");
     const retainLocalImage = vi.fn(async () => undefined);
     const response = {
@@ -239,7 +239,7 @@ describe("transcript image protocol", () => {
 
   it("registers a secure custom image protocol", async () => {
     const { registerTranscriptImageProtocolScheme } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
 
     registerTranscriptImageProtocolScheme();
@@ -258,7 +258,7 @@ describe("transcript image protocol", () => {
 
   it("resolves raster images from any PwrAgent profile under the configured root", async () => {
     const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const pwragentHome = path.join(tempDir, "pwragent-home");
     const imagePath = path.join(
@@ -289,7 +289,7 @@ describe("transcript image protocol", () => {
 
   it("reads approved cached and direct-file SVG bytes for the renderer", async () => {
     const { readTranscriptImageForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const pwragentHome = path.join(tempDir, "pwragent-home");
     const homeDir = path.join(tempDir, "home");
@@ -319,7 +319,7 @@ describe("transcript image protocol", () => {
 
   it("rewrites file image URLs in thread/read responses before they reach the renderer", async () => {
     const { rewriteTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const fileUrl = "file:///Users/test/.pwragent/profiles/dev/state/image-inputs/image.png";
     const dataUrl = "data:image/png;base64,AQID";
@@ -377,7 +377,7 @@ describe("transcript image protocol", () => {
     const {
       rewriteFederatedTranscriptImageUrlsForRenderer,
       toFederatedTranscriptImageProtocolUrl,
-    } = await import("../transcript-image-protocol");
+    } = await import("../shell/transcript-image-protocol");
     const ownerUrl = toProtocolUrl(
       "/Users/owner/.pwragent/profiles/default/state/image-inputs/image.png",
     );
@@ -445,7 +445,7 @@ describe("transcript image protocol", () => {
     const {
       installTranscriptImageProtocol,
       toFederatedTranscriptImageProtocolUrl,
-    } = await import("../transcript-image-protocol");
+    } = await import("../shell/transcript-image-protocol");
     const ownerUrl = toProtocolUrl(
       "/Users/owner/.pwragent/profiles/default/state/image-inputs/image.png",
     );
@@ -491,7 +491,7 @@ describe("transcript image protocol", () => {
     const {
       installTranscriptImageProtocol,
       toFederatedTranscriptImageProtocolUrl,
-    } = await import("../transcript-image-protocol");
+    } = await import("../shell/transcript-image-protocol");
     const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>');
     installTranscriptImageProtocol({
       resolveFederatedImage: async () => ({
@@ -516,7 +516,7 @@ describe("transcript image protocol", () => {
 
   it("materializes data image URLs into thread-scoped files before renderer IPC", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const dataUrl = "data:image/png;base64,AQID";
     const writes: string[] = [];
@@ -583,7 +583,7 @@ describe("transcript image protocol", () => {
     expect(response.replay.entries[0]?.type === "activity"
       ? response.replay.entries[0].details[0]?.images?.[0] : undefined).toEqual(entryPart);
     expect(JSON.stringify(response)).not.toContain("data:image/");
-    const { rewriteFederatedTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const { rewriteFederatedTranscriptImageUrlsForRenderer } = await import("../shell/transcript-image-protocol");
     const remote = rewriteFederatedTranscriptImageUrlsForRenderer(response, "owner");
     expect(remote.replay.entries[0]?.type === "activity"
       ? remote.replay.entries[0].details[0]?.images?.[0]?.url : undefined).toMatch(/^pwragent-image:\/\/federation\/owner\//);
@@ -599,7 +599,7 @@ describe("transcript image protocol", () => {
 
   it("materializes signed PwrSnap loopback images into thread-scoped files", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const signedUrl =
       "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
@@ -683,7 +683,7 @@ describe("transcript image protocol", () => {
 
   it("reads signed PwrSnap loopback images for federation transport", async () => {
     const { readTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const signedUrl =
       "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
@@ -722,7 +722,7 @@ describe("transcript image protocol", () => {
 
   it("does not fetch arbitrary HTTP image URLs", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const externalUrl = "https://example.com/untrusted-image.png";
     const fetch = vi.fn();
@@ -759,7 +759,7 @@ describe("transcript image protocol", () => {
 
   it("does not fetch unsigned or untrusted loopback image URLs", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const imageUrls = [
       "http://127.0.0.1:51729/media?grant=missing-signature",
@@ -800,7 +800,7 @@ describe("transcript image protocol", () => {
 
   it.each(["png", "svg"])("snapshots approved worktree Markdown %s links into transcript galleries", async (extension) => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const imageName = `dmg-background.${extension}`;
     const imagePath = path.join(tempDir, "worktree", imageName);
@@ -874,7 +874,7 @@ describe("transcript image protocol", () => {
 
   it("snapshots Markdown image links from agent temporary directories", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const temporaryRoot = path.sep === "/" ? "/tmp" : os.tmpdir();
     const agentTempDir = await mkdtemp(
@@ -963,7 +963,7 @@ describe("transcript image protocol", () => {
 
   it("adopts another profile's snapshot once the linked source is gone", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     // The source never exists here: macOS swept it out of /tmp after the
     // other profile snapshotted it.
@@ -1018,7 +1018,7 @@ describe("transcript image protocol", () => {
 
   it("refuses a symlinked sibling snapshot and scans profiles once per read", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const secretPath = path.join(tempDir, "outside-any-root.svg");
     await writeFile(secretPath, '<svg xmlns="http://www.w3.org/2000/svg"><text>secret</text></svg>');
@@ -1062,7 +1062,7 @@ describe("transcript image protocol", () => {
 
   it("does not adopt a snapshot taken for a different message", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const imagePath = path.join(tempDir, "swept", "combined-on-flamegraph.svg");
     const message = {
@@ -1103,7 +1103,7 @@ describe("transcript image protocol", () => {
 
   it("returns durable data images for messaging after temporary source cleanup", async () => {
     const { materializeTranscriptMessageImagesForMessaging } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const agentTempDir = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-messaging-image-")
@@ -1170,7 +1170,7 @@ describe("transcript image protocol", () => {
 
   it("keeps data image URLs when materialization writes fail", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const dataUrl = "data:image/png;base64,AQID";
 
@@ -1210,7 +1210,7 @@ describe("transcript image protocol", () => {
 
   it("leaves unsupported and malformed data image URLs unchanged", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const unsupportedDataUrl = "data:image/heic;base64,AQID";
     const malformedDataUrl = "data:image/png;base64,!!!!";
@@ -1252,7 +1252,7 @@ describe("transcript image protocol", () => {
 
   it("resolves raster images from the default Codex home", async () => {
     const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const homeDir = path.join(tempDir, "home");
     const imagePath = path.join(homeDir, ".codex", "sessions", "image.webp");
@@ -1273,7 +1273,7 @@ describe("transcript image protocol", () => {
 
   it("rejects non-image files under allowed roots", async () => {
     const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const pwragentHome = path.join(tempDir, "pwragent-home");
     const textPath = path.join(pwragentHome, "profiles", "dev", "state.db");
@@ -1293,7 +1293,7 @@ describe("transcript image protocol", () => {
 
   it("rejects image files outside PwrAgent and Codex roots", async () => {
     const { resolveTranscriptImageProtocolRequest } = await import(
-      "../transcript-image-protocol"
+      "../shell/transcript-image-protocol"
     );
     const imagePath = path.join(tempDir, "outside", "image.png");
     await mkdir(path.dirname(imagePath), { recursive: true });

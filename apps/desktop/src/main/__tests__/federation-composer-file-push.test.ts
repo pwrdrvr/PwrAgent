@@ -4,7 +4,7 @@ import type { ComposerFilePushProgress, PushComposerFileResult } from "@pwragent
 vi.mock("electron", () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: vi.fn() }));
 
-const { createComposerFilePushController } = await import("../ipc/federation-composer-file-push");
+const { createComposerFilePushController } = await import("../shell/ipc/federation-composer-file-push");
 const { FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL } = await import("../../shared/ipc");
 
 const target = { scope: "remote" as const, instanceId: "pwr_owner" };

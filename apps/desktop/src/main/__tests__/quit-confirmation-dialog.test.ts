@@ -128,7 +128,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../primary-main-window", () => ({
+vi.mock("../shell/primary-main-window", () => ({
   primaryMainWindowWebContents: vi.fn(() => undefined),
 }));
 
@@ -136,15 +136,15 @@ vi.mock("../log", () => ({
   getMainLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
 }));
 
-vi.mock("../ipc/integrated-terminal", () => ({
+vi.mock("../shell/ipc/integrated-terminal", () => ({
   revealIntegratedTerminal: vi.fn(),
 }));
 
-vi.mock("../window-show-thread", () => ({
+vi.mock("../shell/window-show-thread", () => ({
   requestShowThread: vi.fn(),
 }));
 
-vi.mock("../window-show-quit-blockers", () => ({
+vi.mock("../shell/window-show-quit-blockers", () => ({
   requestShowQuitBlockers: vi.fn(),
 }));
 
@@ -158,17 +158,17 @@ vi.mock("../settings/appearance-bootstrap", () => ({
 
 import { app, BrowserWindow, type WebContents } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
-import { primaryMainWindowWebContents } from "../primary-main-window";
-import { revealIntegratedTerminal } from "../ipc/integrated-terminal";
-import { requestShowThread } from "../window-show-thread";
-import { requestShowQuitBlockers } from "../window-show-quit-blockers";
+import { primaryMainWindowWebContents } from "../shell/primary-main-window";
+import { revealIntegratedTerminal } from "../shell/ipc/integrated-terminal";
+import { requestShowThread } from "../shell/window-show-thread";
+import { requestShowQuitBlockers } from "../shell/window-show-quit-blockers";
 import {
   focusActiveQuitConfirmationDialog,
   formatQuitItemAction,
   parseQuitItemAction,
   showQuitConfirmationDialog,
   type QuitBlockerItem,
-} from "../quit-confirmation-dialog";
+} from "../shell/quit-confirmation-dialog";
 
 it("announces the actual scaled deadline and reports countdown pauses", async () => {
   vi.useFakeTimers();

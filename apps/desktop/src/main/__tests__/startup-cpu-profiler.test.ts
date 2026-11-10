@@ -97,7 +97,7 @@ describe("StartupCpuProfiler", () => {
       stop: vi.fn(async () => true),
     };
     session.complete = vi.fn(() => new Promise<void>((resolve) => { finishManifest = resolve; }));
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } = await import("../shell/diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: createEnabledConfig(),
       createSession: async () => ({ ok: true, session }),
@@ -151,7 +151,7 @@ describe("StartupCpuProfiler", () => {
     const { window, emitWebContents } = createWindowTarget();
     const now = vi.fn(() => new Date("2026-04-19T13:30:00.000Z"));
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } = await import("../shell/diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: createEnabledConfig(),
       logger,
@@ -208,7 +208,7 @@ describe("StartupCpuProfiler", () => {
     const { window, emitWebContents } = createWindowTarget();
     const writeMainHeapSnapshot = vi.fn(() => session.mainHeapSnapshotPath);
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } = await import("../shell/diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: {
         ...createEnabledConfig(),
@@ -249,7 +249,7 @@ describe("StartupCpuProfiler", () => {
     const session = createSession();
     const { window, emitWebContents } = createWindowTarget();
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } = await import("../shell/diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: {
         ...createEnabledConfig(),
@@ -316,7 +316,7 @@ describe("StartupCpuProfiler", () => {
     });
     const rendererStart = vi.spyOn(rendererProfiler, "start");
     const analyzeSession = vi.fn(async () => undefined);
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } = await import("../shell/diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: { ...createEnabledConfig(), quitOnComplete: true },
       createSession: async () => ({ ok: true, session }),
@@ -369,7 +369,7 @@ describe("StartupCpuProfiler", () => {
     const analyzeSession = vi.fn(async () => ({ ok: true }));
     const { window } = createWindowTarget();
 
-    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const { StartupCpuProfiler } = await import("../shell/diagnostics/startup-cpu-profiler");
     const profiler = new StartupCpuProfiler({
       config: {
         ...createEnabledConfig(),
