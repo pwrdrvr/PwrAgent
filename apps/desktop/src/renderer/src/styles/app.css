@@ -11410,6 +11410,12 @@ a.button {
   font-size: 12px;
 }
 
+.app-notice-toast__message .chip--instance {
+  height: 20px;
+  font-size: 11px;
+  vertical-align: middle;
+}
+
 /* Machine state is mono, as paths and ids are everywhere else. */
 .app-notice-toast__facts {
   display: grid;
@@ -11432,6 +11438,7 @@ a.button {
 .app-notice-toast__fact dd {
   margin: 0;
   color: var(--text-secondary);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -11443,6 +11450,60 @@ a.button {
 
 .app-notice-toast__thread-menu {
   z-index: 150;
+}
+
+.background-cleanup {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 0 8px 0 15px;
+}
+
+.background-cleanup__heading {
+  margin: 4px 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.background-cleanup__outcome {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.background-cleanup__reason,
+.background-cleanup__path,
+.background-cleanup__more {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.background-cleanup__path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.background-cleanup__more {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.background-cleanup__threads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.background-cleanup .thread-chip,
+.background-cleanup__unknown {
+  height: 20px;
+  font-size: 11px;
 }
 
 /* Two classes: `.composer__checkbox` is declared far below this rule and

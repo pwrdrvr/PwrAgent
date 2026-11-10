@@ -195,6 +195,20 @@ function buildRepair() {
 }
 
 describe("archive cleanup pipeline", () => {
+  it("returns the owning inventory's blocker identities and names with a shared checkout", async () => {
+    vi.useFakeTimers();
+    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.uuid(), { minLength: 1, maxLength: 4 }), async (ids) => {
+      const directory = { id: "shared", kind: "worktree" as const, label: "Project", path: "/contrived/repo", worktreePath: "/contrived/shared" };
+      const active = ids.map((id) => codexThread({ id, title: `Owner work ${id}`, linkedDirectories: [directory] }));
+      const fixture = build(active, codexThread({ id: "target", linkedDirectories: [directory] }));
+      try {
+        const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+        expect(result.cleanup[0]).toMatchObject({ worktreePath: directory.worktreePath,
+          blockingThreads: active.map((thread) => ({ backend: thread.source, threadId: thread.id, title: thread.title })) });
+      } finally { await fixture.registry.close(); }
+    }), { numRuns: 25 });
+  });
+
   it("bounds durable reference-wait writes for a 100-thread batch and two releases", async () => {
     vi.useFakeTimers();
     vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");

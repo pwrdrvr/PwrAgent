@@ -1,5 +1,6 @@
 import type { ArchiveCleanupProgress, ArchiveThreadCleanupResult } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
+import { withThreadActionErrorContext, type ThreadActionErrorContext } from "./thread-action-error-context";
 
 export function formatArchiveCleanupProgress(progress: ArchiveCleanupProgress): AppNoticeToastNotice | undefined {
   if (progress.active.length === 0 && progress.queued === 0) return undefined;
@@ -13,15 +14,11 @@ export function formatArchiveCleanupProgress(progress: ArchiveCleanupProgress): 
   };
 }
 
-export type ArchiveThreadNotice = {
-  id: string;
-  title: string;
-  message: string;
-  detail?: string;
-};
+export type ArchiveThreadNotice = AppNoticeToastNotice;
 
 export function formatArchiveCleanupNotice(
-  cleanup: ArchiveThreadCleanupResult[]
+  cleanup: ArchiveThreadCleanupResult[],
+  context: ThreadActionErrorContext = {},
 ): ArchiveThreadNotice | undefined {
   const failures = cleanup.filter(
     (item) => (item.error || (!item.skippedReason?.startsWith("Worktree is still used by")
@@ -36,14 +33,16 @@ export function formatArchiveCleanupNotice(
   const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
   const title = "Worktree cleanup skipped";
   const message = "Thread archived. The worktree cleanup did not complete.";
-  const detail = firstFailure.worktreePath
-    ? `${firstFailure.worktreePath}: ${reason}`
-    : reason;
+  const facts = failures.map((failure, index) => ({
+    label: failure.worktreePath ? `Worktree ${index + 1}` : `Cleanup ${index + 1}`,
+    value: [failure.worktreePath, failure.error ?? failure.skippedReason ?? "cleanup was skipped"].filter(Boolean).join("\n"),
+  }));
 
-  return {
+  return withThreadActionErrorContext({
     id: [firstFailure.worktreePath ?? "no-worktree", reason, Date.now().toString()].join("\n"),
     title,
     message,
-    detail,
-  };
+    facts,
+    copyText: [title, message, ...facts.map((fact) => fact.value)].join("\n"),
+  }, { ...context, worktreePaths: [] });
 }

@@ -5,8 +5,9 @@ import type { DesktopApi } from "./desktop-api";
 export type NavigationArchiveMember = Pick<NavigationThreadSummary, "id" | "source" | "federation"> & {
   federationTarget?: FederationTarget;
   expectedParent?: ArchiveThreadRequest["expectedParent"];
-};
-type Member = { ref: NavigationIdentity; parent?: NavigationIdentity; expectedParent: ArchiveThreadRequest["expectedParent"] };
+} & Partial<Pick<NavigationThreadSummary, "title" | "titleSource" | "linkedDirectories" | "gitBranch">>;
+type Member = { ref: NavigationIdentity; parent?: NavigationIdentity; expectedParent: ArchiveThreadRequest["expectedParent"];
+  metadata: Pick<NavigationThreadSummary, "title" | "titleSource" | "linkedDirectories" | "gitBranch"> };
 let nextGroupRead = 0;
 
 /** Discover with viewer metadata; only owner-confirmed relationships enter the archive plan. */
@@ -75,6 +76,7 @@ export async function readNavigationArchiveGroup(params: {
     } while (cursor);
   };
   const member = (entry: NavigationQueryEntry, ref: NavigationIdentity): Member => ({ ref,
+    metadata: { title: entry.row.title, titleSource: entry.row.titleSource, linkedDirectories: entry.row.linkedDirectories, gitBranch: entry.row.gitBranch },
     parent: entry.placement.kind === "child" ? normalize(entry.placement.parent) : undefined,
     expectedParent: entry.row.parentThreadId ? { threadId: entry.row.parentThreadId,
       backend: entry.row.parentThreadBackend ?? entry.row.source, instanceId: entry.row.parentThreadInstanceId } : null });
@@ -112,7 +114,7 @@ export async function readNavigationArchiveGroup(params: {
       visiting.add(id);
       for (const child of children.get(id) ?? []) visit(child, depth + 1);
       visiting.delete(id);
-      result.push({ source: value.ref.backend, id: value.ref.threadId, expectedParent: value.expectedParent,
+      result.push({ ...value.metadata, source: value.ref.backend, id: value.ref.threadId, expectedParent: value.expectedParent,
         federationTarget: value.ref.ownerInstanceId ? { scope: "remote", instanceId: value.ref.ownerInstanceId } : { scope: "local" },
         ...(value.ref.ownerInstanceId ? { federation: { instanceLabel: value.ref.ownerInstanceId,
           ref: buildFederatedThreadRef({ backend: value.ref.backend, threadId: value.ref.threadId, instanceId: value.ref.ownerInstanceId }) } } : {}) });

@@ -1,5 +1,6 @@
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
 import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS } from "./background-archive-cleanup-report";
+import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thread";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
@@ -101,7 +102,8 @@ import {
   navigationSelectionAuthorizesComposer,
   navigationThreadSelectionKey,
 } from "./navigation-query-state";
-import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
+import type { ThreadActionErrorEvent, ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
+import { threadActionErrorContext, type ThreadActionErrorContext } from "./thread-action-error-context";
 import { projectForgeAutomationRequestTarget } from "../features/forge-automation/forge-automation-view";
 import { fileLabelFromPath } from "./directory-references";
 import {
@@ -3008,10 +3010,7 @@ type UseThreadNavigationOptions = {
    * sidebar, which had no dismiss, no timeout, a fixed priority order that
    * let one stale error mask the other four, and a permanent layout cost.
    */
-  onThreadActionError?: (event: {
-    kind: ThreadActionErrorKind;
-    message?: string;
-  }) => void;
+  onThreadActionError?: (event: ThreadActionErrorEvent) => void;
 };
 
 export function useThreadNavigation(
@@ -3539,8 +3538,9 @@ export function useThreadNavigation(
     }
     if (changed) setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
   }), [desktopApi]);
-  const [archiveThreadError, setArchiveThreadError] = useState<string>();
+  const [archiveThreadError, setArchiveThreadError] = useState<string | (ThreadActionErrorContext & { message: string })>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
+  const archiveCleanupContexts = useRef(new Map<string, ThreadActionErrorContext>());
   const [archiveCleanupProgressNotice, setArchiveCleanupProgressNotice] = useState<AppNoticeToastNotice>();
   const [archiveCleanupSummaryNotice, setArchiveCleanupSummaryNotice] = useState<AppNoticeToastNotice>();
   const [backgroundCleanupReport] = useState(() => new BackgroundArchiveCleanupReport());
@@ -3564,7 +3564,7 @@ export function useThreadNavigation(
   useEffect(() => {
     onThreadActionErrorRef.current?.({
       kind: "archive-thread",
-      message: archiveThreadError,
+      ...(typeof archiveThreadError === "string" ? { message: archiveThreadError } : { message: undefined, ...archiveThreadError }),
     });
   }, [archiveThreadError]);
   useEffect(() => {
@@ -4749,7 +4749,15 @@ export function useThreadNavigation(
           threadId: string; archivedAt: number; cleanup: ArchiveThreadCleanupResult[]; error?: string; reporting?: "background";
         };
         const background = completion.reporting === "background";
-        if (background && backgroundCleanupReport.record(event.backend, completion) && backgroundCleanupReportTimer.current === undefined) {
+        const completedKey = agentEventThreadIdentityKey(event, completion.threadId);
+        const completedThread = stateRef.current.rows?.threadRows.get(completedKey)
+          ?? { id: completion.threadId, source: event.backend };
+        const context = archiveCleanupContexts.current.get(completedKey)
+          ?? threadActionErrorContext(completedThread, event.federationTarget ?? readRendererFederationTarget());
+        archiveCleanupContexts.current.delete(completedKey);
+        const recorded = background && backgroundCleanupReport.record(event.backend, completion, context,
+          (ref) => resolveBackgroundCleanupThread(ref, loadedThreadRows(stateRef.current.rows), windowTarget));
+        if (recorded && backgroundCleanupReportTimer.current === undefined) {
           // A fixed window cannot be postponed indefinitely by a busy queue.
           // Stable identity also keeps the report out of transient toast history.
           backgroundCleanupReportTimer.current = window.setTimeout(() => {
@@ -4757,8 +4765,12 @@ export function useThreadNavigation(
             setArchiveCleanupSummaryNotice(backgroundCleanupReport.notice());
           }, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS);
         }
-        if (!background && completion.error) setArchiveThreadError(completion.error);
-        const notice = background ? undefined : formatArchiveCleanupNotice(completion.cleanup);
+        if (!background && completion.error) setArchiveThreadError({ message: completion.error, ...context,
+          worktreePaths: [...new Set([
+            ...(context.worktreePaths ?? []),
+            ...completion.cleanup.flatMap((item) => item.worktreePath ? [item.worktreePath] : []),
+          ])] });
+        const notice = background ? undefined : formatArchiveCleanupNotice(completion.cleanup, context);
         if (notice) setArchiveThreadNotice(notice);
         const receivedAt = Date.now();
         void desktopApi.logRendererDiagnostic?.({
@@ -8727,7 +8739,8 @@ export function useThreadNavigation(
       refreshAfterArchive = refresh,
     ): Promise<ArchivedThreadRef[]> => {
       if (!archiveThreadRequest) {
-        setArchiveThreadError("Desktop bridge is missing archiveThread().");
+        setArchiveThreadError({ message: "Desktop bridge is missing archiveThread().",
+          ...threadActionErrorContext(thread, thread.federation?.ref.target ?? readRendererFederationTarget()) });
         return [];
       }
 
@@ -8741,7 +8754,8 @@ export function useThreadNavigation(
           ? await readNavigationArchiveGroup({ api: desktopApi ?? {}, thread, windowTarget: readRendererFederationTarget() })
           : [thread];
       } catch (error) {
-        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        setArchiveThreadError({ message: error instanceof Error ? error.message : String(error),
+          ...threadActionErrorContext(thread, thread.federation?.ref.target ?? readRendererFederationTarget()) });
         return [];
       }
       const targetThreadKeys = new Set(
@@ -8817,10 +8831,21 @@ export function useThreadNavigation(
         refreshOwners.set(JSON.stringify(owner), owner);
       }
       const refreshOptions = { owners: [...refreshOwners.values()] };
+      let archiveTarget: NavigationArchiveMember | undefined;
+      let cleanupContextKey: string | undefined;
       try {
         for (const target of targetThreads) {
+          archiveTarget = target;
           const federationTarget = target.federationTarget ?? target.federation?.ref.target
             ?? readRendererFederationTarget();
+          cleanupContextKey = federationTarget?.scope === "remote"
+            ? federatedThreadIdentityKey({ backend: target.source, threadId: target.id, target: federationTarget })
+            : buildThreadIdentityKey(target.source, target.id);
+          const context = threadActionErrorContext(target, federationTarget);
+          archiveCleanupContexts.current.set(cleanupContextKey, context);
+          // Optional display metadata must stay bounded if a peer never sends
+          // its completion. The event still carries its authoritative id.
+          if (archiveCleanupContexts.current.size > 1024) archiveCleanupContexts.current.delete(archiveCleanupContexts.current.keys().next().value!);
           const response = await archiveThreadRequest({
             backend: target.source,
             threadId: target.id,
@@ -8830,7 +8855,8 @@ export function useThreadNavigation(
             ...(target.expectedParent !== undefined ? { expectedParent: target.expectedParent } : {}),
             ...(federationTarget ? { federationTarget } : {}),
           });
-          const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
+          if (!response.cleanupPending) archiveCleanupContexts.current.delete(cleanupContextKey);
+          const cleanupNotice = formatArchiveCleanupNotice(response.cleanup, context);
           archivedKeys.add(threadSummaryIdentityKey(target));
           archived.push({
             backend: target.source,
@@ -8849,8 +8875,10 @@ export function useThreadNavigation(
             });
           }
         }
+        archiveTarget = undefined;
         await refreshAfterArchive(undefined, undefined, false, refreshOptions);
       } catch (error) {
+        if (cleanupContextKey && archiveTarget && !archivedKeys.has(threadSummaryIdentityKey(archiveTarget))) archiveCleanupContexts.current.delete(cleanupContextKey);
         for (const targetKey of targetThreadKeys) {
           if (!archivedKeys.has(targetKey)) {
             updateArchivedThreadKey(targetKey, false);
@@ -8858,7 +8886,8 @@ export function useThreadNavigation(
             deferredArchiveRemovalsRef.current.delete(targetKey);
           }
         }
-        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        setArchiveThreadError({ message: error instanceof Error ? error.message : String(error),
+          ...(archiveTarget ? threadActionErrorContext(archiveTarget, archiveTarget.federationTarget ?? archiveTarget.federation?.ref.target ?? readRendererFederationTarget()) : {}) });
         await refreshAfterArchive(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
       }
       return archived;

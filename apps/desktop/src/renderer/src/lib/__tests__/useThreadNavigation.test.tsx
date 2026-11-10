@@ -3734,8 +3734,8 @@ describe("useThreadNavigation", () => {
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree cleanup skipped",
       message: "Thread archived. The worktree cleanup did not complete.",
-      detail:
-        "/repo/.worktrees/archive-me: Worktree is not registered with Git",
+      threadLink: { threadId: "thread-archived" },
+      facts: expect.arrayContaining([{ label: "Worktree 1", value: "/repo/.worktrees/archive-me\nWorktree is not registered with Git" }]),
     });
   });
 
@@ -3810,8 +3810,7 @@ describe("useThreadNavigation", () => {
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree cleanup skipped",
       message: "Thread archived. The worktree cleanup did not complete.",
-      detail:
-        "Unable to load thread metadata for archive cleanup: thread list unavailable",
+      facts: expect.arrayContaining([{ label: "Cleanup 1", value: "Unable to load thread metadata for archive cleanup: thread list unavailable" }]),
     });
   });
 
@@ -3896,7 +3895,7 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree cleanup skipped",
-      detail: "/repo/.worktrees/failed: Snapshot creation failed.",
+      facts: expect.arrayContaining([{ label: "Worktree 1", value: "/repo/.worktrees/failed\nSnapshot creation failed." }]),
     });
 
     act(() => {
