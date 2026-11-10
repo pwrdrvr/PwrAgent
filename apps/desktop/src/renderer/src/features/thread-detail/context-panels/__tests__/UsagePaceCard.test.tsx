@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, ReadUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { ClaudeUsageLimits, UsagePaceCard } from "../UsagePaceCard";
 import { usageFixture } from "../../../federation-activity/usage-activity-fixture";
+import { usageWhen } from "../../../federation-activity/usage-activity-presentation";
 
 afterEach(() => {
   cleanup();
@@ -111,6 +112,23 @@ describe("UsagePaceCard", () => {
     const card = await screen.findByRole("button", { name: "Open Usage Activity. Weekly limit 53% used." });
     expect(card.querySelector(".usage-pace-card__foot")).toHaveTextContent("Studio / default $0.0003 API-eq.");
     expect(card.querySelector(".usage-pace-card__foot")).not.toHaveTextContent("This machine");
+  });
+
+  it("keeps the chart, forecast and spend on the current week after an obsolete deadline passes", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const windowStart = RESET_AT - 168 * HOUR;
+    const readUsageActivity = reader({
+      limitObservation: reading(53),
+      limitHistory: [{ ...reading(47, windowStart - HOUR), limits: [{ ...WEEKLY, usedPercent: 47, resetAt: NOW - HOUR / 2 }] }],
+      rows: [usageFixture({ createdAt: windowStart + HOUR, startedAt: windowStart + HOUR, completedAt: NOW - HOUR })],
+    });
+    render(<UsagePaceCard desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
+
+    const card = await screen.findByRole("button", { name: "Open Usage Activity. Weekly limit 53% used." });
+    expect(card).toHaveAccessibleDescription(/^\+0\.6%\/h On pace to reach 100% .*, 6 h 3\d m before the reset$/);
+    expect(card.querySelector(".usage-pace-card__foot")).toHaveTextContent("This machine $0.0003 API-eq.");
+    // The window began more than three days ago, not half an hour ago.
+    expect(card.querySelector(".usage-pace-card__axis")?.firstElementChild).toHaveTextContent(usageWhen(windowStart, NOW, true));
   });
 
   it("stays quiet when the pace lands below 100% at the reset", async () => {

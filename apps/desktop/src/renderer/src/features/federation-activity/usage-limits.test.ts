@@ -42,6 +42,17 @@ describe("usage limit history", () => {
     expect(series.pacePerHour).toBeCloseTo(22 / 6);
   });
 
+  it("does not charge a whole week's usage to the half hour since an obsolete deadline", () => {
+    const before = weekly(t0 - 28 * HOUR, 47, t0 + 41 * HOUR);
+    const after = weekly(t0 + 41.5 * HOUR, 53);
+    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const series = sinceResetSeries(account)!;
+    expect(series.windowStart).toBe(t0);
+    expect(series.resets).toEqual([{ at: t0, kind: "unscheduled", after: before.observedAt, before: after.observedAt }]);
+    expect(series.pacePerHour).toBeCloseTo(53 / 41.5);
+    expect(projectLimit(series)).toEqual({ kind: "full", at: after.observedAt + 47 / (53 / 41.5) * HOUR });
+  });
+
   it("restarts where an early reset was first seen when its new schedule began before the previous reading", () => {
     // The new schedule claims a start three hours ago, but a reading an hour
     // ago was still in the old window, so the reset came after that reading.
@@ -58,6 +69,21 @@ describe("usage limit history", () => {
     const second = weekly(t0 + HOUR, 2, t0 + 7 * 24 * HOUR);
     const [account] = buildLimitAccounts([{ owner: "Studio", history: [first, second] }]);
     expect(sinceResetSeries(account)!.resets).toEqual([{ at: t0, kind: "scheduled", after: t0 - 2 * HOUR, before: t0 + HOUR }]);
+  });
+
+  it("keeps the 15:00 renewal scheduled after a five-hour window's 10:00 deadline was missed", () => {
+    const reading = (at: number, usedPercent: number, resetAt: number): UsageLimitObservation => ({
+      observedAt: at, accountKey: "a", limits: [
+        { name: "5-hour limit", windowKey: "primary", usedPercent, resetAt, windowMinutes: 300 },
+      ],
+    });
+    const [account] = buildLimitAccounts([{ owner: "Studio", history: [
+      reading(t0, 88, t0 + HOUR),
+    ], current: reading(t0 + 7 * HOUR, 12, t0 + 11 * HOUR) }]);
+    const series = fiveHourSeries(account)!;
+    expect(series.resets).toEqual([{ at: t0 + 6 * HOUR, kind: "scheduled", after: t0, before: t0 + 7 * HOUR }]);
+    expect(series.windowStart).toBe(t0 + 6 * HOUR);
+    expect(series.pacePerHour).toBeCloseTo(12);
   });
 
   it("keeps accounts apart and merges owners that share one", () => {
