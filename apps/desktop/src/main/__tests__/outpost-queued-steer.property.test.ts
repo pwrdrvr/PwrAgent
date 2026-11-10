@@ -169,14 +169,26 @@ it.skipIf(process.platform === "win32")("claimed steering owns global dispatch t
       const request = value("guidance"), accepted = await submit(request);
       await native;
       const claimed = store.get(accepted.queueEntryId);
-      expect(claimed).toMatchObject({ status: "starting", turnId: "turn-1" });
-      expect(await runtime.cancelQueuedTurn({ queueEntryId: accepted.queueEntryId })).toMatchObject({ disposition: "already_admitted" });
-      const waiting = await submit({ ...value("waiting"), delivery: "new_turn" });
-      terminal("turn-1", status);
-      await drain();
-      expect(starts).toHaveLength(1);
-      expect(store.get(accepted.queueEntryId)).toMatchObject({ status, fingerprint: claimed.fingerprint, turnId: "turn-1" });
-      release(); await drain();
+      let retried = false, waiting: any;
+      const retry = submit(request).then(() => { retried = true; });
+      try {
+        const dispatch = runtime.dispatches.get(accepted.queueEntryId);
+        expect(dispatch).toBeDefined();
+        await drain();
+        expect(retried).toBe(false);
+        expect(claimed).toMatchObject({ status: "starting", turnId: "turn-1" });
+        expect(await runtime.cancelQueuedTurn({ queueEntryId: accepted.queueEntryId })).toMatchObject({ disposition: "already_admitted" });
+        waiting = await submit({ ...value("waiting"), delivery: "new_turn" });
+        terminal("turn-1", status);
+        await drain();
+        expect(runtime.dispatches.get(accepted.queueEntryId)).toBe(dispatch);
+        expect(retried).toBe(false);
+        expect(starts).toHaveLength(1);
+        expect(store.get(accepted.queueEntryId)).toMatchObject({ status, fingerprint: claimed.fingerprint, turnId: "turn-1" });
+      } finally { release(); }
+      await retry; await drain();
+      expect(retried).toBe(true);
+      expect(runtime.dispatches.has(accepted.queueEntryId)).toBe(false);
       expect(store.get(accepted.queueEntryId)).toMatchObject({ status, fingerprint: claimed.fingerprint, turnId: "turn-1" });
       if (status === "failed") expect(backend.queuedTurns(ref.threadId)[0]).toMatchObject({ queueEntryId: waiting.queueEntryId, manualReleaseRequired: true });
       else expect(starts).toHaveLength(2);

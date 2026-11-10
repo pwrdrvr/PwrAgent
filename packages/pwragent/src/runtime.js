@@ -175,7 +175,8 @@ export class Runtime {
     };
     this.work = threadId ? (queuedControls?.manualReleaseRequired
       ? this.turnQueue.submitHeld(entry, queuedControls.holdReason, { queueIndex: queuedControls.queueIndex })
-      : delivery ? this.turnQueue.submitSteer(entry) : this.turnQueue.submit(entry, { queueIndex: queuedControls?.queueIndex })).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
+      : delivery && queuedControls?.queueIndex === undefined ? this.turnQueue.submitSteer(entry)
+        : this.turnQueue.submit(entry, { queueIndex: queuedControls?.queueIndex })).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
     // The durable acceptance precedes inference. Socket loss cannot cancel it.
     return job;
   }
