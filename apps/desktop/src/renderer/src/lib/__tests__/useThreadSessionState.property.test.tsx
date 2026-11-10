@@ -287,6 +287,10 @@ it.each([
     new LedgerCommand("compact"), new LedgerCommand("start"), new LedgerCommand("item"),
     new LedgerCommand("resolve"), new LedgerCommand("item"), new LedgerCommand("redeliver"),
   ] },
+  { name: "a pre-item read followed by untimed message redelivery after a tool", commands: [
+    new LedgerCommand("start"), new LedgerCommand("read"), new LedgerCommand("item"),
+    new LedgerCommand("item", 0, true), new LedgerCommand("resolve"), new LedgerCommand("redeliver"),
+  ] },
   { name: "an acknowledged empty turn and message redelivery", commands: [
     new LedgerCommand("send"), new LedgerCommand("start"), new LedgerCommand("complete"),
     new LedgerCommand("start"), new LedgerCommand("item"), new LedgerCommand("resolve"),
