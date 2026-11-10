@@ -360,12 +360,12 @@ def clean(report, snapshot_fn=process_snapshot, metadata=apfs_metadata, verify_f
 
 
 def content_inventory(root):
-    """Match the installer's byte/mode/link inventory; do not follow links."""
+    """Match stock installer inventories, retaining special permission bits too."""
     entries = []
     def visit(directory):
         for item in sorted(directory.iterdir()):
             info = item.lstat()
-            entry = {"path": str(item.relative_to(root)), "mode": (info.st_mode & 0o777)}
+            entry = {"path": str(item.relative_to(root)), "mode": stat.S_IMODE(info.st_mode)}
             if item.is_symlink():
                 entry["link"] = os.readlink(item)
             elif item.is_dir():
@@ -493,6 +493,11 @@ def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch
                 # A just-started app might still map the original inodes. Keep
                 # that backup rather than removing a runtime beneath it.
                 snapshot = snapshot_fn()
+                # Writable descriptors need not appear in cwd/txt observations.
+                # The original must still be exactly the approved tree after
+                # publication, including writes through handles opened earlier.
+                if tree_state(backup)["fingerprint"] != current["fingerprint"]:
+                    raise Unsafe("Original backup changed after publication")
                 if active_pids(path, snapshot) or active_pids(backup, snapshot):
                     result["preserved"].append({"path": str(backup), "inode": original_inode, "witness": current["witness"],
                         "reason": "New runtime activity; backup retained"})
