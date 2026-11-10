@@ -1064,6 +1064,15 @@ import {
   type WorktreeArchiveCandidate,
   type WorktreeRestoreCandidate,
 } from "./backend-registry-types";
+import {
+  firstDefinedStringLike,
+  readBooleanLike,
+  readNonEmptyRawString,
+  readNonEmptyString,
+  readOptionalString,
+  readRecord,
+  readStringLike,
+} from "./backend-registry-notification-values";
 
 const createReplayClientsFromEnv = () => getOwnerHostServices().replayClients();
 
@@ -2706,32 +2715,6 @@ function readNotificationProjectLabel(
   return projectKey ? path.basename(projectKey) : undefined;
 }
 
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readOptionalString(value: unknown): string | undefined;
-function readOptionalString(
-  record: Record<string, unknown> | undefined,
-  keys: string[],
-): string | undefined;
-function readOptionalString(
-  value: unknown,
-  keys?: string[],
-): string | undefined {
-  if (keys) {
-    return (
-      readStringLike(
-        value && typeof value === "object" && !Array.isArray(value)
-          ? (value as Record<string, unknown>)
-          : undefined,
-        keys,
-      ) ?? undefined
-    );
-  }
-  return typeof value === "string" ? value : undefined;
-}
-
 function readFileChangeApprovalFile(
   value: unknown,
 ): NonNullable<PendingRequestApprovalContext["files"]>[number] | undefined {
@@ -2781,10 +2764,6 @@ function readFileChangeApprovalDiff(
     return direct;
   }
   return readFileChangeApprovalDiff(readRecord(record.diff));
-}
-
-function readNonEmptyRawString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function fileChangeApprovalContextKey(params: {
@@ -7413,61 +7392,6 @@ function resolveCodexFastModeServiceTier(params: {
     return undefined;
   }
   return params.serviceTier;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readStringLike(
-  record: Record<string, unknown> | undefined,
-  keys: string[],
-): string | null | undefined {
-  if (!record) {
-    return undefined;
-  }
-  for (const key of keys) {
-    if (!(key in record)) {
-      continue;
-    }
-    const value = record[key];
-    if (value === null) {
-      return null;
-    }
-    if (typeof value === "string") {
-      return value.trim() || null;
-    }
-  }
-  return undefined;
-}
-
-function readBooleanLike(
-  record: Record<string, unknown> | undefined,
-  keys: string[],
-): boolean | undefined {
-  if (!record) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function firstDefinedStringLike(
-  ...values: Array<string | null | undefined>
-): string | null | undefined {
-  for (const value of values) {
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
 }
 
 function readObservedCodexFastMode(
