@@ -1,5 +1,8 @@
-import { isPwrSnapResourceUri } from "@pwragent/owner-core/pwrsnap-media";
-import { PWRSNAP_MCP_CONNECTION_ID } from "@pwragent/shared";
+import {
+  isPwrSnapResourceUri,
+  MAX_TRANSCRIPT_IMAGE_BYTES,
+  PWRSNAP_MCP_CONNECTION_ID,
+} from "@pwragent/shared";
 
 /** Links remembered per session. The oldest are forgotten first. */
 export const MAX_PWRSNAP_MEDIA_LINKS_PER_SESSION = 512;
@@ -90,9 +93,6 @@ export function readPwrSnapImageLinks(result: unknown): string[] {
   });
 }
 
-/** The largest image a transcript takes from PwrSnap, before base64. */
-export const MAX_PWRSNAP_MEDIA_BYTES = 64 * 1024 * 1024;
-
 /**
  * What a transcript gets for one PwrSnap image link. `session-ended` covers
  * every link PwrAgent will not read: no live PwrSnap session on the thread
@@ -114,7 +114,7 @@ export function readPwrSnapImageContents(result: unknown, uri: string): PwrSnapM
     if (entryUri !== uri || typeof blob !== "string" || typeof mimeType !== "string") continue;
     const type = mimeType.split(";", 1)[0]!.trim().toLowerCase();
     if (!type.startsWith("image/")) continue;
-    if (blob.length === 0 || blob.length > Math.ceil(MAX_PWRSNAP_MEDIA_BYTES / 3) * 4) continue;
+    if (blob.length === 0 || blob.length > Math.ceil(MAX_TRANSCRIPT_IMAGE_BYTES / 3) * 4) continue;
     return { ok: true, mimeType: type, dataBase64: blob };
   }
   return { ok: false, reason: "failed" };

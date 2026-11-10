@@ -135,3 +135,4 @@ export * from "./uuid-v7";
 export type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary, TerminalSnapshot } from "./contracts/terminal";
 export { mergeCausalMessagingContext } from "./messaging-causal-context";
 export * from "./thread-replay-paging";
+export * from "./transcript-image-sources";

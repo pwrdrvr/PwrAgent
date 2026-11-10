@@ -1,5 +1,6 @@
 import { memo, useId, useState } from "react";
 import { useTranscriptActivityDetails } from "../../lib/useTranscriptActivityDetails";
+import { transcriptImageUnavailableReason } from "@pwragent/shared";
 import type {
   AppServerSkillSummary,
   AppServerThreadActivityEntry,
@@ -173,7 +174,15 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
 
       {images.length > 0 ? (
         <div className="transcript-activity__images">
-          {images.map((image, index) => (
+          {images.map((image, index) => transcriptImageUnavailableReason(image) ? (
+            <div key={`${index}:${image.url.slice(0, 80)}`} className="transcript-message__image-fallback">
+              <div className="transcript-message__image-fallback-main">
+                <span className="transcript-message__image-fallback-title">
+                  {transcriptImageUnavailableReason(image)}
+                </span>
+              </div>
+            </div>
+          ) : (
             <button
               key={`${index}:${image.url.slice(0, 80)}`}
               type="button"

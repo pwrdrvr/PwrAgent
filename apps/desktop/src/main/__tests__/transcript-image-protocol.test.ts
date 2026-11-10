@@ -602,6 +602,7 @@ describe("transcript image protocol", () => {
     // One read for both copies of the link, on the transcript's own thread.
     expect(readPwrSnapMedia).toHaveBeenCalledTimes(1);
     expect(readPwrSnapMedia).toHaveBeenCalledWith({
+      backend: "codex",
       threadId: "codex:thread/pwrsnap-image",
       uri,
     });

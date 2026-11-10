@@ -2422,6 +2422,34 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.queryByRole("button", { name: /Expand transcript image/ })).toBeNull();
   });
 
+  // An older federation peer forwards these raw, without a reason.
+  it("never loads a raw PwrSnap or legacy loopback image URL", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "Here it is.",
+            parts: [
+              { type: "text", text: "Here it is." },
+              { type: "image", url: "http://127.0.0.1:51729/media?grant=old&signature=old", alt: "old capture" },
+              { type: "image", url: "pwrsnap://capture/cap_1/composite", alt: "new capture" },
+            ],
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getAllByText("PwrSnap image unavailable.")).toHaveLength(2);
+    expect(document.querySelectorAll("img")).toHaveLength(0);
+  });
+
   it("shows the owner path when a federated inline image fails to load", async () => {
     const fileUrl =
       "file:///Users/owner/.pwragent/profiles/default/state/image-inputs/missing.png";

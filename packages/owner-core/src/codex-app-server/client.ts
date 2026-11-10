@@ -33,6 +33,8 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
+  isLegacyPwrSnapMediaUrl,
+  isPwrSnapResourceUri,
   readCodexNativeSubAgentName,
   estimateTokenUsageCost,
   formatSearchCommandActionLabel,
@@ -100,7 +102,6 @@ import type {
   CodexMcpServerSummary,
   LinkedDirectorySummary,
 } from "@pwragent/shared";
-import { isLegacyPwrSnapMediaUrl, isPwrSnapResourceUri } from "../pwrsnap-media";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,

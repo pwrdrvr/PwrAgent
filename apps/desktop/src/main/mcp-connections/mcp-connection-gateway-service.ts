@@ -101,6 +101,7 @@ import {
   type SandboxerTransport,
   isSandboxerTransport,
   buildThreadIdentityKey,
+  MAX_TRANSCRIPT_IMAGE_BYTES,
 } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
@@ -133,7 +134,7 @@ import {
   type PwrSuiteRelayApp,
 } from "./pwrsuite-relay";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
-import { MAX_PWRSNAP_MEDIA_BYTES, PwrSnapMediaLinks, readPwrSnapImageContents, type PwrSnapMediaRead } from "./pwrsnap-media-links";
+import { PwrSnapMediaLinks, readPwrSnapImageContents, type PwrSnapMediaRead } from "./pwrsnap-media-links";
 import { createMcpIpcTransport, normalizeMcpIpcBearerToken } from "./mcp-ipc-http";
 import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
@@ -157,7 +158,7 @@ const PWRSNAP_NOT_LISTENING_DETAIL =
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 /** An owner answering a PwrSnap image read sends the image itself. */
-const MAX_PWRSNAP_MEDIA_RESPONSE_BYTES = Math.ceil(MAX_PWRSNAP_MEDIA_BYTES / 3) * 4 + 4096;
+const MAX_PWRSNAP_MEDIA_RESPONSE_BYTES = Math.ceil(MAX_TRANSCRIPT_IMAGE_BYTES / 3) * 4 + 4096;
 const PWRSNAP_MEDIA_READ_TIMEOUT_MS = 15_000;
 const MAX_RPC_CONNECTIONS = 32;
 /**
@@ -636,6 +637,12 @@ export class McpConnectionGatewayService {
   private readonly upstreamSessions = new Map<string, UpstreamSession>();
   /** The PwrSnap image links each live session returned to its thread. */
   private readonly pwrSnapMediaLinks = new PwrSnapMediaLinks();
+  /**
+   * Links each session already failed to read. PwrSnap's refusal stands for
+   * that session (history horizon, budget), so a transcript re-read must not
+   * ask again.
+   */
+  private readonly failedPwrSnapMediaReads = new WeakMap<Client, Set<string>>();
   /**
    * In-flight session opens, keyed by bridge token.
    *
@@ -3188,7 +3195,11 @@ export class McpConnectionGatewayService {
    * link with no live session behind it is `session-ended`, and the
    * transcript shows it as unavailable instead of retrying.
    */
-  async readPwrSnapMediaResource(request: { threadId: string; uri: string }): Promise<PwrSnapMediaRead> {
+  async readPwrSnapMediaResource(request: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+    uri: string;
+  }): Promise<PwrSnapMediaRead> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
       return await this.requestOwnerBroker<PwrSnapMediaRead>(
@@ -3202,23 +3213,37 @@ export class McpConnectionGatewayService {
       liveSession: (candidate) => this.upstreamSessions.get(candidate)?.client,
       threadOf: (candidate) => {
         const grant = this.grants.get(candidate);
-        return grant ? grantThreadId(grant) : undefined;
+        if (!grant) return undefined;
+        // Thread ids are unique per backend only.
+        if (request.backend && grant.backend && grant.backend !== request.backend) return undefined;
+        return grantThreadId(grant);
       },
     });
     const client = token ? this.upstreamSessions.get(token)?.client : undefined;
     if (!client) return { ok: false, reason: "session-ended" };
+    let failed = this.failedPwrSnapMediaReads.get(client);
+    if (failed?.has(request.uri)) return { ok: false, reason: "failed" };
+    let read: PwrSnapMediaRead;
     try {
       const result = await client.readResource(
         { uri: request.uri },
         { timeout: PWRSNAP_MEDIA_READ_TIMEOUT_MS },
       );
-      return readPwrSnapImageContents(result, request.uri);
+      read = readPwrSnapImageContents(result, request.uri);
     } catch (error) {
       connectionLog.warn("PwrSnap media read failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return { ok: false, reason: "failed" };
+      read = { ok: false, reason: "failed" };
     }
+    if (!read.ok) {
+      if (!failed) {
+        failed = new Set();
+        this.failedPwrSnapMediaReads.set(client, failed);
+      }
+      failed.add(request.uri);
+    }
+    return read;
   }
 
   private async closeUpstreamSession(token: string, resetDisconnected = true): Promise<void> {
@@ -3561,7 +3586,11 @@ export class McpConnectionGatewayService {
       if (typeof values.threadId !== "string" || typeof values.uri !== "string") {
         throw new Error("Invalid PwrSnap media read request.");
       }
-      return await this.readPwrSnapMediaResource({ threadId: values.threadId, uri: values.uri });
+      return await this.readPwrSnapMediaResource({
+        ...(typeof values.backend === "string" ? { backend: values.backend as AppServerBackendKind } : {}),
+        threadId: values.threadId,
+        uri: values.uri,
+      });
     }
     if (operation === "broker/close-thread-sessions") {
       if (

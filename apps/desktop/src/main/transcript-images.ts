@@ -1,3 +1,8 @@
+import {
+  isLegacyPwrSnapMediaUrl,
+  isPwrSnapResourceUri,
+  MAX_TRANSCRIPT_IMAGE_BYTES,
+} from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -16,7 +21,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveActiveProfilePath, resolvePwragentRoot } from "./profile";
-import { isLegacyPwrSnapMediaUrl, isPwrSnapResourceUri } from "@pwragent/owner-core/pwrsnap-media";
 import type { PwrSnapMediaRead } from "./mcp-connections/pwrsnap-media-links";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 import { existingThreadAssetAlias, isThreadAssetPath, storeThreadAsset, type ThreadAssetOwner } from "./app-server/thread-assets";
@@ -46,8 +50,6 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
 ]);
 
 const MARKDOWN_LINKED_IMAGE_PATTERN = /!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))[^)]*\)/g;
-// PwrSnap links can point to full-resolution captures, not just UI-sized previews.
-const MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES = 64 * 1024 * 1024;
 const PWRSNAP_SESSION_ENDED_REASON =
   "PwrSnap image unavailable. The PwrSnap session that returned it has ended.";
 const PWRSNAP_READ_FAILED_REASON = "PwrSnap could not provide this image.";
@@ -92,7 +94,11 @@ export type TranscriptImageMaterializerDependencies = {
    * The bytes of a `pwrsnap://` link, through the live PwrSnap MCP session
    * that returned it to this thread. Never opens a session.
    */
-  readPwrSnapMedia: (request: { threadId: string; uri: string }) => Promise<PwrSnapMediaRead>;
+  readPwrSnapMedia: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    uri: string;
+  }) => Promise<PwrSnapMediaRead>;
   resolveRoot: (request: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -330,7 +336,7 @@ async function retainLegacyThreadImage(sourcePath: string, owner: ThreadAssetOwn
   const resolved = await resolveTranscriptImageFile(sourcePath);
   if (!resolved.ok) return undefined;
   const info = await stat(resolved.path);
-  if (info.size === 0 || info.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) return undefined;
+  if (info.size === 0 || info.size > MAX_TRANSCRIPT_IMAGE_BYTES) return undefined;
   return await storeThreadAsset(owner, await readFile(resolved.path), path.basename(sourcePath), resolved.path);
 }
 
@@ -650,7 +656,7 @@ async function transcriptImageUrlForMessaging(
   }
   if (
     buffer.byteLength === 0
-    || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+    || buffer.byteLength > MAX_TRANSCRIPT_IMAGE_BYTES
   ) {
     return undefined;
   }
@@ -722,7 +728,7 @@ export function decodeFederatedTranscriptImageResponse(
   if (
     !mimeType.startsWith("image/")
     || bytes.byteLength === 0
-    || bytes.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+    || bytes.byteLength > MAX_TRANSCRIPT_IMAGE_BYTES
   ) {
     return undefined;
   }
@@ -900,16 +906,17 @@ async function materializePwrSnapImage(
 ): Promise<{ url: string } | { unavailableReason: string }> {
   const root = deps.resolveRoot({ backend: response.backend, threadId: response.threadId });
   const stem = `pwrsnap-${createHash("sha256").update(uri).digest("hex")}`;
-  for (const extension of new Set(DATA_IMAGE_EXTENSIONS.values())) {
-    const cached = path.join(root, `${stem}.${extension}`);
-    if (await isUsableCachedImage(cached)) {
-      return { url: toTranscriptImageProtocolUrl(pathToFileURL(cached).toString()) };
-    }
+  const candidates = [...new Set(DATA_IMAGE_EXTENSIONS.values())]
+    .map((extension) => path.join(root, `${stem}.${extension}`));
+  const usable = await Promise.all(candidates.map(isUsableCachedImage));
+  const cached = candidates.find((_, index) => usable[index]);
+  if (cached) {
+    return { url: toTranscriptImageProtocolUrl(pathToFileURL(cached).toString()) };
   }
 
   let read: PwrSnapMediaRead;
   try {
-    read = await deps.readPwrSnapMedia({ threadId: response.threadId, uri });
+    read = await deps.readPwrSnapMedia({ backend: response.backend, threadId: response.threadId, uri });
   } catch {
     read = { ok: false, reason: "failed" };
   }
@@ -922,7 +929,7 @@ async function materializePwrSnapImage(
   }
   const extension = DATA_IMAGE_EXTENSIONS.get(read.mimeType);
   const buffer = Buffer.from(read.dataBase64, "base64");
-  if (!extension || buffer.byteLength === 0 || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
+  if (!extension || buffer.byteLength === 0 || buffer.byteLength > MAX_TRANSCRIPT_IMAGE_BYTES) {
     return { unavailableReason: PWRSNAP_READ_FAILED_REASON };
   }
   try {
@@ -1155,7 +1162,7 @@ async function isUsableCachedImage(filePath: string): Promise<boolean> {
     const fileStat = await stat(filePath);
     return fileStat.isFile()
       && fileStat.size > 0
-      && fileStat.size <= MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES;
+      && fileStat.size <= MAX_TRANSCRIPT_IMAGE_BYTES;
   } catch {
     return false;
   }
@@ -1275,7 +1282,7 @@ async function readMarkdownLinkedTranscriptImage(
   }
   if (
     buffer.byteLength === 0
-    || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+    || buffer.byteLength > MAX_TRANSCRIPT_IMAGE_BYTES
   ) {
     return undefined;
   }
@@ -1562,7 +1569,7 @@ export async function readTranscriptImageProtocolRequest(
   }
 
   const fileStat = await stat(resolution.path);
-  if (fileStat.size === 0 || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
+  if (fileStat.size === 0 || fileStat.size > MAX_TRANSCRIPT_IMAGE_BYTES) {
     throw new Error("transcript image size is not supported");
   }
   const bytes = await readFile(resolution.path);
@@ -1589,7 +1596,7 @@ export async function readTranscriptImageForRenderer(
     if (
       !fileStat.isFile()
       || fileStat.size === 0
-      || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+      || fileStat.size > MAX_TRANSCRIPT_IMAGE_BYTES
     ) {
       throw new Error("Transcript image size is not supported");
     }

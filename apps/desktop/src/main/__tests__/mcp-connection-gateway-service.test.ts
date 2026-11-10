@@ -570,7 +570,7 @@ describe("McpConnectionGatewayService", () => {
       transport: { close: vi.fn(async () => undefined) },
     });
     const internals = service as unknown as {
-      grants: Map<string, { connectionId: string; threadId?: string }>;
+      grants: Map<string, { connectionId: string; threadId?: string; backend?: string }>;
       upstreamSessions: Map<string, object>;
       dispatchBridgeOperation: (
         token: string,
@@ -580,7 +580,10 @@ describe("McpConnectionGatewayService", () => {
       ) => Promise<unknown>;
       closeThreadSessions: (threadId: string, connectionIds: readonly string[]) => Promise<void>;
     };
-    const grant = { connectionId: "pwrsnap", threadId: "thread-1" };
+    const grant: { connectionId: string; threadId: string; backend?: string } = {
+      connectionId: "pwrsnap",
+      threadId: "thread-1",
+    };
     internals.grants.set("snap-1", grant);
     internals.upstreamSessions.set("snap-1", session());
     await internals.dispatchBridgeOperation("snap-1", grant, "tools/call", {
@@ -598,6 +601,31 @@ describe("McpConnectionGatewayService", () => {
       .resolves.toEqual({ ok: false, reason: "session-ended" });
     await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri: "pwrsnap://capture/cap_9/composite" }))
       .resolves.toEqual({ ok: false, reason: "session-ended" });
+
+    // The same thread id on another backend is another thread.
+    grant.backend = "codex";
+    await expect(service.readPwrSnapMediaResource({ backend: "claude", threadId: "thread-1", uri }))
+      .resolves.toEqual({ ok: false, reason: "session-ended" });
+    await expect(service.readPwrSnapMediaResource({ backend: "codex", threadId: "thread-1", uri }))
+      .resolves.toMatchObject({ ok: true });
+    readResource.mockClear();
+
+    // A read the session refused is not asked again on the next transcript read.
+    const failing = "pwrsnap://capture/cap_2/composite";
+    callTool.mockResolvedValueOnce({
+      content: [{ type: "resource_link", uri: failing, name: "old capture", mimeType: "image/png" }],
+    } as never);
+    await internals.dispatchBridgeOperation("snap-1", grant, "tools/call", {
+      name: "pwrsnap_capture_resource",
+      arguments: {},
+    });
+    readResource.mockRejectedValueOnce(new Error("Outside this session's capture history."));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri: failing }))
+        .resolves.toEqual({ ok: false, reason: "failed" });
+    }
+    expect(readResource).toHaveBeenCalledTimes(1);
+    readResource.mockClear();
 
     // A session reopened on the same grant did not return the link.
     internals.upstreamSessions.set("snap-1", session());
