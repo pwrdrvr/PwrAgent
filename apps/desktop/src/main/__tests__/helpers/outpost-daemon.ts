@@ -16,7 +16,7 @@ export const OUTPOST_PACKAGE_ROOT = path.join(process.cwd(), "packages/pwragent"
 
 /** Every grant a viewer can hold on an Outpost. */
 export const OUTPOST_VIEWER_CAPABILITIES: FederationCapability[] = ["remote_window", "thread_navigation", "thread_detail",
-  "turn_control", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"];
+  "turn_control", "durable_turn_requests_v1", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"];
 
 export type OutpostDaemon = {
   client: FederationRemoteBackendClient;
@@ -28,6 +28,7 @@ export type OutpostDaemon = {
   cli: string;
   env: NodeJS.ProcessEnv;
   viewerId: string;
+  ownerInstanceId: string;
   close(): Promise<void>;
 };
 
@@ -105,7 +106,7 @@ export async function startOutpostDaemon(options: {
       sendEnvelope: (envelope) => connected.sendEnvelope(envelope), defaultTimeoutMs: 3000 });
     connected.startReceiving();
     return {
-      client: new FederationRemoteBackendClient(rpc), rpc, events, workspace, cli, env, viewerId, close,
+      client: new FederationRemoteBackendClient(rpc), rpc, events, workspace, cli, env, viewerId, ownerInstanceId: invite.gatewayInstanceId, close,
       subscribe: (eventClasses) => connected.sendEnvelope({ kind: "notification", method: "federation.eventSubscription",
         id: randomUUID(), params: { eventClasses, threadSelection: { kind: "all" } }, protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: viewerId, targetInstanceId: invite.gatewayInstanceId, createdAt: Date.now() }),

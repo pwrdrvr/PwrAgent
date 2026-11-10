@@ -8,7 +8,7 @@ import {
   type FederationRequestEnvelope,
   type GetDurableTurnRequest,
 } from "@pwragent/shared";
-import { DurableTurnRequestService } from "../federation/durable-turn-request-service";
+import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";

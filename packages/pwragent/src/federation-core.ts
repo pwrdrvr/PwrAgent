@@ -38,6 +38,8 @@ export { ThreadSteeringLifecycle } from "@pwragent/owner-core/thread-steering-li
 export { ThreadSteerSubmissionLifecycle } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
 export { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
 export { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
+export { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
+export { durableFederationCallerScope, DurableTurnRequestError } from "@pwragent/shared";
 export { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 export { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
@@ -65,11 +67,13 @@ import type { ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provide
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
 import { RetainedOwnerThreadStore } from "@pwragent/sqlite-storage/retained-owner-thread-store";
+import { SqliteDurableTurnRequestStore } from "@pwragent/sqlite-storage/durable-turn-request-store";
+import type { DurableTurnRequestStorage } from "@pwragent/owner-core/durable-turn-request-storage";
 export { outpostThreadMetadata, outpostThreadProjection } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
 
 type OutpostOwnerStorage = { threads: ImmediateOwnerThreadRegistry; jobs: OwnerJobStorage; inventory: ProviderThreadSnapshotStorage;
   acpSessions: Pick<AcpSessionStorage, "getSession" | "listAllSessions">; claudeSessions: ClaudeProfileThreadStorage;
-  retainedOwners: RetainedOwnerThreadStorage };
+  retainedOwners: RetainedOwnerThreadStorage; durableTurnRequests: DurableTurnRequestStorage };
 
 /** Outpost's private host binding. Application code receives only storage ports. */
 export function openOutpostProfileRuntime(params: {
@@ -123,6 +127,7 @@ export function openOutpostProfileRuntime(params: {
       const inventory = new ProviderThreadSnapshotStore(db);
       const retainedOwners = new RetainedOwnerThreadStore(db, directory);
       const acpSessions = new AcpSessionStore(db);
+      const durableTurnRequests = new SqliteDurableTurnRequestStore(db);
       const claudeSessions = new ClaudeSessionMetadataStore(path.join(params.stateDirectory, "claude"));
       // Do not expose concrete stores, constructors or the database indirectly.
       return {
@@ -138,6 +143,16 @@ export function openOutpostProfileRuntime(params: {
         },
         inventory: { list: () => inventory.list(), replace: (snapshot, retiredThreadIds) => inventory.replace(snapshot, retiredThreadIds) },
         retainedOwners: { list: () => retainedOwners.list(), confirmNativeThreads: ids => retainedOwners.confirmNativeThreads(ids) },
+        durableTurnRequests: {
+          transaction: work => durableTurnRequests.transaction(work),
+          read: (scope, id) => durableTurnRequests.read(scope, id),
+          write: (scope, receipt) => durableTurnRequests.write(scope, receipt),
+          pruneExpired: now => durableTurnRequests.pruneExpired(now),
+          count: scope => durableTurnRequests.count(scope),
+          insert: (scope, receipt) => durableTurnRequests.insert(scope, receipt),
+          readQueueReceipt: id => durableTurnRequests.readQueueReceipt(id),
+          findQueueReceipt: id => durableTurnRequests.findQueueReceipt(id),
+        },
         acpSessions: { getSession: (backend, id) => acpSessions.getSession(backend, id), listAllSessions: params => acpSessions.listAllSessions(params) },
         claudeSessions: { listThreads: async () => {
           return (await claudeSessions.list({ requireComplete: true })).filter(session => !session.ephemeral)

@@ -366,6 +366,17 @@ content hash, including for editing. The existing viewer Edit flow cancels that
 hash before restoring a viewer-local draft; changed input gets a new acceptance
 identity. Reading never reserves or releases the FIFO and adds no persistence.
 
+Desktop and Outpost construct the same `DurableTurnRequestService` from
+owner-core for durable turn admission. The profile binding supplies the existing
+FULL/immediate inbox storage port. Authenticated issuer/device namespaces and
+owner-bound payload hashes precede dispatch. Outpost assigns one safe immutable
+identity to the receipt, durable job, live queue and events, then calls its
+existing turn path. Both the durable feature grant and `turn_control` are
+required; nested messaging origins retain their additional grant and origin
+authentication. Proven queue boundaries reconcile receipts. Shutdown or a
+missing live queue yields uncertainty without restoring input or reclaiming a
+dispatch claim. Changing accepted input requires cancellation and a new UUID.
+
 Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
 It owns delivery refusal, restart-gate queue admission, native-review admission,
 provider selection and response/effect sequencing. The existing steering

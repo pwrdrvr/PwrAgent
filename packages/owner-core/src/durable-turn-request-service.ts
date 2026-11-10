@@ -12,11 +12,11 @@ import {
   type DurableSteerReceipt,
   type SubmitDurableSteerRequest,
   type ControlActiveTurnResponse,
+  DurableTurnRequestError,
 } from "@pwragent/shared";
-import type { DurableTurnRequestStorage } from "@pwragent/owner-core/durable-turn-request-storage";
+import type { DurableTurnRequestStorage } from "./durable-turn-request-storage";
 
-import { DurableTurnRequestError } from "@pwragent/federation/errors";
-export { DurableTurnRequestError } from "@pwragent/federation/errors";
+export { DurableTurnRequestError } from "@pwragent/shared";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STALE_DISPATCH_MS = 5 * 60_000;
@@ -30,6 +30,7 @@ export class DurableTurnRequestService {
   constructor(private readonly options: {
     storage: DurableTurnRequestStorage;
     ownerInstanceId: string;
+    queueEntryId?: (scope: string, requestId: string) => string;
     authorize: (scope: string, request: GetDurableTurnRequest) => Promise<void>;
     dispatch: (request: DurableTurnPayload & { queueEntryId: string }, scope: string) => Promise<StartTurnResponse>;
     steer?: (request: DurableSteerPayload & { requestId: string }, scope: string) => Promise<ControlActiveTurnResponse>;
@@ -107,7 +108,7 @@ export class DurableTurnRequestService {
       const receipt: Receipt = {
         version: 1, id: clientRequest.id, payloadHash: clientRequest.payloadHash,
         ownerInstanceId: this.options.ownerInstanceId, backend: request.backend, threadId: request.threadId,
-        queueEntryId: `durable-${operation === "steerTurn" ? "steer" : "turn"}:${createHash("sha256").update(JSON.stringify([scope, clientRequest.id])).digest("hex")}`,
+        queueEntryId: this.options.queueEntryId?.(scope, clientRequest.id) ?? `durable-${operation === "steerTurn" ? "steer" : "turn"}:${createHash("sha256").update(JSON.stringify([scope, clientRequest.id])).digest("hex")}`,
         state: "accepted", acceptedAt: now, updatedAt: now, expiresAt,
         ...(operation === "steerTurn" ? { operation: "steerTurn" as const } : {}),
       };
@@ -129,7 +130,7 @@ export class DurableTurnRequestService {
       const sanitized = "ok" in response && !response.ok
         ? { ...response, error: { code: response.error.code, message: `Steering could not be proved: ${response.error.code}.` } }
         : response;
-      return this.transaction(() => {
+      const settled = this.transaction(() => {
         const current = this.read(scope, admitted.id)!;
         // Queue lifecycle can reach terminal before the submission promise settles.
         const result = operation === "startTurn" && "queueStatus" in sanitized && sanitized.queueStatus === "queued"
@@ -137,7 +138,7 @@ export class DurableTurnRequestService {
           ? current.result : sanitized;
         const state = operation === "steerTurn"
           ? ("ok" in result && result.ok ? "dispatched" : "uncertain")
-          : current.state === "completed" ? "completed" : current.state === "dispatched" ? "dispatched"
+          : current.state === "uncertain" ? "uncertain" : current.state === "completed" ? "completed" : current.state === "dispatched" ? "dispatched"
             : "queueStatus" in result && result.queueStatus === "queued" ? "accepted" : "dispatched";
         const receipt = {
           ...current, result,
@@ -147,6 +148,9 @@ export class DurableTurnRequestService {
         this.write(scope, receipt);
         return receipt;
       });
+      // Shutdown may have retired a committed queued acceptance before the
+      // dispatch promise settled. Do not acknowledge a FIFO that no longer exists.
+      return await this.reconcile(scope, settled);
     } catch {
       // Do not persist provider errors (may contain prompts, paths or secrets).
       return this.transaction(() => {

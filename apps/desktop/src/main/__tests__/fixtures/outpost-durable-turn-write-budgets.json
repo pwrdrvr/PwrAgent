@@ -1,0 +1,58 @@
+{
+  "direct-admission": {
+    "commits": 7,
+    "note": "Actual idle-host durable receipt admission/claim, existing owner native dispatch/confirmation and receipt result; terminal excluded",
+    "observedWalBytes": 41200,
+    "rowsChanged": 6,
+    "statements": 8
+  },
+  "duplicate-read": {
+    "commits": 0,
+    "note": "100 matching durable submissions and receipt reads; no dispatch",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "native-completion": {
+    "commits": 2,
+    "note": "Native terminal owner outcome and durable receipt completion; no per-item writes",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "queued-admission": {
+    "commits": 4,
+    "note": "Actual durable receipt admission/claim, owner job acceptance and queued receipt result; setup excluded",
+    "observedWalBytes": 32960,
+    "rowsChanged": 4,
+    "statements": 5
+  },
+  "queued-cancellation": {
+    "commits": 2,
+    "note": "Existing durable owner cancellation and receipt terminal boundary",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "queued-dispatch": {
+    "commits": 5,
+    "note": "Prior owner terminal plus queued native dispatch/confirmation and durable receipt started boundary; initial admission excluded",
+    "observedWalBytes": 16480,
+    "rowsChanged": 4,
+    "statements": 5
+  },
+  "shutdown-uncertain": {
+    "commits": 3,
+    "note": "Graceful shutdown settles one active plus one queued owner job and its queued receipt without replay",
+    "observedWalBytes": 12360,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "uncertain-retries": {
+    "commits": 0,
+    "note": "100 reads and retries of stopped uncertain acceptance; no dispatch or prompt restoration",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

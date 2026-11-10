@@ -339,7 +339,7 @@ import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connectio
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { isAppStateInitialized } from "../storage/desktop-runtime-storage";
 import { desktopFederationState, createFederationStorage, createDurableTurnRequestStorage, type FederationStorage } from "../storage/desktop-federation-storage";
-import { DurableTurnRequestService, DurableTurnRequestError } from "./durable-turn-request-service";
+import { DurableTurnRequestService, DurableTurnRequestError } from "@pwragent/owner-core/durable-turn-request-service";
 import { durableFederationCallerScope, authenticateMessageOrigin } from "./federation-backend-bridge";
 import type { SubmitDurableTurnRequest, GetDurableTurnRequest, DurableTurnReceipt, SubmitDurableSteerRequest, DurableSteerReceipt } from "@pwragent/shared";
 import {

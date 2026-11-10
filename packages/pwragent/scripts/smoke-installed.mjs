@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { createRequire } from "node:module";
 import path from "node:path";
 import net from "node:net";
+import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -242,7 +243,7 @@ try {
         return {};
       },
     };
-    const controller = new HeadlessBackend(controlled, () => {});
+    const controller = new HeadlessBackend(controlled, () => {}, () => "packed-owner");
     controlled.onEvent = message => controller.event(message);
     controller.authenticateOrigin = origin => origin;
     controlled.save({ version: 1, id: "packed-control", fingerprint: "accepted-control", threadId, turnId: "packed-control", status: "running", createdAt: new Date().toISOString() });
@@ -261,6 +262,21 @@ try {
     assert.notEqual(replacement.fingerprint, queued.fingerprint);
     assert.equal((await controller.handle("backend.readQueuedTurn", { ...queuedRequest, queueEntryId: replacement.id })).input[0].text, "Packed edited input");
     await controller.handle("backend.cancelQueuedTurn", { queueEntryId: replacement.id });
+    // An independent fixed-shape V1 wire canonicalization; no workspace import.
+    const createdAt = Date.now(), text = "Packed durable queued input";
+    const durable = { clientRequest: { version: 1, id: randomUUID(), createdAt, payloadHash: createHash("sha256").update(JSON.stringify({
+      createdAt, destination: { backend: "codex", instanceId: "packed-owner", threadId }, operation: "startTurn",
+      request: { backend: "codex", input: [{ text, type: "text" }], threadId }, version: 1,
+    })).digest("hex") }, request: { backend: "codex", threadId, input: [{ type: "text", text }] }, callerScope: "packed-device" };
+    const envelope = { sourceInstanceId: "packed-issuer" };
+    const receipt = await controller.handle("backend.submitTurnRequest", durable, envelope);
+    assert.equal(receipt.state, "accepted");
+    assert.equal(receipt.result.queueEntryId, receipt.queueEntryId);
+    assert.equal((await controller.handle("backend.submitTurnRequest", durable, envelope)).queueEntryId, receipt.queueEntryId);
+    await controller.handle("backend.cancelQueuedTurn", { queueEntryId: receipt.queueEntryId });
+    const lookup = { backend: "codex", threadId, id: durable.clientRequest.id, callerScope: "packed-device" };
+    assert.equal((await controller.handle("backend.getTurnRequest", lookup, envelope)).outcome, "cancelled");
+    assert.equal(await controller.handle("backend.getTurnRequest", { ...lookup, callerScope: "other-device" }, envelope), null);
     const save = store.save.bind(store);
     let refuseOrigin = true;
     store.save = job => { if (refuseOrigin && job.messageOrigin) { refuseOrigin = false; throw new Error("origin refused"); } return save(job); };
@@ -273,7 +289,7 @@ try {
     assert.equal(interrupts, 1);
     assert.equal(store.get("packed-control").status, "interrupted");
   } finally { profile.close(); }
-  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, shared steering retention/retry and interruption");
+  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue receipts/caller isolation/cancellation, shared steering retention/retry and interruption");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {

@@ -1,6 +1,18 @@
 import type { StartTurnRequest, StartTurnResponse, ControlActiveTurnResponse } from "./agent";
 import type { AppServerThreadMessageOrigin } from "./normalized-app-server";
 
+export class DurableTurnRequestError extends Error {
+  constructor(readonly code: string) { super(code); }
+}
+
+/** A delegated device occupies only its authenticated issuer's namespace. */
+export function durableFederationCallerScope(sourceInstanceId: string, callerScope?: string): string {
+  if (callerScope !== undefined && (typeof callerScope !== "string" || !callerScope || callerScope.length > 256)) {
+    throw new DurableTurnRequestError("request_invalid");
+  }
+  return JSON.stringify(["federation", sourceInstanceId, callerScope ?? ""]);
+}
+
 export const DURABLE_TURN_REQUEST_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export type DurableTurnPayload = Omit<StartTurnRequest, "queueEntryId" | "federationTarget"> & {
   messageOrigin?: AppServerThreadMessageOrigin;
