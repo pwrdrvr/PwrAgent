@@ -7,7 +7,7 @@ import {
   detectObservedContextWindowDrop,
   foldObservedContextReplay,
   readThreadCompactionBoundary,
-} from "../app-server/backend-registry";
+} from "../app-server/thread-usage-math";
 import {
   type ObservedContextReplayCursor,
   type ObservedContextReplayTally,
