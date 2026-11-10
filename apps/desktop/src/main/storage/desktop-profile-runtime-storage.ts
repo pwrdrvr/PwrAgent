@@ -2,6 +2,7 @@
 export {
   startProfileRuntimeHeartbeat,
   findLiveProfileRuntimeMarkers,
+  readProfileRuntimeIdentities,
   isProfileRuntimeIdentityLive,
   getProcessRuntimeIdentity,
   isProcessAlive,

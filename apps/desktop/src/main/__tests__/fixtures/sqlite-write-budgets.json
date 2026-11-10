@@ -953,6 +953,10 @@
   },
   "pr-terminal-watch-rename": {"commits": 1, "note": "one pending event renamed and nine unchanged syncs: 1 commit/~8.2 KB WAL per rename, 0 idle writes; ~0.4 MB/day at 50 renames/day", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "pr-terminal-watch-retire": {"commits": 1, "note": "one retirement plus nine duplicate observations: 1 commit/~12.4 KB WAL; ~0.6 MB/day at 50 terminal events/day, zero idle writes", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 2},
+  "pr-watch-recovery-legacy-exit": {"commits": 3, "note": "Observe, claim and finish one abandoned legacy wake: 3 commits/28.8 KB WAL; 50 recoveries/day x 28.8 KB = ~1.44 MB/day, zero idle writes", "observedWalBytes": 28840, "rowsChanged": 3, "statements": 4},
+  "pr-watch-recovery-legacy-live": {"commits": 0, "note": "Ten startup replays while a sibling owns delivery, including after lease expiry: zero commits and 0 MB/day recurring writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "pr-watch-recovery-pending-exit": {"commits": 2, "note": "Claim and finish one abandoned pending wake: 2 commits/16.5 KB WAL; 50 recoveries/day x 16.5 KB = ~0.82 MB/day, zero idle writes", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "pr-watch-recovery-pending-live": {"commits": 0, "note": "Ten startup replays while a sibling owns delivery, including after lease expiry: zero commits and 0 MB/day recurring writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "pr-watch-agent-cancel": {
     "commits": 1,
     "note": "an agent stops one PR watch through watch_thread_pull_request: 1 commit per call, 0 idle writes",

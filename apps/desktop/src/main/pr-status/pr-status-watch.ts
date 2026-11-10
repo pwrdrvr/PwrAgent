@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createPrWatchOwnerId } from "./pr-watch-owner";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
@@ -39,7 +39,7 @@ export type PrStatusWatchOutcome = "success" | "failure";
 const TERMINAL_DETAILS_CACHE_LIMIT = 32;
 
 export class PrStatusWatchCoordinator {
-  private readonly ownerId = randomUUID();
+  private readonly ownerId = createPrWatchOwnerId();
   private readonly terminalDetailsCache = new Map<string, PullRequestTerminalDetails>();
 
   constructor(

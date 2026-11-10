@@ -44,9 +44,10 @@ exclusive transactions retain their existing SQL and write counts.
 The shared `SqliteOverlayStore` implements `OwnerThreadRegistry`, PR storage and
 remote thread routing ports. Its complete closure includes dependency storage,
 relative pin ordering, change-version readers and process-local environment
-output. Desktop constructs the same class through a private storage binding at
-the original app-state lifecycle site. State compatibility exports contain no
-second implementation. The detached PR key policy and remote target port live
+output. Desktop's private storage binding injects process ownership checks for
+PR watch claims at the original app-state lifecycle site. The portable default
+retains lease-based recovery. State compatibility exports contain no second
+implementation. The detached PR key policy and remote target port live
 in owner-core without any storage dependency. All overlay SQL and transaction
 bodies are preserved.
 
