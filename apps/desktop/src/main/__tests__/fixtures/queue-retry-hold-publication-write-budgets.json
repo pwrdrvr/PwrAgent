@@ -1,0 +1,9 @@
+{
+  "new-review-during-retry": {
+    "commits": 0,
+    "note": "Registered desktop Retry and concurrent held-result admission; original setup excluded; no SQLite writes or native work",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

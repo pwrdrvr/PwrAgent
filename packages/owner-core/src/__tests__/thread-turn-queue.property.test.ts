@@ -10,6 +10,130 @@ const THREAD = { backend: "codex" as const, threadId: "model-thread" };
 const REASONS = ["locked", "awaiting-review", "target-ended"] as const;
 const FAILURE = "The previous turn failed. Review the error before retrying queued messages.";
 
+async function retryWithNewHold(count: number, publication: number): Promise<void> {
+  const started: string[] = [];
+  const observed = new Map<string, boolean>();
+  let armed = false, publications = 0;
+  const queue = new ThreadTurnQueue({
+    startTurn: async entry => { started.push(entry.id); return { ...THREAD, turnId: `turn-${entry.id}` }; },
+    onLifecycle: async event => {
+      if (event.type === "queued" || event.type === "held") observed.set(event.entry.id, event.entry.manualReleaseRequired === true);
+      if (armed && event.type === "queued" && !event.entry.manualReleaseRequired && publications++ === publication) {
+        armed = false;
+        await queue.submitHeld({ ...THREAD, id: "new-review", origin: "manual", input: [] }, "independent new review");
+      }
+    },
+  });
+  try {
+    for (let index = 0; index < count; index++) {
+      await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, "old review");
+    }
+    armed = true;
+    expect(await queue.releaseEntryWithDisposition("older-0")).toMatchObject({ disposition: "busy" });
+    // A hold arriving after Retry's release boundary covers every still-waiting
+    // input. Removing its introducing entry does not release anyone's review.
+    expect(queue.getQueuedEntries(THREAD).every(entry => entry.manualReleaseRequired === true)).toBe(true);
+    expect(queue.getQueuedEntries(THREAD).every(entry => entry.holdReason === "independent new review")).toBe(true);
+    expect([...observed.values()].every(Boolean)).toBe(true);
+    queue.cancelEntryWithDisposition("new-review");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(started).toEqual([]);
+    expect(queue.getQueuedEntries(THREAD).map(entry => entry.id)).toEqual(Array.from({ length: count }, (_, index) => `older-${index}`));
+    expect((await queue.releaseEntryWithDisposition("older-0")).disposition).toBe("started");
+    expect(started).toEqual(["older-0"]);
+  } finally { queue.close(); }
+}
+
+it("Retry cannot release a newer review hold while publishing its older release", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), fc.nat(), async (count, offset) => {
+    await retryWithNewHold(count, offset % count);
+  }));
+});
+
+it("cancelling only the new review entry keeps the older input held", async () => {
+  await retryWithNewHold(1, 0);
+});
+
+async function retryWithTitleUpdates(count: number, updates: number[], cancel: boolean): Promise<void> {
+  const released: ThreadTurnQueueLifecycleEvent[] = [];
+  const observed = new Map<string, boolean>();
+  const titles = new Map<string, string>();
+  let armed = false;
+  const queue = new ThreadTurnQueue({
+    startTurn: async entry => ({ ...THREAD, turnId: entry.id }),
+    onLifecycle: async event => {
+      if (event.type === "held" || event.type === "queued") observed.set(event.entry.id, event.entry.manualReleaseRequired === true);
+      if (!armed || event.type !== "queued" || event.entry.manualReleaseRequired) return;
+      released.push(structuredClone(event));
+      if (event.entry.id !== "older-0") return;
+      // Title completion can replace a later entry while this publication
+      // awaits its host. It changes display metadata, not acceptance identity.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      for (const [index, offset] of updates.entries()) {
+        const id = `older-${1 + offset % (count - 1)}`;
+        const title = `Generated title ${index}`;
+        queue.setQueuedEntryTitle(id, title);
+        titles.set(id, title);
+      }
+      if (cancel) queue.cancelEntryWithDisposition(`older-${count - 1}`);
+    },
+  });
+  try {
+    for (let index = 0; index < count; index++) {
+      await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, FAILURE);
+    }
+    armed = true;
+    expect(await queue.releaseEntryWithDisposition("older-0")).toMatchObject({ disposition: "started" });
+    const survivors = Array.from({ length: count - Number(cancel) }, (_, index) => `older-${index}`);
+    expect(released.map(event => event.entry.id)).toEqual(survivors);
+    expect(released.map(event => event.entry.title)).toEqual(survivors.map(id => titles.get(id)));
+    expect(released.map(event => "position" in event ? event.position : undefined)).toEqual(survivors.map((_, index) => index + 1));
+    expect(survivors.every(id => observed.get(id) === false)).toBe(true);
+  } finally { queue.close(); }
+}
+
+it("Retry publishes every surviving released identity with its latest generated title", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.array(fc.nat(), { minLength: 1, maxLength: 12 }), fc.boolean(),
+    async (count, updates, cancel) => await retryWithTitleUpdates(count, updates, cancel)));
+});
+
+it("a title completed during the first release publication cannot omit the second entry", async () => {
+  await retryWithTitleUpdates(2, [0], false);
+});
+
+it("new failure holds own every waiting input and can be independently released after Retry yields", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.nat(), fc.boolean(), async (count, offset, cancelPublished) => {
+    let armed = false, publications = 0;
+    const starts: string[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async entry => { starts.push(entry.id); return { ...THREAD, turnId: entry.id }; },
+      onLifecycle: async event => {
+        if (armed && event.type === "queued" && !event.entry.manualReleaseRequired && publications++ === offset % count) {
+          armed = false;
+          if (cancelPublished) queue.cancelEntryWithDisposition(event.entry.id);
+          await queue.releaseThread({ ...THREAD, turnId: "previous-native", status: "turn/failed", errorMessage: "new failure" });
+        }
+      },
+    });
+    try {
+      for (let index = 0; index < count; index++) await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, "old review");
+      armed = true;
+      await queue.releaseEntryWithDisposition("older-0");
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const waiting = queue.getQueuedEntries(THREAD);
+      expect(waiting).toHaveLength(count - Number(cancelPublished));
+      expect(waiting.every(entry => entry.manualReleaseRequired && entry.holdReason === "new failure")).toBe(true);
+      expect(starts).toEqual([]);
+      // Retry already answered the old cause; independently releasing the
+      // newer one must not strand a row carrying an obsolete old cause.
+      await queue.releaseHold(THREAD, reason => reason === "new failure");
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(starts).toEqual([waiting[0]!.id]);
+      expect(queue.getQueuedEntries(THREAD).every(entry => !entry.manualReleaseRequired)).toBe(true);
+    } finally { queue.close(); }
+  }));
+});
+
 it("Retry admits only eligible held guidance while preserving the running queue owner", async () => {
   await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (steerable, tracked) => {
     const steers: string[] = [], starts: string[] = [];

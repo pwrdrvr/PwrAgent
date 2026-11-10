@@ -49756,6 +49756,56 @@ script = "printf setup"
     })]);
   });
 
+  it("Retry updates sender correspondence when a waiting title completes during release publication", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    let completeTitle!: () => void;
+    const pendingTitle = new Promise<{ status: "ok"; object: { title: string } }>((resolve) => {
+      completeTitle = () => resolve({ status: "ok", object: { title: "Migration guide and upgrade notes" } });
+    });
+    const generate = vi.fn(async () => await pendingTitle);
+    Object.assign(codexClient, { generateStructuredObject: generate });
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    const registry = new DesktopBackendRegistry({
+      codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0,
+    });
+    onTestFinished(async () => { completeTitle(); await registry.close(); });
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "previous", turn: { id: "previous" } },
+    } });
+    const source = { backend: "codex" as const, threadId: "sender" };
+    for (const [id, text] of [["first", "Review the failure"], ["later", "The migration guide now covers all renamed configuration keys and the new default port."]] as const) {
+      const input: AppServerTurnInputItem[] = [{ type: "text", text }];
+      correspondenceStore.record({ id, source, destination: { backend: "codex", threadId: "recipient" }, input, createdAt: 1_000, state: "sending" });
+      await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: id, delivery: "new_turn", input,
+        messageOrigin: { kind: "agent", sourceThread: { ...source, messageId: id } },
+      });
+    }
+    await waitForCondition(() => generate.mock.calls.length > 0);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/failed", params: { threadId: "recipient", turnId: "previous",
+        turn: { id: "previous", status: "failed", error: { message: "Review this failure" } } },
+    } });
+    expect(correspondenceStore.message(source, "later")?.text).toContain("Held for retry");
+    let completeDuringRelease = true;
+    registry.onEvent(async event => {
+      if (event.notification.method !== "thread/turnQueue/updated") return;
+      const params = event.notification.params;
+      if (completeDuringRelease && params.queueEntryId === "first" && params.status === "queued" && !params.manualReleaseRequired) {
+        completeDuringRelease = false;
+        completeTitle();
+        await registry.queuedMessageTitlesIdle();
+      }
+    });
+    expect(await registry.releaseQueuedTurnWithDisposition("first")).toMatchObject({ disposition: "started" });
+    const waiting = registry.getQueuedTurnsForThread({ backend: "codex", threadId: "recipient" });
+    expect(waiting).toMatchObject([{ queueEntryId: "later", title: "Migration guide and upgrade notes" }]);
+    expect(waiting[0]?.manualReleaseRequired).not.toBe(true);
+    expect(correspondenceStore.message(source, "later")?.text).toContain("Queued");
+    expect(codexClient.startTurnCallCount).toBe(1);
+  });
+
   it("shows queued-message titles on one Sub-agents row and charges them to the thread", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-queued-message-titles-");
