@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
@@ -472,6 +473,28 @@ export class ThreadTurnQueue {
       id: input.id ?? `thread-turn:${randomUUID()}`,
       createdAt: input.createdAt ?? this.now(),
     };
+    const existing = this.findQueuedEntry(entry.id);
+    if (existing) {
+      // Controls and display titles can change while this acceptance waits.
+      // A retry must still name exactly its original input and owner facts.
+      const fields = [
+        "backend", "threadId", "origin", "messageOrigin", "delivery", "input",
+        "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode",
+        "serviceTier", "reasoningEffort", "fastMode", "automationRunId", "automationName",
+        "agentMessages", "agentMessageOrigins", "restartContinuation",
+      ] as const;
+      if (!isDeepStrictEqual(
+        structuredClone(fields.map(field => existing.entry[field])),
+        structuredClone(fields.map(field => entry[field])),
+      )) {
+        throw new Error(`Queued turn id ${entry.id} was reused with different input or ownership`);
+      }
+      options?.onAdmission?.();
+      return { status: "queued", entry: existing.entry, position: existing.position };
+    }
+    if (this.recentlyAdmittedEntries.has(entry.id)) {
+      throw new Error(`Queued turn identity ${entry.id} was already admitted`);
+    }
     const key = this.keyFor(entry);
 
     if (!this.canStartImmediately({ backend: entry.backend, threadId: entry.threadId })) {

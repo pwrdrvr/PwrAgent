@@ -176,6 +176,19 @@ try {
   const [{ openOutpostProfileRuntime, ThreadTurnQueue }, { JobStore }, { HeadlessBackend }, { Runtime }] = await Promise.all([
     installed("dist/federation-core.js"), installed("src/store.js"), installed("src/federation-backend.js"), installed("src/runtime.js"),
   ]);
+  const identityQueue = new ThreadTurnQueue({ isThreadActive: () => true,
+    startTurn: async () => { throw new Error("Waiting identity smoke must not dispatch"); } });
+  try {
+    const entry = { backend: "codex", threadId: "packed-identity", id: "packed-explicit", origin: "manual",
+      input: [{ type: "text", text: "Packed immutable acceptance" }] };
+    const accepted = await identityQueue.submit(entry);
+    const retries = await Promise.all([identityQueue.submit(entry), identityQueue.submit(entry)]);
+    assert.ok(retries.every(result => result.entry === accepted.entry));
+    await assert.rejects(identityQueue.submit({ ...entry, input: [{ type: "text", text: "Changed packed acceptance" }] }), /reused/);
+    assert.equal(identityQueue.getQueuedEntries(entry).length, 1);
+    assert.equal(identityQueue.cancelEntryWithDisposition(entry.id).disposition, "cancelled");
+    assert.deepEqual(identityQueue.getQueuedEntries(entry), []);
+  } finally { identityQueue.close(); }
   // The installed shared implementation also serves desktop's replacement
   // caller. It must retire accepted input before issuing a fresh identity.
   const replacementRef = { backend: "codex", threadId: "packed-replacement" };

@@ -58,6 +58,7 @@ import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-s
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { parseThreadCorrespondenceMessage, threadLockRefusalMessage } from "@pwragent/shared";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
+import { publishSelfStartedWakes } from "../../../e2e/fixtures/self-started-wake-publication";
 import { withOwnerPauseState } from "../../renderer/src/features/composer/queued-turn-pause";
 
 // Desktop serves peers from process singletons; point them at this owner.
@@ -328,6 +329,148 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("explicit waiting identities name one immutable acceptance across registered caller retries", async () => {
+    const host = await startDesktopOwner();
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 30 }), fc.boolean(), async (suffix, local) => {
+        const queueEntryId = `explicit:${randomUUID()}`;
+        const request = { ...identity, queueEntryId, delivery: "new_turn" as const,
+          input: [{ type: "text" as const, text: `Original acceptance ${suffix}` }] };
+        const call = (value: typeof request) => local
+          ? (desktopOwner.registry as DesktopBackendRegistry).submitTurn(value)
+          : host.client.startTurn(value);
+        try {
+          await call(request);
+          const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+          const offset = host.events.length;
+          await expect(call({ ...request, input: [{ type: "text", text: `Different acceptance ${suffix}` }] }))
+            .rejects.toThrow(/reused|identity/i);
+          await call(request);
+          expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
+          expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries
+            .filter(entry => entry.queueEntryId === queueEntryId)).toHaveLength(1);
+          expect(host.events.slice(offset).filter(event => event.notification.method === "thread/turnQueue/updated"
+            && event.notification.params.queueEntryId === queueEntryId)).toEqual([]);
+        } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
+      }), { numRuns: 6, examples: [["", false], ["", true]] });
+    } finally { await host.close(); }
+  });
+
+  it("explicit identity retries preserve paused and held neighbors, sender ownership and durable receipts through restart", async () => {
+    const root = await realpath(await mkdtemp("/tmp/pa-identity-"));
+    let host = await startDesktopOwner(null, undefined, undefined, root);
+    try {
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const active = await host.client.startTurn({ ...identity, queueEntryId: "active-identity", input: [{ type: "text", text: "slow" }] });
+      const request = { ...identity, delivery: "new_turn" as const, queueEntryId: "original-identity",
+        input: [{ type: "text" as const, text: "Original immutable input" }],
+        messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "alice" } } };
+      await host.client.startTurn(request);
+      await host.client.setQueuedTurnPaused({ queueEntryId: request.queueEntryId, paused: true });
+      const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+      await queue.submitGroupedSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Legacy Bob input" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
+      await registry.submitHeldTurn({ ...identity, queueEntryId: "independent-review", input: [{ type: "text", text: "Review first" }], holdReason: "Independent review" });
+      const receiptRequest: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+        request: { ...identity, delivery: "new_turn", input: [{ type: "text", text: "Durable immutable neighbor" }] } };
+      receiptRequest.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, receiptRequest)).digest("hex");
+      const receipt = await host.client.submitTurnRequest(receiptRequest);
+      const before = await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity });
+      const original = await host.client.readQueuedTurn(request);
+      await Promise.all([host.client.startTurn(request), host.client.startTurn(request), host.client.startTurn(request)]);
+      await expect(host.client.startTurn({ ...request, messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } })).rejects.toThrow(/reused/);
+      const other = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await expect(host.client.startTurn({ ...request, threadId: other.threadId })).rejects.toThrow(/reused/);
+      await expect(host.client.startTurn({ ...request, queueEntryId: receipt.queueEntryId })).rejects.toThrow(/reused/);
+      await expect(host.client.startTurn({ ...request, queueEntryId: "active-identity" })).rejects.toThrow(/already admitted/);
+      await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
+      await expect(host.client.startTurn(request)).rejects.toThrow(/locked/i);
+      await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
+      expect(await host.client.readQueuedTurn(request)).toEqual(original);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual(before.entries);
+      expect(await host.client.submitTurnRequest(receiptRequest)).toEqual(receipt);
+      expect(host.providerSteerCount()).toBe(0);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      expect(await host.client.cancelQueuedTurn({ queueEntryId: request.queueEntryId, expectedContentHash: original.contentHash })).toMatchObject({ cancelled: true });
+      await expect(host.client.readQueuedTurn(request)).rejects.toThrow();
+      await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+      await host.close();
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+      expect(await host.client.submitTurnRequest(receiptRequest)).toMatchObject({ queueEntryId: receipt.queueEntryId });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+    } finally { await host.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("explicit waiting identity admission, concurrent retries, refused changes and controls add no SQLite writes", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index++) {
+          const request = { ...identity, queueEntryId: `budget-identity:${index}`, delivery: "new_turn" as const,
+            input: [{ type: "text" as const, text: `Immutable acceptance ${index}` }] };
+          await Promise.all([host.client.startTurn(request), host.client.startTurn(request), host.client.startTurn(request)]);
+          const original = await host.client.readQueuedTurn(request);
+          await expect(host.client.startTurn({ ...request, input: [{ type: "text", text: "Changed acceptance" }] })).rejects.toThrow(/reused/);
+          await host.client.setQueuedTurnPaused({ queueEntryId: request.queueEntryId, paused: true });
+          await host.client.startTurn(request);
+          expect(await host.client.readQueuedTurn(request)).toEqual(original);
+          expect(await host.client.cancelQueuedTurn({ queueEntryId: request.queueEntryId, expectedContentHash: original.contentHash })).toMatchObject({ cancelled: true });
+          await expect(host.client.readQueuedTurn(request)).rejects.toThrow();
+        }
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-explicit-queue-identity-write-budgets.json", scenario: "waiting-identity-admissions-100",
+        note: "100 registered ordinary admissions with three concurrent matching retries, changed-input refusals, reads, pauses and hash cancellations; native setup excluded", writes });
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+    } finally { await host.close(); vi.unstubAllEnvs(); }
+  });
+
+  it("both registered owners keep stable explicit retries separate from changed acceptance", async () => {
+    for (const host of [await startDesktopOwner(), await startOutpostOwner()]) {
+      try {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const request = { ...identity, queueEntryId: "same-caller-identity", delivery: "new_turn" as const,
+          input: [{ type: "text" as const, text: "Original acceptance" }] };
+        const accepted = await host.client.startTurn(request);
+        const snapshot = await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! });
+        const retry = await host.client.startTurn(request);
+        expect(retry.queueEntryId).toBe(accepted.queueEntryId);
+        await expect(host.client.startTurn({ ...request, input: [{ type: "text", text: "Different acceptance" }] })).rejects.toThrow();
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).toEqual(snapshot);
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([accepted.queueEntryId]);
+        expect(await host.client.cancelQueuedTurn({ queueEntryId: accepted.queueEntryId! })).toMatchObject({ cancelled: true });
+        await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).rejects.toThrow();
+        expect(host.providerSteerCount()).toBe(0);
+        await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+      } finally { await host.close(); }
+    }
+  });
+
+  it("scheduled stable identities cannot be replaced by an ordinary explicit admission", async () => {
+    const host = await startDesktopOwner();
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
+        displayText: "Scheduled immutable input", turn: { input: [{ type: "text", text: "Scheduled immutable input" }] } }, { id: "identity-collision" });
+      await host.scheduler!.sendNow({ id: "identity-collision" });
+      const queueEntryId = "scheduled-turn:identity-collision";
+      const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+      await expect(host.client.startTurn({ ...identity, queueEntryId, delivery: "new_turn", input: original.input })).rejects.toThrow(/reused/);
+      expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([queueEntryId]);
+    } finally { await host.close(); }
+  });
+
   it("registered Claude SDK background, loop and cron hooks retain separate immutable held prompts", async () => {
     const desktop = await startDesktopOwner(null, async (_db, workspace) => {
       await writeFile(path.join(workspace, "claude.js"), readFileSync(path.join(process.cwd(),
@@ -350,9 +493,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       ];
       const snapshots = new Map<string, Awaited<ReturnType<typeof desktop.client.readQueuedTurn>>>();
       for (const [index, wake] of wakes.entries()) {
-        const file = path.join(desktop.workspace, "wake-requests.json");
-        await writeFile(`${file}.tmp`, JSON.stringify(wakes.slice(0, index + 1)));
-        await rename(`${file}.tmp`, file);
+        await publishSelfStartedWakes(desktop.workspace, wakes.slice(0, index + 1));
         await vi.waitFor(() => expect(existsSync(path.join(desktop.workspace, "hook-results.jsonl"))
           && readFileSync(path.join(desktop.workspace, "hook-results.jsonl"), "utf8").trim().split("\n").length).toBe(index + 1));
         const rows = (await desktop.client.getNavigationQueueProjection({ protocol: 2, ref })).entries;

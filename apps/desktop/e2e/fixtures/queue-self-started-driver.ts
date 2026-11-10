@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { existsSync, readFileSync, watch } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { publishSelfStartedWakes } from "./self-started-wake-publication";
 import type { AgentEvent } from "@pwragent/shared";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { DesktopBackendRegistry } from "../../src/main/app-server/backend-registry";
@@ -59,8 +60,7 @@ export async function exerciseDesktopSelfStartedAdmission(root: string, cliFixtu
     const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
     for (const [index, wake] of wakes.entries()) {
       const observed = waitForLines("hook-results.jsonl", index + 1);
-      await writeFile(path.join(root, "wake-requests.tmp"), JSON.stringify(wakes.slice(0, index + 1)));
-      await rename(path.join(root, "wake-requests.tmp"), path.join(root, "wake-requests.json"));
+      await publishSelfStartedWakes(root, wakes.slice(0, index + 1));
       await observed;
       const waiting = queue.getQueuedEntries(ref);
       assert.equal(waiting.length, 1 + Math.min(index + 1, 3));
