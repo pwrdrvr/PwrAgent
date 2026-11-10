@@ -788,7 +788,7 @@ export type DesktopSettingsSecretState = {
 
 export type DesktopSettingsSecretStorageState = {
   available: boolean;
-  backend: "safeStorage" | "memory" | "unavailable";
+  backend: "safeStorage" | "file-key" | "memory" | "unavailable";
   encrypted: boolean;
   unavailableReason?: string;
 };

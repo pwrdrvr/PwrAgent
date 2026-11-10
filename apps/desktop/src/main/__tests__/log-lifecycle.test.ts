@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import electronLog from "electron-log/main.js";
+import electronLog from "electron-log/node.js";
 import { _resetAppLogsForTests, readAppLogSnapshot } from "../app-logs";
 import {
   getMainLogger,
@@ -24,7 +24,6 @@ const fileSink = vi.fn();
 const consoleSink = vi.fn();
 
 beforeAll(() => {
-  vi.spyOn(electronLog, "initialize").mockImplementation(() => {});
   electronLog.transports.file = Object.assign(fileSink, originalFile);
   electronLog.transports.console.writeFn = consoleSink;
   electronLog.transports.console.level = "info";

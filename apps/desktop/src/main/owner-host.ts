@@ -110,6 +110,7 @@ export const secretEncryption: SettingsSecretEncryption<Buffer> = {
   encryptString: (value) => getOwnerHostServices().secrets.encryptString(value),
   decryptString: (value) => getOwnerHostServices().secrets.decryptString(value),
   getSelectedStorageBackend: () => getOwnerHostServices().secrets.getSelectedStorageBackend?.() ?? "unavailable",
+  getCiphertextAccessError: (value) => getOwnerHostServices().secrets.getCiphertextAccessError?.(value),
 };
 
 export const externalLinks: OwnerHostServices["links"] = {

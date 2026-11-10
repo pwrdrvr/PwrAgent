@@ -3,6 +3,7 @@ import path from "node:path";
 import { build, type Plugin } from "esbuild";
 import ts from "typescript";
 import { expect, it } from "vitest";
+import { headlessEntries } from "../../../scripts/build-headless.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "../../..");
 const main = path.join(desktop, "src/main");
@@ -27,7 +28,7 @@ function walkFiles(root: string): string[] {
   return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     if (["node_modules", "out", ".local", "__tests__", "e2e", "eval"].includes(entry.name)) return [];
     const file = path.join(root, entry.name);
-    return entry.isDirectory() ? walkFiles(file) : /\.[cm]?[jt]sx?$/.test(file) && !/\.test\./.test(file) ? [file] : [];
+    return entry.isDirectory() ? walkFiles(file) : /\.[cm]?[jt]sx?$/.test(file) && !/\.test\.|\.d\.[cm]?ts$/.test(file) ? [file] : [];
   });
 }
 
@@ -107,10 +108,15 @@ it("covers every configured production entry and every inline worker", () => {
   expect(otherWorkerDeclarations).toEqual([]);
   expect(walkFiles(desktop).filter((file) => file.endsWith("electron.vite.config.ts")))
     .toEqual([path.join(desktop, "electron.vite.config.ts")]);
-  // There are no additional production esbuild declarations under desktop.
+  // The Node host boots the real owner graph in headless-host.boot.oracle.test.
+  // Its four leaf workers use the same owner-free sources checked below.
+  expect(Object.values(headlessEntries).sort()).toEqual([
+    "src/main/headless/index.ts",
+    ...entries.slice(1, 5),
+  ].sort());
   // A newly introduced bundler must enter this inventory rather than escaping it.
   const otherBuilders = walkFiles(desktop).filter((file) => /(?:from\s*["']esbuild["']|import\(["']esbuild["']\))/.test(fs.readFileSync(file, "utf8")));
-  expect(otherBuilders).toEqual([]);
+  expect(otherBuilders).toEqual([path.join(desktop, "scripts/build-headless.mjs")]);
 });
 
 for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker]) {
@@ -123,6 +129,13 @@ for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts")
     expect(await bundle(input)).not.toContain(accessMarker);
   });
 }
+
+it("desktop has no executable file-key encryptor", async () => {
+  const keyFilename = "headless-secret.key";
+  expect(await bundle("src/main/index.ts")).not.toContain(keyFilename);
+  expect(await bundle("", 'import { createFileKeyEncryption } from "./headless/file-key-encryption"; createFileKeyEncryption("state");'))
+    .toContain(keyFilename);
+});
 
 it("instruments every strict process-owner getter", () => {
   const names: string[] = [];

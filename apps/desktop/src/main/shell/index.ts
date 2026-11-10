@@ -1177,6 +1177,7 @@ export function bootstrapApp(): void {
   const bootDecision = resolveProfileBootDecision();
   initializeMainLogger({
     profileName: resolveMainLogProfileName(bootDecision),
+    logDirectory: app.getPath("logs"),
   });
   installProcessShutdownHandlers();
   installBootErrorHandlers();

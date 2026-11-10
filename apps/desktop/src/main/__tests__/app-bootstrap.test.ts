@@ -208,6 +208,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
 vi.mock("electron", () => ({
   BrowserWindow: BrowserWindowMock,
   app: {
+    getPath: vi.fn((name: string) => `/tmp/${name}`),
     getAppPath: vi.fn(() => "/repo/apps/desktop"),
     getVersion: vi.fn(() => "0.1.0")
   },
@@ -230,7 +231,7 @@ vi.mock("electron", () => ({
   }
 }));
 
-vi.mock("electron-log/main.js", () => ({
+vi.mock("electron-log/node.js", () => ({
   default: {
     hooks: electronLogHooksMock,
     initialize: vi.fn(),

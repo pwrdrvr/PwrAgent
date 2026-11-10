@@ -38,7 +38,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("electron-log/main.js", () => ({
+vi.mock("electron-log/node.js", () => ({
   default: mocks.electronLog,
 }));
 
@@ -189,7 +189,7 @@ describe("initializeMainLogger stdio handling", () => {
 
     expect(mocks.consoleTransport.level).toBe(false);
     expect(mocks.fileTransport.level).toBe("info");
-    expect(mocks.electronLog.initialize).toHaveBeenCalledTimes(1);
+    expect(mocks.electronLog.initialize).not.toHaveBeenCalled();
   });
 
   it("does not treat an unexpected synchronous write failure as output shutdown", async () => {

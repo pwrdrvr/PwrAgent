@@ -11,11 +11,11 @@ import type { StorageMaintenanceStatus } from "../../shared/storage-maintenance.
 type Request = { dbPath: string; historyEnabled: boolean; archived: StorageThreadIdentity[]; active: StorageThreadIdentity[] };
 const sleep = () => new Promise((resolve) => setTimeout(resolve, 5));
 let started = false;
-process.parentPort?.on("message", (event: { data: Request }) => {
+process.on("message", (request: Request) => {
   if (started) return;
   started = true;
-  void run(event.data).then(() => setImmediate(() => process.exit(0))).catch(() => {
-    process.parentPort?.postMessage({ phase: "error", message: "Storage optimization could not finish. Your remaining data is intact; PwrAgent will try again on a later startup." });
+  void run(request).then(() => setImmediate(() => process.exit(0))).catch(() => {
+    process.send?.({ phase: "error", message: "Storage optimization could not finish. Your remaining data is intact; PwrAgent will try again on a later startup." });
     setImmediate(() => process.exit(1));
   });
 });
@@ -32,7 +32,7 @@ async function run(request: Request): Promise<void> {
   };
   const send = (patch: Partial<StorageMaintenanceStatus>) => {
     status = { ...status, ...patch };
-    process.parentPort?.postMessage(status);
+    process.send?.(status);
   };
   try {
     const admitted = claimStorageMaintenance(db);
@@ -108,3 +108,6 @@ async function run(request: Request): Promise<void> {
     state.close();
   }
 }
+
+// IPC lifetime is ownership: a crashed host must not leave a read/cleanup running.
+process.once("disconnect", () => process.exit(0));

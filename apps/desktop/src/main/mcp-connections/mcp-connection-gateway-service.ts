@@ -1,3 +1,4 @@
+import { runtimeResourcesPath } from "../runtime-resources";
 import { externalLinks as shell } from "../owner-host";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -548,8 +549,8 @@ function connectionAsset(name: BrandedMark): Buffer | null {
   // function threw instead of returning null. Only Electron has a packaged
   // copy to find, so drop the candidate rather than the caller.
   const candidates = [
-    ...(typeof process.resourcesPath === "string"
-      ? [join(process.resourcesPath, fileName)]
+    ...(runtimeResourcesPath()
+      ? [join(runtimeResourcesPath()!, fileName)]
       : []),
     join(__dirname, "../../", sourceFile),
     join(__dirname, "../../../", sourceFile),

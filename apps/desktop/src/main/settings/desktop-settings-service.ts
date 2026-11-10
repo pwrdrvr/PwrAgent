@@ -2593,6 +2593,17 @@ export class DesktopSettingsService {
     return await this.readAndPublishSecretState(secret);
   }
 
+  /** Startup diagnostics inspect host tags without unlocking or replacing keys. */
+  async readFederationKeyAccessErrors(): Promise<Array<{ name: DesktopSettingsSecretName; reason: string }>> {
+    const errors: Array<{ name: DesktopSettingsSecretName; reason: string }> = [];
+    for (const name of ["federationInstancePrivateKey", "federationNoiseStaticPrivateKey"] as const) {
+      await this.options.secretStore.hasSecret(name);
+      const reason = this.options.secretStore.getSecretAccessError?.(name);
+      if (reason) errors.push({ name, reason });
+    }
+    return errors;
+  }
+
   async getOrCreateFederationIdentityKeyPair(): Promise<FederationIdentityKeyPair> {
     const existing = await this.options.secretStore.getSecret(
       "federationInstancePrivateKey",

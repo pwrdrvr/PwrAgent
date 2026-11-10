@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import fc from "fast-check";
 import legacyOwnerBoot from "./fixtures/legacy-owner-boot.json";
 import { recordOwnerCalls, recordCall, assertOwnerHooksBeforeWork } from "./helpers/owner-startup-recording";
@@ -302,6 +304,7 @@ vi.mock("electron", () => ({
     setName: setNameMock,
     isPackaged: false,
     getAppPath: getAppPathMock,
+    getPath: vi.fn((name: string) => `/tmp/${name}`),
     getVersion: getVersionMock,
     showAboutPanel: showAboutPanelMock,
     focus: appFocusMock,
@@ -840,7 +843,7 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalled();
   });
 
-  it("preserves the recorded owner hooks and starts intake only after all bindings", async () => {
+  it.each(["desktop", "headless"] as const)("%s host preserves the recorded owner hooks and starts intake only after all bindings", async (hostName) => {
     const advisory = await import("../bundled-git-lfs-advisory");
     const pendingWakes = await import("../app-server/navigation-detail-service");
     const advisorySpy = vi.spyOn(advisory, "setBundledGitLfsAdvisory");
@@ -853,14 +856,28 @@ describe("bootstrapApp", () => {
     const progressSpy = vi.spyOn(progress, "subscribeManagedRuntimeProgress");
     const previewSpy = vi.spyOn(preview, "setInboundPreviewSink");
     startupProfilerInstance.start.mockResolvedValue();
-    await import("../shell/index");
+    if (hostName === "desktop") {
+      await import("../index");
+    } else {
+      const profileDirectory = mkdtempSync(resolve(os.tmpdir(), "owner-host-equivalence-"));
+      onTestFinished(() => rmSync(profileDirectory, { recursive: true, force: true }));
+      const { createHeadlessOwnerHostServices } = await import("../headless/owner-host-services");
+      const { startOwnerServices } = await import("../owner-services");
+      const { issueProviderDiscoveryPermit } = await import("../settings/provider-discovery-permit");
+      const host = createHeadlessOwnerHostServices({
+        profileDirectory, onQuit: () => {},
+        runtime: { version: "0.1.0", isPackaged: false, appRoot: profileDirectory, resourcesPath: resolve(profileDirectory, "resources") },
+      });
+      const owners = await startOwnerServices(host, { bootMode: "active-profile", startedAt: 0 });
+      owners.prewarm(issueProviderDiscoveryPermit("startup"));
+    }
     await flushMicrotasks();
     const { getDesktopBackendRegistry } = await import("../app-server/backend-registry");
     const { getDesktopFederationRuntime } = await import("../federation/federation-runtime");
     const { getDesktopConfigStore } = await import("../settings/desktop-settings-singleton");
     const records = [
       ...recordOwnerCalls(getDesktopBackendRegistry, "registry", /^(set|on)/),
-      ...recordOwnerCalls(getDesktopFederationRuntime, "federation", /^(set|onRemoteBackendEvent)/),
+      ...recordOwnerCalls(getDesktopFederationRuntime, "federation", /^(set|on)/),
       ...recordOwnerCalls(getDesktopConfigStore, "config", /^subscribe$/),
       ...recordCall("setBundledGitLfsAdvisory", advisorySpy),
       ...recordCall("setNavigationDetailPendingWakesProjector", projectorSpy),
@@ -879,7 +896,8 @@ describe("bootstrapApp", () => {
       ...recordCall("threads.prewarm", listThreadsMock),
       ...recordCall("providers.refresh", refreshProvidersAtStartupMock),
     ];
-    const events = records.sort((a, b) => a.order - b.order).map((record) => record.name);
+    const uiOnlySubscribers = new Set(legacyOwnerBoot.uiOnlySubscribers.map((name) => name.replace(/getDesktopFederationRuntime\(\)/g, "federation")));
+    const events = records.sort((a, b) => a.order - b.order).map((record) => record.name).filter((name) => !uiOnlySubscribers.has(name));
     const legacy = legacyOwnerBoot.events.map((name) => name.replace(/getDesktopBackendRegistry\(\)/g, "registry")
       .replace(/getDesktopFederationRuntime\(\)/g, "federation"));
     const isHandler = (name: string) => /^(registry|federation)\.set/.test(name)
@@ -3091,6 +3109,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(initializeMainLoggerMock).toHaveBeenCalledWith({
+      logDirectory: "/tmp/logs",
       profileName: "default",
     });
     // Open decision → today's flow. No bootstrap cleanup needed
@@ -3114,6 +3133,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(initializeMainLoggerMock).toHaveBeenCalledWith({
+      logDirectory: "/tmp/logs",
       profileName: "bootstrap",
     });
     // Bootstrap mode runs the wizard against the .bootstrap/ dir.
@@ -3160,6 +3180,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(initializeMainLoggerMock).toHaveBeenCalledWith({
+      logDirectory: "/tmp/logs",
       profileName: "ghost",
     });
     // PWRAGENT_PROFILE=ghost on a host that doesn't have a ghost

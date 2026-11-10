@@ -1,4 +1,5 @@
-import { secretEncryption as safeStorage } from "../owner-host";
+import { SecretCiphertextError } from "../settings/secret-encryption-envelope";
+import { secretEncryption } from "../owner-host";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -17,8 +18,8 @@ const SESSION_FILE = "cloudflare-access-session.enc";
 const DRAFT_FILE = "cloudflare-federation-draft.json";
 
 function requireSecureStorage() {
-  if (!safeStorage.isEncryptionAvailable()
-    || (process.platform === "linux" && safeStorage.getSelectedStorageBackend?.() === "basic_text")
+  if (!secretEncryption.isEncryptionAvailable()
+    || (process.platform === "linux" && secretEncryption.getSelectedStorageBackend?.() === "basic_text")
     || isSecretStorageDisabledByEnv()) {
     throw new Error("Secure storage is unavailable. Use a signed PwrAgent build with OS credential storage enabled.");
   }
@@ -49,17 +50,20 @@ export async function loadCloudflareSetup(): Promise<CloudflareSetupState | unde
   if (!data) return undefined;
   requireSecureStorage();
   try {
-    const state = JSON.parse(safeStorage.decryptString(data)) as CloudflareSetupState;
+    const state = JSON.parse(secretEncryption.decryptString(data)) as CloudflareSetupState;
     // A service-token setup has no certificate authority, so the validator —
     // which every gate has — is what proves the record is complete.
     if (state.version !== 1 || !state.verifier || !Array.isArray(state.clients)) throw new Error();
     return state;
-  } catch { throw new Error("The Cloudflare setup could not be decrypted. Its encrypted data has been preserved."); }
+  } catch (error) {
+    if (error instanceof SecretCiphertextError) throw error;
+    throw new Error("The Cloudflare setup could not be decrypted. Its encrypted data has been preserved.");
+  }
 }
 
 export async function saveCloudflareSetup(state: CloudflareSetupState): Promise<void> {
   requireSecureStorage();
-  await writeAtomic(SETUP_FILE, safeStorage.encryptString(JSON.stringify(state)));
+  await writeAtomic(SETUP_FILE, secretEncryption.encryptString(JSON.stringify(state)));
 }
 
 /** Forget the gateway setup record. Callers delete what it names in Cloudflare first. */
@@ -77,9 +81,12 @@ export async function loadCloudflareAccessSession(): Promise<CloudflareAccessSes
   if (!data) return undefined;
   requireSecureStorage();
   try {
-    const session = JSON.parse(safeStorage.decryptString(data)) as CloudflareAccessSession;
+    const session = JSON.parse(secretEncryption.decryptString(data)) as CloudflareAccessSession;
     return session.version === 1 && typeof session.endpoint === "string" ? session : undefined;
-  } catch { return undefined; }
+  } catch (error) {
+    if (error instanceof SecretCiphertextError) throw error;
+    return undefined;
+  }
 }
 
 export async function saveCloudflareAccessSession(session: CloudflareAccessSession | undefined): Promise<void> {
@@ -88,7 +95,7 @@ export async function saveCloudflareAccessSession(session: CloudflareAccessSessi
     return;
   }
   requireSecureStorage();
-  await writeAtomic(SESSION_FILE, safeStorage.encryptString(JSON.stringify(session)));
+  await writeAtomic(SESSION_FILE, secretEncryption.encryptString(JSON.stringify(session)));
 }
 
 /**

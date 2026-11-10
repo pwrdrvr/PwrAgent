@@ -1,3 +1,4 @@
+import { runtimeResourcesPath } from "../runtime-resources";
 import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 
@@ -8,7 +9,7 @@ export function resolveBundledGrokCommand(options?: {
   platform?: NodeJS.Platform;
   exists?: (path: string) => boolean;
 }): string | undefined {
-  const resourcesPath = options?.resourcesPath ?? process.resourcesPath;
+  const resourcesPath = options?.resourcesPath ?? runtimeResourcesPath();
   if (!resourcesPath) {
     return undefined;
   }

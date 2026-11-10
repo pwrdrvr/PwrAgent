@@ -50,7 +50,12 @@ export async function runStartupStorageMaintenance(options: {
     automatic: policy.automatic,
     historyEnabled: policy.historyEnabled,
   });
-  const view = getOwnerHostServices().storageMaintenance.createView();
+  const host = getOwnerHostServices().storageMaintenance;
+  if (!policy.automatic && host.interactive === false) {
+    storageLog.info("manual storage maintenance awaits an interactive host");
+    return;
+  }
+  const view = host.createView();
   let status: StorageMaintenanceStatus = {
     phase: "ready", historyEnabled: policy.historyEnabled, beforeBytes: bytes,
     completedThreads: 0, eligibleThreads: 0,
