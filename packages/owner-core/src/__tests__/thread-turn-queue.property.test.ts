@@ -54,6 +54,53 @@ it("cancelling only the new review entry keeps the older input held", async () =
   await retryWithNewHold(1, 0);
 });
 
+async function retryWithTitleUpdates(count: number, updates: number[], cancel: boolean): Promise<void> {
+  const released: ThreadTurnQueueLifecycleEvent[] = [];
+  const observed = new Map<string, boolean>();
+  const titles = new Map<string, string>();
+  let armed = false;
+  const queue = new ThreadTurnQueue({
+    startTurn: async entry => ({ ...THREAD, turnId: entry.id }),
+    onLifecycle: async event => {
+      if (event.type === "held" || event.type === "queued") observed.set(event.entry.id, event.entry.manualReleaseRequired === true);
+      if (!armed || event.type !== "queued" || event.entry.manualReleaseRequired) return;
+      released.push(structuredClone(event));
+      if (event.entry.id !== "older-0") return;
+      // Title completion can replace a later entry while this publication
+      // awaits its host. It changes display metadata, not acceptance identity.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      for (const [index, offset] of updates.entries()) {
+        const id = `older-${1 + offset % (count - 1)}`;
+        const title = `Generated title ${index}`;
+        queue.setQueuedEntryTitle(id, title);
+        titles.set(id, title);
+      }
+      if (cancel) queue.cancelEntryWithDisposition(`older-${count - 1}`);
+    },
+  });
+  try {
+    for (let index = 0; index < count; index++) {
+      await queue.submitHeld({ ...THREAD, id: `older-${index}`, origin: "manual", input: [] }, FAILURE);
+    }
+    armed = true;
+    expect(await queue.releaseEntryWithDisposition("older-0")).toMatchObject({ disposition: "started" });
+    const survivors = Array.from({ length: count - Number(cancel) }, (_, index) => `older-${index}`);
+    expect(released.map(event => event.entry.id)).toEqual(survivors);
+    expect(released.map(event => event.entry.title)).toEqual(survivors.map(id => titles.get(id)));
+    expect(released.map(event => "position" in event ? event.position : undefined)).toEqual(survivors.map((_, index) => index + 1));
+    expect(survivors.every(id => observed.get(id) === false)).toBe(true);
+  } finally { queue.close(); }
+}
+
+it("Retry publishes every surviving released identity with its latest generated title", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.array(fc.nat(), { minLength: 1, maxLength: 12 }), fc.boolean(),
+    async (count, updates, cancel) => await retryWithTitleUpdates(count, updates, cancel)));
+});
+
+it("a title completed during the first release publication cannot omit the second entry", async () => {
+  await retryWithTitleUpdates(2, [0], false);
+});
+
 it("new failure holds own every waiting input and can be independently released after Retry yields", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.nat(), fc.boolean(), async (count, offset, cancelPublished) => {
     let armed = false, publications = 0;
