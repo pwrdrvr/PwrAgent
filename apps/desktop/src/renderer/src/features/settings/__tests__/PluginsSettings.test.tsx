@@ -1354,44 +1354,44 @@ describe("PluginsSettings", () => {
     });
 
     it.each([false, true])("refreshes authentication after a rejected tool listing (refresh=%s)", async (refresh) => {
-      const connection = managed({ id: "pwrsnap", displayName: "PwrSnap", kind: "pwrsnap" });
+      const connection = managed({ id: "pwrgit", displayName: "PwrGit", kind: "pwrgit" });
       const api = managedApi([connection]);
       let configured = true;
       api.listMcpConnections = vi.fn(async () => ({
         connections: [{ ...connection, configured, state: configured ? "ready" as const : "disconnected" as const }],
       }));
-      api.readPwrSnapConnectionStatus = vi.fn(async () => ({
-        connectionId: "pwrsnap", displayName: "PwrSnap", availability: "running", configured,
+      api.readPwrGitConnectionStatus = vi.fn(async () => ({
+        connectionId: "pwrgit", displayName: "PwrGit", availability: "running", configured,
       } as const));
       let rejectListing!: (error: Error) => void;
       const listing = vi.fn(() => new Promise<never>((_resolve, reject) => {
         rejectListing = reject;
       }));
       api.listMcpConnectionTools = refresh
-        ? vi.fn().mockResolvedValueOnce({ connectionId: "pwrsnap", tools: ["fixture_tool"], fetchedAt: 1 })
+        ? vi.fn().mockResolvedValueOnce({ connectionId: "pwrgit", tools: ["fixture_tool"], fetchedAt: 1 })
           .mockImplementation(listing)
         : listing;
       render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
 
-      const row = within(await findRow("PwrSnap"));
+      const row = within(await findRow("PwrGit"));
       expect(row.getByText("Signed in")).toBeInTheDocument();
       expect(screen.getByText("1 ready")).toBeInTheDocument();
       if (refresh) {
         await row.findByText("1 tool");
-        fireEvent.click(row.getByRole("button", { name: /^PwrSnap/ }));
+        fireEvent.click(row.getByRole("button", { name: /^PwrGit/ }));
         fireEvent.click(row.getByRole("button", { name: "Test connection" }));
       }
       await waitFor(() => expect(listing).toHaveBeenCalledOnce());
       await act(async () => {
         configured = false;
-        rejectListing(new Error("PwrSnap rejected this connection's authorization."));
+        rejectListing(new Error("PwrGit rejected this connection's authorization."));
       });
 
       expect(await row.findByText("Sign-in required")).toBeInTheDocument();
       expect(row.queryByText("Signed in")).not.toBeInTheDocument();
       expect(row.getByRole("button", { name: "Connect" })).toBeInTheDocument();
       expect(screen.getByText("0 ready · 1 to set up")).toBeInTheDocument();
-      expect(api.readPwrSnapConnectionStatus).toHaveBeenCalledTimes(2);
+      expect(api.readPwrGitConnectionStatus).toHaveBeenCalledTimes(2);
       expect(api.listMcpConnections).toHaveBeenCalledTimes(2);
       expect(row.queryByText("fixture_tool")).not.toBeInTheDocument();
     });

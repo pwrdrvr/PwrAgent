@@ -42,14 +42,15 @@ export function PwrSnapConnectionPrompt(props: {
             status: response.status,
             ...(response.outcome === "needs_local_agent_access"
               ? { error: "Turn on Local Agent Access in PwrSnap, then Connect again" }
-              : {}),
+              : response.outcome === "needs_update"
+                ? { error: "Update PwrSnap to 1.3.0 or later, then Connect again" }
+                : {}),
           };
         }
       : undefined,
     openApp: desktopApi?.openPwrSnap,
     waitingLine: "Connecting to PwrSnap…",
-    connectsWhileClosed: true,
-    // A remote tile needs the owner's PwrSnap running as well as paired:
+    // A remote tile needs the owner's PwrSnap running as well as installed:
     // the viewer's install state never stands in for the owner's.
     remoteNeedsRunning: true,
   }), [desktopApi]);

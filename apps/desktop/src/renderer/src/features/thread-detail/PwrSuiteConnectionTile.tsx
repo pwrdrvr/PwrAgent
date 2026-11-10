@@ -38,9 +38,7 @@ export type PwrSuiteConnectionApp<Status extends PwrSuiteConnectionStatus> = {
   openApp: (() => Promise<{ opened: boolean; error?: string }>) | undefined;
   /** The tile's line while Connect waits on the app. */
   waitingLine: string;
-  /** PwrSnap pairs whether or not it is open; PwrGit has to be running. */
-  connectsWhileClosed: boolean;
-  /** PwrSnap's remote tile needs the owner's app running, not just paired. */
+  /** PwrSnap's remote tile needs the owner's app running, not just installed. */
   remoteNeedsRunning: boolean;
 };
 
@@ -171,7 +169,8 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
     [line, tone] = [`Connected · ${config.name} isn’t open`, "state"];
   }
 
-  const canConnect = !configured && (running || (installed && config.connectsWhileClosed));
+  // Both apps answer a connection only while they run with Local Agent Access.
+  const canConnect = !configured && running;
   let action;
   if (!status || unreachable) {
     action = (

@@ -14,7 +14,7 @@ vi.mock("../log", () => ({ getMainLogger: () => logs }));
 const services: McpConnectionGatewayService[] = [];
 const directories: string[] = [];
 const secret = "fixture-access-token-never-log";
-const grant = { connectionId: "pwrsnap", threadId: JSON.stringify(["gateway", "codex", "fixture-thread"]) };
+const grant = { connectionId: "pwrgit", threadId: JSON.stringify(["gateway", "codex", "fixture-thread"]) };
 
 type Internals = {
   grants: Map<string, typeof grant>;
@@ -61,10 +61,10 @@ function fixture() {
   const credential = JSON.stringify({ tokens: { access_token: secret, token_type: "bearer" } });
   const service = new McpConnectionGatewayService({
     sandboxer: sandboxerStub(),
-    registry, leaseManager: null, readGatewaySelection: async () => ["pwrsnap"], fetchFn,
+    registry, leaseManager: null, readGatewaySelection: async () => ["pwrgit"], fetchFn,
     settings: {
-      resolvePwrSnapMcpCredential: async () => credential,
-      resolvePwrGitMcpCredential: async () => undefined,
+      resolvePwrSnapMcpCredential: async () => undefined,
+      resolvePwrGitMcpCredential: async () => credential,
       resolveMcpConnectionCredentials: async () => storedCredential,
       clearPwrSnapMcpCredential: async () => undefined,
       clearPwrGitMcpCredential: async () => undefined,
@@ -122,11 +122,11 @@ describe("MCP discovery lifecycle with the real SDK and a fake HTTP endpoint", (
     await vi.advanceTimersByTimeAsync(60_000);
     expect(await result).toMatchObject({ data: { kind: "deadline", phase: "tools/list", page: 1, elapsedMs: 60_000 } });
     expect(f.posts.find((post) => post.method === "tools/list")?.signal?.aborted).toBe(true);
-    const status = (await f.service.listConnections()).find((connection) => connection.id === "pwrsnap");
+    const status = (await f.service.listConnections()).find((connection) => connection.id === "pwrgit");
     expect(status).toMatchObject({ configured: true, state: "ready", discovery: { state: "failed", lastFailure: { message: expect.stringContaining("tools/list") } } });
     f.configure({});
     await expect(f.run()).resolves.toMatchObject([{ toolName: "lookup_1" }]);
-    expect((await f.service.listConnections()).find((connection) => connection.id === "pwrsnap")?.discovery)
+    expect((await f.service.listConnections()).find((connection) => connection.id === "pwrgit")?.discovery)
       .toMatchObject({ state: "ready", lastSuccessAt: expect.any(Number), lastFailure: expect.any(Object) });
   });
 
@@ -168,7 +168,7 @@ describe("MCP discovery lifecycle with the real SDK and a fake HTTP endpoint", (
     await f.run();
     const abandoned = new AbortController();
     abandoned.abort();
-    const registration = new McpDiscovery("pwrsnap", Date.now() + 60_000, abandoned.signal);
+    const registration = new McpDiscovery("pwrgit", Date.now() + 60_000, abandoned.signal);
     const params = { name: "lookup_1", arguments: {} };
     try {
       await expect(mcpDiscoveryContext.run(registration, async () => await f.run("tools/call", undefined, undefined, params)))
@@ -192,7 +192,7 @@ describe("MCP discovery lifecycle with the real SDK and a fake HTTP endpoint", (
 
   it("keeps a gateway execution RPC alive beyond the discovery budget", async () => {
     const f = fixture();
-    const base = { connectionId: "pwrsnap", scopeKey: grant.threadId, signal: new AbortController().signal };
+    const base = { connectionId: "pwrgit", scopeKey: grant.threadId, signal: new AbortController().signal };
     let tools: McpGatewayTool[] | undefined;
     const discovery = f.service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }).then((result) => { tools = result as McpGatewayTool[]; });
     await vi.waitFor(() => expect(tools).toBeDefined());
@@ -221,7 +221,7 @@ describe("MCP discovery lifecycle with the real SDK and a fake HTTP endpoint", (
 
   it("still bounds gateway call catalog validation before executing a tool", async () => {
     const f = fixture();
-    const base = { connectionId: "pwrsnap", scopeKey: grant.threadId, signal: new AbortController().signal };
+    const base = { connectionId: "pwrgit", scopeKey: grant.threadId, signal: new AbortController().signal };
     let tools: McpGatewayTool[] | undefined;
     const discovery = f.service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }).then((result) => { tools = result as McpGatewayTool[]; });
     await vi.waitFor(() => expect(tools).toBeDefined());
@@ -258,7 +258,7 @@ describe("MCP discovery lifecycle with the real SDK and a fake HTTP endpoint", (
     f.configure({ failure });
     const error = await f.run().catch((error: unknown) => error);
     expect(error).toBeInstanceOf(McpError);
-    expect(error).toMatchObject({ data: { ...diagnostic, connectionId: "pwrsnap", phase: "initialize", discoveryId: expect.any(String) } });
+    expect(error).toMatchObject({ data: { ...diagnostic, connectionId: "pwrgit", phase: "initialize", discoveryId: expect.any(String) } });
     expect(String(error)).not.toContain(secret);
     expect(JSON.stringify(error)).not.toContain(secret);
     expect(JSON.stringify(logs.warn.mock.calls)).not.toContain(secret);

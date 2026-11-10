@@ -7,8 +7,7 @@ sister PwrSuite repository:
 - Source: `apps/desktop/build/icon.png` — the full-bleed master PwrSnap's own
   build documents as its Windows master. Downsampled to 256px, which is the
   only transformation applied.
-- Usage: the New Thread PwrSnap connection prompt, and the OAuth callback page
-  the browser lands on after PwrSnap's authorization screen
+- Usage: the New Thread PwrSnap connection prompt
 
 To refresh it, point the sync script at a PwrSnap checkout:
 

@@ -504,7 +504,7 @@ export function registerMcpConnectionIpcHandlers(
     async (event): Promise<ConnectPwrSnapResponse> => {
       if (federationWindowTargetForWebContents(event.sender)) {
         throw new Error(
-          "PwrSnap pairing is only available on the machine that owns this window.",
+          "PwrSnap connections are only available on the machine that owns this window.",
         );
       }
       return await service.connect();

@@ -3,13 +3,9 @@ import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PWRSNAP_SESSION_REJECTED_DETAIL } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  McpConnectionGatewayService,
-  PWRSNAP_SESSION_REJECTED_ERROR,
-} from "../mcp-connections/mcp-connection-gateway-service";
+import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import { pwrSnapRelayPath } from "../mcp-connections/pwrsnap-relay";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import * as appState from "../state/app-state";
 import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
@@ -74,6 +70,21 @@ function temporaryRegistry(): McpConnectionRegistry {
   return registry;
 }
 
+/** A PwrSnap install in a temp folder, with or without its `pwrsnap-mcp` relay. */
+function pwrSnapInstall(options: { relay?: boolean } = {}): string {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-pwrsnap-install-"));
+  temporaryDirectories.push(directory);
+  const app = path.join(directory, process.platform === "darwin" ? "PwrSnap.app" : process.platform === "win32" ? "PwrSnap.exe" : "pwrsnap");
+  if (process.platform === "darwin") fs.mkdirSync(app);
+  else fs.writeFileSync(app, "");
+  if (options.relay !== false) {
+    const relay = pwrSnapRelayPath(app)!;
+    fs.mkdirSync(path.dirname(relay), { recursive: true });
+    fs.writeFileSync(relay, "", { mode: 0o755 });
+  }
+  return app;
+}
+
 afterEach(async () => {
   await Promise.all(services.splice(0).map(async (service) => await service.close()));
   for (const directory of temporaryDirectories.splice(0)) {
@@ -120,49 +131,8 @@ describe("McpConnectionGatewayService", () => {
     await expect(service.createConnection({ displayName: "Network", serverUrl: "https://example.org/mcp", ipcBearerToken: "secret" })).rejects.toThrow("local IPC");
   });
 
-  it("requests local asset import only through a new PwrSnap approval", async () => {
-    const settings = createSettings(createAuthorizedCredential("fixture-existing-access"));
-    const opened: URL[] = [];
-    const service = new McpConnectionGatewayService({
-      sandboxer: sandboxerStub(),
-      registry: temporaryRegistry(),
-      settings,
-      leaseManager: null,
-      fetchFn: vi.fn(async () => { throw new Error("Unexpected OAuth request"); }),
-      openExternal: async (url) => { opened.push(new URL(url)); },
-    });
-    services.push(service);
-
-    const authorization = service.authorizeConnection("pwrsnap").catch((error: unknown) => error);
-    await vi.waitFor(() => expect(opened).toHaveLength(1));
-    await service.cancelAuthorization("pwrsnap");
-    expect(await authorization).toBeInstanceOf(Error);
-
-    expect(opened[0]!.searchParams.get("scope")?.split(" ")).toEqual([
-      "library.read",
-      "capture.composite.read",
-      "capture.original.read",
-      "capture.export",
-      "capture.edit",
-      "trash.write",
-      "sizzle.compose",
-      "sizzle.preview.read",
-      "sizzle.full.read",
-      "sizzle.assets.import",
-    ]);
-    expect(opened[0]!.searchParams.get("code_challenge_method")).toBe("S256");
-    // Asking for broader consent must not change the stored authorization.
-    expect(settings.saveMcpConnectionCredentials).toHaveBeenCalledOnce();
-    const envelope = JSON.parse((await settings.resolveMcpConnectionCredentials())!);
-    expect(envelope.credentials.pwrsnap.tokens).toEqual({
-      access_token: "fixture-existing-access",
-      token_type: "bearer",
-    });
-    expect(settings.clearPwrSnapMcpCredential).not.toHaveBeenCalled();
-  });
-
   it("serves a changing full catalog and validates calls over the revocable socket", async () => {
-    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(), resolveInstallPaths: () => [pwrSnapInstall()], leaseManager: null });
     services.push(service);
     let requiredType = "string";
     const listTools = vi.fn(async () => ({ tools: [{ name: "lookup", inputSchema: {
@@ -202,7 +172,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("gives live gateway catalog pages one 60-second budget", async () => {
-    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(), resolveInstallPaths: () => [pwrSnapInstall()], leaseManager: null });
     services.push(service);
     let now = Date.now();
     const timeouts: number[] = [];
@@ -226,7 +196,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("rejects repeated pagination cursors instead of approving an incomplete catalog", async () => {
-    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(), resolveInstallPaths: () => [pwrSnapInstall()], leaseManager: null });
     services.push(service);
     const listTools = vi.fn(async () => ({ tools: [], nextCursor: "same" }));
     Object.assign(service, { connectUpstreamClient: async () => ({ client: { listTools, close: vi.fn(async () => undefined) }, transport: { close: vi.fn(async () => undefined) } }) });
@@ -236,7 +206,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("propagates cancellation without closing the shared session", async () => {
-    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(), resolveInstallPaths: () => [pwrSnapInstall()], leaseManager: null });
     services.push(service);
     let entered!: () => void;
     const started = new Promise<void>((resolve) => { entered = resolve; });
@@ -267,7 +237,7 @@ describe("McpConnectionGatewayService", () => {
   });
 
   it("does not resurrect a session whose authorization changed during connection", async () => {
-    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    const service = new McpConnectionGatewayService({ sandboxer: sandboxerStub(), readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(), resolveInstallPaths: () => [pwrSnapInstall()], leaseManager: null });
     services.push(service);
     let opened!: () => void;
     let release!: () => void;
@@ -314,68 +284,87 @@ describe("McpConnectionGatewayService", () => {
     }
   });
 
-  it("distinguishes an absent install from a running MCP endpoint", async () => {
-    const absent = new McpConnectionGatewayService({
-      sandboxer: sandboxerStub(),
-      fetchFn: vi.fn(async () => {
-        throw new Error("connection refused");
-      }),
-      resolveInstallPaths: () => [],
-      settings: createSettings(),
-      leaseManager: null,
-    });
-    services.push(absent);
+  it("reads PwrSnap's install, relay, and listener as three separate facts", async () => {
+    const withRelay = pwrSnapInstall();
+    const withoutRelay = pwrSnapInstall({ relay: false });
+    const fetchFn = vi.fn(async () => { throw new Error("PwrSnap has no network endpoint."); });
+    const status = async (installPaths: string[], listening: boolean) => {
+      const service = new McpConnectionGatewayService({
+        sandboxer: sandboxerStub(),
+        fetchFn,
+        resolveInstallPaths: () => installPaths,
+        isPwrSnapListening: async () => listening,
+        settings: createSettings(),
+        leaseManager: null,
+      });
+      services.push(service);
+      return await service.readStatus();
+    };
 
-    await expect(absent.readStatus()).resolves.toMatchObject({
-      availability: "not_installed",
-      configured: false,
+    await expect(status([], false)).resolves.toEqual({
+      connectionId: "pwrsnap", displayName: "PwrSnap", availability: "not_installed", configured: false,
     });
-
-    const running = new McpConnectionGatewayService({
-      sandboxer: sandboxerStub(),
-      fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
-      resolveInstallPaths: () => [],
-      settings: createSettings(JSON.stringify({
-        tokens: { access_token: "secret", token_type: "bearer" },
-      })),
-      leaseManager: null,
+    await expect(status([withoutRelay], false)).resolves.toMatchObject({
+      availability: "installed", configured: false, detail: expect.stringContaining("1.3.0"),
     });
-    services.push(running);
-
-    await expect(running.readStatus()).resolves.toMatchObject({
-      availability: "running",
-      configured: true,
+    await expect(status([withRelay], false)).resolves.toMatchObject({
+      availability: "installed", configured: true, detail: expect.stringContaining("Local Agent Access"),
     });
+    const running = await status([withRelay], true);
+    expect(running).toMatchObject({ availability: "running", configured: true });
+    expect(running.detail).toBeUndefined();
+    // The first install with a relay wins over an older one beside it.
+    await expect(status([withoutRelay, withRelay], true)).resolves.toMatchObject({ configured: true });
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("requires the operator to start an installed PwrSnap before connecting", async () => {
+  it("connects PwrSnap only while it listens, with no browser sign-in", async () => {
     const openPath = vi.fn(async () => "");
+    const openExternal = vi.fn(async () => undefined);
+    const fetchFn = vi.fn(async () => { throw new Error("PwrSnap has no network endpoint."); });
+    let listening = false;
+    let installs = [pwrSnapInstall({ relay: false })];
+    const settings = createSettings(createAuthorizedCredential("fixture-legacy-access"));
     const service = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
-      fetchFn: vi.fn(async () => {
-        throw new Error("connection refused");
-      }),
+      registry: temporaryRegistry(),
+      fetchFn,
+      openExternal,
       openPath,
-      resolveInstallPaths: () => [fileURLToPath(import.meta.url)],
-      settings: createSettings(),
+      resolveInstallPaths: () => installs,
+      isPwrSnapListening: async () => listening,
+      settings,
       leaseManager: null,
     });
     services.push(service);
 
     await expect(service.connect()).resolves.toMatchObject({
-      outcome: "needs_local_agent_access",
+      outcome: "needs_update",
       status: { availability: "installed", configured: false },
     });
+    installs = [pwrSnapInstall()];
+    await expect(service.connect()).resolves.toMatchObject({
+      outcome: "needs_local_agent_access",
+      status: { availability: "installed", configured: true },
+    });
+    listening = true;
+    await expect(service.connect()).resolves.toMatchObject({
+      outcome: "connected",
+      status: { availability: "running", configured: true },
+    });
+    // The OAuth token PwrSnap 1.2 issued opens nothing now; it is dropped.
+    expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
     expect(openPath).not.toHaveBeenCalled();
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("reuses one revocable stdio bridge grant for a configured thread", async () => {
     const service = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
       bridgeEntryPath: "/test/mcp-connection-bridge.js",
-      settings: createSettings(JSON.stringify({
-        tokens: { access_token: "secret", token_type: "bearer" },
-      })),
+      settings: createSettings(),
+      resolveInstallPaths: () => [pwrSnapInstall()],
       leaseManager: null,
     });
     services.push(service);
@@ -566,114 +555,6 @@ describe("McpConnectionGatewayService", () => {
     });
   });
 
-  it.each(["unauthorized", JSON.stringify({ error: "builtin_role_drift" })])("clears a rejected PwrSnap credential without inferring revocation (%s)", async (body) => {
-    const settings = createSettings(createAuthorizedCredential());
-    const fetchFn = vi.fn(async () => new Response(body, { status: 401 }));
-    const service = new McpConnectionGatewayService({
-      sandboxer: sandboxerStub(),
-      fetchFn,
-      resolveInstallPaths: () => [],
-      settings,
-      leaseManager: null,
-    });
-    services.push(service);
-
-    await expect(service.readStatus()).resolves.toMatchObject({
-      availability: "running",
-      configured: true,
-    });
-
-    const bridge = service as unknown as {
-      dispatchBridgeOperation: (
-        token: string,
-        grant: { connectionId: string; threadId?: string },
-        operation: unknown,
-        params: unknown,
-      ) => Promise<unknown>;
-    };
-    await expect(bridge.dispatchBridgeOperation(
-      "test-token",
-      { connectionId: "pwrsnap", threadId: "thread-1" },
-      "tools/list",
-      {},
-    )).rejects.toThrow("PwrSnap rejected this connection's authorization.");
-
-    expect(settings.clearMcpConnectionCredentials).toHaveBeenCalledOnce();
-    expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
-    await expect(service.readStatus()).resolves.toMatchObject({
-      availability: "running",
-      configured: false,
-      detail: PWRSNAP_SESSION_REJECTED_DETAIL,
-    });
-    expect(PWRSNAP_SESSION_REJECTED_DETAIL).toContain("rejected");
-    expect(PWRSNAP_SESSION_REJECTED_DETAIL).not.toMatch(/revok/i);
-
-    const requests = fetchFn.mock.calls.length;
-    await expect(service.listConnectionTools({ connectionId: "pwrsnap" }))
-      .rejects.toThrow("PwrSnap rejected this connection's authorization.");
-    expect(fetchFn).toHaveBeenCalledTimes(requests);
-
-    // Existing threads keep starting; only PwrSnap calls report the rejection.
-    await expect(service.registerBridge("pwrsnap", "thread-1"))
-      .resolves.toBeTruthy();
-  });
-
-  it("refreshes an existing PwrSnap token without requesting broader scopes", async () => {
-    const credential = JSON.parse(createAuthorizedCredential("fixture-old-access"));
-    credential.tokens = {
-      ...credential.tokens,
-      refresh_token: "fixture-refresh",
-      scope: "sizzle.compose",
-    };
-    const settings = createSettings(JSON.stringify(credential));
-    const refreshRequests: URLSearchParams[] = [];
-    const openExternal = vi.fn(async () => undefined);
-    const service = new McpConnectionGatewayService({
-      sandboxer: sandboxerStub(),
-      registry: temporaryRegistry(),
-      settings,
-      leaseManager: null,
-      openExternal,
-      fetchFn: vi.fn(async (input, init) => {
-        const url = new URL(String(input));
-        if (url.pathname === "/oauth/token") {
-          refreshRequests.push(new URLSearchParams(String(init?.body)));
-          return Response.json({
-            access_token: "fixture-refreshed-access",
-            refresh_token: "fixture-rotated-refresh",
-            token_type: "bearer",
-            scope: "sizzle.compose",
-          });
-        }
-        if (url.pathname !== "/mcp") throw new Error("Unexpected fixture request");
-        if (new Headers(init?.headers).get("authorization") === "Bearer fixture-old-access") {
-          return new Response("unauthorized", { status: 401 });
-        }
-        if (init?.method !== "POST") return new Response(null, { status: 405 });
-        const request = JSON.parse(String(init.body));
-        if (request.id === undefined) return new Response(null, { status: 202 });
-        return Response.json({
-          jsonrpc: "2.0",
-          id: request.id,
-          result: request.method === "initialize" ? {
-            protocolVersion: request.params.protocolVersion,
-            capabilities: { tools: {} },
-            serverInfo: { name: "PwrSnap fixture", version: "1.2.5" },
-          } : { tools: [] },
-        });
-      }),
-    });
-    services.push(service);
-
-    await expect(service.listConnectionTools({ connectionId: "pwrsnap" }))
-      .resolves.toMatchObject({ tools: [] });
-    expect(refreshRequests).toHaveLength(1);
-    expect(refreshRequests[0]!.get("grant_type")).toBe("refresh_token");
-    expect(refreshRequests[0]!.has("scope")).toBe(false);
-    expect(openExternal).not.toHaveBeenCalled();
-    const envelope = JSON.parse((await settings.resolveMcpConnectionCredentials())!);
-    expect(envelope.credentials.pwrsnap.tokens.scope).toBe("sizzle.compose");
-  });
   /**
    * The OAuth round trip belongs to the browser, so "cancel" can only mean
    * releasing PwrAgent's half of it. Before this the only exit from an
@@ -1041,23 +922,6 @@ describe("McpConnectionGatewayService", () => {
       answers[1]({ tools: [{ name: "fresh" }] });
       await expect(second).resolves.toMatchObject({ tools: ["fresh"] });
       expect(upstream.connect).toHaveBeenCalledTimes(2);
-    });
-
-    it("reports PwrSnap's authorization rejection through the same session opener threads use", async () => {
-      const settings = createSettings(createAuthorizedCredential());
-      const service = new McpConnectionGatewayService({
-        sandboxer: sandboxerStub(),
-        fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
-        resolveInstallPaths: () => [],
-        settings,
-        leaseManager: null,
-      });
-      services.push(service);
-
-      await expect(
-        service.listConnectionTools({ connectionId: "pwrsnap" }),
-      ).rejects.toThrow(PWRSNAP_SESSION_REJECTED_ERROR);
-      expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalled();
     });
 
     it("answers for the profile's owner broker", async () => {

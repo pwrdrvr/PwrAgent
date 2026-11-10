@@ -49,7 +49,6 @@ export function PwrGitConnectionPrompt(props: {
       : undefined,
     openApp: desktopApi?.openPwrGit,
     waitingLine: "Approve the connection in PwrGit",
-    connectsWhileClosed: false,
     // PwrGit has no federation surface yet, so a remote tile only appears
     // once the owner reports the connection configured.
     remoteNeedsRunning: false,

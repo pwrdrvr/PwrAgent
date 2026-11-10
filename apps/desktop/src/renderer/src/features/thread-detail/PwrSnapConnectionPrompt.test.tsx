@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
-  PWRSNAP_SESSION_REJECTED_DETAIL,
   type ConnectPwrSnapResponse,
   type PwrSnapConnectionStatus,
 } from "@pwragent/shared";
@@ -135,29 +134,35 @@ describe("PwrSnapConnectionPrompt", () => {
     await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
   });
 
-  it("offers to reconnect and explains why after PwrSnap rejected the session", async () => {
-    const detail = PWRSNAP_SESSION_REJECTED_DETAIL;
+  it("names the update an older PwrSnap needs when Connect cannot reach a relay", async () => {
+    const snapStatus: PwrSnapConnectionStatus = {
+      connectionId: PWRSNAP_MCP_CONNECTION_ID,
+      displayName: "PwrSnap",
+      availability: "running",
+      configured: false,
+      detail: "Update PwrSnap to 1.3.0 or later, then turn on Local Agent Access.",
+    };
+    const connectPwrSnap = vi.fn(async (): Promise<ConnectPwrSnapResponse> => ({
+      outcome: "needs_update",
+      status: snapStatus,
+    }));
     render(
       <PwrSnapConnectionPrompt
         backend="codex"
-        desktopApi={{
-          readPwrSnapConnectionStatus: async () => ({
-            connectionId: "pwrsnap",
-            displayName: "PwrSnap",
-            availability: "running",
-            configured: false,
-            detail,
-          }),
-        }}
+        desktopApi={{ readPwrSnapConnectionStatus: async () => snapStatus, connectPwrSnap }}
         enabled={false}
         onEnabledChange={vi.fn()}
       />,
     );
 
-    expect(await screen.findByRole("button", { name: "Connect to PwrSnap" }))
-      .toBeTruthy();
-    expect(screen.getByText(detail)).toBeTruthy();
+    expect(await screen.findByText(snapStatus.detail!)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Connect to PwrSnap" }));
+    });
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Update PwrSnap to 1.3.0 or later, then Connect again",
+    );
   });
 
   // The mirror of PwrGit's assertion: this asset is full-bleed too, so scaling
@@ -184,36 +189,39 @@ describe("PwrSnapConnectionPrompt", () => {
     expect(icon?.className).toBe("mcp-connection__icon");
   });
 
-  it("pairs with PwrSnap even while it is closed, and names Local Agent Access", async () => {
-    const snapStatus: PwrSnapConnectionStatus = {
-      connectionId: PWRSNAP_MCP_CONNECTION_ID,
-      displayName: "PwrSnap",
-      availability: "installed",
-      configured: false,
-    };
-    const connectPwrSnap = vi.fn(async (): Promise<ConnectPwrSnapResponse> => ({
-      outcome: "needs_local_agent_access",
-      status: snapStatus,
-    }));
-    render(
-      <PwrSnapConnectionPrompt
-        backend="codex"
-        desktopApi={{
-          readPwrSnapConnectionStatus: async () => snapStatus,
-          connectPwrSnap,
-        }}
-        enabled={false}
-        onEnabledChange={vi.fn()}
-      />,
-    );
+  it("asks for PwrSnap to be opened instead of offering Connect while it is closed", async () => {
+    const detail = "Open PwrSnap and turn on Local Agent Access to connect agents.";
+    for (const configured of [true, false]) {
+      const openPwrSnap = vi.fn(async () => ({ opened: true }));
+      const connectPwrSnap = vi.fn();
+      const view = render(
+        <PwrSnapConnectionPrompt
+          backend="codex"
+          desktopApi={{
+            readPwrSnapConnectionStatus: async () => ({
+              connectionId: PWRSNAP_MCP_CONNECTION_ID,
+              displayName: "PwrSnap",
+              availability: "installed",
+              configured,
+              detail,
+            }),
+            connectPwrSnap,
+            openPwrSnap,
+          }}
+          enabled={false}
+          onEnabledChange={vi.fn()}
+        />,
+      );
 
-    expect(await screen.findByText("Screenshots your agents can use")).toBeTruthy();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Connect to PwrSnap" }));
-    });
-    expect(connectPwrSnap).toHaveBeenCalledOnce();
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "Turn on Local Agent Access in PwrSnap, then Connect again",
-    );
+      expect(await screen.findByText(detail)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Connect to PwrSnap" })).toBeNull();
+      expect(screen.queryByRole("switch")).toBeNull();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Open PwrSnap" }));
+      });
+      expect(openPwrSnap).toHaveBeenCalledOnce();
+      expect(connectPwrSnap).not.toHaveBeenCalled();
+      view.unmount();
+    }
   });
 });

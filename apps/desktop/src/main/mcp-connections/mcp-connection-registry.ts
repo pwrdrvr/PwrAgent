@@ -53,7 +53,9 @@ const BUILT_IN_TOOL_APPROVAL_KEYS = {
   [SANDBOXER_MCP_CONNECTION_ID]: "sandboxer_tool_approval",
 } as const;
 const CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-const PWRSNAP_SERVER_URL = "http://127.0.0.1:51729/mcp";
+// PwrSnap has no URL: PwrAgent starts the `pwrsnap-mcp` relay inside the
+// PwrSnap install. This names it the way a local command row is named.
+const PWRSNAP_SERVER_URL = "stdio:pwrsnap";
 
 type StoredConnectionRow = Record<
   string,
@@ -701,7 +703,7 @@ function builtInPwrSnapConnection(): McpConnectionRecord {
     id: PWRSNAP_MCP_CONNECTION_ID,
     displayName: "PwrSnap",
     serverUrl: PWRSNAP_SERVER_URL,
-    authMode: "oauth",
+    authMode: "none",
     kind: "pwrsnap",
     enabled: true,
     selectForNewThreads: false,

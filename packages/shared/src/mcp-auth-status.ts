@@ -94,8 +94,25 @@ export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
  * PwrAgent here, Codex there.
  */
 export function describeMcpConnectionAuth(
-  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "sandboxerCliState" | "detail">>,
+  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "kind" | "sandboxerCliState" | "detail">>,
 ): McpAuthStatusPresentation {
+  if (connection.kind === "pwrsnap") {
+    // PwrAgent starts PwrSnap's bundled relay, and PwrSnap asks the operator
+    // to approve each session in its own window.
+    return connection.configured
+      ? {
+          label: "Approved in PwrSnap",
+          description: "PwrAgent starts PwrSnap's local relay for each thread. PwrSnap asks you to approve each session.",
+          tone: "ok",
+          canSignIn: false,
+        }
+      : {
+          label: "Update needed",
+          description: connection.detail ?? "Update PwrSnap to 1.3.0 or later, then turn on Local Agent Access.",
+          tone: "warn",
+          canSignIn: false,
+        };
+  }
   if (connection.authMode === "none") {
     // A local command signs in to nothing. What it can be missing is a
     // stored secret that encrypted storage no longer gives back.

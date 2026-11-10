@@ -254,10 +254,10 @@ updated_at = 456
     const registry = new McpConnectionRegistry({ configPath: configPath() });
     expect(() =>
       registry.create({
-        displayName: "Not PwrSnap",
-        serverUrl: "http://127.0.0.1:51729/mcp",
+        displayName: "Not PwrGit",
+        serverUrl: "http://127.0.0.1:51731/mcp",
       }),
-    ).toThrow("PwrSnap is already registered for that address.");
+    ).toThrow("PwrGit is already registered for that address.");
   });
 
   it("re-points a connection in place instead of forcing remove-and-retype", () => {
