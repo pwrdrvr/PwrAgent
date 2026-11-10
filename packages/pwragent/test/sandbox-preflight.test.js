@@ -12,6 +12,20 @@ function fixture(t, source) {
   return { command, workspace, home: workspace };
 }
 
+// The host OS is the oracle: a successful sandbox wrapper must be able to
+// execute the actual probe argv on every supported platform.
+test("a working sandbox wrapper executes the native probe successfully", async (t) => {
+  const options = fixture(t, `
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(process.argv.indexOf("--") + 1);
+const result = spawnSync(args[0], args.slice(1), { encoding: "utf8" });
+process.stderr.write(result.error?.message || result.stderr || "");
+process.exitCode = result.status ?? 1;
+`);
+  const result = await checkCodexSandbox(options);
+  assert.equal(result.status, "ready", result.error);
+});
+
 test("a sandbox check that cannot start degrades without rejecting startup", async (t) => {
   const options = fixture(t, "");
   const result = await checkCodexSandbox({ ...options, command: path.join(options.workspace, "missing") });

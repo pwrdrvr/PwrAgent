@@ -4,11 +4,12 @@ import { spawn } from "node:child_process";
 // Codex-owned files. The policy matches the Outpost's workspace-write turns.
 export function checkCodexSandbox({ command, home, workspace, timeout = 10000, signal }) {
   const checkedAt = new Date().toISOString();
+  const probe = process.platform === "darwin" ? "/usr/bin/true" : "/bin/true";
   return new Promise((resolve) => {
     const child = spawn(command, ["sandbox", "-c", "sandbox_mode=\"workspace-write\"",
       "-c", "approval_policy=\"never\"", "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([workspace])}`,
       "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-      "-c", "sandbox_workspace_write.exclude_slash_tmp=true", "--", "/bin/true"], {
+      "-c", "sandbox_workspace_write.exclude_slash_tmp=true", "--", probe], {
       cwd: workspace, env: { ...process.env, CODEX_HOME: home },
       stdio: ["ignore", "ignore", "pipe"], detached: true,
     });

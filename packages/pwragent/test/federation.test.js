@@ -32,7 +32,7 @@ test("nonzero sandbox exits are the health oracle for local and federated client
     assert.deepEqual(checks[0].sandbox, ["sandbox", "-c", "sandbox_mode=\"workspace-write\"",
       "-c", "approval_policy=\"never\"", "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([h.workspace])}`,
       "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-      "-c", "sandbox_workspace_write.exclude_slash_tmp=true", "--", "/bin/true"]);
+      "-c", "sandbox_workspace_write.exclude_slash_tmp=true", "--", process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]);
     await h.stop(h.daemon);
   }), { numRuns: 5 });
 });

@@ -137,7 +137,8 @@ paths are placeholders. `KillMode=control-group` is needed to reap tools that
 start a new session or process group. Running `serve` in an SSH foreground shell
 alone does not provide this lifetime guarantee.
 
-At startup, `serve` runs `/bin/true` through `codex sandbox` with the Outpost's
+At startup, `serve` runs the native `true` executable (`/bin/true` on Linux,
+`/usr/bin/true` on macOS) through `codex sandbox` with the Outpost's
 workspace-write policy, tool network access disabled, and approval policy
 `never`. This checks native sandbox startup on Linux (and macOS development
 hosts) without a model request. The check has a 10-second deadline. A failure
