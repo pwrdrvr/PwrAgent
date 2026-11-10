@@ -1,11 +1,11 @@
 import path from "node:path";
 import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import type { exerciseDesktopPausePublication } from "./fixtures/queue-pause-publication-driver";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { queuePausePublicationPlugin } from "./fixtures/queue-pause-publication-build";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(new URL("../package.json", import.meta.url));
@@ -20,20 +20,7 @@ for (const initiallyPaused of [false, true]) {
         await build({ entryPoints: [path.join(specDir, "fixtures/queue-pause-publication-driver.ts")], outfile: driverPath,
           bundle: true, platform: "node", format: "cjs", logLevel: "silent", external: ["electron"],
           define: { "import.meta.url": JSON.stringify(pathToFileURL(driverPath).href), "import.meta.dirname": JSON.stringify(homeRoot) },
-          plugins: [{ name: "isolated-desktop-pause-owner", setup(builder) {
-            builder.onResolve({ filter: /\?raw$/ }, args => ({ path: path.resolve(args.resolveDir, args.path.slice(0, -4)), namespace: "pause-raw" }));
-            builder.onLoad({ filter: /.*/, namespace: "pause-raw" }, async args => ({ contents: await readFile(args.path, "utf8"), loader: "text" }));
-            builder.onResolve({ filter: /^[^./]/ }, args => {
-              if (args.path.startsWith("node:") || args.path === "electron"
-                || args.path.startsWith("@pwragent/") || args.path.startsWith("@pwrdrvr/codex-app-server-protocol")) return;
-              try { return { path: require.resolve(args.path), external: true }; } catch { return; }
-            });
-            builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "fixture-codex", namespace: "pause-owner" }));
-            builder.onLoad({ filter: /.*/, namespace: "pause-owner" }, () => ({
-              contents: `export { OwnerConformanceCodexTransport as StdioJsonRpcTransport } from ${JSON.stringify(path.resolve(specDir, "../src/main/__tests__/fixtures/owner-conformance-codex-transport.ts"))};`,
-              loader: "ts", resolveDir: specDir,
-            }));
-          } }],
+          plugins: [queuePausePublicationPlugin(specDir, id => require.resolve(id))],
         });
       },
     });
