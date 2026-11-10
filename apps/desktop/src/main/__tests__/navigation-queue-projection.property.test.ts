@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import fc from "fast-check";
 import type { ComposerThreadOwner, ScheduledThreadAction } from "@pwragent/shared";
-import { ThreadTurnQueue, type ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
+import { ThreadTurnQueue, type ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 import {
   buildThreadComposerScopeKey, getNextReleasableQueuedTurn, useComposerDraftStore,
   type ComposerDraftStore, type ComposerQueuedTurnSnapshot,

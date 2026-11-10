@@ -337,6 +337,20 @@ terminal event. Desktop supplies MCP cancellation, provider execution, ACP
 prompt locking, runtime selection, logging and active-mode retirement through
 host ports. Active-turn identity maps and persistence remain host-owned.
 
+The production turn queue lives in `owner-core/thread-turn-queue.ts`.
+Desktop's `BackendRegistry` constructs that class directly with its existing
+start, steer, occupancy, restart-gate and lifecycle callbacks. The shared queue
+owns FIFO admission, independent hold causes and revisions, paused entries,
+grouped messages, early/duplicate terminals and dispatch suspension. Desktop
+still owns provider/resource construction, durable project holds and restart
+continuations, title generation, correspondence and event delivery. Closing
+the queue cancels its pending drains at the same registry shutdown boundary.
+The generated queue model runs against this shared implementation; desktop's
+restart-gate model and actual registry construction/projection oracle exercise
+its host wiring. Outpost still refuses busy submissions and reports no queue;
+adopting the engine there requires its actual durable acceptance and no-replay
+host integration.
+
 Steer submission lives in `owner-core/thread-steer-submission-lifecycle.ts`.
 It owns delivery refusal, restart-gate queue admission, native-review admission,
 provider selection and response/effect sequencing. The existing steering

@@ -5,7 +5,7 @@ import {
   type AppServerThreadMessageOrigin,
   type AppServerTurnInputItem,
 } from "@pwragent/shared";
-import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
+import type { ThreadTurnQueueEntry } from "@pwragent/owner-core/thread-turn-queue";
 import { storageProcessAlive } from "./storage-maintenance";
 
 /**

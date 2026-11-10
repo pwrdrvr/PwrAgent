@@ -974,7 +974,7 @@ import {
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueImmediateSubmissionResult,
   type ThreadTurnQueueSubmissionResult,
-} from "./thread-turn-queue";
+} from "@pwragent/owner-core/thread-turn-queue";
 import {
   getProjectForgeAutomationIndex,
   summarizeProjectHeldWakeup,

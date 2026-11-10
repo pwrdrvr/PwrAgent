@@ -8,9 +8,8 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
-import { mergeCausalMessagingContext } from "./causal-messaging-context";
-import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "@pwragent/owner-core/queue-admission";
+import { buildThreadIdentityKey, mergeCausalMessagingContext } from "@pwragent/shared";
+import { transitionQueueAdmission, type QueueAdmission, type QueueAdmissionEvent } from "./queue-admission";
 
 export type ThreadTurnQueueOrigin =
   | "manual"

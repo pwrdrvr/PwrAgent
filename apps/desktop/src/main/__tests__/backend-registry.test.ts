@@ -3337,6 +3337,44 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("constructs the shared owner queue and projects generated held admissions through its actual host", async () => {
+    const shared = await import("@pwragent/owner-core/thread-turn-queue").catch(() => undefined);
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.constantFrom("awaiting-review", "target-ended"), { minLength: 1, maxLength: 8 }),
+      async (reasons) => {
+        const client = new MockBackendClient({ threads: [] });
+        const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+        const identity = { backend: "codex" as const, threadId: "shared-queue-owner" };
+        const events: AgentEvent[] = [];
+        registry.onEvent((event) => { events.push(event); });
+        try {
+          // This is the queue the production registry constructs, not a test
+          // adapter. Its class and its host-facing projection share one owner.
+          expect(shared?.ThreadTurnQueue, "owner-core must export the production queue").toBeDefined();
+          const queue = (registry as unknown as { threadTurnQueue: object }).threadTurnQueue;
+          expect(Object.getPrototypeOf(queue)).toBe(shared!.ThreadTurnQueue.prototype);
+          const admitted: string[] = [];
+          for (const [index, holdReason] of reasons.entries()) {
+            const entryId = `held-${index}`;
+            await registry.submitHeldTurn({ ...identity, queueEntryId: entryId, holdReason,
+              input: [{ type: "text", text: entryId }] });
+            admitted.push(entryId);
+            expect(registry.listHeldThreadQueueEntries(identity).map((entry) => entry.entryId)).toEqual(admitted);
+          }
+          expect(client.startTurnCallCount).toBe(0);
+          expect(events.filter((event) => event.notification.method === "thread/turnQueue/updated"
+            && event.notification.params.status === "queued").map((event) =>
+            (event.notification.params as { queueEntryId: string }).queueEntryId)).toEqual(admitted);
+          for (const entryId of admitted) {
+            expect(registry.cancelQueuedTurnWithDisposition(entryId)).toMatchObject({ disposition: "cancelled" });
+          }
+          expect(registry.listHeldThreadQueueEntries(identity)).toEqual([]);
+          expect(client.startTurnCallCount).toBe(0);
+        } finally { await registry.close(); }
+      },
+    ), { numRuns: 25 });
+  });
+
   it("retains the owner claim when its real pooled ACP adapter cannot dispose a provider", async () => {
     const close = vi.fn();
     const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({
