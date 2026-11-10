@@ -1331,7 +1331,7 @@ MIT
 - dugite@3.3.2 | https://github.com/desktop/dugite
 - dunder-proto@1.0.1 | https://github.com/es-shims/dunder-proto
 - ee-first@1.1.1 | jonathanong/ee-first
-- electron@44.9.3 | https://github.com/electron/electron
+- electron@44.10.1 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
 - electron-updater@6.8.11 | https://github.com/electron-userland/electron-builder
 - emojilib@2.4.0 | https://github.com/muan/emojilib
@@ -7974,13 +7974,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-electron@44.9.3 (MIT)
----------------------
+electron@44.10.1 (MIT)
+----------------------
 
 Applies to:
-- electron@44.9.3 (MIT)
+- electron@44.10.1 (MIT)
 
-Representative file: electron@44.9.3/LICENSE
+Representative file: electron@44.10.1/LICENSE
 
 Copyright (c) Electron contributors
 Copyright (c) 2013-2020 GitHub Inc.
