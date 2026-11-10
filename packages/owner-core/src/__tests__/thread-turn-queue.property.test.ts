@@ -99,6 +99,28 @@ it("a title completing during unlock cannot leave the later sender held", async 
   await unlockDuringTitle(2, 1, "Updated title");
 });
 
+it("unlock unwinds only its own dispatch suspension after a publication error", async () => {
+  const starts: string[] = [];
+  let armed = false;
+  const queue = new ThreadTurnQueue({
+    startTurn: async entry => { starts.push(entry.id); return { ...THREAD, turnId: entry.id }; },
+    onLifecycle: event => {
+      if (armed && event.type === "queued" && !event.entry.manualReleaseRequired) throw new Error("observer failed");
+    },
+  });
+  try {
+    await queue.submitHeld({ ...THREAD, id: "waiting", origin: "manual", input: [] }, "old lock");
+    armed = true;
+    await queue.withDispatchSuspended(THREAD, async () => {
+      await expect(queue.releaseHold(THREAD, () => true)).rejects.toThrow("observer failed");
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(starts).toEqual([]);
+    });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(starts).toEqual(["waiting"]);
+  } finally { queue.close(); }
+});
+
 async function unlockWithNewHold(count: number, publication: number): Promise<void> {
   const started: string[] = [];
   const observed = new Map<string, boolean>();

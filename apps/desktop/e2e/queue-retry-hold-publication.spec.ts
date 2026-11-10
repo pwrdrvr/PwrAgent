@@ -7,6 +7,68 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
+test("Electron unlock fences newer failure review and preserves a titled row's sender transition", async () => {
+  let queueModule = "";
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      queueModule = path.join(homeRoot, "production-queue.cjs");
+      await build({ entryPoints: [path.resolve(specDir, "../../../packages/owner-core/src/thread-turn-queue.ts")],
+        outfile: queueModule, bundle: true, platform: "node", format: "cjs", logLevel: "silent" });
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const results = await app.electronApp.evaluate(async (_electron, modulePath) => {
+      const { ThreadTurnQueue: Queue } = process.getBuiltinModule("node:module").createRequire(modulePath)(modulePath) as { ThreadTurnQueue: typeof ThreadTurnQueue };
+      const identity = { backend: "codex" as const, threadId: "invented-electron-owner" };
+      const results = [];
+      for (const overlap of ["failure", "title"] as const) {
+        const sends: string[] = [];
+        const senderState = new Map<string, string>();
+        let active = true, armed = false, yieldingFailure = false;
+        const queue = new Queue({
+          isThreadActive: () => active,
+          startTurn: async entry => { sends.push(entry.id); return { ...identity, turnId: entry.id }; },
+          onLifecycle: async event => {
+            if (event.type === "queued" || event.type === "held") senderState.set(event.entry.id, event.type);
+            if (armed && event.type === "queued" && event.entry.id === "waiting-0" && !event.entry.manualReleaseRequired) {
+              armed = false;
+              if (overlap === "failure") {
+                yieldingFailure = true;
+                await queue.releaseThread({ ...identity, turnId: "new-native", status: "turn/failed", errorMessage: "new review" });
+              } else queue.setQueuedEntryTitle("waiting-1", "Generated title");
+            } else if (yieldingFailure && event.type === "held") {
+              yieldingFailure = false;
+              await new Promise<void>(resolve => setImmediate(resolve));
+            }
+          },
+        });
+        try {
+          for (let index = 0; index < 2; index++) await queue.submit({ ...identity, id: `waiting-${index}`, origin: "manual",
+            input: [{ type: "text", text: `Immutable input ${index}` }], paused: overlap === "title" || index === 0 });
+          await queue.releaseThread({ ...identity, turnId: "prior-native", status: "turn/failed", errorMessage: "old lock" });
+          active = false;
+          queue.scheduleThreadDrain(identity);
+          armed = true;
+          await queue.releaseHold(identity, reason => reason === "old lock");
+          await new Promise<void>(resolve => setImmediate(resolve));
+          results.push({ overlap, sends, senderState: [...senderState.values()],
+            waiting: queue.getQueuedEntries(identity).map(entry => ({ id: entry.id, held: entry.manualReleaseRequired === true, title: entry.title, input: entry.input })) });
+        } finally { queue.close(); }
+      }
+      return results;
+    }, queueModule);
+    for (const result of results) {
+      expect(result.sends).toEqual([]);
+      expect(result.senderState).toEqual(result.overlap === "failure" ? ["held", "held"] : ["queued", "queued"]);
+      expect(result.waiting).toEqual([0, 1].map(index => ({ id: `waiting-${index}`, held: result.overlap === "failure",
+        title: result.overlap === "title" && index === 1 ? "Generated title" : undefined, input: [{ type: "text", text: `Immutable input ${index}` }] })));
+    }
+  } finally { await app.close(); }
+});
+
 for (const operation of ["Retry", "unlock"] as const) {
 test(`Electron preserves newer queue review holds across asynchronous ${operation} publication and cancellation`, async () => {
   let queueModule = "";
