@@ -19,11 +19,12 @@ await ensureRuntime({
   version, platform, arch,
   cacheRoot: join(process.env.PWRAGENT_HOME || join(homedir(), ".pwragent"), "cache/electron-runtime/v1"),
   expectedChecksum: checksums?.[`electron-v${version}-${platform}-${arch}.zip`],
-  download: () => downloadArtifact({
+  download: (options) => downloadArtifact({
     version,
     artifactName: "electron",
     force: process.env.force_no_cache === "true",
     cacheRoot: process.env.electron_config_cache,
     checksums, platform, arch,
+    ...options,
   }),
 });

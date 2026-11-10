@@ -1,6 +1,7 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -249,6 +250,82 @@ it("uses isolated extraction when the cache is unavailable and releases the lock
   expect(readFileSync(join(opts.electronDir, "dist/electron"))).toEqual(setup.bytes);
   expect(readFileSync(cacheRoot, "utf8")).toBe("user data");
 });
+
+it("property: denied external ZIP-cache writes fall back to owned worktree paths", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  await fc.assert(fc.asyncProperty(fc.constantFrom("EACCES", "EPERM", "EROFS"), async (code) => {
+    const electronDir = mkdtempSync(join(setup.root, "restricted-package-"));
+    const calls = [];
+    const opts = optionsFor(setup, electronDir, {
+      download: async (options) => {
+        calls.push(options);
+        if (calls.length === 1) throw Object.assign(new Error("External ZIP cache is unwritable"), { code });
+        return setup.zip;
+      },
+    });
+    await ensureRuntime(opts);
+    expect(calls).toHaveLength(2);
+    expect(dirname(calls[0].tempDirectory)).toBe(electronDir);
+    expect(calls[1].tempDirectory).toBe(calls[0].tempDirectory);
+    expect(calls[1].cacheRoot).toBe(join(calls[0].tempDirectory, "cache"));
+    expect(existsSync(calls[0].tempDirectory)).toBe(false);
+    expect(readFileSync(join(electronDir, "dist/electron"))).toEqual(setup.bytes);
+  }), { numRuns: 6 });
+}, 60_000);
+
+it("does not retry network failures as cache permission failures", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const calls = [];
+  const opts = optionsFor(setup, undefined, {
+    download: async (options) => {
+      calls.push(options);
+      throw Object.assign(new Error("Network failed"), { code: "ECONNRESET" });
+    },
+  });
+  await expect(ensureRuntime(opts)).rejects.toThrow("Network failed");
+  expect(calls).toHaveLength(1);
+  expect(existsSync(calls[0].tempDirectory)).toBe(false);
+});
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("real @electron/get installs with both external caches write-denied", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const require = createRequire(import.meta.url);
+  const { downloadArtifact } = createRequire(require.resolve("electron/package.json"))("@electron/get");
+  const zipCache = join(setup.root, "external-zip-cache");
+  const extractionCache = join(setup.root, "external-extraction-cache");
+  for (const path of [zipCache, extractionCache]) { mkdirSync(path); chmodSync(path, 0o555); }
+  const denied = [];
+  const calls = [];
+  const opts = optionsFor(setup, join(setup.root, "worktree/node_modules/electron"), {
+    cacheRoot: extractionCache,
+    download: async (options) => {
+      calls.push(options);
+      try {
+        return await downloadArtifact({
+          version: setup.version, artifactName: "electron", platform: "darwin", arch: "arm64",
+          checksums: { [`electron-v${setup.version}-darwin-arm64.zip`]: hash(readFileSync(setup.zip)) },
+          cacheRoot: zipCache,
+          // Real checksum/cache handling; replace only HTTP with a local ZIP.
+          downloader: { download: async (_url, destination) => { copyFileSync(setup.zip, destination); } },
+          ...options,
+        });
+      } catch (error) { denied.push(error.code); throw error; }
+    },
+  });
+  try {
+    await ensureRuntime(opts);
+    expect(denied).toEqual(["EACCES"]);
+    expect(calls).toHaveLength(2);
+    expect(dirname(calls[0].tempDirectory)).toBe(opts.electronDir);
+    expect(calls[1].cacheRoot).toBe(join(calls[0].tempDirectory, "cache"));
+    expect(existsSync(calls[0].tempDirectory)).toBe(false);
+    expect(readFileSync(join(opts.electronDir, "dist/electron"))).toEqual(setup.bytes);
+    expect(readdirSync(zipCache)).toEqual([]);
+    expect(readdirSync(extractionCache)).toEqual([]);
+  } finally {
+    for (const path of [zipCache, extractionCache]) chmodSync(path, 0o755);
+  }
+}, 30_000);
 
 it("concurrent processes publish one shared cache and serialize writes to the same package", async () => {
   const setup = fixture();

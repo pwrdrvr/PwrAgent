@@ -170,6 +170,7 @@ export async function ensureRuntime({ electronDir, version, platform, arch, cach
   const release = await acquireInstallLock(electronDir);
   let cacheStage;
   let installStage;
+  let downloadStage;
   try {
     // Completed installs require neither network nor cache access. A changed
     // target (including architecture) cannot pass this short circuit.
@@ -184,7 +185,19 @@ export async function ensureRuntime({ electronDir, version, platform, arch, cach
         && JSON.stringify(installed.files) === JSON.stringify(await inventory(join(electronDir, "dist")))) return;
     } catch { /* Incomplete or legacy install: publish a verified replacement. */ }
 
-    const zipPath = await download(); // @electron/get verifies cached ZIPs too.
+    // Even a ZIP-cache hit needs checksum scratch space. Keep that space
+    // inside the package so a worktree-only sandbox never needs global temp.
+    downloadStage = mkdtempSync(join(electronDir, ".runtime-download-"));
+    let zipPath;
+    try {
+      zipPath = await download({ tempDirectory: downloadStage });
+    } catch (error) {
+      if (!["EACCES", "EPERM", "EROFS"].includes(error.code)) throw error;
+      log(`Electron ZIP cache is unwritable (${error.message}); downloading inside the worktree.`);
+      // Retry only a denied filesystem write, once, with a fully local cache.
+      // @electron/get still verifies the artifact with the same checksums.
+      zipPath = await download({ tempDirectory: downloadStage, cacheRoot: join(downloadStage, "cache") });
+    }
     const checksum = await sha256File(zipPath);
     if (expectedChecksum && checksum !== expectedChecksum) throw new Error("Electron artifact checksum mismatch");
     const identity = { ...target, checksum };
@@ -247,8 +260,12 @@ export async function ensureRuntime({ electronDir, version, platform, arch, cach
     atomicWrite(join(electronDir, "path.txt"), executable);
     log(`Electron ${version} (${platform}/${arch}) runtime installed at ${join(dist, executable)}`);
   } finally {
-    if (installStage) rmSync(installStage, { recursive: true, force: true });
-    if (cacheStage) rmSync(cacheStage, { recursive: true, force: true });
-    release();
+    try {
+      if (installStage) rmSync(installStage, { recursive: true, force: true });
+      if (cacheStage) rmSync(cacheStage, { recursive: true, force: true });
+      if (downloadStage) rmSync(downloadStage, { recursive: true, force: true });
+    } finally {
+      release();
+    }
   }
 }

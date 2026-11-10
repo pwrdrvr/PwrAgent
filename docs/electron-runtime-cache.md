@@ -59,6 +59,20 @@ verified winner. Cache hits are rehashed. Invalid existing cache entries are
 preserved for diagnosis and bypassed. An unavailable cache permits a normal
 local extraction.
 
+Worktree-only write permissions are supported. Download and checksum temporary
+files live in an owned directory inside the current Electron package. If the
+ZIP cache rejects a write with `EACCES`, `EPERM` or `EROFS`, the installer makes
+one attempt with a ZIP cache inside that same temporary directory. Both attempts
+retain `@electron/get` checksum validation and download settings. Network and
+integrity failures do not trigger this permission fallback. The entry-point
+download callback must forward the installer's `tempDirectory` and optional
+`cacheRoot` overrides after its default download options.
+
+A readable, verified shared extraction can still be cloned without modifying
+the shared cache. When shared storage cannot be used, installation remains
+local and may allocate a private runtime. Download scratch and its local ZIP
+cache are removed after installation; no existing user cache is removed.
+
 The runtime is cloned into a separate staging directory inside the target
 Electron package, rehashed, and then published. `path.txt` is written last.
 Type definitions remain available in the package root. A complete install is
