@@ -188,7 +188,7 @@ export async function scanCargoBuildOutputs(
           lease = undefined;
           const paths = await artifactPaths(outputPath, signal);
           if (!paths.length) continue;
-          const space = await measureMaintenanceAllocationPaths(paths, signal);
+          const space = await measureMaintenanceAllocationPaths(paths, signal, options);
           if (await identity(row) !== token) throw new Error("Output directory changed");
           result.items.push({ row: { ...row, ...(space ? { space } : {}) }, identity: token });
         } catch (error) {
@@ -228,7 +228,7 @@ export async function removeCargoBuildOutput(
     if (await identity(row) !== candidate.identity) return { kept: "Output directory changed" };
     await assertUntracked(row, signal);
     const paths = await artifactPaths(row.outputPath, signal);
-    const space = await measureMaintenanceAllocationPaths(paths, signal);
+    const space = await measureMaintenanceAllocationPaths(paths, signal, options);
     for (const file of paths) {
       if (signal.aborted) return { kept: "Stopped before removing" };
       lease.assertHeld();

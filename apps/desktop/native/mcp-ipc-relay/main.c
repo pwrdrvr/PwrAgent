@@ -10,11 +10,12 @@
 #include <string.h>
 
 #ifdef _WIN32
-#define _WIN32_WINNT 0x0600
+#define _WIN32_WINNT 0x0602
 #include <windows.h>
 #include <aclapi.h>
 #include <wchar.h>
 #include "maintenance-lock.h"
+#include "maintenance-allocation.h"
 
 static void fail(const char *message) {
   fprintf(stderr, "MCP IPC: %s (Windows error %lu)\n", message, GetLastError());
@@ -125,6 +126,7 @@ static DWORD WINAPI copy_bytes(void *arg) {
 
 int wmain(int argc, wchar_t **argv) {
   if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return maintenance_lock(argv[2]);
+  if (argc >= 3 && !wcscmp(argv[1], L"--maintenance-allocation")) return maintenance_allocation(argc - 2, argv + 2);
   if (argc != 2) fail("expected one endpoint");
   HANDLE pipe = verified_pipe(argv[1]);
   HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);

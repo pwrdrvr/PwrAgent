@@ -15,6 +15,7 @@ vi.mock("../../test-setup/native-helper-fixture", async (importOriginal) => ({
 const files = [
   path.resolve("apps/desktop/src/main/__tests__/maintenance-cargo-output.property.test.ts"),
   path.resolve("apps/desktop/src/main/__tests__/mcp-ipc-http.test.ts"),
+  path.resolve("apps/desktop/src/main/__tests__/maintenance-disk-usage.property.test.ts"),
   path.resolve("apps/desktop/src/main/__tests__/unrelated.test.ts"),
 ];
 
@@ -51,19 +52,21 @@ describe("native helper preparation", () => {
       const { project, provide, rerun } = projectFixture(selected, lane);
       const dispose = await setup(project);
       try {
-        const expected = files.slice(0, 2).filter((file) => selected.includes(file) && lane.includes(file));
+        const expected = files.slice(0, 3).filter((file) => selected.includes(file) && lane.includes(file));
         expect(roots).toHaveLength(expected.length);
         expect(new Set(roots).size).toBe(roots.length);
         expect(roots.every((root) => existsSync(root))).toBe(true);
         const helpers = provide.mock.calls.at(-1)![1];
         expect(Boolean(helpers.maintenanceCargo)).toBe(expected.includes(files[0]));
         expect(Boolean(helpers.mcpIpc)).toBe(expected.includes(files[1]));
+        expect(Boolean(helpers.maintenanceAllocation)).toBe(expected.includes(files[2]));
         if (helpers.maintenanceCargo) expect(helpers.maintenanceCargo.identity).toBeUndefined();
         if (helpers.mcpIpc) expect(helpers.mcpIpc.identity).toBeDefined();
+        if (helpers.maintenanceAllocation) expect(helpers.maintenanceAllocation.identity).toBeUndefined();
         // A later selection in this test invocation can acquire the other
         // fixture, without rebuilding one already prepared.
         await rerun.mock.calls[0][0](files.map((moduleId) => ({ moduleId, project })));
-        expect(roots).toHaveLength(files.slice(0, 2).filter((file) => lane.includes(file)).length);
+        expect(roots).toHaveLength(files.slice(0, 3).filter((file) => lane.includes(file)).length);
       } finally { await dispose(); }
       expect(roots.every((root) => !existsSync(root))).toBe(true);
     }), { numRuns: 20 });
@@ -84,7 +87,7 @@ describe("native helper preparation", () => {
     const preparation = setup(project).catch((error: unknown) => error).finally(() => { settled = true; });
     try {
       await setImmediate();
-      expect(roots).toHaveLength(2);
+      expect(roots).toHaveLength(3);
       expect(settled).toBe(false);
       expect(roots[1] && existsSync(roots[1])).toBe(true);
       expect(provide).not.toHaveBeenCalled();
