@@ -29,6 +29,7 @@ import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { findBranchDriftPr, type PrBranchDrift } from "../pr-status/pr-branch-drift";
+import { resolvePrOverflow } from "../pr-status/pr-rollup";
 import { ThreadRowPrChip, ThreadRowPrRollupChip } from "./ThreadRowPrChips";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
@@ -271,6 +272,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // chips render instantly on app launch and stay in sync without any
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
+  // The chips line's one PR chip; the rest sit behind a `+N PRs` chip.
+  const leadPr = prs.length > 1 ? resolvePrOverflow(prs)!.lead : prs[0];
   // PR watches reach the chips through ThreadRowPrChips, which read their
   // context themselves: a watch change must not re-render every row body.
   const density = useContext(ThreadRowDensityContext);
@@ -301,9 +304,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     ) => props.onOpenPullRequestContextMenu?.(props.thread, targetPr, position),
   );
   // A string, not a callback or a Set: the memoized rollup chip compares it
-  // by value, and it is read during that chip's render. Only Minimal mounts
-  // the chip.
-  const repoPrefixedPrUrls = density === "minimal"
+  // by value, and it is read during that chip's render. Minimal mounts the
+  // chip for any PR; the other densities, for the `+N PRs` chip.
+  const repoPrefixedPrUrls = density === "minimal" || prs.length > 1
     ? prs
       .filter((pr) => needsRepoPrefix(props.thread, pr, prs))
       .map((pr) => pr.url)
@@ -447,6 +450,11 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           : undefined
       }
       onContextMenu={(event) => {
+        // React bubbles events from portals the row mounts (the PR list,
+        // the reaction picker) here too; they own their own menus.
+        if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) {
+          return;
+        }
         event.preventDefault();
         props.onOpenContextMenu(props.thread, {
           x: event.clientX,
@@ -808,22 +816,44 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             hasUnsentDraft={hasUnsentDraft}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
-            prChips={prs.map((pr) => (
-              <ThreadRowPrChip
-                key={pr.url}
-                thread={props.thread}
-                pr={pr}
-                showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
-                branchDrift={branchDrift?.url === pr.url ? branchDrift : undefined}
-                onOpen={openPrStable}
-                onOpenContextMenu={
-                  props.onOpenPullRequestContextMenu
-                    ? openPrContextMenu
-                    : undefined
-                }
-                onDetach={props.onDetachPullRequests ? detachPr : undefined}
-              />
-            ))}
+            // One chip for the lead PR, then one `+N PRs` chip whose list
+            // holds every PR and Detach all.
+            prChips={leadPr ? (
+              <>
+                <ThreadRowPrChip
+                  key={leadPr.url}
+                  thread={props.thread}
+                  pr={leadPr}
+                  showRepoPrefix={needsRepoPrefix(props.thread, leadPr, prs)}
+                  branchDrift={branchDrift?.url === leadPr.url ? branchDrift : undefined}
+                  onOpen={openPrStable}
+                  onOpenContextMenu={
+                    props.onOpenPullRequestContextMenu
+                      ? openPrContextMenu
+                      : undefined
+                  }
+                  onDetach={props.onDetachPullRequests ? detachPr : undefined}
+                />
+                {prs.length > 1 ? (
+                  <ThreadRowPrRollupChip
+                    variant="overflow"
+                    thread={props.thread}
+                    prs={prs}
+                    threadTitle={props.thread.title}
+                    repoPrefixedUrls={repoPrefixedPrUrls}
+                    branchDrift={branchDrift}
+                    onOpen={openPrStable}
+                    onOpenContextMenu={
+                      props.onOpenPullRequestContextMenu
+                        ? openPrContextMenu
+                        : undefined
+                    }
+                    onDetach={props.onDetachPullRequests ? detachPr : undefined}
+                    onDetachAll={props.onDetachPullRequests ? detachPrs : undefined}
+                  />
+                ) : null}
+              </>
+            ) : null}
             thread={props.thread}
           />
 
@@ -1256,7 +1286,8 @@ type RepositoryIdentity = {
   repo: string;
 };
 
-function needsRepoPrefix(
+/** Whether a PR's chip names its repository (`org/repo#12`), not just `#12`. */
+export function needsRepoPrefix(
   thread: NavigationThreadSummary,
   pr: PrSummary,
   prs: PrSummary[],

@@ -22,11 +22,19 @@ const openPr: PrSummary = {
   reviewState: "ready_for_review",
   mergeState: "mergeable",
 };
-const mergedPr: PrSummary = { ...openPr, state: "merged", lifecycleState: "merged" };
+// A PR that just merged is the newest finished one, so it stays the chips
+// line's lead PR in Mission Control and Compact.
+const mergedPr: PrSummary = {
+  ...openPr,
+  state: "merged",
+  lifecycleState: "merged",
+  mergedAt: 2_000,
+};
 const olderPr: PrSummary = {
   ...mergedPr,
   number: 11,
   url: "https://github.com/acme/orbit/pull/11",
+  mergedAt: 1_000,
 };
 
 function buildThread(prs: PrSummary[]): NavigationThreadSummary {

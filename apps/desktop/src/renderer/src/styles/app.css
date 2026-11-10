@@ -1533,6 +1533,18 @@
   height: 20px;
 }
 
+/* Mission Control's `+N PRs` chip, after the lead PR's chip in the flow.
+   Minimal hides it with the rest of the flow and draws its title-line
+   rollup instead. */
+.thread-row__pr-overflow {
+  display: inline-flex;
+  align-items: center;
+}
+
+.pr-chip--overflow .pr-chip__label {
+  color: var(--text-secondary);
+}
+
 .thread-row__title-reactions .thread-row__chip--reaction {
   height: 20px;
 }
@@ -1739,6 +1751,12 @@
 .pr-rollup-popover__list > li:hover,
 .pr-rollup-popover__list > li:has(.pr-rollup-popover__row:focus-visible) {
   background: var(--accent-soft);
+}
+
+/* The row a PR menu was opened from, while that menu is open. */
+.pr-rollup-popover__list > li.is-menu-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
 /* The title and status take the row's full width; the chip sits beside. */
@@ -10058,6 +10076,12 @@ a.button {
   z-index: 140;
 }
 
+/* A PR's menu can open from a row of the PR list, which stays open under
+   it at the PR card's layer (`.pr-rollup-popover`, 140). */
+.thread-context-menu--pull-request {
+  z-index: 145;
+}
+
 /* Native menu density: a 24px row of regular-weight 13px type, the size of
    the macOS and Claude desktop menus. 24px is also the WCAG 2.2 target-size
    floor, so a row never goes below it. */
@@ -10272,6 +10296,32 @@ a.button {
 .thread-context-menu.thread-context-menu__flyout--start {
   left: auto;
   right: calc(100% + 2px);
+}
+
+/* A PR row in the thread menu's Copy Pull Request URL flyout: the chip's
+   dot and number, then the title. Same order as the PR list. */
+.thread-context-menu .thread-context-menu__pr {
+  gap: 8px;
+}
+
+.thread-context-menu__pr-state {
+  display: inline-flex;
+  flex: none;
+}
+
+.thread-context-menu__pr-number {
+  flex: none;
+  min-width: 44px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.thread-context-menu__pr-title {
+  overflow: hidden;
+  max-width: 220px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-context-menu__flyout .new-thread-menu__section-label {

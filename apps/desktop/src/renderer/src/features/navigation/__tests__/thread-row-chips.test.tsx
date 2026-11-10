@@ -148,6 +148,15 @@ function resolvedChipHeight(element: Element): string | undefined {
 }
 
 describe("ThreadRow chip flow", () => {
+  /**
+   * Mission Control draws the lead PR's chip and a `+N PRs` chip; the list
+   * that chip opens holds every PR, each row with its own card.
+   */
+  function openPrList(): HTMLElement {
+    fireEvent.click(screen.getByRole("button", { name: /more pull request/ }));
+    return screen.getByRole("group", { name: /^Pull requests for/ });
+  }
+
   function renderRow(
     overrides: Partial<React.ComponentProps<typeof ThreadRow>> = {},
   ) {
@@ -1024,12 +1033,13 @@ describe("ThreadRow chip flow", () => {
       [...screen.getByRole("tooltip").querySelectorAll(".pr-status-card__section")]
         .find((section) => section.textContent?.startsWith("Local branch"));
 
-    const onBranch = screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#201/ });
+    const list = openPrList();
+    const onBranch = within(list).getByRole("button", { name: /Open pwrdrvr\/PwrAgent#201/ });
     fireEvent.focus(onBranch);
     expect(localBranch()).toHaveTextContent("Behind main4 commitsAhead of main2 commits");
     fireEvent.blur(onBranch);
 
-    fireEvent.focus(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#202/ }));
+    fireEvent.focus(within(list).getByRole("button", { name: /Open pwrdrvr\/PwrAgent#202/ }));
     expect(localBranch()).toBeUndefined();
   });
 
@@ -1074,13 +1084,14 @@ describe("ThreadRow chip flow", () => {
       [...screen.getByRole("tooltip").querySelectorAll(".pr-status-card__section-title")]
         .some((title) => title.textContent === "Local branch");
 
-    const otherRepo = screen.getByRole("button", { name: /Open elsewhere\/PwrAgent#301/ });
+    const list = openPrList();
+    const otherRepo = within(list).getByRole("button", { name: /Open elsewhere\/PwrAgent#301/ });
     fireEvent.focus(otherRepo);
     expect(hasLocalBranch()).toBe(false);
     fireEvent.blur(otherRepo);
 
     // The upstream PR the fork's branch contributes to does get it.
-    fireEvent.focus(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#302/ }));
+    fireEvent.focus(within(list).getByRole("button", { name: /Open pwrdrvr\/PwrAgent#302/ }));
     expect(hasLocalBranch()).toBe(true);
   });
 
@@ -1209,16 +1220,17 @@ describe("ThreadRow chip flow", () => {
       },
     });
 
-    expect(screen.getByText("#3160")).toBeInTheDocument();
-    expect(screen.getByText("pwrdrvr/PwrDisk#39")).toBeInTheDocument();
+    const list = openPrList();
+    expect(within(list).getByText("#3160")).toBeInTheDocument();
+    expect(within(list).getByText("pwrdrvr/PwrDisk#39")).toBeInTheDocument();
     const hasLocalBranch = (): boolean =>
       [...screen.getByRole("tooltip").querySelectorAll(".pr-status-card__section-title")]
         .some((title) => title.textContent === "Local branch");
-    const moved = screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#3160/ });
+    const moved = within(list).getByRole("button", { name: /Open pwrdrvr\/PwrAgent#3160/ });
     fireEvent.focus(moved);
     expect(hasLocalBranch()).toBe(true);
     fireEvent.blur(moved);
-    fireEvent.focus(screen.getByRole("button", { name: /Open pwrdrvr\/PwrDisk#39/ }));
+    fireEvent.focus(within(list).getByRole("button", { name: /Open pwrdrvr\/PwrDisk#39/ }));
     expect(hasLocalBranch()).toBe(false);
   });
 
@@ -1292,8 +1304,9 @@ describe("ThreadRow chip flow", () => {
       },
     });
 
-    expect(screen.getByText("#42")).toBeInTheDocument();
-    expect(screen.getByText("pwrdrvr/PwrAgent#1024")).toBeInTheDocument();
+    const list = openPrList();
+    expect(within(list).getByText("#42")).toBeInTheDocument();
+    expect(within(list).getByText("pwrdrvr/PwrAgent#1024")).toBeInTheDocument();
   });
 
   it("dismisses the PR tooltip on window blur (cmd-tab away leaves no mouseleave)", () => {
