@@ -3375,6 +3375,48 @@ describe("DesktopBackendRegistry", () => {
     ), { numRuns: 25 });
   });
 
+  it("keeps unsupported live steering Retry held through native completion", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("acp:gemini" as const, "acp:kimi" as const),
+      fc.integer({ min: 1, max: 3 }),
+      fc.array(fc.constantFrom("review", "locked"), { minLength: 1, maxLength: 3 }),
+      async (backend, retries, reasons) => {
+        const agent = { ...createKimiAgentRecord(backend), registryId: backend.slice(4) };
+        const { registry, acpClient } = createKimiAcpRegistry({ installedAgent: agent });
+        const identity = { backend, threadId: "held-steering-owner" };
+        const queue = (registry as unknown as {
+          threadTurnQueue: import("@pwragent/owner-core/thread-turn-queue").ThreadTurnQueue;
+        }).threadTurnQueue;
+        const events: AgentEvent[] = [];
+        registry.onEvent(event => { events.push(event); });
+        try {
+          const provider = (await registry.listBackends({ includeUnavailable: true })).backends
+            .find(candidate => candidate.kind === backend);
+          expect(provider?.capabilities.steerTurn).toBe(false);
+          await emitStartedTurn(registry, backend, identity.threadId, "native-owner");
+          for (const [index, reason] of reasons.entries()) {
+            await queue.submitHeld({ ...identity, id: `held-${index}`, origin: "manual", delivery: "queued-steer",
+              input: [{ type: "text", text: `Invented held guidance ${index}` }] }, reason);
+          }
+          const before = queue.getQueuedEntries(identity);
+          events.length = 0;
+          for (let index = 0; index < retries; index++) {
+            expect(await registry.releaseQueuedTurnWithDisposition("held-0")).toMatchObject({ disposition: "busy" });
+            expect(queue.getQueuedEntries(identity)).toEqual(before);
+          }
+          await emitCompletedTurn(registry, backend, identity.threadId, "native-owner");
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+          expect(queue.getQueuedEntries(identity)).toEqual(before);
+          expect(acpClient.startPrompt).not.toHaveBeenCalled();
+          expect(acpClient.steerSession).not.toHaveBeenCalled();
+          expect(events.filter(event => event.notification.method === "thread/turnQueue/updated"
+            && event.notification.params.status === "queued")).toEqual([]);
+        } finally { await registry.close(); }
+      },
+    ), { numRuns: 12, examples: [["acp:gemini", 1, ["review"]]] });
+  });
+
   it("retains the owner claim when its real pooled ACP adapter cannot dispose a provider", async () => {
     const close = vi.fn();
     const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({
