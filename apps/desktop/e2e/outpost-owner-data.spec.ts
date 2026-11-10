@@ -28,6 +28,80 @@ test.beforeAll(() => {
   });
 });
 
+test("ordinary Outpost agent guidance steers once while the mounted native owner and distinct waiting turn stay intact", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  test.setTimeout(120_000);
+  const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent") });
+  const command = async (args: string[]) => JSON.parse((await promisify(execFile)(process.execPath, [outpost.cli, ...args], { env: outpost.env })).stdout);
+  let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  try {
+    const created = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    const identity = { backend: "codex" as const, threadId: created.threadId };
+    await outpost.client.renameThread({ ...identity, name: "Invented ordinary steering" });
+    const active = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+    const invite = await command(["federation-invite", "--port", "0"]);
+    app = await launchElectronApp({ secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json") });
+    await app.window.evaluate(async encoded => {
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encoded });
+    }, invite.invite);
+    await expect.poll(async () => app!.window.evaluate(async () =>
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status)).toBe("connected");
+    await app.window.evaluate(async ({ instanceId, threadId }) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const ref = { backend: "codex" as const, threadId, target: { scope: "remote" as const, instanceId } };
+      await api.addRemoteThreadPin!({ ref, instanceLabel: "Invented Outpost", summary: {
+        id: threadId, source: "codex", title: "Invented ordinary steering", titleSource: "explicit", linkedDirectories: [],
+        threadStatus: "active", inbox: { inInbox: true }, updatedAt: 2_000,
+        federation: { ref, instanceLabel: "Invented Outpost", peerStatus: "connected" },
+      } });
+    }, { instanceId: outpost.ownerInstanceId, threadId: identity.threadId });
+    await app.window.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Invented ordinary steering", exact: true }).click();
+    const thinking = app.window.getByRole("img", { name: "Thinking on another instance", exact: true });
+    await expect(thinking).toHaveCount(1);
+    const request = { ...identity, queueEntryId: "mounted-guidance", input: [{ type: "text" as const, text: "Invented ordinary interjection" }],
+      messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "invented-sender", instanceId: "forged" } } };
+    const accepted = await outpost.client.startTurn(request);
+    await expect.poll(async () => (await command(["show", "--id", accepted.queueEntryId!])).status).toBe("running");
+    const job = await command(["show", "--id", accepted.queueEntryId!]);
+    const waiting = await outpost.client.startTurn({ ...identity, delivery: "new_turn", input: [{ type: "text", text: "Invented distinct waiting turn" }] });
+    const first = await outpost.client.startTurn({ ...request, queueEntryId: "mounted-first", input: [{ type: "text", text: "Invented first waiting guidance" }] });
+    const second = await outpost.client.startTurn({ ...request, queueEntryId: "mounted-second", input: [{ type: "text", text: "Invented second waiting guidance" }] });
+    const original = await command(["show", "--id", first.queueEntryId!]);
+    const replacement = await outpost.client.replaceQueuedMessage({ ...identity, queueEntryId: first.queueEntryId!,
+      input: [{ type: "text", text: "Invented replacement guidance" }], messageOrigin: request.messageOrigin });
+    expect(replacement.queueEntryId).not.toBe(first.queueEntryId);
+    expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId))
+      .toEqual([waiting.queueEntryId, replacement.queueEntryId, second.queueEntryId]);
+    expect(await command(["show", "--id", first.queueEntryId!])).toMatchObject({ status: "interrupted", fingerprint: original.fingerprint });
+    const queued = app.window.locator(".composer__queued").filter({ hasText: "Invented distinct waiting turn" });
+    await expect(queued).toHaveCount(1);
+    const replaced = app.window.locator(".composer__queued").filter({ hasText: "Invented replacement guidance" });
+    await expect(replaced).toHaveCount(1);
+    for (let i = 0; i < 8; i++) expect((await outpost.client.startTurn(request)).queueEntryId).toBe(accepted.queueEntryId);
+    await expect(thinking).toHaveCount(1);
+    await expect(queued).toHaveCount(1);
+    expect(await outpost.client.resolveThreadAdmissionState(identity)).toMatchObject({ activeTurn: { turnId: active.turnId } });
+    await outpost.client.interruptTurn(active);
+    await expect(queued).toHaveCount(0);
+    await expect(replaced).toHaveCount(0);
+    await expect(thinking).toHaveCount(0);
+    expect(await command(["show", "--id", accepted.queueEntryId!])).toMatchObject({ status: "interrupted", fingerprint: job.fingerprint, turnId: active.turnId });
+    const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const steers = calls.filter(call => call.method === "turn/steer" && call.params.input[0].text === request.input[0].text);
+    expect(steers).toHaveLength(1);
+    expect(steers[0].params).toMatchObject({ expectedTurnId: active.turnId, input: request.input });
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === request.input[0].text)).toHaveLength(0);
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented distinct waiting turn")).toHaveLength(1);
+    const inputs = calls.filter(call => call.method === "turn/start" || call.method === "turn/steer").map(call => call.params.input[0].text);
+    expect(inputs).not.toContain("Invented first waiting guidance");
+    expect(inputs.filter(text => text === "Invented replacement guidance" || text === "Invented second waiting guidance"))
+      .toEqual(["Invented replacement guidance", "Invented second waiting guidance"]);
+    expect((await outpost.client.startTurn(request)).queueEntryId).toBe(accepted.queueEntryId);
+    expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+    expect(waiting.queueEntryId).not.toBe(accepted.queueEntryId);
+  } finally { try { await app?.close(); } finally { await outpost.close(); } }
+});
+
 test("durable Outpost steering delivers once to the mounted active turn while its waiting queue stays intact", async () => {
   test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
   test.setTimeout(120_000);

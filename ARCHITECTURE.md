@@ -355,6 +355,22 @@ memory. Cancellation settles the job before dispatch, and shutdown or recovery
 settles unfinished queued jobs as unknown without restoring or replaying input.
 New-thread jobs still require an idle host. Confirmed provider acceptance cannot
 return to a retryable FIFO after a host confirmation failure.
+Ordinary authenticated agent messages without requested settings or explicit
+`new_turn` delivery use the same queue's individual `submitSteer` admission on
+Outpost. Each accepted job retains its own input and delivery fingerprint;
+accepted messages are never concatenated. At the FIFO head it joins the current
+native turn, or starts a new turn when idle. The existing steering lifecycle
+receives that job's exact request identity and captured native target. A durable
+starting claim precedes inference; the daemon-global dispatch slot stays held
+through acknowledgement and origin finalization. The original active job keeps
+control ownership. Provider terminals settle the accepted interjections against
+that same turn; uncertainty, shutdown and recovery never restore their input.
+CLI interruption also requires that original active job; an interjection's
+confirmed target does not grant it native control. Shutdown drains restored
+entries again after admitted dispatch settles, including a refused claim.
+Explicit new turns, requested settings and durable turn receipts retain ordinary
+turn admission. Delivery metadata uses the existing job payload, without a schema
+change, and is part of each fresh immutable fingerprint.
 Outpost's registered pause/resume and ordering methods delegate to the same
 queue operations desktop uses. Pause revisions and independent review holds
 remain in that engine; typed state/order events invalidate the owner projection.

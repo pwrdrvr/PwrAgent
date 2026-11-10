@@ -6,6 +6,7 @@ export type OwnerJobRecord = {
   id: string;
   status: "queued" | "starting" | "running" | "interrupting" | "completed" | "failed" | "interrupted" | "blocked" | "unknown";
   fingerprint?: string;
+  delivery?: "queued-steer";
   threadId?: string | null;
   turnId?: string;
   model?: string | null;

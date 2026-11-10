@@ -99,6 +99,22 @@ matching accepted retries plus reads and one hundred uncertain retries plus
 reads each make zero commits and no native resend. Setup is excluded. Steering
 adds no job, schema, timer or write to an existing accepted job's fingerprint.
 
+`outpost-queued-steer-write-budgets.json` measures individual ordinary agent
+admission through the actual owner and existing shared queue. Acceptance, native
+target claim, origin retention and running confirmation cost four commits/20,600
+observed WAL bytes (2.06 MB/day at 100/day). Native uncertainty costs three
+commits/16,480 bytes (1.648 MB/day); refused running confirmation costs four/20,600.
+One terminal settling the original job and one interjection costs two/8,240
+(0.824 MB/day). Shutdown of original, steered and waiting jobs costs three/12,360;
+their existing atomic recovery costs one/4,120. Each 100 matching accepted or
+uncertain retries makes zero commits and no native resend. Setup is excluded.
+Retiring a refused claim restored behind shutdown's first cancellation sweep
+costs two commits/8,240 bytes (0.824 MB/day at 100/day), excluding acceptance.
+One hundred interjection-identity interrupt refusals add zero writes or native
+control calls; native interruption stays with the original active job.
+The existing job payload retains a bounded delivery enum and captured native
+identity, never prompt text. No schema, timer or inherited budget changes.
+
 Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
 ACP session metadata and last-observed command ports. Desktop's private bindings
 retain both explicitly typed runtime factories and their app-state construction

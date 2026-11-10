@@ -1,0 +1,79 @@
+{
+  "accepted": {
+    "commits": 4,
+    "note": "One actual authenticated agent admission, native target claim and accepted/uncertain outcome, excluding active-turn setup",
+    "observedWalBytes": 20600,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "accepted-100-retries": {
+    "commits": 0,
+    "note": "One hundred identical actual startTurn retries and queue reads; no native resend",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "confirmation-uncertain": {
+    "commits": 4,
+    "note": "One actual authenticated agent admission, native target claim and accepted/uncertain outcome, excluding active-turn setup",
+    "observedWalBytes": 20600,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "confirmation-uncertain-100-retries": {
+    "commits": 0,
+    "note": "One hundred identical actual startTurn retries and queue reads; no native resend",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "graceful-stop": {
+    "commits": 3,
+    "note": "Stop one original owner, one accepted interjection and one waiting new turn without replay",
+    "observedWalBytes": 12360,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "native-terminal": {
+    "commits": 2,
+    "note": "One provider terminal settles the original owner and one accepted interjection",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "native-uncertain": {
+    "commits": 3,
+    "note": "One actual authenticated agent admission, native target claim and accepted/uncertain outcome, excluding active-turn setup",
+    "observedWalBytes": 16480,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "native-uncertain-100-retries": {
+    "commits": 0,
+    "note": "One hundred identical actual startTurn retries and queue reads; no native resend",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "non-owner-interrupt-100": {
+    "commits": 0,
+    "note": "One hundred attempts to interrupt through an interjection identity; no native control or writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "recover": {
+    "commits": 1,
+    "note": "The existing recovery transaction settles original, steered and waiting jobs without replay",
+    "observedWalBytes": 4120,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "refused-claim-stop": {
+    "commits": 2,
+    "note": "A refused claim shuts down the owner and retires input restored after the first cancellation sweep",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  }
+}

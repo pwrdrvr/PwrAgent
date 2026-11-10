@@ -141,6 +141,7 @@ export class HeadlessBackend {
       },
     });
     this.steering = new ThreadSteeringLifecycle({ submit: (request, origin) => this.steerSubmissions.submit(request, origin) });
+    runtime.steerQueuedTurn = request => this.steering.steerTurn(request, request.messageOrigin);
     runtime.onTurnTerminal = (target) => this.steering.retireTurn(target);
   }
 
@@ -635,10 +636,14 @@ export class HeadlessBackend {
     if (params.cwd && params.cwd !== (thread.cwd || this.runtime.workspace)) throw new Error("Turn cwd differs from its owner thread project");
     const sandbox = sandboxFor(params, thread.sandbox);
     const prompt = textInput(params.input);
+    const messageOrigin = this.authenticateOrigin?.(params.messageOrigin, envelope);
+    const hasTurnSettings = [params.executionMode, params.approvalPolicy, params.sandbox, params.model,
+      params.collaborationMode, params.serviceTier, params.reasoningEffort, params.fastMode, params.acpRuntime].some(value => value !== undefined);
+    const queuedSteer = messageOrigin?.kind === "agent" && params.delivery !== "new_turn" && !hasTurnSettings;
     if (params.queueEntryId !== undefined && (typeof params.queueEntryId !== "string" || !params.queueEntryId || params.queueEntryId.length > 256)) throw new Error("Invalid submission identity");
     const job = this.runtime.submit({ id: acceptedJobId ?? `fed-${digest([envelope.sourceInstanceId, params.queueEntryId || envelope.id])}`, prompt,
-      threadId: thread.id, cwd: thread.cwd || this.runtime.workspace, messageOrigin: this.authenticateOrigin?.(params.messageOrigin, envelope), sandbox, model: params.model || thread.model,
-      reasoningEffort: params.reasoningEffort || thread.reasoningEffort, serviceTier: params.serviceTier || thread.serviceTier });
+      threadId: thread.id, cwd: thread.cwd || this.runtime.workspace, messageOrigin, sandbox, model: params.model || thread.model,
+      reasoningEffort: params.reasoningEffort || thread.reasoningEffort, serviceTier: params.serviceTier || thread.serviceTier }, queuedSteer ? { delivery: "queued-steer" } : undefined);
     if (job.status === "queued") {
       const entry = this.queuedTurns(thread.id).find(entry => entry.queueEntryId === job.id);
       return { backend: "codex", threadId: thread.id, turnId: `queued:${job.id}`, queueStatus: "queued", queueEntryId: job.id,

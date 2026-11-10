@@ -292,6 +292,16 @@ try {
     assert.equal(await controller.handle("backend.getSteerRequest", { ...steerLookup, callerScope: "other-device" }, envelope), null);
     assert.equal(await controller.handle("backend.getSteerRequest", steerLookup, { sourceInstanceId: "other-issuer" }), null);
     assert.equal(steers, 1);
+    const guidance = { backend: "codex", threadId, queueEntryId: "packed-guidance", input: [{ type: "text", text: "Packed ordinary guidance" }], messageOrigin: { kind: "agent", systemReason: "packed-guidance" } };
+    const admitted = await controller.handle("backend.startTurn", guidance, envelope);
+    for (let i = 0; i < 24; i++) await new Promise(resolve => setImmediate(resolve));
+    const acceptedGuidance = store.get(admitted.queueEntryId);
+    assert.equal(acceptedGuidance.status, "running");
+    assert.equal(acceptedGuidance.turnId, "packed-control");
+    assert.equal(controlled.active, "packed-control");
+    assert.equal(controlled.turnQueue.getAllQueuedEntries().length, 0);
+    for (let i = 0; i < 8; i++) assert.equal((await controller.handle("backend.startTurn", guidance, envelope)).queueEntryId, admitted.queueEntryId);
+    assert.equal(steers, 2);
     const save = store.save.bind(store);
     let refuseOrigin = true;
     store.save = job => { if (refuseOrigin && job.messageOrigin) { refuseOrigin = false; throw new Error("origin refused"); } return save(job); };
@@ -300,9 +310,11 @@ try {
     await Promise.all(Array.from({ length: 3 }, () => controller.handle("controlActiveTurn", { ...request, operation: "steer" })));
     await assert.rejects(controller.handle("steerTurn", { ...request, input: [{ type: "text", text: "changed" }] }), /reused with different input/);
     await controller.handle("controlActiveTurn", { backend: "codex", threadId, expectedTurnId: "packed-control", requestId: "stop", operation: "stop" });
-    assert.equal(steers, 2);
+    assert.equal(steers, 3);
     assert.equal(interrupts, 1);
     assert.equal(store.get("packed-control").status, "interrupted");
+    assert.equal(store.get(admitted.queueEntryId).status, "interrupted");
+    assert.equal(store.get(admitted.queueEntryId).fingerprint, acceptedGuidance.fingerprint);
   } finally { profile.close(); }
   console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue and steering receipts/caller isolation/cancellation, shared steering retention/retry and interruption");
 } finally {

@@ -7,11 +7,12 @@ import { Runtime } from "../src/runtime.js";
 import { ThreadTurnStartLifecycle, ThreadTurnQueue } from "../dist/federation-core.js";
 
 function runningRuntime(request) {
-  let job = { id: "job", threadId: "thread", turnId: "turn", status: "running" };
+  const job = { id: "job", threadId: "thread", turnId: "turn", status: "running" };
+  const jobs = new Map([[job.id, job]]);
   return Object.assign(Object.create(Runtime.prototype), {
     active: job.id, loadedThreads: new Set(), codex: { interruptTurn: (params) => request("turn/interrupt", params) },
     turnQueue: new ThreadTurnQueue({ startTurn: async () => { throw new Error("No queued start in this fixture"); } }),
-    store: { get: () => job, save: (value) => { job = { ...value }; return job; } },
+    store: { jobs, get: (id) => jobs.get(id), save: (value) => { const saved = { ...value }; jobs.set(saved.id, saved); return saved; } },
     onFailure: (error) => { throw error; },
   });
 }

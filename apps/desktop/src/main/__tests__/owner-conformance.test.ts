@@ -323,6 +323,38 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("the real federated message caller steers ordinary agent input into the same native turn on both owners", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      for (const host of [desktop, outpost]) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const peer = { target: { scope: "remote" as const, instanceId: host.ownerInstanceId }, label: "Invented owner", capabilities: ["thread_navigation", "turn_control"] };
+        const handler = createFederatedThreadMessageHandler({ runtime: () => ({ connectedPeerTargets: () => [peer], remoteBackend: () => host.client }) as unknown as DesktopFederationRuntime });
+        const before = host.providerSteerCount!();
+        for (let i = 0; i < 3; i++) {
+          await handler({ backend: "codex", threadId: identity.threadId, instanceId: host.ownerInstanceId, input: [{ type: "text", text: `Invented guidance ${i}` }],
+            messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: `sender-${i}`, instanceId: "forged" } } });
+          await vi.waitFor(() => expect(host.providerSteerCount!(), host.name).toBe(before + i + 1));
+        }
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+        const calls = host.name === "desktop" ? OwnerConformanceCodexTransport.requests
+          : readFileSync(path.resolve(host.workspace, "../f/calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+        const steers = calls.filter(call => call.method === "turn/steer" && call.params?.threadId === identity.threadId);
+        expect(steers).toHaveLength(3);
+        expect(steers.every(call => call.params.expectedTurnId === active.turnId)).toBe(true);
+        const waiting = await host.client.startTurn({ ...identity, delivery: "new_turn", queueEntryId: "distinct", input: [{ type: "text", text: "Invented next turn" }],
+          messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender", instanceId: "forged" } } });
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([waiting.queueEntryId]);
+        expect(host.providerSteerCount!()).toBe(before + 3);
+        await host.client.cancelQueuedTurn({ queueEntryId: waiting.queueEntryId! });
+        await host.client.interruptTurn(active);
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
+  });
+
   it("the existing durable steering caller delivers once to the active turn on both registered owners and leaves waiting input intact", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
