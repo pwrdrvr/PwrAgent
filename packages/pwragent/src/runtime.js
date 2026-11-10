@@ -369,7 +369,8 @@ export class Runtime {
 
   dispatchQueuedSteer(entry) {
     if (!this.canSteerQueued(entry)) return undefined;
-    if (this.stopping || this.uncertain || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) throw new Error("Outpost cannot dispatch work");
+    if (this.stopping || this.uncertain || this.dispatches.size > (this.queueRelease && entry.id === this.queueRelease.entryId ? 1 : 0)
+      || this.intakeBusy || this.threadCreationBusy?.()) throw new Error("Outpost cannot dispatch work");
     const job = this.store.get(entry.id), active = this.store.get(this.active);
     this.assertQueuedIdentity(job, entry);
     const target = { backend: "codex", threadId: active.threadId, turnId: active.turnId };
