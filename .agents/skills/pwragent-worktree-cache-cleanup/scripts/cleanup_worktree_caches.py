@@ -427,6 +427,7 @@ def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch
             continue
         path, root = Path(current["path"]), Path(current["worktree"])
         stage, moved, published = None, False, False
+        backup_removal_safe = False
         try:
             with installer_lock(path.parent):
                 arch = arch_fn(path)
@@ -476,7 +477,13 @@ def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch
                 if active_pids(path, snapshot) or active_pids(backup, snapshot):
                     result["preserved"].append({"path": str(backup), "reason": "New runtime activity; backup retained"})
                     stage = None
+                else:
+                    backup_removal_safe = True
         except (OSError, ValueError, Unsafe, subprocess.SubprocessError) as error:
+            if published and not backup_removal_safe:
+                result["preserved"].append({"path": str(backup),
+                    "reason": f"{error}; original backup retained because final safety checks did not succeed"})
+                continue
             if moved and not published:
                 try:
                     if not path.exists() and not path.is_symlink():
@@ -489,7 +496,9 @@ def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch
                     error = Unsafe(f"{error}; original retained at {backup}")
             result["preserved"].append({"path": str(path), "reason": str(error)})
         finally:
-            if stage is not None:
+            # Publication alone never authorizes deleting the original. A
+            # failed post-publication inspection must retain its exact inode.
+            if stage is not None and (not moved or backup_removal_safe):
                 shutil.rmtree(stage)
         print(json.dumps({"runtimes_shared": len(result["shared"]), "preserved": len(result["preserved"])}), file=sys.stderr, flush=True)
     return result

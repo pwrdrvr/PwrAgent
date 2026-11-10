@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ensureRuntime } from "../../../../apps/desktop/scripts/electron-runtime-cache.mjs";
 
-const [electronDir, arch, cacheRoot = join(homedir(), ".pwragent/cache/electron-runtime/v1")] = process.argv.slice(2);
+const [electronDir, arch, cacheRoot = join(process.env.PWRAGENT_HOME || join(homedir(), ".pwragent"), "cache/electron-runtime/v1")] = process.argv.slice(2);
 if (!electronDir || !["arm64", "x64"].includes(arch) || process.platform !== "darwin") {
   throw new Error("Expected a macOS Electron package and its measured arm64/x64 architecture");
 }

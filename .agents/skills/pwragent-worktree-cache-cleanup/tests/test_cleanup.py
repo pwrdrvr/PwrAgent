@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 SKILL = Path(__file__).resolve().parents[1]
@@ -183,6 +184,54 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(result["shared"], [])
         self.assertEqual((dist / "Electron.app/Contents/MacOS/Electron").stat().st_ino, original_inode)
         self.assertEqual(list(dist.parent.glob(".sharing-install-*")), [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS APFS sharing oracle")
+    def test_original_backup_requires_explicit_post_publication_safety(self):
+        for outcome in ("filesystem_error", "snapshot_error", "activity", "safe"):
+            with self.subTest(outcome=outcome):
+                dist = runtime(self.linked, "-" + outcome)
+                cache_root = self.base / ("cache-" + outcome)
+                shutil.copytree(dist, cache_root / "dist", symlinks=True)
+                identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+                (cache_root / "runtime.json").write_text(json.dumps({"identity": identity,
+                    "files": cleanup.content_inventory(cache_root / "dist")}))
+                relative = "Electron.app/Contents/MacOS/Electron"
+                original_inode = (dist / relative).stat().st_ino
+                original_bytes = (dist / relative).read_bytes()
+                def published():
+                    return dist.exists() and (dist / relative).stat().st_ino != original_inode
+                def snapshot():
+                    if published():
+                        if outcome == "snapshot_error":
+                            raise cleanup.Unsafe("Injected final process inspection failure")
+                        if outcome == "activity":
+                            return ([(123, str(dist / relative))], [])
+                    return IDLE
+                original_state = cleanup.tree_state
+                def state(path, *args, **kwargs):
+                    if path == dist and published() and outcome == "filesystem_error":
+                        raise OSError("Injected post-publication filesystem failure")
+                    return original_state(path, *args, **kwargs)
+                report = cleanup.audit(self.project, IDLE, for_sharing=True)
+                with mock.patch.object(cleanup, "tree_state", side_effect=state):
+                    result = cleanup.share(report, snapshot_fn=snapshot,
+                        prepare_fn=lambda _package, _arch: {"cache": str(cache_root), "identity": identity},
+                        arch_fn=lambda _path: "arm64")
+                backups = list(dist.parent.glob(".sharing-install-*/previous-dist"))
+                self.assertTrue(dist.exists())
+                if outcome == "safe":
+                    self.assertEqual(backups, [])
+                    self.assertEqual(result["preserved"], [])
+                else:
+                    self.assertEqual(len(backups), 1)
+                    self.assertEqual((backups[0] / relative).stat().st_ino, original_inode)
+                    self.assertEqual((backups[0] / relative).read_bytes(), original_bytes)
+                    self.assertTrue(any(item["path"] == str(backups[0]) for item in result["preserved"]))
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS runtime preparation")
+    def test_cache_root_follows_configured_home_or_explicit_override(self):
+        subprocess.run(["node", "--test", str(SKILL / "tests/prepare-runtime-cache-root.test.mjs")],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def test_sharing_rejects_content_that_differs_from_pinned_artifact(self):
         dist = runtime(self.linked)
