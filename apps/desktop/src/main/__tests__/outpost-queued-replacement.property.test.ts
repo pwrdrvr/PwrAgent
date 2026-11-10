@@ -60,14 +60,14 @@ it.skipIf(process.platform === "win32")("replacing A before B keeps the new acce
   });
 });
 
-it.skipIf(process.platform === "win32")("generated replacements preserve the live FIFO and neighbors across paused and held queues", async () => {
+it.skipIf(process.platform === "win32")("generated explicit-new-turn replacements preserve the live FIFO and neighbors across paused and held queues", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 2, maxLength: 5 }), fc.boolean(),
     fc.array(fc.nat(20), { minLength: 2, maxLength: 6 }), async (pauses, held, replacements) => {
       await fixture(async (runtime, backend, store, _profile, events, sent) => {
         const model: Array<{ id: string; prompt: string; paused: boolean }> = [];
         for (const [index, paused] of pauses.entries()) {
           const prompt = `waiting-${index}`;
-          const accepted = await backend.handle("backend.startTurn", { ...ref, input: [{ type: "text", text: prompt }], messageOrigin: origin }, envelope(prompt));
+          const accepted = await backend.handle("backend.startTurn", { ...ref, delivery: "new_turn", input: [{ type: "text", text: prompt }], messageOrigin: origin }, envelope(prompt));
           model.push({ id: accepted.queueEntryId, prompt, paused });
           if (paused) await runtime.setQueuedTurnPaused({ queueEntryId: accepted.queueEntryId, paused: true });
         }
@@ -198,7 +198,7 @@ it.skipIf(process.platform === "win32")("replacement preserves the parent's rese
     await fixture(async (runtime, backend, store, _profile, _events, sent) => {
       const waiting: Array<{ queueEntryId: string }> = [];
       for (let n = 0; n < 3; n++) waiting.push(await backend.handle("backend.startTurn", {
-        ...ref, input: [{ type: "text", text: `waiting${n}` }], messageOrigin: origin,
+        ...ref, delivery: "new_turn", input: [{ type: "text", text: `waiting${n}` }], messageOrigin: origin,
       }, envelope(`waiting${n}`)));
       terminal(runtime, "failed"); await settle();
       const accepted = waiting.map(entry => store.get(entry.queueEntryId));

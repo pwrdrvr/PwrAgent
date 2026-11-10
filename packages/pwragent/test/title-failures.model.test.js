@@ -27,10 +27,19 @@ async function fixture(t, control = {}) {
   writeFileSync(path.join(root, "helper-title.json"), JSON.stringify({ title: "Helper generated title", ...control }));
   const previous = process.env.PWRAGENT_TEST_DATA;
   process.env.PWRAGENT_TEST_DATA = root;
+  let runtime;
+  // Match daemon ownership: runtime shutdown drains before owner storage closes.
+  t.after(async () => {
+    await runtime?.failureStop;
+    await runtime?.stop();
+    if (previous === undefined) delete process.env.PWRAGENT_TEST_DATA;
+    else process.env.PWRAGENT_TEST_DATA = previous;
+  });
   const owner = ownerStorage(t, root);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const store = new JobStore(owner.directory, owner.identity, owner.profile);
   const failures = [];
-  const runtime = new Runtime({ store, workspace: root, home, command, onFailure: error => failures.push(error) });
+  runtime = new Runtime({ store, workspace: root, home, command, onFailure: error => failures.push(error) });
   // Exercise the daemon's real failure action, including uncertain job outcome.
   runtime.onFailure = error => { failures.push(error); runtime.failureStop ??= runtime.stop(); };
   runtime.codex = new Codex({ command, home, workspace: root, timeout: 1000,
@@ -42,13 +51,6 @@ async function fixture(t, control = {}) {
   runtime.codex.generateTitle = params => generate({ ...params, timeoutMs: 50, turnTimeoutMs: 50 });
   const backend = new HeadlessBackend(runtime, () => {});
   runtime.onEvent = message => backend.event(message);
-  t.after(async () => {
-    await runtime.failureStop;
-    await runtime.stop();
-    if (previous === undefined) delete process.env.PWRAGENT_TEST_DATA;
-    else process.env.PWRAGENT_TEST_DATA = previous;
-    rmSync(root, { recursive: true, force: true });
-  });
   await runtime.codex.initialize();
   return { root, runtime, backend, failures,
     calls: () => readFileSync(path.join(root, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse),

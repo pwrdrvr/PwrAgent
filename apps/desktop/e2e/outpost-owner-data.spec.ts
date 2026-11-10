@@ -64,22 +64,38 @@ test("ordinary Outpost agent guidance steers once while the mounted native owner
     await expect.poll(async () => (await command(["show", "--id", accepted.queueEntryId!])).status).toBe("running");
     const job = await command(["show", "--id", accepted.queueEntryId!]);
     const waiting = await outpost.client.startTurn({ ...identity, delivery: "new_turn", input: [{ type: "text", text: "Invented distinct waiting turn" }] });
+    const first = await outpost.client.startTurn({ ...request, queueEntryId: "mounted-first", input: [{ type: "text", text: "Invented first waiting guidance" }] });
+    const second = await outpost.client.startTurn({ ...request, queueEntryId: "mounted-second", input: [{ type: "text", text: "Invented second waiting guidance" }] });
+    const original = await command(["show", "--id", first.queueEntryId!]);
+    const replacement = await outpost.client.replaceQueuedMessage({ ...identity, queueEntryId: first.queueEntryId!,
+      input: [{ type: "text", text: "Invented replacement guidance" }], messageOrigin: request.messageOrigin });
+    expect(replacement.queueEntryId).not.toBe(first.queueEntryId);
+    expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId))
+      .toEqual([waiting.queueEntryId, replacement.queueEntryId, second.queueEntryId]);
+    expect(await command(["show", "--id", first.queueEntryId!])).toMatchObject({ status: "interrupted", fingerprint: original.fingerprint });
     const queued = app.window.locator(".composer__queued").filter({ hasText: "Invented distinct waiting turn" });
     await expect(queued).toHaveCount(1);
+    const replaced = app.window.locator(".composer__queued").filter({ hasText: "Invented replacement guidance" });
+    await expect(replaced).toHaveCount(1);
     for (let i = 0; i < 8; i++) expect((await outpost.client.startTurn(request)).queueEntryId).toBe(accepted.queueEntryId);
     await expect(thinking).toHaveCount(1);
     await expect(queued).toHaveCount(1);
     expect(await outpost.client.resolveThreadAdmissionState(identity)).toMatchObject({ activeTurn: { turnId: active.turnId } });
     await outpost.client.interruptTurn(active);
     await expect(queued).toHaveCount(0);
+    await expect(replaced).toHaveCount(0);
     await expect(thinking).toHaveCount(0);
     expect(await command(["show", "--id", accepted.queueEntryId!])).toMatchObject({ status: "interrupted", fingerprint: job.fingerprint, turnId: active.turnId });
     const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
-    const steers = calls.filter(call => call.method === "turn/steer");
+    const steers = calls.filter(call => call.method === "turn/steer" && call.params.input[0].text === request.input[0].text);
     expect(steers).toHaveLength(1);
     expect(steers[0].params).toMatchObject({ expectedTurnId: active.turnId, input: request.input });
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === request.input[0].text)).toHaveLength(0);
     expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented distinct waiting turn")).toHaveLength(1);
+    const inputs = calls.filter(call => call.method === "turn/start" || call.method === "turn/steer").map(call => call.params.input[0].text);
+    expect(inputs).not.toContain("Invented first waiting guidance");
+    expect(inputs.filter(text => text === "Invented replacement guidance" || text === "Invented second waiting guidance"))
+      .toEqual(["Invented replacement guidance", "Invented second waiting guidance"]);
     expect((await outpost.client.startTurn(request)).queueEntryId).toBe(accepted.queueEntryId);
     expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
     expect(waiting.queueEntryId).not.toBe(accepted.queueEntryId);
