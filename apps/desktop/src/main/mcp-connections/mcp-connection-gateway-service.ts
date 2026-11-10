@@ -2699,7 +2699,9 @@ export class McpConnectionGatewayService {
       // Another request may have restarted it while this one probed.
       const restarted = this.upstreamSessions.get(token);
       if (restarted) return restarted.client;
-      this.disconnectedStdioGrants.delete(token);
+      // The grant stays marked until the new session is live: a start that
+      // fails (the app closed again, or the operator turned the approval
+      // down) must leave only a tool call able to try once more.
     }
     let pending = this.upstreamStarts.get(token);
     if (!pending) {
@@ -2719,7 +2721,11 @@ export class McpConnectionGatewayService {
       connectionId: grant.connectionId, discoveryId: discovery.id, startDiscoveryId: start.discoveryId,
     });
     try {
-      return await discovery.phase("initialize", async () => await waitForMcp(start.promise, discovery.signal));
+      const client = await discovery.phase("initialize", async () => await waitForMcp(start.promise, discovery.signal));
+      // A live session is not an ended one. A session that closed already
+      // has marked the grant again, and is no longer registered here.
+      if (this.upstreamSessions.get(token)?.client === client) this.disconnectedStdioGrants.delete(token);
+      return client;
     } finally {
       start.waiters -= 1;
       if (start.waiters === 0 && this.upstreamStarts.get(token) === start) {

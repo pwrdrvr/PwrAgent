@@ -556,6 +556,18 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     // Back with Local Agent Access on: still no session until a tool call.
     listening = true;
     await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} closed`);
+
+    // A restart that fails (the app closed again, or the operator turned the
+    // approval down) leaves the session ended: a listing still starts nothing.
+    const launches = path.join(fixture.root, `${id}-failed-launches`);
+    const working = fs.readFileSync(relay);
+    fs.writeFileSync(relay, `#!/bin/sh\necho start >> "${launches}"\nexit 3\n`);
+    const failedLaunches = () => fs.existsSync(launches) ? fs.readFileSync(launches, "utf8").trim().split("\n").length : 0;
+    await expect(whoami(thread.rpc)).rejects.toThrow();
+    expect(failedLaunches()).toBe(1);
+    await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} closed`);
+    expect(failedLaunches()).toBe(1);
+    fs.writeFileSync(relay, working);
     const restarted = await whoami(thread.rpc);
     expect(restarted.pid).not.toBe(first.pid);
     expect(restarted.calls).toBe(1);
