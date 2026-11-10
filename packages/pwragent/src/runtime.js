@@ -175,6 +175,18 @@ export class Runtime {
     return this.turnQueue.getAllQueuedEntries().find(entry => entry.id === id);
   }
 
+  readQueuedTurn({ backend, threadId, queueEntryId }) {
+    if (this.stopping) throw new Error("Daemon is stopping");
+    const entry = this.queuedEntry(queueEntryId);
+    if (!entry || entry.backend !== backend || entry.threadId !== threadId) throw new Error("The queued message is no longer waiting.");
+    // Accepted Outpost input is text-only, so forEdit needs no attachment
+    // staging. Inspection never edits acceptance or reserves the FIFO; the
+    // viewer must cancel this snapshot's hash before making its local draft.
+    const { input, messageOrigin } = structuredClone(entry);
+    return { queueEntryId: entry.id, contentHash: digest(input), input,
+      ...(messageOrigin ? { messageOrigin } : {}) };
+  }
+
   assertQueuedIdentity(job, entry) {
     if (entry.backend !== "codex" || entry.threadId !== job.threadId || job.turnId
       || !["queued", "starting"].includes(job.status)) throw new Error("Queued job identity changed; no work was replayed");
