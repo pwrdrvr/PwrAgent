@@ -5,5 +5,12 @@
     "observedWalBytes": 12360,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "repeated-null-reset": {
+    "commits": 0,
+    "note": "100 repeated owner metadata patches after Token Miser setup; null executionMode restores default without a durable change; 0 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
   }
 }
