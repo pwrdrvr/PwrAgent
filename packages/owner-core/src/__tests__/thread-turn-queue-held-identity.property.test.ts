@@ -97,3 +97,25 @@ it("held admission refuses an identity pending native acceptance or already acce
     expect(queue.getQueuedEntries(THREAD)).toEqual([]);
   } finally { finish(); queue.close(); }
 });
+
+it("a validated release refuses foreign acceptance facts without changing waiting work", async () => {
+  const changes: Partial<ThreadTurnQueueEntry> = {
+    backend: "claude", threadId: "other", origin: "manual", input: input("Other input"), model: "other-model",
+    messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } },
+  };
+  const fields = Object.keys(changes) as (keyof typeof changes)[];
+  await fc.assert(fc.asyncProperty(fc.constantFrom(...fields), async field => {
+    const sends: string[] = [];
+    const queue = new ThreadTurnQueue({ startTurn: async entry => { sends.push(entry.id); return { ...entry, turnId: entry.id }; } });
+    const request = { ...THREAD, id: "review", origin: "scheduled" as const, input: input("Original") };
+    try {
+      await queue.submitHeld(request, "Review");
+      const before = queue.getQueuedEntries(THREAD);
+      await expect(queue.releaseEntryWithDisposition(request.id, { ...request, [field]: changes[field] })).rejects.toThrow(/reused|ownership/);
+      expect(queue.getQueuedEntries(THREAD)).toEqual(before);
+      expect(sends).toEqual([]);
+      expect(await queue.releaseEntryWithDisposition(request.id, request)).toMatchObject({ disposition: "started" });
+      expect(sends).toEqual([request.id]);
+    } finally { queue.close(); }
+  }), { examples: fields.map(field => [field]) });
+});

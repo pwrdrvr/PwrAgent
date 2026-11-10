@@ -329,6 +329,46 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it.each([false, true])("scheduler retries its original acceptance after provider refusal or a thread lock (locked=%s)", async locked => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 12 }), async suffix => {
+        const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const identity = { backend: "codex" as const, threadId: created.threadId };
+        const id = randomUUID(), queueEntryId = `scheduled-turn:${id}`;
+        const input = [{ type: "text" as const, text: `Scheduled retry ${suffix}` }];
+        const active = locked ? undefined : await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        if (locked) await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
+        await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
+          displayText: "Scheduled retry", turn: { input } }, { id });
+        const admitted = await host.scheduler!.sendNow({ id });
+        expect(admitted.action.status).toBe(locked ? "held" : "queued");
+        const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+        if (active) {
+          OwnerConformanceCodexTransport.refusedStarts = 1;
+          await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+          await vi.waitFor(() => expect(host.scheduler!.get(id)?.status).toBe("held"));
+        }
+        const before = registry.getQueuedTurnsForThread(identity);
+        const retried = await host.scheduler!.sendNow({ id });
+        expect(retried.action.status).toBe(locked ? "held" : "started");
+        expect(retried.action.queueEntryId).toBe(queueEntryId);
+        if (locked) {
+          expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
+          expect(registry.getQueuedTurnsForThread(identity)).toEqual(before);
+          await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
+          await vi.waitFor(() => expect(host.scheduler!.get(id)?.status).toBe("started"));
+        }
+        const requests = OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start"
+          && request.params.threadId === identity.threadId
+          && JSON.stringify(request.params.input) === JSON.stringify(input));
+        expect(requests).toHaveLength(locked ? 1 : 2);
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      }), { numRuns: 4, examples: [[""]] });
+    } finally { await host.close(); }
+  });
+
   it("scheduled held admission refuses another acceptance's stable identity", async () => {
     const host = await startDesktopOwner();
     try {
