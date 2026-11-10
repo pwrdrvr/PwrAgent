@@ -61,7 +61,7 @@ describe("buildThreadHandoffTargets", () => {
     expect(target?.availability).toBe("incoming-off");
   });
 
-  it("names an update before an outage, since an old build stays unable after it reconnects", () => {
+  it("names an outage before an update, since a disconnected peer's capabilities are stale", () => {
     const [target] = buildThreadHandoffTargets(health([
       peer({
         id: "pwr_a",
@@ -69,6 +69,13 @@ describe("buildThreadHandoffTargets", () => {
         status: "connecting",
         capabilities: ["thread_navigation"],
       }),
+    ]));
+    expect(target?.availability).toBe("offline");
+  });
+
+  it("names an update for a connected peer on an old build", () => {
+    const [target] = buildThreadHandoffTargets(health([
+      peer({ id: "pwr_a", label: "old-mbp", capabilities: ["thread_navigation"] }),
     ]));
     expect(target?.availability).toBe("update-required");
   });

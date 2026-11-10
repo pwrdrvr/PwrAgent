@@ -67,7 +67,10 @@ import { useThreadJump } from "./features/navigation/useThreadJump";
 import { useLensHotkeys } from "./features/navigation/useLensHotkeys";
 import { revealSelectedSidebarThreadRow } from "./features/navigation/reveal-selected-thread-row";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
-import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
+import {
+  buildFederationThreadTargets,
+  listedFederationPeerTargets,
+} from "./features/chrome/federation-thread-targets";
 import { FederationDisplayLabelsProvider, federationLocalDisplayLabel } from "./lib/federation-display-label";
 import { buildThreadHandoffTargets } from "./features/federation/thread-handoff-targets";
 import {
@@ -849,6 +852,12 @@ function DesktopAppShell(props: {
       desktopApi?.getNavigationQueryPage,
       liveFederationHealth,
     ],
+  );
+  // The machine pickers list connected peers only. Lookups that name a
+  // thread's or launchpad's machine keep the full list.
+  const listedNewThreadFederationTargets = useMemo(
+    () => listedFederationPeerTargets(newThreadFederationTargets),
+    [newThreadFederationTargets],
   );
   // A peer window offers its projects' Forge Automation only when the peer
   // can store and enforce it, and lets this machine control its turns.
@@ -2851,7 +2860,7 @@ function DesktopAppShell(props: {
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
   // Every machine a handoff card can name: the new-thread machine chip's
   // peers with their state, the window's owner included so a card it owns
-  // can name it. An offline peer is listed and cannot be picked.
+  // can name it. The dispatch picker leaves offline peers out.
   const todoHandoffInstances = useMemo(
     () => federationMachines.map((target) => ({
       instanceId: target.instanceId,
@@ -3590,6 +3599,10 @@ function DesktopAppShell(props: {
         : [],
     [desktopApi?.handoffThreadToInstance, liveFederationHealth],
   );
+  const listedThreadHandoffTargets = useMemo(
+    () => listedFederationPeerTargets(threadHandoffTargets),
+    [threadHandoffTargets],
+  );
   const findFederatedCounterpartDirectory =
     navigation.findFederatedCounterpartDirectory;
   const findThreadHandoffRepository = useCallback<FindThreadHandoffRepository>(
@@ -4069,7 +4082,7 @@ function DesktopAppShell(props: {
     threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
     newThreadDirectoryLabel: navigation.newThreadDirectoryLabel,
-    newThreadFederationTargets,
+    newThreadFederationTargets: listedNewThreadFederationTargets,
     onAddProjectDirectory: readRendererFederationTarget()
       ? undefined
       : addProjectDirectory,
@@ -4494,7 +4507,7 @@ function DesktopAppShell(props: {
         setMainView("thread");
         void navigation.openDirectoryLaunchpad(directory, directory.launchpad?.backend);
       },
-      federationTargets: newThreadFederationTargets,
+      federationTargets: listedNewThreadFederationTargets,
       checkFederationTargetProject,
       onCreateThreadOnFederationTarget: (instanceId, directory) => {
         void createThreadOnFederationTarget(instanceId, directory);
@@ -4720,7 +4733,7 @@ function DesktopAppShell(props: {
             <SendThreadToMachineDialog
               key={sendToMachineKey}
               source={sendToMachineSource}
-              targets={threadHandoffTargets}
+              targets={listedThreadHandoffTargets}
               findRepository={findThreadHandoffRepository}
               {...(liveHandoff ? { transfer: liveHandoff } : {})}
               {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
@@ -4880,7 +4893,7 @@ function DesktopAppShell(props: {
           localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
           checkFederationTargetProject={checkFederationTargetProject}
           onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
-          onSendThreadToMachine={threadHandoffTargets.length > 0
+          onSendThreadToMachine={listedThreadHandoffTargets.length > 0
             ? setSendToMachineThread
             : undefined}
           onContinueAfter={canContinueAfter

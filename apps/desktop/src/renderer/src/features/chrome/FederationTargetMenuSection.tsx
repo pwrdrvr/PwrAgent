@@ -3,6 +3,7 @@ import {
   describeFederationThreadTargetAvailability,
   FEDERATION_PROJECT_STATE_LABEL,
   FEDERATION_TARGET_AVAILABILITY_LABEL,
+  listedFederationPeerTargets,
   type FederationThreadTarget,
 } from "./federation-thread-targets";
 
@@ -41,13 +42,15 @@ export function FederationTargetMenuSection(props: {
       <div className="new-thread-menu__section-label" id={labelId}>
         New chat on
       </div>
-      {props.targets.map((target) => {
+      {/* Connected machines only. Callers pass the listed set already; this
+          keeps a caller that forgets from bringing the offline rows back. */}
+      {listedFederationPeerTargets(props.targets).map((target) => {
         const projectState = target.availability === "available"
           ? props.projectStates?.[target.instanceId]
           : undefined;
-        // A peer without the project is listed, not dropped, for the same
-        // reason an offline one is: a machine vanishing from the menu is
-        // indistinguishable from a bug.
+        // A connected peer without the project is listed, not dropped: it
+        // is up, so leaving it out would read as a bug, and the reason is
+        // about this project, not the machine.
         const missingProject = projectState === "missing";
         const stateLabel = missingProject
           ? FEDERATION_PROJECT_STATE_LABEL.missing

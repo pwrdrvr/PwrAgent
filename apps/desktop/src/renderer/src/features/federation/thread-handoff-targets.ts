@@ -35,6 +35,11 @@ export type ThreadHandoffTarget = FederationPeerTarget<ThreadHandoffTargetAvaila
 function resolveAvailability(
   peer: FederationHealthStatus["peers"][number],
 ): ThreadHandoffTargetAvailability {
+  // Offline first, as for "New chat on": a disconnected peer's capabilities
+  // are stale, so "Update required" would misname a machine that is asleep.
+  if (peer.status !== "connected") {
+    return "offline";
+  }
   if (
     !REQUIRED_RECEIVER_CAPABILITIES.every((capability) =>
       peer.capabilities.includes(capability),
@@ -42,17 +47,15 @@ function resolveAvailability(
   ) {
     return "update-required";
   }
-  if (peer.status !== "connected") {
-    return "offline";
-  }
   return peer.receiverPermissions?.filePush === true ? "available" : "incoming-off";
 }
 
 /**
  * Every peer this window could send a thread to, in the stable label order
- * the "New chat on" targets use. Unavailable peers stay listed with their
- * reason: a machine missing from the list is indistinguishable from a bug.
- * Revoked peers are dead entries and are dropped.
+ * the "New chat on" targets use. The dialog lists them through
+ * `listedFederationPeerTargets`, which drops offline peers; a connected peer
+ * that cannot receive stays listed with its reason. Revoked peers are dead
+ * entries and are dropped.
  */
 export function buildThreadHandoffTargets(
   health: FederationHealthStatus | undefined,

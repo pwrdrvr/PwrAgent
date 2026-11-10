@@ -24,12 +24,11 @@ const REQUIRED_TARGET_CAPABILITIES: readonly FederationCapability[] = [
 /**
  * Why a target can or cannot host a new thread right now.
  *
- * `offline` is a state the peer recovers from on its own, so the row stays
- * visible and explains itself. `unsupported` is a property of the build the
- * peer is running and will not change without an upgrade — it stays visible
- * for the same reason Settings → Federation keeps listing the peer with a
- * disabled "Browse remote threads": a machine vanishing from the list is
- * indistinguishable from a bug.
+ * `offline` peers are left out of machine pickers by
+ * `listedFederationPeerTargets`; lookups that name a thread's machine still
+ * see them. `unsupported` is a property of the build a connected peer is
+ * running and will not change without an upgrade, so that row stays listed
+ * and says so.
  */
 export type FederationThreadTargetAvailability =
   | "available"
@@ -42,14 +41,17 @@ export type FederationThreadTarget =
 function resolveAvailability(
   peer: FederationHealthStatus["peers"][number],
 ): FederationThreadTargetAvailability {
-  if (
-    !REQUIRED_TARGET_CAPABILITIES.every((capability) =>
-      peer.capabilities.includes(capability),
-    )
-  ) {
-    return "unsupported";
+  // Offline wins: a disconnected peer's capability list is whatever it last
+  // advertised, and calling it "Unsupported" sent operators to upgrade a
+  // machine that was only asleep.
+  if (peer.status !== "connected") {
+    return "offline";
   }
-  return peer.status === "connected" ? "available" : "offline";
+  return REQUIRED_TARGET_CAPABILITIES.every((capability) =>
+    peer.capabilities.includes(capability),
+  )
+    ? "available"
+    : "unsupported";
 }
 
 /** A peer offered as the destination of a thread action, with its state. */
@@ -106,13 +108,37 @@ export function buildFederationPeerTargets<Availability extends string>(
     }))
     .sort(
       (left, right) =>
-        left.label.localeCompare(right.label)
+        // The name the row shows, as Profiles → Remote Instances sorts
+        // (`orderPeersForMenu`). Sorting by the full host label while showing
+        // the short name made the list read as shuffled.
+        (left.shortLabel ?? left.label).localeCompare(right.shortLabel ?? right.label)
+        || left.label.localeCompare(right.label)
         // Two peers can share a display label — same machine, neither
         // advertising a profile. Without a tiebreak their order falls back to
         // health order, which is exactly the under-the-pointer reshuffle this
         // sort exists to prevent.
         || left.instanceId.localeCompare(right.instanceId),
     );
+}
+
+/**
+ * The peers a machine picker lists: connected ones only, as Profiles →
+ * Remote Instances lists them. An offline machine cannot take the action,
+ * and ten greyed rows around the one that can made the pickers hard to
+ * read. A connected peer that cannot take this action stays listed with its
+ * reason, because that reason is about this action, not the machine.
+ *
+ * `keepInstanceId` is the machine already chosen, kept even while offline so
+ * the list agrees with the chip or row that names it.
+ *
+ * The Star Map, the Federation popover and Settings → Federation describe the
+ * federation itself and still show every peer.
+ */
+export function listedFederationPeerTargets<
+  Target extends { instanceId: string; availability: string },
+>(targets: readonly Target[], keepInstanceId?: string): Target[] {
+  return targets.filter((target) =>
+    target.availability !== "offline" || target.instanceId === keepInstanceId);
 }
 
 /**

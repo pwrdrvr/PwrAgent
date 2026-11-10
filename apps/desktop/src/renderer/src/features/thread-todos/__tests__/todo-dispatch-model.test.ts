@@ -96,7 +96,7 @@ describe("handoff machines", () => {
   const studio = { instanceId: "mac", label: "studio" };
   const winLab = { instanceId: "win", label: "win-lab / dev", dispatchTarget: true };
 
-  it("lists this machine first for its own card, then reachable peers", () => {
+  it("lists this machine first for its own card, then connected peers", () => {
     const { owner, machines } = todoDispatchMachines({
       peers: [winLab, { instanceId: "ci", label: "ci-runner", availability: "offline" }, { instanceId: "mac", label: "studio" }],
       local: studio,
@@ -106,7 +106,6 @@ describe("handoff machines", () => {
       .toEqual([
         ["local", "studio", true, undefined],
         ["win", "win-lab / dev", true, undefined],
-        ["ci", "ci-runner", false, "Offline"],
       ]);
   });
 

@@ -139,13 +139,16 @@ export function todoDispatchMachines(params: {
   }
   for (const peer of params.peers) {
     if (peer.instanceId === params.ownerInstanceId || peer.instanceId === params.local?.instanceId) continue;
+    // Machine pickers list connected machines only, as Profiles → Remote
+    // Instances does. The card's owner is named above whatever its state.
+    if (peer.availability === "offline") continue;
     const available = peer.availability === undefined || peer.availability === "available";
     others.push({
       key: peer.instanceId,
       label: peer.label,
       instanceId: peer.instanceId,
       available,
-      ...(available ? {} : { unavailableReason: peer.availability === "offline" ? "Offline" : "Unsupported" }),
+      ...(available ? {} : { unavailableReason: "Unsupported" }),
       dispatchTarget: peer.dispatchTarget === true,
     });
   }

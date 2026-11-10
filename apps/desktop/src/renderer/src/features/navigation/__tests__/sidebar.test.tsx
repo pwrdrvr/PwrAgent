@@ -2578,7 +2578,8 @@ describe("Sidebar", () => {
         threads={[localThread]}
         localMachineLabel="Harbor Mac"
         newThreadFederationTargets={[
-          { availability: "offline", instanceId: "attic", label: "Attic Mini" },
+          { availability: "unsupported", instanceId: "attic", label: "Attic Mini" },
+          { availability: "offline", instanceId: "loft", label: "Loft PC" },
           { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
         ]}
         onBrowseModeChange={() => undefined}
@@ -2606,28 +2607,29 @@ describe("Sidebar", () => {
     fireEvent.keyDown(reopened, { key: "ArrowRight" });
     const flyout = screen.getByRole("menu", { name: "New workspace on" });
     const machines = within(flyout).getAllByRole("menuitem");
-    // The parent's machine leads, set off by a separator; an offline peer
-    // stays listed, disabled, below the machines that can take the child.
+    // The parent's machine leads, set off by a separator. Connected peers
+    // follow in the order they arrive; a connected peer that cannot take the
+    // child stays listed, disabled, and an offline one is left out.
     expect(machines.map((item) => item.textContent)).toEqual([
       "Harbor MacParent",
+      "Attic MiniUnsupported",
       "Studio Mac / work",
-      "Attic MiniOffline",
     ]);
     expect(within(flyout).getAllByRole("separator")).toHaveLength(1);
     expect(machines[0]!.nextElementSibling).toHaveAttribute("role", "separator");
     expect(machines[0]).toHaveFocus();
-    expect(machines[2]).toHaveAttribute("aria-disabled", "true");
+    expect(machines[1]).toHaveAttribute("aria-disabled", "true");
     expect(machines.map((item) =>
       item.querySelector(".new-thread-menu__target-dot")?.getAttribute("data-availability")))
-      .toEqual(["available", "available", "offline"]);
+      .toEqual(["available", "unsupported", "available"]);
 
     await act(async () => {
-      fireEvent.click(machines[2]!);
+      fireEvent.click(machines[1]!);
     });
     expect(onCreateSubthread).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(machines[1]!);
+      fireEvent.click(machines[2]!);
     });
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       localThread,
@@ -2703,7 +2705,6 @@ describe("Sidebar", () => {
       "Mac MiniChecking…",
       "Cart BoxChecking…",
       "Rack ServerChecking…",
-      "Attic MiniOffline",
     ]);
     // Disabled until the machine answers, with its reachable dot.
     expect(checking[1]).toHaveAttribute("aria-disabled", "true");
@@ -2720,10 +2721,9 @@ describe("Sidebar", () => {
       "Mac MiniNo worktrees",
       "Cart BoxNo branch",
       "Rack ServerCouldn't check",
-      "Attic MiniOffline",
     ]);
     expect(machines.map((item) => item.getAttribute("aria-disabled"))).toEqual([
-      null, null, "true", "true", "true", "true", "true",
+      null, null, "true", "true", "true", "true",
     ]);
     expect(machines.map((item) => item.getAttribute("title"))).toEqual([
       "codex/thread-centric-ui",
@@ -2732,12 +2732,12 @@ describe("Sidebar", () => {
       "The repository has no commits yet",
       "PwrAgent there is on no branch to start a worktree from",
       "Rack Server did not answer",
-      "Not connected",
     ].map((title, index) => index < 2 ? `from ${title}` : title));
     expect(machines.map((item) =>
       item.querySelector(".new-thread-menu__target-dot")?.getAttribute("data-availability")))
-      .toEqual(["available", "available", "no-project", "no-project", "no-project", "no-project", "offline"]);
-    // Offline machines are not asked; the parent's own machine needs no answer.
+      .toEqual(["available", "available", "no-project", "no-project", "no-project", "no-project"]);
+    // Offline machines are not listed or asked; the parent's own machine
+    // needs no answer.
     expect(readSubthreadWorktreeBase.mock.calls.map(([instanceId]) => instanceId).sort())
       .toEqual(["cart", "lab", "mini", "rack", "studio-work"]);
     expect(readSubthreadWorktreeBase).toHaveBeenCalledWith(
@@ -2970,9 +2970,9 @@ describe("Sidebar", () => {
         threads={[localThread]}
         localMachineLabel="Harbor Mac"
         newThreadFederationTargets={[
-          { availability: "offline", instanceId: "attic", label: "Attic Mini" },
           { availability: "available", instanceId: "studio-work", label: "Studio Mac / work" },
           { availability: "available", instanceId: "lab", label: "Lab Box" },
+          { availability: "unsupported", instanceId: "attic", label: "Attic Mini" },
         ]}
         readSubthreadWorktreeBase={readSubthreadWorktreeBase}
         onBrowseModeChange={() => undefined}
