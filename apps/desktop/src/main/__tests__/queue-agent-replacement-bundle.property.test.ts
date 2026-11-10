@@ -8,7 +8,7 @@ function resolver() {
   replacementHostDependencies(specifier => `/native/${specifier}`).setup({
     onResolve(_options: unknown, handler: typeof callback) { callback = handler; },
   } as PluginBuild);
-  return (file: string, kind: OnResolveArgs["kind"]) => callback({ path: file, kind, importer: "", namespace: "file", resolveDir: "", pluginData: undefined });
+  return (file: string, kind: OnResolveArgs["kind"]) => callback({ path: file, kind, importer: "", namespace: "file", resolveDir: "", pluginData: undefined, with: {} });
 }
 
 it("the actual replacement driver plugin keeps generated Windows and POSIX source paths inside esbuild", async () => {
