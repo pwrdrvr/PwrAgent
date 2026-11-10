@@ -325,6 +325,150 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("desktop correspondence learns a failure hold after a generated queued title lands", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const source = { backend: "codex" as const, threadId: "invented-title-sender" };
+      const input = [{ type: "text" as const, text: "Accepted report with enough detail for the existing queued message title helper to name it." }];
+      const correspondence = registry["correspondenceStore"];
+      correspondence.record({ id: "title-correspondence", source, destination: identity, input, createdAt: 1, state: "sending" });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "fail" }] });
+      await registry.submitTurn({ ...identity, queueEntryId: "title-older", delivery: "new_turn", input });
+      await registry.submitTurn({ ...identity, queueEntryId: "title-next", delivery: "new_turn", input,
+        messageOrigin: { kind: "agent", sourceThread: { ...source, messageId: "title-correspondence" } } });
+      expect(correspondence.message(source, "title-correspondence")?.text).toContain("Queued");
+      let published!: () => void;
+      const publication = new Promise<void>(resolve => { published = resolve; });
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (!armed || event.notification.method !== "thread/turnQueue/updated"
+          || event.notification.params.queueEntryId !== "title-older" || event.notification.params.status !== "held") return;
+        armed = false;
+        expect(registry["applyQueuedMessageTitle"]({ ...identity, entryId: "title-next", source: input[0]!.text }, "Generated queued title")).toBe(true);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        published();
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await publication;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expect(correspondence.message(source, "title-correspondence")?.text).toContain("Held");
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+        .toMatchObject([{ queueEntryId: "title-older", manualReleaseRequired: true },
+          { queueEntryId: "title-next", manualReleaseRequired: true, title: "Generated queued title" }]);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      expectSqliteWriteBudget({ budgetFile: "queue-failure-title-publication-write-budgets.json", scenario: "desktop-failure-and-title",
+        note: "Actual failure publication plus display-only title and real drain; setup excluded; existing terminal persistence only", writes });
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
+  });
+
+  it("actual desktop failure publication cannot dispatch the successor of a cancelled held row", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "fail" }] });
+      for (const id of ["older", "next"]) await host.client.startTurn({ ...identity, queueEntryId: id,
+        delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+      let published!: () => void;
+      const publication = new Promise<void>(resolve => { published = resolve; });
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (armed && event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.queueEntryId === "older" && event.notification.params.status === "held") {
+          armed = false;
+          await host.client.cancelQueuedTurn({ queueEntryId: "older" });
+          published();
+        }
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await publication;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+        .toMatchObject([{ queueEntryId: "next", manualReleaseRequired: true }]);
+      expectSqliteWriteBudget({ budgetFile: "queue-failure-hold-publication-write-budgets.json", scenario: "desktop-failure-and-cancel",
+        note: "Actual provider failure, held-event cancellation and real drain; acceptance/setup excluded; only existing terminal persistence", writes });
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "next" })).toMatchObject({ disposition: "started" });
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
+  });
+
+  it.each(["desktop", "outpost"] as const)("%s terminal failure leaves accepted new_turn input held through controls and cancellation", async name => {
+    const host = name === "desktop" ? await startDesktopOwner() : await startOutpostOwner();
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "fail" }] });
+      const ids: string[] = [];
+      for (const id of ["failure-older", "failure-next"]) {
+        const accepted = await host.client.startTurn({ ...identity, queueEntryId: id,
+          delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+        expect(accepted).toMatchObject({ queueStatus: "queued" });
+        ids.push(accepted.queueEntryId!);
+      }
+      const [older, next] = ids;
+      const request = { protocol: 2 as const, ref: identity };
+      await vi.waitFor(async () => expect((await host.client.getNavigationQueueProjection(request)).entries)
+        .toMatchObject([{ queueEntryId: older, manualReleaseRequired: true }, { queueEntryId: next, manualReleaseRequired: true }]));
+      await host.client.cancelQueuedTurn({ queueEntryId: older! });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect((await host.client.getNavigationQueueProjection(request)).entries).toMatchObject([{ queueEntryId: next, manualReleaseRequired: true }]);
+      expect(await host.client.setQueuedTurnPaused({ queueEntryId: next!, paused: true })).toMatchObject({ disposition: "held" });
+      expect(await host.client.moveQueuedTurn({ queueEntryId: next! })).toMatchObject({ disposition: "held" });
+      expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: next! })).input).toEqual([{ type: "text", text: "slow" }]);
+      await vi.waitFor(() => expect(host.events.filter(event => event.notification.method === "thread/turnQueue/updated"
+        && event.notification.params.queueEntryId === next).at(-1)?.notification.params).toMatchObject({ status: "held", manualReleaseRequired: true }));
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: next! })).toMatchObject({ disposition: "started" });
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: next! })).toMatchObject({ disposition: "not_found" });
+    } finally { await host.close(); }
+  });
+
+  it("desktop shutdown and profile reopen never restore input held during failure publication", async () => {
+    const root = await realpath(await mkdtemp("/tmp/pwragent-qf-"));
+    let host: OwnerHost | undefined;
+    let stop = () => {};
+    try {
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "fail" }] });
+      for (const id of ["older", "next"]) await host.client.startTurn({ ...identity, queueEntryId: id,
+        delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+      let cancelled!: () => void;
+      const publication = new Promise<void>(resolve => { cancelled = resolve; });
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (armed && event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.status === "held" && event.notification.params.queueEntryId === "older") {
+          armed = false;
+          await host!.client.cancelQueuedTurn({ queueEntryId: "older" });
+          cancelled();
+        }
+      });
+      await publication;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toMatchObject([{ queueEntryId: "next", manualReleaseRequired: true }]);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      stop();
+      await host.close();
+      host = undefined;
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "next" })).toMatchObject({ disposition: "not_found" });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+    } finally { stop(); await host?.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it.each(["failure", "title"] as const)("desktop unlock preserves review and sender lifecycle during overlapping %s publication", async overlap => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();

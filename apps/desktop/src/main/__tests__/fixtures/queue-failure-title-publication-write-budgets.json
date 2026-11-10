@@ -1,0 +1,9 @@
+{
+  "desktop-failure-and-title": {
+    "commits": 1,
+    "note": "Actual failure publication plus display-only title and real drain; setup excluded; existing terminal persistence only",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  }
+}

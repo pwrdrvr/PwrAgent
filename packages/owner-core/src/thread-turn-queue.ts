@@ -934,9 +934,10 @@ export class ThreadTurnQueue {
       if (index === -1) continue;
       const current = queue[index];
       if (!current) return undefined;
-      const updated = { ...current, title };
-      queue[index] = updated;
-      return updated;
+      // Display metadata does not replace the entry's lifecycle identity.
+      // Pending hold/release events still belong to this same queued input.
+      current.title = title;
+      return current;
     }
     return undefined;
   }
@@ -1349,6 +1350,7 @@ export class ThreadTurnQueue {
     const queue = this.queuedEntries.get(key);
     if (!queue?.length) return;
     this.addHoldReason(key, reason);
+    const heldEntries: ThreadTurnQueueEntry[] = [];
     for (let index = 0; index < queue.length; index += 1) {
       const current = queue[index];
       if (!current) continue;
@@ -1359,6 +1361,13 @@ export class ThreadTurnQueue {
         holdReason: reason,
       };
       queue[index] = held;
+      heldEntries.push(held);
+    }
+    // Hold the entire FIFO before publication can cancel or release a row.
+    // Later controls own any entries they replace while these events await.
+    for (const held of heldEntries) {
+      const index = this.queuedEntries.get(key)?.indexOf(held) ?? -1;
+      if (index < 0) continue;
       await this.emit({
         type: "held",
         entry: held,
