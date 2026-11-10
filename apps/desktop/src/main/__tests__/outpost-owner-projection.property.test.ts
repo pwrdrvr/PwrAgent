@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -59,6 +59,9 @@ it("seeds the retained unread fixture independently of whether startup discovery
 it("keeps metadata-only rows filterable without replacing provider or canonical titles", async () => {
   const f = fixture();
   f.inventory.replace({ backend: "codex", observedAt: 1, threads: [provider(1)] });
+  // Imported ownership is independent of a native row; an arbitrary overlay is not.
+  writeFileSync(path.join(f.directory, "identity.json"), JSON.stringify({ version: 1, workspace: f.root, codexHome: path.join(f.root, "codex") }));
+  writeFileSync(path.join(f.directory, "threads.json"), JSON.stringify({ version: 1, threads: ["mode-only", "seen-only", "named"].map(id => ({ id })) }));
   const owner = await open(f);
   try {
     await fc.assert(fc.asyncProperty(fc.constantFrom("default" as const, "auto" as const), fc.nat(10000),
