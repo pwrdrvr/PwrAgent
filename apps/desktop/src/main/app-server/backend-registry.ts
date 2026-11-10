@@ -9,7 +9,6 @@ import { ThreadNamingLifecycle, isPromptPlaceholderTitle, isInjectedContextPlace
 import { projectOwnerThreadTitle, projectOverlayThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 import { ProfileThreadOwnerAdmission, type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import { getRuntimeLeaseManager } from "../runtime-lease-manager";
-import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
@@ -41,7 +40,6 @@ import {
   indexTokenMiserCachedReplays,
   indexTokenMiserPricingLines,
   type TokenMiserCachedReplayIndex,
-  type TokenMiserPricingIndex,
 } from "./token-miser-ledger-index";
 import {
   addTokenMiserGateAccountingTotals,
@@ -65,7 +63,6 @@ import {
   type ForgeAgentToolPolicy,
   type McpConnectionStatus,
   type McpConnectionToolApprovalResolution,
-  type McpProjectToolApprovalOffer,
   buildMcpProjectToolApprovalOffer,
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
@@ -90,9 +87,7 @@ import {
   readForgeApprovalRememberChoice,
   resolveForgeAgentToolAccess,
   type ForgeAgentIdentity,
-  type ForgeAgentRuleAgent,
   type ForgeAgentRuleNames,
-  type ForgeAgentToolRuleApprovalNote,
   type ForgeAgentToolRuleGroup,
   type ForgeApprovalMergeMethods,
   type ForgeApprovalRememberOptionId,
@@ -108,8 +103,8 @@ import type {
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
 import type { ArchiveCleanupCheckpointStorage, ArchiveCleanupIntent } from "../storage/desktop-runtime-storage";
-import type { ProjectHeldWakeupStorage, StoredProjectHeldWakeup } from "../storage/desktop-runtime-storage";
-import type { RestartContinuationStorage, StoredRestartContinuation } from "../storage/desktop-runtime-storage";
+import type { StoredProjectHeldWakeup } from "../storage/desktop-runtime-storage";
+import type { StoredRestartContinuation } from "../storage/desktop-runtime-storage";
 import type { RestartGateStatus } from "../../shared/restart-gate";
 import {
   OPEN_RESTART_GATE,
@@ -176,10 +171,6 @@ import {
   type ThreadPendingWakeHold,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
-  type ListProjectHeldWakeupsRequest,
-  type ListProjectHeldWakeupsResponse,
-  type SetProjectForgeAutomationRequest,
-  type SetProjectForgeAutomationResponse,
 } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
@@ -218,7 +209,6 @@ import { isDeepStrictEqual, promisify } from "node:util";
 import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
-  ThreadForkParams as CodexThreadForkParams,
   ThreadStartParams as CodexThreadStartParams,
   ThreadSource as CodexThreadSource,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
@@ -260,7 +250,6 @@ import { runOneTimeArchivedWorktreeRepair } from "../storage/desktop-runtime-sto
 import type {
   ArchivedThreadAutomationRetirement,
   OverlayStoreLike,
-  DesktopOwnerStorage,
   WorktreeGitWorkingStateCacheEntry,
 } from "../storage/desktop-overlay-store";
 import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-images";
@@ -270,7 +259,6 @@ import { MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS, MCP_CONNECTION_STARTUP_TIMEO
 import {
   getMcpConnectionGatewayService,
   type McpConnectionBridgeRegistration,
-  type McpConnectionGatewayService,
 } from "../mcp-connections/mcp-connection-gateway-service";
 import {
   buildManagedReviewContextInput,
@@ -322,16 +310,10 @@ import {
   type ArchiveThreadRequest,
   type ArchiveThreadCleanupResult,
   type ArchiveThreadResponse,
-  type MarkThreadSeenRequest,
-  type MarkThreadSeenResponse,
-  type SetThreadPinRequest,
-  type SetThreadParentRequest,
-  type SetThreadParentResponse,
   type SetThreadLockResponse,
   type FederationInstanceId,
   type ThreadLock,
   type ThreadLockSource,
-  type SetThreadPinResponse,
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
@@ -339,7 +321,6 @@ import {
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
-  type AppServerThreadActivityDetail,
   type AppServerThreadCommandDetail,
   type AppServerThreadEntry,
   type AppServerReviewContext,
@@ -400,7 +381,6 @@ import {
   type ControlActiveTurnRequest,
   type ControlActiveTurnResponse,
   type ControlActiveTurnErrorCode,
-  type ForkThreadRequest,
   type ForkThreadResponse,
   isBranchDrifted,
   type HandoffThreadWorkspaceRequest,
@@ -514,8 +494,6 @@ import {
   type MoveThreadWorkspaceResult,
   type MutateThreadToolArgs,
   type MutateThreadParentV1Request,
-  type MarkProjectReadToolArgs,
-  type MarkProjectReadResult,
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
   type PendingThreadWorkspaceMoveSummary,
@@ -523,21 +501,13 @@ import {
   type AttachThreadDirectoryToolArgs,
   type AttachThreadDirectoryWorkspaceMode,
   type AttachThreadPullRequestToolArgs,
-  type CheckThreadPullRequestStatusToolArgs,
-  type WatchThreadPullRequestToolArgs,
-  type ThreadPullRequestAutomationStatus,
   type DetachThreadDirectoryToolArgs,
   type GetThreadStatusToolArgs,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionErrorCode,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
-  type ThreadMaintenanceApplyRequest,
-  type ThreadMaintenanceCoverage,
-  type ThreadMaintenanceKeptThread,
   type ThreadMaintenanceRules,
-  type ThreadMaintenanceRun,
-  type ThreadMaintenanceScan,
   type ThreadReadEntrySummary,
   type ThreadReadMessageSummary,
   type ThreadMutationAppliedChange,
@@ -630,7 +600,6 @@ import {
   type DesktopHelperModelSettings,
   type DesktopTaskMonitorModelChoice,
   type HelperModelId,
-  type HelperModelResolution,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
@@ -680,21 +649,15 @@ import {
   formatRateLimitWindowName,
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
-  type HelperThreadToolCallHandler,
 } from "../codex-app-server/desktop-client";
 import {
   DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
   codexAppServerRecycleCheckIntervalMs,
   type CodexAppServerProcessSample,
-  type CodexAppServerRecycleOutcome,
   type CodexAppServerRecycleSettings,
   type CodexAppServerRecycleStatus,
 } from "../codex-app-server/app-server-recycle-policy";
-import {
-  isCodexInvalidResponseMessageIdError,
-  type CodexInvalidResponseMessageIdRecoveryResult,
-  type CodexRecoveryBlockingTurn,
-} from "../codex-app-server/invalid-response-message-id-recovery";
+import { isCodexInvalidResponseMessageIdError } from "../codex-app-server/invalid-response-message-id-recovery";
 import { codexVersionFromUserAgent, resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { subAgentActivityToolCall } from "../codex-app-server/subagent-activity";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
@@ -814,7 +777,6 @@ import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-captu
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
-const createReplayClientsFromEnv = () => getOwnerHostServices().replayClients();
 import {
   GitDirectoryService,
   UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
@@ -841,7 +803,6 @@ import {
 import type { GitReadRequest } from "../git-info/read-cache";
 import {
   resolveWorktreeRepositoryDirectory,
-  type DirectoryEnrichmentCaller,
   type ThreadDirectoryEnrichment,
 } from "./thread-directory-enricher";
 import {
@@ -896,8 +857,6 @@ import { detectUsageSpendAlerts } from "./usage-spend-alerts";
 import {
   ThreadTitleGenerationService,
   type ThreadTitleAdapterResult,
-  type ThreadTitleGenerator,
-  type ThreadTitleGenerationResult,
 } from "@pwragent/owner-core/thread-title-generation-service";
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
@@ -1009,15 +968,104 @@ import {
   type PdfTurnInputHandling,
 } from "../pdf/pdf-turn-input-preparation";
 import { getReviewAutoFixArming } from "../thread-reviews/review-auto-fix";
+import {
+  type AcceptedActiveTurnControlRequest,
+  type AcceptedDynamicToolCall,
+  type AcceptedThreadControlRequest,
+  type AgentThreadActions,
+  type ArchiveCleanupDiscoveryRequest,
+  type ArchiveCleanupMetadata,
+  type ArchiveWorktreeRemovalAdmission,
+  type ArchivedWorktreeRepairReport,
+  type BackendClient,
+  type BackendRegistryForkThreadRequest,
+  type BackendRegistryMcpConnectionService,
+  type BackendRegistryOverlayStoreLike,
+  type ClaudeTurnTimes,
+  type CodexDiscoveryObserver,
+  type CodexFastModeMismatchWarning,
+  type CodexNativeSubAgentCall,
+  type CodexNativeSubAgentNotification,
+  type CodexNativeSubAgentReconciliation,
+  type CodexNativeSubAgentTool,
+  type CodexRetryableCompaction,
+  type CodexRetryableOperation,
+  type CodexRetryableTurnStart,
+  type CreatedThreadDirectoryVisibility,
+  type CreatedThreadVisibilityRow,
+  type DeferredThreadPricing,
+  type DerivedLiveThreadTokenUsage,
+  type DirectoryGitStatusWriter,
+  type ForgeToolRuleWriter,
+  type ForgeWriteApprovalNotes,
+  type HandoffSourceSettings,
+  type InitializeResult,
+  type LiveCodexNativeSubAgentUsage,
+  type LiveCodexToolItem,
+  type LiveThreadContextWindowObservation,
+  type LiveThreadRequestUsage,
+  type LiveThreadUsageAggregate,
+  type LiveThreadUsageBatch,
+  type LiveThreadUsageEmitWork,
+  type LocalPullRequestAuthorityResolver,
+  type McpGatewayConversationConsent,
+  type McpProjectToolApprovalCardOffer,
+  type MessagingArchiveCleaner,
+  type MessagingArchiveCleanupResult,
+  type MessagingArchiveCleanupStore,
+  type ModelSettings,
+  type ObservedCodexSettings,
+  type ObservedContextReplayCursor,
+  type ObservedContextReplayTally,
+  type ObservedContextWindowDrop,
+  type PendingCodexInvalidIdRecovery,
+  type PendingLiveThreadUsageLine,
+  type PendingReviewStartRecord,
+  type PendingServerRequest,
+  type PendingThreadMessageContext,
+  type PersistedCodexNativeUsageBackfill,
+  type ProjectForgeAutomationHandler,
+  type ProjectHeldWakeupStoreLike,
+  type PullRequestReferenceResolver,
+  type QuietRestartTarget,
+  type QuitThreadSource,
+  type RecentlyCompletedThreadUsageTurn,
+  type ReportedCompactionRequestBoundary,
+  type RequestComponentsCost,
+  type RestartContinuationStoreLike,
+  type ReviewSubAgentRecord,
+  type ReviewTerminal,
+  type StartingTurnOrigin,
+  type StartupProviderThreadRefresh,
+  type TaskMonitorCancellationState,
+  type TaskMonitorDelegationRecord,
+  type TaskMonitorMcpAccess,
+  type TaskMonitorTokenUsageBreakdown,
+  type TaskMonitorTokenUsageRecords,
+  type TaskMonitorUsageTotals,
+  type ThreadCompactionBoundary,
+  type ThreadGitWorkingStateRefreshHandler,
+  type ThreadListCacheHit,
+  type ThreadListCacheState,
+  type ThreadListCallerReason,
+  type ThreadMaintenanceToolHandler,
+  type ThreadPrAutoDispatchHandler,
+  type ThreadPrWatchesPeerHandler,
+  type ThreadPricingLedger,
+  type ThreadPullRequestCanonicalizer,
+  type ThreadPullRequestDetachHandler,
+  type ThreadPullRequestRefreshHandler,
+  type ThreadPullRequestStatusToolHandler,
+  type ThreadPullRequestWatchToolHandler,
+  type ThreadTitleGenerationLogStatus,
+  type ThreadTitleHelperResult,
+  type ThreadTitleService,
+  type TokenMiserLedgerIndexes,
+  type WorktreeArchiveCandidate,
+  type WorktreeRestoreCandidate,
+} from "./backend-registry-types";
 
-type InitializeResult = {
-  serverInfo?: {
-    name?: string;
-    version?: string;
-  };
-  methods?: string[];
-  userAgent?: string;
-};
+const createReplayClientsFromEnv = () => getOwnerHostServices().replayClients();
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 
@@ -1046,24 +1094,6 @@ const MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX = "mcp-upstream-form:";
 /** How long a card waits for its project's name before using owner/repo. */
 const FORGE_PROJECT_LABEL_TIMEOUT_MS = 1_000;
 const FORGE_APPROVAL_WITHDRAWN_TODO_KEY = "forge-approval-withdrawn";
-
-/** Saves one group of one (repository, agent) forge project rule. */
-export type ForgeToolRuleWriter = (update: {
-  repository: string;
-  agent: ForgeAgentRuleAgent;
-  group: ForgeAgentToolRuleGroup;
-  level: ForgeAgentToolAccess | undefined;
-}) => Promise<unknown>;
-
-/** What the agent is told about how a forge write was approved. */
-type ForgeWriteApprovalNotes = {
-  /** A project rule set to Allow ran the call without a card. */
-  approval?: ForgeAgentToolRuleApprovalNote;
-  /** The card's "Always allow" choice, and whether its rule was saved. */
-  rememberedRule?:
-    | { rule: string; saved: true }
-    | { rule: string; saved: false; error: string };
-};
 
 function withForgeApprovalNotes(result: unknown, notes: ForgeWriteApprovalNotes | undefined): unknown {
   if (!notes || (!notes.approval && !notes.rememberedRule)) return result;
@@ -1186,309 +1216,6 @@ function assistantOutputForTurn(
 
   return [];
 }
-
-type BackendClient = {
-  listBackgroundTerminals?(threadId: string): Promise<ListBackgroundTerminalsResponse>;
-  terminateBackgroundTerminal?(threadId: string, processId: string): Promise<boolean>;
-  exportThreadForHandoff?(threadId: string): Promise<import("@pwragent/shared").ThreadHandoffExport>;
-  startRealtime?: CodexAppServerClient["startRealtime"];
-  stopRealtime?: CodexAppServerClient["stopRealtime"];
-  appendRealtimeText?: CodexAppServerClient["appendRealtimeText"];
-  onRealtimeEvent?: CodexAppServerClient["onRealtimeEvent"];
-  onRealtimeDisconnect?: CodexAppServerClient["onRealtimeDisconnect"];
-  close(): Promise<void>;
-  getInitializeResult(): Promise<InitializeResult>;
-  readServerCapabilities?(): Promise<CodexServerCapabilities>;
-  isTokenMiserActivationNegotiated?(): boolean;
-  readCodexHome?(): Promise<string>;
-  readConfiguredMcpServerNames?(params?: {
-    cwd?: string;
-  }): Promise<string[]>;
-  invalidateThreadListings?(notification?: AppServerNotification): void;
-  listThreads(
-    params?: {
-      archived?: boolean;
-      enrichDirectories?: boolean;
-      filter?: string;
-      limit?: number;
-      maxPages?: number;
-      requireComplete?: boolean;
-      skipArchivedMetadataRefresh?: boolean;
-      deadlineAt?: number;
-    },
-    diagnostics?: { callerReason?: string; ownerId?: string },
-  ): Promise<AppServerThreadSummary[]>;
-  listArchiveCleanupThreadsPage?: CodexAppServerClient["listArchiveCleanupThreadsPage"];
-  /** The listing above honors `sortKey: "updated_at"`. */
-  archiveCleanupRecencyReads?: boolean;
-  readArchiveCleanupThreadSummary?: CodexAppServerClient["readArchiveCleanupThreadSummary"];
-  enrichArchiveCleanupThreads?: CodexAppServerClient["enrichArchiveCleanupThreads"];
-  listNativeSubAgentThreads?(
-    params?: {
-      ancestorThreadId?: string;
-      filter?: string;
-      limit?: number;
-      all?: boolean;
-      archived?: boolean;
-    },
-    diagnostics?: { callerReason?: string; ownerId?: string },
-  ): Promise<AppServerThreadSummary[]>;
-  /** A thread's configured model, without reading its turns. */
-  readThreadModelSettings?(params: {
-    threadId: string;
-  }): Promise<{ model?: string; reasoningEffort?: string } | undefined>;
-  readThreadPricingSnapshot?: CodexAppServerClient["readThreadPricingSnapshot"];
-  /** The configured Codex model provider a thread runs on, if Codex reported one. */
-  modelProviderForThread?(threadId: string): string | undefined;
-  /** Any model provider Codex reported for a thread, `openai` for its default. */
-  reportedModelProviderForThread?(threadId: string): string | undefined;
-  enrichThreadDirectories?(
-    threads: AppServerThreadSummary[],
-    caller?: DirectoryEnrichmentCaller,
-  ): Promise<AppServerThreadSummary[]>;
-  deleteThread?(params: { threadId: string }): Promise<{ threadId: string }>;
-  archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
-  retireReviewThread?: CodexAppServerClient["retireReviewThread"];
-  restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
-  renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
-  updateThreadMetadata?(params: {
-    threadId: string;
-    gitInfo?: {
-      branch?: string | null;
-      originUrl?: string | null;
-      sha?: string | null;
-    } | null;
-  }): Promise<{ threadId: string }>;
-  updateThreadWorkspace?(params: {
-    threadId: string;
-    cwd: string;
-  }): Promise<{ threadId: string }>;
-  generateTitle?: ThreadTitleGenerator["generateTitle"];
-  resolveHelperModelSelection?(params: {
-    helper: HelperModelId;
-    model?: string;
-    reasoningEffort?: string;
-  }): Promise<HelperModelResolution>;
-  generateStructuredObject?(params: {
-    helper: HelperModelId;
-    model?: string;
-    reasoningEffort?: string;
-    prompt: string;
-    schema: Record<string, unknown>;
-    system?: string;
-    disableExecution?: boolean;
-    isMatch: (record: Record<string, unknown>) => boolean;
-    timeoutMs?: number;
-    /** Model answering budget, separate from the protocol round-trips. */
-    turnTimeoutMs?: number;
-  }): ReturnType<ThreadTitleGenerator["generateTitle"]>;
-  /**
-   * One ephemeral helper turn that may call the supplied PwrAgent dynamic
-   * tools. Optional: only Codex advertises dynamic tools, so a backend
-   * without it simply has no agent-driven intake path.
-   */
-  runHelperToolTurn?(params: {
-    helper: HelperModelId;
-    model?: string;
-    reasoningEffort?: string;
-    prompt: string;
-    system?: string;
-    dynamicTools: CodexDynamicToolSpec[];
-    onToolCall: HelperThreadToolCallHandler;
-    timeoutMs?: number;
-    turnTimeoutMs?: number;
-  }): Promise<{ status: "ok" } | { status: "failed"; reason: string }>;
-  listSkills(params?: {
-    cwd?: string;
-    cwds?: string[];
-  }): Promise<AppServerListSkillsResponse["data"]>;
-  onNotification(
-    listener: (notification: AppServerNotification) => void | Promise<void>
-  ): () => void;
-  onRequest?(
-    listener: (
-      request: AppServerPendingRequestNotification
-    ) => Promise<unknown> | unknown
-  ): () => void;
-  readThread(params: {
-    threadId: string;
-    includeTurns?: boolean;
-    before?: string;
-    limit?: number;
-  }): Promise<AppServerReadThreadResponse["replay"]>;
-  readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
-  readThreadName?(threadId: string): Promise<string | undefined>;
-  readThreadActivity?(params: { threadId: string; turnId: string; entryId: string; itemIds?: string[] }): Promise<AppServerThreadActivityEntry>;
-  readThreadToolInvocation?(params: { threadId: string; turnId: string; itemId: string }): Promise<AppServerThreadActivityDetail[]>;
-  readThreadTurn?(params: { threadId: string; turnId: string }): Promise<AppServerThreadReplay>;
-  prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
-  resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
-  refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
-  injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
-  startThread(params: {
-    cwd?: string;
-    ephemeral?: boolean;
-    model?: string;
-    approvalPolicy?: string;
-    approvalsReviewer?: "user" | "auto_review";
-    sandbox?: string;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-    config?: CodexThreadStartParams["config"];
-    defaultModeRequestUserInput?: boolean;
-    dynamicTools?: CodexDynamicToolSpec[];
-    threadSource?: CodexThreadSource;
-    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
-  }): Promise<{ threadId: string }>;
-  forkThread?(params: {
-    threadId: string;
-    path?: string;
-    cwd?: string;
-    model?: string;
-    approvalPolicy?: string;
-    approvalsReviewer?: "user" | "auto_review";
-    sandbox?: string;
-    serviceTier?: string;
-    fastMode?: boolean;
-    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-    config?: CodexThreadForkParams["config"];
-  }): Promise<{ threadId: string }>;
-  readTurnRoot?(params: { threadId: string; turnId: string }): Promise<string | undefined>;
-  startTurn(params: {
-    threadId: string;
-    parentTurnId?: string;
-    rootTurnId?: string;
-    input: AppServerTurnInputItem[];
-    onInputTextPrepared?: (text: string | undefined) => void;
-    cwd?: string;
-    approvalPolicy?: string;
-    approvalsReviewer?: "user" | "auto_review";
-    sandbox?: string;
-    model?: string;
-    collaborationMode?: AppServerCollaborationModeRequest;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-    config?: CodexThreadStartParams["config"];
-    defaultModeRequestUserInput?: boolean;
-    dynamicTools?: CodexDynamicToolSpec[];
-    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
-  }): Promise<{
-    threadId: string;
-    turnId: string;
-  }>;
-  recoverInvalidPersistedResponseMessageIds?(params: {
-    failureMessage: string;
-    forkLineageThreadIds?: string[];
-    onWaitingForTurns?: (
-      turns: CodexRecoveryBlockingTurn[],
-    ) => void | Promise<void>;
-    signal?: AbortSignal;
-    threadId: string;
-  }): Promise<CodexInvalidResponseMessageIdRecoveryResult>;
-  startReview?(params: {
-    threadId: string;
-    target: StartReviewRequest["target"];
-    delivery?: StartReviewRequest["delivery"];
-    model?: string;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    cwd?: string;
-    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-    config?: CodexThreadStartParams["config"];
-    dynamicTools?: CodexDynamicToolSpec[];
-  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
-  listModels?(diagnostics?: {
-    callerReason?: string;
-    ownerId?: string;
-  }): Promise<BackendModelOption[]>;
-  isAuthenticationRequired?(): boolean;
-  getAppServerRestartStatus?(): CodexAppServerRestartStatus;
-  onAppServerRestartStatusChanged?(
-    listener: (status: CodexAppServerRestartStatus) => void,
-  ): () => void;
-  onAppServerUnexpectedExit?(listener: (threadIds?: ReadonlySet<string>) => void): () => void;
-  restartAppServer?(): Promise<void>;
-  unsubscribeIdleThreads?(params: {
-    idleMs: number;
-    isThreadBusy: (threadId: string) => boolean;
-  }): Promise<string[] | void>;
-  resetAppServerRestarts?(reason: string): void;
-  readAppServerProcessSample?(): Promise<CodexAppServerProcessSample | undefined>;
-  getAppServerRecycleStatus?(): CodexAppServerRecycleStatus;
-  maybeRecycleIdleAppServer?(params: {
-    settings: CodexAppServerRecycleSettings;
-    isQuiescent: () => boolean;
-  }): Promise<CodexAppServerRecycleOutcome | void>;
-  readAccount?(): Promise<BackendAccountSummary>;
-  readRateLimits?(): Promise<BackendRateLimitSummary[]>;
-  interruptTurn(params: {
-    threadId: string;
-    turnId: string;
-  }): Promise<{ threadId: string; turnId: string }>;
-  revertThread?(params: {
-    threadId: string;
-    beforeTurnId: string;
-  }): Promise<void>;
-  compactThread?(params: {
-    threadId: string;
-    model?: string;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-  }): Promise<{ threadId: string; turnId: string; itemId?: string }>;
-  listMcpServers?(params: {
-    threadId?: string;
-    detail: ListThreadMcpServersResponse["detail"];
-  }): Promise<ListThreadMcpServersResponse["servers"]>;
-  reloadMcpConfig?(): Promise<void>;
-  startMcpServerOAuthLogin?(params: {
-    name: string;
-  }): Promise<{ authorizationUrl: string }>;
-  removeMcpServer?(params: { name: string }): Promise<void>;
-  steerTurn?(params: {
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    onInputTextPrepared?: (text: string | undefined) => void;
-    expectedTurnId: string;
-  }): Promise<{ threadId: string; turnId: string }>;
-  setTurnApprovalReviewer?(params: {
-    threadId: string;
-    turnId: string;
-    approvalsReviewer: "user" | "auto_review";
-  }): Promise<{ status: "applied" | "targetUnavailable" }>;
-  setThreadPermissions?(params: {
-    threadId: string;
-    cwd?: string;
-    model?: string;
-    approvalPolicy?: string;
-    approvalsReviewer?: "user" | "auto_review";
-    sandbox?: string;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-  }): Promise<{ threadId: string }>;
-  trustProject?(params: {
-    projectPath: string;
-    configPath?: string;
-  }): Promise<{ projectPath: string; configPath?: string }>;
-};
-
-type BackendRegistryForkThreadRequest = ForkThreadRequest & {
-  importedWorktree?: { repositoryPath: string; worktreePath: string };
-  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-  /** Run the environment's setup even when the fork is not a new worktree. */
-  rerunCodexEnvironmentSetup?: boolean;
-  onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
-  onCodexEnvironmentSetupProgress?: (
-    event: CodexEnvironmentSetupProgressEvent,
-  ) => void;
-  sourceThreadPath?: string;
-};
 
 /**
  * Resolve the live workspace CWD for thread-scoped commands.
@@ -2313,140 +2040,6 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
   return value;
 }
 
-type QuitThreadSource = {
-  backend: AppServerBackendKind;
-  threadId: string;
-  threadKey: string;
-  source: string;
-  turnId?: string;
-};
-
-/** A started Codex tool item; `itemType` is lowercased with separators removed. */
-type LiveCodexToolItem = { turnId: string; itemType: string; turnEnded?: boolean };
-
-type PendingServerRequest = {
-  owner?: { backend: AppServerBackendKind; threadId: string; turnId?: string };
-  backend: AppServerBackendKind;
-  notification: AppServerPendingRequestNotification;
-  resolve: (response: SubmitServerRequestRequest["response"]) => void;
-  reject: (error: Error) => void;
-};
-
-type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & {
-  canGenerateTitle?: (backend: AppServerBackendKind) => boolean;
-};
-
-type ThreadPullRequestStatusToolHandler = (
-  args: CheckThreadPullRequestStatusToolArgs,
-  context: PwrAgentThreadInspectionRequest["context"],
-) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
-
-type ThreadPullRequestCanonicalizer = (
-  prs: PrSummary[],
-) => PrSummary[] | Promise<PrSummary[]>;
-
-type LocalPullRequestAuthorityResolver = (prKey: string) => boolean;
-
-/**
- * Asks the forge which repository a PR URL names now. A renamed repository's
- * old URL still resolves, and the answer carries the current name. Undefined
- * means the forge could not say (offline, no CLI, budget, not found).
- */
-type PullRequestReferenceResolver = (params: {
-  url: string;
-  cwd?: string;
-}) => Promise<Pick<PullRequestReferenceIdentity, "provider" | "org" | "repo" | "url"> | undefined>;
-
-type ThreadPullRequestWatchToolHandler = (
-  args: WatchThreadPullRequestToolArgs,
-) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
-
-type DirectoryGitStatusWriter = (params: {
-  directory?: NavigationDirectorySummary;
-  directoryKey: string;
-  fetchedAt: number;
-  gitStatus?: NavigationDirectoryGitStatus;
-}) => void | Promise<void>;
-
-type ThreadPullRequestDetachHandler = (
-  request: DetachThreadPullRequestRequest,
-) => Promise<DetachThreadPullRequestResponse>;
-
-type ThreadPrWatchesPeerHandler = (
-  request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
-) => Promise<import("@pwragent/shared").ThreadPrWatchesResponse>;
-
-/** The desktop app-server service's owner-side Forge Automation requests. */
-type ProjectForgeAutomationHandler = {
-  set(
-    request: Omit<SetProjectForgeAutomationRequest, "federationTarget">,
-  ): Promise<SetProjectForgeAutomationResponse>;
-  listHeldWakeups(
-    request: Omit<ListProjectHeldWakeupsRequest, "federationTarget">,
-  ): Promise<ListProjectHeldWakeupsResponse>;
-  resolveHeldWakeups(
-    request: Omit<ResolveProjectHeldWakeupsRequest, "federationTarget">,
-  ): Promise<ResolveProjectHeldWakeupsResponse>;
-};
-
-type ThreadPullRequestRefreshHandler = (
-  request: RefreshOwnedThreadPullRequestsRequest,
-) => Promise<RefreshThreadPullRequestsResponse>;
-
-type ThreadGitWorkingStateRefreshHandler = (
-  request: RefreshOwnedThreadGitWorkingStateRequest,
-) => Promise<RefreshThreadGitWorkingStateResponse>;
-
-type ThreadPrAutoDispatchHandler = {
-  preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
-  preferencesChanged?: (
-    requests: SetThreadPrAutoDispatchRequest[],
-  ) => Promise<void>;
-  cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
-  /** A lock or unlock moves the thread out of or back into the Auto-fix election. */
-  lockChanged?: (request: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    locked: boolean;
-  }) => Promise<void>;
-  sendPendingNow: (
-    request: SendThreadPrAutoDispatchNowRequest,
-  ) => Promise<boolean>;
-  inspect?: (
-    request: {
-      backend: AppServerBackendKind;
-      threadId: string;
-    },
-    context?: PwrAgentThreadInspectionRequest["context"],
-  ) => Promise<ThreadPullRequestAutomationStatus>;
-};
-
-type ThreadTitleGenerationLogStatus =
-  | ThreadTitleGenerationResult["status"]
-  | "applied"
-  | "requesting"
-  | "skipped";
-
-type ThreadTitleHelperResult = Extract<
-  ThreadTitleGenerationResult,
-  { status: "generated" | "invalid" }
->;
-
-type WorktreeArchiveCandidate = {
-  repositoryPath: string;
-  worktreePath: string;
-};
-
-type ProjectHeldWakeupStoreLike = ProjectHeldWakeupStorage;
-type RestartContinuationStoreLike = RestartContinuationStorage;
-
-/** A running turn a quiet restart stops and continues after the restart. */
-export type QuietRestartTarget = {
-  backend: AppServerBackendKind;
-  threadId: string;
-  turnId: string;
-};
-
 /** Steered into each running turn as a quiet restart begins. */
 export const QUIET_RESTART_STEER_TEXT = [
   "PwrAgent is restarting now, for example to install an update.",
@@ -2531,48 +2124,6 @@ const THREAD_TURN_QUEUE_ORIGINS: readonly string[] = ["manual", "automation", "m
 const ARCHIVE_FLEET_DELTA_PAGE_SIZE = 5;
 const ARCHIVE_FLEET_DELTA_PAGES = 20;
 
-type ArchiveCleanupMetadata = {
-  workspaceRevision?: number;
-  activeThreads: AppServerThreadSummary[];
-  archivedThreads: AppServerThreadSummary[];
-  thread: AppServerThreadSummary;
-  overlaysByThreadKey?: Map<string, ThreadOverlayState | undefined>;
-  activeChildren?: AppServerThreadSummary[];
-  legacyParentBackends?: Set<AppServerBackendKind>;
-  worktreeEvidence?: {
-    externalPaths: Set<string>;
-    activeByPath: Map<string, AppServerThreadSummary[]>;
-    archivedByPath: Map<string, AppServerThreadSummary[]>;
-  };
-  /** The paths of each listed thread that can relate to the listed scopes.
-   * Absent for a thread: every one of its paths. */
-  ownershipPaths?: WeakMap<AppServerThreadSummary, readonly string[]>;
-};
-
-type ArchiveCleanupDiscoveryRequest = {
-  backend: AppServerBackendKind;
-  threadId: string;
-  context?: ArchiveCleanupContext;
-  targetThread?: AppServerThreadSummary;
-  codexRolloutMissing?: boolean;
-  /** Complete membership/overlays before candidate discovery; no Git probes. */
-  identityOnly?: boolean;
-  /** Fresh global membership/overlays, with Git probes limited to this scope. */
-  ownershipScope?: string;
-  removalAdmission?: ArchiveWorkspaceAdmission;
-  /** Collects each identity row before overlay merging, for the fleet index. */
-  fleetRows?: Array<{ backend: AppServerBackendKind; base: AppServerThreadSummary; overlay?: ThreadOverlayState; archived: boolean }>;
-  onDiscoveryProgress?: (progress: MaintenanceDiscoveryProgress) => void;
-};
-
-type ArchiveWorktreeRemovalAdmission = {
-  backend: AppServerBackendKind;
-  threadId: string;
-  worktreePath: string;
-  containerPath?: string;
-  scope: ArchiveWorkspaceAdmission;
-};
-
 function archiveWorkspacePaths(thread: Pick<AppServerThreadSummary, "projectKey" | "linkedDirectories">): string[] {
   return [thread.projectKey, ...thread.linkedDirectories.flatMap((directory) => [linkedDirectoryWorktreePath(directory), directory.path])]
     .filter((value): value is string => Boolean(value));
@@ -2585,30 +2136,6 @@ function archiveNotificationWorkspacePaths(thread: Record<string, unknown> | und
     return [directory?.path, directory?.worktreePath];
   })].map(readNonEmptyString).filter((value): value is string => Boolean(value));
 }
-
-export type ArchivedWorktreeRepairReport = {
-  archivedThreads: number;
-  discoveredWorktrees: number;
-  missingWorktrees: number;
-  protectedWorktrees: number;
-  protectedWorktreeDetails: Array<{
-    worktreePath: string;
-    externallyManaged: boolean;
-    activeThreads: Array<{ backend: AppServerBackendKind; threadId: string; projectKey?: string }>;
-  }>;
-  candidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string }>;
-  cleanup: ArchiveThreadCleanupResult[];
-  emptyContainerCandidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string; containerIdentity: NonNullable<WorktreeContainerCleanup["identity"]> }>;
-  containerCleanup: WorktreeContainerCleanup[];
-  /** Read-only audits only: PwrAgent worktrees no thread refers to. */
-  unreferencedWorktrees?: string[];
-  unreferencedTruncated?: boolean;
-  /** Why unreferenced checkouts could not be listed this time. */
-  unreferencedUnavailable?: string;
-  inventory?: { roots: string[]; paths: string[]; repositories?: string[]; providers: NonNullable<ThreadMaintenanceCoverage["providers"]>;
-    keptPaths?: { path: string; reason: string }[];
-    owners?: { path: string; threads: ThreadMaintenanceKeptThread[]; candidates: ThreadArchiveCandidate[] }[] };
-};
 
 /** Checkouts left in place by a repair pass, counted by a short reason. A
  * checkout that was already gone is not counted: nothing was kept. */
@@ -2634,13 +2161,6 @@ const REVIEWED_SNAPSHOT_LIMIT_TTL_MS = 30 * 60_000;
 
 const MISSING_WORKTREE_SKIP_REASON = "Worktree directory no longer exists.";
 const MISSING_REPOSITORY_SKIP_REASON = "Its repository no longer exists; the checkout was kept.";
-
-type WorktreeRestoreCandidate = {
-  branch?: string;
-  repositoryPath?: string;
-  snapshot?: WorktreeSnapshotSummary;
-  worktreePath: string;
-};
 
 function linkedDirectoryWorktreePath(
   directory: LinkedDirectorySummary,
@@ -3681,130 +3201,6 @@ function taskMonitorThreadKey(
   return `${backend}:${threadId}`;
 }
 
-type TaskMonitorCancellationState = {
-  finalizing: boolean;
-  promise: Promise<TaskMonitorResponse<"cancel_monitor_delegation">>;
-  requestPersisted: Promise<void>;
-  resolve: (
-    response: TaskMonitorResponse<"cancel_monitor_delegation">,
-  ) => void;
-  summary: string;
-};
-
-type TaskMonitorMcpAccess = {
-  connectionIds: string[];
-  selectionOwner: { backend: AppServerBackendKind; threadId: string };
-  automation?: {
-    grantedConnectionIds?: string[];
-    serverAliases?: Record<string, string[]>;
-    toolAllowlist?: string[];
-  };
-};
-
-type TaskMonitorDelegationRecord = {
-  causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
-  activeCommandCount: number;
-  backend: AppServerBackendKind;
-  /**
-   * The prompt that started the monitor. A Claude recovery turn can start in
-   * a fresh session, so it repeats the brief.
-   */
-  brief?: string;
-  createdAt: number;
-  cwd?: string;
-  executionMode?: ThreadExecutionMode;
-  finalHandoffPrompt?: string;
-  lastActivityAt: number;
-  latestUsage?: TaskMonitorUsageSnapshot;
-  monitorId: string;
-  mcpAccess?: TaskMonitorMcpAccess;
-  pendingMcpApprovalCount?: number;
-  deniedMcpTools?: Set<string>;
-  monitorThreadId?: string;
-  monitorTurnId?: string;
-  parentBackend: AppServerBackendKind;
-  parentThreadId: string;
-  parentTurnId: string;
-  rootTurnId?: string;
-  heartbeatIntervalSeconds: number;
-  pollIntervalSeconds: number;
-  preferredModel: string;
-  preferredReasoningEffort: string;
-  persistedStatus?: ThreadSubAgentSummary["status"];
-  /** The latest progress the monitor reported, oldest first. */
-  recentProgress?: string[];
-  runtimeModel?: string;
-  cancellation?: TaskMonitorCancellationState;
-  finalizationStarted?: boolean;
-  recoveryAttempted?: boolean;
-  staleInterruptAttempted?: boolean;
-  /**
-   * A Claude monitor ended its turn while a background watcher ran. The
-   * watcher's notification starts the next turn, so no recovery runs.
-   */
-  awaitingClaudeTaskWake?: boolean;
-  startupTimeoutSeconds: number;
-  task: string;
-};
-
-type ReviewSubAgentRecord = {
-  /** Backend running the review child. */
-  backend: AppServerBackendKind;
-  /**
-   * Workspace, branch, and pull request the review was started against,
-   * resolved once at start. Held on the record so the completion entry reports
-   * the same facts as the start entry rather than re-deriving them from a
-   * thread that may have moved on.
-   */
-  context?: AppServerReviewContext;
-  createdAt: number;
-  displayText: string;
-  fastMode?: boolean;
-  latestUsage?: TaskMonitorUsageSnapshot;
-  mode: "managed" | "native";
-  model?: string;
-  reasoningEffort?: string;
-  /** Backend owning the thread being reviewed. */
-  parentBackend: AppServerBackendKind;
-  parentThreadId: string;
-  serviceTier?: string;
-  reviewThreadId: string;
-  task: string;
-  turnId: string;
-};
-
-type ReviewTerminal = {
-  backend: AppServerBackendKind;
-  completedAt?: number;
-  errorMessage?: string;
-  method: "turn/completed" | "turn/failed" | "turn/cancelled";
-  threadId: string;
-  turnId: string;
-};
-
-type PendingReviewStartRecord = {
-  turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
-  pendingReviewId: string;
-  backend: AppServerBackendKind;
-  threadId: string;
-  invokingTurnId: string;
-  request: StartReviewRequest;
-  createdAt: number;
-  updatedAt: number;
-  idempotencyKey?: string;
-  status: "scheduled" | "starting" | "started" | "cancelled" | "failed";
-  reviewThreadId?: string;
-  reviewTurnId?: string;
-  error?: string;
-};
-
-type CodexNativeSubAgentTool =
-  | "spawnAgent"
-  | "sendInput"
-  | "resumeAgent"
-  | "wait"
-  | "closeAgent";
-
 /**
  * The lifecycle tool a replayed transcript row stands for, the same mapping
  * `subAgentActivityToolCall` applies to a live report: a finish is observed
@@ -3828,30 +3224,6 @@ function codexNativeToolForOperation(
       return "spawnAgent";
   }
 }
-
-type CodexNativeSubAgentCall = {
-  activityBoundary?: boolean;
-  item: Record<string, unknown>;
-  itemId?: string;
-  parentTurnId?: string;
-  receiverThreadIds: string[];
-  receiverThreadNames: Map<string, string>;
-  tool: string;
-};
-
-type CodexNativeSubAgentReconciliation = {
-  attempts: number;
-  parentThreadId: string;
-  receiverThreadId: string;
-  startedAt: number;
-  timer?: NodeJS.Timeout;
-};
-
-type CodexNativeSubAgentNotification = {
-  lastMessage?: string;
-  receiverThreadId: string;
-  status: ThreadSubAgentSummary["status"];
-};
 
 const CODEX_NATIVE_SUBAGENT_TOOLS = new Set<CodexNativeSubAgentTool>([
   "spawnAgent",
@@ -4563,40 +3935,6 @@ function buildTaskMonitorRecoveryPrompt(params: {
   ].join("\n");
 }
 
-type TaskMonitorTokenUsageBreakdown = {
-  cacheWriteInputTokens?: number;
-  cachedInputTokens?: number;
-  inputTokens?: number;
-  uncachedInputTokens?: number;
-  outputTokens?: number;
-  reasoningOutputTokens?: number;
-  totalTokens?: number;
-};
-
-type TaskMonitorTokenUsageRecords = {
-  currentUsage?: TaskMonitorTokenUsageBreakdown;
-  latestUsage?: TaskMonitorTokenUsageBreakdown;
-  totalUsage?: TaskMonitorTokenUsageBreakdown;
-};
-
-// Running tally of observed context replays within one live turn. Each model
-// request inside a turn resubmits the working context (one "replay"); the
-// protocol reports it as a fresh `last` breakdown while `total.inputTokens`
-// grows by that request's input. A replay is "hot" when its input was
-// predominantly cache-served, else "cold" (cache miss).
-export type ObservedContextReplayTally = {
-  coldReplayCount: number;
-  coldReplayUncachedTokens: number;
-  hotReplayCachedTokens: number;
-  hotReplayCount: number;
-};
-
-type LiveThreadContextWindowObservation = {
-  finalContextTokens: number;
-  modelContextWindow: number;
-  peakContextTokens: number;
-};
-
 // Below this per-request input size, the request is the new prompt/tool payload
 // rather than a full context replay — do not count it. Mirrors the renderer's
 // former MIN_CONTEXT_REPLAY_INPUT_TOKENS floor.
@@ -4607,22 +3945,6 @@ const OBSERVED_HOT_CACHE_FRACTION = 0.9;
 // to each other. Keep their semantic boundary briefly so the notification can
 // omit its optional item id without creating a second durable marker.
 const COMPACTION_NOTIFICATION_DEDUP_WINDOW_MS = 30_000;
-
-// Per-thread replay-observation cursor.
-export type ObservedContextReplayCursor = {
-  // High-water mark of the session's cumulative `total.inputTokens`. A replay is
-  // counted only when this grows, which makes duplicate re-emissions and a
-  // forked thread's inherited baseline no-ops.
-  cumulativeInputTokens: number;
-  // Approximate working-context size after the most recent observed request
-  // (its input plus its output). Used to cap COLD replay attribution: a cold
-  // request's uncached tokens include both the replayed context AND any fresh
-  // prompt/tool content submitted with it — only the portion up to the prior
-  // context size is replay overhead; the rest would have been paid regardless.
-  // Absent until the thread's first observed request (e.g. right after app
-  // start), in which case cold attribution falls back to the full uncached.
-  lastContextTokens?: number;
-};
 
 export function buildThreadCompactionIdentity(params: {
   backend: AppServerBackendKind;
@@ -4641,12 +3963,6 @@ export function buildThreadCompactionIdentity(params: {
     `request-${params.cumulativeInputTokens ?? "unobserved"}`,
   ].join(":");
 }
-
-export type ThreadCompactionBoundary = {
-  itemId?: string;
-  threadId: string;
-  turnId?: string;
-};
 
 /**
  * Compaction is the hard stop for Token Miser replay savings: once Codex
@@ -4695,20 +4011,6 @@ export function readThreadCompactionBoundary(
     ...(turnId ? { turnId } : {}),
   };
 }
-
-export type ObservedContextWindowDrop = {
-  cumulativeInputTokens: number;
-  currentContextTokens: number;
-  previousCumulativeInputTokens: number;
-  previousContextTokens: number;
-};
-
-type ReportedCompactionRequestBoundary = {
-  cumulativeInputTokens?: number;
-  itemId?: string;
-  observedAt: number;
-  turnId?: string;
-};
 
 /**
  * Detect the safety-net compaction signal: a genuinely new cold model request
@@ -4915,14 +4217,6 @@ function buildTaskMonitorUsageSnapshot(params: {
   };
 }
 
-type TaskMonitorTokenUsage = TaskMonitorUsageSnapshot["tokenUsage"];
-
-/** A snapshot without its summary; every count except cache writes is set. */
-type TaskMonitorUsageTotals = Omit<TaskMonitorUsageSnapshot, "summary" | "tokenUsage"> & {
-  tokenUsage: Required<Omit<TaskMonitorTokenUsage, "cacheWriteInputTokens">>
-    & Pick<TaskMonitorTokenUsage, "cacheWriteInputTokens">;
-};
-
 /**
  * The numbers behind a usage snapshot, without its locale-formatted summary.
  * Totals that are only summed, such as Token Miser savings, use this so they
@@ -4986,12 +4280,6 @@ function buildTaskMonitorUsageTotals(params: {
     },
   };
 }
-
-type PersistedCodexNativeUsageBackfill = {
-  completedAt?: number;
-  monitorTurnId?: string;
-  usage: TaskMonitorUsageSnapshot;
-};
 
 function readFormattedTokenCount(
   value: string,
@@ -5800,11 +5088,6 @@ function buildTokenMiserSubAgentAccounting(params: {
   };
 }
 
-type TokenMiserLedgerIndexes = {
-  pricing: TokenMiserPricingIndex;
-  replays: TokenMiserCachedReplayIndex;
-};
-
 function tokenMiserMonitorId(entry: TokenMiserObjectMetadata): string {
   return `system:token-miser:${entry.objectId}`;
 }
@@ -5927,8 +5210,6 @@ function withLegacyTokenMiserReplayAccounting(
       cachedBaselineTokens - cachedRevealedTokens,
   };
 }
-
-type ThreadPricingLedger = NonNullable<AppServerReadThreadResponse["pricing"]>;
 
 function toThreadReadEvaluationPricing(
   pricing: ThreadPricingLedger,
@@ -6203,8 +5484,6 @@ function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
     usageLineId: line.usageLineId,
   });
 }
-
-type ClaudeTurnTimes = { completedAt?: number; startedAt?: number };
 
 /**
  * Each turn's times in a Claude transcript, by turn id: its earliest
@@ -6872,14 +6151,6 @@ function buildLaunchpadOptions(
   };
 }
 
-type CodexDiscoveryObserver = {
-  /**
-   * Codex answered `initialize`. Its model, account, and rate-limit reads all
-   * wait on that handshake, so what remains after it is those reads.
-   */
-  onCodexConnected?: () => void;
-};
-
 async function readClientAccount(
   client: BackendClient
 ): Promise<BackendAccountSummary | undefined> {
@@ -6926,15 +6197,6 @@ function describeCodexRateLimit(limit: BackendRateLimitSummary): BackendRateLimi
   return name === limit.name ? limit : { ...limit, name };
 }
 
-type ModelSettings = {
-  model?: string;
-  reasoningEffort?: string;
-  reasoningEffortsByModel?: Record<string, string>;
-  serviceTier?: string;
-  fastMode?: boolean;
-  providerSettings?: NavigationLaunchpadDefaults["providerSettings"];
-};
-
 function hasExplicitModelSettings(settings: ModelSettings): boolean {
   return (
     settings.model !== undefined ||
@@ -6943,97 +6205,6 @@ function hasExplicitModelSettings(settings: ModelSettings): boolean {
     settings.fastMode !== undefined
   );
 }
-
-type CodexFastModeMismatchWarning = {
-  threadId: string;
-  turnId: string;
-  expectedFastMode: boolean;
-  observedFastMode: boolean;
-  observedServiceTier?: string | null;
-};
-
-type ObservedCodexSettings = {
-  fastMode?: boolean;
-  serviceTier?: string | null;
-  rawServiceTier?: string | null;
-  observedAt: number;
-};
-
-type ThreadListCallerReason =
-  | "archive-cleanup"
-  | "branch-drift"
-  | "ipc-list-threads"
-  | "messaging-navigation-snapshot"
-  | "navigation-snapshot"
-  | "startup-prewarm"
-  | "title-generation"
-  | "workspace-handoff"
-  | (string & {});
-
-type StartupProviderThreadRefresh = Readonly<{
-  backends: readonly AppServerBackendKind[];
-  threads: readonly AppServerThreadSummary[];
-}>;
-
-type McpGatewayConversationConsent = {
-  readOnlyOnly?: boolean;
-  schemaRevision: string;
-  selectionRevision?: string;
-  approved: boolean;
-};
-
-type ThreadListCacheState = {
-  archived: boolean;
-  expiresAt?: number;
-  promise?: Promise<AppServerThreadSummary[]>;
-  threads?: AppServerThreadSummary[];
-};
-
-type ThreadListCacheHit = {
-  cacheKey: string;
-  expiresInMs?: number;
-  pending: boolean;
-  source: "exact" | "navigation-shared";
-  threadCount?: number;
-  value: Promise<AppServerThreadSummary[]> | AppServerThreadSummary[];
-};
-
-/**
- * One row of a directory, reduced to what deciding a new thread's visibility
- * needs: how to reach its top-level ancestor, whether that ancestor renders,
- * and how to address it for a pin.
- */
-type CreatedThreadVisibilityRow = {
-  backend: AppServerBackendKind;
-  /** Absent once the walk reaches a row this directory renders top-level. */
-  parentKey?: string;
-  pinned: boolean;
-  /**
-   * True when this directory renders the row as a peer's thread. Its pin lives
-   * in `remote_thread_pins`, not the local thread overlay, so the local
-   * mutators must not be aimed at it.
-   */
-  remote: boolean;
-  subthreadsCollapsed: boolean;
-  threadId: string;
-};
-
-type CreatedThreadDirectoryVisibility = Pick<
-  NavigationDirectorySummary,
-  "key" | "kind" | "path"
-> & {
-  directoryThreadsCollapsed: boolean;
-  hasPinnedTopLevelThread: boolean;
-  /** Keyed exactly as `directory.threadKeys` names each row. */
-  rowsByThreadKey: ReadonlyMap<string, CreatedThreadVisibilityRow>;
-  /**
-   * `<backend>:<threadId>` for every row above, including the peer-owned ones
-   * that `rowsByThreadKey` files under a federated key. A creation request
-   * names its parent by backend and id alone, so this is the only way to find
-   * a remote parent's row from one.
-   */
-  rowKeysByLocalKey: ReadonlyMap<string, string>;
-};
 
 let threadListCacheSequence = 0;
 
@@ -7087,32 +6258,6 @@ function shouldBackfillCodexDirectoryRelationships(
 ): boolean {
   return callerReason === "directory-relationship-reconcile";
 }
-
-type MessagingArchiveCleanupStore = Pick<
-  MessagingStoreLike,
-  | "deletePendingIntentsForThread"
-  | "findActiveBindingsForBackend"
-  | "findActiveBindingsForThread"
-  | "revokeBinding"
->;
-
-type MessagingArchiveCleaner = {
-  requestBindingRevokeAllForThread(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    origin: "thread-archive";
-  }): Promise<{
-    notifiedCount: number;
-    revokedCount: number;
-  }>;
-};
-
-type MessagingArchiveCleanupResult = {
-  error?: string;
-  notifiedCount?: number;
-  pendingIntentCount: number;
-  revokedCount: number;
-};
 
 /** Same connections, in any order; two absent selections are the same. */
 function sameMcpConnectionIds(
@@ -8528,21 +7673,6 @@ function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {
   } as CodexThreadStartParams["config"];
 }
 
-/**
- * What the backend registry needs from the MCP connection gateway.
- *
- * Named rather than inlined because it is no longer one method: the registry
- * registers bridges for a turn, records when a selection reached the agent,
- * and answers the agent tool's read operations. Tests supply a stub for
- * exactly this shape.
- */
-/** A project grant a tool approval card offers, and what accepting it writes. */
-type McpProjectToolApprovalCardOffer = {
-  connectionId: string;
-  repository: string;
-  offer: McpProjectToolApprovalOffer;
-};
-
 function withoutMcpProjectToolApprovalOffer(
   request: AppServerPendingRequestNotification,
 ): AppServerPendingRequestNotification {
@@ -8551,29 +7681,6 @@ function withoutMcpProjectToolApprovalOffer(
   const { [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: _offer, ...rest } = meta as Record<string, unknown>;
   return { ...request, params: { ...request.params, _meta: rest } } as AppServerPendingRequestNotification;
 }
-
-export type BackendRegistryMcpConnectionService =
-  Pick<McpConnectionGatewayService, "registerBridge">
-  // Everything past bridge registration is optional so a test can stub the
-  // one method it exercises. A runtime that supplies only `registerBridge`
-  // still starts turns; it just cannot answer the agent tool's reads, which
-  // the handler reports rather than crashing on.
-  & Partial<
-    Pick<
-      McpConnectionGatewayService,
-      | "noteThreadHandover"
-      | "threadHandoverAt"
-      | "peekThreadBridge"
-      | "listConnections"
-      | "setConnectionProjectToolApproval"
-      | "createConnection"
-      | "probeConnection"
-      | "requestGatewayToolOperation"
-      | "closeThreadSessions"
-      | "setThreadRootsResolver"
-      | "noteThreadDirectoriesChanged"
-    >
-  >;
 
 export function buildCodexConnectionMcpServerName(
   server: McpConnectionBridgeRegistration["server"],
@@ -8891,42 +7998,6 @@ function archivedThreadMessageRefusal(thread: Pick<AppServerThreadSummary, "id" 
   return `Thread "${thread.title}" (${thread.id}) is archived; cannot send a message. Restore it with mutate_thread (archive=false) before sending.`;
 }
 
-/** See `DesktopBackendRegistry.readThreadHandoffSettings`. */
-export type HandoffSourceSettings = {
-  executionMode: ThreadExecutionMode;
-  model?: string;
-  reasoningEffort?: string;
-  serviceTier?: string;
-  fastMode?: boolean;
-  /** The thread's environment, when it runs one locally. */
-  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-};
-
-/** See `DesktopBackendRegistry.setAgentThreadActions`. */
-export type AgentThreadActions = {
-  markProjectRead?: (args: MarkProjectReadToolArgs) => Promise<MarkProjectReadResult>;
-  archiveThread: (request: ArchiveThreadRequest) => Promise<ArchiveThreadResponse>;
-  setThreadPin: (request: SetThreadPinRequest) => Promise<SetThreadPinResponse>;
-  markThreadSeen: (
-    request: MarkThreadSeenRequest,
-  ) => Promise<MarkThreadSeenResponse>;
-  /** The sidebar's own path, so every window hears the new grouping. */
-  setThreadParent?: (
-    request: SetThreadParentRequest,
-  ) => Promise<SetThreadParentResponse>;
-};
-
-/** The app-level Thread maintenance service, injected so the registry never
- * imports the runtime that constructs it. */
-export type ThreadMaintenanceToolHandler = {
-  /** Runs a scan the service retains under `scanId`. */
-  scan: (request: { rules?: Partial<ThreadMaintenanceRules>; projectKey?: string; scanId: string }) => Promise<ThreadMaintenanceScan>;
-  getScan: (scanId: string) => ThreadMaintenanceScan | undefined;
-  getRun: () => ThreadMaintenanceRun | undefined;
-  start: (request: ThreadMaintenanceApplyRequest) => { run: ThreadMaintenanceRun; done: Promise<ThreadMaintenanceRun> };
-  open: (request: { projectKey?: string }) => boolean;
-};
-
 const THREAD_MAINTENANCE_CONFIRM_QUESTION_ID = "thread_maintenance";
 const THREAD_MAINTENANCE_CONFIRM_APPROVE_LABEL = "Run maintenance";
 
@@ -9075,32 +8146,6 @@ function buildWorkspaceMoveFailurePrompt(params: {
   ].join("\n");
 }
 
-/**
- * A turn's origin while its `user:<turnId>` row is not yet written. `turnId`
- * is unset until the provider's start call returns it.
- */
-type StartingTurnOrigin = {
-  backend: AppServerBackendKind;
-  threadId: string;
-  origin: AppServerThreadMessageOrigin;
-  turnId?: string;
-};
-
-type PendingThreadMessageContext = {
-  backend: AppServerBackendKind;
-  createdAt: number;
-  admittedCodexTurnSequence?: number;
-  id: string;
-  messageId?: string;
-  imageParts?: AppServerThreadImagePart[];
-  retainedInput?: AppServerTurnInputItem[];
-  origin?: AppServerThreadMessageOrigin;
-  text?: string;
-  threadId: string;
-  turnId?: string;
-  turnEnded?: boolean;
-};
-
 async function pendingThreadMessageImageParts(
   input: AppServerTurnInputItem[] | undefined,
   owner: ThreadAssetOwner,
@@ -9139,21 +8184,6 @@ function contentHasRenderableImage(content: unknown[]): boolean {
     );
   });
 }
-
-type AcceptedThreadControlRequest = {
-  promise: Promise<PwrAgentThreadOrchestrationResponse>;
-  signature: string;
-};
-
-type AcceptedDynamicToolCall = {
-  promise: Promise<unknown>;
-  signature: string;
-};
-
-type AcceptedActiveTurnControlRequest = {
-  promise: Promise<ControlActiveTurnResponse>;
-  signature: string;
-};
 
 class ActiveTurnControlPreconditionError extends Error {
   constructor(
@@ -9221,92 +8251,6 @@ function toForwardSlashes(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-type CodexRetryableTurnStart = {
-  kind: "turn";
-  params: {
-    backend: "codex";
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    executionMode?: ThreadExecutionMode;
-    approvalPolicy?: string;
-    sandbox?: string;
-    model?: string;
-    collaborationMode?: AppServerCollaborationModeRequest;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    messageOrigin?: AppServerThreadMessageOrigin;
-    agentMessageOrigins?: AppServerThreadMessageOrigin[];
-    agentMessages?: ThreadTurnQueueEntry["agentMessages"];
-  };
-  terminalObserved?: boolean;
-  turnId?: string;
-};
-
-type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<OwnerThreadRegistry, "getThreadMetadata" | "updateThreadMetadata">> & Partial<
-  Pick<
-    DesktopOwnerStorage,
-    | "acknowledgeThreadEnvironmentFailure"
-    | "adoptLegacyRemoteDirectoryLaunchpad"
-    | "readThreadGitWorkingStateCache"
-    | "completeThreadUsageTurn"
-    | "completeThreadUsageTurns"
-    | "repairUnfinishedThreadUsageTurns"
-    | "readThreadUsageTurnTimeRepairCandidates"
-    | "repairThreadUsageTurnTimes"
-    | "readUsageActivity"
-    | "listRemoteThreadPins"
-    | "listThreadCompactions"
-    | "recordThreadCompaction"
-    | "readTokenMiserGatePricingLines"
-    | "reconcileOrphanedThreadSubAgents"
-    | "moveLegacyThreadSubAgents"
-    | "moveLegacyThreadUsageActivities"
-    | "readThreadUsageActivities"
-    | "readThreadUsageActivityForTurn"
-    | "readThreadUsageSettings"
-    | "markThreadToolInvocationsNoisy"
-    | "setThreadSpendAlertPending"
-    | "persistThreadToolInvocationBoundary"
-    | "upsertThreadSubAgents"
-    | "upsertThreadUsageLines"
-    | "writeThreadGitWorkingStateCacheEntry"
-    | "getVoiceManagerThread"
-    | "getArchiveCleanupOverlayStates"
-    | "readArchiveCleanupChangeToken"
-  >
->;
-
-type CodexRetryableCompaction = {
-  kind: "compact";
-  params: { backend: "codex"; threadId: string };
-  invalidIdRecoveryAttempted?: boolean;
-  lifecycleStarted?: boolean;
-  terminalObserved?: boolean;
-  turnId?: string;
-};
-
-type CodexRetryableOperation = CodexRetryableTurnStart | CodexRetryableCompaction;
-
-type PendingCodexInvalidIdRecovery = CodexRetryableOperation & {
-  audit: ThreadCodexInvalidIdRecovery;
-  failureMessage: string;
-  /** The last status told to the operator was `waiting`. */
-  reportedWaiting: boolean;
-  completion: Promise<{
-    backend: "codex";
-    threadId: string;
-    turnId: string;
-  }>;
-  reject: (error: unknown) => void;
-  resolve: (result: {
-    backend: "codex";
-    threadId: string;
-    turnId: string;
-  }) => void;
-};
-
 const CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 
 // How long streamed command-output accounting is held in memory before it is
@@ -9363,33 +8307,6 @@ class ActiveTurnKeySet extends Set<string> {
   }
 }
 
-/** A pricing publish a flush held back for its caller to send. */
-type DeferredThreadPricing = {
-  activeTurnIds: string[];
-};
-
-type PendingLiveThreadUsageLine = {
-  backend: AppServerBackendKind;
-  line: ThreadUsageLineRecord;
-  observationSequence: number;
-};
-
-type LiveThreadUsageBatch = {
-  deferredPricing?: DeferredThreadPricing;
-  pricingTargets: { activeTurnIds: Set<string>; backend: AppServerBackendKind; threadId: string }[];
-};
-
-/**
- * A running native worker's latest usage, not yet in sqlite: the card's copy,
- * and its priced usage lines by id (one per worker turn).
- */
-type LiveCodexNativeSubAgentUsage = Pick<
-  ThreadSubAgentSummary,
-  "monitorUsage" | "preferredModel" | "preferredReasoningEffort" | "updatedAt"
-> & {
-  lines: ReadonlyMap<string, ThreadUsageLineRecord>;
-};
-
 function withLiveCodexNativeSubAgentUsage(
   card: ThreadSubAgentSummary,
   live: LiveCodexNativeSubAgentUsage,
@@ -9406,64 +8323,6 @@ function withLiveCodexNativeSubAgentUsage(
     updatedAt: Math.max(card.updatedAt, live.updatedAt),
   };
 }
-
-type LiveThreadUsageEmitWork = {
-  backend: AppServerBackendKind;
-  derivationFinished: boolean;
-  derivationKey: string;
-  derivationTail: Promise<void>;
-  observationSequence: number;
-  precedingDerivation: Promise<void>;
-  settleDerivation: () => void;
-  settled: Promise<void>;
-  settle: () => void;
-  threadId: string;
-};
-
-type RecentlyCompletedThreadUsageTurn = {
-  completedAt?: number;
-  startedAt?: number;
-  turnId: string;
-};
-
-type LiveThreadUsageAggregate = {
-  latestUsage?: TaskMonitorTokenUsageBreakdown;
-  usage: TaskMonitorTokenUsageBreakdown;
-};
-
-type LiveThreadRequestUsage = {
-  cumulativeInputTokens: number;
-  requests: TaskMonitorTokenUsageBreakdown[];
-};
-
-type RequestComponentsCost = {
-  cacheWriteInputCostMicros: number;
-  cachedInputCostMicros: number;
-  catalogId: string;
-  catalogVersion: string;
-  currency: "USD";
-  outputCostMicros: number;
-  provider: string;
-  rateId?: string;
-  serviceTier: string;
-  totalCostMicros: number;
-  uncachedInputCostMicros: number;
-};
-
-type DerivedLiveThreadTokenUsage = {
-  // Whether turnTokenUsage is a real measurement of this turn — a per-turn
-  // delta or a per-request "last" snapshot — vs a fallback to a whole-thread
-  // total we could not decompose.
-  attributed: boolean;
-  cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
-  turnTokenUsage: TaskMonitorTokenUsageBreakdown | unknown;
-  /**
-   * The `total - latest` baseline, set only on the call that first seeds it
-   * for a `(thread, turn)`. For a fork's first observed turn this equals the
-   * context copied in at the fork point.
-   */
-  seededBaselineTokenUsage?: TaskMonitorTokenUsageBreakdown;
-};
 
 function isCodexInvalidIdRecoveryCooldownActive(
   attemptedAt: number,

@@ -1,4 +1,4 @@
-import type { QuietRestartTarget } from "../app-server/backend-registry";
+import type { QuietRestartTarget } from "../app-server/backend-registry-types";
 
 /**
  * "Quiet & Continue After Restart" from the quit dialog. Each step is

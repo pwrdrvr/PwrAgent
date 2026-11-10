@@ -7,9 +7,11 @@ import {
   detectObservedContextWindowDrop,
   foldObservedContextReplay,
   readThreadCompactionBoundary,
+} from "../app-server/backend-registry";
+import {
   type ObservedContextReplayCursor,
   type ObservedContextReplayTally,
-} from "../app-server/backend-registry";
+} from "../app-server/backend-registry-types";
 
 describe("detectObservedContextWindowDrop", () => {
   const cursor: ObservedContextReplayCursor = {

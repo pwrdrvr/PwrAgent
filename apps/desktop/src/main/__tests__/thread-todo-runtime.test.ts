@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { HandoffSourceSettings } from "../app-server/backend-registry";
+import type { HandoffSourceSettings } from "../app-server/backend-registry-types";
 import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,

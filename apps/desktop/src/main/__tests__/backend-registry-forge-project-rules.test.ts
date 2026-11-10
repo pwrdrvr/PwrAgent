@@ -10,7 +10,8 @@ import {
   type ForgeAgentToolRule,
   type ThreadExecutionMode,
 } from "@pwragent/shared";
-import { DesktopBackendRegistry, type ForgeToolRuleWriter } from "../app-server/backend-registry";
+import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { type ForgeToolRuleWriter } from "../app-server/backend-registry-types";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
