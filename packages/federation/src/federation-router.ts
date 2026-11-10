@@ -153,18 +153,31 @@ export class FederationRouter {
     envelope: FederationProtocolEnvelope;
     sourcePeerId?: FederationInstanceId;
   }): Promise<FederationRouteResult> {
-    const roleFailure = this.checkPeerRole(params.envelope, params.sourcePeerId);
-    const result = roleFailure ?? await this.routeAuthorizedEnvelope(params);
-    if (result.status === "rejected" && params.sourcePeerId) {
+    // The audit line is written before the refusal reply leaves, so a peer
+    // that observes a refusal can never read an audit that lacks it.
+    let audited = false;
+    const audit = () => {
+      if (audited || !params.sourcePeerId) return;
+      audited = true;
       this.options.auditRefusal?.({ peerId: params.sourcePeerId,
         method: "method" in params.envelope ? params.envelope.method : params.envelope.kind,
         role: this.options.peerRole?.(params.sourcePeerId) ?? "full", createdAt: this.now() });
-    }
+    };
+    const roleFailure = this.checkPeerRole(params.envelope, params.sourcePeerId, audit);
+    const result = roleFailure ?? await this.routeAuthorizedEnvelope({ ...params, beforeRefusalReply: audit });
+    if (result.status === "rejected") audit();
     return result;
   }
 
-  /** Hosts call before their fast notification paths; requests still use routeEnvelope. */
-  checkPeerRole(envelope: FederationProtocolEnvelope, sourcePeerId?: FederationInstanceId): FederationRouteResult | undefined {
+  /**
+   * Hosts call before their fast notification paths; requests still use routeEnvelope.
+   * `beforeRefusalReply` runs before the refusal is sent, so a host can audit first.
+   */
+  checkPeerRole(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId?: FederationInstanceId,
+    beforeRefusalReply?: () => void,
+  ): FederationRouteResult | undefined {
     if (!sourcePeerId || this.options.peerRole?.(sourcePeerId) !== "contained") return;
     const denied = envelope.kind === "request"
       ? !containedFederationMethodAllowed(envelope.method)
@@ -173,20 +186,21 @@ export class FederationRouter {
       : envelope.kind === "blob_chunk";
     if (!denied) return;
     const failure = this.errorEnvelope(envelope, { code: "capability_denied", message: "Contained peer request is not allowed." });
-    this.replyToSource(sourcePeerId, failure);
+    this.replyToSource({ sourcePeerId, beforeRefusalReply }, failure);
     return { status: "rejected", code: failure.error.code, message: failure.error.message };
   }
 
   private async routeAuthorizedEnvelope(params: {
     envelope: FederationProtocolEnvelope;
     sourcePeerId?: FederationInstanceId;
+    beforeRefusalReply?: () => void;
   }): Promise<FederationRouteResult> {
     if (!this.authenticatesOrigin(params.envelope, params.sourcePeerId)) {
       const failure = this.errorEnvelope(params.envelope, {
         code: "relay_origin_mismatch",
         message: "Federation relay origin is not authenticated by this connection.",
       });
-      this.replyToSource(params.sourcePeerId, failure);
+      this.replyToSource(params, failure);
       return {
         status: "rejected",
         code: failure.error.code,
@@ -195,7 +209,7 @@ export class FederationRouter {
     }
     const deadlineFailure = this.checkDeadline(params.envelope);
     if (deadlineFailure) {
-      this.replyToSource(params.sourcePeerId, deadlineFailure);
+      this.replyToSource(params, deadlineFailure);
       return {
         status: "rejected",
         code: deadlineFailure.error.code,
@@ -208,7 +222,7 @@ export class FederationRouter {
         code: "instance_shutting_down",
         message: "This instance is preparing to shut down.",
       });
-      this.replyToSource(params.sourcePeerId, failure);
+      this.replyToSource(params, failure);
       return { status: "rejected", code: failure.error.code, message: failure.error.message };
     }
 
@@ -218,7 +232,7 @@ export class FederationRouter {
         params.sourcePeerId,
       );
       if (capabilityFailure) {
-        this.replyToSource(params.sourcePeerId, capabilityFailure);
+        this.replyToSource(params, capabilityFailure);
         return {
           status: "rejected",
           code: capabilityFailure.error.code,
@@ -230,7 +244,7 @@ export class FederationRouter {
         params.sourcePeerId,
       );
       if (additionalCapabilityFailure) {
-        this.replyToSource(params.sourcePeerId, additionalCapabilityFailure);
+        this.replyToSource(params, additionalCapabilityFailure);
         return {
           status: "rejected",
           code: additionalCapabilityFailure.error.code,
@@ -247,7 +261,7 @@ export class FederationRouter {
         params.sourcePeerId,
       );
       if (capabilityFailure) {
-        this.replyToSource(params.sourcePeerId, capabilityFailure);
+        this.replyToSource(params, capabilityFailure);
         return {
           status: "rejected",
           code: capabilityFailure.error.code,
@@ -320,7 +334,7 @@ export class FederationRouter {
         code: "method_not_found",
         message: `No federation handler registered for ${params.envelope.method}`,
       });
-      this.replyToSource(params.sourcePeerId, failure);
+      this.replyToSource(params, failure);
       return {
         status: "rejected",
         code: failure.error.code,
@@ -340,7 +354,7 @@ export class FederationRouter {
         createdAt: this.now(),
         result,
       };
-      this.replyToSource(params.sourcePeerId, response);
+      this.replyToSource(params, response);
       return { status: "handled", response };
     } catch (error) {
       const failure = this.errorEnvelope(params.envelope, {
@@ -348,7 +362,7 @@ export class FederationRouter {
           : error instanceof DurableTurnRequestError ? error.code : "handler_failed",
         message: error instanceof Error ? error.message : String(error),
       });
-      this.replyToSource(params.sourcePeerId, failure);
+      this.replyToSource(params, failure);
       return {
         status: "rejected",
         code: failure.error.code,
@@ -380,6 +394,7 @@ export class FederationRouter {
   private async relayEnvelope(params: {
     envelope: FederationProtocolEnvelope;
     sourcePeerId?: FederationInstanceId;
+    beforeRefusalReply?: () => void;
   }): Promise<FederationRouteResult> {
     const targetInstanceId = params.envelope.targetInstanceId;
     if (!targetInstanceId) {
@@ -395,7 +410,7 @@ export class FederationRouter {
         code: "relay_hop_limit",
         message: "Federation relay hop limit exceeded.",
       });
-      this.replyToSource(params.sourcePeerId, failure);
+      this.replyToSource(params, failure);
       return {
         status: "rejected",
         code: failure.error.code,
@@ -412,7 +427,7 @@ export class FederationRouter {
           code: "relay_not_authorized",
           message: "Source peer is not authorized to relay through this gateway.",
         });
-        this.replyToSource(params.sourcePeerId, failure);
+        this.replyToSource(params, failure);
         return {
           status: "rejected",
           code: failure.error.code,
@@ -427,7 +442,7 @@ export class FederationRouter {
         code: "target_unavailable",
         message: "Target federation peer is not connected.",
       });
-      this.replyToSource(params.sourcePeerId, failure);
+      this.replyToSource(params, failure);
       return {
         status: "rejected",
         code: failure.error.code,
@@ -530,11 +545,12 @@ export class FederationRouter {
   }
 
   private replyToSource(
-    sourcePeerId: FederationInstanceId | undefined,
+    route: { sourcePeerId?: FederationInstanceId; beforeRefusalReply?: () => void },
     envelope: FederationProtocolEnvelope,
   ): void {
-    if (!sourcePeerId) return;
-    this.connections.get(sourcePeerId)?.sendEnvelope(envelope);
+    if (!route.sourcePeerId) return;
+    if (envelope.kind === "error") route.beforeRefusalReply?.();
+    this.connections.get(route.sourcePeerId)?.sendEnvelope(envelope);
   }
 
   private errorEnvelope(
