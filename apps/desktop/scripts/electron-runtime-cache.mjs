@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  constants, copyFileSync, cpSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync,
+  constants, cpSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync,
   readFileSync, readdirSync, readlinkSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -175,8 +175,10 @@ export async function ensureRuntime({ electronDir, version, platform, arch, cach
     // target (including architecture) cannot pass this short circuit.
     try {
       const installed = JSON.parse(readFileSync(installedManifest, "utf8"));
+      const types = installed.files.find((file) => file.path === "electron.d.ts");
       if (JSON.stringify(installed.target) === JSON.stringify(target)
         && (!expectedChecksum || installed.checksum === expectedChecksum)
+        && (!types || types.sha256 === await sha256File(join(electronDir, "electron.d.ts")))
         && existsSync(join(electronDir, "dist", executable))
         && readFileSync(join(electronDir, "path.txt"), "utf8") === executable
         && JSON.stringify(installed.files) === JSON.stringify(await inventory(join(electronDir, "dist")))) return;
@@ -228,7 +230,7 @@ export async function ensureRuntime({ electronDir, version, platform, arch, cach
     }
     const types = join(installStage, "dist/electron.d.ts");
     if (existsSync(types)) {
-      copyFileSync(types, join(installStage, "electron.d.ts"), constants.COPYFILE_FICLONE);
+      cloneTree(types, join(installStage, "electron.d.ts"));
       renameSync(join(installStage, "electron.d.ts"), join(electronDir, "electron.d.ts"));
     }
     const dist = join(electronDir, "dist");

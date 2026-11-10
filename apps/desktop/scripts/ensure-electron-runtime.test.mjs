@@ -1,10 +1,11 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { setTimeout } from "node:timers/promises";
 import fc from "fast-check";
 import { afterEach, expect, it } from "vitest";
 import { ensureRuntime, inventory, platformPath } from "./electron-runtime-cache.mjs";
@@ -124,6 +125,43 @@ it("property: cache entries partition every target dimension and archive identit
   ), { numRuns: 6 });
 }, 60_000);
 
+it("recovers an OS-confirmed dead installer while concurrent successors preserve the new owner", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const install = prepareInstall(setup, "interrupted");
+  const ready = join(setup.root, "owner-ready");
+  const script = `
+    import { ensureRuntime } from ${JSON.stringify(pathToFileURL(join(here, "electron-runtime-cache.mjs")).href)};
+    import { writeFileSync } from "node:fs";
+    await ensureRuntime({
+      electronDir: ${JSON.stringify(install.electron)}, version: "44.10.1", platform: "darwin", arch: "arm64",
+      cacheRoot: ${JSON.stringify(join(setup.root, "home/cache/electron-runtime/v1"))},
+      download: async () => {
+        writeFileSync(${JSON.stringify(ready)}, "ready");
+        await new Promise(() => { setInterval(() => {}, 1000); });
+      },
+    });
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: "ignore" });
+  const exited = new Promise((resolveExit, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolveExit);
+  });
+  try {
+    const deadline = Date.now() + 15_000;
+    while (!existsSync(ready) && Date.now() < deadline && child.exitCode === null) await setTimeout(20);
+    expect(existsSync(ready)).toBe(true); // Witness that the owner actually holds the lock.
+    child.kill("SIGKILL");
+    await exited; // Process identity, rather than elapsed time, allows recovery.
+    const results = await Promise.allSettled([install.run(), install.run(), install.run()]);
+    for (const result of results) expect(result.status, result.reason?.stderr).toBe("fulfilled");
+    expect(readFileSync(install.binary)).toEqual(setup.bytes);
+    expect(existsSync(join(install.electron, ".pwragent-runtime-lock"))).toBe(false);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+  }
+}, 60_000);
+
 it("property: any changed cached payload is rejected and rebuilt from the verified archive", async () => {
   const setup = fixture("44.10.1", randomBytes(8192));
   const mutations = process.platform === "win32" ? ["bytes", "add", "remove"] : ["bytes", "mode", "add", "remove", "link"];
@@ -161,6 +199,9 @@ it("revalidates target changes, keeps installed runtimes usable offline, and rep
   writeFileSync(join(opts.electronDir, "dist/electron"), "incomplete");
   await ensureRuntime({ ...opts, arch: "x64" });
   expect(readFileSync(join(opts.electronDir, "dist/electron"))).toEqual(setup.bytes);
+  expect(readFileSync(join(opts.electronDir, "electron.d.ts"), "utf8")).toBe("// fixture types\n");
+  rmSync(join(opts.electronDir, "electron.d.ts"));
+  await ensureRuntime({ ...opts, arch: "x64" });
   expect(readFileSync(join(opts.electronDir, "electron.d.ts"), "utf8")).toBe("// fixture types\n");
 });
 
