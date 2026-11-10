@@ -1,0 +1,17 @@
+{
+  "sourceCommit": "b4ae1ad8494cea8ec58ba3af4885940e0b1e76f2",
+  "command": "PWRAGENT_CONCURRENCY_BASELINE=legacy pnpm test apps/desktop/src/main/__tests__/headless-concurrency.oracle.test.ts",
+  "exitCode": 1,
+  "observed": {
+    "queueA": "started",
+    "queueB": "queued",
+    "states": ["active", "idle"],
+    "newThreadError": "handler_failed: Outpost is busy"
+  },
+  "expected": {
+    "queueA": "started",
+    "queueB": "started",
+    "states": ["active", "active"],
+    "newThreadAdmitted": true
+  }
+}

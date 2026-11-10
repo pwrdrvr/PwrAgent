@@ -35,6 +35,14 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static refusedSteers = 0;
   static recordsFile: string | undefined;
   static helperTitle: string | undefined;
+  private static heldCompletions = new Map<string, () => void>();
+
+  /** A protocol-fixture barrier: completion follows the oracle's overlap check. */
+  static completeHeldTurn(threadId: string): void {
+    const complete = this.heldCompletions.get(threadId);
+    if (!complete) throw new Error(`No held fixture turn for ${threadId}`);
+    complete();
+  }
   private static sequence = 0;
   private handler: (message: string) => void = () => {};
   private readonly activeTurns = new Map<string, FixtureTurn>();
@@ -48,10 +56,14 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.refusedSteers = 0;
     OwnerConformanceCodexTransport.recordsFile = undefined;
     OwnerConformanceCodexTransport.helperTitle = undefined;
+    OwnerConformanceCodexTransport.heldCompletions.clear();
   }
 
   async connect(): Promise<void> {}
-  async close(): Promise<void> { this.activeTurns.clear(); }
+  async close(): Promise<void> {
+    for (const threadId of this.activeTurns.keys()) OwnerConformanceCodexTransport.heldCompletions.delete(threadId);
+    this.activeTurns.clear();
+  }
   setCloseHandler(_handler: (error?: Error) => void): void {}
   setMessageHandler(handler: (message: string) => void): void { this.handler = handler; }
 
@@ -147,8 +159,15 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
       if (thread && prompt === "slow") {
         // Match the Outpost fixture's held turn, released by turn/interrupt.
-        const turn = { id: turnId, status: "inProgress", items: [], error: null };
+        const turn: FixtureTurn = { id: turnId, status: "inProgress", items: [], error: null };
         this.activeTurns.set(thread.id, turn);
+        OwnerConformanceCodexTransport.heldCompletions.set(thread.id, () => {
+          this.activeTurns.delete(thread.id);
+          OwnerConformanceCodexTransport.heldCompletions.delete(thread.id);
+          turn.status = "completed";
+          turn.items = [{ type: "agentMessage", text: "Fixture result" }];
+          this.notify("turn/completed", { threadId: thread.id, turn });
+        });
         thread.turns.push(turn);
         followUp = { method: "turn/started", params: { threadId: thread.id, turn } };
       } else if (thread) {
@@ -180,6 +199,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       else {
         turn.status = "interrupted";
         this.activeTurns.delete(String(params.threadId));
+        OwnerConformanceCodexTransport.heldCompletions.delete(String(params.threadId));
         followUp = { method: "turn/completed", params: { threadId: params.threadId, turn } };
       }
     }
