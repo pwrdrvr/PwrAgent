@@ -45,6 +45,7 @@ import { createFederatedThreadControlHandler, createFederatedThreadMessageHandle
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { applyFederationConfigPatch, subscribeFederationConfig } from "./federation/federation-config-subscription";
 import { getMcpConnectionGatewayService, initializeMcpConnectionGatewayService, getExistingMcpConnectionGatewayService } from "./mcp-connections/mcp-connection-gateway-service";
+import { setPwrSnapMediaReader } from "./transcript-images";
 import { getMainLogger } from "./log";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { loadDesktopMessagingConfigFromSettings } from "./messaging/messaging-config";
@@ -544,6 +545,13 @@ wireOwnerRendererEvents();
   });
   scheduledActions.start();
   automations.start();
+
+  // Transcript images from PwrSnap are read through the MCP session that
+  // returned them. With the gateway off there is no such session.
+  setPwrSnapMediaReader(async (request) =>
+    getDesktopSettingsService().resolveMcpGatewayEnabled()
+      ? await getMcpConnectionGatewayService().readPwrSnapMediaResource(request)
+      : { ok: false, reason: "session-ended" });
 
   // Only pre-start the bridge for a profile that actually uses it. Settings
   // still reaches the gateway on demand, so turning the switch back on does

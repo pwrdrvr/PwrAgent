@@ -1144,6 +1144,19 @@ export function TranscriptImageTile(props: {
     [props.imagePart.url]
   );
 
+  // The owner could not obtain the bytes, so `url` is never loaded.
+  if (props.imagePart.unavailableReason) {
+    return (
+      <div className="transcript-message__image-fallback">
+        <div className="transcript-message__image-fallback-main">
+          <span className="transcript-message__image-fallback-title">
+            {props.imagePart.unavailableReason}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   if (failed) {
     return (
       <div className="transcript-message__image-fallback">

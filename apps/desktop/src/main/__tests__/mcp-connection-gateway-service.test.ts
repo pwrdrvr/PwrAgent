@@ -545,6 +545,77 @@ describe("McpConnectionGatewayService", () => {
     });
   });
 
+  it("reads a PwrSnap image only through the live session that returned it to its thread", async () => {
+    const uri = "pwrsnap://capture/cap_1/composite";
+    const callTool = vi.fn(async () => ({
+      content: [
+        { type: "text", text: "PwrSnap media is ready in the attached resource link." },
+        { type: "resource_link", uri, name: "composite capture", mimeType: "image/png" },
+      ],
+    }));
+    const readResource = vi.fn(async () => ({
+      contents: [{ uri, mimeType: "image/png", blob: "AQID" }],
+    }));
+    const registry = temporaryRegistry();
+    registry.setEnabled("pwrsnap", true);
+    const service = new McpConnectionGatewayService({
+      settings: createSettings(),
+      registry,
+      leaseManager: null,
+      resolveInstallPaths: () => [pwrSnapInstall()],
+    });
+    services.push(service);
+    const session = (): object => ({
+      client: { callTool, readResource, close: vi.fn(async () => undefined) },
+      transport: { close: vi.fn(async () => undefined) },
+    });
+    const internals = service as unknown as {
+      grants: Map<string, { connectionId: string; threadId?: string }>;
+      upstreamSessions: Map<string, object>;
+      dispatchBridgeOperation: (
+        token: string,
+        grant: { connectionId: string; threadId?: string },
+        operation: unknown,
+        params: unknown,
+      ) => Promise<unknown>;
+      closeThreadSessions: (threadId: string, connectionIds: readonly string[]) => Promise<void>;
+    };
+    const grant = { connectionId: "pwrsnap", threadId: "thread-1" };
+    internals.grants.set("snap-1", grant);
+    internals.upstreamSessions.set("snap-1", session());
+    await internals.dispatchBridgeOperation("snap-1", grant, "tools/call", {
+      name: "pwrsnap_capture_resource",
+      arguments: {},
+    });
+
+    await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri }))
+      .resolves.toEqual({ ok: true, mimeType: "image/png", dataBase64: "AQID" });
+    expect(readResource).toHaveBeenCalledWith({ uri }, expect.anything());
+
+    // Another thread, or a link the session never returned, is not read.
+    readResource.mockClear();
+    await expect(service.readPwrSnapMediaResource({ threadId: "thread-2", uri }))
+      .resolves.toEqual({ ok: false, reason: "session-ended" });
+    await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri: "pwrsnap://capture/cap_9/composite" }))
+      .resolves.toEqual({ ok: false, reason: "session-ended" });
+
+    // A session reopened on the same grant did not return the link.
+    internals.upstreamSessions.set("snap-1", session());
+    await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri }))
+      .resolves.toEqual({ ok: false, reason: "session-ended" });
+
+    // Once the thread's session closes, nothing is read and no session opens.
+    await internals.dispatchBridgeOperation("snap-1", grant, "tools/call", {
+      name: "pwrsnap_capture_resource",
+      arguments: {},
+    });
+    await internals.closeThreadSessions("thread-1", ["pwrsnap"]);
+    await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri }))
+      .resolves.toEqual({ ok: false, reason: "session-ended" });
+    expect(readResource).not.toHaveBeenCalled();
+    expect(internals.upstreamSessions.size).toBe(0);
+  });
+
   /**
    * The OAuth round trip belongs to the browser, so "cancel" can only mean
    * releasing PwrAgent's half of it. Before this the only exit from an

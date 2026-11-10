@@ -9,7 +9,8 @@ export function collectThreadImageGallery(
 
   const appendImage = (image: AppServerThreadImagePart): void => {
     if (
-      seenUrls.has(image.url)
+      image.unavailableReason
+      || seenUrls.has(image.url)
       || (image.sourceUrl ? seenSourceUrls.has(image.sourceUrl) : false)
     ) {
       return;

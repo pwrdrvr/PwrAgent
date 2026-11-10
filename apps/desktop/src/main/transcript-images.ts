@@ -16,7 +16,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveActiveProfilePath, resolvePwragentRoot } from "./profile";
-import { isPwrSnapSignedMediaUrl } from "./pwrsnap-media-url";
+import { isLegacyPwrSnapMediaUrl, isPwrSnapResourceUri } from "@pwragent/owner-core/pwrsnap-media";
+import type { PwrSnapMediaRead } from "./mcp-connections/pwrsnap-media-links";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 import { existingThreadAssetAlias, isThreadAssetPath, storeThreadAsset, type ThreadAssetOwner } from "./app-server/thread-assets";
 
@@ -47,7 +48,11 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
 const MARKDOWN_LINKED_IMAGE_PATTERN = /!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))[^)]*\)/g;
 // PwrSnap links can point to full-resolution captures, not just UI-sized previews.
 const MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES = 64 * 1024 * 1024;
-const FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS = 10_000;
+const PWRSNAP_SESSION_ENDED_REASON =
+  "PwrSnap image unavailable. The PwrSnap session that returned it has ended.";
+const PWRSNAP_READ_FAILED_REASON = "PwrSnap could not provide this image.";
+const LEGACY_PWRSNAP_MEDIA_REASON =
+  "PwrSnap image unavailable. It used a link that PwrSnap 1.3 no longer serves.";
 
 export type TranscriptImageProtocolOptions = {
   /** Extra local roots approved for the current thread's Markdown image links. */
@@ -81,19 +86,13 @@ export type TranscriptImageMaterializationOptions = {
   resolveApprovedLocalImageRoots?: () => Promise<readonly string[]>;
 };
 
-type TranscriptImageFetchResponse = {
-  ok: boolean;
-  headers: { get: (name: string) => string | null };
-  body?: ReadableStream<Uint8Array> | null;
-  arrayBuffer: () => Promise<ArrayBuffer>;
-};
-
 export type TranscriptImageMaterializerDependencies = {
   retainLocalImage?: (sourcePath: string, owner: ThreadAssetOwner) => Promise<string | undefined>;
-  fetch: (
-    url: string,
-    init: { redirect: "error"; signal: AbortSignal },
-  ) => Promise<TranscriptImageFetchResponse>;
+  /**
+   * The bytes of a `pwrsnap://` link, through the live PwrSnap MCP session
+   * that returned it to this thread. Never opens a session.
+   */
+  readPwrSnapMedia: (request: { threadId: string; uri: string }) => Promise<PwrSnapMediaRead>;
   resolveRoot: (request: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -120,6 +119,12 @@ export type TranscriptImageFileResolution =
   | { ok: true; path: string; mimeType: string }
   | { ok: false; status: number; message: string };
 
+/** One read per `pwrsnap://` link per materialization pass. */
+type PwrSnapImageMaterializations = Map<
+  string,
+  Promise<{ url: string } | { unavailableReason: string }>
+>;
+
 type MaterializedTranscriptImage = {
   buffer: Buffer;
   extension: string;
@@ -143,9 +148,22 @@ function threadImagesSegment(backend: AppServerBackendKind, threadId: string): s
   );
 }
 
+let pwrSnapMediaReader: TranscriptImageMaterializerDependencies["readPwrSnapMedia"] | undefined;
+
+/**
+ * Where transcripts read PwrSnap media: the MCP gateway, set at startup.
+ * Until then every link reads as `session-ended`, since no session exists.
+ */
+export function setPwrSnapMediaReader(
+  reader: TranscriptImageMaterializerDependencies["readPwrSnapMedia"] | undefined,
+): void {
+  pwrSnapMediaReader = reader;
+}
+
 const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
   retainLocalImage: retainLegacyThreadImage,
-  fetch: async (url, init) => await globalThis.fetch(url, init),
+  readPwrSnapMedia: async (request) =>
+    await pwrSnapMediaReader?.(request) ?? { ok: false, reason: "session-ended" },
   resolveRoot: ({ backend, threadId }) =>
     resolveActiveProfilePath(threadImagesSegment(backend, threadId)),
   resolveSiblingRoots: async ({ backend, threadId }) => {
@@ -401,7 +419,7 @@ export function rewriteTranscriptImageUrlsForRenderer(
   );
 }
 
-/** Only owner-local and signed media need routing through the owning peer. */
+/** Only owner-local files need routing through the owning peer. */
 export function rewriteFederatedTranscriptImageUrlForRenderer(
   url: string,
   instanceId: FederationInstanceId,
@@ -428,10 +446,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
   const deps = withMemoizedSiblingRoots({ ...defaultMaterializerDependencies, ...dependencies });
   const resolveApprovedLocalImageRoots = createApprovedLocalImageRootResolver(options);
   const materializedFileWrites = new Map<string, Promise<void>>();
-  const fetchedLoopbackImages = new Map<
-    string,
-    Promise<MaterializedTranscriptImage | undefined>
-  >();
+  const pwrSnapImages: PwrSnapImageMaterializations = new Map();
   const markdownLinkImageResolutions = new Map<
     string,
     Promise<TranscriptImageFileResolution>
@@ -452,7 +467,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
             response,
             deps,
             materializedFileWrites,
-            fetchedLoopbackImages,
+            pwrSnapImages,
             markdownLinkImageResolutions,
             materializedMarkdownLinkedImages,
             resolveApprovedLocalImageRoots,
@@ -466,7 +481,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
             response,
             deps,
             materializedFileWrites,
-            fetchedLoopbackImages,
+            pwrSnapImages,
             markdownLinkImageResolutions,
             materializedMarkdownLinkedImages,
             resolveApprovedLocalImageRoots,
@@ -526,7 +541,7 @@ export async function materializeTranscriptImageEventForRenderer(
 
 /**
  * Resolve the images belonging to one assistant message into provider-safe
- * image parts. Local files, data images, and signed PwrSnap loopback URLs are
+ * image parts. Local files, data images, and live PwrSnap resource links are
  * first copied into the durable transcript cache, then returned as data URLs
  * so messaging adapters never receive renderer-only `pwragent-image://` URLs.
  * Ordinary remote URLs remain remote URLs for adapters that can embed them.
@@ -719,7 +734,7 @@ async function materializeTranscriptEntryImageUrls(
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
-  fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
+  pwrSnapImages: PwrSnapImageMaterializations,
   markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
   materializedMarkdownLinkedImages: Map<
     string,
@@ -744,7 +759,7 @@ async function materializeTranscriptEntryImageUrls(
           return retained ? { ...image, ...retained } : undefined;
         }
         return await materializeTranscriptMessagePartImageUrl(image, response, deps,
-          materializedFileWrites, fetchedLoopbackImages) as AppServerThreadImagePart;
+          materializedFileWrites, pwrSnapImages) as AppServerThreadImagePart;
       }))).filter((image): image is AppServerThreadImagePart => image !== undefined) } : {}),
     }))) };
   }
@@ -757,7 +772,7 @@ async function materializeTranscriptEntryImageUrls(
     response,
     deps,
     materializedFileWrites,
-    fetchedLoopbackImages,
+    pwrSnapImages,
     markdownLinkImageResolutions,
     materializedMarkdownLinkedImages,
     resolveApprovedLocalImageRoots,
@@ -769,7 +784,7 @@ async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMe
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
-  fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
+  pwrSnapImages: PwrSnapImageMaterializations,
   markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
   materializedMarkdownLinkedImages: Map<
     string,
@@ -803,7 +818,7 @@ async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMe
           response,
           deps,
           materializedFileWrites,
-          fetchedLoopbackImages,
+          pwrSnapImages,
         ),
       ),
     ),
@@ -815,7 +830,7 @@ async function materializeTranscriptMessagePartImageUrl(
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
-  fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
+  pwrSnapImages: PwrSnapImageMaterializations,
 ): Promise<AppServerThreadMessagePart> {
   if (part.type !== "image") {
     return part;
@@ -855,22 +870,69 @@ async function materializeTranscriptMessagePartImageUrl(
     );
   }
 
-  const fetchedImage = await fetchLoopbackSignedImage(
-    part.url,
-    deps,
-    fetchedLoopbackImages,
-  );
-  if (!fetchedImage) {
+  if (isLegacyPwrSnapMediaUrl(part.url)) {
+    return { ...part, unavailableReason: LEGACY_PWRSNAP_MEDIA_REASON };
+  }
+  if (!isPwrSnapResourceUri(part.url)) {
     return part;
   }
+  let materialized = pwrSnapImages.get(part.url);
+  if (!materialized) {
+    materialized = materializePwrSnapImage(part.url, response, deps);
+    pwrSnapImages.set(part.url, materialized);
+  }
+  const result = await materialized;
+  return "url" in result
+    ? { ...part, url: result.url }
+    : { ...part, unavailableReason: result.unavailableReason };
+}
 
-  return await materializeTranscriptImagePart(
-    part,
-    fetchedImage,
-    response,
-    deps,
-    materializedFileWrites,
-  );
+/**
+ * A `pwrsnap://` link becomes a file in the thread's image cache the first
+ * time its session can provide it. The cache is keyed by the link, so the
+ * image keeps rendering after that session ends. A link with no cached copy
+ * and no live session is shown as unavailable; it is not retried.
+ */
+async function materializePwrSnapImage(
+  uri: string,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+): Promise<{ url: string } | { unavailableReason: string }> {
+  const root = deps.resolveRoot({ backend: response.backend, threadId: response.threadId });
+  const stem = `pwrsnap-${createHash("sha256").update(uri).digest("hex")}`;
+  for (const extension of new Set(DATA_IMAGE_EXTENSIONS.values())) {
+    const cached = path.join(root, `${stem}.${extension}`);
+    if (await isUsableCachedImage(cached)) {
+      return { url: toTranscriptImageProtocolUrl(pathToFileURL(cached).toString()) };
+    }
+  }
+
+  let read: PwrSnapMediaRead;
+  try {
+    read = await deps.readPwrSnapMedia({ threadId: response.threadId, uri });
+  } catch {
+    read = { ok: false, reason: "failed" };
+  }
+  if (!read.ok) {
+    return {
+      unavailableReason: read.reason === "session-ended"
+        ? PWRSNAP_SESSION_ENDED_REASON
+        : PWRSNAP_READ_FAILED_REASON,
+    };
+  }
+  const extension = DATA_IMAGE_EXTENSIONS.get(read.mimeType);
+  const buffer = Buffer.from(read.dataBase64, "base64");
+  if (!extension || buffer.byteLength === 0 || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
+    return { unavailableReason: PWRSNAP_READ_FAILED_REASON };
+  }
+  try {
+    await deps.mkdir(root, { recursive: true });
+    const filePath = path.join(root, `${stem}.${extension}`);
+    await deps.writeFile(filePath, buffer);
+    return { url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()) };
+  } catch {
+    return { unavailableReason: PWRSNAP_READ_FAILED_REASON };
+  }
 }
 
 async function materializeTranscriptImagePart(
@@ -901,113 +963,6 @@ async function materializeTranscriptImagePart(
   } catch {
     return part;
   }
-}
-
-async function fetchLoopbackSignedImage(
-  url: string,
-  deps: TranscriptImageMaterializerDependencies,
-  fetchedImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
-): Promise<MaterializedTranscriptImage | undefined> {
-  if (!isPwrSnapSignedMediaUrl(url)) {
-    return undefined;
-  }
-
-  let fetchPromise = fetchedImages.get(url);
-  if (!fetchPromise) {
-    fetchPromise = fetchLoopbackSignedImageOnce(url, deps);
-    fetchedImages.set(url, fetchPromise);
-  }
-  return await fetchPromise;
-}
-
-async function fetchLoopbackSignedImageOnce(
-  url: string,
-  deps: Pick<TranscriptImageMaterializerDependencies, "fetch">,
-): Promise<MaterializedTranscriptImage | undefined> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS);
-  try {
-    const response = await deps.fetch(url, {
-      redirect: "error",
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (
-      Number.isFinite(declaredLength)
-      && declaredLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
-    ) {
-      return undefined;
-    }
-
-    const mimeType = response.headers
-      .get("content-type")
-      ?.split(";", 1)[0]
-      ?.trim()
-      .toLowerCase();
-    const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
-    if (!mimeType || !extension) {
-      return undefined;
-    }
-
-    const buffer = await readFetchedTranscriptImageBuffer(response, controller);
-    if (!buffer) {
-      return undefined;
-    }
-
-    return {
-      buffer,
-      extension,
-      mimeType,
-      sha256: createHash("sha256").update(buffer).digest("hex"),
-    };
-  } catch {
-    return undefined;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function readFetchedTranscriptImageBuffer(
-  response: TranscriptImageFetchResponse,
-  controller: AbortController,
-): Promise<Buffer | undefined> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.byteLength === 0 || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
-      return undefined;
-    }
-    return buffer;
-  }
-
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value) {
-        continue;
-      }
-
-      byteLength += value.byteLength;
-      if (byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
-        controller.abort();
-        return undefined;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  return byteLength > 0 ? Buffer.concat(chunks, byteLength) : undefined;
 }
 
 async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
@@ -1514,7 +1469,7 @@ function isLocalTranscriptImageUrl(url: string): boolean {
 }
 
 function isFederationOwnerImageUrl(url: string): boolean {
-  return isLocalTranscriptImageUrl(url) || isPwrSnapSignedMediaUrl(url);
+  return isLocalTranscriptImageUrl(url);
 }
 
 function isFileImageUrl(url: string): boolean {
@@ -1526,7 +1481,8 @@ function isMaterializableImageUrl(url: string): boolean {
     isFileImageUrl(url)
     || url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`)
     || url.startsWith("data:image/")
-    || isPwrSnapSignedMediaUrl(url)
+    || isPwrSnapResourceUri(url)
+    || isLegacyPwrSnapMediaUrl(url)
   );
 }
 
@@ -1596,20 +1552,7 @@ export async function resolveTranscriptImageProtocolRequest(
 export async function readTranscriptImageProtocolRequest(
   requestUrl: string,
   options?: TranscriptImageProtocolOptions,
-  dependencies: Pick<TranscriptImageMaterializerDependencies, "fetch"> =
-    defaultMaterializerDependencies,
 ): Promise<FederatedTranscriptImageResponse> {
-  if (isPwrSnapSignedMediaUrl(requestUrl)) {
-    const image = await fetchLoopbackSignedImageOnce(requestUrl, dependencies);
-    if (!image) {
-      throw new Error("PwrSnap transcript image could not be fetched");
-    }
-    return {
-      dataBase64: image.buffer.toString("base64"),
-      mimeType: image.mimeType,
-    };
-  }
-
   const resolution = await resolveTranscriptImageProtocolRequest(
     requestUrl,
     options,

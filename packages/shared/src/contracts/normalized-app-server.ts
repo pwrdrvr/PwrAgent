@@ -849,6 +849,12 @@ export type AppServerThreadImagePart = {
    * in PwrAgent rather than delegating it to an external editor.
    */
   sourceUrl?: string;
+  /**
+   * Set when the owner could not obtain the image's bytes, such as a PwrSnap
+   * resource whose MCP session has ended. Renderers show this text in place
+   * of the image and never load `url`.
+   */
+  unavailableReason?: string;
 };
 
 export type AppServerThreadFilePart = {
