@@ -146,8 +146,11 @@ export class Runtime {
     const cwd = this.projects.resolve(threadId ? this.threadCwd?.(threadId) || params.cwd || this.workspace : params.cwd);
     if (threadId && params.cwd && params.cwd !== cwd) throw new Error("Turn cwd differs from its owner thread project");
     const delivery = queuedControls?.delivery === "queued-steer" ? "queued-steer" : undefined;
-    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}), ...(delivery ? { delivery } : {}) });
     const prior = this.store.jobs.get(id);
+    // Accepted delivery-less identities retain their original fingerprint on
+    // upgrade. New queued steers still bind delivery into their acceptance.
+    const fingerprintDelivery = prior && prior.delivery === undefined ? undefined : delivery;
+    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}), ...(fingerprintDelivery ? { delivery: fingerprintDelivery } : {}) });
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error("Job ID was already used with different input");
       return prior;
