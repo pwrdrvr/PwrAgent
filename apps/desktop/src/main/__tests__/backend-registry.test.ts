@@ -4921,6 +4921,82 @@ describe("DesktopBackendRegistry", () => {
         expect(first.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(1);
       });
 
+      const checkSentWakeupPauseHistory = async (
+        storage: ReturnType<typeof durableStore>,
+        batches: readonly (readonly boolean[])[],
+      ) => {
+        const { rows, store } = storage;
+        const first = launch(store, "instance-a");
+        let second: ReturnType<typeof launch> | undefined;
+        try {
+          await first.registry.deliverProjectPausedWakeup(wake());
+          await first.registry.submitTurn({ backend: "codex", threadId: "parked", input: [{ type: "text", text: "Operator reply" }] });
+          await expect(resolve(first.registry, "send")).resolves.toEqual({ results: [{ entryId: "task-monitor:nightly", status: "sent" }] });
+          expect(rows()).toHaveLength(1);
+          const request = { backend: "codex" as const, threadId: "parked", queueEntryId: "task-monitor:nightly" };
+          const accepted = await first.registry.readQueuedTurn(request);
+          const events: AgentEvent[] = [];
+          first.registry.onEvent(event => { events.push(event); });
+          let paused = false;
+          let durable = true;
+          const { writes } = await measureSqliteWrites(async () => {
+            for (const batch of batches) {
+              const expected = batch.map(value => {
+                const disposition = paused === value ? "unchanged" : "updated";
+                if (disposition === "updated" && value) durable = false;
+                paused = value;
+                return { disposition, paused: value };
+              });
+              const results = await Promise.all(batch.map(value => first.registry.setQueuedTurnPaused({ queueEntryId: request.queueEntryId, paused: value })));
+              expect(results).toMatchObject(expected);
+              // An effective Pause permanently retires project durability,
+              // even when a concurrent Resume is the final visible state.
+              expect(rows()).toHaveLength(durable ? 1 : 0);
+              const live = first.registry.getQueuedTurnsForThread(request)[0]!;
+              expect(Boolean(live.paused)).toBe(paused);
+              const last = events.flatMap(event => event.notification.method === "thread/turnQueue/updated"
+                && event.notification.params.queueEntryId === request.queueEntryId ? [event.notification.params] : []).at(-1);
+              if (last) {
+                expect(Boolean(last.paused)).toBe(Boolean(live.paused));
+                expect(last.pauseRevision ?? 0).toBe(live.pauseRevision ?? 0);
+              }
+              expect(await first.registry.readQueuedTurn(request)).toEqual(accepted);
+              expect(first.codexClient.startTurnCallCount).toBe(1);
+            }
+          });
+          expect(writes.commits).toBe(durable ? 0 : 1);
+          await first.registry.close();
+          second = launch(store, "instance-b", ["instance-b"]);
+          expect(second.registry.listProjectHeldWakeups(PROJECT)).toHaveLength(durable ? 1 : 0);
+          expect(second.registry.getQueuedTurnsForThread(request)).toHaveLength(durable ? 1 : 0);
+          expect(second.codexClient.startTurnCallCount).toBe(0);
+          return writes;
+        } finally {
+          store.remove("task-monitor:nightly");
+          await first.registry.close();
+          await second?.registry.close();
+        }
+      };
+
+      it("models completed sent-wake-up pauses independently of the latest concurrent control", async () => {
+        pauseProject();
+        const storage = durableStore();
+        await fc.assert(fc.asyncProperty(fc.array(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }), { maxLength: 5 }),
+          batches => checkSentWakeupPauseHistory(storage, batches).then(() => {})));
+      });
+
+      it("does not resurrect a sent wake-up after concurrent Pause then Resume", async () => {
+        pauseProject();
+        await checkSentWakeupPauseHistory(durableStore(), [[true, false]]);
+      });
+
+      it("budgets completed sent-wake-up Pause cleanup across concurrent Resume", async () => {
+        pauseProject();
+        const writes = await checkSentWakeupPauseHistory(durableStore(), [[true, false], [true, false]]);
+        expectSqliteWriteBudget({ budgetFile: "desktop-queue-pause-wakeup-write-budgets.json", scenario: "completed-pause-cleanup",
+          note: "Two concurrent Pause/Resume pairs for a sent wake-up behind an active turn; setup/admission and restart excluded. One existing durable-row delete, then no further writes.", writes });
+      });
+
       it("drops the durable copy when the operator pauses a sent wake-up again", async () => {
         pauseProject();
         const { rows, store } = durableStore();
