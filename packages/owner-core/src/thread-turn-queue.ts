@@ -1309,11 +1309,10 @@ export class ThreadTurnQueue {
   private scheduleDrain(key: string): void {
     if (this.closed || this.drainTimers.has(key)) return;
     // One event-loop admission window also groups simultaneous local/remote
-    // sends before paying for a backend steer.
-    // Keep the immediate referenced. Node's poll phase ignores an unref'd
-    // immediate, so a drain scheduled from a timer callback waits for some
-    // other timer or I/O to wake the loop; a send queued behind a checkout
-    // restore waited seconds this way. close() clears pending drains.
+    // sends before paying for a backend steer. The immediate stays
+    // referenced: Node's poll phase ignores an unref'd one, so a drain
+    // scheduled from a timer callback waited for unrelated timers or I/O
+    // (seconds, behind a checkout restore). close() clears pending drains.
     const timer = setImmediate(() => {
       this.drainTimers.delete(key);
       void this.startNext(key);

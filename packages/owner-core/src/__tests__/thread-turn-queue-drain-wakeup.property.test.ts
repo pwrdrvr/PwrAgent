@@ -58,9 +58,12 @@ async function drainRunsOnItsOwn(source: Source, queued: number): Promise<void> 
       new Promise<"stalled">((resolve) => { bound = setTimeout(() => resolve("stalled"), BOUND_MS); }),
     ]);
     expect(outcome).toBe("started");
-    // A loop woken only by the bound starts the head as the bound fires, so
-    // the race alone can read "started". The wait itself is the oracle.
-    expect(startedAfterMs).toBeLessThan(BOUND_MS / 3);
+    // A loop woken only by the bound runs the drain's immediate right after
+    // poll returns, before the bound's own callback, so neither the race nor
+    // the order of the two shows the stall. The wait itself is the oracle: a
+    // stalled drain waits the whole bound, so 80% of it leaves a slow runner
+    // more than a second of margin.
+    expect(startedAfterMs).toBeLessThan(BOUND_MS * 0.8);
     expect(sent).toEqual(["queued-0"]);
   } finally {
     clearTimeout(bound);
