@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import { replacementHostDependencies } from "./fixtures/queue-agent-replacement-bundle";
 import type { exerciseDesktopAgentReplacement } from "./fixtures/queue-agent-replacement-driver";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -20,14 +21,9 @@ for (const grouped of [false, true]) {
         await build({ entryPoints: [path.join(specDir, "fixtures/queue-agent-replacement-driver.ts")], outfile: driverPath,
           bundle: true, platform: "node", format: "cjs", logLevel: "silent", external: ["electron"],
           define: { "import.meta.url": JSON.stringify(pathToFileURL(driverPath).href), "import.meta.dirname": JSON.stringify(homeRoot) },
-          plugins: [{ name: "isolated-desktop-replacement-owner", setup(builder) {
+          plugins: [replacementHostDependencies(specifier => require.resolve(specifier)), { name: "isolated-desktop-replacement-owner", setup(builder) {
             builder.onResolve({ filter: /\?raw$/ }, args => ({ path: path.resolve(args.resolveDir, args.path.slice(0, -4)), namespace: "replacement-raw" }));
             builder.onLoad({ filter: /.*/, namespace: "replacement-raw" }, async args => ({ contents: await readFile(args.path, "utf8"), loader: "text" }));
-            builder.onResolve({ filter: /^[^./]/ }, args => {
-              if (args.path.startsWith("node:") || args.path === "electron"
-                || args.path.startsWith("@pwragent/") || args.path.startsWith("@pwrdrvr/codex-app-server-protocol")) return;
-              try { return { path: require.resolve(args.path), external: true }; } catch { return; }
-            });
             builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "fixture-codex", namespace: "replacement-owner" }));
             builder.onLoad({ filter: /.*/, namespace: "replacement-owner" }, () => ({
               contents: `export { OwnerConformanceCodexTransport as StdioJsonRpcTransport } from ${JSON.stringify(path.resolve(specDir, "../src/main/__tests__/fixtures/owner-conformance-codex-transport.ts"))};`,
