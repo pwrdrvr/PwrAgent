@@ -7,8 +7,8 @@ description: Audit and manually clean a selected PwrAgent Git project's worktree
 
 Use the self-contained [cleanup script](scripts/cleanup_worktree_caches.py) with
 Python 3.9+ on macOS. Resolve script paths relative to this skill's directory.
-The source-controlled copy lives in PwrAgent's `.agents/skills/`; the installed
-copy also works when the project has checked out older branches.
+This skill lives only in PwrAgent's `.agents/skills/`. Its script can audit
+worktrees on older branches when invoked from a checkout containing this skill.
 
 First produce a report, using the selected project's repository or worktree:
 
