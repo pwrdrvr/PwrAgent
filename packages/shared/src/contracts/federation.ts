@@ -296,6 +296,13 @@ export type FederationReceiverPermissions = {
 };
 
 export type FederationHostInfo = {
+  /** Startup probe through Codex's native workspace-write sandbox. Older
+   * peers omit this; a failed probe leaves the Outpost reachable for reads. */
+  codexSandbox?: {
+    status: "ready" | "failed";
+    checkedAt: string;
+    error?: string;
+  };
   /** Retained peer identity on finite-lived compute; absence means unspecified.
    * Connection loss never implies pause, deletion or peer expiry. */
   outpost?: {

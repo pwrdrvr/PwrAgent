@@ -6,10 +6,20 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 
-assert.deepEqual(process.argv.slice(2), ["app-server", "--listen", "stdio://"]);
 const directory = process.env.PWRAGENT_TEST_DATA;
 assert.ok(directory);
 const log = (value) => appendFileSync(path.join(directory, "calls.jsonl"), JSON.stringify(value) + "\n");
+if (process.argv[2] === "sandbox") {
+  log({ sandbox: process.argv.slice(2), cwd: process.cwd(), home: process.env.CODEX_HOME });
+  let result = { code: 0 };
+  try { result = JSON.parse(readFileSync(path.join(directory, "sandbox-check.json"), "utf8")); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  process.stderr.write(result.stderr || "");
+  if (result.hang) setInterval(() => {}, 1000);
+  else process.exit(result.code);
+  await new Promise(() => {});
+}
+assert.deepEqual(process.argv.slice(2), ["app-server", "--listen", "stdio://"]);
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 let initialized = false;
 let acknowledged = false;

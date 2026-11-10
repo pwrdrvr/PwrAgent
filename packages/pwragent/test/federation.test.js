@@ -14,6 +14,72 @@ import {
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { setup, eventually } from "./helpers.js";
 
+// The sandbox process owns its outcome: every nonzero exit must disable new
+// turns, and local status and federation facts must report the same outcome.
+test("nonzero sandbox exits are the health oracle for local and federated clients", { timeout: 20000 }, async (t) => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 255 }), async code => {
+    const h = await setup(t, { beforeStart: ({ data }) => {
+      writeFileSync(path.join(data, "sandbox-check.json"), JSON.stringify({ code, stderr: `fixture exit ${code}` }));
+    } });
+    const status = await h.rpc("status");
+    assert.equal(status.ready, false);
+    assert.equal(status.health, "degraded");
+    assert.equal(status.codexSandbox.status, "failed");
+    assert.deepEqual((await h.rpc("federation-status")).host.codexSandbox, status.codexSandbox);
+    const checks = h.calls().filter(call => call.sandbox);
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].cwd, h.workspace);
+    assert.equal(checks[0].home, h.home);
+    assert.deepEqual(checks[0].sandbox, ["sandbox", "-c", "sandbox_mode=\"workspace-write\"",
+      "-c", "approval_policy=\"never\"", "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([h.workspace])}`,
+      "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+      "-c", "sandbox_workspace_write.exclude_slash_tmp=true", "--", process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]);
+    await h.stop(h.daemon);
+  }), { numRuns: 5 });
+});
+
+test("failed Codex sandbox preflight keeps diagnostics reachable and rejects tool work", { timeout: 10000 }, async (t) => {
+  const diagnostic = "bwrap: No permissions to create a new namespace";
+  const h = await setup(t, { beforeStart: ({ data }) => {
+    writeFileSync(path.join(data, "sandbox-check.json"), JSON.stringify({ code: 1, stderr: diagnostic }));
+  } });
+  const command = h.launch(["status"]);
+  assert.equal((await command.done).code, 0);
+  const status = JSON.parse(command.output);
+  assert.equal(status.ready, false);
+  assert.equal(status.health, "degraded");
+  assert.equal(status.codexSandbox.status, "failed");
+  assert.match(status.codexSandbox.error, /bwrap: No permissions to create a new namespace/);
+  const facts = await h.rpc("federation-status");
+  assert.deepEqual(facts.host.codexSandbox, status.codexSandbox);
+  const gateway = await setup(t);
+  const gatewayInvite = (await gateway.rpc("federation-invite", { port: 0 })).invite;
+  await h.rpc("federation-join", { invite: gatewayInvite });
+  const advertised = await eventually(() => {
+    const state = JSON.parse(readFileSync(path.join(gateway.directory, "federation.json"), "utf8"));
+    return Object.values(state.peers).find(peer => peer.host?.codexSandbox)?.host.codexSandbox;
+  });
+  assert.deepEqual(advertised, status.codexSandbox);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  const v = await viewer(invite);
+  t.after(() => v.connection.close());
+  const backend = (await v.call("listBackends")).backends.find(backend => backend.kind === "codex");
+  assert.equal(backend.available, false);
+  assert.match(backend.unavailableReason, /bwrap: No permissions/);
+  assert.ok(backend.executionModes.every(mode => !mode.available));
+  await assert.rejects(h.submit("blocked", "write a file", { sandbox: "workspace-write" }), /Codex sandbox preflight failed/);
+  const thread = await v.call("startThread", { backend: "codex", cwd: h.workspace });
+  await assert.rejects(v.call("startTurn", { backend: "codex", threadId: thread.threadId,
+    input: [{ type: "text", text: "write a file" }] }), /Codex sandbox preflight failed/);
+  assert.equal(h.calls().filter(call => call.method === "turn/start").length, 0);
+  assert.deepEqual(await h.rpc("list"), []);
+  await h.stop(h.daemon);
+  writeFileSync(path.join(h.data, "sandbox-check.json"), JSON.stringify({ code: 0 }));
+  await h.start();
+  assert.equal((await h.rpc("status")).ready, true);
+  assert.equal((await h.rpc("status")).codexSandbox.status, "ready");
+});
+
 async function viewer(invite, identity = { id: randomUUID(), ...generateFederationIdentityKeyPair(), noiseStatic: generateNoiseStaticKeyPair() }, mode = "enroll", capabilities = HEADLESS_CAPABILITIES) {
   const events = [];
   let rpc;
@@ -392,7 +458,7 @@ test("leave removes the upstream router entry and subscriptions before asynchron
   let unregistered = false;
   const client = { close: () => { closed = true; } };
   const federation = Object.assign(Object.create(HeadlessFederation.prototype), {
-    state: { instanceId: randomUUID(), gateway: { gatewayInstanceId: id } }, client,
+    state: { instanceId: randomUUID(), gateway: { gatewayInstanceId: id } }, client, runtime: {},
     remotePeers: new Map([["cached", {}]]), peerDirectory: new FederationReplacementReceiver(),
     generation: 0, ptyRoutes: new Map(), endpoints: new Map(), pty: { notifyPeerDisconnected() {} }, connections: new Map([[id, client]]), subscriptions: new Map([["viewer", { via: id }]]),
     router: { unregisterConnection: (peer) => { assert.equal(peer, id); unregistered = true; } }, save: () => {},
@@ -493,6 +559,9 @@ test("a contained peer advertising every capability is refused and audited by th
   for (const endpoint of [v.rpc, relayed]) for (const method of methods) {
     await assert.rejects(endpoint.request({ method, params: { secret: "fixture-payload-must-stay-private" } }), /capability_denied/);
   }
+  // A denial can reach the viewer before the owner's synchronous audit append
+  // finishes. Fence the owner's event loop before inspecting its journal.
+  await h.rpc("status");
   const audit = readFileSync(path.join(h.directory, "federation-refusals.jsonl"), "utf8");
   assert.equal(audit.includes("fixture-payload-must-stay-private"), false);
   const entries = audit.trim().split("\n").map((line) => JSON.parse(line));

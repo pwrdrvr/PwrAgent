@@ -137,6 +137,59 @@ paths are placeholders. `KillMode=control-group` is needed to reap tools that
 start a new session or process group. Running `serve` in an SSH foreground shell
 alone does not provide this lifetime guarantee.
 
+At startup, `serve` runs the native `true` executable (`/bin/true` on Linux,
+`/usr/bin/true` on macOS) through `codex sandbox` with the Outpost's
+workspace-write policy, tool network access disabled, and approval policy
+`never`. This checks native sandbox startup on Linux (and macOS development
+hosts) without a model request. The check has a 10-second deadline. A failure
+keeps the service listening for diagnostics and retained history, but rejects
+new turns before accepting a job. `pwragent status` reports `ready: false`,
+`health: "degraded"`, and `codexSandbox` with the timestamp and bounded error.
+Federation host facts carry the same `codexSandbox`; the Codex backend and its
+execution modes report unavailable with that reason to desktop viewers.
+Fix the host/container configuration and restart `serve` to check again.
+A successful probe establishes sandbox startup in the configured workspace;
+it does not establish authentication, model availability, or every project's
+filesystem permissions.
+
+### Linux containers
+
+Codex's bubblewrap sandbox requires user and mount namespaces. The host must
+permit unprivileged user namespaces, and container seccomp/LSM policy must
+permit the sandbox's namespace and mount operations. Docker's default seccomp
+profile alone can produce `bwrap: No permissions to create a new namespace`.
+
+Use `--cap-drop ALL` and `--security-opt no-new-privileges` with a seccomp
+profile built from Docker's default profile plus one `SCMP_ACT_ALLOW` rule
+for `clone`, `unshare`, `setns`, `mount`, `umount2`, and `pivot_root`. Keep all
+the default profile's other restrictions. For example, given the Docker
+default profile for your engine as `docker-default.json`:
+
+```sh
+jq '.syscalls += [{"names":["clone","unshare","setns","mount","umount2","pivot_root"],"action":"SCMP_ACT_ALLOW","args":[]}]' \
+  docker-default.json > seccomp-outpost.json
+```
+
+Minimal run example for an image with `pwragent` as its entry point and Codex
+installed at `/usr/local/bin/codex`. Run as the image's unprivileged user;
+provision the three separate mounted directories for that user first, and
+configure authentication in the dedicated Codex home using the Codex CLI.
+
+```sh
+docker run -d --name pwragent-outpost \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --security-opt seccomp="$(pwd)/seccomp-outpost.json" \
+  -e PWRAGENT_HOME=/state \
+  -v outpost-state:/state -v outpost-codex:/codex -v outpost-workspace:/workspace \
+  YOUR_OUTPOST_IMAGE serve --workspace /workspace \
+  --codex-home /codex --codex-bin /usr/local/bin/codex
+```
+
+The container options permit Codex to create its sandbox. Outpost turns still
+use approval policy `never`, read-only or workspace-write access, and disabled
+tool network access. Full access is unavailable. The startup check never
+retries with broader permissions.
+
 Run subsequent commands on the outpost, as the same OS user and with the same
 `PWRAGENT_HOME` and profile. Write the task text to a local file, then:
 

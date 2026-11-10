@@ -6,6 +6,7 @@ import { Runtime } from "./runtime.js";
 import { openOutpostProfileRuntime } from "../dist/federation-core.js";
 import { HeadlessFederation } from "./federation.js";
 import { MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, readMessages } from "./wire.js";
+import { checkCodexSandbox } from "./sandbox-preflight.js";
 
 export async function serve({ directory, workspace, home, command, profile }) {
   if (!["linux", "darwin"].includes(process.platform)) throw new Error("Headless currently supports Linux and macOS only");
@@ -43,7 +44,9 @@ export async function serve({ directory, workspace, home, command, profile }) {
   let resolveDone;
   const done = new Promise((resolve) => { resolveDone = resolve; });
   const sockets = new Set();
+  const preflight = new AbortController();
   const stop = (error) => {
+    preflight.abort();
     if (error) exitCode = 1;
     if (shutdown) return shutdown;
     shutdown = (async () => {
@@ -76,6 +79,9 @@ export async function serve({ directory, workspace, home, command, profile }) {
     process.on("SIGTERM", signalStop);
     process.on("SIGINT", signalStop);
     await runtime.codex.initialize();
+    runtime.codexSandbox = await checkCodexSandbox({ command, home, workspace, signal: preflight.signal });
+    if (shutdown) return await done;
+    if (runtime.codexSandbox.status === "failed") console.error(runtime.codexSandbox.error);
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, codexPid: runtime.codex.child.pid }) + "\n");
     federation = new HeadlessFederation({ directory, runtime, profile, onFailure: (error) => { void stop(error); } });
     await federation.backend.initialize();
@@ -122,7 +128,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
     });
     if (shutdown) { server.close(); return await done; }
     server.on("error", (error) => { void stop(error); });
-    console.log(JSON.stringify({ ready: true, socket: socketPath, pid: process.pid, running: runtime.running }));
+    console.log(JSON.stringify({ ...await runtime.handle("status"), listening: true, socket: socketPath }));
     return await done;
   } catch (error) {
     await stop(error);

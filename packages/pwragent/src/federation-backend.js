@@ -697,18 +697,19 @@ export class HeadlessBackend {
   }
 
   async listBackends() {
-    const models = (await this.runtime.codex.listModels()).map((model) => ({
+    const unavailableReason = this.runtime.codexSandbox?.status === "failed" ? this.runtime.codexSandbox.error : undefined;
+    const models = unavailableReason ? [] : (await this.runtime.codex.listModels()).map((model) => ({
       id: model.id, label: model.label, current: model.current,
       reasoningEfforts: model.reasoningEfforts, defaultReasoningEffort: model.defaultReasoningEffort,
       supportsReasoning: model.supportsReasoning, supportsSteering: true,
       supportsImage: false, supportsFast: false,
     }));
-    return { fetchedAt: Date.now(), backends: [{ kind: "codex", label: "Codex (headless outpost)", available: true,
+    return { fetchedAt: Date.now(), backends: [{ kind: "codex", label: "Codex (headless outpost)", available: !unavailableReason, unavailableReason,
       methods: Object.keys(METHOD_CAPABILITIES), capabilities: { listThreads: true, createThread: true, resumeThread: true,
         renameThread: true, readThread: true, startTurn: true, interruptTurn: true, steerTurn: true,
-        transcriptPagination: false, toolUse: true, approvalRequests: false, multiDirectoryThreads: false },
-      executionModes: [{ mode: "default", label: "Read-only", available: true, isDefault: true },
-        { mode: "auto", label: "Workspace write", available: true }, { mode: "full-access", label: "Full access", available: false }],
+        transcriptPagination: false, toolUse: !unavailableReason, approvalRequests: false, multiDirectoryThreads: false },
+      executionModes: [{ mode: "default", label: "Read-only", available: !unavailableReason, isDefault: true, unavailableReason },
+        { mode: "auto", label: "Workspace write", available: !unavailableReason, unavailableReason }, { mode: "full-access", label: "Full access", available: false }],
       launchpadOptions: { models, supportsFastMode: false } }, ...[...new Set([...this.threads.values("all")].map(thread => thread.source))]
       .filter(backend => backend !== "codex").sort().map(kind => ({ kind, label: kind === "claude" ? "Claude" : kind.slice(4), available: false,
         methods: RETAINED_READ_METHODS.map(name => `backend.${name}`),
