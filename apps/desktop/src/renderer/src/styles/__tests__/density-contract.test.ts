@@ -116,3 +116,96 @@ describe("density rules", () => {
     expect(gapless?.selectors[0]).toContain(":not(:has(.thread-row__chips .pr-chip))");
   });
 });
+
+/**
+ * A nested tray row's left inset and chevron, as the cascade resolves them in
+ * each density. The model names, per case, the rule that wins (the density
+ * and X-ray rules out-rank the nested rule by specificity) and evaluates its
+ * declared value with the custom properties the shell sets.
+ */
+describe("nested row inset", () => {
+  const declaration = (selector: string, property: string): string => {
+    const rule = rulesMentioning(selector).find((entry) => entry.selectors.includes(selector));
+    const value = rule?.body.match(new RegExp(`(?:^|[;\\s])${property}:\\s*([^;]+);`))?.[1]?.trim();
+    if (!value) throw new Error(`no ${property} on ${selector}`);
+    return value;
+  };
+  const densityRule = (density: string, mentions: string, property: string): string => {
+    const rule = rulesMentioning(`[data-density="${density}"]`).find((entry) =>
+      entry.selectors[0]!.includes(mentions) && new RegExp(`(?:^|[;\\s])${property}:`).test(entry.body));
+    const value = rule?.body.match(new RegExp(`(?:^|[;\\s])${property}:\\s*([^;]+);`))?.[1]?.trim();
+    if (!value) throw new Error(`no ${density} ${property} rule for ${mentions}`);
+    return value;
+  };
+
+  /** Evaluates a px length built from calc(), min() and the two custom properties. */
+  function px(value: string, vars: Record<string, string>): number {
+    let expression = value;
+    for (let guard = 0; /var\(/.test(expression); guard += 1) {
+      if (guard > 10) throw new Error(`unresolved ${value}`);
+      expression = expression.replace(/var\((--[\w-]+)(?:,\s*([^()]+))?\)/g, (_, name: string, fallback?: string) => {
+        const resolved = vars[name] ?? fallback;
+        if (resolved === undefined) throw new Error(`no ${name} for ${value}`);
+        return `(${resolved})`;
+      });
+    }
+    const arithmetic = expression.replace(/min\(/g, "Math.min(").replace(/calc\(/g, "(").replace(/(\d)px/g, "$1");
+    if (!/^[\d\s.+\-*/(),Mathmin]+$/.test(arithmetic)) throw new Error(`not arithmetic: ${arithmetic}`);
+    return Number(new Function(`return ${arithmetic};`)());
+  }
+
+  const topLevelInset = Number(declaration(".thread-row", "padding").split(/\s+/)[1]!.replace("px", ""));
+  const topLevelToggle = px(declaration(".thread-row__subthread-toggle", "left"), {});
+  const shellInset = rulesMentioning(".thread-row-shell--nested")
+    .find((rule) => rule.selectors.includes(".thread-row-shell--nested"))
+    ?.body.match(/--thread-row-inline-start:\s*([^;]+);/)?.[1]?.trim();
+  const nestedVars = (depth: number): Record<string, string> => ({
+    "--thread-row-nested-depth": String(depth),
+    ...(shellInset ? { "--thread-row-inline-start": shellInset } : {}),
+  });
+
+  type Layout = { inset: number; toggle: number };
+  const layouts: Record<string, { top: Layout; nested: (depth: number) => Layout }> = {
+    "mission-control": {
+      top: { inset: topLevelInset, toggle: topLevelToggle },
+      nested: (depth) => ({
+        inset: px(declaration(".thread-row-shell--nested .thread-row", "padding-left"), nestedVars(depth)),
+        toggle: px(declaration(".thread-row-shell--nested .thread-row__subthread-toggle", "left"), nestedVars(depth)),
+      }),
+    },
+  };
+  for (const density of ["compact", "minimal"]) {
+    layouts[density] = {
+      top: { inset: px(densityRule(density, " .thread-row:not(", "padding-left"), {}), toggle: topLevelToggle },
+      nested: (depth) => ({
+        inset: px(densityRule(density, " .thread-row:not(", "padding-left"), nestedVars(depth)),
+        toggle: px(densityRule(density, ".thread-row-shell--nested", "left"), nestedVars(depth)),
+      }),
+    };
+  }
+  // X-ray lifts one row out of the list; it runs in Compact and Minimal only.
+  const xrayInset = (vars: Record<string, string>) =>
+    px(declaration(".thread-row-shell[data-xray-target] > .thread-row", "padding-left"), vars);
+
+  for (const [density, layout] of Object.entries(layouts)) {
+    it(`${density}: steps each depth in 12px up to the cap, and keeps the chevron's top-level distance`, () => {
+      const insets = [1, 2, 3, 4, 5, 6].map((depth) => layout.nested(depth).inset);
+      expect(insets[0]).toBeGreaterThanOrEqual(layout.top.inset);
+      for (let depth = 2; depth <= 6; depth += 1) {
+        const step = insets[depth - 1]! - insets[depth - 2]!;
+        expect(step, `depth ${depth}`).toBe(depth <= 4 ? 12 : 0);
+      }
+      for (let depth = 1; depth <= 6; depth += 1) {
+        const nested = layout.nested(depth);
+        expect(nested.inset - nested.toggle, `depth ${depth}`).toBe(layout.top.inset - layout.top.toggle);
+      }
+    });
+  }
+
+  it("lifts an X-ray row without moving its title, at any depth", () => {
+    expect(xrayInset({})).toBe(layouts.compact!.top.inset);
+    for (let depth = 1; depth <= 6; depth += 1) {
+      expect(xrayInset(nestedVars(depth)), `depth ${depth}`).toBe(layouts.compact!.nested(depth).inset);
+    }
+  });
+});
