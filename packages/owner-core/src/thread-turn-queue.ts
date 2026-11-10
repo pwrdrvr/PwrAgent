@@ -248,6 +248,19 @@ type StartNextResult = "none" | "started" | "blocked";
 const RECENT_ADMITTED_ENTRY_LIMIT = 1_000;
 const RECENT_TERMINAL_TURN_LIMIT = 1_000;
 
+function sameAcceptance(left: ThreadTurnQueueEntry, right: ThreadTurnQueueEntry): boolean {
+  const fields = [
+    "backend", "threadId", "origin", "messageOrigin", "delivery", "input",
+    "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode",
+    "serviceTier", "reasoningEffort", "fastMode", "automationRunId", "automationName",
+    "agentMessages", "agentMessageOrigins", "restartContinuation",
+  ] as const;
+  return isDeepStrictEqual(
+    structuredClone(fields.map(field => left[field])),
+    structuredClone(fields.map(field => right[field])),
+  );
+}
+
 function groupedAgentInput(messages: QueuedAgentMessage[]): AppServerTurnInputItem[] {
   if (messages.length === 1) return structuredClone(messages[0]!.input);
   return messages.flatMap((message, index) => {
@@ -295,6 +308,10 @@ function restoreAfter(
 
 export class ThreadTurnQueue {
   private readonly queuedEntries = new Map<string, ThreadTurnQueueEntry[]>();
+  // Controls can replace or release a row's current hold. Retain only the
+  // original held admission intent until cancellation or native acceptance;
+  // an ordinary row covered by a FIFO hold never acquires that intent.
+  private readonly heldAdmissionReasons = new Map<string, string>();
   private readonly admissions = new Map<string, QueueAdmission>();
   private readonly runningEntries = new Map<string, RunningEntry>();
   private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
@@ -455,6 +472,7 @@ export class ThreadTurnQueue {
 
   close(): void {
     this.closed = true;
+    this.heldAdmissionReasons.clear();
     for (const timer of this.drainTimers.values()) clearImmediate(timer);
     this.drainTimers.clear();
   }
@@ -477,16 +495,7 @@ export class ThreadTurnQueue {
     if (existing) {
       // Controls and display titles can change while this acceptance waits.
       // A retry must still name exactly its original input and owner facts.
-      const fields = [
-        "backend", "threadId", "origin", "messageOrigin", "delivery", "input",
-        "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode",
-        "serviceTier", "reasoningEffort", "fastMode", "automationRunId", "automationName",
-        "agentMessages", "agentMessageOrigins", "restartContinuation",
-      ] as const;
-      if (!isDeepStrictEqual(
-        structuredClone(fields.map(field => existing.entry[field])),
-        structuredClone(fields.map(field => entry[field])),
-      )) {
+      if (!sameAcceptance(existing.entry, entry)) {
         throw new Error(`Queued turn id ${entry.id} was reused with different input or ownership`);
       }
       options?.onAdmission?.();
@@ -545,11 +554,10 @@ export class ThreadTurnQueue {
     const existing = this.findQueuedEntry(entry.id);
     if (existing) {
       if (
-        existing.entry.backend !== entry.backend
-        || existing.entry.threadId !== entry.threadId
-        || JSON.stringify(existing.entry.input) !== JSON.stringify(entry.input)
+        this.heldAdmissionReasons.get(entry.id) !== reason
+        || !sameAcceptance(existing.entry, entry)
       ) {
-        throw new Error(`Queued turn id ${entry.id} was reused with different input`);
+        throw new Error(`Queued turn id ${entry.id} was reused with different input, ownership or hold intent`);
       }
       options?.onAdmission?.();
       return {
@@ -557,6 +565,10 @@ export class ThreadTurnQueue {
         entry: existing.entry,
         position: existing.position,
       };
+    }
+
+    if (this.recentlyAdmittedEntries.has(entry.id)) {
+      throw new Error(`Queued turn identity ${entry.id} was already admitted`);
     }
 
     const key = this.keyFor(entry);
@@ -568,6 +580,7 @@ export class ThreadTurnQueue {
     const index = options?.queueIndex ?? (this.heldQueues.has(key)
       ? queue.length
       : leadingContinuations < 0 ? queue.length : leadingContinuations);
+    this.heldAdmissionReasons.set(entry.id, reason);
     this.addHoldReason(key, reason);
     queue.splice(index, 0, entry);
     options?.onAdmission?.();
@@ -763,6 +776,7 @@ export class ThreadTurnQueue {
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
       const [entry] = queue.splice(index, 1);
+      this.heldAdmissionReasons.delete(entryId);
       if (queue.length === 0) this.queuedEntries.delete(key);
       if (!options?.retainQueueHold) this.dropSpentHold(key);
       if (entry) {
@@ -1060,10 +1074,18 @@ export class ThreadTurnQueue {
 
   async releaseEntryWithDisposition(
     entryId: string,
+    expected?: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "delivery">,
   ): Promise<ThreadTurnQueueReleaseResult> {
     const found = this.findQueuedEntry(entryId);
     if (!found) {
       return { disposition: "not_found", entryId };
+    }
+    // A retry releases the original delivery; it does not choose a new one
+    // or re-admit the row under its current (possibly changed) hold cause.
+    if (expected && !sameAcceptance(found.entry, {
+      ...expected, id: entryId, createdAt: 0, delivery: found.entry.delivery,
+    })) {
+      throw new Error(`Queued turn id ${entryId} was reused with different input or ownership`);
     }
     // Retry answers the entry dispatch would start, which can sit behind
     // paused ones.
@@ -1522,6 +1544,7 @@ export class ThreadTurnQueue {
   }
 
   private rememberAdmittedEntry(entry: AdmittedEntry): void {
+    if (entry.turnId !== undefined) this.heldAdmissionReasons.delete(entry.entryId);
     this.recentlyAdmittedEntries.delete(entry.entryId);
     this.recentlyAdmittedEntries.set(entry.entryId, entry);
     while (this.recentlyAdmittedEntries.size > RECENT_ADMITTED_ENTRY_LIMIT) {

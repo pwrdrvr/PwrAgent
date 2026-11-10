@@ -176,6 +176,24 @@ try {
   const [{ openOutpostProfileRuntime, ThreadTurnQueue }, { JobStore }, { HeadlessBackend }, { Runtime }] = await Promise.all([
     installed("dist/federation-core.js"), installed("src/store.js"), installed("src/federation-backend.js"), installed("src/runtime.js"),
   ]);
+  const heldIdentityQueue = new ThreadTurnQueue({ isThreadActive: () => true,
+    startTurn: async () => { throw new Error("Held identity smoke must not dispatch"); } });
+  try {
+    const entry = { backend: "codex", threadId: "packed-held-identity", id: "packed-held", origin: "scheduled",
+      input: [{ type: "text", text: "Packed immutable review" }] };
+    await heldIdentityQueue.submit(entry);
+    await assert.rejects(heldIdentityQueue.submitHeld(entry, "Review"), /reused/);
+    heldIdentityQueue.cancelEntry(entry.id);
+    const held = { ...entry, id: "packed-new-held" };
+    await heldIdentityQueue.submitHeld(held, "Review");
+    await assert.rejects(heldIdentityQueue.submitHeld({ ...held, origin: "manual" }, "Review"), /reused/);
+    await assert.rejects(heldIdentityQueue.submitHeld(held, "Other review"), /reused/);
+    const retries = await Promise.all([heldIdentityQueue.submitHeld(held, "Review"), heldIdentityQueue.submitHeld(held, "Review")]);
+    assert.equal(heldIdentityQueue.getQueuedEntries(entry).length, 1);
+    assert.ok(retries.every(result => result.entry === heldIdentityQueue.getQueuedEntries(entry)[0]));
+    await assert.rejects(heldIdentityQueue.releaseEntryWithDisposition(held.id, { ...held, origin: "manual" }), /ownership/);
+    assert.equal((await heldIdentityQueue.releaseEntryWithDisposition(held.id, held)).disposition, "busy");
+  } finally { heldIdentityQueue.close(); }
   const identityQueue = new ThreadTurnQueue({ isThreadActive: () => true,
     startTurn: async () => { throw new Error("Waiting identity smoke must not dispatch"); } });
   try {

@@ -23192,7 +23192,12 @@ export class DesktopBackendRegistry {
 
   async releaseQueuedTurnWithDisposition(
     entryId: string,
+    expected?: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "delivery">,
   ): Promise<ReleaseQueuedTurnResponse> {
+    const acceptance = expected ? {
+      ...expected,
+      input: await ownThreadInputAttachments(expected.input, expected, this.localFilePrivateStorageRoots),
+    } : undefined;
     const entry = this.threadTurnQueue.getAllQueuedEntries().find((candidate) => candidate.id === entryId);
     if (entry?.delivery === "queued-steer" && entry.manualReleaseRequired && this.getActiveTurnForThread(entry)) {
       const backend = (await this.listBackends({ includeUnavailable: true })).backends
@@ -23205,7 +23210,7 @@ export class DesktopBackendRegistry {
         return { queueEntryId: entryId, disposition: "busy" };
       }
     }
-    const result = await this.threadTurnQueue.releaseEntryWithDisposition(entryId);
+    const result = await this.threadTurnQueue.releaseEntryWithDisposition(entryId, acceptance);
     return {
       queueEntryId: entryId,
       disposition: result.disposition,

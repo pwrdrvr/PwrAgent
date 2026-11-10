@@ -1,0 +1,16 @@
+{
+  "held-admissions-100": {
+    "commits": 0,
+    "note": "100 registered held admissions with three matching calls, refused owner/cause changes, immutable reads, pause attempts and hash cancellation; native setup excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "scheduled-collision-refusal": {
+    "commits": 2,
+    "note": "Actual scheduled held identity collision: existing claim and failed outcome, excluding action creation and native/ordinary admission",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
+  }
+}
