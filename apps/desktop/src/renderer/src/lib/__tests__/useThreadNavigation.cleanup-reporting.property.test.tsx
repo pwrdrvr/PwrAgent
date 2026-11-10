@@ -57,7 +57,8 @@ it("models mixed recovered, deferred and manual completions without extending a 
         expect(summary?.autoDismiss).toBe(false);
         expect(summary?.message).toContain(`${backgroundCount} cleanup results`);
         expect(summary?.message).not.toContain("Thread archived");
-        expect(summary?.facts?.length).toBeLessThanOrEqual(5);
+        expect(summary?.copyText).toContain("Copy includes all");
+        expect(summary!.copyText!.length).toBeLessThan(512 * 1024);
         backgroundIds.add(summary!.id);
       }
     }

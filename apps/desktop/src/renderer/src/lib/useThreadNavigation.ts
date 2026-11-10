@@ -1,5 +1,6 @@
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
 import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS } from "./background-archive-cleanup-report";
+import { resolveBackgroundCleanupThread } from "./background-archive-cleanup-thread";
 import type { AppNoticeToastNotice } from "../features/notifications/AppNoticeToast";
 export type { ArchiveThreadNotice } from "./archive-cleanup-notice";
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
@@ -4754,7 +4755,9 @@ export function useThreadNavigation(
         const context = archiveCleanupContexts.current.get(completedKey)
           ?? threadActionErrorContext(completedThread, event.federationTarget ?? readRendererFederationTarget());
         archiveCleanupContexts.current.delete(completedKey);
-        if (background && backgroundCleanupReport.record(event.backend, completion, context) && backgroundCleanupReportTimer.current === undefined) {
+        const recorded = background && backgroundCleanupReport.record(event.backend, completion, context,
+          (ref) => resolveBackgroundCleanupThread(ref, loadedThreadRows(stateRef.current.rows), windowTarget));
+        if (recorded && backgroundCleanupReportTimer.current === undefined) {
           // A fixed window cannot be postponed indefinitely by a busy queue.
           // Stable identity also keeps the report out of transient toast history.
           backgroundCleanupReportTimer.current = window.setTimeout(() => {

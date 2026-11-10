@@ -64347,6 +64347,7 @@ script = "printf setup"
         deletedBranch: false,
         skippedReason:
           "Worktree is still used by another active thread: 019e79f9-7ff1-7f31-9a67-f92435a1c9fa.",
+        blockingThreads: [{ backend: "codex", threadId: "019e79f9-7ff1-7f31-9a67-f92435a1c9fa", title: "Parent thread" }],
       },
     ]);
 
@@ -64675,6 +64676,7 @@ script = "printf setup"
         deletedBranch: false,
         skippedReason:
           "Worktree is still used by another active thread: thread-child.",
+        blockingThreads: [{ backend: "codex", threadId: "thread-child", title: "Child thread" }],
       },
     ]);
 
@@ -64751,6 +64753,7 @@ script = "printf setup"
         deletedBranch: false,
         skippedReason:
           "Worktree is still used by another active thread: kimi-child.",
+        blockingThreads: [{ backend: "acp:kimi", threadId: "kimi-child", title: "Kimi child" }],
       },
     ]);
 
@@ -65509,6 +65512,7 @@ script = "printf setup"
         removedWorktree: false,
         deletedBranch: false,
         skippedReason: "Worktree is still used by another active thread: thread-parent.",
+        blockingThreads: [{ backend: "codex", threadId: "thread-parent", title: "Parent thread" }],
       },
     ]);
     expect(archiveWorktree).not.toHaveBeenCalled();

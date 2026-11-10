@@ -40664,7 +40664,7 @@ export class DesktopBackendRegistry {
       overlay,
     );
     const thread: AppServerThreadSummary = {
-      id: base.id, source: backend, title: "", titleSource: "explicit", linkedDirectories,
+      id: base.id, source: backend, title: base.title, titleSource: base.titleSource, linkedDirectories,
       projectKey: base.projectKey, gitBranch: base.gitBranch, observedGitBranch: base.observedGitBranch,
     };
     return {
@@ -41442,6 +41442,7 @@ export class DesktopBackendRegistry {
             removedWorktree: false,
             deletedBranch: false,
             skippedReason,
+            blockingThreads: activeUsers.map((thread) => ({ backend: thread.source, threadId: thread.id, title: thread.title })),
           };
         }
 

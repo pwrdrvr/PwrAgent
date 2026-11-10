@@ -1129,6 +1129,8 @@ export type ArchiveThreadCleanupResult = {
   deletedBranch: boolean;
   skippedReason?: string;
   error?: string;
+  /** Active users on the cleanup owner's instance. A remote viewer qualifies that owner. */
+  blockingThreads?: Array<{ backend: AppServerBackendKind; threadId: ThreadIdentifier; title?: string }>;
 };
 
 export type ArchiveCleanupProgress = {
