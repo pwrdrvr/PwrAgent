@@ -35,7 +35,9 @@ version/platform/architecture-keyed cache. It independently clones each runtime,
 checks contents and APFS private bytes/clone IDs/inodes, and publishes under the
 installer lock. It leaves source and package declarations untouched. If activity
 starts during publication, it restores or retains the original rather than
-removing a loaded runtime. Per-path results go beside the plan as `.result.json`.
+removing a loaded runtime. Retained-backup reports include its directory inode
+and original witness-file metadata. Per-path results go beside the plan as
+`.result.json`.
 
 For cache removal, first produce a report using the selected repository:
 
@@ -68,8 +70,10 @@ approved identity and fingerprint. An edited report cannot add arbitrary paths.
   `.vite` directory or assume an unfamiliar/custom cache path is Vitest data.
 - Electron discovery covers physical pnpm package directories and a physical
   `node_modules/electron`. Package version and stock macOS bundle identity must
-  agree. Unexpected root files, tracked files, escaping links, hardlinks and
-  metadata failures cause preservation.
+  agree. Both cleanup and sharing compare runtime bytes, modes and links
+  against the package-checksummed artifact, including the runtime root mode.
+  Modified or unverified runtimes are preserved, as are unexpected root files,
+  tracked files, escaping links, hardlinks and metadata failures.
 - `getattrlist` private size, clone ID and sharing flags are the filesystem
   oracle. Any shared-block flag preserves the entire runtime, including a clone
   with private modifications. `du`, equal hashes and private bytes alone do not
@@ -84,9 +88,10 @@ approved identity and fingerprint. An edited report cannot add arbitrary paths.
   when possible, otherwise reports the retained quarantine path.
 
 This operation does not stop apps, delete worktrees, edit source, clean `.local`
-or desktop `out/`, or remove global pnpm/Electron caches. Sharing may populate
-the verified Electron extraction cache. No sudo or GUI is needed. Report allocated bytes separately from measured private bytes: APFS
-snapshots can retain deleted blocks, so allocation is not an immediate free-space
+or desktop `out/`, or remove global pnpm/Electron caches. Sharing and Electron
+cleanup may populate the verified extraction cache. No sudo or GUI is needed.
+Report allocated bytes separately from measured private bytes: APFS snapshots
+can retain deleted blocks, so allocation is not an immediate free-space
 promise. Zero private bytes alone also does not establish a clone. Report
 per-path failures; do not retry a deletion blindly.
 
