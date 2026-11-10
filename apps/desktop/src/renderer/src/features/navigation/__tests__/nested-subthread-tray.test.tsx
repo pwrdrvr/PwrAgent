@@ -5,6 +5,7 @@ import type { NavigationDirectoryRow, NavigationQueryPage, NavigationQueryReques
 import { Sidebar } from "../Sidebar";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
+import type { PendingLaunchpadCreation, SubthreadLaunchpadDraft } from "../../../lib/useThreadNavigation";
 
 // A sub-thread can own sub-threads. The tray renders the whole subtree flat
 // under the top-level row, so the middle row is the only place that can say
@@ -30,13 +31,42 @@ function resource(id: string, query: NavigationQueryRequest["query"], patch: Par
   } } };
 }
 
-function mount(params: { browseMode: "directories" | "inbox"; middleCollapsed?: boolean }) {
+// A sub-thread of Grandchild 0 the owner has created; its row is loaded.
+const landedUnderGrandchild: PendingLaunchpadCreation = {
+  operationId: "startup-1", submittedAt: 1, selectionKey: "starting-launchpad:1", directoryKey: directory.key,
+  directoryLabel: "Repo", setupProgressKey: "starting-launchpad:1", title: "Landed great-grandchild", input: [],
+  launchpad: { backend: "codex", directoryKey: directory.key, directoryKind: "directory", directoryLabel: "Repo",
+    directoryPath: "/repo", executionMode: "default", prompt: "Landed great-grandchild", workMode: "worktree",
+  } as PendingLaunchpadCreation["launchpad"],
+  parentThreadKey: "codex:grandchild-0", threadKey: "codex:great-grandchild",
+};
+
+// A sub-thread being written on Middle.
+const draftOnMiddle: SubthreadLaunchpadDraft = {
+  kind: "subthread-draft", selectionKey: "launchpad:draft", directoryKey: "draft", directoryLabel: "Repo",
+  launchpad: { backend: "codex", directoryKey: "draft", directoryKind: "directory", directoryLabel: "Repo",
+    directoryPath: "/repo", executionMode: "default", prompt: "", workMode: "worktree",
+    parentThreadId: "middle", parentThreadTitle: "Middle",
+  } as SubthreadLaunchpadDraft["launchpad"],
+  parentThreadKey: "codex:middle", sourceThreadKey: "codex:middle", parentThreadTitle: "Middle",
+};
+
+function mount(params: {
+  browseMode: "directories" | "inbox";
+  middleCollapsed?: boolean;
+  grandchildCollapsed?: boolean;
+  creations?: PendingLaunchpadCreation[];
+  drafts?: SubthreadLaunchpadDraft[];
+}) {
   const root = navRow("root", { title: "Root", pinnedRank: "1", ordinaryChildCount: 2 });
   const middle = navRow("middle", { title: "Middle", parentThreadId: "root", ordinaryChildCount: 12,
     subthreadsCollapsed: params.middleCollapsed });
   const sibling = navRow("sibling", { title: "Sibling", parentThreadId: "root" });
   const grandchildren = Array.from({ length: 10 }, (_, index) =>
-    navRow(`grandchild-${index}`, { title: `Grandchild ${index}`, parentThreadId: "middle", createdAt: 100 - index }));
+    navRow(`grandchild-${index}`, { title: `Grandchild ${index}`, parentThreadId: "middle", createdAt: 100 - index,
+      ...(index === 0 ? { ordinaryChildCount: 1, subthreadsCollapsed: params.grandchildCollapsed } : {}) }));
+  const greatGrandchild = navRow("great-grandchild", { title: "Great-grandchild", parentThreadId: "grandchild-0" });
+  const grandchildChildrenId = 'children:[null,"codex","grandchild-0"]';
   const rootChildrenId = 'children:[null,"codex","root"]';
   const middleChildrenId = 'children:[null,"codex","middle"]';
   // Directories pages a project's mounted children; the browsing lenses page the owner's.
@@ -58,13 +88,18 @@ function mount(params: { browseMode: "directories" | "inbox"; middleCollapsed?: 
     complete: false, nextCursor: "more",
     entries: grandchildren.map((row, index) => ({ row, placement: { kind: "child" as const, parent: middle.ref }, orderKey: String(index) })),
   }));
+  resources.set(grandchildChildrenId, resource(grandchildChildrenId,
+    { kind: "children", parent: grandchildren[0]!.ref, directoryKey }, {
+      entries: [{ row: greatGrandchild, placement: { kind: "child" as const, parent: grandchildren[0]!.ref }, orderKey: "0" }],
+    }));
   const loadMore = vi.fn(async () => undefined);
   const setCollapsed = vi.fn(async () => undefined);
   const navigation = { resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore,
     rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
   const view = render(<Sidebar backends={[]} browseMode={params.browseMode} directories={[directory]}
-    threads={[root, middle, sibling, ...grandchildren]}
+    threads={[root, middle, sibling, ...grandchildren, greatGrandchild]}
+    pendingLaunchpadCreations={params.creations} subthreadLaunchpadDrafts={params.drafts}
     loading={false} selectedItemKey="codex:root" selectedThreadDirectoryKeys={[directory.key]}
     pagedNavigation={navigation} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined}
@@ -108,6 +143,26 @@ for (const browseMode of ["directories", "inbox"] as const) {
     expect(siblingAt).toBe(moreAt + 1);
     // The tray stays a valid list: its paging control is a listitem too.
     expect(items.map((item) => item.getAttribute("role"))).toEqual(items.map(() => "listitem"));
+    f.view.unmount();
+  });
+}
+
+for (const browseMode of ["directories", "inbox"] as const) {
+  it(`${browseMode}: a thread folded away under a sub-thread has landed, so no starting row stands in for it`, () => {
+    const f = mount({ browseMode, grandchildCollapsed: true, creations: [landedUnderGrandchild] });
+    expect(screen.getByRole("button", { name: "Expand sub-threads for Grandchild 0" })).toBeInTheDocument();
+    expect(screen.queryByText("Great-grandchild")).not.toBeInTheDocument();
+    expect(screen.queryByText("Landed great-grandchild")).not.toBeInTheDocument();
+    f.view.unmount();
+  });
+
+  it(`${browseMode}: a sub-thread being written holds its folded parent open`, () => {
+    const f = mount({ browseMode, middleCollapsed: true, drafts: [draftOnMiddle] });
+    // Open, as a top-level row holding a draft is: the draft row is never
+    // drawn under a chevron that says the section is closed.
+    expect(screen.getByRole("button", { name: "Collapse sub-threads for Middle" }))
+      .toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Grandchild 0")).toBeInTheDocument();
     f.view.unmount();
   });
 }

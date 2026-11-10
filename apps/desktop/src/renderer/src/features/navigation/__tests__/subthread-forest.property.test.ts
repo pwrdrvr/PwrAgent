@@ -88,12 +88,15 @@ it("reserves a promoted child before walking its ancestor's tray (shrunk #2769 r
 
 /**
  * The model for a tray whose rows each draw their own disclosure toggle. A
- * row renders when it is a lens root, or when no non-root ancestor between it
- * and its nearest root is folded. Every rendered, unfolded mid-level parent
- * with a child page gets exactly one paging slot, after its last rendered row:
- * a mid-level parent's page grows past 10 rows only through that slot.
+ * row's fold holds when it is collapsed and no sub-thread draft is being
+ * written at or below it. A row renders when it is a lens root, or when no
+ * non-root ancestor between it and its nearest root holds a fold; every other
+ * row is folded away, which still counts as landed. Every rendered, open
+ * mid-level parent with a child page gets exactly one paging slot, after its
+ * last rendered row: a mid-level parent's page grows past 10 rows only
+ * through that slot.
  */
-function checkCollapsibleTrays(nodes: Node[], reverseRoots: boolean) {
+function checkCollapsibleTrays(nodes: Node[], reverseRoots: boolean, draftIndices: number[] = []) {
   const parents = nodes.map((node, index) => node.parent % (index + 1) - 1);
   const rows: NavigationThreadSummary[] = nodes.map((node, index) => ({ ...row(`thread-${index}`), subthreadsCollapsed: node.collapsed }));
   const keys = rows.map(threadSummaryIdentityKey);
@@ -105,28 +108,39 @@ function checkCollapsibleTrays(nodes: Node[], reverseRoots: boolean) {
   const isRoot = (index: number) => parents[index] === -1 || nodes[index]!.promoted;
   const roots = rows.filter((_, index) => isRoot(index));
   if (reverseRoots) roots.reverse();
+  const draftParentKeys = new Set(draftIndices.map((index) => keys[index % keys.length]!));
   const trays = createSubthreadTrays(children, roots, undefined, {
+    draftParentKeys,
     isCollapsed: (thread) => thread.subthreadsCollapsed === true,
   });
 
+  const holdsDraft = (index: number): boolean => draftParentKeys.has(keys[index]!)
+    || parents.some((parent, child) => parent === index && holdsDraft(child));
+  const folds = (index: number): boolean => nodes[index]!.collapsed && !holdsDraft(index);
   const shown = (index: number): boolean => {
     for (let parent = parents[index]!; !isRoot(index); index = parent, parent = parents[index]!) {
       if (isRoot(parent)) return true;
-      if (nodes[parent]!.collapsed) return false;
+      if (folds(parent)) return false;
     }
     return true;
   };
   const rendered = roots.flatMap((root) => [root, ...trays.subtree(threadSummaryIdentityKey(root))]);
   expect(rendered.map(threadSummaryIdentityKey).sort())
     .toEqual(keys.filter((_, index) => shown(index)).sort());
+  // A row is either rendered or folded away: never neither, never both.
+  keys.forEach((key, index) => expect(trays.folded(key)).toBe(!shown(index)));
 
   for (const root of roots) {
     const tray = trays.subtree(threadSummaryIdentityKey(root)).map(threadSummaryIdentityKey);
     const slots = tray.flatMap((key, at) => trays.pagesAfter(key).map((parent) => ({ parentKey: threadSummaryIdentityKey(parent), at })));
     const expected = tray.filter((key) => {
       const index = keys.indexOf(key);
-      return !nodes[index]!.collapsed && children.has(key);
+      return !folds(index) && children.has(key);
     });
+    for (const key of tray) {
+      const index = keys.indexOf(key);
+      expect(trays.heldOpen(key)).toBe(nodes[index]!.collapsed && holdsDraft(index));
+    }
     expect(slots.map((slot) => slot.parentKey).sort()).toEqual([...expected].sort());
     for (const { parentKey, at } of slots) {
       const start = tray.indexOf(parentKey);
@@ -144,5 +158,5 @@ function checkCollapsibleTrays(nodes: Node[], reverseRoots: boolean) {
 }
 
 it("folds a collapsed mid-level parent and gives each open one its own paging slot after its subtree", () => {
-  fc.assert(fc.property(forest, fc.boolean(), checkCollapsibleTrays));
+  fc.assert(fc.property(forest, fc.boolean(), fc.array(fc.nat(20), { maxLength: 3 }), checkCollapsibleTrays));
 });

@@ -24,7 +24,7 @@ import { useDropIndicatorController } from "./drag-drop";
 import type { NestThreadHandler } from "./thread-nest-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
 import { useThreadNestDrag } from "./useThreadNestDrag";
-import { createSubthreadTrays, ordinaryChildCountOf } from "./subthread-trays";
+import { canFoldSubthreads, createSubthreadTrays, ordinaryChildCountOf } from "./subthread-trays";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
   threadSummaryIdentityKey,
@@ -278,22 +278,28 @@ export function RecentsList(props: RecentsListProps) {
     if (row && !children.some((child) => threadSummaryIdentityKey(child) === key)) children.push(row);
     childrenByParentKey.set(parentKey, children);
   }
+  const canSetSubthreadsCollapsed = Boolean(props.onSetSubthreadsCollapsed);
+  const subthreadDraftParentKeys = new Set((props.startingThreads ?? [])
+    .filter(isSubthreadLaunchpadDraft).map((draft) => draft.parentThreadKey));
   // One tray per top-level row, holding its whole descendant subtree in
   // depth-first order. The owner keys each child under its *true* parent,
   // so a grandchild is filed under a row that is itself a child; rendering
-  // only direct children would silently drop it from this lens.
-  // A tray row folds its own sub-threads only where its chevron can draw:
-  // folding behind a missing control would strand the rows it hides.
-  const canFoldSubthreads = (thread: NavigationThreadSummary): boolean =>
-    Boolean(props.onSetSubthreadsCollapsed) && threadSupportsFederationCapability(thread, "thread_grouping");
+  // only direct children would silently drop it from this lens. A tray row
+  // folds its own sub-threads only where it draws a chevron: folding behind
+  // a missing control would strand the rows it hides.
   const trays = createSubthreadTrays(childrenByParentKey, [...pinnedRoots, ...topLevelThreads],
     readOwnerChildOrder(props.pagedNavigation?.resources ?? new Map(), presentation),
-    { isCollapsed: (thread) => isSubthreadSectionCollapsed(thread) && canFoldSubthreads(thread) });
+    { draftParentKeys: subthreadDraftParentKeys, isCollapsed: (thread) =>
+      isSubthreadSectionCollapsed(thread)
+      && ordinaryChildCountOf(thread) > 0
+      && canFoldSubthreads(thread, canSetSubthreadsCollapsed) });
   const renderedThreadKeys = new Set(topLevelKeys);
   for (const key of topLevelKeys) {
     for (const child of trays.subtree(key)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
   }
-  const startingThreads = selectUnlandedStartingThreads(props.startingThreads, renderedThreadKeys);
+  // A row folded away under a sub-thread has landed too; it is just closed.
+  const startingThreads = selectUnlandedStartingThreads(props.startingThreads,
+    { has: (threadKey) => renderedThreadKeys.has(threadKey) || trays.folded(threadKey) });
   // A rendered ancestor is still revealing the thread while its tray is shut,
   // or open with its children page on the way. Once that page has landed
   // without the thread (it is further down the tray), the thread needs a row.
@@ -440,8 +446,12 @@ export function RecentsList(props: RecentsListProps) {
               selectedThreadKey={props.selectedThreadKey}
               selected={props.selectedThreadKeys?.has(childKey)}
               subthreadCount={childSubthreadCount}
-              subthreadsCollapsed={isSubthreadSectionCollapsed(child)}
-              onToggleSubthreads={childSubthreadCount > 0 && canFoldSubthreads(child) ? toggleSubthreads : undefined}
+              subthreadsCollapsed={isSubthreadSectionCollapsed(child) && !trays.heldOpen(childKey)}
+              onToggleSubthreads={
+                childSubthreadCount > 0 && canFoldSubthreads(child, canSetSubthreadsCollapsed)
+                  ? toggleSubthreads
+                  : undefined
+              }
               thinkingThreadKeys={props.thinkingThreadKeys}
               agentCommandThreadKeys={props.agentCommandThreadKeys}
               thread={child}
@@ -590,8 +600,7 @@ export function RecentsList(props: RecentsListProps) {
           onMovePinnedThread={pinned && pinOrderingEnabled ? movePinnedThread : undefined}
           onToggleSubthreads={
             subthreadCount > 0
-              && threadSupportsFederationCapability(thread, "thread_grouping")
-              && props.onSetSubthreadsCollapsed
+              && canFoldSubthreads(thread, canSetSubthreadsCollapsed)
               ? toggleSubthreads
               : undefined
           }

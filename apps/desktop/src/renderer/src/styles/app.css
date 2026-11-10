@@ -6721,6 +6721,19 @@ a.button {
   left: calc(min(48px, 12px * var(--thread-row-nested-depth, 1)) - 2px);
 }
 
+/* Compact and Minimal give every row a flat 12px padding-left at any depth,
+   so a nested chevron stays at the top-level 8px. Following the depth there
+   put it over the title from depth 2. The X-ray row keeps the depth inset. */
+:root[data-density="compact"] .thread-row-shell--nested:not(:is(.density-preview, [data-xray-target]) *):not([data-xray-target]) .thread-row__subthread-toggle,
+.density-preview--compact .thread-row-shell--nested .thread-row__subthread-toggle {
+  left: 8px;
+}
+
+:root[data-density="minimal"] .thread-row-shell--nested:not(:is(.density-preview, [data-xray-target]) *):not([data-xray-target]) .thread-row__subthread-toggle,
+.density-preview--minimal .thread-row-shell--nested .thread-row__subthread-toggle {
+  left: 8px;
+}
+
 .thread-row__subthread-toggle::before {
   width: 0;
   height: 0;

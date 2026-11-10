@@ -1,6 +1,6 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { sortSubthreadSummaries } from "@pwragent/shared";
-import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { threadSummaryIdentityKey, threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 
 export type SubthreadTrays = {
@@ -35,6 +35,18 @@ export type SubthreadTrays = {
    * listed; its control trails the whole tray.
    */
   pagesAfter: (threadKey: string) => readonly NavigationThreadSummary[];
+  /**
+   * Whether a row is loaded but hidden under a folded descendant. It has
+   * landed: it is not a starting thread still waiting for a row, and a
+   * starting sub-thread under it belongs inside the fold.
+   */
+  folded: (threadKey: string) => boolean;
+  /**
+   * Whether a sub-thread draft at or below this row holds its fold open.
+   * Such a row renders open whatever its saved fold says, so its chevron
+   * must read open too.
+   */
+  heldOpen: (threadKey: string) => boolean;
 };
 
 export type SubthreadTrayOptions = {
@@ -45,6 +57,12 @@ export type SubthreadTrayOptions = {
    * A tray owner's own collapse is the caller's to honor.
    */
   isCollapsed?: (thread: NavigationThreadSummary) => boolean;
+  /**
+   * Parents of the sub-thread drafts being written. A draft opens every fold
+   * above it, as it opens a tray owner, so the draft row is never shown under
+   * a closed chevron or hidden inside a fold.
+   */
+  draftParentKeys?: ReadonlySet<string>;
 };
 
 /**
@@ -81,6 +99,22 @@ export function createSubthreadTrays(
   const directChildKeysByTrayKey = new Map<string, string[]>();
   const depthByThreadKey = new Map<string, number>();
   const pagesAfterByThreadKey = new Map<string, NavigationThreadSummary[]>();
+  const foldedThreadKeys = new Set<string>();
+  const heldOpenThreadKeys = new Set<string>();
+  // Only computed while a draft exists, which is rare; memoized per row.
+  const holdsDraft = new Map<string, boolean>();
+  const subtreeHoldsDraft = (threadKey: string): boolean => {
+    const draftParentKeys = options.draftParentKeys;
+    if (!draftParentKeys?.size) return false;
+    const known = holdsDraft.get(threadKey);
+    if (known !== undefined) return known;
+    holdsDraft.set(threadKey, false);
+    const held = draftParentKeys.has(threadKey)
+      || (childrenByParentKey.get(threadKey) ?? []).some((child) =>
+        subtreeHoldsDraft(threadSummaryIdentityKey(child)));
+    holdsDraft.set(threadKey, held);
+    return held;
+  };
   const placedThreadKeys = new Set(owners.map(threadSummaryIdentityKey));
 
   const collectSubtree = (
@@ -117,7 +151,14 @@ export function createSubthreadTrays(
       directChildKeys?.push(childKey);
       tray.push(child);
       depthByThreadKey.set(childKey, depth);
-      if (options.isCollapsed?.(child)) continue;
+      if (options.isCollapsed?.(child)) {
+        if (subtreeHoldsDraft(childKey)) {
+          heldOpenThreadKeys.add(childKey);
+        } else {
+          foldSubtree(childKey);
+          continue;
+        }
+      }
       collectSubtree(trayKey, child, childKey, depth + 1);
       // A parent with a child page (or one still loading) closes its subtree
       // here. Recursion has already closed every deeper parent, so the list
@@ -131,6 +172,16 @@ export function createSubthreadTrays(
     }
   };
 
+  // A promoted root keeps its own tray, so a fold never claims it.
+  const foldSubtree = (parentKey: string): void => {
+    for (const child of childrenByParentKey.get(parentKey) ?? []) {
+      const childKey = threadSummaryIdentityKey(child);
+      if (placedThreadKeys.has(childKey) || foldedThreadKeys.has(childKey)) continue;
+      foldedThreadKeys.add(childKey);
+      foldSubtree(childKey);
+    }
+  };
+
   for (const owner of owners) {
     const ownerKey = threadSummaryIdentityKey(owner);
     collectSubtree(ownerKey, owner, ownerKey, 1);
@@ -139,9 +190,23 @@ export function createSubthreadTrays(
   return {
     depth: (threadKey) => depthByThreadKey.get(threadKey) ?? 1,
     directChildKeys: (trayKey) => directChildKeysByTrayKey.get(trayKey) ?? [],
+    folded: (threadKey) => foldedThreadKeys.has(threadKey),
+    heldOpen: (threadKey) => heldOpenThreadKeys.has(threadKey),
     pagesAfter: (threadKey) => pagesAfterByThreadKey.get(threadKey) ?? NO_PAGES,
     subtree: (trayKey) => subtreeByTrayKey.get(trayKey) ?? [],
   };
+}
+
+/**
+ * Whether a row draws its sub-thread chevron: the owner supports grouping and
+ * this window can write the fold. A row folds only where this holds, or the
+ * rows it hides would have no control to bring them back.
+ */
+export function canFoldSubthreads(
+  thread: NavigationThreadSummary,
+  canSetCollapsed: boolean,
+): boolean {
+  return canSetCollapsed && threadSupportsFederationCapability(thread, "thread_grouping");
 }
 
 /** The owner's count of a row's ordinary sub-threads, loaded or not. */
