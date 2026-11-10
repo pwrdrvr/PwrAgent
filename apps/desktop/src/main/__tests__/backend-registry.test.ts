@@ -41633,11 +41633,12 @@ command = "pnpm dev"
   );
 
   it.each(["thread-parent", "thread-review"])(
-    "delivers grouped agent guidance after a native review without holding the queue (%s)",
+    "delivers independent agent guidance after a native review without holding the queue (%s)",
     async (reviewThreadId) => {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start", "turn/steer", "review/start"] },
         startReviewResult: { threadId: "thread-parent", reviewThreadId, turnId: "review-turn" },
+        startTurnResults: [1, 2, 3].map(index => ({ threadId: "thread-parent", turnId: `guidance-${index}` })),
       });
       const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
@@ -41659,11 +41660,11 @@ command = "pnpm dev"
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(first.status).toBe("queued");
-      expect(second.entry.id).toBe(first.entry.id);
+      expect(second.entry.id).not.toBe(first.entry.id);
       expect(steer).not.toHaveBeenCalled();
       expect(codexClient.startTurnCallCount).toBe(0);
       const entries = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "thread-parent")];
-      expect(entries?.map((entry) => entry.queueEntryId)).toEqual([first.entry.id, "operator-next"]);
+      expect(entries?.map((entry) => entry.queueEntryId)).toEqual([first.entry.id, second.entry.id, "operator-next"]);
       expect(entries?.some((entry) => entry.manualReleaseRequired)).toBe(false);
       await codexClient.emit({ method: "turn/completed", params: {
         threadId: reviewThreadId, turnId: "review-turn", turn: { id: "review-turn", status: "completed", output: [] },
@@ -41671,10 +41672,11 @@ command = "pnpm dev"
       await waitForCondition(() => codexClient.startTurnCallCount === 1);
       const delivered = codexClient.lastStartTurnParams?.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
       expect(delivered).toContain("Alice evidence");
-      expect(delivered).toContain("Bob evidence");
-      expect(steer).not.toHaveBeenCalled();
+      expect(delivered).not.toContain("Bob evidence");
+      await waitForCondition(() => steer.mock.calls.length === 1);
+      expect(steer.mock.calls[0]?.[0].input).toEqual([{ type: "text", text: "Bob evidence" }]);
       await codexClient.emit({ method: "turn/completed", params: {
-        threadId: "thread-parent", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+        threadId: "thread-parent", turnId: "guidance-1", turn: { id: "guidance-1", status: "completed", output: [] },
       } });
       await waitForCondition(() => codexClient.startTurnCallCount === 2);
       expect(codexClient.lastStartTurnParams?.input).toEqual([{ type: "text", text: "Operator follow-up" }]);
@@ -49591,7 +49593,7 @@ script = "printf setup"
     expect(JSON.stringify(notice).length).toBeLessThan(1000);
   });
 
-  it("groups cross-thread send and steer admissions while a previous steer is dispatching", async () => {
+  it("keeps cross-thread send and steer admissions immutable while a previous steer is dispatching", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
     const correspondenceStore = new ThreadCorrespondenceStore();
     const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
@@ -49622,42 +49624,37 @@ script = "printf setup"
         : await registry.controlActiveTurn({ operation: "steer", backend: "codex", threadId: "recipient", requestId: `request-${index}`, expectedTurnId: "active-recipient", input, messageOrigin });
     }));
     const snapshot = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")];
-    expect(snapshot).toHaveLength(1);
-    const queueEntryId = snapshot![0]!.queueEntryId;
+    expect(snapshot).toHaveLength(20);
     expect(sends).toHaveLength(20);
-    const queued = await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId });
-    const text = queued.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
-    for (let index = 0; index < 20; index += 1) {
-      expect(text).toContain(`Evidence ${index}`);
-      expect(text).toContain(`Sender ${index}`);
+    const waiting = await Promise.all(snapshot!.map(entry => registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: entry.queueEntryId })));
+    for (const queued of waiting) {
+      const index = Number(queued.messageOrigin!.sourceThread!.threadId.slice("sender-".length));
+      expect(queued.input).toEqual([{ type: "text", text: `Evidence ${index}` }]);
+      expect(queued.messageOrigin?.sourceThread?.threadId).toBe(`sender-${index}`);
     }
+    const queueEntryId = snapshot![waiting.findIndex(entry => entry.messageOrigin?.sourceThread?.threadId === "sender-7")]!.queueEntryId;
     const replacement = await registry.replaceQueuedAgentMessage({ backend: "codex", threadId: "recipient", queueEntryId,
       input: [{ type: "text", text: "Sender 7 consolidated evidence" }],
       messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
     });
     expect(steers.mock.calls[0]![0].input).toEqual([{ type: "text", text: "Already dispatching" }]);
     release();
-    await waitForCondition(() => steers.mock.calls.length === 2);
+    await waitForCondition(() => steers.mock.calls.length === 21);
     await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] === undefined);
     expect(codexClient.startTurnCallCount).toBe(0);
-    const groupedStart = events.find((event) => event.notification.method === "thread/turnQueue/updated"
+    const replacementStart = events.find((event) => event.notification.method === "thread/turnQueue/updated"
       && event.notification.params.queueEntryId === replacement.queueEntryId && event.notification.params.status === "started");
-    expect(groupedStart).toBeDefined();
-    const summary = (groupedStart!.notification.params as { incomingWork?: {
+    expect(replacementStart).toBeDefined();
+    const summary = (replacementStart!.notification.params as { incomingWork?: {
       messages: { origin: { sourceThread: { threadId: string; title: string } }; preview: string }[];
       omittedMessageCount: number;
     } }).incomingWork;
-    expect(summary?.messages).toHaveLength(3);
-    expect(summary?.omittedMessageCount).toBe(17);
-    for (const message of summary!.messages) {
-      const index = Number(message.origin.sourceThread.threadId.slice("sender-".length));
-      expect(message.origin.sourceThread.title).toBe(`Sender ${index}`);
-      expect(message.preview).toBe(`Evidence ${index}`);
-    }
-    const delivered = steers.mock.calls[1]![0].input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
-    expect(delivered).toContain("Sender 7 consolidated evidence");
-    expect(delivered).not.toContain("Evidence 7");
-    expect(delivered).toContain("Evidence 19");
+    expect(summary?.messages).toHaveLength(1);
+    expect(summary?.omittedMessageCount).toBe(0);
+    expect(summary?.messages[0]?.origin.sourceThread.threadId).toBe("sender-7");
+    expect(summary?.messages[0]?.preview).toBe("Sender 7 consolidated evidence");
+    expect(steers.mock.calls.slice(1).map(([request]) => request.input)).toEqual(waiting.map(entry =>
+      entry.messageOrigin?.sourceThread?.threadId === "sender-7" ? [{ type: "text", text: "Sender 7 consolidated evidence" }] : entry.input));
     for (let index = 0; index < 20; index += 1) {
       expect(correspondenceStore.message({ backend: "codex", threadId: `sender-${index}` }, `message-${index}`)?.text)
         .toContain(index === 7 ? "Cancelled" : "Receiving thread started work");
@@ -49667,7 +49664,7 @@ script = "printf setup"
       messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(steers).toHaveBeenCalledTimes(2);
+    expect(steers).toHaveBeenCalledTimes(21);
     expect((await registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: "distinct-turn" })).input)
       .toEqual([{ type: "text", text: "Start separate work" }]);
     await codexClient.emit({

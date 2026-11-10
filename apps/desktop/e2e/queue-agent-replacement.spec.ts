@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { replacementHostDependencies } from "./fixtures/queue-agent-replacement-bundle";
 import type { exerciseDesktopAgentReplacement } from "./fixtures/queue-agent-replacement-driver";
+import type { exerciseDesktopAgentAdmission } from "./fixtures/queue-agent-admission-driver";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -18,7 +19,7 @@ for (const grouped of [false, true]) {
       fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
       async preLaunchHook(homeRoot) {
         driverPath = path.join(homeRoot, "desktop-replacement-driver.cjs");
-        await build({ entryPoints: [path.join(specDir, "fixtures/queue-agent-replacement-driver.ts")], outfile: driverPath,
+        await build({ entryPoints: [path.join(specDir, grouped ? "fixtures/queue-agent-admission-driver.ts" : "fixtures/queue-agent-replacement-driver.ts")], outfile: driverPath,
           bundle: true, platform: "node", format: "cjs", logLevel: "silent", external: ["electron"],
           define: { "import.meta.url": JSON.stringify(pathToFileURL(driverPath).href), "import.meta.dirname": JSON.stringify(homeRoot) },
           plugins: [replacementHostDependencies(specifier => require.resolve(specifier)), { name: "isolated-desktop-replacement-owner", setup(builder) {
@@ -39,13 +40,16 @@ for (const grouped of [false, true]) {
       const result = await app.electronApp.evaluate(async (_electron, args) => {
         const driver = process.getBuiltinModule("node:module").createRequire(args.driverPath)(args.driverPath) as {
           exerciseDesktopAgentReplacement: typeof exerciseDesktopAgentReplacement;
+          exerciseDesktopAgentAdmission: typeof exerciseDesktopAgentAdmission;
         };
-        return await driver.exerciseDesktopAgentReplacement(args.root, args.grouped);
+        return args.grouped ? await driver.exerciseDesktopAgentAdmission(args.root, true)
+          : { ...await driver.exerciseDesktopAgentReplacement(args.root, false), additionalIds: [] as string[] };
       }, { driverPath, root: path.join(app.homeRoot, "isolated-replacement-owner"), grouped });
       expect(result.replacementId).not.toBe(result.originalId);
       expect(result.retired).toBe(true);
       expect(result.statuses).toEqual([[result.originalId, "cancelled"], [result.replacementId, "queued"]]);
-      expect(result.waiting).toEqual([...(grouped ? ["group-review"] : []), result.replacementId, "replacement-neighbor"]);
+      expect(result.waiting).toEqual([...(grouped ? ["group-review"] : []), result.replacementId, ...result.additionalIds, "replacement-neighbor"]);
+      expect(result.additionalIds).toHaveLength(grouped ? 3 : 0);
       expect(result.text).toContain("Fresh Alice input");
       expect(result.text).not.toContain("Original Alice input");
       if (grouped) {
