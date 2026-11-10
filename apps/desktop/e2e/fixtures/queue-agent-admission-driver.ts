@@ -81,8 +81,15 @@ export async function exerciseDesktopAgentAdmission(root: string, grouped: boole
     const result = { originalId: queued.entry.id, replacementId: replacement.queueEntryId!, retired, statuses,
       additionalIds: additional.map(entry => entry.id), waiting: waiting.map(entry => entry.id), text: current.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n"),
       paused: row.paused, pauseRevision: row.pauseRevision, held: row.manualReleaseRequired,
-      nativeStarts: OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start").length };
+      nativeStarts: OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start").length,
+      untouchedSenderText: "", cancelledReceipt: "" };
     if (JSON.stringify(original.input) !== originalInput) throw new Error("Original accepted input changed");
+    if (grouped) {
+      const bob = await registry.replaceQueuedAgentMessage({ ...identity, queueEntryId: queued.entry.id,
+        input: [{ type: "text", text: "Fresh Bob input" }], messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
+      const currentBob = await registry.readQueuedTurn({ ...identity, queueEntryId: bob.queueEntryId! });
+      result.untouchedSenderText = currentBob.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n");
+    }
     await registry.interruptTurn(active);
     return result;
   } finally {

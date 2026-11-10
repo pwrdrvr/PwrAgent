@@ -2698,7 +2698,14 @@ it("the actual desktop federated caller retains untouched senders' original repl
         input: [{ type: "text" as const, text }], ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}),
         messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: sender } } });
       const handles = new Map<string, string>();
-      for (const sender of ["alice", "bob"]) handles.set(sender, (await handler(request(sender, `Original ${sender}`)))!.queueEntryId!);
+      // Seed a legacy batch; new production messages have individual identities.
+      const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+      for (const sender of ["alice", "bob"]) {
+        const accepted = await queue.submitGroupedSteer({ ...identity, origin: "manual",
+          input: [{ type: "text", text: `Original ${sender}` }], messageOrigin: authenticateMessageOrigin({
+            messageOrigin: request(sender, "").messageOrigin, sourceInstanceId: "viewer" }) });
+        handles.set(sender, accepted.entry.id);
+      }
       expect(handles.get("alice")).toBe(handles.get("bob"));
       const { writes } = await measureSqliteWrites(async () => {
         for (const [index, sender] of edits.entries()) {
