@@ -13309,7 +13309,7 @@ describe("CodexAppServerClient", () => {
   describe("helper lifecycle config", () => {
     const cases = ["title", "structured", "data-only", "tool"] as const;
 
-    async function runHelper(kind: typeof cases[number], fallback: boolean) {
+    async function runHelper(kind: typeof cases[number], fallback: boolean, constrained = false) {
       const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
       if (fallback) {
         MockTransport.threadStartErrors = [{ code: -32602, message: "unsupported helper config" }];
@@ -13323,7 +13323,8 @@ describe("CodexAppServerClient", () => {
           output: [{ type: "text", text: JSON.stringify({ title: "Fixture title" }) }],
         },
       };
-      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [],
+        ...(constrained ? { helperExecutionPolicy: { approvalPolicy: "never" as const, sandbox: "read-only" as const } } : {}) });
       const common = {
         prompt: "Return a fixture title.",
         schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } },
@@ -13354,10 +13355,19 @@ describe("CodexAppServerClient", () => {
       );
       const starts = requests.filter((request) => request.method === "thread/start");
       expect(starts).toHaveLength(fallback ? 2 : 1);
-      return { client, starts };
+      return { client, starts, requests };
     }
 
     for (const fallback of [false, true]) {
+      it.each(cases)(`retains host never/read-only policy for %s helpers (fallback=${fallback})`, async (kind) => {
+        const { client, starts, requests } = await runHelper(kind, fallback, true);
+        try {
+          for (const start of starts) expect(start.params).toMatchObject({ approvalPolicy: "never", sandbox: "read-only" });
+          const turn = requests.find(request => request.method === "turn/start");
+          expect(turn?.params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly" } });
+        } finally { await client.close(); }
+      });
+
       it.each(cases)(`suppresses inherited hooks for %s helpers (fallback=${fallback})`, async (kind) => {
         const { client, starts } = await runHelper(kind, fallback);
         try {

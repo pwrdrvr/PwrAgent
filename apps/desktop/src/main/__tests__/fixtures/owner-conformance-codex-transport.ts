@@ -33,9 +33,11 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   static refusedStarts = 0;
   static recordsFile: string | undefined;
+  static helperTitle: string | undefined;
   private static sequence = 0;
   private handler: (message: string) => void = () => {};
   private readonly activeTurns = new Map<string, FixtureTurn>();
+  private readonly helpers = new Set<string>();
 
   static reset(): void {
     OwnerConformanceCodexTransport.threads = new Map();
@@ -43,6 +45,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.sequence = 0;
     OwnerConformanceCodexTransport.refusedStarts = 0;
     OwnerConformanceCodexTransport.recordsFile = undefined;
+    OwnerConformanceCodexTransport.helperTitle = undefined;
   }
 
   async connect(): Promise<void> {}
@@ -77,6 +80,22 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     let followUp: { method: string; params: unknown } | undefined;
     if (request.method === "initialize") {
       result = { userAgent: "fixture-codex/0.159.2", codexHome: "/fixture-codex-home", platformFamily: "unix", platformOs: "linux" };
+    } else if (request.method === "config/read" && OwnerConformanceCodexTransport.helperTitle) {
+      result = { config: { mcp_servers: {} } };
+    } else if (request.method === "account/read") {
+      result = { account: null, requiresOpenaiAuth: false };
+    } else if (request.method === "mcpServerStatus/list" && this.helpers.has(String(params.threadId))) {
+      result = { data: [], nextCursor: null };
+    } else if (request.method === "thread/unsubscribe" && this.helpers.has(String(params.threadId))) {
+      this.helpers.delete(String(params.threadId));
+    } else if (request.method === "thread/start" && params.ephemeral === true && OwnerConformanceCodexTransport.helperTitle) {
+      const id = `helper-${++OwnerConformanceCodexTransport.sequence}`;
+      this.helpers.add(id);
+      result = { thread: { id, cwd: params.cwd, ephemeral: true, turns: [] }, instructionSources: [] };
+    } else if (request.method === "turn/start" && this.helpers.has(String(params.threadId))) {
+      result = { turn: { id: `helper-turn-${++OwnerConformanceCodexTransport.sequence}`, status: "completed", items: [
+        { type: "agentMessage", text: JSON.stringify({ title: OwnerConformanceCodexTransport.helperTitle }) },
+      ] } };
     } else if (request.method === "model/list") {
       result = { data: [{ id: "fixture-model", model: "fixture-model", displayName: "Fixture model", isDefault: true,
         supportedReasoningEfforts: [] }], nextCursor: null };

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A protocol fixture, not a model/provider. All state is test-owned.
 import assert from "node:assert/strict";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
@@ -15,10 +15,21 @@ let initialized = false;
 let acknowledged = false;
 let active;
 let sequence = 0;
+const helpers = new Set();
+const helperControl = () => {
+  try { return JSON.parse(readFileSync(path.join(directory, "helper-title.json"), "utf8")); }
+  catch (error) { if (error.code !== "ENOENT") throw error; return undefined; }
+};
 const records = path.join(directory, "fixture-threads.json");
 let threads;
 try { threads = JSON.parse(readFileSync(records, "utf8")); } catch { threads = {}; }
-const persist = () => writeFileSync(records, JSON.stringify(threads));
+const persist = () => {
+  // Daemon shutdown may kill this fixture during a native-name update. Keep
+  // the preceding complete provider snapshot until its replacement is ready.
+  const temporary = `${records}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify(threads));
+  renameSync(temporary, records);
+};
 const complete = (status) => {
   if (!active) return;
   clearTimeout(active.timer);
@@ -52,7 +63,36 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     acknowledged = true;
   } else {
     assert.ok(acknowledged);
-    if (method === "model/list") {
+    const stalled = helperControl()?.stalledMethod;
+    if (method === stalled
+      && (method !== "thread/start" || params.ephemeral === true)
+      && (method !== "turn/start" || helpers.has(params.threadId))
+      && (method !== "thread/name/set" || params.name === "Helper generated title")) continue;
+    if (method === "config/read" && helperControl()) {
+      reply({ config: { mcp_servers: {} } });
+    } else if (method === "account/read") {
+      reply({ account: null, requiresOpenaiAuth: false });
+    } else if (method === "mcpServerStatus/list" && helpers.has(params.threadId)) {
+      reply({ data: [], nextCursor: null });
+    } else if (method === "thread/unsubscribe" && helpers.has(params.threadId)) {
+      helpers.delete(params.threadId);
+      reply({});
+    } else if (method === "thread/start" && params.ephemeral === true && helperControl()) {
+      assert.equal(params.approvalPolicy, "never");
+      assert.equal(params.sandbox, "read-only");
+      assert.equal(params.config.project_doc_max_bytes, 0);
+      assert.equal(params.config.features.hooks, false);
+      assert.deepEqual(params.config.notify, []);
+      assert.equal(params.dynamicTools, undefined);
+      const threadId = `helper-${++sequence}`;
+      helpers.add(threadId);
+      reply({ thread: { id: threadId, cwd: params.cwd, ephemeral: true, turns: [] }, instructionSources: [] });
+    } else if (method === "turn/start" && helpers.has(params.threadId)) {
+      assert.ok(params.outputSchema);
+      reply({ turn: { id: `helper-turn-${++sequence}`, status: "completed", items: [
+        { type: "agentMessage", text: JSON.stringify({ title: helperControl().title }) },
+      ] } });
+    } else if (method === "model/list") {
       reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, hidden: false,
         supportedReasoningEfforts: [], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
     } else if (method === "thread/start" || method === "thread/resume") {

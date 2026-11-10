@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { CodexAppServerClient } from "../dist/federation-core.js";
 import { readMessages, MAX_RESPONSE_BYTES } from "./wire.js";
 
@@ -75,14 +76,18 @@ const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 export class Codex extends CodexAppServerClient {
   constructor({ command, home, workspace, onNotification, onRequest, onFailure, timeout = 30000 }) {
+    const optionalTitleWork = new AsyncLocalStorage();
     const transport = new OutpostCodexTransport({ command, home, workspace, onFailure,
       onUnexpectedExit: () => {} });
-    super({ env: { ...process.env, CODEX_HOME: home }, requestTimeoutMs: timeout }, {
+    super({ env: { ...process.env, CODEX_HOME: home }, requestTimeoutMs: timeout,
+      helperExecutionPolicy: { approvalPolicy: "never", sandbox: "read-only" } }, {
       createTransport: (callbacks) => { transport.onUnexpectedExit = callbacks.onUnexpectedExit; return transport; },
       clientInfo: { name: "pwragent-headless", title: "PwrAgent Headless" },
       onRequestFailure: (error) => {
-        // A lost mutation response leaves an uncertain outcome; stop this host.
-        if (error instanceof Error && error.message.startsWith("json-rpc timeout:")) onFailure(error);
+        // Optional title setup, execution, cleanup and application can fail
+        // without losing a user's turn. The async scope belongs to each caller,
+        // so concurrent user requests retain their uncertain-outcome handling.
+        if (!optionalTitleWork.getStore() && error instanceof Error && error.message.startsWith("json-rpc timeout:")) onFailure(error);
       },
       logger: quietLogger,
       rpcLogger: quietLogger,
@@ -101,11 +106,13 @@ export class Codex extends CodexAppServerClient {
       sampleAppServerProcessTree: async () => ({}),
     });
     this.hostTransport = transport;
+    this.optionalTitleWork = optionalTitleWork;
     this.onNotification(onNotification);
     this.onRequest(onRequest);
   }
 
   get child() { return this.hostTransport.child; }
+  runOptionalTitleWork(work) { return this.optionalTitleWork.run(true, work); }
   initialize() { return this.getInitializeResult(); }
   stop() { return this.close(); }
 }

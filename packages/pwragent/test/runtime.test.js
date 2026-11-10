@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Runtime } from "../src/runtime.js";
+import { ThreadTurnStartLifecycle } from "../dist/federation-core.js";
 
 function runningRuntime(request) {
   let job = { id: "job", threadId: "thread", turnId: "turn", status: "running" };
@@ -44,6 +45,8 @@ test("turn startup delegates subscription and resume ownership to the shared cli
   const calls = [];
   const runtime = runningRuntime(async () => ({}));
   runtime.codex.startTurn = async (params) => { calls.push(params); return { threadId: "thread", turnId: "next-turn" }; };
+  runtime.turnStarts = new ThreadTurnStartLifecycle({ assertAvailable() {}, withMutation: async (_identity, work) => await work(),
+    assertUnlocked: async () => {}, wake: async () => {} });
   runtime.workspace = "/fixture";
   runtime.projects = { resolve: (cwd) => cwd };
   runtime.loadedThreads.add("thread");
