@@ -77,7 +77,7 @@ test("project creation, clone, project-specific turns and restart use owner cwd"
   // interrupt that history write and leave the resumed fixture without a thread.
   await eventually(async () => (await h.rpc("list")).some((job) => job.threadId === created.threadId && job.status === "completed"));
   assert.equal(existsSync(path.join(h.workspace, "fixture-result.txt")), false);
-  const page = await v.call("backend.getNavigationQueryPage", { protocol: 2, query: { kind: "directory", directoryKey: project.path } });
+  const page = await v.call("backend.getNavigationQueryPage", { protocol: 2, query: { kind: "directory", directoryKey: `directory:${project.path}` } });
   assert.equal(page.entries[0].row.projectKey, project.path);
   await assert.rejects(v.call("backend.startTurn", { threadId: created.threadId, cwd: h.workspace, input: [{ type: "text", text: "wrong cwd" }] }), /cwd|workspace|project/i);
   v.connection.close();

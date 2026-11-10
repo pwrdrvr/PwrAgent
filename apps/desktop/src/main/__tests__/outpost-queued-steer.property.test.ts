@@ -30,7 +30,7 @@ async function fixture(work: (f: any) => Promise<void>) {
     federation.ensureIdentity("fixture");
     federation.publish = (event: any) => events.push(event.notification);
     const backend = federation.backend;
-    backend.persistCreatedNativeThread({ id: ref.threadId, title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: ref.threadId, title: { text: "Existing", source: "explicit" }, cwd: root });
     const envelope = { sourceInstanceId: "issuer", targetInstanceId: federation.state.instanceId, id: "transport" };
     const value = (id: string, text = id) => ({ ...ref, queueEntryId: id, input: [{ type: "text", text }],
       messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: `sender-${id}`, instanceId: "untrusted-claim" } } });
@@ -390,7 +390,7 @@ it.skipIf(process.platform === "win32")("held guidance Retry preserves live refu
       const accepted = await submit(value("gated-guidance")), id = accepted.queueEntryId;
       runtime.threadLocked = () => true; await drain();
       runtime.threadLocked = () => false;
-      const job = store.get(id), before = backend.queueProjection({ protocol: 2, ref });
+      const job = store.get(id), before = backend.readQueueProjection({ protocol: 2, ref });
       const owns = runtime.ownsThread, cwd = runtime.threadCwd, dispatch = Promise.resolve();
       if (gate === "lock") runtime.threadLocked = () => true;
       if (gate === "intake") runtime.intakeBusy = true;
@@ -406,7 +406,7 @@ it.skipIf(process.platform === "win32")("held guidance Retry preserves live refu
       }
       try {
         expect(["blocked", "busy"]).toContain((await backend.handle("backend.releaseQueuedTurn", { queueEntryId: id })).disposition);
-        expect(backend.queueProjection({ protocol: 2, ref })).toEqual(before);
+        expect(backend.readQueueProjection({ protocol: 2, ref })).toEqual(before);
         expect(store.get(id)).toEqual(job);
         expect(steers).toEqual([]);
       } finally {

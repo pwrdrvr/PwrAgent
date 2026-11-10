@@ -28,7 +28,7 @@ export class RetainedOwnerThreadStore implements RetainedOwnerThreadStorage {
     const records = new Map(this.threads.readOwnerThreadMetadataList().filter(record => record.backend === "codex")
       .map(record => [record.threadId, record]));
     return [...ids].filter(id => retainsOwnerThread(records.get(id), imported.threadIds.has(id), jobs.get(id)))
-      .map(id => projectRetainedOwnerThread(id, records.get(id), jobs.get(id), imported.workspace));
+      .map(id => this.threads.projectNavigationThreadSummary({ thread: projectRetainedOwnerThread(id, records.get(id), jobs.get(id), imported.workspace) }));
   }
 
   confirmNativeThreads(threadIds: readonly string[]): void {

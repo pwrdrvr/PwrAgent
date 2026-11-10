@@ -5,7 +5,7 @@ import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMes
 import { Codex } from "./codex.js";
 import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
-import { ThreadCreationLifecycle, ThreadInterruptionLifecycle, ThreadTurnStartLifecycle, ThreadTurnQueue } from "../dist/federation-core.js";
+import { ThreadCreationLifecycle, ThreadInterruptionLifecycle, ThreadTurnStartLifecycle, ThreadTurnQueue, buildTurnStartEvent, buildTurnStartFailureEvent } from "../dist/federation-core.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
@@ -66,7 +66,7 @@ export class Runtime {
     }
     // Durability is the acceptance boundary. An observer cannot undo it or
     // convert confirmed provider input into a retryable submission failure.
-    try { this.onEvent?.({ method: "headless/jobChanged", params: saved }); }
+    try { this.onJobChanged?.(saved); }
     catch (error) { this.reportFailure(error); }
     return saved;
   }
@@ -311,7 +311,7 @@ export class Runtime {
       // A later serialized edit can finish before this awaiting caller resumes.
       // Announce the live FIFO, rather than restore a since-cancelled identity.
       const queueEntryIds = this.turnQueue.getQueuedEntries({ backend: result.backend, threadId: result.threadId }).map(entry => entry.id);
-      try { this.onEvent?.({ method: "headless/queueReordered", params: { threadId: result.threadId, queueEntryIds } }); }
+      try { this.publishOwnerEvent?.({ backend: "codex", notification: { method: "thread/turnQueue/reordered", params: { threadId: result.threadId, queueEntryIds } } }); }
       catch (error) { this.reportFailure(error); }
     }
     return { queueEntryId, disposition: result.disposition,
@@ -414,7 +414,7 @@ export class Runtime {
       const job = this.store.get(event.entry.id);
       if (job.status === "queued") this.finish(job.id, this.stopping ? "unknown" : "interrupted", event.reason);
     }
-    try { this.onEvent?.({ method: "headless/queueChanged", params: event }); }
+    try { this.onQueueLifecycle?.(event); }
     catch (error) { this.reportFailure(error); }
   }
 
@@ -422,12 +422,16 @@ export class Runtime {
     const cwd = this.projects.resolve(job.cwd || this.workspace);
     const params = { cwd, approvalPolicy: "never", sandbox: job.sandbox,
       ...(job.model ? { model: job.model } : {}) };
+    let providerThread;
     const result = job.threadId ? { threadId: job.threadId }
-      : await this.threadCreations.start({ backend: "codex" }, { providers: { codex: async () => {
+      : await this.threadCreations.start({ backend: "codex" }, { providerAnnouncesStarted: false, providers: { codex: async () => {
         const created = await this.codex.startThread({ ...params, ephemeral: false, dynamicTools: this.messagingTools.buildDynamicToolSpecs() });
         if (typeof created?.threadId !== "string" || !created.threadId || created.threadId.length > 256) throw new Error("Codex returned an invalid thread ID");
+        providerThread = created.thread;
         return created;
-      } } });
+      } }, announceStarted: async ({ threadId }) => this.publishOwnerEvent?.({ backend: "codex", notification: {
+        method: "thread/started", params: { threadId, ...(providerThread ? { thread: providerThread } : {}) },
+      } }) });
     if (typeof result.threadId !== "string" || !result.threadId || result.threadId.length > 256) {
       throw new Error("Codex returned an invalid thread ID");
     }
@@ -435,12 +439,18 @@ export class Runtime {
     this.save({ ...this.store.get(job.id), threadId: result.threadId,
       ...(!job.threadId ? { messagingFileTools: true } : {}) });
     const identity = { backend: "codex", threadId: result.threadId };
-    const submission = await this.turnStarts.run(identity, () => this.turnStarts.submitCodex({ identity, pendingTurnId: `pending:${result.threadId}`, submit: () => this.codex.startTurn({ ...params, threadId: result.threadId,
+    const submission = await this.turnStarts.run(identity, async () => {
+      await this.turnStarts.prepareCodex({ threadId: result.threadId, reserve: () => {}, prepare: async () => {},
+        announce: async pendingTurnId => this.publishOwnerEvent?.(buildTurnStartEvent(identity, pendingTurnId)),
+        rememberInput: () => {}, registerContext: async () => undefined, forgetContext: () => {},
+        fail: async (pendingTurnId, error) => this.publishOwnerEvent?.(buildTurnStartFailureEvent(identity, pendingTurnId, error)), retire: () => {} });
+      return this.turnStarts.submitCodex({ identity, pendingTurnId: `pending:${result.threadId}`, submit: () => this.codex.startTurn({ ...params, threadId: result.threadId,
       onTerminalResult: (params) => this.notification({ method: "turn/completed", params }),
       input: [{ type: "text", text: prompt }],
       ...(job.reasoningEffort ? { reasoningEffort: job.reasoningEffort } : {}),
       ...(job.serviceTier ? { serviceTier: job.serviceTier } : {}),
-    }) }));
+    }) });
+    });
     const turn = submission.turn;
     if (typeof turn.turnId !== "string" || !turn.turnId || turn.turnId.length > 256 || turn.turnId.startsWith("pending:")) {
       this.onFailure(new Error("Codex returned an invalid turn ID; execution outcome is unknown"));
@@ -450,10 +460,14 @@ export class Runtime {
     // Confirmed identity is durable before independent finalizers. A storage
     // refusal stops this owner and records unknown; it never resends input.
     this.save({ ...this.store.get(job.id), turnId: turn.turnId, status: "running" });
-    await this.turnStarts.finalizeCodex({ identity, turn,
+    const settings = { model: job.model, reasoningEffort: job.reasoningEffort, serviceTier: job.serviceTier };
+    const executionMode = job.sandbox === "workspace-write" ? "auto" : "default";
+    await this.turnStarts.finalizeCodex({ identity, turn, settings, executionMode,
+      persistModel: async () => this.store.threadRegistry.updateThreadMetadata(identity, { ...settings, executionMode }),
+      persistExecutionMode: async () => this.store.threadRegistry.updateThreadMetadata(identity, { executionMode }),
       // The prompt stays in memory: job records never store it. The existing
       // event supplies both prompt fallback and shared helper-title admission.
-      scheduleTitle: () => this.onEvent?.({ method: "headless/turnStarted", params: { threadId: result.threadId, jobId: job.id, prompt } }),
+      scheduleTitle: () => this.scheduleTitle?.({ threadId: result.threadId, jobId: job.id, prompt }),
       failed: (_stage, error) => this.reportFailure(error),
     });
     // A terminal may arrive while finalization yields. Its provider outcome

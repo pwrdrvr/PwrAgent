@@ -142,6 +142,8 @@ export type OwnerConformanceBaseline = {
   sharedMethods: string[];
   /** Known differences, each one a line to fix. The list should only shrink. */
   differences: string[];
+  /** Only named desktop host features may differ; each carries its reason. */
+  desktopOnlyFeatures?: Record<string, string>;
 };
 
 /** What changed against the checked-in baseline, as a readable failure. */

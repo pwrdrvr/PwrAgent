@@ -23,8 +23,8 @@ it("budgets actual first-prompt and helper title boundaries separately from dupl
     const backend = new HeadlessBackend({ workspace: root, store, onFailure(error: unknown) { throw error; }, codex: {
       generateTitle: async () => await helper, renameThread: async () => ({ threadId: "thread" }),
     } }, () => {});
-    const event = { method: "headless/turnStarted", params: { threadId: "thread", jobId: "first", prompt: "Please fix the login test" } };
-    const fallback = await measureSqliteWrites(async () => { backend.event(event); });
+    const titleRequest = { threadId: "thread", jobId: "first", prompt: "Please fix the login test" };
+    const fallback = await measureSqliteWrites(async () => { backend.runtime.scheduleTitle(titleRequest); });
     expectSqliteWriteBudget({ budgetFile: "outpost-title-write-budgets.json", scenario: "prompt-fallback", note: "Existing immediate first-prompt title boundary; setup and job acceptance excluded", writes: fallback.writes });
     const generated = await measureSqliteWrites(async () => {
       complete({ status: "ok", object: { title: "Repair login regression" } });
@@ -32,7 +32,7 @@ it("budgets actual first-prompt and helper title boundaries separately from dupl
     });
     expectSqliteWriteBudget({ budgetFile: "outpost-title-write-budgets.json", scenario: "helper-title", note: "One acknowledged helper title through actual shared naming and owner metadata; no helper job or transcript persistence", writes: generated.writes });
     const repeated = await measureSqliteWrites(async () => {
-      for (let i = 0; i < 1000; i++) { backend.event(event); backend.threads.get("thread"); }
+      for (let i = 0; i < 1000; i++) { backend.runtime.scheduleTitle(titleRequest); backend.threads.get("thread"); }
       await backend.titles.whenSettled();
     });
     expectSqliteWriteBudget({ budgetFile: "outpost-title-write-budgets.json", scenario: "repeated-title-reads", note: "1000 repeated accepted-turn observations and owner reads; helper admission remains process-local", writes: repeated.writes });

@@ -10945,7 +10945,7 @@ export class CodexAppServerClient {
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadStartParams["threadSource"];
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
-  }): Promise<{ threadId: string }> {
+  }): Promise<{ threadId: string; thread?: Record<string, unknown> }> {
     params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
 
@@ -10981,6 +10981,7 @@ export class CodexAppServerClient {
 
     return {
       threadId,
+      thread: asRecord(asRecord(result)?.thread) ?? undefined,
     };
   }
 

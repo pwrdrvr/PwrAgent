@@ -23,7 +23,7 @@ async function fixture(work: (runtime: any, backend: any, store: any, profile: a
     const events: any[] = [];
     const backend = new HeadlessBackend(runtime, (event: any) => events.push(event.notification));
     runtime.onEvent = (event: unknown) => backend.event(event);
-    backend.persistCreatedNativeThread({ id: "native", title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: "native", title: { text: "Existing", source: "explicit" }, cwd: root });
     await work(runtime, backend, store, profile, events);
   } finally {
     if (runtime) { runtime.codex.stop = async () => {}; await runtime.stop(); }
@@ -86,7 +86,7 @@ it.skipIf(process.platform === "win32")("owner retry rechecks live gates without
   await fc.assert(fc.asyncProperty(fc.constantFrom("lock", "intake", "creating", "uncertain", "active", "retired", "project"), async gate => {
     await fixture(async (runtime, backend, store) => {
       const sent = await held(runtime, 2);
-      const before = backend.queueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } });
+      const before = backend.readQueueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } });
       const job = store.get("waiting0");
       const priorOwns = runtime.ownsThread, priorCwd = runtime.threadCwd;
       if (gate === "lock") runtime.threadLocked = () => true;
@@ -98,7 +98,7 @@ it.skipIf(process.platform === "win32")("owner retry rechecks live gates without
       if (gate === "project") runtime.threadCwd = () => path.join(runtime.workspace, "changed");
       const response = await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" });
       expect(["blocked", "busy"]).toContain(response.disposition);
-      expect(backend.queueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } })).toEqual(before);
+      expect(backend.readQueueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } })).toEqual(before);
       expect(store.get("waiting0")).toEqual(job);
       expect(sent).toEqual(["first"]);
       runtime.threadLocked = () => false; runtime.intakeBusy = false; backend.creating = false;
@@ -183,7 +183,7 @@ it.skipIf(process.platform === "win32")("queue control write budgets measure rel
         for (let i = 0; i < 1000; i++) {
           await backend.handle("backend.releaseQueuedTurn", request);
           await backend.handle("backend.cancelQueuedTurn", request);
-          backend.queueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } });
+          backend.readQueueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } });
         }
       });
       expectSqliteWriteBudget({ budgetFile, scenario: cancel ? "cancelled-retries" : "admitted-retries", note: "1000 repeated release/cancel/projection reads; no provider sends or writes", writes: repeats.writes });
@@ -243,7 +243,7 @@ it.skipIf(process.platform === "win32")("cross-thread release contention either 
   await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 3 }), fc.nat({ max: 2 }), fc.boolean(), async (count, position, competitorFirst) => {
     await fixture(async (runtime, backend, store) => {
       const sent = await held(runtime, count);
-      backend.persistCreatedNativeThread({ id: "other", title: "Other", titleSource: "explicit", cwd: runtime.workspace });
+      backend.persistCreatedNativeThread({ threadId: "other", title: { text: "Other", source: "explicit" }, cwd: runtime.workspace });
       const before = backend.queuedTurns("native");
       const accepted = store.get("waiting0");
       const submit = () => runtime.submit({ id: "competitor", threadId: "other", prompt: "competitor" });
@@ -252,11 +252,11 @@ it.skipIf(process.platform === "win32")("cross-thread release contention either 
       expect(runtime.turnQueue.canStartImmediately({ backend: "codex", threadId: "other" })).toBe(false);
       runtime.dispatches.delete("finishing");
       let submitted = false;
-      const observe = runtime.onEvent;
-      runtime.onEvent = (event: any) => {
+      const observe = runtime.onQueueLifecycle;
+      runtime.onQueueLifecycle = (event: any) => {
         observe(event);
-        if (!submitted && event.method === "headless/queueChanged" && event.params.type === "queued"
-          && event.params.entry.id === `waiting${position % count}`) {
+        if (!submitted && event.type === "queued"
+          && event.entry.id === `waiting${position % count}`) {
           submitted = true;
           submit();
         }
@@ -289,7 +289,7 @@ it.skipIf(process.platform === "win32")("release admission reservations retire a
   await fc.assert(fc.asyncProperty(fc.boolean(), async shutdown => {
     await fixture(async (runtime, backend, store) => {
       await held(runtime);
-      backend.persistCreatedNativeThread({ id: "other", title: "Other", titleSource: "explicit", cwd: runtime.workspace });
+      backend.persistCreatedNativeThread({ threadId: "other", title: { text: "Other", source: "explicit" }, cwd: runtime.workspace });
       let reject!: (error: Error) => void;
       runtime.codex.startTurn = async () => {
         if (!shutdown) throw new Error("Retry refused");
@@ -320,11 +320,11 @@ it.skipIf(process.platform === "win32")("a same-FIFO cancellation cannot turn a 
   await fc.assert(fc.asyncProperty(fc.boolean(), async cancelHead => {
     await fixture(async (runtime, backend, store) => {
       const sent = await held(runtime, 2);
-      const observe = runtime.onEvent;
+      const observe = runtime.onQueueLifecycle;
       let cancellation: Promise<any> | undefined;
-      runtime.onEvent = (event: any) => {
+      runtime.onQueueLifecycle = (event: any) => {
         observe(event);
-        if (!cancellation && event.method === "headless/queueChanged" && event.params.type === "queued") {
+        if (!cancellation && event.type === "queued") {
           cancellation = backend.handle("backend.cancelQueuedTurn", { queueEntryId: cancelHead ? "waiting0" : "waiting1" });
         }
       };

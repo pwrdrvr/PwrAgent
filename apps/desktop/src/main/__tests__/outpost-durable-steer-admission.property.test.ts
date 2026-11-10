@@ -31,7 +31,7 @@ async function fixture(work: (f: any) => Promise<void>) {
     federation.ensureIdentity("fixture");
     federation.publish = (event: any) => events.push(event.notification);
     const backend = federation.backend;
-    backend.persistCreatedNativeThread({ id: ref.threadId, title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: ref.threadId, title: { text: "Existing", source: "explicit" }, cwd: root });
     const envelope = { sourceInstanceId: "issuer", targetInstanceId: federation.state.instanceId, id: "transport" };
     const submit = (value: SubmitDurableSteerRequest, callerScope = "device", sourceInstanceId = "issuer") => backend.handle("backend.submitSteerRequest", { ...value, callerScope }, { ...envelope, sourceInstanceId });
     const get = (value: SubmitDurableSteerRequest, callerScope = "device", sourceInstanceId = "issuer") => backend.handle("backend.getSteerRequest", { ...ref, id: value.clientRequest.id, callerScope }, { ...envelope, sourceInstanceId });

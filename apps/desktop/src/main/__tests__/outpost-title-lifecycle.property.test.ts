@@ -25,9 +25,9 @@ it("the actual Outpost admits one helper per first turn and explicit rename wins
           generateTitle: async () => { calls++; return await helper; },
           renameThread: async () => ({ threadId: "thread" }),
         } }, () => {});
-        const event = { method: "headless/turnStarted", params: { threadId: "thread", jobId: "first", prompt: "Please fix the login test" } };
+        const titleRequest = { threadId: "thread", jobId: "first", prompt: "Please fix the login test" };
         if (renameAt === "before") await backend.handle("renameThread", { threadId: "thread", name: "Operator title" });
-        for (let i = 0; i <= duplicates; i++) backend.event(event);
+        for (let i = 0; i <= duplicates; i++) backend.runtime.scheduleTitle(titleRequest);
         // Admission may yield through title eligibility; drive microtasks only.
         for (let i = 0; i < 12; i++) await Promise.resolve();
         expect(calls).toBe(renameAt === "before" ? 0 : 1);
@@ -39,7 +39,7 @@ it("the actual Outpost admits one helper per first turn and explicit rename wins
           : { title: outcome === "ok" ? "Repair login regression" : "Fix the login test", titleSource: "derived" };
         expect(backend.summary(backend.owned("thread"))).toMatchObject(expected);
         expect(store.get("first")).toMatchObject({ fingerprint: "immutable", threadId: "thread", turnId: "turn", status: "running" });
-        backend.event(event);
+        backend.runtime.scheduleTitle(titleRequest);
         await backend.titles.whenSettled();
         expect(calls).toBe(renameAt === "before" ? 0 : 1);
       } finally { profile.close(); rmSync(root, { recursive: true, force: true }); }

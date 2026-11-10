@@ -74,7 +74,7 @@ export function setupHandoffs(federation, directory) {
         if (runtime.active || runtime.dispatches?.size || runtime.uncertain || runtime.turnQueue?.getAllQueuedEntries().length) throw new Error("Wait for the source turn to finish");
         const exported = await runtime.codex.exportThreadForHandoff(id);
         return { ...exported, replay: (await backend.readThread(id)).replay,
-          cwd: runtime.projects.resolve(owned.cwd || runtime.workspace),
+          cwd: runtime.projects.resolve(owned.projectKey || runtime.workspace),
           // A placeholder would become the destination's explicit name.
           ...(owned.titleSource === "fallback" ? {} : { title: owned.title }) };
       },
@@ -88,7 +88,7 @@ export function setupHandoffs(federation, directory) {
             cwd, approvalPolicy: "never", sandbox: "read-only" });
           const id = result.threadId;
           if (typeof id !== "string" || !id || backend.threads.has(id)) throw new Error("Invalid forked thread identity");
-          backend.persistCreatedNativeThread({ id, cwd, title: "Imported thread", titleSource: "fallback", createdAt: Date.now(), sandbox: "read-only" });
+          backend.persistCreatedNativeThread({ threadId: id, cwd, title: { text: "Imported thread", source: "fallback" }, createdAt: Date.now(), executionMode: "default" });
           runtime.loadedThreads.add(id);
           backend.invalidate(id);
           return { threadId: id };
@@ -98,10 +98,7 @@ export function setupHandoffs(federation, directory) {
       archiveThread: async ({ threadId }) => {
         backend.owned(threadId);
         await runtime.codex.archiveThread({ threadId });
-        const thread = backend.owned(threadId);
-        thread.archived = true;
-        thread.archivedAt = Date.now();
-        backend.persist(thread);
+        await backend.threads.updateThreadMetadata({ backend: "codex", threadId }, { archivedAt: Date.now() });
         backend.invalidate(threadId);
       },
       renameThread: (request) => backend.handle("backend.renameThread", request),
@@ -131,7 +128,7 @@ export function setupHandoffs(federation, directory) {
     try {
       atomicJson(file, { fingerprint, status: "pending" });
       const result = await service.receive(envelope.sourceInstanceId, request);
-      await runtime.projects.add({ path: backend.owned(result.threadId).cwd });
+      await runtime.projects.add({ path: backend.owned(result.threadId).projectKey });
       atomicJson(file, { fingerprint, status: "completed", result });
       receipts.delete(request.file.path);
       return result;

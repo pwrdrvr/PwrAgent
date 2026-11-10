@@ -20,7 +20,7 @@ export function projectRetainedOwnerThread(
   record: OwnerThreadRecord | undefined,
   job: OwnerJobRecord | undefined,
   workspace?: string,
-): NavigationThreadSummary {
+): Omit<NavigationThreadSummary, "inbox"> {
   const cwd = record?.cwd || job?.cwd || workspace;
   const createdAt = record?.createdAt ?? (job?.createdAt ? Date.parse(job.createdAt) : 0);
   const updatedAt = Math.max(record?.updatedAt ?? createdAt, job?.updatedAt ? Date.parse(job.updatedAt) : 0);
@@ -37,6 +37,6 @@ export function projectRetainedOwnerThread(
     serviceTier: record?.serviceTier ?? job?.serviceTier ?? undefined, fastMode: record?.fastMode,
     pinnedRank: record?.pinnedRank, parentThreadId: record?.parent?.threadId, parentThreadBackend: record?.parent?.backend,
     parentThreadInstanceId: record?.parent?.instanceId, subthreadOrder: record?.subthreadOrder, subthreadsCollapsed: record?.subthreadsCollapsed,
-    threadStatus: "idle", inbox: { inInbox: updatedAt > (record?.seenUpdatedAt ?? record?.seenAt ?? 0), reason: "updated-since-seen" },
+    threadStatus: "idle",
   };
 }

@@ -1,3 +1,4 @@
+import { comparableOwnerConfiguration } from "./helpers/retained-owner-fixture";
 import fc from "fast-check";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,7 +78,7 @@ async function checkMembership(id: string, commands: Command[], finalOnly = fals
             subthreadOrder: ["child"], subthreadsCollapsed: true, model: "owner-model", reasoningEffort: "high", serviceTier: "flex", fastMode: true,
             inbox: { inInbox: session.updatedAt > seen.get(candidate)! } });
         }
-        expect(detail.thread).toEqual(resolved);
+        expect(comparableOwnerConfiguration(detail.thread)).toEqual(comparableOwnerConfiguration(resolved));
         const active = (await owner.handle("listThreads", { backend: candidate })).threads;
         expect(active.map((thread: AppServerThreadSummary) => thread.id)).toEqual(present && !session.archivedAt ? [id] : []);
         const archived = await owner.handle("lookupArchivedThreads", { backend: candidate, threadIds: [id], includeParent: true });

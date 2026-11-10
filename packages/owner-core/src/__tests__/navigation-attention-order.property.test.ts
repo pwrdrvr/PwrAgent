@@ -153,3 +153,25 @@ describe("owner Attention order properties (AGENTS.md: Attention order)", () => 
     }));
   });
 });
+
+it("provisional starts adopt provider identity without allocating an extra per-turn rank", () => {
+  fc.assert(fc.property(fc.boolean(), fc.array(fc.nat(4), { minLength: 1, maxLength: 12 }), (promoteOnTurnEnd, duplicates) => {
+    let actual = { members: new Map(), nextRank: 1 };
+    let oracle = { members: new Map(), nextRank: 1 };
+    for (const [index, duplicateCount] of duplicates.entries()) {
+      const turnId = `turn-${index}`;
+      const observe = (order: typeof actual, active: boolean, id?: string) =>
+        observeNavigationAttentionTurn({ previous: order, key: "thread", active, turnId: id, promoteOnTurnEnd });
+      oracle = observe(oracle, true);
+      for (let duplicate = 0; duplicate <= duplicateCount; duplicate++) actual = observe(actual, true, "pending:thread");
+      actual = observe(actual, true, turnId);
+      oracle = observe(oracle, true, turnId);
+      expect(actual.members.get("thread").rank).toBe(oracle.members.get("thread").rank);
+      for (let duplicate = 0; duplicate <= duplicateCount; duplicate++) {
+        actual = observe(actual, false, turnId);
+        oracle = observe(oracle, false, turnId);
+      }
+      expect(actual.nextRank).toBe(oracle.nextRank);
+    }
+  }));
+});

@@ -30,7 +30,7 @@ async function fixture(work: (runtime: any, backend: any, store: any, profile: a
     }, stop: async () => {} };
     const backend = new HeadlessBackend(runtime, (event: any) => events.push(event.notification));
     runtime.onEvent = (event: unknown) => backend.event(event);
-    backend.persistCreatedNativeThread({ id: ref.threadId, title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: ref.threadId, title: { text: "Existing", source: "explicit" }, cwd: root });
     runtime.submit({ id: "active", threadId: ref.threadId, prompt: "active" }); await runtime.work;
     await work(runtime, backend, store, profile, events, sent);
   } finally {
@@ -51,7 +51,7 @@ it.skipIf(process.platform === "win32")("queued reads are detached snapshots; ed
         const params = { id: `waiting${index}`, threadId: ref.threadId, prompt, messageOrigin };
         const accepted = runtime.submit(params);
         const request = { ...ref, queueEntryId: accepted.id, forEdit };
-        const revision = backend.queueProjection({ protocol: 2, ref }).revision, eventCount = events.length;
+        const revision = backend.readQueueProjection({ protocol: 2, ref }).revision, eventCount = events.length;
         const snapshot = await backend.handle("backend.readQueuedTurn", request);
         const input = [{ type: "text", text: prompt }];
         expect(snapshot).toEqual({ queueEntryId: accepted.id, input, contentHash: hash(input), messageOrigin });
@@ -59,7 +59,7 @@ it.skipIf(process.platform === "win32")("queued reads are detached snapshots; ed
         snapshot.messageOrigin.sourceThread.threadId = "forged";
         expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: accepted.id, expectedContentHash: hash(snapshot.input) })).toMatchObject({ disposition: "content_changed", cancelled: false });
         expect(await backend.handle("backend.readQueuedTurn", request)).toEqual({ queueEntryId: accepted.id, input, contentHash: hash(input), messageOrigin });
-        expect(backend.queueProjection({ protocol: 2, ref }).revision).toBe(revision);
+        expect(backend.readQueueProjection({ protocol: 2, ref }).revision).toBe(revision);
         expect(events).toHaveLength(eventCount);
         expect(store.get(accepted.id)).toEqual(accepted);
         expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: accepted.id, expectedContentHash: snapshot.contentHash })).toMatchObject({ disposition: "cancelled", cancelled: true });

@@ -1617,5 +1617,7 @@
   "worktree-registration-card-cancel": {"commits": 1, "note": "One native operator registration card, its questionnaire receipt, and the resulting authorization if approved", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
   "worktree-registration-inspect": {"commits": 0, "note": "Read and revalidate one persisted registration receipt after reopening SQLite", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "worktree-registration-one": {"commits": 1, "note": "One explicitly approved linked-checkout registration; provider inventory and Git validation are read-only", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
-  "worktree-registration-revoke": {"commits": 1, "note": "Revoke one existing checkout authorization", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1}
+  "worktree-registration-revoke": {"commits": 1, "note": "Revoke one existing checkout authorization", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "outpost-read-model-passive-100": {"commits": 0, "note": "100 resolve, selected detail and navigation reads over the shared canonical projection; no SQLite commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "outpost-seen-burst-100": {"commits": 1, "note": "100 owner seen commands in one stamp interval; omitted watermarks stay unchanged and only the first command commits", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1}
 }

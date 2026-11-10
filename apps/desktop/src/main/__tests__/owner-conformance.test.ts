@@ -296,8 +296,19 @@ const FIRST_PROMPT_SCENARIO: Step[] = [
       query: { kind: "lens", lens: "attention" }, attentionView: { id: "conformance", promoteOnTurnEnd: true } }),
     values: (page) => ({ rows: page.entries?.length, ranked: page.entries?.map((entry: any) => typeof entry.attentionRank) }) },
   { name: "read its selected detail", method: "backend.getNavigationSelectedDetail",
-    run: (host, context) => host.client.getNavigationSelectedDetail({ protocol: 2, ref: ref(context) }),
+    run: async (host, context) => {
+      const detail = await host.client.getNavigationSelectedDetail({ protocol: 2, ref: ref(context) });
+      context.detailRevision = detail.revision;
+      return detail;
+    },
     values: (response) => ({ title: response.thread?.title, executionMode: response.thread?.executionMode }) },
+  { name: "retain its selected revision", method: "backend.getNavigationSelectedDetail",
+    run: (host, context) => host.client.getNavigationSelectedDetail({ protocol: 2, ref: ref(context), knownRevision: context.detailRevision }),
+    values: response => ({ unchanged: response.unchanged }) },
+  { name: "read its selected collection", method: "backend.getNavigationSelectedDetail",
+    run: (host, context) => host.client.getNavigationSelectedDetail({ protocol: 2, ref: ref(context), collection: { name: "subthreadOrder" } }) },
+  { name: "read its queue projection", method: "backend.getNavigationQueueProjection",
+    run: (host, context) => host.client.getNavigationQueueProjection({ protocol: 2, ref: ref(context) }) },
   { name: "read its transcript", method: "backend.readThread",
     run: (host, context) => host.client.readThread(ref(context)),
     values: (response) => ({ lastAssistantMessage: response.replay?.lastAssistantMessage }) },
@@ -3172,6 +3183,53 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
+  it("generated read, model, rename and seen histories agree with the desktop owner oracle", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      const hosts = [desktop, outpost];
+      const refs = await Promise.all(hosts.map(async host => ({ backend: "codex" as const,
+        threadId: (await host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto", model: "gpt-5.5", reasoningEffort: "medium" })).threadId })));
+      await Promise.all(hosts.map(settle));
+      for (const [index, host] of hosts.entries()) {
+        const created = host.events.filter(event => event.notification.method === "thread/started"
+          && (event.notification.params.threadId ?? (event.notification.params.thread as { id?: string } | undefined)?.id) === refs[index]!.threadId);
+        expect(created, `${host.name} announces creation once`).toHaveLength(1);
+      }
+      // The owner, rather than the viewer, supplies every row and its unread watermark.
+      await fc.assert(fc.asyncProperty(fc.array(fc.record({
+        kind: fc.constantFrom("rename", "model", "read", "unread", "activity"), value: fc.integer({ min: 0, max: 10000 }),
+      }), { minLength: 1, maxLength: 8 }), async operations => {
+        for (const operation of operations) {
+          for (const [index, host] of hosts.entries()) {
+            const ref = refs[index]!;
+            if (operation.kind === "rename") await host.client.renameThread({ ...ref, name: `Oracle ${operation.value}` });
+            else if (operation.kind === "model") await host.client.setThreadModelSettings({ ...ref, model: "gpt-5.5", reasoningEffort: operation.value % 2 ? "high" : "medium" });
+            else {
+              const detail = await host.client.getNavigationSelectedDetail({ protocol: 2, ref });
+              const updatedAt = detail.thread!.updatedAt!;
+              await host.client.markThreadSeen({ ...ref, seenAt: Date.now(),
+                ...(operation.kind === "activity" ? {} : { seenUpdatedAt: operation.kind === "unread" ? Math.max(0, updatedAt - 1) : updatedAt }) });
+            }
+          }
+          const details = await Promise.all(hosts.map((host, index) => host.client.getNavigationSelectedDetail({ protocol: 2, ref: refs[index]! })));
+          const values = details.map(({ thread }) => ({ title: thread!.title, titleSource: thread!.titleSource,
+            model: thread!.model, reasoningEffort: thread!.reasoningEffort, executionMode: thread!.executionMode,
+            inInbox: thread!.inbox.inInbox, reason: thread!.inbox.reason }));
+          expect(values[1]).toEqual(values[0]);
+        }
+      }), { numRuns: 5 });
+      for (const [index, host] of hosts.entries()) {
+        await host.client.renameThread({ ...refs[index]!, name: "PWR139 searchable owner" });
+        const found = await host.client.searchFederatedThreads({ query: "searchable owner", limit: 20 });
+        expect(found.threads.map(thread => thread.id), host.name).toContain(refs[index]!.threadId);
+        const excluded = await host.client.searchFederatedThreads({ query: "searchable owner", projectKeys: ["/invented-other-project"], limit: 20 });
+        expect(excluded.threads, host.name).toEqual([]);
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
+  }, 120_000);
+
   it("answer a thread's life the same way, or the baseline records the difference", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
@@ -3190,6 +3248,10 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         sharedMethods: [...outpost.methods].filter((method) => desktop.methods.has(method)).sort(),
         differences: desktopRecords.flatMap((record, index) => compareStep(record, outpostRecords[index]!)),
       };
+      // Shared owner methods must have identical response and event shapes.
+      const sharedReadLifecycle = new Set(["backend.getNavigationQueryPage", "backend.getNavigationSelectedDetail",
+        "backend.readThread", "backend.startThread", "backend.startTurn", "backend.renameThread", "backend.getNavigationQueueProjection"]);
+      expect(measured.differences.filter(difference => sharedReadLifecycle.has(difference.split(" ")[0]!))).toEqual([]);
       if (process.env.UPDATE_OWNER_CONFORMANCE === "1") {
         writeFileSync(BASELINE_PATH, JSON.stringify(measured, null, 2) + "\n");
         return;
@@ -3197,19 +3259,10 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const baseline: OwnerConformanceBaseline = existsSync(BASELINE_PATH)
         ? JSON.parse(readFileSync(BASELINE_PATH, "utf8"))
         : { sharedMethods: [], differences: [] };
-      // Keep the inherited historical snapshot byte-identical, while requiring
-      // these two actual queue differences to stay fixed on both live owners.
-      const queueConvergence = new Set([
-        "backend.startTurn [start its first turn] response $.queueEntryId: desktop string, outpost missing",
-        "backend.startTurn [start its first turn] event thread/turnQueue/updated: desktop sends it, outpost does not",
-      ]);
-      expect(measured.differences.filter(difference => queueConvergence.has(difference))).toEqual([]);
-      const queueControls = ["backend.readQueuedTurn", "backend.replaceQueuedMessage", "backend.cancelQueuedTurn", "backend.releaseQueuedTurn", "backend.setQueuedTurnPaused", "backend.moveQueuedTurn", "backend.submitTurnRequest", "backend.getTurnRequest", "backend.submitSteerRequest", "backend.getSteerRequest"];
-      expect(queueControls.every(method => measured.sharedMethods.includes(method))).toBe(true);
-      const change = describeBaselineChange({ ...baseline,
-        sharedMethods: [...new Set([...baseline.sharedMethods, ...queueControls])].sort(),
-        differences: baseline.differences.filter(difference => !queueConvergence.has(difference)),
-      }, measured);
+      // Every remaining difference names a desktop-only feature and its reason.
+      expect(measured.differences.filter(difference => !baseline.desktopOnlyFeatures?.[difference])).toEqual([]);
+      expect(Object.values(baseline.desktopOnlyFeatures ?? {}).every(reason => reason.length > 20)).toBe(true);
+      const change = describeBaselineChange(baseline, measured);
       if (change) throw new Error(change);
     } finally {
       await outpost?.close();

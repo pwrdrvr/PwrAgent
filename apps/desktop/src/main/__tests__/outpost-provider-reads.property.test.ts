@@ -1,3 +1,4 @@
+import { comparableOwnerConfiguration } from "./helpers/retained-owner-fixture";
 import fc from "fast-check";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -110,7 +111,7 @@ it("retained owner reads preserve provider identity, native authority and canoni
             : [{ id: "/fixture", kind: "local", path: "/fixture", label: "fixture" }], inbox: { inInbox: !command.seen } });
         const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
         expect(detail.identity).toBe(command.archived ? "archived" : "present");
-        expect(detail.thread).toEqual(resolved);
+        expect(comparableOwnerConfiguration(detail.thread)).toEqual(comparableOwnerConfiguration(resolved));
         const active = (await owner.handle("listThreads", { backend })).threads;
         expect(active.map((row: AppServerThreadSummary) => row.source)).toEqual(command.archived ? [] : [backend]);
         const archived = await owner.handle("lookupArchivedThreads", { ...ref, threadIds: ["00000000-0000-4000-8000-000000000001"], includeParent: true });

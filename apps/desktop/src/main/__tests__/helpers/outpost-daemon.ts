@@ -15,7 +15,7 @@ import { connectFederationClient } from "../../federation/federation-transport";
 export const OUTPOST_PACKAGE_ROOT = path.join(process.cwd(), "packages/pwragent");
 
 /** Every grant a viewer can hold on an Outpost. */
-export const OUTPOST_VIEWER_CAPABILITIES: FederationCapability[] = ["remote_window", "thread_navigation", "thread_detail",
+export const OUTPOST_VIEWER_CAPABILITIES: FederationCapability[] = ["remote_window", "thread_navigation", "thread_detail", "federated_search",
   "turn_control", "durable_turn_requests_v1", "durable_steer_requests_v1", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"];
 
 export type OutpostDaemon = {

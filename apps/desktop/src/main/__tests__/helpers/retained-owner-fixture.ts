@@ -1,3 +1,4 @@
+import { NAVIGATION_DETAIL_COLLECTION_NAMES } from "@pwragent/shared";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,4 +23,10 @@ export function retainedOwnerFixture(titled: boolean | "missing" = true, ids = [
   return { root, directory, dbPath, db, overlay: new SqliteOverlayStore(db), jobs: new SqliteOwnerJobStore(db),
     retained: new RetainedOwnerThreadStore(db, directory),
     close() { db.close(); rmSync(root, { recursive: true, force: true }); } };
+}
+
+export function comparableOwnerConfiguration(thread: Record<string, unknown> | undefined) {
+  if (!thread) return thread;
+  return JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(thread).filter(([key]) =>
+    key !== "activeSubAgents" && !NAVIGATION_DETAIL_COLLECTION_NAMES.includes(key as typeof NAVIGATION_DETAIL_COLLECTION_NAMES[number])))));
 }

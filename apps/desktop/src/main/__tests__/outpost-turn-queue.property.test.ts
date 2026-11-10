@@ -35,10 +35,10 @@ it.skipIf(process.platform === "win32").each([false, true])("actual Outpost sync
       const accepted = runtime.submit(request, controls); await runtime.work;
       const next = runtime.submit({ id: "next", threadId: "native", prompt: "Immutable next input" }, { paused: true, pauseRevision: 1 }); await runtime.work;
       let rejected = 0;
-      const observe = runtime.onEvent;
-      runtime.onEvent = (event: any) => {
+      const observe = runtime.onQueueLifecycle;
+      runtime.onQueueLifecycle = (event: any) => {
         observe(event);
-        if (event.method === "headless/queueChanged" && event.params.type === "started" && event.params.entry.id === "accepted") {
+        if (event.type === "started" && event.entry.id === "accepted") {
           rejected++; throw new Error("Synchronous started observer rejected");
         }
       };
@@ -80,7 +80,7 @@ async function fixture(work: (runtime: any, backend: any, store: any, profile: a
     const events: any[] = [];
     const backend = new HeadlessBackend(runtime, (event: any) => events.push(event.notification));
     runtime.onEvent = (event: unknown) => backend.event(event);
-    backend.persistCreatedNativeThread({ id: "native", title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: "native", title: { text: "Existing", source: "explicit" }, cwd: root });
     await work(runtime, backend, store, profile, events);
   } finally {
     if (runtime) { runtime.codex.stop = async () => {}; await runtime.stop(); }
@@ -108,7 +108,7 @@ it.skipIf(process.platform === "win32")("actual Outpost durable admissions follo
         fingerprints.push(queued.fingerprint);
         for (let repeat = 0; repeat < duplicates; repeat++) expect(runtime.submit(input(i))).toEqual(store.get(`job${i}`));
       }
-      const projection = await backend.handle("getNavigationQueueProjection", { protocol: 2, ref: { backend: "codex", threadId: "native" } });
+      const projection = await backend.readQueueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } });
       expect(projection.entries.map((entry: any) => entry.queueEntryId)).toEqual(Array.from({ length: waiting }, (_, i) => `job${i + 1}`));
       expect(sent).toEqual(["job0"]);
       for (let i = 0; i <= waiting; i++) {
@@ -133,7 +133,7 @@ it.skipIf(process.platform === "win32")("provider occupancy, early duplicate ter
   await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), async (early, cancel, sameThread) => {
     await fixture(async (runtime, backend, store) => {
       let sends = 0;
-      backend.persistCreatedNativeThread({ id: "other", title: "Other", titleSource: "explicit", cwd: runtime.workspace });
+      backend.persistCreatedNativeThread({ threadId: "other", title: { text: "Other", source: "explicit" }, cwd: runtime.workspace });
       runtime.codex = { startTurn: async ({ threadId }: any) => {
         sends++;
         const terminal = { method: "turn/completed", params: { threadId, turn: { id: `turn${sends}`, status: "completed" } } };
@@ -167,16 +167,16 @@ it.skipIf(process.platform === "win32")("queue pages and revision fences agree w
       runtime.submit({ id: "first", threadId: "native", prompt: "first" }); await runtime.work;
       for (let i = 0; i < count; i++) runtime.submit({ id: `page${i}`, threadId: "native", prompt: character.repeat(250) });
       const request = { protocol: 2, ref: { backend: "codex", threadId: "native" } };
-      const first = backend.queueProjection(request);
+      const first = backend.readQueueProjection(request);
       expect(first.entries).toHaveLength(100);
       expect(first.complete).toBe(false);
-      const second = backend.queueProjection({ ...request, cursor: first.nextCursor });
+      const second = backend.readQueueProjection({ ...request, cursor: first.nextCursor });
       expect(second.complete).toBe(true);
       expect([...first.entries, ...second.entries].map(entry => entry.queueEntryId)).toEqual(runtime.turnQueue.getQueuedEntries(request.ref).map((entry: { id: string }) => entry.id));
       expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(256 * 1024);
       await runtime.handle("interrupt", { id: "page0" });
-      expect(() => backend.queueProjection({ ...request, cursor: first.nextCursor })).toThrow("navigation_cursor_expired");
-      expect(() => backend.queueProjection({ ...request, cursor: "malformed" })).toThrow("navigation_invalid_request");
+      expect(() => backend.readQueueProjection({ ...request, cursor: first.nextCursor })).toThrow("navigation_cursor_expired");
+      expect(() => backend.readQueueProjection({ ...request, cursor: "malformed" })).toThrow("navigation_invalid_request");
     });
   }), { numRuns: 3 });
 });
@@ -213,8 +213,8 @@ it.skipIf(process.platform === "win32")("shutdown from an acceptance observer ca
       let sends = 0;
       runtime.codex = { startThread: async () => ({ threadId: "created" }), startTurn: async () => { sends++; return { threadId: "native", turnId: "turn" }; }, stop: async () => {} };
       let stop: Promise<void> | undefined;
-      runtime.onEvent = (event: any) => {
-        if (event.method === "headless/jobChanged" && event.params.id === "accepted" && event.params.status === "starting") stop ??= runtime.stop();
+      runtime.onJobChanged = (event: any) => {
+        if (event.id === "accepted" && event.status === "starting") stop ??= runtime.stop();
       };
       const job = runtime.submit({ id: "accepted", prompt: "private", ...(continued ? { threadId: "native" } : {}) });
       await stop;
@@ -339,7 +339,7 @@ it.skipIf(process.platform === "win32")("a refused queued dispatch projects idle
   await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 3 }), fc.integer({ min: 0, max: 2 }), async (sameThread, extra, duplicates) => {
     await fixture(async (runtime, backend, store) => {
       const target = sameThread ? "native" : "other";
-      backend.persistCreatedNativeThread({ id: "other", title: "Other", titleSource: "explicit", cwd: runtime.workspace });
+      backend.persistCreatedNativeThread({ threadId: "other", title: { text: "Other", source: "explicit" }, cwd: runtime.workspace });
       let sends = 0;
       runtime.codex = { startTurn: async ({ threadId }: any) => {
         if (++sends === 2) throw new Error("Native refusal");
@@ -385,7 +385,7 @@ it.skipIf(process.platform === "win32")("budgets actual queued acceptance, dispa
       const input = { id: "waiting", threadId: "native", prompt: "waiting" };
       await record("queued-acceptance", "One continued-thread acceptance behind an active provider job; prompt remains transient", () => runtime.submit(input));
       await record("duplicate-projection", "1000 matching queued retries and live queue projections; no sends or writes", async () => {
-        for (let i = 0; i < 1000; i++) { runtime.submit(input); await backend.queueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } }); }
+        for (let i = 0; i < 1000; i++) { runtime.submit(input); await backend.readQueueProjection({ protocol: 2, ref: { backend: "codex", threadId: "native" } }); }
       });
       await record("queued-dispatch-terminal", "Prior terminal plus one queued dispatch/identity/confirmation/terminal; existing thread already explicitly named", async () => {
         runtime.notification({ method: "turn/completed", params: { threadId: "native", turn: { id: "turn1", status: "completed" } } });
@@ -434,7 +434,7 @@ it.skipIf(process.platform === "win32")("budgets actual queued acceptance, dispa
     await fixture(async (runtime) => {
       runtime.codex = { stop: async () => {} };
       let stop: Promise<void> | undefined;
-      runtime.onEvent = (event: any) => { if (event.method === "headless/jobChanged" && event.params.status === "starting") stop ??= runtime.stop(); };
+      runtime.onJobChanged = (event: any) => { if (event.status === "starting") stop ??= runtime.stop(); };
       const { writes } = await measureSqliteWrites(async () => { runtime.submit({ id: "accepted", threadId: "native", prompt: "private" }); await stop; });
       expectSqliteWriteBudget({ budgetFile, scenario: "acceptance-observer-shutdown", note: "Durable acceptance and unknown outcome when its observer immediately stops the host; zero provider sends", writes });
     });
@@ -458,9 +458,10 @@ it.skipIf(process.platform === "win32")("actual Outpost refusal covers waiting j
       const refused = runtime.submit({ id: "refused", threadId: "native", prompt: "Immutable refused input" });
       const next = runtime.submit({ id: "next", threadId: "native", prompt: "Immutable waiting input" });
       let cancellation: Promise<unknown> | undefined;
-      runtime.onEvent = (event: any) => {
-        backend.event(event);
-        if (event.method === "headless/queueChanged" && event.params.type === "blocked" && event.params.entry.id === "refused") {
+      const observeQueue = runtime.onQueueLifecycle;
+      runtime.onQueueLifecycle = (event: any) => {
+        observeQueue(event);
+        if (event.type === "blocked" && event.entry.id === "refused") {
           covered = runtime.turnQueue.getAllQueuedEntries().every((entry: any) => entry.manualReleaseRequired === true);
           cancellation = backend.handle("cancelQueuedTurn", { queueEntryId: "refused" });
           if (rejectObserver) throw new Error("Synchronous observer refused");

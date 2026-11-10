@@ -1,3 +1,4 @@
+import { comparableOwnerConfiguration } from "./helpers/retained-owner-fixture";
 import fc from "fast-check";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -45,7 +46,7 @@ async function checkDiscovery(id: string, commands: DiscoveryCommand[]): Promise
         createdAt: 1, updatedAt, projectKey: root, inbox: { inInbox: !command.seen } });
       expect(detail.thread.archivedAt).toBe(command.archived ? updatedAt + 1 : undefined);
       expect(JSON.stringify(detail)).not.toContain("private-sdk-id");
-      expect((await owner.handle("resolveThread", ref)).thread).toEqual(detail.thread);
+      expect(comparableOwnerConfiguration((await owner.handle("resolveThread", ref)).thread)).toEqual(comparableOwnerConfiguration(detail.thread));
       expect((await owner.handle("listThreads", { backend: "claude" })).threads.map((row: { id: string }) => row.id))
         .toEqual(command.archived ? [] : [id]);
       expect((await owner.handle("lookupArchivedThreads", { backend: "claude", threadIds: [id] })).threads.map((row: { id: string }) => row.id))

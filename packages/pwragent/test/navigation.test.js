@@ -14,7 +14,8 @@ function backendFixture(t, jobs, published = []) {
   const directory = mkdtempSync(path.join(local, "navigation-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const owner = ownerStorage(t, directory);
-  const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(), store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, inventory: owner.inventory },
+  owner.storage.navigation.initializeUnreadBaseline([]);
+  const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(), store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, navigation: owner.storage.navigation, inventory: owner.inventory },
     codex: { renameThread: async ({ threadId }) => ({ threadId }) },
     onFailure: (error) => { throw error; } };
   return new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
@@ -40,7 +41,7 @@ test("10,000-thread navigation indexes jobs once and updates the index at job bo
   const backend = backendFixture(t, jobs);
   assert.equal(visits, 10000, "one startup pass through the job registry");
   visits = 0;
-  const request = { protocol: 2, query: { kind: "directory", directoryKey: backend.runtime.workspace }, pageSize: 10 };
+  const request = { protocol: 2, query: { kind: "directory", directoryKey: `directory:${backend.runtime.workspace}` }, pageSize: 10 };
   const page = await backend.handle("getNavigationQueryPage", request);
   assert.equal(page.entries.length, 10);
   assert.equal(page.counts.total, 10000);
@@ -49,12 +50,12 @@ test("10,000-thread navigation indexes jobs once and updates the index at job bo
   assert.equal((await backend.handle("getNavigationQueryPage", { ...request, cursor: page.nextCursor })).rangeStart, 10);
   const latest = { ...job("continued", "thread-0", "2026-01-01T00:00:00.000Z"), status: "running", turnId: "turn-1" };
   jobs.set(latest.id, latest);
-  backend.event({ method: "headless/jobChanged", params: latest });
+  backend.runtime.onJobChanged(latest);
   assert.equal(backend.summary(backend.owned("thread-0")).threadStatus, "active");
   const completed = { ...latest, status: "completed" };
   jobs.set(latest.id, completed);
-  backend.event({ method: "headless/jobChanged", params: completed });
-  backend.event({ method: "headless/jobChanged", params: jobs.get("job-0") });
+  backend.runtime.onJobChanged(completed);
+  backend.runtime.onJobChanged(jobs.get("job-0"));
   assert.equal(backend.latest("thread-0"), completed, "an older job update cannot replace the latest turn");
   assert.equal(backend.summary(backend.owned("thread-0")).threadStatus, "idle");
   assert.equal(visits, 0, "queries and boundary events never rescan the job registry");
@@ -66,7 +67,7 @@ test("directory pages retain creation order while Updated pages follow recent ac
   const old = job("old-job", "old", "2026-01-01T00:00:00.000Z", "2026-01-03T00:00:00.000Z");
   const newer = job("new-job", "new", "2026-01-02T00:00:00.000Z");
   const backend = backendFixture(t, new Map([[old.id, old], [newer.id, newer]]));
-  const directory = { protocol: 2, query: { kind: "directory", directoryKey: backend.runtime.workspace }, pageSize: 1 };
+  const directory = { protocol: 2, query: { kind: "directory", directoryKey: `directory:${backend.runtime.workspace}` }, pageSize: 1 };
   const first = await backend.handle("getNavigationQueryPage", directory);
   assert.equal(first.entries[0].row.id, "new");
   assert.equal((await backend.handle("getNavigationQueryPage", { ...directory, cursor: first.nextCursor })).entries[0].row.id, "old");
@@ -149,11 +150,11 @@ test("seen acknowledgements retain the displayed update watermark across a newer
     { backend: "codex", threadId: "thread", seenAt, seenUpdatedAt });
   assert.equal(backend.summary(backend.owned("thread")).inbox.inInbox, true);
   const reopened = new HeadlessBackend(backend.runtime, () => {});
-  assert.equal(reopened.owned("thread").seenUpdatedAt, seenUpdatedAt);
+  assert.equal(reopened.threads.storage.getThreadMetadata({ backend: "codex", threadId: "thread" }).seenUpdatedAt, seenUpdatedAt);
   assert.equal(reopened.summary(reopened.owned("thread")).inbox.inInbox, true);
   const refreshed = await reopened.handle("markThreadSeen", { threadId: "thread" });
   assert.equal(refreshed.seenUpdatedAt, undefined, "the response echoes only a requested watermark");
-  assert.equal(reopened.owned("thread").seenUpdatedAt, seenUpdatedAt, "an omitted watermark keeps the stored one");
+  assert.equal(reopened.threads.storage.getThreadMetadata({ backend: "codex", threadId: "thread" }).seenUpdatedAt, seenUpdatedAt, "an omitted watermark keeps the stored one");
   assert.equal(reopened.summary(reopened.owned("thread")).inbox.inInbox, true);
   await markRead(reopened, "thread");
   assert.equal(reopened.summary(reopened.owned("thread")).inbox.inInbox, false);
@@ -169,8 +170,8 @@ test("marking seen without a watermark never changes unread state, and is announ
   const legacy = job("legacy-job", "legacy", "2026-01-01T00:00:00.000Z");
   const published = [];
   const backend = backendFixture(t, new Map([[unseen.id, unseen], [legacy.id, legacy]]), published);
-  // A registry written before watermarks existed judged unread by seenAt.
-  backend.persist({ ...backend.owned("legacy"), seenAt: Date.parse("2026-01-02T00:00:00.000Z") });
+  // The shared owner watermark remains authoritative when seenAt changes.
+  backend.threads.storage.updateThreadMetadata({ backend: "codex", threadId: "legacy" }, { seenAt: Date.parse("2026-01-02T00:00:00.000Z"), seenUpdatedAt: Date.parse("2026-01-02T00:00:00.000Z") });
   assert.equal(backend.summary(backend.owned("unseen")).inbox.inInbox, true);
   assert.equal(backend.summary(backend.owned("legacy")).inbox.inInbox, false);
   for (const threadId of ["unseen", "legacy"]) await backend.handle("markThreadSeen", { threadId, seenAt: Date.parse("2026-01-03T00:00:00.000Z") });
@@ -206,7 +207,7 @@ test("continuation cursors retain their snapshot across global count changes and
 test("navigation pages fit the shared byte budget and scope retained cursors to their requester and owner", async (t) => {
   const jobs = new Map(Array.from({ length: 60 }, (_, i) => [`job-${i}`, job(`job-${i}`, `thread-${i}`, "2026-01-01T00:00:00.000Z")]));
   const backend = backendFixture(t, jobs);
-  for (const thread of backend.threads.values()) backend.persist({ ...thread, title: "x".repeat(6000) });
+  for (const thread of backend.threads.values()) backend.threads.storage.updateThreadMetadata({ backend: "codex", threadId: thread.id }, { title: { text: "x".repeat(6000), source: "explicit" } });
   const request = { protocol: 2, query: { kind: "lens", lens: "inbox" }, pageSize: 100 };
   const envelope = { sourceInstanceId: "viewer-a" };
   let page = await backend.handle("getNavigationQueryPage", request, envelope);
@@ -238,7 +239,10 @@ for (const promoteOnTurnEnd of [true, false]) {
     const page = () => backend.handle("getNavigationQueryPage", request);
     const ids = async () => (await page()).entries.map((entry) => entry.row.id);
     const rank = async (id) => (await page()).entries.find((entry) => entry.row.id === id)?.attentionRank;
-    const update = (value) => { jobs.set(value.id, value); backend.event({ method: "headless/jobChanged", params: value }); };
+    const update = (value) => { jobs.set(value.id, value); backend.runtime.onJobChanged(value);
+        const turnId = value.turnId || (value.status === "starting" ? `pending:${value.threadId}` : `turn:${value.id}`);
+        if (value.status === "running" || value.status === "starting") backend.event({ method: "turn/started", params: { threadId: value.threadId, turnId } });
+        if (value.status === "completed") backend.event({ method: "turn/completed", params: { threadId: value.threadId, turnId } }); };
     assert.deepEqual(await ids(), ["new", "old"]);
     const waitingRank = await rank("old");
     await backend.handle("renameThread", { threadId: "old", title: "Renamed waiting work" });
@@ -283,7 +287,10 @@ for (const promoteOnTurnEnd of [true, false]) {
       const request = { protocol: 2, query: { kind: "lens", lens: "attention" },
         attentionView: { id: "window", promoteOnTurnEnd } };
       const rank = async () => (await backend.handle("getNavigationQueryPage", request)).entries[0].attentionRank;
-      const update = (value) => { jobs.set(value.id, value); backend.event({ method: "headless/jobChanged", params: value }); };
+      const update = (value) => { jobs.set(value.id, value); backend.runtime.onJobChanged(value);
+        const turnId = value.turnId || (value.status === "starting" ? `pending:${value.threadId}` : `turn:${value.id}`);
+        if (value.status === "running" || value.status === "starting") backend.event({ method: "turn/started", params: { threadId: value.threadId, turnId } });
+        if (value.status === "completed") backend.event({ method: "turn/completed", params: { threadId: value.threadId, turnId } }); };
       await rank();
       update(old);
       update({ ...old, status: "completed", updatedAt: "2026-01-02T00:00:00.000Z" });

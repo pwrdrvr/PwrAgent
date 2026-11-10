@@ -1,5 +1,5 @@
 import path from "node:path";
-import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection, projectOwnerThreadTitle, projectAcpSessionThread, retainsOwnerThread } from "../dist/federation-core.js";
+import { buildThreadIdentityKey, projectRetainedOwnerThread, projectOwnerThreadTitle, projectAcpSessionThread, retainsOwnerThread } from "../dist/federation-core.js";
 
 /** Retained provider discovery and live canonical metadata, qualified by backend. */
 export class OutpostThreadRegistry {
@@ -26,10 +26,6 @@ export class OutpostThreadRegistry {
   async getThreadMetadata(identity) { return this.storage.getThreadMetadata(identity); }
   async listThreadMetadata() { return this.storage.listThreadMetadata(); }
   async updateThreadMetadata(identity, patch) { this.identity(identity); return this.storage.updateThreadMetadata(identity, patch); }
-
-  seenWatermark(thread) {
-    return thread.seenUpdatedAt ?? this.unreadBaseline[buildThreadIdentityKey(thread.source ?? "codex", thread.id)] ?? thread.seenAt ?? 0;
-  }
 
   async refreshClaudeThreads() {
     if (!this.claudeSessions) return;
@@ -83,35 +79,28 @@ export class OutpostThreadRegistry {
     const actualSession = backend.startsWith("acp:") || (backend === "claude" && this.claudeThreadIds?.has(id));
     const acpArchiveObservation = backend.startsWith("acp:") && (record?.archivedAt !== undefined
       || record?.archiveRetentionStartedAt !== undefined || record?.restoredAt !== undefined);
-    const thread = record ? outpostThreadProjection(record) : { id };
-    if (native) {
-      Object.assign(thread, actualSession ? { title: native.title, titleSource: native.titleSource } : projectOwnerThreadTitle(native, record));
-      if (record?.title?.nativeName !== undefined && record.title.nativeName !== native.title) thread.titleNativeName = native.title;
-      if (actualSession) {
-        Object.assign(thread, { createdAt: native.createdAt, updatedAt: native.updatedAt,
-          cwd: native.projectKey || native.linkedDirectories[0]?.path });
-        if (!acpArchiveObservation) {
-          thread.archived = native.archivedAt !== undefined;
-          thread.archivedAt = native.archivedAt;
-        }
-      } else if (native.observedAt > Math.max(record?.archivedAt ?? -Infinity, record?.archiveRetentionStartedAt ?? -Infinity, record?.restoredAt ?? -Infinity)) {
-        thread.archived = native.archivedAt !== undefined;
-        thread.archivedAt = native.archivedAt;
-      }
+    const retained = projectRetainedOwnerThread(id, record, undefined);
+    const projected = { ...retained, ...native, source: backend, archivedAt: native ? native.archivedAt : retained.archivedAt,
+      ...(record ? { createdAt: record.createdAt ?? native?.createdAt, updatedAt: record.updatedAt ?? native?.updatedAt,
+        projectKey: record.cwd ?? native?.projectKey,
+        executionMode: record.executionMode, model: record.model ?? native?.model,
+        reasoningEffort: record.reasoningEffort ?? native?.reasoningEffort, serviceTier: record.serviceTier ?? native?.serviceTier,
+        fastMode: record.fastMode ?? native?.fastMode } : {}),
+      ...(native ? actualSession ? { title: native.title, titleSource: native.titleSource } : projectOwnerThreadTitle(native, record) : {}),
+    };
+    if (actualSession) {
+      Object.assign(projected, { createdAt: native.createdAt, updatedAt: native.updatedAt,
+        projectKey: native.projectKey, executionMode: native.executionMode ?? record?.executionMode ?? "default" });
     }
-    const projected = { ...(native ? { ...native, id, title: native.title, titleSource: native.titleSource,
-      createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path,
-      archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
-      sandbox: native.executionMode === "auto" ? "workspace-write" : "read-only", model: native.model,
-      reasoningEffort: native.reasoningEffort, serviceTier: native.serviceTier, fastMode: native.fastMode } : {}),
-      ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)), source: backend,
-      executionMode: actualSession ? native.executionMode ?? record?.executionMode ?? "default" : record?.executionMode ?? native?.executionMode ?? "default" };
-    if (acpArchiveObservation) projected.archivedAt = projected.archived
-      ? Math.max(record.archivedAt ?? -Infinity, record.archiveRetentionStartedAt ?? -Infinity) : undefined;
-    if (projected.title === undefined) {
-      projected.title = "Untitled thread";
-      projected.titleSource = "fallback";
+    if (record && (!native || acpArchiveObservation || (!actualSession && !(native.observedAt > Math.max(
+      record.archivedAt ?? -Infinity, record.archiveRetentionStartedAt ?? -Infinity, record.restoredAt ?? -Infinity))))) {
+      projected.archivedAt = retained.archivedAt;
     }
+    if (!projected.linkedDirectories?.length && projected.projectKey) {
+      const cwd = projected.projectKey;
+      projected.linkedDirectories = [{ id: cwd, kind: "local", path: cwd, label: path.basename(cwd) }];
+    }
+    delete projected.observedAt;
     return projected;
   }
 
@@ -144,9 +133,5 @@ export class OutpostThreadRegistry {
     return [...identities].filter(([key, identity]) => identity.backend !== "codex" || natives.has(key)
       || retainsOwnerThread(byId.get(key), this.retainedOwnerIds.has(identity.threadId)) || this.acceptedJobThreadIds.has(identity.threadId))
       .map(([key, identity]) => this.project(identity.threadId, byId.get(key), natives.get(key), identity.backend)).values();
-  }
-  set(id, thread) {
-    if (id !== thread.id) throw new Error("Thread registry identity changed");
-    this.storage.updateThreadMetadata({ backend: "codex", threadId: id }, outpostThreadMetadata(thread));
   }
 }

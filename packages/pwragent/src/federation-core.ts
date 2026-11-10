@@ -1,3 +1,4 @@
+import { navigationDetailRevision } from "@pwragent/owner-core/navigation-detail-projection";
 export * from "@pwragent/federation/federation-transport";
 export * from "@pwragent/federation/federation-identity";
 export * from "@pwragent/federation/federation-noise";
@@ -69,11 +70,13 @@ import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-o
 import { RetainedOwnerThreadStore } from "@pwragent/sqlite-storage/retained-owner-thread-store";
 import { SqliteDurableTurnRequestStore } from "@pwragent/sqlite-storage/durable-turn-request-store";
 import type { DurableTurnRequestStorage } from "@pwragent/owner-core/durable-turn-request-storage";
-export { outpostThreadMetadata, outpostThreadProjection } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
+export { projectRetainedOwnerThread } from "@pwragent/owner-core/retained-owner-thread-storage";
+
+import type { OwnerNavigationStorage } from "@pwragent/owner-core/navigation-storage";
 
 type OutpostOwnerStorage = { threads: ImmediateOwnerThreadRegistry; jobs: OwnerJobStorage; inventory: ProviderThreadSnapshotStorage;
   acpSessions: Pick<AcpSessionStorage, "getSession" | "listAllSessions">; claudeSessions: ClaudeProfileThreadStorage;
-  retainedOwners: RetainedOwnerThreadStorage; durableTurnRequests: DurableTurnRequestStorage };
+  retainedOwners: RetainedOwnerThreadStorage; durableTurnRequests: DurableTurnRequestStorage; navigation: OwnerNavigationStorage };
 
 /** Outpost's private host binding. Application code receives only storage ports. */
 export function openOutpostProfileRuntime(params: {
@@ -137,6 +140,28 @@ export function openOutpostProfileRuntime(params: {
           updateThreadMetadata: (identity, patch) => storage.threads.mergeOwnerThreadMetadata(identity, patch),
           readUnreadBaseline: () => storage.threads.readUnreadBaseline(),
         },
+        navigation: {
+          initializeUnreadBaseline: threads => storage.threads.initializeNavigationUnreadBaseline(threads),
+          readIndex: params => storage.threads.readNavigationQueryIndex(params),
+          projectSummary: params => storage.threads.projectNavigationThreadSummary(params),
+          projectDetail: params => storage.threads.projectNavigationThreadDetail(params),
+          readCollectionSource: async ({ ref, name, thread }) => {
+            const identity = { backend: ref.backend, threadId: ref.threadId };
+            if (name === "subAgents") {
+              const stored = await storage.threads.readThreadSubAgentRevision(identity);
+              return { count: stored.count, revision: navigationDetailRevision({ ref, name, order: "created", stored }),
+                read: (offset, limit) => storage.threads.listThreadSubAgentPage({ ...identity, offset, limit }) };
+            }
+            const overlay = await storage.threads.getThreadOverlayState(identity);
+            const values = name === "codexNativeSubAgents" ? thread.codexNativeSubAgents ?? []
+              : overlay?.[name] ?? (name === "worktreeSnapshots" ? thread.worktreeSnapshots : undefined) ?? [];
+            return { count: values.length, revision: navigationDetailRevision({ ref, name, values }),
+              read: async (offset, limit) => values.slice(offset, offset + limit) };
+          },
+          readPricing: identity => storage.threads.readThreadPricing(identity),
+          readToolAccounting: identity => storage.threads.readThreadToolAccounting(identity),
+          markThreadSeen: params => storage.threads.markThreadSeen({ ...params, backend: params.backend ?? "codex" }),
+        },
         jobs: {
           get: id => storage.jobs.get(id), list: () => storage.jobs.list(), count: () => storage.jobs.count(),
           save: job => storage.jobs.save(job),
@@ -165,3 +190,9 @@ export function openOutpostProfileRuntime(params: {
     throw error;
   }
 }
+
+export { buildTurnQueueLifecycleEvent, queuedTurnDisplayText, queuedTurnPauseParams } from "@pwragent/owner-core/thread-turn-queue-events";
+export { buildTurnStartEvent, buildTurnStartFailureEvent } from "@pwragent/owner-core/thread-turn-start-lifecycle";
+export { projectNavigationSelectedDetail, readNavigationQueueProjection, readNavigationSelectedCollection } from "@pwragent/owner-core/navigation-detail-projection";
+export { searchFederatedThreadsOnOwner } from "@pwragent/owner-core/federated-search";
+export { NAVIGATION_DETAIL_COLLECTION_NAMES, projectActiveThreadSubAgents } from "@pwragent/shared";

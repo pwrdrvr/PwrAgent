@@ -460,9 +460,21 @@ uncertain send. No messaging queue or automatic retry runs on the outpost.
 
 ## Architecture
 
+Desktop and the Outpost read canonical owner metadata from the profile's
+`state.db`. The shared overlay storage and owner-core produce summaries,
+protocol-2 navigation, selected configuration and collection pages, queue
+projections, and unread state. Seen commands preserve an omitted watermark and
+coalesce unchanged stamps using the same storage operation on both hosts.
+Outpost search uses the shared owner search algorithm; it never reads viewer
+drafts or adds execution or transcript access for unsupported providers.
+
+The Outpost announces accepted creation and turn/queue boundaries through the
+shared lifecycle and protocol event builders. Job persistence remains separate
+from the provider's event stream; it does not manufacture Attention turns.
+
 The desktop evaluator still starts Electron under Xvfb. Its backend registry
 also owns settings, secrets, Git enrichment and desktop services. The headless
-package instead owns a small App Server adapter and durable job registry.
+package supplies the App Server process adapter and durable job storage.
 `@pwragent/federation` extracts the existing host-independent Noise transport,
 enrollment, router and RPC implementation. Desktop wrappers preserve existing
 imports and inject desktop diagnostics; the headless host supplies private JSON

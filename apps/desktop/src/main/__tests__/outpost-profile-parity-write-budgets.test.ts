@@ -40,7 +40,7 @@ it("budgets actual discovery and native-title boundaries without writes on uncha
       renameThread: async ({ name }: { name: string }) => { nativeName = name; return { threadId: "thread" }; } } };
     const backend = new HeadlessBackend(runtime, () => {});
     const discovery = await measureSqliteWrites(() => backend.initialize());
-    expectSqliteWriteBudget({ budgetFile, scenario: "outpost-fresh-discovery", note: "One complete provider inventory boundary; setup, leases and adoption excluded", writes: discovery.writes });
+    expectSqliteWriteBudget({ budgetFile, scenario: "outpost-fresh-discovery", note: "One complete provider inventory boundary and one immutable startup unread baseline; setup, leases and adoption excluded", writes: discovery.writes });
     const rename = await measureSqliteWrites(() => backend.handle("renameThread", { threadId: "thread", name: "Outpost title" }));
     expectSqliteWriteBudget({ budgetFile, scenario: "outpost-native-rename", note: "Acknowledged native rename and title provenance in one canonical metadata commit", writes: rename.writes });
     // First changed inventory boundary is separate from passive reads.

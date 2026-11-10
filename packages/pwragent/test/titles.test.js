@@ -13,9 +13,10 @@ function backendFixture(t, jobs, read = async () => ({ thread: { turns: [] } }),
   const directory = mkdtempSync(path.join(local, "titles-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const owner = ownerStorage(t, directory, directory, legacyThreads);
+  owner.storage.navigation.initializeUnreadBaseline([]);
   const codex = fixtureCodexClient(read);
   const runtime = { projects: { list: () => [{ path: directory, label: "Fixture" }] }, workspace: directory, loadedThreads: new Set(),
-    store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, inventory: owner.inventory,
+    store: { directory: path.join(owner.directory, "jobs"), jobs, threadRegistry: owner.threadRegistry, navigation: owner.storage.navigation, inventory: owner.inventory,
       retainedOwners: owner.storage.retainedOwners }, codex, onFailure: (error) => { throw error; } };
   const published = [];
   const backend = new HeadlessBackend(runtime, (event, eventClass) => published.push({ eventClass, ...event.notification }));
@@ -42,7 +43,7 @@ test("the first prompt names a placeholder thread and announces it", (t) => {
   const jobs = new Map([["first", job("first", "thread", { turnId: "turn-1" })]]);
   const { backend, published, registry } = backendFixture(t, jobs);
   assert.equal(backend.owned("thread").titleSource, "fallback");
-  backend.event({ method: "headless/turnStarted", params: { threadId: "thread", jobId: "first", prompt: "$plan Could you fix the flaky login test" } });
+  backend.runtime.scheduleTitle({ threadId: "thread", jobId: "first", prompt: "$plan Could you fix the flaky login test" });
   assert.deepEqual((({ title, titleSource }) => ({ title, titleSource }))(backend.summary(backend.owned("thread"))),
     { title: "Fix the flaky login test", titleSource: "derived" });
   assert.deepEqual(published, [
@@ -62,7 +63,7 @@ test("a later turn never names a thread; reading it uses Codex's preview, then i
     return params.threadId === "legacy" ? { thread: { preview: "Investigate the slow navigation query.", turns: [] } }
       : { thread: { preview: "", turns: [{ id: "turn-2", status: "completed", items: [user, { type: "agentMessage", text: "Done" }] }] } };
   });
-  backend.event({ method: "headless/turnStarted", params: { threadId: "legacy", jobId: "new", prompt: "continue" } });
+  backend.runtime.scheduleTitle({ threadId: "legacy", jobId: "new", prompt: "continue" });
   assert.equal(backend.owned("legacy").titleSource, "fallback");
   await backend.readThread("legacy");
   assert.equal(backend.owned("legacy").title, "Investigate the slow navigation query");
@@ -76,7 +77,7 @@ test("an explicit rename is never replaced, and an empty prompt leaves the place
   await backend.handle("renameThread", { threadId: "named", title: "  Release checklist " });
   assert.deepEqual(published[0], { eventClass: "transcript", method: "thread/name/updated",
     params: { threadId: "named", threadName: "Release checklist", titleSource: "explicit" } });
-  backend.event({ method: "headless/turnStarted", params: { threadId: "named", jobId: "named", prompt: "Rewrite everything" } });
+  backend.runtime.scheduleTitle({ threadId: "named", jobId: "named", prompt: "Rewrite everything" });
   const beforeDerived = published.length;
   backend.event({ method: "thread/name/updated", params: { threadId: "named", threadName: "Rewrite everything", titleSource: "derived" } });
   assert.equal(published.length, beforeDerived, "a rejected derived title is not published");
@@ -84,7 +85,7 @@ test("an explicit rename is never replaced, and an empty prompt leaves the place
   assert.equal(backend.owned("named").title, "Release checklist");
   assert.equal(backend.owned("named").titleSource, "explicit");
   published.length = 0;
-  backend.event({ method: "headless/turnStarted", params: { threadId: "blank", jobId: "blank", prompt: "   " } });
+  backend.runtime.scheduleTitle({ threadId: "blank", jobId: "blank", prompt: "   " });
   assert.equal(backend.owned("blank").titleSource, "fallback");
   assert.deepEqual(published, []);
 });

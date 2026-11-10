@@ -5,7 +5,6 @@ import { expect, it } from "vitest";
 import { StateDb } from "../storage/state-db";
 import { RetainedOwnerThreadStore } from "../storage/retained-owner-thread-store";
 import { retainedOwnerFixture } from "./helpers/retained-owner-fixture";
-import { outpostThreadProjection } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
 
 it("matches the current owner's durable archive authority for retained imports and accepted identities", async () => {
   await fc.assert(fc.asyncProperty(fc.nat(10000), fc.array(fc.constantFrom("observe", "archive", "restore"), { maxLength: 10 }),
@@ -21,10 +20,10 @@ it("matches the current owner's durable archive authority for retained imports a
             if (command === "observe") await f.overlay.observeArchivedThreads([ref], now);
             else await f.overlay.setThreadArchiveTombstone({ ...ref, ...(command === "archive" ? { archivedAt: now } : { restoredAt: now }) });
             const record = (await f.overlay.getThreadMetadata(ref))!;
-            const owner = outpostThreadProjection(record);
+            const archived = command !== "restore";
             const retained = f.retained.list().find(thread => thread.id === threadId)!;
-            expect(retained.archivedAt !== undefined).toBe(owner.archived);
-            if (owner.archived) expect(retained.archivedAt).toBe(Math.max(record.archivedAt ?? -Infinity, record.archiveRetentionStartedAt ?? -Infinity));
+            expect(retained.archivedAt !== undefined).toBe(archived);
+            if (archived) expect(retained.archivedAt).toBe(Math.max(record.archivedAt ?? -Infinity, record.archiveRetentionStartedAt ?? -Infinity));
           }
         }
       } finally { f.close(); }

@@ -31,7 +31,7 @@ async function fixture(work: (runtime: any, backend: any, store: any, profile: a
     const federation = new HeadlessFederation({ directory: path.join(root, "headless"), runtime, profile: "fixture", onFailure() {} });
     federation.publish = (event: any) => events.push(event.notification);
     const backend = federation.backend;
-    backend.persistCreatedNativeThread({ id: ref.threadId, title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: ref.threadId, title: { text: "Existing", source: "explicit" }, cwd: root });
     runtime.submit({ id: "active", threadId: ref.threadId, prompt: "active" }); await runtime.work;
     await work(runtime, backend, store, profile, events, sent);
   } finally {
@@ -202,12 +202,12 @@ it.skipIf(process.platform === "win32")("replacement preserves the parent's rese
       }, envelope(`waiting${n}`)));
       terminal(runtime, "failed"); await settle();
       const accepted = waiting.map(entry => store.get(entry.queueEntryId));
-      const observe = runtime.onEvent;
+      const observe = runtime.onQueueLifecycle;
       let control: Promise<any> | undefined;
-      runtime.onEvent = (event: any) => {
+      runtime.onQueueLifecycle = (event: any) => {
         observe(event);
-        if (!control && event.method === "headless/queueChanged" && event.params.type === "queued"
-          && event.params.entry.id === waiting[observation]!.queueEntryId) {
+        if (!control && event.type === "queued"
+          && event.entry.id === waiting[observation]!.queueEntryId) {
           control = replace(backend, waiting[target]!.queueEntryId, "changed").then(
             (value: { queueEntryId: string }) => ({ value }), (error: Error) => ({ error }),
           );
@@ -238,11 +238,11 @@ it.skipIf(process.platform === "win32")("replacement preserves the parent's rese
 it.skipIf(process.platform === "win32")("shutdown during replacement acceptance preserves both outcomes without restoring prompts or replaying jobs", async () => {
   await fixture(async (runtime, backend, store, profile, _events, sent) => {
     const response = await queued(backend), original = store.get(response.queueEntryId);
-    const observe = runtime.onEvent;
+    const observe = runtime.onJobChanged;
     let stopping: Promise<void> | undefined;
-    runtime.onEvent = (event: any) => {
+    runtime.onJobChanged = (event: any) => {
       observe(event);
-      if (event.method === "headless/jobChanged" && event.params.id !== original.id && event.params.status === "queued") stopping = runtime.stop();
+      if (event.id !== original.id && event.status === "queued") stopping = runtime.stop();
     };
     const replacement = await replace(backend, original.id, "changed");
     await stopping;

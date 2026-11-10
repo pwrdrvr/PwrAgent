@@ -94,7 +94,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       ] } });
     } else if (method === "model/list") {
       reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, hidden: false,
-        supportedReasoningEfforts: [], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
+        supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
     } else if (method === "thread/start" || method === "thread/resume") {
       if (params.approvalPolicy !== undefined) assert.equal(params.approvalPolicy, "never");
       if (params.sandbox !== undefined) assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
@@ -107,16 +107,19 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           continue;
         }
       }
-      threads[threadId] ||= { id: threadId, cwd: params.cwd, turns: [] };
+      threads[threadId] ||= { id: threadId, cwd: params.cwd, preview: "", name: null, createdAt: Math.floor(Date.now() / 1000), updatedAt: Math.floor(Date.now() / 1000), turns: [] };
       persist();
-      reply({ thread: threads[threadId] });
+      const thread = { ...threads[threadId], sessionId: threadId, status: { type: "idle" }, source: "cli", modelProvider: "openai",
+        ephemeral: false, path: null, cliVersion: "0.159.2", gitInfo: null };
+      reply({ thread });
+      if (method === "thread/start") send({ method: "thread/started", params: { thread } });
     } else if (method === "turn/start") {
       assert.equal(params.approvalPolicy, "never");
       assert.equal(params.sandboxPolicy.networkAccess, false);
       assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const prompt = params.input[0].text;
       // Codex reports the first user message as the thread's preview.
-      if (threads[params.threadId] && threads[params.threadId].preview === undefined) {
+      if (threads[params.threadId] && !threads[params.threadId].preview) {
         threads[params.threadId].preview = prompt;
         persist();
       }

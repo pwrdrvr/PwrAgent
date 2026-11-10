@@ -31,7 +31,7 @@ async function fixture(work: (f: any) => Promise<void>) {
     federation.ensureIdentity("fixture");
     federation.publish = (event: any) => events.push(event.notification);
     const backend = federation.backend;
-    backend.persistCreatedNativeThread({ id: ref.threadId, title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: ref.threadId, title: { text: "Existing", source: "explicit" }, cwd: root });
     const envelope = { sourceInstanceId: "issuer", targetInstanceId: federation.state.instanceId, id: "transport" };
     const submit = (value: SubmitDurableTurnRequest, callerScope = "device", sourceInstanceId = "issuer") => backend.handle("backend.submitTurnRequest", { ...value, callerScope }, { ...envelope, sourceInstanceId });
     const get = (value: SubmitDurableTurnRequest, callerScope = "device", sourceInstanceId = "issuer") => backend.handle("backend.getTurnRequest", { ...ref, id: value.clientRequest.id, callerScope }, { ...envelope, sourceInstanceId });
@@ -118,9 +118,9 @@ it.skipIf(process.platform === "win32")("shutdown overtaking queued acceptance r
     await active();
     const observer = runtime.onEvent;
     let stopped: Promise<void> | undefined;
-    runtime.onEvent = (event: any) => {
+    runtime.onJobChanged = (event: any) => {
       observer(event);
-      if (event.method === "headless/jobChanged" && event.params.status === "queued") stopped = runtime.stop();
+      if (event.status === "queued") stopped = runtime.stop();
     };
     const request = value();
     expect(await submit(request)).toMatchObject({ state: "uncertain" });

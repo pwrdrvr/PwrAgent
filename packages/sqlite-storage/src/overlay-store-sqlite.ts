@@ -1526,14 +1526,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
     queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number };
   }): Promise<NavigationThreadSummary> {
+    return this.projectNavigationThreadSummary(params);
+  }
+
+  projectNavigationThreadSummary(params: {
+    thread: AppServerThreadSummary;
+    messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
+    queuedExecutionMode?: { mode: ThreadExecutionMode; queuedAt: number };
+  }): NavigationThreadSummary {
     const thread = params.thread;
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const backend = this.getBackend(thread.source);
-    const overlay = this.getThread(threadKey);
+    const backend = this.getBackend("all") ?? this.getBackend(thread.source);
+    const baseline = this.readNavigationUnreadBaseline();
+    let overlay = this.getThread(threadKey);
+    const baselineWatermark = baseline?.seenUpdatedAt[threadKey];
+    if (baselineWatermark !== undefined && overlay?.lastSeenUpdatedAt === undefined) {
+      overlay = { backend: thread.source, threadId: thread.id, executionMode: thread.executionMode ?? "default",
+        extraLinkedDirectories: [], ...overlay, lastSeenUpdatedAt: baselineWatermark };
+    }
     const queue = params.queuedExecutionMode;
     return materializeNavigationThreads({
-      firstSnapshot: !backend?.lastSnapshotHash,
-      previousKnownThreadKeys: backend?.knownThreadKeys ?? [],
+      firstSnapshot: !baseline && !backend?.lastSnapshotHash,
+      previousKnownThreadKeys: baseline?.knownThreadKeys ?? backend?.knownThreadKeys ?? [],
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey: { [threadKey]: queue ? {
         backend: thread.source, threadId: thread.id,

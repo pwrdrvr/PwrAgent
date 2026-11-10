@@ -51,15 +51,20 @@ it.skipIf(process.platform === "win32")("durable job acceptance and provider out
       await fixture(async (runtime, backend, store, root) => {
         const calls: string[] = [];
         runtime.onFailure = () => { throw new Error("diagnostics refused"); };
-        const observe = runtime.onEvent;
-        runtime.onEvent = (event: any) => {
-          const phase = event.method === "headless/turnStarted" ? "title"
-            : event.params.status === "starting" ? event.params.threadId ? "thread" : "acceptance"
-            : event.params.status === "running" ? "running" : "terminal";
+        const observeJob = runtime.onJobChanged;
+        runtime.onJobChanged = (job: any) => {
+          const phase = job.status === "starting" ? job.threadId ? "thread" : "acceptance"
+            : job.status === "running" ? "running" : "terminal";
           calls.push(phase);
-          observe(event);
-          if (phase === "title" && ordering === "during-finalization") runtime.notification(completion);
+          observeJob(job);
           if (phase === failure) throw new Error(`${phase} observer refused`);
+        };
+        const scheduleTitle = runtime.scheduleTitle;
+        runtime.scheduleTitle = (request: any) => {
+          calls.push("title");
+          scheduleTitle(request);
+          if (ordering === "during-finalization") runtime.notification(completion);
+          if (failure === "title") throw new Error("title observer refused");
         };
         const completion = { method: "turn/completed", params: { threadId: "native", turn: { id: "turn", status: terminal } } };
         runtime.codex = {

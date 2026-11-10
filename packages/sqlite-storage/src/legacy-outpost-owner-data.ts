@@ -31,17 +31,6 @@ export function outpostThreadMetadata(thread: OutpostThread): OwnerThreadMetadat
   return patch;
 }
 
-export function outpostThreadProjection(record: OwnerThreadRecord): OutpostThread {
-  const thread: OutpostThread = { id: record.threadId, title: record.title?.text, titleSource: record.title?.source, titleNativeName: record.title?.nativeName,
-    sandbox: record.executionMode === "auto" ? "workspace-write" : record.executionMode === "full-access" ? "danger-full-access" : "read-only",
-    parentThreadId: record.parent?.threadId, parentThreadBackend: record.parent?.backend, parentThreadInstanceId: record.parent?.instanceId };
-  for (const field of FIELDS) if (record[field] !== undefined) thread[field] = structuredClone(record[field]);
-  if (record.archivedAt !== undefined || record.archiveRetentionStartedAt !== undefined || record.restoredAt !== undefined) {
-    thread.archived = Math.max(record.archivedAt ?? -Infinity, record.archiveRetentionStartedAt ?? -Infinity)
-      > (record.restoredAt ?? -Infinity);
-  }
-  return thread;
-}
 
 type Identity = { version: 1; workspace: string; codexHome: string };
 type Manifest = { version: 1; identity: Identity; files: Array<{ name: string; sha256: string }> };

@@ -30,7 +30,7 @@ async function fixture(work: (runtime: any, backend: any, store: any, profile: a
     }, stop: async () => {} };
     const backend = new HeadlessBackend(runtime, (event: any) => events.push(event.notification));
     runtime.onEvent = (event: unknown) => backend.event(event);
-    backend.persistCreatedNativeThread({ id: ref.threadId, title: "Existing", titleSource: "explicit", cwd: root });
+    backend.persistCreatedNativeThread({ threadId: ref.threadId, title: { text: "Existing", source: "explicit" }, cwd: root });
     runtime.submit({ id: "active", threadId: ref.threadId, prompt: "active" }); await runtime.work;
     await work(runtime, backend, store, profile, events, sent);
   } finally {
@@ -46,7 +46,7 @@ it.skipIf(process.platform === "win32")("actual owner pause and ordering obey an
       const accepted = model.map(entry => runtime.submit({ id: entry.id, threadId: ref.threadId, prompt: entry.id }));
       for (const command of commands) {
         const entry = model.find(entry => entry.id === `waiting${command.from}`)!;
-        const before = backend.queueProjection({ protocol: 2, ref });
+        const before = backend.readQueueProjection({ protocol: 2, ref });
         const eventCount = events.length;
         if (command.kind === "move") {
           const anchor = command.to < 4 ? `waiting${command.to}` : command.to === 4 ? undefined : "absent";
@@ -64,9 +64,9 @@ it.skipIf(process.platform === "win32")("actual owner pause and ordering obey an
           const paused = command.kind === "pause", changed = entry.paused !== paused;
           if (changed) { entry.paused = paused; entry.revision++; }
           expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: entry.id, paused, messageOrigin: { kind: "agent", sourceInstanceId: "forged" } })).toEqual({ queueEntryId: entry.id, disposition: changed ? "updated" : "unchanged", paused, ...(entry.revision ? { pauseRevision: entry.revision } : {}) });
-          if (changed) expect(events.slice(eventCount)).toContainEqual(expect.objectContaining({ method: "thread/turnQueue/updated", params: expect.objectContaining({ queueEntryId: entry.id, paused, pauseRevision: entry.revision }) }));
+          if (changed) expect(events.slice(eventCount)).toContainEqual(expect.objectContaining({ method: "thread/turnQueue/updated", params: expect.objectContaining({ queueEntryId: entry.id, ...(paused ? { paused: true } : {}), pauseRevision: entry.revision }) }));
         }
-        const projection = backend.queueProjection({ protocol: 2, ref });
+        const projection = backend.readQueueProjection({ protocol: 2, ref });
         expect(projection.entries.map((item: any) => ({ id: item.queueEntryId, paused: Boolean(item.paused), revision: item.pauseRevision ?? 0 }))).toEqual(model);
         expect(projection.entries.map((item: any) => item.position)).toEqual([0, 1, 2, 3]);
         expect(projection.revision === before.revision).toBe(events.length === eventCount);
@@ -178,7 +178,7 @@ it.skipIf(process.platform === "win32")("concurrent control events never republi
         if (status === "queued" || status === "held") visible.set(queueEntryId, { paused: Boolean(paused), revision: pauseRevision ?? 0 });
         else visible.delete(queueEntryId);
       }
-      const projection = backend.queueProjection({ protocol: 2, ref }).entries;
+      const projection = backend.readQueueProjection({ protocol: 2, ref }).entries;
       expect([...visible].sort()).toEqual(projection.map((entry: any) => [entry.queueEntryId, { paused: Boolean(entry.paused), revision: entry.pauseRevision ?? 0 }]).sort());
       expect(sent).toEqual(["active"]);
     });
@@ -193,7 +193,7 @@ it.skipIf(process.platform === "win32")("direct pause/cancel cannot recreate a c
       backend.handle("backend.cancelQueuedTurn", { queueEntryId: "waiting" }),
     ]);
     expect(events.filter(event => event.method === "thread/turnQueue/updated" && event.params.queueEntryId === "waiting").at(-1)?.params.status).toBe("cancelled");
-    expect(backend.queueProjection({ protocol: 2, ref }).entries).toEqual([]);
+    expect(backend.readQueueProjection({ protocol: 2, ref }).entries).toEqual([]);
     expect(store.get("waiting").status).toBe("interrupted");
   });
 });
@@ -227,7 +227,7 @@ it.skipIf(process.platform === "win32")("resuming or moving waiting input cannot
       await runtime.handle("resume", { id: "waiting" }); await settle();
       expect(sent).toEqual(["active"]);
       expect(store.get("waiting")).toEqual(accepted);
-      expect(backend.queueProjection({ protocol: 2, ref }).entries).toMatchObject([{ queueEntryId: "waiting", pauseRevision: 2 }]);
+      expect(backend.readQueueProjection({ protocol: 2, ref }).entries).toMatchObject([{ queueEntryId: "waiting", pauseRevision: 2 }]);
       runtime.ownsThread = owns; runtime.threadCwd = cwd; runtime.threadLocked = () => false;
       runtime.intakeBusy = false; backend.creating = false; runtime.uncertain = false;
     });
@@ -241,12 +241,12 @@ it.skipIf(process.platform === "win32")("pause and order controls preserve the p
       terminal(runtime, "turn-1", "failed"); await settle();
       expect(backend.queuedTurns(ref.threadId).every((entry: any) => entry.manualReleaseRequired)).toBe(true);
       const accepted = store.get("waiting0");
-      const observe = runtime.onEvent;
+      const observe = runtime.onQueueLifecycle;
       let control: Promise<any> | undefined;
-      runtime.onEvent = (event: any) => {
+      runtime.onQueueLifecycle = (event: any) => {
         observe(event);
-        if (!control && event.method === "headless/queueChanged" && event.params.type === "queued"
-          && event.params.entry.id === `waiting${observation}`) {
+        if (!control && event.type === "queued"
+          && event.entry.id === `waiting${observation}`) {
           const queueEntryId = `waiting${target}`;
           control = command.startsWith("move")
             ? backend.handle("backend.moveQueuedTurn", { queueEntryId, beforeQueueEntryId: command === "move-before" ? "waiting0" : undefined })
@@ -300,7 +300,7 @@ it.skipIf(process.platform === "win32")("pause and ordering invalidate paged pro
   try {
     await fixture(async (runtime, backend, store) => {
       for (let n = 0; n < 101; n++) runtime.submit({ id: `waiting${n}`, threadId: ref.threadId, prompt: `waiting${n}` });
-      const page = backend.queueProjection({ protocol: 2, ref });
+      const page = backend.readQueueProjection({ protocol: 2, ref });
       expect(page.entries).toHaveLength(100); expect(page.complete).toBe(false);
       const accepted = [...store.jobs.values()];
       const { writes } = await measureSqliteWrites(async () => {
@@ -310,12 +310,12 @@ it.skipIf(process.platform === "win32")("pause and ordering invalidate paged pro
           await runtime.handle("move", { id: "waiting1", before: "waiting0" });
           await runtime.handle("resume", { id: "waiting0" });
           await runtime.handle("move", { id: "waiting0", before: "waiting1" });
-          backend.queueProjection({ protocol: 2, ref });
+          backend.readQueueProjection({ protocol: 2, ref });
         }
       });
       expectSqliteWriteBudget({ budgetFile: "outpost-queue-pause-order-write-budgets.json", scenario: "waiting-controls", note: "100 pause/duplicate-pause/resume and two ordering requests plus projections while provider is active; in-memory changes only", writes });
       expect([...store.jobs.values()]).toEqual(accepted);
-      expect(() => backend.queueProjection({ protocol: 2, ref, cursor: page.nextCursor })).toThrow("Queue changed");
+      expect(() => backend.readQueueProjection({ protocol: 2, ref, cursor: page.nextCursor })).toThrow("Queue changed");
       await expect(backend.handle("backend.setQueuedTurnPaused", { queueEntryId: "waiting0", paused: "false" })).rejects.toThrow("boolean");
       await expect(backend.handle("backend.moveQueuedTurn", { queueEntryId: "waiting0", beforeQueueEntryId: 42 })).rejects.toThrow("queue entry");
     });
@@ -331,9 +331,10 @@ it.skipIf(process.platform === "win32")("actual Outpost held admission covers re
       for (const job of accepted) await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: job.id, paused: true });
       terminal(runtime, "turn-1"); await settle();
       let cancellation: Promise<unknown> | undefined;
-      runtime.onEvent = (event: any) => {
-        backend.event(event);
-        if (event.method === "headless/queueChanged" && event.params.type === "queued" && event.params.entry.id === "review") {
+      const observeQueue = runtime.onQueueLifecycle;
+      runtime.onQueueLifecycle = (event: any) => {
+        observeQueue(event);
+        if (event.type === "queued" && event.entry.id === "review") {
           cancellation = backend.handle("backend.cancelQueuedTurn", { queueEntryId: "review" });
         }
       };
@@ -346,7 +347,7 @@ it.skipIf(process.platform === "win32")("actual Outpost held admission covers re
       expectSqliteWriteBudget({ budgetFile: "queue-held-admission-write-budgets.json", scenario: "outpost",
         note: "Actual Runtime/HeadlessBackend resumed FIFO, held job acceptance and synchronous review cancellation plus real drains; setup excluded", writes });
       expect(sent).toEqual(["active"]);
-      expect(backend.queueProjection({ protocol: 2, ref }).entries.map((entry: any) => [entry.queueEntryId, entry.manualReleaseRequired]))
+      expect(backend.readQueueProjection({ protocol: 2, ref }).entries.map((entry: any) => [entry.queueEntryId, entry.manualReleaseRequired]))
         .toEqual([["older", true], ["next", true]]);
       for (const job of accepted) expect(store.get(job.id)).toEqual(job);
       expect(store.get("review").status).toBe("interrupted");

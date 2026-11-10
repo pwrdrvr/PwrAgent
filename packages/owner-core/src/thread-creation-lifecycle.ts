@@ -66,6 +66,8 @@ export interface PreparedThreadCreation<Metadata> {
 }
 
 export interface ThreadCreationHost {
+  /** A provider notification already announces creation on this host. */
+  providerAnnouncesStarted?: boolean;
   providers: {
     codex(): Promise<{ threadId: string }>;
     claude(): Promise<{ threadId: string }>;
@@ -201,8 +203,8 @@ export class ThreadCreationLifecycle {
     const parent = options.parent ? await attempt("parent", () => host.persistParent?.(created)) : undefined;
     if (parent) await attempt("parent-event", () => host.announceParent?.(created));
     const visibility = await attempt("visibility", () => host.finalizeVisibility?.(created, parent));
-    // Codex owns its thread/started notification. Other providers need the host.
-    if (backend !== "codex") await attempt("started", () => host.announceStarted?.(created));
+    // The host announces acceptance when its provider does not announce it.
+    if (!(host.providerAnnouncesStarted ?? (backend === "codex"))) await attempt("started", () => host.announceStarted?.(created));
     return { ...created, ...visibility };
   }
 }
