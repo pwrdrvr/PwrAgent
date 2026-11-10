@@ -5,7 +5,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import { canonicalDurableTurnRequest, type SubmitDurableTurnRequest } from "@pwragent/shared";
+import { canonicalDurableSteerRequest, canonicalDurableTurnRequest, type SubmitDurableSteerRequest, type SubmitDurableTurnRequest } from "@pwragent/shared";
 import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
@@ -26,6 +26,67 @@ test.beforeAll(() => {
   execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
     cwd: path.resolve(specDir, "../../.."), stdio: "pipe",
   });
+});
+
+test("durable Outpost steering delivers once to the mounted active turn while its waiting queue stays intact", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  test.setTimeout(120_000);
+  const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent") });
+  let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  try {
+    const identity = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    await outpost.client.renameThread({ ...identity, name: "Invented durable steering" });
+    const active = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+    const waiting = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "Invented waiting input" }] });
+    const invite = JSON.parse((await promisify(execFile)(process.execPath, [outpost.cli, "federation-invite", "--port", "0"], { env: outpost.env })).stdout);
+    app = await launchElectronApp({ secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json") });
+    await app.window.evaluate(async encoded => {
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encoded });
+    }, invite.invite);
+    await expect.poll(async () => app!.window.evaluate(async () =>
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status)).toBe("connected");
+    await app.window.evaluate(async ({ instanceId, threadId }) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const ref = { backend: "codex" as const, threadId, target: { scope: "remote" as const, instanceId } };
+      await api.addRemoteThreadPin!({ ref, instanceLabel: "Invented Outpost", summary: {
+        id: threadId, source: "codex", title: "Invented durable steering", titleSource: "explicit", linkedDirectories: [],
+        threadStatus: "active", inbox: { inInbox: true }, updatedAt: 2_000,
+        federation: { ref, instanceLabel: "Invented Outpost", peerStatus: "connected" },
+      } });
+    }, { instanceId: outpost.ownerInstanceId, threadId: identity.threadId });
+    await app.window.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Invented durable steering", exact: true }).click();
+    const queued = app.window.locator(".composer__queued").filter({ hasText: "Invented waiting input" });
+    const thinking = app.window.getByRole("img", { name: "Thinking on another instance", exact: true });
+    await expect(queued).toHaveCount(1);
+    await expect(thinking).toHaveCount(1);
+    expect(await outpost.client.resolveThreadAdmissionState({ backend: "codex", threadId: identity.threadId })).toMatchObject({ activeTurn: {
+      backend: "codex", threadId: identity.threadId, turnId: active.turnId,
+    } });
+    const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+      request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text: "Invented durable interjection" }] } };
+    request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(outpost.ownerInstanceId, request)).digest("hex");
+    const receipts = await Promise.all(Array.from({ length: 8 }, () => outpost.client.submitSteerRequest(request)));
+    const receipt = await outpost.client.getSteerRequest({ backend: "codex", threadId: identity.threadId, id: request.clientRequest.id });
+    expect(receipt).toMatchObject({ state: "dispatched", operation: "steerTurn", result: { ok: true, turnId: active.turnId, requestId: receipt!.queueEntryId } });
+    expect(receipts.every(result => result.queueEntryId === receipt!.queueEntryId)).toBe(true);
+    await expect(queued).toHaveCount(1);
+    await expect(thinking).toHaveCount(1);
+    expect(await outpost.client.resolveThreadAdmissionState({ backend: "codex", threadId: identity.threadId })).toMatchObject({ activeTurn: {
+      backend: "codex", threadId: identity.threadId, turnId: active.turnId,
+    } });
+    expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: { backend: "codex", threadId: identity.threadId } })).entries.map(entry => entry.queueEntryId)).toEqual([waiting.queueEntryId]);
+    await outpost.client.interruptTurn(active);
+    await expect(queued).toHaveCount(0);
+    await expect(thinking).toHaveCount(0);
+    expect(await outpost.client.submitSteerRequest(request)).toEqual(receipt);
+    const calls = (await readFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const steers = calls.filter(call => call.method === "turn/steer");
+    expect(steers).toHaveLength(1);
+    expect(steers[0].params).toMatchObject({ threadId: identity.threadId, expectedTurnId: active.turnId, input: request.request.input });
+    expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === "Invented waiting input")).toHaveLength(1);
+  } finally {
+    try { await app?.close(); } finally { await outpost.close(); }
+  }
 });
 
 test("durable Outpost admission appears in the mounted queue and cancelled input needs a new receipt before one send", async () => {

@@ -51,7 +51,7 @@ import {
 import { OUTPOST_PACKAGE_ROOT, OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpost-daemon";
 import { createTempStateDb } from "./sqlite-test-utils";
 import { createFederatedThreadMessageHandler } from "../federation/federated-thread-message-service";
-import { canonicalDurableTurnRequest, type SubmitDurableTurnRequest } from "@pwragent/shared";
+import { canonicalDurableSteerRequest, canonicalDurableTurnRequest, type SubmitDurableSteerRequest, type SubmitDurableTurnRequest } from "@pwragent/shared";
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
@@ -191,6 +191,7 @@ async function startDesktopOwner(
       messageOrigin: request.messageOrigin, sourceInstanceId: JSON.parse(scope)[1], resolveSourceInstance: () => undefined,
     }) }),
     isQueued: async receipt => { await backend.readQueuedTurn(receipt); return true; },
+    steer: request => backend.controlActiveTurn!({ ...request, operation: "steer" }),
   });
   registerFederationBackendHandlers({ router, backend, durableTurnRequests });
   rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "desktop-owner", defaultTimeoutMs: 5000,
@@ -322,6 +323,64 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("the existing durable steering caller delivers once to the active turn on both registered owners and leaves waiting input intact", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      for (const host of [desktop, outpost]) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const waiting = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Invented waiting input" }] });
+        const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
+        const runtime = Object.assign(new DesktopFederationRuntime(), {
+          connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_steer_requests_v1"] }],
+          remoteBackend: () => host.client,
+        });
+        const value = (text: string, id: string = randomUUID()): SubmitDurableSteerRequest => {
+          const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id, createdAt: Date.now(), payloadHash: "" },
+            request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text }] } };
+          request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(host.ownerInstanceId, request)).digest("hex");
+          return request;
+        };
+        const before = host.providerSteerCount!(), request = value("Invented durable interjection");
+        const receipts = await Promise.all(Array.from({ length: 8 }, () => runtime.submitDurableSteerRequest("mobile:device", request, target)));
+        const lookup = { ...identity, id: request.clientRequest.id };
+        const receipt = await runtime.getDurableSteerRequest("mobile:device", lookup, target);
+        expect(receipts.every(result => result.queueEntryId === receipt!.queueEntryId)).toBe(true);
+        expect(receipt).toMatchObject({ state: "dispatched", operation: "steerTurn", result: {
+          ok: true, requestId: receipt!.queueEntryId, turnId: active.turnId, disposition: "steered",
+        } });
+        expect(host.providerSteerCount!()).toBe(before + 1);
+        expect(await runtime.getDurableSteerRequest("other-device", lookup, target)).toBeNull();
+        await expect(runtime.submitDurableSteerRequest("mobile:device", value("Changed input", request.clientRequest.id), target)).rejects.toThrow();
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([waiting.queueEntryId]);
+        await host.client.cancelQueuedTurn({ queueEntryId: waiting.queueEntryId! });
+        await host.client.interruptTurn(active);
+        expect(await runtime.submitDurableSteerRequest("mobile:device", request, target)).toEqual(receipt);
+        expect(host.providerSteerCount!()).toBe(before + 1);
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
+  });
+
+  it("the enrolled Outpost requires both steering feature and turn-control grants before receipt admission", async () => {
+    for (const capabilities of [["turn_control"], ["durable_steer_requests_v1"], ["durable_turn_requests_v1", "turn_control"]] as FederationCapability[][]) {
+      const outpost = await startOutpostDaemon({ capabilities });
+      try {
+        const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+          request: { backend: "codex", threadId: "unadmitted", expectedTurnId: "unadmitted-turn", input: [{ type: "text", text: "Must not be admitted" }] } };
+        request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(outpost.ownerInstanceId, request)).digest("hex");
+        await expect(outpost.client.submitSteerRequest(request)).rejects.toThrow(/capability|grant|forbidden|allowed/i);
+        await expect(outpost.client.getSteerRequest({ backend: "codex", threadId: "unadmitted", id: request.clientRequest.id })).rejects.toThrow(/capability|grant|forbidden|allowed/i);
+        const db = StateDb.open(path.join(outpost.env.PWRAGENT_HOME!, "profiles/t/state/state.db"));
+        try {
+          const scope = JSON.stringify(["steerTurn", JSON.stringify(["federation", outpost.viewerId, ""])]);
+          expect(new SqliteDurableTurnRequestStore(db).read(scope, request.clientRequest.id)).toBeUndefined();
+        } finally { db.close(); }
+      } finally { await outpost.close(); }
+    }
+  });
+
   it("the existing durable federation runtime caller shares one acceptance through queue cancellation and terminal reconciliation on both owners", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
@@ -1618,7 +1677,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         "backend.startTurn [start its first turn] event thread/turnQueue/updated: desktop sends it, outpost does not",
       ]);
       expect(measured.differences.filter(difference => queueConvergence.has(difference))).toEqual([]);
-      const queueControls = ["backend.readQueuedTurn", "backend.replaceQueuedMessage", "backend.cancelQueuedTurn", "backend.releaseQueuedTurn", "backend.setQueuedTurnPaused", "backend.moveQueuedTurn", "backend.submitTurnRequest", "backend.getTurnRequest"];
+      const queueControls = ["backend.readQueuedTurn", "backend.replaceQueuedMessage", "backend.cancelQueuedTurn", "backend.releaseQueuedTurn", "backend.setQueuedTurnPaused", "backend.moveQueuedTurn", "backend.submitTurnRequest", "backend.getTurnRequest", "backend.submitSteerRequest", "backend.getSteerRequest"];
       expect(queueControls.every(method => measured.sharedMethods.includes(method))).toBe(true);
       const change = describeBaselineChange({ ...baseline,
         sharedMethods: [...new Set([...baseline.sharedMethods, ...queueControls])].sort(),

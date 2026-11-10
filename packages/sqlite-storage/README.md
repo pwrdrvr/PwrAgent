@@ -89,6 +89,16 @@ three/12,360 (1.236 MB at 100 shutdowns/day). One hundred duplicate submissions
 plus reads and one hundred uncertain retries plus reads each make zero commits.
 Setup is excluded; no schema, timer or inherited budget changes.
 
+`outpost-durable-steer-write-budgets.json` measures the actual Outpost steering
+inbox through its existing native control path. Receipt admission, claim and
+accepted result cost three commits/four statements/three changed rows with
+24,720 observed WAL bytes; an uncertain native outcome has the same cost.
+At 100 steers/day each projects to 2.472 MB/day. A fresh-host read settling one
+stale claim costs one commit/4,120 bytes (0.412 MB/day at 100/day). One hundred
+matching accepted retries plus reads and one hundred uncertain retries plus
+reads each make zero commits and no native resend. Setup is excluded. Steering
+adds no job, schema, timer or write to an existing accepted job's fingerprint.
+
 Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
 ACP session metadata and last-observed command ports. Desktop's private bindings
 retain both explicitly typed runtime factories and their app-state construction
