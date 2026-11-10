@@ -5,7 +5,7 @@ import {
   type Server as NodeHttpServer,
   type ServerResponse,
 } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import {
   Server as McpProtocolServer,
 } from "@modelcontextprotocol/sdk/server/index.js";
@@ -167,6 +167,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     AgentToolMcpClientContext
   >();
   private readonly tokensByBoundThread = new Map<string, string>();
+  private readonly connectionsWithoutRequests = new Set<Socket>();
   private httpServer?: NodeHttpServer;
   private port?: number;
   private startPromise?: Promise<void>;
@@ -236,6 +237,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           }
           resolve();
         });
+        // HTTP idle cleanup can miss sockets before their first request. The
+        // fetch pool replaces an aborted SSE connection with just such a socket.
+        // It owns no admitted work, so shutdown must release it explicitly.
+        for (const socket of this.connectionsWithoutRequests) socket.destroy();
       });
     }
     this.port = undefined;
@@ -279,6 +284,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
 
   private async start(): Promise<void> {
     const httpServer = createHttpServer((request, response) => {
+      this.connectionsWithoutRequests.delete(request.socket);
       void this.handleHttpRequest(request, response).catch((error) => {
         agentToolMcpLog.error("MCP request failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -296,6 +302,14 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           response.end();
         }
       });
+    });
+    httpServer.on("connection", (socket) => {
+      if (this.closed) {
+        socket.destroy();
+        return;
+      }
+      this.connectionsWithoutRequests.add(socket);
+      socket.once("close", () => this.connectionsWithoutRequests.delete(socket));
     });
     await listenOnLoopback(httpServer);
     const address = httpServer.address() as AddressInfo | null;
