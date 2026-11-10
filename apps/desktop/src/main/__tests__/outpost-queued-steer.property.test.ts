@@ -380,7 +380,7 @@ it.skipIf(process.platform === "win32")("explicit Retry of unclaimed held guidan
       expect(store.get(id)).toMatchObject({ status: "completed", fingerprint: prior.fingerprint, turnId: "turn-1" });
       expect(steers).toHaveLength(1);
     });
-  }), { numRuns: 8 });
+  }), { numRuns: 8, examples: [["lock", 1], ["claim", 1]] });
 });
 
 it.skipIf(process.platform === "win32")("held guidance Retry preserves live refusals, pauses, order and immutable acceptance", async () => {
@@ -396,7 +396,7 @@ it.skipIf(process.platform === "win32")("held guidance Retry preserves live refu
       if (gate === "intake") runtime.intakeBusy = true;
       if (gate === "creating") backend.creating = true;
       if (gate === "uncertain") runtime.uncertain = true;
-      if (gate === "dispatch") runtime.dispatches.add(dispatch);
+      if (gate === "dispatch") runtime.dispatches.set("fixture-pending", dispatch);
       if (gate === "stopping") runtime.stopping = true;
       if (gate === "retired") runtime.ownsThread = () => false;
       if (gate === "project") runtime.threadCwd = () => path.join(runtime.workspace, "missing");
@@ -411,7 +411,7 @@ it.skipIf(process.platform === "win32")("held guidance Retry preserves live refu
         expect(steers).toEqual([]);
       } finally {
         runtime.threadLocked = () => false; runtime.intakeBusy = false; backend.creating = false;
-        runtime.uncertain = false; runtime.stopping = false; runtime.dispatches.delete(dispatch);
+        runtime.uncertain = false; runtime.stopping = false; runtime.dispatches.delete("fixture-pending");
         runtime.ownsThread = owns; runtime.threadCwd = cwd;
       }
     });
@@ -457,7 +457,12 @@ it.skipIf(process.platform === "win32")("retried guidance retains claim ownershi
         expect(await runtime.cancelQueuedTurn({ queueEntryId: id })).toMatchObject({ disposition: "already_admitted", cancelled: false });
         expect(await runtime.setQueuedTurnPaused({ queueEntryId: id, paused: true })).toMatchObject({ disposition: "not_found" });
         expect(await runtime.moveQueuedTurn({ queueEntryId: id })).toMatchObject({ disposition: "not_found" });
-        await submit(request);
+        const reservation = runtime.dispatches.get(id);
+        expect(reservation).toBeDefined();
+        let retried = false;
+        const duplicate = submit(request).then((result: any) => { retried = true; return result; });
+        await drain();
+        expect(retried).toBe(false);
         const waiting = runtime.submit({ id: "late-review", threadId: ref.threadId, prompt: "Invented new review hold" },
           { delivery: "queued-steer", manualReleaseRequired: true, holdReason: "Independent later review" });
         expect(runtime.active).toBe("active");
@@ -465,8 +470,13 @@ it.skipIf(process.platform === "win32")("retried guidance retains claim ownershi
         if (status === "stop") stopped = runtime.stop();
         else terminal("turn-1", status);
         expect(starts).toHaveLength(1);
+        await drain();
+        expect(runtime.dispatches.get(id)).toBe(reservation);
+        expect(retried).toBe(false);
         acknowledge();
-        await retry; await stopped; await drain();
+        await retry; await duplicate; await stopped; await drain();
+        expect(retried).toBe(true);
+        expect(runtime.dispatches.has(id)).toBe(false);
         expect(store.get(id)).toMatchObject({ status: status === "stop" ? "unknown" : status, turnId: "turn-1" });
         expect(steers).toHaveLength(1);
         expect(starts).toHaveLength(1);
@@ -475,7 +485,7 @@ it.skipIf(process.platform === "win32")("retried guidance retains claim ownershi
         expect(await runtime.releaseQueuedTurn({ queueEntryId: id })).toMatchObject({ disposition: "not_found" });
       } finally { acknowledge(); await retry; }
     });
-  }), { numRuns: 8 });
+  }), { numRuns: 8, examples: [["completed"], ["stop"]] });
 });
 
 it.skipIf(process.platform === "win32")("budgets explicit held guidance Retry without reacceptance or replay writes", async () => {
