@@ -390,6 +390,9 @@ queue operations desktop uses. Pause revisions and independent review holds
 remain in that engine; typed state/order events invalidate the owner projection.
 Local CLI controls use those same runtime methods. The changes stay in memory,
 make no SQLite commits and cannot change accepted input or its fingerprint.
+Desktop pause publication rereads the shared FIFO after the mutation settles.
+A cancelled row emits no later pause update; a replaced row publishes its current
+hold and pause revision. The response still acknowledges the original mutation.
 Outpost also serves the existing queued-input read through the shared
 `thread_detail` capability. It returns a detached input/origin snapshot and its
 content hash, including for editing. The existing viewer Edit flow cancels that

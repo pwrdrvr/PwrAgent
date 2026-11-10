@@ -23148,28 +23148,32 @@ export class DesktopBackendRegistry {
       request.paused,
     );
     const entry = result.entry;
-    if (result.disposition === "updated" && entry?.paused && !entry.projectHold) {
+    // A control can retire or replace this row while the shared mutation
+    // settles. Publish only its live state, including newer holds/revisions.
+    const current = entry && this.threadTurnQueue.getQueuedEntries(entry)
+      .find((candidate) => candidate.id === entry.id);
+    if (result.disposition === "updated" && current?.paused && !current.projectHold) {
       // A sent wake-up the operator pauses again is an ordinary queued
       // message now; a restart must not bring it back as a project hold.
-      this.forgetDurableProjectHeldWakeup(entry.id);
+      this.forgetDurableProjectHeldWakeup(current.id);
     }
-    if (result.disposition === "updated" && entry) {
+    if (result.disposition === "updated" && current) {
       this.refreshRestartQueuedEntries();
       await this.emit({
-        backend: entry.backend,
+        backend: current.backend,
         notification: {
           method: "thread/turnQueue/updated",
           params: {
-            threadId: entry.threadId,
-            queueEntryId: entry.id,
-            queueEntryCreatedAt: entry.createdAt,
-            origin: entry.origin,
-            status: entry.manualReleaseRequired ? "held" : "queued",
-            displayText: queuedTurnDisplayText(entry.input),
-            ...(entry.title ? { title: entry.title } : {}),
-            manualReleaseRequired: entry.manualReleaseRequired === true,
-            ...queuedTurnPauseParams(entry),
-            ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
+            threadId: current.threadId,
+            queueEntryId: current.id,
+            queueEntryCreatedAt: current.createdAt,
+            origin: current.origin,
+            status: current.manualReleaseRequired ? "held" : "queued",
+            displayText: queuedTurnDisplayText(current.input),
+            ...(current.title ? { title: current.title } : {}),
+            manualReleaseRequired: current.manualReleaseRequired === true,
+            ...queuedTurnPauseParams(current),
+            ...(current.holdReason ? { errorMessage: current.holdReason } : {}),
           },
         },
       }).catch((error) => {

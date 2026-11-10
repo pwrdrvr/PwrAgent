@@ -1,0 +1,9 @@
+{
+  "live-pause-cancel": {
+    "commits": 0,
+    "note": "100 registered pause/resume pairs, immutable input read, concurrent pause/cancel and authoritative projection; native setup/admission excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

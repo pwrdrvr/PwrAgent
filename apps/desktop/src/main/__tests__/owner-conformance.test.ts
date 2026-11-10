@@ -57,6 +57,8 @@ import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-req
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { parseThreadCorrespondenceMessage, threadLockRefusalMessage } from "@pwragent/shared";
+import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
+import { withOwnerPauseState } from "../../renderer/src/features/composer/queued-turn-pause";
 
 // Desktop serves peers from process singletons; point them at this owner.
 const desktopOwner = vi.hoisted(() => ({ registry: undefined as unknown }));
@@ -1167,6 +1169,123 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       }), { numRuns: 25 });
       await host.client.interruptTurn(active);
     } finally { await host.close(); }
+  });
+
+  it("desktop pause publication projects newer controls and independent holds from the actual FIFO", async () => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+    try {
+      let serial = 0;
+      await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom("cancel", "hold", "pause", "move"), fc.boolean(),
+        async (initiallyPaused, control, rejectObserver) => {
+          const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+          const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+          const id = `live-pause-${serial++}`;
+          const input = [{ type: "text" as const, text: `Immutable ${id}` }];
+          await host.client.startTurn({ ...identity, queueEntryId: id, delivery: "new_turn", input });
+          await host.client.startTurn({ ...identity, queueEntryId: `${id}-next`, delivery: "new_turn", input });
+          if (initiallyPaused) await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: true });
+          const accepted = await host.client.readQueuedTurn({ ...identity, queueEntryId: id });
+          const offset = host.events.length;
+          const stopObserver = registry.onEvent(event => {
+            if (rejectObserver && event.notification.method === "thread/turnQueue/updated"
+              && event.notification.params.queueEntryId === id) throw new Error("Invented pause observer refusal");
+          });
+          try {
+            const pause = registry.setQueuedTurnPaused({ queueEntryId: id, paused: !initiallyPaused });
+            await Promise.resolve();
+            if (control === "cancel") registry.cancelQueuedTurnWithDisposition(id);
+            else if (control === "hold") {
+              await queue.submitHeld({ ...identity, id: `${id}-review`, origin: "manual", input }, "first independent review");
+              await queue.submitHeld({ ...identity, id: `${id}-lock`, origin: "manual", input }, "second independent lock");
+            } else if (control === "pause") await registry.setQueuedTurnPaused({ queueEntryId: id, paused: initiallyPaused });
+            else await host.client.moveQueuedTurn({ queueEntryId: `${id}-next`, beforeQueueEntryId: id });
+            const response = await pause;
+            await new Promise<void>(resolve => setImmediate(resolve));
+            const authoritative = queue.getQueuedEntries(identity);
+            const projection = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
+            expect(projection.map(row => row.queueEntryId)).toEqual(authoritative.map(row => row.id));
+            const last = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
+              && event.notification.params.queueEntryId === id ? [event.notification.params] : []).at(-1)!;
+            const live = authoritative.find(row => row.id === id);
+            if (live) {
+              expect(last.status).toBe(live.manualReleaseRequired ? "held" : "queued");
+              expect(Boolean(last.paused)).toBe(Boolean(live.paused));
+              expect(last.pauseRevision ?? 0).toBe(live.pauseRevision ?? 0);
+              expect(last.errorMessage).toBe(live.holdReason);
+              expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: id }))).toEqual(accepted);
+              // The response acknowledges its mutation. The existing renderer
+              // revision rule must preserve a newer event when that reply lands.
+              const rows = [{ id, queueEntryId: id, paused: live.paused, pauseRevision: live.pauseRevision }];
+              expect(withOwnerPauseState(rows, id, response) ?? rows).toEqual(rows);
+            } else expect(last.status).toBe("cancelled");
+            if (control === "hold") {
+              await queue.releaseHold(identity, reason => reason === "second independent lock");
+              expect(queue.getQueuedEntries(identity).every(row => row.manualReleaseRequired)).toBe(true);
+            }
+          } finally {
+            stopObserver();
+            for (const row of queue.getQueuedEntries(identity)) await host.client.cancelQueuedTurn({ queueEntryId: row.id });
+            await host.client.interruptTurn(active);
+          }
+        }), { numRuns: 25, examples: [[false, "hold", false], [true, "pause", true], [true, "cancel", false]] });
+    } finally { await host.close(); }
+  });
+
+  it.each([false, true])("desktop %s-paused cancellation remains terminal through the registered caller and shutdown", async initiallyPaused => {
+    const root = await realpath(await mkdtemp("/tmp/pa-pause-reopen-"));
+    const host = await startDesktopOwner(null, undefined, undefined, root);
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await host.client.startTurn({ ...identity, queueEntryId: "named-pause-cancel", delivery: "new_turn", input: [{ type: "text", text: "Immutable named input" }] });
+      if (initiallyPaused) await host.client.setQueuedTurnPaused({ queueEntryId: "named-pause-cancel", paused: true });
+      const offset = host.events.length;
+      const pause = host.client.setQueuedTurnPaused({ queueEntryId: "named-pause-cancel", paused: !initiallyPaused });
+      await Promise.resolve();
+      registry.cancelQueuedTurnWithDisposition("named-pause-cancel");
+      await pause;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const events = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
+        && event.notification.params.queueEntryId === "named-pause-cancel" ? [event.notification.params.status] : []);
+      expect(events.at(-1)).toBe("cancelled");
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
+    } finally { await host.close(); }
+    const reopened = await startDesktopOwner(null, undefined, undefined, root);
+    try { expect(OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start")).toEqual([]); }
+    finally { await reopened.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("desktop live pause publication and cancellation make no SQLite commits", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await host.client.startTurn({ ...identity, queueEntryId: "pause-budget", delivery: "new_turn", input: [{ type: "text", text: "Immutable budget input" }] });
+      const accepted = await host.client.readQueuedTurn({ ...identity, queueEntryId: "pause-budget" });
+      for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve));
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let n = 0; n < 100; n++) {
+          await host.client.setQueuedTurnPaused({ queueEntryId: "pause-budget", paused: true });
+          await host.client.setQueuedTurnPaused({ queueEntryId: "pause-budget", paused: false });
+        }
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: "pause-budget" })).toEqual(accepted);
+        const pause = registry.setQueuedTurnPaused({ queueEntryId: "pause-budget", paused: true });
+        await Promise.resolve();
+        registry.cancelQueuedTurnWithDisposition("pause-budget");
+        await pause;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-queue-pause-publication-write-budgets.json", scenario: "live-pause-cancel",
+        note: "100 registered pause/resume pairs, immutable input read, concurrent pause/cancel and authoritative projection; native setup/admission excluded", writes });
+      await host.client.interruptTurn(active);
+    } finally { await host.close(); vi.unstubAllEnvs(); }
   });
 
   it("both actual owners pause, reorder and resume the same waiting FIFO with typed events", async () => {
