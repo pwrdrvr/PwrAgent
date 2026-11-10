@@ -543,13 +543,18 @@ describe("to-do dispatch target", () => {
     expect(onRun).toHaveBeenLastCalledWith(remote, expect.not.objectContaining({ startOnInstanceId: expect.anything() }));
   });
 
-  it("lists an offline peer without letting it be picked", async () => {
-    setup({ instances: [WIN, { instanceId: "ci", label: "ci-runner", availability: "offline" }] });
+  it("leaves an offline peer out and keeps a connected unsupported one disabled", async () => {
+    setup({ instances: [
+      WIN,
+      { instanceId: "ci", label: "ci-runner", availability: "offline" },
+      { instanceId: "old", label: "old-box", availability: "unsupported" },
+    ] });
     await settle();
     await act(async () => { fireEvent.click(chip("Machine for the new thread")); });
-    const offline = within(screen.getByRole("menu", { name: "Machine for the new thread" }))
-      .getByRole("menuitemradio", { name: /ci-runner/ });
-    expect(offline.getAttribute("aria-disabled")).toBe("true");
-    expect(offline.textContent).toBe("ci-runnerOffline");
+    const menu = within(screen.getByRole("menu", { name: "Machine for the new thread" }));
+    expect(menu.queryByRole("menuitemradio", { name: /ci-runner/ })).toBeNull();
+    const unsupported = menu.getByRole("menuitemradio", { name: /old-box/ });
+    expect(unsupported.getAttribute("aria-disabled")).toBe("true");
+    expect(unsupported.textContent).toBe("old-boxUnsupported");
   });
 });
