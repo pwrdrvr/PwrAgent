@@ -3417,6 +3417,35 @@ describe("DesktopBackendRegistry", () => {
     ), { numRuns: 12, examples: [["acp:gemini", 1, ["review"]]] });
   });
 
+  it("budgets unsupported live steering Retry without releasing review holds", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-held-steer-capability-");
+    const db = StateDb.open(temp.dbPath);
+    const { registry, acpBackendId } = createKimiAcpRegistry({ overlayStore: new SqliteOverlayStore(db) as never });
+    const identity = { backend: acpBackendId, threadId: "held-steering-budget" };
+    const queue = (registry as unknown as {
+      threadTurnQueue: import("@pwragent/owner-core/thread-turn-queue").ThreadTurnQueue;
+    }).threadTurnQueue;
+    try {
+      await emitStartedTurn(registry, acpBackendId, identity.threadId, "native-owner");
+      await queue.submitHeld({ ...identity, id: "held-guidance", origin: "manual", delivery: "queued-steer",
+        input: [{ type: "text", text: "Invented held guidance" }] }, "review");
+      const before = queue.getQueuedEntries(identity);
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index++) {
+          expect(await registry.releaseQueuedTurnWithDisposition("held-guidance")).toMatchObject({ disposition: "busy" });
+          expect(queue.getQueuedEntries(identity)).toEqual(before);
+        }
+      });
+      expectSqliteWriteBudget({ budgetFile: "held-steer-capability-write-budgets.json",
+        scenario: "unsupported-live-steer-100-retries",
+        note: "100 unsupported live steering Retry commands through the actual desktop registry with real SQLite overlay; setup excluded. Zero writes, WAL bytes and MB/day.",
+        writes });
+    } finally {
+      await registry.close(); db.close(); removeTempStateDbDir(temp.tempDir); vi.unstubAllEnvs();
+    }
+  });
+
   it("retains the owner claim when its real pooled ACP adapter cannot dispose a provider", async () => {
     const close = vi.fn();
     const { registry, acpClient, acpBackendId } = createKimiAcpRegistry({

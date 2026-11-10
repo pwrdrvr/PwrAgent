@@ -1,0 +1,9 @@
+{
+  "unsupported-live-steer-100-retries": {
+    "commits": 0,
+    "note": "100 unsupported live steering Retry commands through the actual desktop registry with real SQLite overlay; setup excluded. Zero writes, WAL bytes and MB/day.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}
