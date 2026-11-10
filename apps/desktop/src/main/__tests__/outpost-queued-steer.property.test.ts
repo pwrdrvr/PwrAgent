@@ -81,6 +81,58 @@ it.skipIf(process.platform === "win32")("each accepted default agent input steer
   }), { numRuns: 8 });
 });
 
+it.skipIf(process.platform === "win32")("delivery-less accepted agent identities survive upgrade retries without writes or native replay", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const statuses = ["queued", "running", "completed", "failed", "interrupted", "unknown"] as const;
+  try {
+    await fc.assert(fc.asyncProperty(fc.constantFrom(...statuses), fc.boolean(), fc.string({ maxLength: 32 }), fc.integer({ min: 1, max: 4 }), async (status, reopen, text, copies) => {
+      await fixture(async ({ root, runtime, backend, store, profile, steers, starts, submit, value, terminal, envelope }: any) => {
+        const request = value("legacy", `legacy-${text}`);
+        // This unchanged acceptance path has the base version's delivery-less
+        // fingerprint and FIFO semantics, before default agent delivery changed.
+        const accepted = await submit({ ...request, delivery: "new_turn" });
+        if (status !== "queued") {
+          terminal(); await drain();
+          if (status === "unknown") runtime.finish(accepted.queueEntryId, "unknown", "Native outcome uncertain");
+          else if (status !== "running") terminal("turn-2", status);
+          await drain();
+        }
+        expect(store.get(accepted.queueEntryId)).toMatchObject({ status });
+        expect(store.get(accepted.queueEntryId).delivery).toBeUndefined();
+        let owner = runtime, ownerStore = store, ownerBackend = backend;
+        if (reopen) {
+          runtime.turnQueue.close();
+          const [{ JobStore }, { Runtime }, { HeadlessFederation }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation.js")]);
+          ownerStore = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
+          owner = new Runtime({ store: ownerStore, workspace: root, home: path.join(root, "codex"), command: "unused", onFailure() {} });
+          owner.codex = { startTurn: () => { throw new Error("replayed legacy start"); }, steerTurn: () => { throw new Error("replayed legacy steer"); }, stop: async () => {} };
+          ownerBackend = new HeadlessFederation({ directory: path.join(root, "headless"), runtime: owner, profile: "fixture", onFailure() {} }).backend;
+        }
+        try {
+          const before = ownerStore.get(accepted.queueEntryId), queued = owner.turnQueue.getAllQueuedEntries();
+          const sends = [starts.length, steers.length];
+          const { writes } = await measureSqliteWrites(async () => {
+            for (let i = 0; i < copies; i++) {
+              const retry = ownerBackend.handle("backend.startTurn", request, envelope);
+              if (before.turnId || before.status === "queued") expect((await retry).queueEntryId).toBe(before.id);
+              else await expect(retry).rejects.toThrow(before.reason);
+            }
+            for (const changed of [
+              { ...request, input: [{ type: "text", text: `${request.input[0].text}!` }] },
+              { ...request, model: "different-model" },
+              { ...request, messageOrigin: { ...request.messageOrigin, sourceThread: { ...request.messageOrigin.sourceThread, threadId: "different-sender" } } },
+            ]) await expect(ownerBackend.handle("backend.startTurn", changed, envelope)).rejects.toThrow("different input");
+          });
+          expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
+          expect(ownerStore.get(before.id)).toEqual(before);
+          expect(owner.turnQueue.getAllQueuedEntries()).toEqual(queued);
+          expect([starts.length, steers.length]).toEqual(sends);
+        } finally { if (reopen) await owner.stop(); }
+      });
+    }), { numRuns: 8, examples: statuses.flatMap(status => [false, true].map(reopen => [status, reopen, "", 2] as [typeof status, boolean, string, number])) });
+  } finally { vi.unstubAllEnvs(); }
+});
+
 it.skipIf(process.platform === "win32")("explicit new turns, all requested settings and FIFO predecessors prevent default agent steering", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom("delivery", "model", "reasoningEffort", "serviceTier", "executionMode", "approvalPolicy", "sandbox", "fastMode"), async setting => {
     await fixture(async ({ runtime, store, steers, starts, submit, value, terminal }: any) => {
