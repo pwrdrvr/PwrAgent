@@ -58,15 +58,20 @@ test("actual Outpost held, paused and ordered queue controls hand durable outcom
         expect((await backend.handle("getNavigationQueueProjection", { protocol: 2, ref })).entries).toMatchObject([{ queueEntryId: waiting.id, manualReleaseRequired: true }]);
         backend.persistCreatedNativeThread({ id: "queue-other", cwd: workspace, title: "Other invented thread", titleSource: "explicit" });
         let contended = false;
+        let pauseDuringRelease: Promise<unknown> | undefined, moveDuringRelease: Promise<unknown> | undefined;
         runtime.onEvent = (event: any) => {
           backend.event(event);
           if (!contended && event.method === "headless/queueChanged" && event.params.type === "queued" && event.params.entry.id === waiting.id) {
             contended = true;
             expect(runtime.submit({ id: "queue-competitor", threadId: "queue-other", prompt: "Invented competing input" }).status).toBe("queued");
+            pauseDuringRelease = backend.handle("backend.setQueuedTurnPaused", { queueEntryId: waiting.id, paused: true });
+            moveDuringRelease = backend.handle("backend.moveQueuedTurn", { queueEntryId: waiting.id });
           }
         };
         expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: waiting.id })).toMatchObject({ disposition: "started", turnId: "queue-turn-3" });
         expect(contended).toBe(true);
+        expect(await pauseDuringRelease).toMatchObject({ disposition: "not_found" });
+        expect(await moveDuringRelease).toMatchObject({ disposition: "not_found" });
         expect(store.get("queue-competitor")).toMatchObject({ status: "queued" });
         expect(store.get(waiting.id)).toMatchObject({ status: "running", turnId: "queue-turn-3" });
         runtime.submit({ id: "queue-delete", threadId: ref.threadId, prompt: "Invented deleted input" });

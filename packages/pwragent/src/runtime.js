@@ -252,8 +252,13 @@ export class Runtime {
 
   async setQueuedTurnPaused({ queueEntryId, paused }) {
     if (this.stopping) throw new Error("Daemon is stopping");
-    this.queuedEntry(queueEntryId);
+    const waiting = this.queuedEntry(queueEntryId);
     if (typeof paused !== "boolean") throw new Error("Paused must be a boolean");
+    const release = this.queueRelease;
+    // Match cancellation: another suspension must not defeat the reserved
+    // head's admission after its manual holds have already been cleared.
+    if (waiting && release && waiting.threadId === release.threadId && this.queuedEntry(release.entryId)) await release.done;
+    if (this.stopping) throw new Error("Daemon is stopping");
     const result = await this.turnQueue.setEntryPaused(queueEntryId, paused);
     const entry = result.entry;
     if (result.disposition === "updated") {
@@ -269,8 +274,12 @@ export class Runtime {
 
   async moveQueuedTurn({ queueEntryId, beforeQueueEntryId }) {
     if (this.stopping) throw new Error("Daemon is stopping");
-    this.queuedEntry(queueEntryId);
+    const waiting = this.queuedEntry(queueEntryId);
     if (beforeQueueEntryId !== undefined && !validId(beforeQueueEntryId)) throw new Error("Invalid queue entry anchor ID");
+    const release = this.queueRelease;
+    // Preserve the same admission ordering as cancellation and pause edits.
+    if (waiting && release && waiting.threadId === release.threadId && this.queuedEntry(release.entryId)) await release.done;
+    if (this.stopping) throw new Error("Daemon is stopping");
     const result = await this.turnQueue.moveEntry(queueEntryId, beforeQueueEntryId);
     if (result.disposition === "moved") {
       // A later serialized edit can finish before this awaiting caller resumes.
