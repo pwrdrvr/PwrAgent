@@ -14,6 +14,32 @@ function weekly(at: number, usedPercent: number, resetAt: number, provider = "op
 }
 
 describe("usage limit schedule properties", () => {
+  it("keeps regular renewals scheduled across any number of skipped windows", () => {
+    fc.assert(fc.property(fc.record({
+      windowMinutes: fc.constantFrom(300, 10_080),
+      skippedWindows: fc.integer({ min: 0, max: 12 }),
+      oldPercent: fc.integer({ min: 0, max: 100 }),
+      usedPercent: fc.integer({ min: 1, max: 99 }),
+    }), ({ windowMinutes, skippedWindows, oldPercent, usedPercent }) => {
+      const duration = windowMinutes * 60_000;
+      const windowStart = START + skippedWindows * duration;
+      const reading = (at: number, percent: number, resetAt: number): UsageLimitObservation => ({
+        observedAt: at, accountKey: "fixture-account", limits: [
+          { name: "Limit", windowKey: "primary", usedPercent: percent, resetAt, windowMinutes },
+        ],
+      });
+      const [account] = buildLimitAccounts([{ owner: "Fixture", history: [
+        reading(START - HOUR, oldPercent, START),
+      ], current: reading(windowStart + HOUR, usedPercent, windowStart + duration) }]);
+      const series = sinceResetSeries(account)!;
+      expect(series.resets).toEqual([{
+        at: windowStart, kind: "scheduled", after: START - HOUR, before: windowStart + HOUR,
+      }]);
+      expect(series.windowStart).toBe(windowStart);
+      expect(series.pacePerHour).toBeCloseTo(usedPercent);
+    }));
+  });
+
   it("uses the current window's schedule even when an older deadline has since passed", () => {
     // The new schedule places a reset inside the gap between readings. An
     // obsolete deadline later in that gap cannot move its zero-usage origin.

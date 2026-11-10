@@ -71,6 +71,21 @@ describe("usage limit history", () => {
     expect(sinceResetSeries(account)!.resets).toEqual([{ at: t0, kind: "scheduled", after: t0 - 2 * HOUR, before: t0 + HOUR }]);
   });
 
+  it("keeps the 15:00 renewal scheduled after a five-hour window's 10:00 deadline was missed", () => {
+    const reading = (at: number, usedPercent: number, resetAt: number): UsageLimitObservation => ({
+      observedAt: at, accountKey: "a", limits: [
+        { name: "5-hour limit", windowKey: "primary", usedPercent, resetAt, windowMinutes: 300 },
+      ],
+    });
+    const [account] = buildLimitAccounts([{ owner: "Studio", history: [
+      reading(t0, 88, t0 + HOUR),
+    ], current: reading(t0 + 7 * HOUR, 12, t0 + 11 * HOUR) }]);
+    const series = fiveHourSeries(account)!;
+    expect(series.resets).toEqual([{ at: t0 + 6 * HOUR, kind: "scheduled", after: t0, before: t0 + 7 * HOUR }]);
+    expect(series.windowStart).toBe(t0 + 6 * HOUR);
+    expect(series.pacePerHour).toBeCloseTo(12);
+  });
+
   it("keeps accounts apart and merges owners that share one", () => {
     const credit: UsageLimitObservation = { observedAt: t0 + HOUR, accountKey: "b", planType: "business", limits: [
       { name: "Individual limit", windowKey: "individual", usedPercent: 37.2, used: 37_223, limit: 100_000, resetAt: new Date(2026, 8, 30).getTime() },

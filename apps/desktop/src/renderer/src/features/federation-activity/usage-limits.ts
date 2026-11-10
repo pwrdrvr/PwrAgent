@@ -20,9 +20,9 @@ export type LimitPoint = {
 export const limitProvider = (observation: Pick<UsageLimitObservation, "provider">) => observation.provider ?? "openai";
 
 /**
- * A limit went back down between two readings. `scheduled` means the earlier
- * reading's reset time had passed; anything else is a reset nobody announced
- * (the provider or the operator applied one), placed where it was first seen.
+ * A limit renewed or went back down between two readings. `scheduled` means
+ * it follows the earlier reading's schedule, including skipped windows;
+ * `unscheduled` means the provider or operator reset it outside that schedule.
  */
 export type LimitReset = { at: number; kind: "scheduled" | "unscheduled"; after: number; before: number };
 
@@ -149,11 +149,15 @@ function describeSeries(key: string, reading: UsageLimitReading, points: LimitPo
     // deadline has now passed. That obsolete deadline can fall inside the
     // current window; treating it as the reset would charge all current usage
     // to the time since that deadline instead of the whole current window.
-    const began = after.resetAt !== undefined && after.resetAt !== before.resetAt && reading.windowMinutes
-      ? after.resetAt - reading.windowMinutes * 60_000 : undefined;
+    const windowMs = reading.windowMinutes ? reading.windowMinutes * 60_000 : undefined;
+    const began = after.resetAt !== undefined && after.resetAt !== before.resetAt && windowMs !== undefined
+      ? after.resetAt - windowMs : undefined;
     const at = began !== undefined && began > before.at && began <= after.at ? began
       : elapsed ? before.resetAt! : after.at;
-    resets.push({ at, kind: at === before.resetAt ? "scheduled" : "unscheduled", after: before.at, before: after.at });
+    // A gap can skip full windows without changing the provider's schedule.
+    const scheduled = before.resetAt !== undefined && at >= before.resetAt
+      && (at === before.resetAt || (windowMs !== undefined && (at - before.resetAt) % windowMs === 0));
+    resets.push({ at, kind: scheduled ? "scheduled" : "unscheduled", after: before.at, before: after.at });
   }
   const latest = points.at(-1)!;
   const lastReset = resets.at(-1);
