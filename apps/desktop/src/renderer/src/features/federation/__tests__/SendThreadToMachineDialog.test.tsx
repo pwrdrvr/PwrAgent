@@ -108,10 +108,10 @@ function machine(label: string): HTMLElement {
 }
 
 describe("SendThreadToMachineDialog", () => {
-  it("lists every machine and disables the ones that cannot receive, with the reason", async () => {
+  it("lists connected machines and disables the ones that cannot receive, with the reason", async () => {
     renderDialog();
-    expect(machine("old-mbp")).toBeDisabled();
-    expect(machine("old-mbp")).toHaveTextContent("Offline");
+    // An offline machine is not a choice, as in every other machine picker.
+    expect(screen.queryByRole("radio", { name: /old-mbp/ })).toBeNull();
     expect(machine("win-test")).toBeDisabled();
     expect(machine("win-test")).toHaveTextContent("Incoming files off");
     expect(machine("win-test")).toHaveAttribute(
@@ -122,6 +122,14 @@ describe("SendThreadToMachineDialog", () => {
       expect(machine("studio-mac")).toHaveTextContent("PwrAgent");
     });
     expect(machine("build-linux")).toHaveTextContent("No matching project");
+  });
+
+  it("keeps the chosen machine listed after it disconnects, so the send still names it", async () => {
+    renderDialog({ initialChoice: { targetInstanceId: "pwr_old", operation: "move" } });
+    await waitFor(() => expect(machine("studio-mac")).toHaveTextContent("PwrAgent"));
+    expect(machine("old-mbp")).toHaveAttribute("aria-checked", "true");
+    expect(machine("old-mbp")).toHaveTextContent("Offline");
+    expect(screen.getByRole("button", { name: "Move to old-mbp" })).toBeDisabled();
   });
 
   it("defaults to Copy on the first available machine", async () => {

@@ -258,7 +258,7 @@ describe("NewThreadButton", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps unreachable instances visible and disabled rather than hiding them", async () => {
+  it("leaves offline machines out and keeps a connected unsupported one disabled", async () => {
     const onCreateThreadOnTarget = vi.fn();
     render(
       <NewThreadButton
@@ -284,18 +284,16 @@ describe("NewThreadButton", () => {
         .parentElement as HTMLElement,
     );
 
-    // aria-disabled, not `disabled` — an unreachable machine has to stay
-    // focusable or keyboard users never learn it exists, which is the whole
-    // reason it is listed rather than filtered out.
-    const offline = await screen.findByRole("menuitem", { name: /Studio Mac/ });
-    expect(offline).toHaveAttribute("aria-disabled", "true");
-    expect(offline).not.toBeDisabled();
-    expect(offline).toHaveTextContent("Offline");
-    const unsupported = screen.getByRole("menuitem", { name: /Attic Mini/ });
+    // An offline machine is not a choice, as in Profiles → Remote Instances.
+    const unsupported = await screen.findByRole("menuitem", { name: /Attic Mini/ });
+    expect(screen.queryByRole("menuitem", { name: /Studio Mac/ })).toBeNull();
+    // aria-disabled, not `disabled`: a connected machine that cannot take the
+    // thread stays focusable, so keyboard users can hear why.
     expect(unsupported).toHaveAttribute("aria-disabled", "true");
+    expect(unsupported).not.toBeDisabled();
     expect(unsupported).toHaveTextContent("Unsupported");
 
-    fireEvent.click(offline);
+    fireEvent.click(unsupported);
     expect(onCreateThreadOnTarget).not.toHaveBeenCalled();
   });
 

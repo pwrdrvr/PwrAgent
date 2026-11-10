@@ -81,6 +81,7 @@ import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { SidebarStartActions } from "./SidebarStartActions";
 import {
   FEDERATION_PROJECT_STATE_LABEL,
+  listedFederationPeerTargets,
   type FederationThreadTarget,
 } from "../chrome/federation-thread-targets";
 import { FederationTargetMenuSection } from "../chrome/FederationTargetMenuSection";
@@ -724,6 +725,13 @@ export function Sidebar(props: SidebarProps) {
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
+  // The machines the "New chat on" menu and sub-thread flyout list:
+  // connected ones only. `federationThreadTargets` still names a parent's
+  // machine when it is offline.
+  const listedFederationThreadTargets = useMemo(
+    () => listedFederationPeerTargets(props.newThreadFederationTargets ?? []),
+    [props.newThreadFederationTargets],
+  );
   const keybindings = useKeybindings();
   // A menu row's chord, drawn the way the native menu draws its own.
   const menuShortcut = (actionId: KeybindingActionId) => {
@@ -835,7 +843,7 @@ export function Sidebar(props: SidebarProps) {
     check: props.checkFederationTargetProject,
     directory: directoryTargetMenu?.directory,
     open: Boolean(directoryTargetMenu),
-    targets: federationThreadTargets,
+    targets: listedFederationThreadTargets,
   });
   const [pendingDetachPullRequest, setPendingDetachPullRequest] = useState<
     | {
@@ -1618,13 +1626,13 @@ export function Sidebar(props: SidebarProps) {
   }, [subthreadDraftMenu]);
 
   useEffect(() => {
-    if (federationThreadTargets.length === 0) {
+    if (listedFederationThreadTargets.length === 0) {
       // The menu is also gated on this at render time, so without clearing the
       // state a peer reconnecting would pop the menu back open at its old
       // anchor with no operator input.
       setDirectoryTargetMenu(undefined);
     }
-  }, [federationThreadTargets.length]);
+  }, [listedFederationThreadTargets.length]);
 
   useEffect(() => {
     if (!directoryTargetMenu) {
@@ -1680,7 +1688,7 @@ export function Sidebar(props: SidebarProps) {
   useMenuNavigation({
     open:
       directoryTargetMenu?.position !== undefined
-      && federationThreadTargets.length > 0,
+      && listedFederationThreadTargets.length > 0,
     menuRef: directoryTargetMenuRef,
     triggerRef: directoryTargetMenuOpenerRef,
     onClose: () => setDirectoryTargetMenu(undefined),
@@ -2924,11 +2932,11 @@ export function Sidebar(props: SidebarProps) {
       && subthreadFlyoutShownKey === contextMenuThreadKey,
     targets: contextMenuParentInstanceId
       ? [
-          ...federationThreadTargets.filter((target) =>
+          ...listedFederationThreadTargets.filter((target) =>
             target.instanceId !== contextMenuParentInstanceId),
           { instanceId: SUBTHREAD_THIS_MACHINE, availability: "available" },
         ]
-      : federationThreadTargets,
+      : listedFederationThreadTargets,
   });
   const subthreadWorktreeChoice = (
     key: string,
@@ -2968,7 +2976,7 @@ export function Sidebar(props: SidebarProps) {
   };
   const localMachineLabel = props.localMachineLabel ?? "This machine";
   const subthreadMachines: SubthreadMachineChoice[] | undefined =
-    contextMenuCanCreateSubthread && federationThreadTargets.length > 0
+    contextMenuCanCreateSubthread && listedFederationThreadTargets.length > 0
       ? [
           ...(contextMenuParentInstanceId
             ? [{
@@ -2998,14 +3006,10 @@ export function Sidebar(props: SidebarProps) {
                 ? { baseBranch: contextMenuParentBranch }
                 : {}),
           },
-          // Reachable machines first and offline or unsupported ones last,
-          // each group in the federation's own order, so the rows that can
-          // take the child sit under the parent's.
-          ...federationThreadTargets
+          // Connected machines in the order every machine picker uses, so
+          // a row sits where it does in "New chat on".
+          ...listedFederationThreadTargets
             .filter((target) => target.instanceId !== contextMenuParentInstanceId)
-            .sort((a, b) =>
-              Number(a.availability !== "available")
-              - Number(b.availability !== "available"))
             .map((target) => ({
               instanceId: target.instanceId,
               label: target.shortLabel ?? target.label,
@@ -3600,7 +3604,7 @@ export function Sidebar(props: SidebarProps) {
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={hoverReleasedListHandlers.openLaunchpad}
               onOpenFederationTargetMenu={
-                federationThreadTargets.length > 0
+                listedFederationThreadTargets.length > 0
                   ? openDirectoryTargetMenu
                   : undefined
               }
@@ -4356,7 +4360,7 @@ export function Sidebar(props: SidebarProps) {
         />
       ) : null}
 
-      {directoryTargetMenu && federationThreadTargets.length > 0 ? (
+      {directoryTargetMenu && listedFederationThreadTargets.length > 0 ? (
         <div
           ref={directoryTargetMenuRef}
           className="new-thread-menu__card new-thread-menu__card--anchored"
@@ -4374,7 +4378,7 @@ export function Sidebar(props: SidebarProps) {
           onClick={(event) => event.stopPropagation()}
         >
           <FederationTargetMenuSection
-            targets={federationThreadTargets}
+            targets={listedFederationThreadTargets}
             projectLabel={directoryTargetMenu.directoryLabel}
             projectStates={directoryTargetProjectStates}
             onSelect={(instanceId) => {

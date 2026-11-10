@@ -161,13 +161,28 @@ describe("LaunchpadMachineChip", () => {
     });
     // The current machine is never asked; the offline one cannot answer.
     expect(check.mock.calls.map(([instanceId]) => instanceId)).toEqual(["tower"]);
-    const [here, studio, tower, attic] = options();
+    // The offline machine is left out, as Profiles → Remote Instances does.
+    const [here, studio, tower, ...rest] = options();
     expect(here).toHaveTextContent("This machine");
     expect(studio).toHaveAttribute("aria-selected", "true");
     expect(tower).toHaveTextContent("No project");
     expect(tower).toHaveAttribute("aria-disabled", "true");
+    expect(rest).toEqual([]);
+  });
+
+  it("keeps the draft's own machine listed while it is offline", async () => {
+    render(
+      <LaunchpadMachineChip
+        control={control({ currentInstanceId: "attic" })}
+        onRetarget={() => undefined}
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
+    });
+    const attic = options().find((option) => option.textContent?.includes("Attic Mini"));
+    expect(attic).toHaveAttribute("aria-selected", "true");
     expect(attic).toHaveTextContent("Offline");
-    expect(attic).toHaveAttribute("aria-disabled", "true");
   });
 
   it("retargets to this machine or a peer, and refuses a disabled row", async () => {

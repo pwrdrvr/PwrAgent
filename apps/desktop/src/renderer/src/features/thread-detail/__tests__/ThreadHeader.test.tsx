@@ -157,8 +157,8 @@ describe("ThreadHeader", () => {
     const menu = screen.getByRole("menu");
     expect(within(menu).getByText("New chat on")).toBeInTheDocument();
 
-    // An offline machine is listed but refuses the click.
-    fireEvent.click(within(menu).getByRole("menuitem", { name: /build-box/ }));
+    // An offline machine is not offered.
+    expect(within(menu).queryByRole("menuitem", { name: /build-box/ })).toBeNull();
     expect(onCreateRemote).not.toHaveBeenCalled();
 
     fireEvent.keyDown(menu, { key: "Escape" });

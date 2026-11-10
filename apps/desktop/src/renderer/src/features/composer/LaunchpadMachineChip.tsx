@@ -5,6 +5,7 @@ import type { ProjectIdentity } from "../../lib/federation-project-match";
 import {
   FEDERATION_PROJECT_STATE_LABEL,
   FEDERATION_TARGET_AVAILABILITY_LABEL,
+  listedFederationPeerTargets,
   type FederationThreadTarget,
 } from "../chrome/federation-thread-targets";
 import {
@@ -141,10 +142,16 @@ export function LaunchpadMachineChip(props: {
 }) {
   const { control } = props;
   const [open, setOpen] = useState(false);
+  // Connected machines, plus the one the draft is aimed at even while it is
+  // offline, so the menu agrees with the chip.
+  const listedTargets = useMemo(
+    () => listedFederationPeerTargets(control.targets, control.currentInstanceId),
+    [control.currentInstanceId, control.targets],
+  );
   // The machine the launchpad already runs on has the project by definition.
   const otherTargets = useMemo(
-    () => control.targets.filter((target) => target.instanceId !== control.currentInstanceId),
-    [control.currentInstanceId, control.targets],
+    () => listedTargets.filter((target) => target.instanceId !== control.currentInstanceId),
+    [control.currentInstanceId, listedTargets],
   );
   const projectStates = useFederationProjectStates({
     check: control.checkProject,
@@ -188,7 +195,7 @@ export function LaunchpadMachineChip(props: {
               tooltip: `${control.local.label} has no project named ${projectLabel}`,
             }),
     },
-    ...control.targets.map((target): ComposerDropdownOption => {
+    ...listedTargets.map((target): ComposerDropdownOption => {
       const isCurrent = target.instanceId === control.currentInstanceId;
       if (!isCurrent && target.availability !== "available") {
         return {
@@ -213,7 +220,13 @@ export function LaunchpadMachineChip(props: {
         label: target.shortLabel ?? target.label,
         value: target.instanceId,
         tooltip: target.label,
-        ...(projectState === "checking" ? { description: FEDERATION_PROJECT_STATE_LABEL.checking } : {}),
+        // The draft's own machine stays listed when it drops offline, and
+        // says so, as the chip does.
+        ...(isCurrent && target.availability !== "available"
+          ? { description: FEDERATION_TARGET_AVAILABILITY_LABEL[target.availability] }
+          : projectState === "checking"
+            ? { description: FEDERATION_PROJECT_STATE_LABEL.checking }
+            : {}),
       };
     }),
   ];

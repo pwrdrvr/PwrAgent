@@ -27,7 +27,7 @@ describe("federation machine names", () => {
     render(<FederationTargetMenuSection targets={buildFederationThreadTargets(health)} onSelect={onSelect} />);
     const max = screen.getByRole("menuitem", { name: "M5 Max" });
     expect(max).toHaveAttribute("title", "Studio-MBP-M5-Max");
-    expect(screen.getByRole("menuitem", { name: /^M4 Mini \/ dev/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("menuitem", { name: /^M4 Mini \/ dev/ })).toBeNull();
     fireEvent.click(max);
     expect(onSelect).toHaveBeenCalledWith("max");
   });
@@ -41,7 +41,8 @@ describe("federation machine names", () => {
     expect(chip).toHaveTextContent("M4 Mini / default");
     fireEvent.click(chip);
     expect(screen.getByRole("option", { name: /M5 Max/ })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /M4 Mini \/ dev/ })).toHaveAttribute("aria-disabled", "true");
+    // An offline peer is not a choice at all.
+    expect(screen.queryByRole("option", { name: /M4 Mini \/ dev/ })).toBeNull();
   });
 
   it("resolves thread chips from live health while preserving the original name in the tooltip", () => {
