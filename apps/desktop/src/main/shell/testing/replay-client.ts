@@ -19,7 +19,7 @@ import {
   asThreadReplay,
   type ReplayFixture,
   type ReplayStepOverride,
-} from "./replay-fixture";
+} from "../../testing/replay-fixture";
 
 type InitializeResult = {
   serverInfo?: {

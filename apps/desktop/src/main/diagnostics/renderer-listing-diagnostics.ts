@@ -1,4 +1,4 @@
-import type { HotCpuTarget } from "../shell/diagnostics/hot-cpu-profiler";
+import type { HotCpuTarget } from "./hot-cpu-target";
 import { listingDiagnostics } from "./listing-diagnostics";
 
 /** One bounded CDP read per saved profile, never on the event/IPC hot path. */

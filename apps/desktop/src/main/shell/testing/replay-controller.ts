@@ -6,12 +6,12 @@ import type {
   ReplayResponseStep,
   ReplayStep,
   ReplayStepOverride,
-} from "./replay-fixture";
+} from "../../testing/replay-fixture";
 import {
   REUSABLE_RESPONSE_METHODS,
   responseReuseKey,
   validateReplayFixture,
-} from "./replay-fixture";
+} from "../../testing/replay-fixture";
 
 type ReplayLiveStep = Exclude<ReplayStep, ReplayResponseStep>;
 

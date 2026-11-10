@@ -15,8 +15,8 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import { ReplayClient } from "./replay-client";
-import type { ReplayFixture, ReplayStepOverride } from "./replay-fixture";
-import { validateReplayFixture } from "./replay-fixture";
+import type { ReplayFixture, ReplayStepOverride } from "../../testing/replay-fixture";
+import { validateReplayFixture } from "../../testing/replay-fixture";
 import { gitSubprocessDiagnostics } from "../../diagnostics/git-subprocess-diagnostics";
 import { listingDiagnostics } from "../../diagnostics/listing-diagnostics";
 

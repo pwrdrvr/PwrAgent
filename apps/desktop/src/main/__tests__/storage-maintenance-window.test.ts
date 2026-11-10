@@ -1,9 +1,11 @@
 import type { EventEmitter } from "node:events";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { StorageMaintenanceStorage } from "@pwragent/owner-core/storage-maintenance-storage";
 import type { StorageMaintenanceCommand, StorageMaintenanceStatus } from "../../shared/storage-maintenance";
 import { STORAGE_MAINTENANCE_CHANNEL } from "../../shared/storage-maintenance";
-import { app } from "electron";
+import { app, utilityProcess } from "electron";
+import { getOwnerHostServices } from "../owner-host";
+import { createStorageMaintenanceView } from "../shell/storage-maintenance-window";
 import * as storagePolicy from "@pwragent/owner-core/storage-maintenance-storage";
 
 type FakeWindow = EventEmitter & {
@@ -74,6 +76,12 @@ async function started() {
   await vi.waitFor(() => expect(fixture.workers).toHaveLength(1));
   return { done, window: fixture.windows[0], worker: fixture.workers[0] };
 }
+beforeEach(() => {
+  getOwnerHostServices().storageMaintenance = {
+    createView: createStorageMaintenanceView,
+    forkWorker: (path) => utilityProcess.fork(path, [], { stdio: "ignore", serviceName: "PwrAgent storage maintenance" }),
+  };
+});
 afterEach(() => {
   for (const window of fixture.windows) window.close();
   fixture.windows.length = 0; fixture.workers.length = 0; fixture.handlers.clear();

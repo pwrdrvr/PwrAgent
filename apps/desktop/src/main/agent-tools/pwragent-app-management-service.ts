@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import type {
   PwrAgentAppManagementData,
   PwrAgentAppRequest,
@@ -10,12 +10,10 @@ import type {
   AppUpdateCheckResult,
   AppUpdateStatus,
 } from "../../shared/app-metadata";
-import {
-  checkForAppUpdatesNow,
-  installDownloadedAppUpdate,
-  readAppUpdateStatus,
-} from "../shell/auto-updater";
-import { requestQuit } from "../shell/quit-manager";
+const checkForAppUpdatesNow = (source: "manual") => getOwnerHostServices().updates.check(source);
+const readAppUpdateStatus = () => getOwnerHostServices().updates.read();
+const installDownloadedAppUpdate = (options: Parameters<ReturnType<typeof getOwnerHostServices>["updates"]["install"]>[0]) => getOwnerHostServices().updates.install(options);
+const requestQuit = (options: Parameters<ReturnType<typeof getOwnerHostServices>["updates"]["requestQuit"]>[0]) => getOwnerHostServices().updates.requestQuit(options);
 import type {
   CodexAppServerProcessSample,
   CodexAppServerRecycleSettings,

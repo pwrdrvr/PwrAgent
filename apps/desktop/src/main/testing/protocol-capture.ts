@@ -1,6 +1,6 @@
 import type { JsonRpcObserver } from "@pwrdrvr/agent-transport";
-import { getMainLogger } from "../../log";
-import { resolveActiveProfilePath } from "../../profile";
+import { getMainLogger } from "../log";
+import { resolveActiveProfilePath } from "../profile";
 import { ProtocolCaptureStore } from "./capture-store";
 
 const CAPTURE_ENABLED_ENV = "PWRAGENT_PROTOCOL_CAPTURE";

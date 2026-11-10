@@ -10,28 +10,16 @@ import type { HotCpuProfileConfig } from "../../diagnostics/hot-cpu-profile-conf
 import type { HotCpuProfileSession } from "../../diagnostics/hot-cpu-profile-session";
 import { getMainLogger } from "../../log";
 import { joinCpuProfiles } from "../../diagnostics/cpu-profile-history";
-import { acquireDebuggerLease, type DebuggerLease, type DiagnosticDebugger } from "../../diagnostics/debugger-lease";
+import { acquireDebuggerLease, type DebuggerLease } from "../../diagnostics/debugger-lease";
 
 // Rotate only after evaluating the CPU sample, and retain the last complete
 // window as well as the live one. A burst across a rotation stays available.
 const RECORDING_WINDOW_MS = 30_000;
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
+import type { HotCpuTarget } from "../../diagnostics/hot-cpu-target";
+export type { HotCpuTarget } from "../../diagnostics/hot-cpu-target";
 
-export type HotCpuTarget = {
-  debugger: DiagnosticDebugger;
-  getOSProcessId: () => number;
-  readDiagnostics?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
-  isDestroyed?: () => boolean;
-  isDevToolsOpened?: () => boolean;
-  takeHeapSnapshot?: (filePath: string) => Promise<void>;
-  readHeapUsage?: () => {
-    heapUsed: number;
-    heapTotal: number;
-    external: number;
-    arrayBuffers: number;
-  };
-};
 
 type CpuUsageReading = {
   cpuPercent: number;

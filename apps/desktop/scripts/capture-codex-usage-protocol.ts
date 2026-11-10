@@ -5,8 +5,8 @@ import type {
   BackendRateLimitSummary,
 } from "@pwragent/shared";
 import { CodexAppServerClient } from "../src/main/codex-app-server/desktop-client";
-import { ProtocolCaptureStore } from "../src/main/shell/testing/capture-store";
-import { createProtocolCaptureObserver } from "../src/main/shell/testing/protocol-capture";
+import { ProtocolCaptureStore } from "../src/main/testing/capture-store";
+import { createProtocolCaptureObserver } from "../src/main/testing/protocol-capture";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_PROMPT =

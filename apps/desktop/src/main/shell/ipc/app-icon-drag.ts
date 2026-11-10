@@ -22,7 +22,7 @@ export function resolvePwragentAppIconPath(
       ? [join(resourcesPath, "pwragent-app-icon.png")]
       : []),
     join(__dirname, "../../build/icon.png"),
-    join(__dirname, "../../../build/icon.png"),
+    join(__dirname, "../../../../build/icon.png"),
   ];
   return candidates.find((candidate) => existsSync(candidate));
 }

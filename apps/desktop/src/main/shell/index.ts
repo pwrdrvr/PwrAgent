@@ -1,3 +1,5 @@
+import { installOwnerHostServices } from "../owner-host";
+import { createDesktopOwnerHostServices } from "./owner-host-services";
 import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
 import { installPermissionPolicy } from "./permission-policy";
 import { markAgentProjectRead } from "../app-server/agent-project-read";
@@ -294,6 +296,8 @@ import {
   E2E_CHILD_PROCESS_DIAGNOSTICS_FILE_ENV,
   installE2eChildProcessDiagnostics,
 } from "../e2e-child-process-diagnostics";
+
+installOwnerHostServices(createDesktopOwnerHostServices());
 
 configureBundledGit(app.isPackaged ? process.resourcesPath : undefined);
 

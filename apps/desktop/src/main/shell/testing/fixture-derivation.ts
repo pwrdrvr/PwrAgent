@@ -6,14 +6,14 @@ import {
   type ProtocolCaptureEnvelope,
   type ProtocolCaptureEventRecord,
   type ProtocolCaptureStringReplacement,
-} from "./capture-store";
+} from "../../testing/capture-store";
 import type {
   ReplayFixture,
   ReplayRequestStep,
   ReplayResponseStep,
   ReplayStep,
-} from "./replay-fixture";
-import { validateReplayFixture } from "./replay-fixture";
+} from "../../testing/replay-fixture";
+import { validateReplayFixture } from "../../testing/replay-fixture";
 
 type CaptureIndexEntry = {
   backend: string;

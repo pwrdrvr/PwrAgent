@@ -1,4 +1,4 @@
-import { safeStorage } from "electron";
+import { secretEncryption as safeStorage } from "../owner-host";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";

@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
-import { ProtocolCaptureStore } from "../shell/testing/capture-store";
-import { createProtocolCaptureObserver } from "../shell/testing/protocol-capture";
+import { ProtocolCaptureStore } from "../testing/capture-store";
+import { createProtocolCaptureObserver } from "../testing/protocol-capture";
 
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];

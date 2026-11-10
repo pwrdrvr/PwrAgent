@@ -1,6 +1,6 @@
+import { externalLinks as shell } from "./owner-host";
 import path from "node:path";
 import { stat } from "node:fs/promises";
-import { shell } from "electron";
 import { isToolManagedWorktreePath, type ThreadMaintenanceRun } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "./app-server/thread-maintenance-service";

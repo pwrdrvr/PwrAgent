@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ProtocolCaptureEventRecord } from "./capture-store";
+import type { ProtocolCaptureEventRecord } from "../../testing/capture-store";
 
 export type ProtocolCaptureMethodSummary = {
   count: number;

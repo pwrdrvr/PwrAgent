@@ -7,7 +7,7 @@ import type { DurableTurnReceipt, SubmitDurableTurnRequest } from "@pwragent/sha
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteDurableTurnRequestStore } from "@pwragent/sqlite-storage/durable-turn-request-store";
 import { durableFederationCallerScope, FEDERATION_BACKEND_METHODS } from "../src/main/federation/federation-backend-bridge";
-import type { ReplayFixture } from "../src/main/shell/testing/replay-fixture";
+import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { startInProcessFederationGateway } from "./fixtures/federation-gateway";

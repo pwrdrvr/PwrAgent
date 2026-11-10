@@ -1,3 +1,4 @@
+import { getOwnerHostServices, rendererSubscribers as subscribersForChannel } from "../owner-host";
 import {
   createThreadDependencyStorage,
   createThreadSandboxStorage,
@@ -55,7 +56,6 @@ import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
-import { BrowserWindow, dialog } from "electron";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -313,7 +313,7 @@ import {
 import {
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
-import { materializeTranscriptImageUrlsForRenderer } from "../shell/transcript-image-protocol";
+import { materializeTranscriptImageUrlsForRenderer } from "../transcript-images";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins, rejectNonUserDirectoryKey } from "./local-directory-pins";
@@ -347,7 +347,6 @@ import {
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
 } from "../../shared/ipc";
 import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
-import { subscribersForChannel } from "../shell/window-channels";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   PROJECT_FORGE_AUTOMATION_UNSUPPORTED_MESSAGE,
@@ -7377,10 +7376,7 @@ class DesktopAppServerService {
       listTargets: () => this.collectPrPollTargets(),
       getFocusedThreadKeys: () => this.prPollingFocus.union(),
       isWindowVisible: () =>
-        BrowserWindow.getAllWindows().some(
-          (window) =>
-            !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
-        ),
+        getOwnerHostServices().ui.isWindowVisible(),
       // Admission pays for one GitHub batch or one GitLab MR read.
       // Additional GitLab REST reads consume their own shared token.
       onPollUnavailable: (targets, failed) => {
@@ -7469,9 +7465,7 @@ class DesktopAppServerService {
   private runPrDiscoveryTick(): void {
     // Discovery is a background nicety; skip it entirely while hidden rather
     // than spend `gh` subprocesses and tokens no one will see.
-    const visible = BrowserWindow.getAllWindows().some(
-      (window) => !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
-    );
+    const visible = getOwnerHostServices().ui.isWindowVisible();
     if (!visible) {
       return;
     }
@@ -9557,7 +9551,7 @@ class DesktopAppServerService {
   }
 
   async pickDirectoryFromDisk(
-    parentWindow?: BrowserWindow,
+    parentWindow?: unknown,
   ): Promise<PickDirectoryFromDiskResponse> {
     const e2ePickPath = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
       ? process.env.PWRAGENT_E2E_PICK_DIRECTORY_PATH?.trim()
@@ -9571,25 +9565,16 @@ class DesktopAppServerService {
     // of floating free. `dialog.showOpenDialog` accepts an optional
     // `BrowserWindow` first arg for exactly this; if the caller didn't
     // pass one we fall back to the focused window.
-    const window =
-      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
     // Open where the user last browsed (the parent of their last pick), else the
     // home folder — much friendlier than the OS default, which is Documents on a
     // fresh Windows profile and looks like you can't escape it.
     const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
-    const result = window
-      ? await dialog.showOpenDialog(window, {
-          title: "Add directory",
-          buttonLabel: "Add directory",
-          defaultPath,
-          properties: ["openDirectory", "createDirectory"],
-        })
-      : await dialog.showOpenDialog({
-          title: "Add directory",
-          buttonLabel: "Add directory",
-          defaultPath,
-          properties: ["openDirectory", "createDirectory"],
-        });
+    const result = await getOwnerHostServices().ui.pickFiles({
+      title: "Add directory",
+      buttonLabel: "Add directory",
+      defaultPath,
+      properties: ["openDirectory", "createDirectory"],
+    }, parentWindow);
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true };
     }
@@ -9598,7 +9583,7 @@ class DesktopAppServerService {
   }
 
   async pickFileFromDisk(
-    parentWindow?: BrowserWindow,
+    parentWindow?: unknown,
   ): Promise<PickFileFromDiskResponse> {
     const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
       ? process.env.PWRAGENT_E2E_PICK_FILE_PATHS?.trim()
@@ -9610,8 +9595,6 @@ class DesktopAppServerService {
       };
     }
 
-    const window =
-      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
     const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
     const options = {
       title: "Add file",
@@ -9621,9 +9604,7 @@ class DesktopAppServerService {
         "openFile" | "multiSelections"
       >,
     };
-    const result = window
-      ? await dialog.showOpenDialog(window, options)
-      : await dialog.showOpenDialog(options);
+    const result = await getOwnerHostServices().ui.pickFiles(options, parentWindow);
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true };
     }
@@ -9639,7 +9620,7 @@ class DesktopAppServerService {
    * pick is classified via `fs.stat`; unreadable paths are skipped.
    */
   async pickReferenceFromDisk(
-    parentWindow?: BrowserWindow,
+    parentWindow?: unknown,
   ): Promise<PickReferenceFromDiskResponse> {
     const e2ePickPaths = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
       ? process.env.PWRAGENT_E2E_PICK_REFERENCE_PATHS?.trim()
@@ -9651,8 +9632,6 @@ class DesktopAppServerService {
       };
     }
 
-    const window =
-      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
     const defaultPath = this.lastPickedDirectoryParent ?? os.homedir();
     const options = {
       title: "Add reference",
@@ -9664,9 +9643,7 @@ class DesktopAppServerService {
         "openFile" | "openDirectory" | "multiSelections"
       >,
     };
-    const result = window
-      ? await dialog.showOpenDialog(window, options)
-      : await dialog.showOpenDialog(options);
+    const result = await getOwnerHostServices().ui.pickFiles(options, parentWindow);
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true };
     }

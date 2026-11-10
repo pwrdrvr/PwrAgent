@@ -1,3 +1,4 @@
+import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import fc from "fast-check";
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
 import { isolatedGitKeys, isolateProcessGitEnvironment } from "./helpers/isolated-git";
@@ -3321,6 +3322,10 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 // (`answerAcpSessionCancel`, `interruptEndsTurn`).
 let restoreGitEnvironment: () => void;
 beforeEach(() => {
+  installOwnerHostServices({
+    ...getOwnerHostServices(),
+    notifications: desktopNotificationServiceMock.getDesktopNotificationService(),
+  });
   // Branch proofs read process.env, while setup Git uses gitTestEnv. Keep
   // both inside the fixture: inherited config/location overrides correctly
   // defer a production probe to owned Git, but are not part of these repos.

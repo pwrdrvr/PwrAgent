@@ -5,7 +5,7 @@ import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
 import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
-import type { ReplayFixture } from "../src/main/shell/testing/replay-fixture";
+import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";

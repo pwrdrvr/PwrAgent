@@ -5,7 +5,7 @@ import {
   type ReplayFixture,
   type ReplayResponseStep,
   type ReplayStep,
-} from "../shell/testing/replay-fixture";
+} from "../testing/replay-fixture";
 
 it("tracks concurrent requests separately and waits for every answer before progressing", () => {
   const controller = new ReplayController({ metadata: { backend: "codex", scenario: "concurrent-input" }, steps: [

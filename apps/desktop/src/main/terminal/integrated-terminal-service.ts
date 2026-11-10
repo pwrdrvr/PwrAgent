@@ -3,7 +3,11 @@ import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { WebContents } from "electron";
+import type { RendererEventTarget } from "../owner-host";
+
+export interface TerminalEventTarget extends RendererEventTarget {
+  once(event: "destroyed", listener: () => void): unknown;
+}
 import type { IPty, IDisposable } from "node-pty";
 import type {
   DesktopIntegratedTerminalWindowsShell,
@@ -202,7 +206,7 @@ type TerminalSession = {
    *  preference outlives any renderer remount. */
   panelHidden: boolean;
   createdAt: number;
-  subscribers: Set<WebContents>;
+  subscribers: Set<TerminalEventTarget>;
   disposables: IDisposable[];
 };
 
@@ -316,7 +320,7 @@ export class IntegratedTerminalService {
   private readonly pendingCloseSessionIds = new Set<string>();
   /** One `destroyed` listener per WebContents, not per session — 10 terminals
    *  in one window used to install 10 and trip Node's max-listeners warning. */
-  private readonly subscribedWebContents = new Set<WebContents>();
+  private readonly subscribedWebContents = new Set<TerminalEventTarget>();
   private readonly archived = new Map<string, TerminalHistoryRecord>();
   private readonly pendingCreates = new Map<string, {
     request: IntegratedTerminalCreateRequest;
@@ -347,7 +351,7 @@ export class IntegratedTerminalService {
 
   async createOrAttach(
     request: IntegratedTerminalCreateRequest,
-    webContents: WebContents,
+    webContents: TerminalEventTarget,
   ): Promise<IntegratedTerminalCreateResponse> {
     if (this.disposing) throw new Error("Terminal service is shutting down.");
     this.assertWorktreeAvailable(request.cwd);
@@ -369,7 +373,7 @@ export class IntegratedTerminalService {
 
   private async createSession(
     request: IntegratedTerminalCreateRequest,
-    webContents: WebContents,
+    webContents: TerminalEventTarget,
   ): Promise<IntegratedTerminalCreateResponse> {
     await this.ready;
     const threadKey = request.threadKey.trim();
@@ -766,7 +770,7 @@ export class IntegratedTerminalService {
     this.onSessionsChanged?.(this.listSessions());
   }
 
-  private subscribe(session: TerminalSession, webContents: WebContents): void {
+  private subscribe(session: TerminalSession, webContents: TerminalEventTarget): void {
     if (webContents.isDestroyed()) {
       return;
     }

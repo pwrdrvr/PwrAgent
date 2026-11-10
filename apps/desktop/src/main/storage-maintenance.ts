@@ -1,15 +1,12 @@
-import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
+import { getOwnerHostServices } from "./owner-host";
+import type { StorageMaintenanceWorker } from "./storage-maintenance-host";
 import { join } from "node:path";
 import type { StorageMaintenanceStorage } from "@pwragent/owner-core/storage-maintenance-storage";
 import { findLiveProfileRuntimeMarkers, resolveActiveProfileName, resolveActiveProfilePath } from "./profile";
 import { storageHistoryPolicy, storageMaintenanceDue, type StorageThreadIdentity } from "@pwragent/owner-core/storage-maintenance-storage";
 import { storageProcessAlive } from "./storage/desktop-storage-maintenance";
-import { STORAGE_MAINTENANCE_CHANNEL, STORAGE_MAINTENANCE_EVENT, type StorageMaintenanceCommand, type StorageMaintenanceStatus } from "../shared/storage-maintenance";
-import { readBootstrapAppearance, themedWindowAdditionalArguments } from "./settings/appearance-bootstrap";
-import { themedWindowBackgroundColor } from "./shell/native-appearance";
-import { auxiliaryWindowChromeOptions } from "./shell/auxiliary-window-chrome";
+import { type StorageMaintenanceStatus } from "../shared/storage-maintenance";
 import { getMainLogger } from "./log";
-import { describeWebContentsLoad } from "./shell/window-load-diagnostics";
 
 const storageLog = getMainLogger("pwragent:storage-maintenance");
 
@@ -53,19 +50,7 @@ export async function runStartupStorageMaintenance(options: {
     automatic: policy.automatic,
     historyEnabled: policy.historyEnabled,
   });
-  const appearance = readBootstrapAppearance();
-  const window = new BrowserWindow({
-    width: 540, height: 460, title: "PwrAgent storage", show: false,
-    // The Pwr-family title strip, as every auxiliary window draws it; the
-    // window is fixed-size, so there is nothing for the green button to zoom.
-    ...auxiliaryWindowChromeOptions(), resizable: false, maximizable: false,
-    backgroundColor: themedWindowBackgroundColor(appearance),
-    webPreferences: {
-      preload: join(__dirname, "../preload/storage-maintenance.cjs"),
-      sandbox: true, contextIsolation: true, nodeIntegration: false,
-      additionalArguments: themedWindowAdditionalArguments(appearance),
-    },
-  });
+  const view = getOwnerHostServices().storageMaintenance.createView();
   let status: StorageMaintenanceStatus = {
     phase: "ready", historyEnabled: policy.historyEnabled, beforeBytes: bytes,
     completedThreads: 0, eligibleThreads: 0,
@@ -73,18 +58,18 @@ export async function runStartupStorageMaintenance(options: {
   let running = false;
   let stopping = false;
   let finished = false;
-  let worker: Electron.UtilityProcess | undefined;
+  let worker: StorageMaintenanceWorker | undefined;
   let ownershipTimer: ReturnType<typeof setInterval> | undefined;
   let release: () => void = () => {};
   const done = new Promise<void>((resolve) => { release = resolve; });
   const publish = (patch: Partial<StorageMaintenanceStatus>) => {
     status = { ...status, ...patch };
-    if (!window.isDestroyed()) window.webContents.send(STORAGE_MAINTENANCE_EVENT, status);
+    if (!view.isClosed()) view.publish(status);
   };
   const finish = () => {
     if (finished) return;
     finished = true;
-    app.removeListener("before-quit", cancel);
+    unsubscribeQuit();
     interruptMaintenance = undefined;
     if (ownershipTimer) clearInterval(ownershipTimer);
     storageLog.info("startup storage maintenance released startup", {
@@ -107,7 +92,7 @@ export async function runStartupStorageMaintenance(options: {
     }
   };
   interruptMaintenance = async () => { cancel(); await done; };
-  app.once("before-quit", cancel);
+  const unsubscribeQuit = view.onQuit(cancel);
   const start = async () => {
     const { historyEnabled } = storageHistoryPolicy(storage.read());
     if (running || finished) return;
@@ -122,7 +107,7 @@ export async function runStartupStorageMaintenance(options: {
         publish({ phase: "deferred", message: "Another PwrAgent instance is using this profile. Storage optimization will wait." });
         finish(); return;
       }
-      worker = utilityProcess.fork(join(__dirname, "storage-maintenance-worker.js"), [], { stdio: "ignore", serviceName: "PwrAgent storage maintenance" });
+      worker = getOwnerHostServices().storageMaintenance.forkWorker(join(__dirname, "storage-maintenance-worker.js"));
       ownershipTimer = setInterval(() => {
         if (worker && otherInstances()) {
           stopping = true;
@@ -154,11 +139,10 @@ export async function runStartupStorageMaintenance(options: {
       finish();
     }
   };
-  ipcMain.handle(STORAGE_MAINTENANCE_CHANNEL, async (event, command: StorageMaintenanceCommand) => {
-    if (event.sender !== window.webContents) throw new Error("Invalid storage maintenance sender");
-    if (command.action === "hold") window.setAlwaysOnTop(true);
+  view.onCommand(async (command) => {
+    if (command.action === "hold") view.hold();
     if (command.action === "cancel") cancel();
-    if (command.action === "dismiss") window.close();
+    if (command.action === "dismiss") view.close();
     if (command.action === "start") void start();
     if (command.action === "preference" && (status.phase === "ready" || finished) && typeof command.historyEnabled === "boolean") {
       storage.setHistoryPreference(command.historyEnabled);
@@ -166,13 +150,8 @@ export async function runStartupStorageMaintenance(options: {
     }
     return status;
   });
-  window.once("closed", () => {
-    ipcMain.removeHandler(STORAGE_MAINTENANCE_CHANNEL);
-    cancel();
-  });
-  const load = process.env.ELECTRON_RENDERER_URL
-    ? window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/storage-maintenance.html`)
-    : window.loadFile(join(__dirname, "../renderer/storage-maintenance.html"));
+  view.onClosed(cancel);
+  const load = view.loaded;
   // Closing the window aborts the load; that rejection is expected and must
   // not reach the process-level unhandled-rejection handler.
   load.catch(() => {});
@@ -188,28 +167,28 @@ export async function runStartupStorageMaintenance(options: {
       done.then(() => "released" as const),
     ]);
     if (loaded === "released") {
-      if (!window.isDestroyed()) window.close();
+      if (!view.isClosed()) view.close();
       return;
     }
     // The timer measures wall time, so a main thread blocked by startup work
     // can fire it after the page finished but before the load promise did.
     if (
       loaded === "timeout"
-      && (window.isDestroyed() || window.webContents.isLoading?.() !== false)
+      && (view.isClosed() || view.isLoading() !== false)
     ) {
       // Skip the job for this launch rather than keep the app windowless.
       // cancel() records the attempt, so the next try waits for the usual
       // interval instead of repeating this wait on every launch.
       storageLog.warn("startup storage maintenance window did not load; continuing startup without it", {
         timeoutMs: STORAGE_WINDOW_LOAD_TIMEOUT_MS,
-        ...describeWebContentsLoad(window.webContents),
+        ...view.describeLoad(),
       });
       cancel();
-      if (!window.isDestroyed()) window.close();
+      if (!view.isClosed()) view.close();
       await done;
       return;
     }
-    window.show();
+    view.show();
     if (policy.automatic) void start();
     await done;
   } catch (error) {
@@ -219,7 +198,7 @@ export async function runStartupStorageMaintenance(options: {
       });
     }
     cancel();
-    if (!window.isDestroyed()) window.close();
+    if (!view.isClosed()) view.close();
     await done;
   } finally {
     clearTimeout(loadTimer);

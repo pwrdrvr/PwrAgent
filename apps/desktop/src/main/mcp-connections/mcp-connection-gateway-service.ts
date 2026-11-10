@@ -1,3 +1,4 @@
+import { externalLinks as shell } from "../owner-host";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
@@ -10,7 +11,6 @@ import {
   type Server as NetServer,
   type Socket,
 } from "node:net";
-import { shell } from "electron";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";

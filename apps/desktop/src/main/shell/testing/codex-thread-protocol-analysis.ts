@@ -3,7 +3,7 @@ import {
   readProtocolCaptureFile,
   type CapturedProtocolEnvelopeRecord,
   type ProtocolCaptureEnvelope,
-} from "./capture-store";
+} from "../../testing/capture-store";
 
 type ThreadListRequestVariant = {
   method: "thread/list" | "thread/loaded/list";

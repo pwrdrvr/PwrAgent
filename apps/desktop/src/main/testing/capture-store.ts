@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getMainLogger } from "../../log";
+import { getMainLogger } from "../log";
 
 export type ProtocolCaptureEventRecord = {
   backend: string;

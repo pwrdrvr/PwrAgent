@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProtocolCaptureStore, readProtocolCaptureFile } from "../shell/testing/capture-store";
+import { ProtocolCaptureStore, readProtocolCaptureFile } from "../testing/capture-store";
 import { analyzeProtocolCaptureTraffic } from "../shell/testing/protocol-capture-analysis";
-import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../shell/testing/protocol-capture";
+import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-capture";
 
 async function createTempDir(): Promise<string> {

@@ -2,6 +2,7 @@ import { FederationRoleDeniedError } from "@pwragent/federation/federation-route
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
 import { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
 import type { FederationPeerRole } from "@pwragent/shared";
+import { applicationHost as app } from "../owner-host";
 import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
@@ -31,7 +32,6 @@ import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANS
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest, type ThreadHandoffSendOptions } from "./thread-instance-handoff-service";
-import { app } from "electron";
 import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDestination,
   type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
 import {
@@ -329,7 +329,7 @@ import {
   rewriteFederatedTranscriptImageUrlForRenderer,
   rewriteFederatedTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
-} from "../shell/transcript-image-protocol";
+} from "../transcript-images";
 import {
   readThreadForPeer,
   readTurnAssistantReplyForPeer,

@@ -3,7 +3,7 @@ import os from "node:os";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
-import type { ReplayFixture } from "../src/main/shell/testing/replay-fixture";
+import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const mcpElicitationSpecDir = path.dirname(fileURLToPath(import.meta.url));

@@ -11,7 +11,7 @@ import { listingDiagnostics } from "./listing-diagnostics";
 import { Session } from "node:inspector";
 import { directoryEnrichmentDiagnostics } from "./directory-enrichment-diagnostics";
 import { gitSubprocessDiagnostics } from "./git-subprocess-diagnostics";
-import type { HotCpuTarget } from "../shell/diagnostics/hot-cpu-profiler";
+import type { HotCpuTarget } from "./hot-cpu-target";
 
 export function createMainProcessHotCpuTarget(): HotCpuTarget {
   let session: Session | null = null;

@@ -20,7 +20,7 @@ import type {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
-import { toTranscriptImageProtocolUrl } from "../shell/transcript-image-protocol";
+import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
