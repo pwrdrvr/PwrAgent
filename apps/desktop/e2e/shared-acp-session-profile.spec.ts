@@ -191,3 +191,83 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
     } finally { db.close(); }
   } finally { await app.close(); }
 });
+
+test("desktop and Outpost retire actual ACP active/archive members despite retained pins and inventories", async () => {
+  const ids = ["retired-active", "retired-archived"];
+  const other = "acp:uninstalled" as const;
+  const app = await launchElectronApp({
+    fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"), secretStorage: "memory",
+    async preLaunchHook(homeRoot) {
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        const sessions = new AcpSessionStore(db);
+        const overlay = new SqliteOverlayStore(db);
+        const repo = path.join(homeRoot, "enriched-repo");
+        const cwd = path.join(homeRoot, ".worktrees", "enriched-member");
+        await mkdir(repo, { recursive: true });
+        await mkdir(path.join(cwd, ".codex", "environments"), { recursive: true });
+        await writeFile(path.join(cwd, ".codex", "environments", "environment.toml"), 'version = 1\nname = "Invented ACP environment"\n');
+        for (const [index, id] of ids.entries()) {
+          sessions.upsertSession({ backendId: backend, sessionId: id, title: `Invented ACP ${index}`, titleSource: "derived",
+            cwd, createdAt: 1, updatedAt: 2, executionMode: "auto", status: "idle", ...(index ? { archivedAt: 3 } : {}) });
+          await overlay.updateThreadMetadata({ backend, threadId: id }, { pinnedRank: `${1024 + index}`, seenAt: 10_000, seenUpdatedAt: 2 });
+          await overlay.setAcpWorktreeDirectory({ backend, threadId: id, cwd,
+            directory: { id: repo, path: repo, worktreePath: cwd, kind: "worktree", label: "enriched-repo" } });
+        }
+        sessions.upsertSession({ backendId: other, sessionId: ids[0]!, title: "Uninstalled ACP member", titleSource: "explicit",
+          cwd: homeRoot, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
+      } finally { db.close(); }
+    },
+  });
+  try {
+    await expect(app.window.getByRole("button", { name: /Invented ACP 0/i }).first()).toBeVisible();
+    await expect(app.window.getByRole("button", { name: /Uninstalled ACP member/i }).first()).toBeVisible();
+    const before = await app.window.evaluate(async ({ backend, ids }) => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      const active = await api.getNavigationSelectedDetail!({ protocol: 2, ref: { backend, threadId: ids[0]! } });
+      const archived = await api.listThreads!({ backend, archived: true });
+      return [active.thread!, archived.threads.find(thread => thread.id === ids[1])!];
+    }, { backend, ids });
+    expect(before[0]).toMatchObject({ title: "Invented ACP 0", executionMode: "auto", pinnedRank: "1024" });
+    expect(before[1]).toMatchObject({ title: "Invented ACP 1", archivedAt: 3 });
+    const cached = await app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return await api.listThreads!();
+    });
+    expect(cached.threads.find(thread => thread.id === ids[0] && thread.source === backend)).toMatchObject({
+      linkedDirectories: [{ path: path.join(app.homeRoot, "enriched-repo"), worktreePath: path.join(app.homeRoot, ".worktrees", "enriched-member") }],
+      codexEnvironmentOptions: [{ name: "Invented ACP environment" }],
+    });
+    await app.closeApplication();
+    const stateDirectory = path.dirname(stateDbPathForHomeRoot(app.homeRoot));
+    const [{ JobStore }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("federation-backend.js")]);
+    const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: app.homeRoot });
+    try {
+      const store = new JobStore(path.join(stateDirectory, "headless"), { version: 1, workspace: app.homeRoot, codexHome: path.join(app.homeRoot, "codex") }, profile);
+      const runtime = { workspace: app.homeRoot, store, projects: { list: () => [] }, onFailure(error: unknown) { throw error; } };
+      let owner = new HeadlessBackend(runtime, () => {});
+      for (const [index, id] of ids.entries()) expect((await owner.handle("getNavigationSelectedDetail", {
+        protocol: 2, ref: { backend, threadId: id },
+      })).identity).toBe(index ? "archived" : "present");
+      const db = StateDb.open(stateDbPathForHomeRoot(app.homeRoot));
+      try {
+        new ProviderThreadSnapshotStore(db).replace({ backend, observedAt: Date.now() + 100_000,
+          threads: before });
+        for (const id of ids) new AcpSessionStore(db).deleteSession(backend, id);
+      } finally { db.close(); }
+      for (let reopen = 0; reopen < 2; reopen++) {
+        for (const id of ids) {
+          const ref = { backend, threadId: id };
+          expect((await owner.handle("resolveThread", ref)).thread).toBeUndefined();
+          expect((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity).toBe("unresolved");
+          expect((await owner.handle("getNavigationQueryPage", { protocol: 2, consumer: "remote-window", backend,
+            query: { kind: "exact", identities: [ref] } })).entries).toEqual([]);
+        }
+        expect((await owner.handle("lookupArchivedThreads", { backend, threadIds: ids, includeParent: true })).parentLinks).toEqual([]);
+        expect((await owner.handle("resolveThread", { backend: other, threadId: ids[0] })).thread.title).toBe("Uninstalled ACP member");
+        await expect(owner.handle("readThread", { backend: other, threadId: ids[0] })).rejects.toThrow("executes Codex only");
+        owner = new HeadlessBackend(runtime, () => {});
+      }
+    } finally { profile.close(); }
+  } finally { await app.close(); }
+});

@@ -1,0 +1,4 @@
+{
+  "first-acp-cache-enrichment": {"commits": 1, "note": "One existing first worktree mapping commit; 16480 WAL bytes (~1.648 MB/day at 100 newly resolved sessions); no timer", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "repeated-acp-cache-enrichment": {"commits": 0, "note": "100 cache publications and 1000 cached reads retain directory/environment enrichment with zero SQLite writes (0 MB/day)", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

@@ -515,6 +515,79 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }), { numRuns: 3 });
   }, 60_000);
 
+  it("retires actual active and archived ACP membership across desktop and daemon while retained metadata and colliding Codex identities survive", async () => {
+    await fc.assert(fc.asyncProperty(fc.uuid(), async (threadId) => {
+      for (const archived of [false, true]) {
+        const root = await realpath(await mkdtemp(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-acp-retire-")));
+        const backend = "acp:gemini" as const;
+        const ref = { backend, threadId };
+        let desktop: OwnerHost | undefined;
+        let outpost: Awaited<ReturnType<typeof startOutpostDaemon>> | undefined;
+        let seeded = false;
+        const prepare = async (db: StateDb, workspace: string) => {
+          if (seeded) return;
+          seeded = true;
+          new AcpAgentStore(db).upsertInstalledAgent({ backendId: backend, registryId: "gemini", name: "ACP retirement fixture",
+            distributionKind: "local", distributionSource: "fixture", installStatus: "installed", authStatus: "not-required",
+            verificationStatus: "not-applicable", allowlistRuleId: "fixture", installedAt: 1, updatedAt: 1,
+            launchDescriptor: { backendId: backend, registryId: "gemini", distributionKind: "local",
+              command: process.execPath, args: ["-e", "throw new Error('Membership discovery must not start ACP')"], env: {} } });
+          new AcpSessionStore(db).upsertSession({ backendId: backend, sessionId: threadId, title: "Actual ACP member", titleSource: "derived",
+            cwd: workspace, createdAt: 1, updatedAt: 2, executionMode: "auto", status: "idle", ...(archived ? { archivedAt: 3 } : {}) });
+          await new SqliteOverlayStore(db).updateThreadMetadata(ref, { pinnedRank: "1024", seenAt: 10_000, seenUpdatedAt: 2,
+            parent: { backend: "codex", threadId: "parent" }, model: "retained-model", fastMode: true });
+          writeFileSync(path.join(root, "f/fixture-threads.json"), JSON.stringify({ [threadId]: {
+            id: threadId, name: "Colliding native Codex", cwd: workspace, createdAt: 1, updatedAt: 2, turns: [],
+          } }));
+        };
+        try {
+          desktop = await startDesktopOwner(null, prepare, undefined, root);
+          const before = archived
+            ? (await desktop.client.lookupArchivedThreads({ backend, threadIds: [threadId], includeParent: true })).threads[0]!
+            : (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread!;
+          expect(before).toMatchObject({ title: "Actual ACP member", titleSource: "derived" });
+          if (archived) expect(before.archivedAt).toBe(3);
+          else expect(before).toMatchObject({ executionMode: "auto", pinnedRank: "1024" });
+          await desktop.close(); desktop = undefined;
+          outpost = await startOutpostDaemon({ profileRoot: root });
+          expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread).toMatchObject({
+            title: before.title, titleSource: before.titleSource, pinnedRank: "1024", executionMode: "auto",
+            model: "retained-model", fastMode: true, parentThreadId: "parent", parentThreadBackend: "codex", inbox: { inInbox: false } });
+          const db = StateDb.open(path.join(root, "profiles/t/state/state.db"), { profileName: "t" });
+          try {
+            const sessions = new AcpSessionStore(db);
+            sessions.deleteSession(backend, threadId);
+            expect(sessions.getSession(backend, threadId)).toBeUndefined();
+            expect(await new SqliteOverlayStore(db).getThreadMetadata(ref)).toMatchObject({ pinnedRank: "1024" });
+            // Leave a positively observed older row behind, as desktop retention can.
+            new ProviderThreadSnapshotStore(db).replace({ backend, observedAt: Date.now() + 100_000,
+              threads: [before] });
+          } finally { db.close(); }
+          const assertAbsent = async (client: FederationRemoteBackendClient) => {
+            expect((await client.resolveThread(ref)).thread).toBeUndefined();
+            expect((await client.getNavigationSelectedDetail({ protocol: 2, ref })).identity).toBe("unresolved");
+            expect((await client.lookupArchivedThreads({ backend, threadIds: [threadId], includeParent: true })).threads).toEqual([]);
+            expect((await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend,
+              query: { kind: "exact", identities: [ref] } })).entries).toEqual([]);
+            expect((await client.resolveThread({ backend: "codex", threadId })).thread?.title).toBe("Colliding native Codex");
+          };
+          await assertAbsent(outpost.client);
+          await outpost.close(); outpost = undefined;
+          outpost = await startOutpostDaemon({ profileRoot: root });
+          await assertAbsent(outpost.client);
+          await outpost.close(); outpost = undefined;
+          desktop = await startDesktopOwner(null, prepare, undefined, root);
+          await assertAbsent(desktop.client);
+          const publisher = desktopOwner.registry as {
+            publishRefreshedProviderThreadsToCache(refreshes: Array<{ backends: AppServerBackendKind[]; threads: AppServerThreadSummary[] }>): Promise<void>;
+          };
+          await publisher.publishRefreshedProviderThreadsToCache([{ backends: [backend], threads: [before] }]);
+          await assertAbsent(desktop.client);
+        } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
+      }
+    }), { numRuns: 3 });
+  }, 60_000);
+
   it("serves native and remote navigation from the real desktop owner with the same bounded results", async () => {
     const desktop = await startDesktopOwner();
     try {

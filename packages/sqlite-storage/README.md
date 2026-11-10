@@ -373,7 +373,19 @@ statements, rows and WAL bytes: incremental 0 MB/day. No SQLite timer is added.
 Claude inventories use the same supported-backend codec as the other providers.
 Actual ACP session metadata (including archives and uninstalled backends) is read
 through the shared session port, rather than inferred from an older startup
-inventory. Hidden helpers remain excluded. Desktop and Outpost use the same pure
+inventory. That store also owns membership: a deleted or hidden session cannot
+resolve from an older inventory or a retained overlay. Desktop startup hydration
+and refresh publication use actual ACP membership, including agents with no
+installed record. Native titles/provenance, workspace, times and execution mode
+outrank older overlay facts. Native archive state applies without a durable
+owner archive/restore observation; a passive stored session cannot supersede
+that observation. Live pins, parents, seen watermarks and model settings remain
+shared. Desktop cache publication reapplies the ordinary directory/environment
+enrichment, then rechecks native membership after its IO. The separate
+`acp-cache-enrichment-write-budgets.json` records the existing first worktree
+mapping commit (16,480 WAL bytes, about 1.648 MB/day at 100 new resolutions);
+100 repeated publications and 1,000 cached reads add zero writes.
+Hidden helpers remain excluded. Desktop and Outpost use the same pure
 ACP summary projection; host path labels stay injected. Unsupported providers
 are listed as unavailable and their execution, transcript and mutation requests
 are refused before reaching Codex. This grants no cross-instance reach.
@@ -395,3 +407,16 @@ actual-owner conformance checks colliding Codex/Claude/ACP identities, native
 names, late lists and metadata through desktop → daemon → desktop. Supported
 Electron verifies that desktop ACP renames and archives reach the actual Outpost
 registry without launching an ACP process.
+
+`outpost-acp-membership.property.test.ts` checks generated native save/delete,
+hidden-helper, stale-inventory/overlay and owner-reopen sequences against an
+independent membership model, with colliding backend IDs and native metadata
+authority. Actual desktop/daemon conformance covers native deletion followed by
+stale retained reads and restart on each host. Supported Electron coverage reads
+active, archived and uninstalled ACP members before handing native retirement to
+Outpost. The installed package smoke also checks ACP retirement without losing a
+colliding Claude record. The separate `outpost-acp-membership-write-budgets.json`
+measures the existing native delete as one commit/12,360 WAL bytes (about
+1.236 MB/day at 100 deletions/day), and 1,000 absent read rounds plus ten registry
+reopens as zero commits. Membership projection adds no SQLite write or timer:
+incremental 0 MB/day. The inherited default and conformance fixtures are unchanged.
