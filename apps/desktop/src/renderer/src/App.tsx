@@ -4733,7 +4733,7 @@ function DesktopAppShell(props: {
             <SendThreadToMachineDialog
               key={sendToMachineKey}
               source={sendToMachineSource}
-              targets={listedThreadHandoffTargets}
+              targets={threadHandoffTargets}
               findRepository={findThreadHandoffRepository}
               {...(liveHandoff ? { transfer: liveHandoff } : {})}
               {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}

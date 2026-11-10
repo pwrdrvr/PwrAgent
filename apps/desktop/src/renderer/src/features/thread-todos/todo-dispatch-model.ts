@@ -1,6 +1,7 @@
 import type { BackendSummary, CodexSpeed, ThreadTodoModelSettings } from "@pwragent/shared";
 import { codexSpeedOptions } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { FEDERATION_TARGET_AVAILABILITY_LABEL } from "../chrome/federation-thread-targets";
 
 export function formatTodoDispatchSettings(settings: ThreadTodoModelSettings, backends: BackendSummary[]): string {
   const summary = backends.find((entry) => entry.kind === settings.backend);
@@ -148,7 +149,7 @@ export function todoDispatchMachines(params: {
       label: peer.label,
       instanceId: peer.instanceId,
       available,
-      ...(available ? {} : { unavailableReason: "Unsupported" }),
+      ...(available ? {} : { unavailableReason: FEDERATION_TARGET_AVAILABILITY_LABEL.unsupported }),
       dispatchTarget: peer.dispatchTarget === true,
     });
   }

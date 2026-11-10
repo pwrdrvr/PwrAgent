@@ -5,6 +5,7 @@ import { CelestialIcon, MinimizeIcon } from "../../icons";
 import { flyBetween } from "../../lib/fly-between";
 import type { ProjectIdentity } from "../../lib/federation-project-match";
 import { useModalDialog } from "../../lib/useModalDialog";
+import { listedFederationPeerTargets } from "../chrome/federation-thread-targets";
 import { InstanceGlyph } from "./InstanceGlyph";
 import { threadHandoffCancelBlockedReason, threadHandoffVerb } from "./thread-handoff-copy";
 import type {
@@ -201,6 +202,12 @@ export function SendThreadToMachineDialog(props: {
   }, [dialogRef, sending]);
 
   const target = targets.find((candidate) => candidate.instanceId === targetId);
+  // Connected machines only, plus the chosen one even after it disconnects,
+  // so a running transfer still names where it is going.
+  const listedTargets = useMemo(
+    () => listedFederationPeerTargets(targets, targetId),
+    [targetId, targets],
+  );
   const lookup = targetId ? lookups[targetId] : undefined;
   const repositoryPath = targetId === undefined
     ? ""
@@ -341,7 +348,7 @@ export function SendThreadToMachineDialog(props: {
             className="thread-handoff-dialog__machines"
             role="radiogroup"
           >
-            {targets.map((candidate) => {
+            {listedTargets.map((candidate) => {
               const state = describeRow(candidate);
               const unavailable = candidate.availability !== "available";
               return (
