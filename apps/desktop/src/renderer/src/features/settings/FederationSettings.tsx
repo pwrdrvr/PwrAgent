@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Select } from "../../components/Select";
 import { FederationCapabilities } from "./FederationCapabilities";
 import { CloudflareSetup } from "./CloudflareSetup";
 import { FederationConnections } from "../federation-activity/FederationConnections";
@@ -76,6 +77,7 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [tailscaleConfiguring, setTailscaleConfiguring] =
     useState<FederationTailscaleMode>();
   const [funnelAcknowledged, setFunnelAcknowledged] = useState(false);
+  const [inviteRole, setInviteRole] = useState<"full" | "contained">("contained");
   const [generatedInvite, setGeneratedInvite] = useState("");
   const [inviteCopied, setInviteCopied] = useState(false);
   const inviteCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -84,6 +86,7 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [inviteToImport, setInviteToImport] = useState("");
   const [importNotice, setImportNotice] = useState<string>();
   const [revokingPeerId, setRevokingPeerId] = useState<string>();
+  const [settingRoleFor, setSettingRoleFor] = useState<string>();
   const [settingIconFor, setSettingIconFor] = useState<string>();
   const [confirmingForget, setConfirmingForget] = useState(false);
   const [forgetting, setForgetting] = useState(false);
@@ -916,6 +919,11 @@ export function FederationSettings(props: FederationSettingsProps) {
         chipKind={generatedInvite ? "ok" : "muted"}
       >
         <div className="settings-fields">
+          <SettingsField label="Invite access"
+            help="Choose the peer's access before it connects. Contained peers can communicate with their users but cannot reach other instances."
+            control={<Select aria-label="Invite access" value={inviteRole}
+              options={[{ value: "contained", label: "Contained" }, { value: "full", label: "Full" }]}
+              onChange={(role) => { if (role === "full" || role === "contained") setInviteRole(role); }} />} />
           <SettingsField
             label="Generate invite"
             sub={
@@ -934,7 +942,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                   }
                   onClick={() => {
                     setActionError(undefined);
-                    props.desktopApi?.generateFederationInvite?.({})
+                    props.desktopApi?.generateFederationInvite?.({ permissionRole: inviteRole })
                       .then(async (response) => {
                         setGeneratedInvite(response.invite);
                         // Auto-copy so the operator can paste straight into
@@ -1253,6 +1261,23 @@ export function FederationSettings(props: FederationSettingsProps) {
                     {peer.capabilities.length} capabilities · Instance{" "}
                     <code>{peer.id}</code>
                   </span>
+                  {peer.canRevoke && props.desktopApi?.setFederationPeerRole ? (
+                    <SettingsField label="Peer access" pending={settingRoleFor === peer.id}
+                      help="Contained peers can reply to their users. Requests to operate other instances are blocked."
+                      control={<Select value={peer.permissionRole ?? "full"}
+                        aria-label={`Peer access for ${peer.label}`}
+                        disabled={settingRoleFor === peer.id}
+                        options={[{ value: "full", label: "Full" }, { value: "contained", label: "Contained" }]}
+                        onChange={(role) => {
+                          if (role !== "full" && role !== "contained") return;
+                          setSettingRoleFor(peer.id);
+                          setActionError(undefined);
+                          void props.desktopApi!.setFederationPeerRole!({ peerId: peer.id, role })
+                            .then(() => loadHealth())
+                            .catch((cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause)))
+                            .finally(() => setSettingRoleFor(undefined));
+                        }} />} />
+                  ) : <span>Peer access: {peer.permissionRole === "contained" ? "Contained" : "Full"}</span>}
                   {peer.lastConnectedAt ? (
                     <span>
                       Connected {formatTimestamp(peer.lastConnectedAt)}
@@ -1859,6 +1884,8 @@ function parseFederationListenPort(value: string): number {
 }
 
 const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
+  peer_roles_v1: "receiver-enforced peer access",
+  contained_messaging_upload_v1: "send scoped messaging attachments",
   remote_window: "open a remote workspace",
   thread_navigation: "browse and create threads",
   navigation_snapshot_deltas: "exchange compact navigation updates",

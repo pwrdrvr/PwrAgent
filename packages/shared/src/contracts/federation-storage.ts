@@ -14,6 +14,7 @@ export type FederationEnrollmentEntry = {
   usedAt?: number;
   peerId?: FederationPeerId;
   label?: string;
+  permissionRole?: import("./federation").FederationPeerRole;
   role?: FederationInstanceRole;
   endpoint?: string;
   gatewayInstanceId?: string;
@@ -44,6 +45,8 @@ export type FederationSessionAuditEntry = {
 export interface FederationStorage {
   upsertPeer(params: {
     peer: FederationPeerSummary & { pinnedPublicKeyPem?: string };
+    /** Local enrollment choice; ignored for already enrolled peers. */
+    assignedRole?: import("./federation").FederationPeerRole;
     createdAt?: number;
     updatedAt: number;
     /** Only verified one-time enrollment may explicitly restore revoked trust. */
@@ -56,12 +59,14 @@ export interface FederationStorage {
     pinnedPublicKeyPem?: string;
   }) | undefined;
   listPeers(options?: { includeRevoked?: boolean }): FederationPeerSummary[];
+  setPeerRole(peerId: FederationPeerId, role: import("./federation").FederationPeerRole, updatedAt: number): void;
   revokePeer(peerId: FederationPeerId, revokedAt: number): void;
   createEnrollment(params: {
     token: string;
     generatedAt: number;
     expiresAt: number;
     label?: string;
+    permissionRole?: import("./federation").FederationPeerRole;
     role?: FederationInstanceRole;
     endpoint?: string;
     gatewayInstanceId?: string;

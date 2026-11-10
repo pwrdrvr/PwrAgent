@@ -71,6 +71,7 @@ export function publicPeerSummary(peer: FederationPeerSummary): FederationPeerSu
     id: peer.id,
     label: peer.label,
     role: peer.role,
+    permissionRole: peer.permissionRole,
     status: peer.status,
     capabilities: [...peer.capabilities],
     canRevoke: peer.canRevoke,
