@@ -10,6 +10,7 @@ import type { BackendModelOption } from "./contracts/backend";
  */
 export const HELPER_MODEL_IDS = [
   "thread_titles",
+  "mcp_approval_reviews",
   "task_monitors",
   "token_miser_evaluation",
   "token_miser_focused_summaries",
@@ -38,6 +39,12 @@ export const HELPER_MODEL_DEFINITIONS: readonly HelperModelDefinition[] = [
     id: "thread_titles",
     label: "Thread titles",
     defaultReasoningEffort: "low",
+    backends: ["codex"],
+  },
+  {
+    id: "mcp_approval_reviews",
+    label: "MCP approval reviews",
+    defaultReasoningEffort: "medium",
     backends: ["codex"],
   },
   {
