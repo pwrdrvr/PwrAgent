@@ -1,33 +1,44 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import fc from "fast-check";
 import { afterEach, expect, it } from "vitest";
+import { ensureRuntime, inventory, platformPath } from "./electron-runtime-cache.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const roots = [];
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const execAsync = promisify(execFile);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture() {
+function fixture(version = "44.10.1", bytes = randomBytes(1024 * 1024)) {
   const root = mkdtempSync(join(tmpdir(), "pwragent-electron-cache-"));
   roots.push(root);
   const payload = join(root, "payload");
   mkdirSync(join(payload, "Electron.app/Contents/MacOS"), { recursive: true });
-  writeFileSync(join(payload, "Electron.app/Contents/MacOS/Electron"), randomBytes(1024 * 1024), { mode: 0o755 });
-  writeFileSync(join(payload, "version"), "44.10.1");
+  for (const executable of ["Electron.app/Contents/MacOS/Electron", "electron", "electron.exe"]) {
+    writeFileSync(join(payload, executable), bytes, { mode: 0o755 });
+  }
+  writeFileSync(join(payload, "version"), version);
   writeFileSync(join(payload, "electron.d.ts"), "// fixture types\n");
   const zip = join(root, "electron.zip");
-  execFileSync("zip", ["-q", "-r", zip, "."], { cwd: payload });
-  return { root, zip };
+  if (process.platform === "win32") {
+    const quote = (value) => `'${value.replace(/'/g, "''")}'`;
+    execFileSync("powershell.exe", ["-NoProfile", "-Command", `Compress-Archive -Path ${quote(join(payload, "*"))} -DestinationPath ${quote(zip)}`]);
+  } else {
+    execFileSync("zip", ["-q", "-r", zip, "."], { cwd: payload });
+  }
+  return { root, zip, version, bytes };
 }
 
-function installAt({ root, zip }, name) {
+function prepareInstall({ root, zip, version }, name) {
   const target = join(root, name);
   const electron = join(target, "node_modules/electron");
   mkdirSync(join(electron, "node_modules/@electron/get"), { recursive: true });
@@ -38,17 +49,31 @@ function installAt({ root, zip }, name) {
   try { cpSync(helper, join(target, "electron-runtime-cache.mjs")); } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  writeFileSync(join(electron, "package.json"), JSON.stringify({ name: "electron", version: "44.10.1" }));
+  writeFileSync(join(electron, "package.json"), JSON.stringify({ name: "electron", version }));
   writeFileSync(join(electron, "checksums.json"), JSON.stringify({
-    "electron-v44.10.1-darwin-arm64.zip": hash(readFileSync(zip)),
+    [`electron-v${version}-darwin-arm64.zip`]: hash(readFileSync(zip)),
   }));
   writeFileSync(join(electron, "node_modules/@electron/get/index.js"),
-    `exports.downloadArtifact = async () => ${JSON.stringify(zip)};\n`);
-  execFileSync(process.execPath, [join(target, "install.mjs")], {
+    `exports.downloadArtifact = async (options) => {
+      require("fs").appendFileSync(${JSON.stringify(join(root, "requests.jsonl"))}, JSON.stringify(options) + "\\n");
+      return ${JSON.stringify(zip)};
+    };\n`);
+  const options = {
     env: { ...process.env, PWRAGENT_HOME: join(root, "home"), npm_config_platform: "darwin", npm_config_arch: "arm64" },
     stdio: "pipe",
-  });
-  return join(electron, "dist/Electron.app/Contents/MacOS/Electron");
+  };
+  return {
+    electron,
+    binary: join(electron, "dist/Electron.app/Contents/MacOS/Electron"),
+    run: () => execAsync(process.execPath, [join(target, "install.mjs")], options),
+    runSync: () => execFileSync(process.execPath, [join(target, "install.mjs")], options),
+  };
+}
+
+function installAt(setup, name) {
+  const install = prepareInstall(setup, name);
+  install.runSync();
+  return install.binary;
 }
 
 it.skipIf(process.platform !== "darwin")("APFS oracle: repeated extraction shares blocks with independent writable files", () => {
@@ -69,3 +94,122 @@ it.skipIf(process.platform !== "darwin")("APFS oracle: repeated extraction share
   expect(hash(readFileSync(first))).toBe(original);
   expect(metadata()[1].privateBytes).toBeGreaterThan(0);
 }, 30_000);
+
+function optionsFor(setup, electronDir = join(setup.root, "package"), overrides = {}) {
+  mkdirSync(electronDir, { recursive: true });
+  return {
+    electronDir, version: setup.version, platform: "darwin", arch: "arm64",
+    cacheRoot: join(setup.root, "cache"), expectedChecksum: hash(readFileSync(setup.zip)),
+    download: async () => setup.zip, log: () => {}, ...overrides,
+  };
+}
+
+it("property: cache entries partition every target dimension and archive identity", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  await fc.assert(fc.asyncProperty(
+    fc.uniqueArray(fc.tuple(fc.constantFrom("darwin", "mas", "linux", "win32"), fc.constantFrom("arm64", "x64")), {
+      minLength: 2, maxLength: 8, selector: JSON.stringify,
+    }),
+    async (targets) => {
+      const cacheRoot = mkdtempSync(join(setup.root, "partition-"));
+      for (const [platform, arch] of targets) {
+        const opts = optionsFor(setup, join(cacheRoot, `package-${platform}-${arch}`), { cacheRoot, platform, arch });
+        await ensureRuntime(opts);
+        expect(readFileSync(join(opts.electronDir, "dist", platformPath(platform)))).toEqual(setup.bytes);
+      }
+      const manifests = readdirSync(cacheRoot).filter((name) => /^[a-f0-9]{64}$/.test(name))
+        .map((name) => JSON.parse(readFileSync(join(cacheRoot, name, "runtime.json"), "utf8")));
+      expect(manifests.map(({ identity }) => [identity.platform, identity.arch]).sort()).toEqual([...targets].sort());
+    },
+  ), { numRuns: 6 });
+}, 60_000);
+
+it("property: any changed cached payload is rejected and rebuilt from the verified archive", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const mutations = process.platform === "win32" ? ["bytes", "add", "remove"] : ["bytes", "mode", "add", "remove", "link"];
+  await fc.assert(fc.asyncProperty(fc.constantFrom(...mutations), fc.uint8Array({ minLength: 1, maxLength: 1024 }), async (kind, data) => {
+    const cacheRoot = mkdtempSync(join(setup.root, "tamper-"));
+    const a = optionsFor(setup, join(cacheRoot, "a"), { cacheRoot });
+    await ensureRuntime(a);
+    const key = readdirSync(cacheRoot).find((name) => /^[a-f0-9]{64}$/.test(name));
+    const dist = join(cacheRoot, key, "dist");
+    const file = join(dist, "Electron.app/Contents/MacOS/Electron");
+    if (kind === "bytes") writeFileSync(file, data);
+    if (kind === "mode") chmodSync(file, 0o600);
+    if (kind === "add") writeFileSync(join(dist, "unexpected"), data);
+    if (kind === "remove") rmSync(file);
+    if (kind === "link") { rmSync(file); symlinkSync("../../../electron", file); }
+    const corrupted = await inventory(dist);
+    const b = optionsFor(setup, join(cacheRoot, "b"), { cacheRoot });
+    await ensureRuntime(b);
+    expect(await inventory(join(b.electronDir, "dist"))).toEqual(await inventory(join(a.electronDir, "dist")));
+    expect(await inventory(dist)).toEqual(corrupted); // Preserve corrupt cache for diagnosis.
+    expect(lstatSync(join(b.electronDir, "dist/Electron.app/Contents/MacOS/Electron")).isFile()).toBe(true);
+  }), { numRuns: 12 });
+}, 60_000);
+
+it("revalidates target changes, keeps installed runtimes usable offline, and repairs incomplete installs", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const opts = optionsFor(setup);
+  await ensureRuntime(opts);
+  const before = lstatSync(join(opts.electronDir, "dist/electron"));
+  await ensureRuntime({ ...opts, download: () => { throw new Error("offline"); } });
+  expect(lstatSync(join(opts.electronDir, "dist/electron")).ino).toBe(before.ino);
+  let downloads = 0;
+  await ensureRuntime({ ...opts, arch: "x64", download: async () => { downloads++; return setup.zip; } });
+  expect(downloads).toBe(1);
+  writeFileSync(join(opts.electronDir, "dist/electron"), "incomplete");
+  await ensureRuntime({ ...opts, arch: "x64" });
+  expect(readFileSync(join(opts.electronDir, "dist/electron"))).toEqual(setup.bytes);
+  expect(readFileSync(join(opts.electronDir, "electron.d.ts"), "utf8")).toBe("// fixture types\n");
+});
+
+it("separates versions and archive digests, rejecting unverified artifacts without damaging an install", async () => {
+  const first = fixture("44.9.3", randomBytes(8192));
+  const second = fixture("44.10.1", randomBytes(8192));
+  const third = fixture("44.10.1", randomBytes(8192));
+  const opts = optionsFor(first);
+  await ensureRuntime(opts);
+  const before = await inventory(join(opts.electronDir, "dist"));
+  await expect(ensureRuntime({ ...opts, version: second.version, download: async () => second.zip })).rejects.toThrow("checksum mismatch");
+  expect(await inventory(join(opts.electronDir, "dist"))).toEqual(before);
+  await ensureRuntime(optionsFor(second, opts.electronDir, { cacheRoot: opts.cacheRoot }));
+  await ensureRuntime(optionsFor(third, opts.electronDir, { cacheRoot: opts.cacheRoot }));
+  expect(readFileSync(join(opts.electronDir, "dist/version"), "utf8")).toBe(second.version);
+  expect(readFileSync(join(opts.electronDir, "dist/electron"))).toEqual(third.bytes);
+  expect(readdirSync(opts.cacheRoot).filter((name) => /^[a-f0-9]{64}$/.test(name))).toHaveLength(3);
+});
+
+it("uses isolated extraction when the cache is unavailable and releases the lock after errors", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const cacheRoot = join(setup.root, "not-a-directory");
+  writeFileSync(cacheRoot, "user data");
+  const opts = optionsFor(setup, undefined, { cacheRoot });
+  await expect(ensureRuntime({ ...opts, download: () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  expect(existsSync(join(opts.electronDir, ".pwragent-runtime-lock"))).toBe(false);
+  await ensureRuntime(opts);
+  expect(readFileSync(join(opts.electronDir, "dist/electron"))).toEqual(setup.bytes);
+  expect(readFileSync(cacheRoot, "utf8")).toBe("user data");
+});
+
+it("concurrent processes publish one shared cache and serialize writes to the same package", async () => {
+  const setup = fixture();
+  const installs = ["one", "two", "three"].map((name) => prepareInstall(setup, name));
+  const results = await Promise.allSettled([...installs.map((install) => install.run()), installs[0].run(), installs[0].run()]);
+  for (const result of results) expect(result.status, result.reason?.stderr).toBe("fulfilled");
+  for (const install of installs) {
+    expect(readFileSync(install.binary)).toEqual(setup.bytes);
+    expect(existsSync(join(install.electron, ".pwragent-runtime-lock"))).toBe(false);
+  }
+  const requests = readFileSync(join(setup.root, "requests.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  expect(requests).toHaveLength(3);
+  expect(requests.every((request) => request.version === setup.version && request.platform === "darwin" && request.arch === "arm64")).toBe(true);
+  if (process.platform === "darwin") {
+    const probe = join(setup.root, "private-size");
+    execFileSync("clang", [join(here, "fixtures/apfs-private-size.c"), "-o", probe]);
+    const metadata = execFileSync(probe, installs.map((install) => install.binary), { encoding: "utf8" }).trim().split("\n").map(JSON.parse);
+    expect(new Set(metadata.map(({ inode }) => inode)).size).toBe(3);
+    expect(new Set(metadata.map(({ cloneId }) => cloneId)).size).toBe(1);
+    expect(metadata.reduce((sum, { privateBytes }) => sum + privateBytes, 0)).toBe(0);
+  }
+}, 60_000);
