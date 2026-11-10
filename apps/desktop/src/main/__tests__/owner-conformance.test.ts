@@ -329,6 +329,30 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("scheduled held admission refuses another acceptance's stable identity", async () => {
+    const host = await startDesktopOwner();
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 30 }), async suffix => {
+        const id = randomUUID();
+        const queueEntryId = `scheduled-turn:${id}`;
+        const text = `Same independent acceptance ${suffix}`;
+        await host.client.startTurn({ ...identity, queueEntryId, delivery: "new_turn", input: [{ type: "text", text }] });
+        const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+        try {
+          await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
+            manualReleaseRequired: true, displayText: text, turn: { input: [{ type: "text", text }] } }, { id });
+          const response = await host.scheduler!.sendNow({ id });
+          expect(response.action.status).toBe("failed");
+          expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
+          expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+            .toMatchObject([{ queueEntryId, manualReleaseRequired: undefined }]);
+        } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
+      }), { numRuns: 6 });
+    } finally { await host.close(); }
+  });
+
   it("explicit waiting identities name one immutable acceptance across registered caller retries", async () => {
     const host = await startDesktopOwner();
     try {
