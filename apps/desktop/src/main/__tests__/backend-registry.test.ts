@@ -35080,7 +35080,9 @@ command = "pnpm dev"
       if (operation === "replace") {
         queueEntryId = "replace-image";
         await registry.submitHeldTurn({ ...target, queueEntryId, input: [{ type: "text", text: "Initial" }], holdReason: "fixture", messageOrigin });
-        await registry.replaceQueuedAgentMessage({ ...target, queueEntryId, input: [{ type: "text", text: "Replacement" }, original], messageOrigin });
+        const replacement = await registry.replaceQueuedAgentMessage({ ...target, queueEntryId, input: [{ type: "text", text: "Replacement" }, original], messageOrigin });
+        expect(replacement.queueEntryId).not.toBe(queueEntryId);
+        queueEntryId = replacement.queueEntryId!;
       } else {
         await registry.publishLocalEvent({ backend: "codex", notification: {
           method: "turn/started", params: { threadId: target.threadId, turnId: "active", turn: { id: "active" } },
@@ -49629,7 +49631,7 @@ script = "printf setup"
       expect(text).toContain(`Evidence ${index}`);
       expect(text).toContain(`Sender ${index}`);
     }
-    await registry.replaceQueuedAgentMessage({ backend: "codex", threadId: "recipient", queueEntryId,
+    const replacement = await registry.replaceQueuedAgentMessage({ backend: "codex", threadId: "recipient", queueEntryId,
       input: [{ type: "text", text: "Sender 7 consolidated evidence" }],
       messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender-7" } },
     });
@@ -49639,7 +49641,7 @@ script = "printf setup"
     await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] === undefined);
     expect(codexClient.startTurnCallCount).toBe(0);
     const groupedStart = events.find((event) => event.notification.method === "thread/turnQueue/updated"
-      && event.notification.params.queueEntryId === queueEntryId && event.notification.params.status === "started");
+      && event.notification.params.queueEntryId === replacement.queueEntryId && event.notification.params.status === "started");
     expect(groupedStart).toBeDefined();
     const summary = (groupedStart!.notification.params as { incomingWork?: {
       messages: { origin: { sourceThread: { threadId: string; title: string } }; preview: string }[];
@@ -49657,7 +49659,8 @@ script = "printf setup"
     expect(delivered).not.toContain("Evidence 7");
     expect(delivered).toContain("Evidence 19");
     for (let index = 0; index < 20; index += 1) {
-      expect(correspondenceStore.message({ backend: "codex", threadId: `sender-${index}` }, `message-${index}`)?.text).toContain("Receiving thread started work");
+      expect(correspondenceStore.message({ backend: "codex", threadId: `sender-${index}` }, `message-${index}`)?.text)
+        .toContain(index === 7 ? "Cancelled" : "Receiving thread started work");
     }
     await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "distinct-turn", delivery: "new_turn",
       input: [{ type: "text", text: "Start separate work" }],
@@ -50080,6 +50083,58 @@ script = "printf setup"
     }), { numRuns: 8, examples: [[""]] });
   });
 
+  it("replacement correspondence agrees with cancellation during its queued lifecycle publication", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    await fc.assert(fc.asyncProperty(fc.string({ minLength: 1, maxLength: 40 }), fc.boolean(), async (suffix, defer) => {
+      const correspondenceStore = new ThreadCorrespondenceStore();
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] },
+        threads: ["sender", "recipient"].map(id => ({ id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] })),
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+      try {
+        for (const threadId of ["sender", "recipient"]) await registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "turn/started", params: { threadId, turnId: `active:${threadId}`, turn: { id: `active:${threadId}` } },
+        } });
+        const send = async (prompt: string, replaceQueueEntryId?: string) => {
+          const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+            threadId: "sender", turnId: "active:sender", callId: `review:${prompt}`, requestId: `review:${prompt}`,
+            namespace: "pwragent", tool: "send_message_to_thread", arguments: { backend: "codex", threadId: "recipient", prompt,
+              ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}) },
+          } } as AppServerPendingRequestNotification);
+          expect(response).toMatchObject({ success: true });
+          return JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+        };
+        const first = await send("Original accepted evidence");
+        let cancelled = false;
+        registry.onEvent(async event => {
+          if (event.notification.method === "thread/turnQueue/updated" && event.notification.params.status === "queued"
+            && typeof event.notification.params.queueEntryId === "string" && event.notification.params.queueEntryId !== first.queueEntryId) {
+            if (defer) await Promise.resolve();
+            cancelled = registry.cancelQueuedTurn(event.notification.params.queueEntryId);
+          }
+        });
+        const { result: replacement, writes } = await measureSqliteWrites(async () => {
+          const result = await send(`Fresh evidence ${suffix}`, first.queueEntryId);
+          await new Promise<void>(resolve => setImmediate(resolve));
+          return result;
+        });
+        expectSqliteWriteBudget({ budgetFile: "desktop-replacement-review-write-budgets.json", scenario: "local-receipt-publication",
+          note: "Actual local dynamic tool replacement and cancellation; correspondence uses the existing sidecar journal; setup excluded", writes });
+        expect(cancelled).toBe(true);
+        expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] ?? []).toEqual([]);
+        const replay = correspondenceStore.appendToReplay({ backend: "codex", threadId: "sender" }, {
+          entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+        });
+        expect(replay.messages).toHaveLength(2);
+        expect(replay.messages[0]!.text).toContain("Original accepted evidence");
+        expect(replay.messages[1]!.text).toContain(`Fresh evidence ${suffix}`);
+        expect(replay.messages[1]!.text).toContain("Cancelled");
+        expect(replay.messages[1]!.text).not.toContain("Queued");
+        await expect(registry.readQueuedTurn({ backend: "codex", threadId: "recipient", queueEntryId: replacement.queueEntryId })).rejects.toThrow();
+      } finally { await registry.close(); }
+    }), { numRuns: 8, examples: [["!", false], ["!", true]] });
+  });
+
   it("consolidates only the sender's queued message without adding a turn", async () => {
     const correspondenceStore = new ThreadCorrespondenceStore();
     const codexClient = new MockBackendClient({
@@ -50121,31 +50176,36 @@ script = "printf setup"
     await expect(registry.replaceQueuedAgentMessage({ ...target, threadId: "sender", input, messageOrigin: original.messageOrigin })).rejects.toThrow("not found or already started");
     const replacement = await send("Complete consolidated findings", queueEntryId);
     expect(replacement.response).toMatchObject({ success: true });
-    expect(replacement.payload).toMatchObject({ queueStatus: "queued", queueEntryId });
-    const updated = await registry.readQueuedTurn(target);
+    expect(replacement.payload).toMatchObject({ queueStatus: "queued" });
+    const replacementId = replacement.payload.queueEntryId as string;
+    expect(replacementId).not.toBe(queueEntryId);
+    await expect(registry.readQueuedTurn(target)).rejects.toThrow();
+    const updated = await registry.readQueuedTurn({ ...target, queueEntryId: replacementId });
     expect(updated.input).toEqual([{ type: "text", text: "Complete consolidated findings" }]);
-    expect(updated.messageOrigin).toEqual(original.messageOrigin);
+    expect(updated.messageOrigin?.sourceThread).toMatchObject({ ...original.messageOrigin!.sourceThread, messageId: expect.any(String) });
+    expect(updated.messageOrigin?.sourceThread?.messageId).not.toBe(original.messageOrigin?.sourceThread?.messageId);
     await waitForCondition(() => events.some((event) =>
       event.notification.method === "thread/turnQueue/updated"
-      && event.notification.params.inputUpdated === true));
+      && event.notification.params.queueEntryId === replacementId));
     expect(events).toContainEqual(expect.objectContaining({
       backend: "codex",
       notification: {
         method: "thread/turnQueue/updated",
         params: expect.objectContaining({
           threadId: "recipient",
-          queueEntryId,
+          queueEntryId: replacementId,
           status: "queued",
-          inputUpdated: true,
           displayText: "Complete consolidated findings",
         }),
       },
     }));
-    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.map((entry) => entry.queueEntryId)).toEqual([queueEntryId, "operator-next"]);
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.map((entry) => entry.queueEntryId)).toEqual([replacementId, "operator-next"]);
     const replay = correspondenceStore.appendToReplay({ backend: "codex", threadId: "sender" }, {
       entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
     });
-    expect(replay.messages).toHaveLength(1);
+    expect(replay.messages).toHaveLength(2);
+    expect(replay.messages[0]?.text).toContain("Initial evidence");
+    expect(replay.messages[0]?.text).toContain("Cancelled");
     expect(replay.entries[0]?.turn?.id).toBe("active:sender");
     expect(events).toContainEqual(expect.objectContaining({ notification: {
       method: "item/completed",
@@ -50154,9 +50214,9 @@ script = "printf setup"
         item: expect.objectContaining({ id: replay.entries[0]?.id, createdAt: replay.entries[0]?.createdAt }),
       }),
     } }));
-    expect(replay.messages[0]?.text).toContain("Complete consolidated findings");
-    expect(replay.messages[0]?.text).not.toContain("Initial evidence");
-    registry.cancelQueuedTurn(queueEntryId);
+    expect(replay.messages[1]?.text).toContain("Complete consolidated findings");
+    expect(replay.messages[1]?.text).not.toContain("Initial evidence");
+    registry.cancelQueuedTurn(replacementId);
     expect((await send("Too late", queueEntryId)).response).toMatchObject({ success: false });
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]).toHaveLength(1);
   });
@@ -50192,12 +50252,12 @@ script = "printf setup"
       ...replacement.messageOrigin, sourceThread: { ...replacement.messageOrigin.sourceThread, instanceId: "other-instance" },
     } })).rejects.toThrow("Only the sending thread");
     expect((await registry.readQueuedTurn(replacement)).messageOrigin).toEqual(originalOrigin);
-    await registry.replaceQueuedAgentMessage(replacement);
-    const queued = await registry.readQueuedTurn(replacement);
+    const accepted = await registry.replaceQueuedAgentMessage(replacement);
+    expect(accepted.queueEntryId).not.toBe(replacement.queueEntryId);
+    await expect(registry.readQueuedTurn(replacement)).rejects.toThrow();
+    const queued = await registry.readQueuedTurn({ ...replacement, queueEntryId: accepted.queueEntryId! });
     expect(queued.input).toEqual(replacement.input);
-    expect(queued.messageOrigin).toEqual({ ...originalOrigin, sourceThread: {
-      ...originalOrigin.sourceThread, turnId, rootTurnId,
-    } });
+    expect(queued.messageOrigin).toEqual(replacement.messageOrigin);
     expect(codexClient.startTurnCalls).toHaveLength(0);
     await registry.publishLocalEvent({ ...target, notification: {
       method: "turn/completed", params: { threadId: target.threadId, turnId: "busy", turn: { id: "busy", status: "completed", output: [] } },

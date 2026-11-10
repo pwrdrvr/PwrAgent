@@ -402,6 +402,17 @@ content hash, including for editing. The existing viewer Edit flow cancels that
 hash before restoring a viewer-local draft; changed input gets a new acceptance
 identity. Reading never reserves or releases the FIFO and adds no persistence.
 
+Desktop sender replacement also cancels the waiting identity before fresh
+admission through that queue. Serialized controls recheck the live sender and
+position; grouped contributions from other senders, independent holds and pause
+revisions stay intact. An untouched grouped contribution retains its sender's
+replacement handle until that contribution leaves or is replaced; retired queue
+identities still refuse reads and controls. The sender retains its cancelled
+correspondence input and initializes the replacement receipt before recipient
+admission, so early lifecycle outcomes survive the response. A durable new-turn
+receipt remains attached to its cancelled original identity, and cannot replay
+or retarget changed input.
+
 Desktop and Outpost construct the same `DurableTurnRequestService` from
 owner-core for durable turn admission. The profile binding supplies the existing
 FULL/immediate inbox storage port. Authenticated issuer/device namespaces and

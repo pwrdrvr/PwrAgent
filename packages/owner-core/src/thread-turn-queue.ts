@@ -81,6 +81,8 @@ type QueuedAgentMessage = {
   input: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
   receivedAt: number;
+  /** The sender's handle survives peer edits only while this contribution waits. */
+  replacementHandle?: string;
 };
 
 export type ThreadTurnQueueStartResult = {
@@ -474,14 +476,14 @@ export class ThreadTurnQueue {
     if (!this.canStartImmediately({ backend: entry.backend, threadId: entry.threadId })) {
       const queue = this.queueFor(key);
       const holdReason = this.holdReasonFor(key);
-      const queuedEntry = holdReason
+      const queuedEntry = holdReason && !entry.manualReleaseRequired
         ? {
             ...entry,
             manualReleaseRequired: true,
             holdReason,
           }
         : entry;
-      const index = options?.queueIndex ?? queue.length;
+      const index = Math.min(options?.queueIndex ?? queue.length, queue.length);
       queue.splice(index, 0, queuedEntry);
       options?.onAdmission?.();
       const position = index + 1;
@@ -732,13 +734,13 @@ export class ThreadTurnQueue {
     return [...this.queuedEntries.values()].flatMap((queue) => [...queue]);
   }
 
-  cancelEntry(entryId: string, reason?: string): ThreadTurnQueueEntry | undefined {
+  cancelEntry(entryId: string, reason?: string, options?: { retainQueueHold?: boolean }): ThreadTurnQueueEntry | undefined {
     for (const [key, queue] of this.queuedEntries.entries()) {
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
       const [entry] = queue.splice(index, 1);
       if (queue.length === 0) this.queuedEntries.delete(key);
-      this.dropSpentHold(key);
+      if (!options?.retainQueueHold) this.dropSpentHold(key);
       if (entry) {
         void this.emit({ type: "cancelled", entry, reason });
       }
@@ -902,32 +904,50 @@ export class ThreadTurnQueue {
     return undefined;
   }
 
-  replaceQueuedAgentInput(
+  async replaceQueuedAgentInput(
     entryId: string,
     input: AppServerTurnInputItem[],
     sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
     origin?: AppServerThreadMessageOrigin,
-  ): ThreadTurnQueueEntry | undefined {
-    const found = this.findQueuedEntry(entryId);
-    if (!found?.entry.agentMessages) return undefined;
-    let replaced = false;
-    const messages = found.entry.agentMessages.flatMap((message) => {
-      const source = message.origin?.sourceThread;
-      if (!source || source.backend !== sender.backend || source.threadId !== sender.threadId
-        || source.instanceId !== sender.instanceId) return [message];
-      if (replaced) return [];
-      replaced = true;
-      return [{ ...message, input, ...(origin ? { origin } : {}) }];
+  ): Promise<ThreadTurnQueueEntry | undefined> {
+    const found = this.findQueuedEntry(entryId, sender);
+    if (!found) return undefined;
+    return await this.withDispatchSuspended(found.entry, async () => {
+      const current = this.findQueuedEntry(entryId, sender);
+      if (!current || this.closed || (current.entry.agentMessageOrigins && !current.entry.agentMessages)) return undefined;
+      const owns = (source: AppServerThreadMessageOrigin["sourceThread"]) => source
+        && source.backend === sender.backend && source.threadId === sender.threadId
+        && source.instanceId === sender.instanceId;
+      const entry = current.entry;
+      if (entry.messageOrigin?.kind !== "agent") return undefined;
+      const replacementId = `thread-turn:${randomUUID()}`;
+      let replaced = false;
+      const messages = entry.agentMessages?.flatMap((message) => {
+        if (!owns(message.origin?.sourceThread)) return [{ ...message, replacementHandle: message.replacementHandle ?? entry.id }];
+        if (replaced) return [];
+        replaced = true;
+        return [{ ...message, replacementHandle: replacementId, input: structuredClone(input), receivedAt: this.now(), ...(origin ? { origin: structuredClone(origin) } : {}) }];
+      });
+      if (messages ? !replaced : !owns(entry.messageOrigin.sourceThread)) return undefined;
+      const { id: _oldId, createdAt: _oldCreatedAt, title: _staleTitle, ...rest } = entry;
+      const messageOrigin = structuredClone(origin && owns(entry.messageOrigin.sourceThread) ? origin : entry.messageOrigin);
+      const replacement = {
+        ...rest,
+        id: replacementId,
+        input: messages ? groupedAgentInput(messages) : structuredClone(input),
+        messageOrigin: messages ? { ...messageOrigin, kind: "agent" as const,
+          causalMessagingSource: undefined, causalMessagingAmbiguous: undefined,
+          ...mergeCausalMessagingContext(messages.map(message => message.origin)) } : messageOrigin,
+        ...(messages ? { agentMessages: messages,
+          agentMessageOrigins: messages.flatMap(message => message.origin ? [message.origin] : []) } : {}),
+      };
+      // Retire the immutable acceptance before admitting changed input. Keep
+      // the FIFO's independent holds through this synchronous empty boundary.
+      this.cancelEntry(entry.id, "Replaced before dispatch", { retainQueueHold: true });
+      if (this.closed) { this.dropSpentHold(current.key); return undefined; }
+      const result = await this.submit(replacement, { queueIndex: current.position - 1 });
+      return result.entry;
     });
-    if (!replaced) return undefined;
-    // The title named the input being replaced.
-    const { title: _staleTitle, ...rest } = found.entry;
-    const entry = { ...rest, agentMessages: messages, input: groupedAgentInput(messages),
-      messageOrigin: { ...rest.messageOrigin, kind: "agent" as const,
-        causalMessagingSource: undefined, causalMessagingAmbiguous: undefined,
-        ...mergeCausalMessagingContext(messages.map((message) => message.origin)) } };
-    this.queueFor(found.key)[found.position - 1] = entry;
-    return entry;
   }
 
   /** Sets a still-queued entry's display title. Undefined once it has left. */
@@ -1340,13 +1360,17 @@ export class ThreadTurnQueue {
     return nextQueue;
   }
 
-  private findQueuedEntry(entryId: string): {
+  private findQueuedEntry(entryId: string, sender?: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>): {
     entry: ThreadTurnQueueEntry;
     key: string;
     position: number;
   } | undefined {
     for (const [key, queue] of this.queuedEntries) {
-      const index = queue.findIndex((entry) => entry.id === entryId);
+      const index = queue.findIndex((entry) => entry.id === entryId || (sender && entry.agentMessages?.some(message => {
+        const source = message.origin?.sourceThread;
+        return message.replacementHandle === entryId && source?.backend === sender.backend
+          && source.threadId === sender.threadId && source.instanceId === sender.instanceId;
+      })));
       const entry = queue[index];
       if (index >= 0 && entry) {
         return { entry, key, position: index + 1 };

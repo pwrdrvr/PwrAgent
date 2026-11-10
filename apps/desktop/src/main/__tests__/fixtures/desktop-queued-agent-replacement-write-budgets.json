@@ -1,0 +1,16 @@
+{
+  "durable-replacement": {
+    "commits": 1,
+    "note": "Actual registered replacement cancels one original durable new_turn receipt before fresh transient admission; setup/native/receipt admission excluded",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "registered-replacement": {
+    "commits": 0,
+    "note": "100 actual registered replacements, stale retries, immutable reads and final cancellation; native setup/admission excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

@@ -173,9 +173,39 @@ try {
       createdAt: 1, updatedAt: 2, executionMode: "auto", linkedDirectories: [] } }), { mode: 0o600 });
   const packageRoot = path.resolve(path.dirname(realpathSync(cli)), "..");
   const installed = file => import(pathToFileURL(path.join(packageRoot, file)).href);
-  const [{ openOutpostProfileRuntime }, { JobStore }, { HeadlessBackend }, { Runtime }] = await Promise.all([
+  const [{ openOutpostProfileRuntime, ThreadTurnQueue }, { JobStore }, { HeadlessBackend }, { Runtime }] = await Promise.all([
     installed("dist/federation-core.js"), installed("src/store.js"), installed("src/federation-backend.js"), installed("src/runtime.js"),
   ]);
+  // The installed shared implementation also serves desktop's replacement
+  // caller. It must retire accepted input before issuing a fresh identity.
+  const replacementRef = { backend: "codex", threadId: "packed-replacement" };
+  const replacementOrigin = { kind: "agent", sourceThread: { backend: "codex", threadId: "alice" } };
+  const replacementQueue = new ThreadTurnQueue({ isThreadActive: () => true,
+    startTurn: async entry => ({ ...replacementRef, turnId: entry.id }) });
+  try {
+    const old = await replacementQueue.submitGroupedSteer({ ...replacementRef, origin: "manual",
+      input: [{ type: "text", text: "Original Alice" }], messageOrigin: replacementOrigin });
+    await replacementQueue.submitGroupedSteer({ ...replacementRef, origin: "manual", input: [{ type: "text", text: "Unchanged Bob" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
+    await replacementQueue.submit({ ...replacementRef, id: "packed-neighbor", origin: "manual", input: [{ type: "text", text: "neighbor" }] });
+    await replacementQueue.setEntryPaused(old.entry.id, true);
+    const original = structuredClone(replacementQueue.getQueuedEntries(replacementRef)[0]);
+    const next = await replacementQueue.replaceQueuedAgentInput(old.entry.id, [{ type: "text", text: "Fresh Alice" }], replacementOrigin.sourceThread, replacementOrigin);
+    assert.notEqual(next.id, old.entry.id);
+    assert.deepEqual(replacementQueue.getQueuedEntries(replacementRef).map(entry => entry.id), [next.id, "packed-neighbor"]);
+    assert.equal(next.paused, true);
+    assert.equal(next.pauseRevision, 1);
+    assert.deepEqual(next.agentMessages.map(message => message.input[0].text), ["Fresh Alice", "Unchanged Bob"]);
+    assert.ok(JSON.stringify(original.input).includes("Original Alice"));
+    assert.equal(await replacementQueue.replaceQueuedAgentInput(old.entry.id, [], replacementOrigin.sourceThread), undefined);
+    const bob = await replacementQueue.replaceQueuedAgentInput(old.entry.id, [{ type: "text", text: "Fresh Bob" }],
+      { backend: "codex", threadId: "bob" });
+    assert.ok(bob);
+    assert.notEqual(bob.id, next.id);
+    assert.deepEqual(bob.agentMessages.map(message => message.input[0].text), ["Fresh Alice", "Fresh Bob"]);
+    assert.deepEqual(replacementQueue.getQueuedEntries(replacementRef).map(entry => entry.id), [bob.id, "packed-neighbor"]);
+    assert.equal(replacementQueue.cancelEntry(old.entry.id), undefined);
+  } finally { replacementQueue.close(); }
   const profile = openOutpostProfileRuntime({ stateDirectory: state, profileName: "t", cwd: workspace });
   try {
     const store = new JobStore(headless, { version: 1, workspace, codexHome }, profile);
