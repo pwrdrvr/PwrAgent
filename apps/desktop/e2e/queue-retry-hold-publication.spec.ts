@@ -61,5 +61,33 @@ test("Electron preserves newer queue review holds across asynchronous Retry publ
     expect(result.beforeExplicitRetry).toEqual([]);
     expect(result.explicitRetry).toBe("started");
     expect(result.sends).toEqual(["older-0"]);
+    const titled = await app.electronApp.evaluate(async (_electron, modulePath) => {
+      const { ThreadTurnQueue: Queue } = process.getBuiltinModule("node:module").createRequire(modulePath)(modulePath) as { ThreadTurnQueue: typeof ThreadTurnQueue };
+      const identity = { backend: "codex" as const, threadId: "invented-title-owner" };
+      const released: Array<{ id: string; title?: string }> = [];
+      let armed = false;
+      const queue = new Queue({
+        startTurn: async entry => ({ ...identity, turnId: entry.id }),
+        onLifecycle: async event => {
+          if (!armed || event.type !== "queued" || event.entry.manualReleaseRequired) return;
+          released.push({ id: event.entry.id, title: event.entry.title });
+          if (event.entry.id !== "first") return;
+          await new Promise<void>(resolve => setImmediate(resolve));
+          queue.setQueuedEntryTitle("later", "Invented generated title");
+          queue.cancelEntryWithDisposition("cancelled");
+        },
+      });
+      try {
+        for (const id of ["first", "later", "cancelled"]) {
+          await queue.submitHeld({ ...identity, id, origin: "manual", input: [] }, "Review the previous failure");
+        }
+        armed = true;
+        const retry = await queue.releaseEntryWithDisposition("first");
+        return { disposition: retry.disposition, released, waiting: queue.getQueuedEntries(identity).map(entry => entry.id) };
+      } finally { queue.close(); }
+    }, queueModule);
+    expect(titled).toEqual({ disposition: "started", waiting: ["later"], released: [
+      { id: "first", title: undefined }, { id: "later", title: "Invented generated title" },
+    ] });
   } finally { await app.close(); }
 });

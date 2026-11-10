@@ -1358,9 +1358,10 @@ export class ThreadTurnQueue {
       // Retry answered only the old review. Never publish its release over
       // a newer hold, or resurrect an entry cancelled during publication.
       if (this.heldQueues.has(key)) return;
-      const currentIndex = queue[index] === entry ? index : queue.indexOf(entry);
-      if (currentIndex < 0) continue;
-      await this.emit({ type: "queued", entry, position: currentIndex + 1 });
+      const currentIndex = queue[index]?.id === entry.id ? index : queue.findIndex(current => current.id === entry.id);
+      const current = queue[currentIndex];
+      if (!current || current.manualReleaseRequired) continue;
+      await this.emit({ type: "queued", entry: current, position: currentIndex + 1 });
     }
   }
 
