@@ -153,6 +153,8 @@ function createService(fixture: Fixture, overrides: {
   readGatewaySelection?: () => Promise<string[]>;
   resolveInstallPaths?: () => string[];
   resolvePwrGitInstallPaths?: () => string[];
+  isPwrSnapListening?: () => Promise<boolean>;
+  isPwrGitListening?: () => Promise<boolean>;
   fetchFn?: typeof fetch;
   openExternal?: (url: string) => Promise<void>;
 } = {}) {
@@ -166,6 +168,8 @@ function createService(fixture: Fixture, overrides: {
     readGatewaySelection: overrides.readGatewaySelection,
     ...(overrides.resolveInstallPaths ? { resolveInstallPaths: overrides.resolveInstallPaths } : {}),
     ...(overrides.resolvePwrGitInstallPaths ? { resolvePwrGitInstallPaths: overrides.resolvePwrGitInstallPaths } : {}),
+    ...(overrides.isPwrSnapListening ? { isPwrSnapListening: overrides.isPwrSnapListening } : {}),
+    ...(overrides.isPwrGitListening ? { isPwrGitListening: overrides.isPwrGitListening } : {}),
     ...(overrides.fetchFn ? { fetchFn: overrides.fetchFn } : {}),
     ...(overrides.openExternal ? { openExternal: overrides.openExternal } : {}),
     registry,
@@ -503,9 +507,9 @@ describe.skipIf(process.platform === "win32")("local command MCP connections", (
 
 describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle through an unchanged relay", () => {
   it.each([
-    { id: "pwrsnap" as const, name: "PwrSnap", installs: "resolveInstallPaths" as const },
-    { id: "pwrgit" as const, name: "PwrGit", installs: "resolvePwrGitInstallPaths" as const },
-  ])("starts $name's bundled relay per thread, with no OAuth, and never restarts a finished session", async ({ id, name, installs }) => {
+    { id: "pwrsnap" as const, name: "PwrSnap", installs: "resolveInstallPaths" as const, probe: "isPwrSnapListening" as const },
+    { id: "pwrgit" as const, name: "PwrGit", installs: "resolvePwrGitInstallPaths" as const, probe: "isPwrGitListening" as const },
+  ])("starts $name's bundled relay per thread, with no OAuth, and again on a tool call once $name is back", async ({ id, name, installs, probe }) => {
     const fixture = makeFixture();
     // An install whose relay is the fake server: PwrAgent must start exactly
     // the file inside the install, not anything on PATH.
@@ -516,8 +520,11 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     fs.rmSync(fixture.command);
     const fetchFn = vi.fn(async () => { throw new Error(`${name} has no network endpoint.`); });
     const openExternal = vi.fn(async () => undefined);
+    let listening = true;
+    const isListening = vi.fn(async () => listening);
     const { service } = createService(fixture, {
       [installs]: () => [app],
+      [probe]: isListening,
       fetchFn: fetchFn as unknown as typeof fetch,
       openExternal,
     });
@@ -533,11 +540,27 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     expect(alive(first.pid)).toBe(true);
     expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBe(1);
 
-    // A relay that ends (PwrSnap quit or revoked the session) is not
-    // restarted for the thread: a new session needs a fresh approval.
+    // The app quits (an update relaunch, say), and its relay ends with it.
+    listening = false;
+    isListening.mockClear();
     process.kill(first.pid, "SIGTERM");
     await waitFor(() => !alive(first.pid), `the ${name} relay to exit`);
-    await vi.waitFor(async () => await expect(whoami(thread.rpc)).rejects.toThrow("connection ended"));
+    await vi.waitFor(async () => await expect(whoami(thread.rpc)).rejects.toThrow(`${name} is not open`));
+    // A listing never starts a session, because a new one asks the operator
+    // to approve it in the app's own window. It does not even ask.
+    isListening.mockClear();
+    await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} closed`);
+    expect(isListening).not.toHaveBeenCalled();
+    expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBeUndefined();
+
+    // Back with Local Agent Access on: still no session until a tool call.
+    listening = true;
+    await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} closed`);
+    const restarted = await whoami(thread.rpc);
+    expect(restarted.pid).not.toBe(first.pid);
+    expect(restarted.calls).toBe(1);
+    // The new session serves listings again.
+    await expect(thread.rpc.request("tools/list", {})).resolves.toBeDefined();
 
     // The thread letting go stops a live relay too.
     const other = await bridgeFor(service, id, `${id}-other-thread`);
@@ -548,6 +571,25 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     lease.destroy();
     expect(fetchFn).not.toHaveBeenCalled();
     expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("never starts an operator's command again for a thread once it has exited", async () => {
+    const fixture = makeFixture();
+    const { service } = createService(fixture, {
+      // A relay's probe must not stand in for an operator's command.
+      isPwrSnapListening: async () => true,
+      isPwrGitListening: async () => true,
+    });
+    const connection = await service.createConnection({ displayName: "Project files", stdio: launch(fixture) });
+    const thread = await bridgeFor(service, connection.id, "stdio-thread");
+    const lease = await attach(thread.socketPath, thread.token);
+    const first = await whoami(thread.rpc);
+    process.kill(first.pid, "SIGTERM");
+    await waitFor(() => !alive(first.pid), "the command to exit");
+    await vi.waitFor(async () => await expect(whoami(thread.rpc)).rejects.toThrow("connection ended"));
+    await expect(whoami(thread.rpc)).rejects.toThrow("connection ended");
+    expect(pidsOf(fixture, "server")).toEqual([first.pid]);
+    lease.destroy();
   });
 
   it.each([

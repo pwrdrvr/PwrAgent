@@ -320,6 +320,8 @@ export type McpConnectionGatewayServiceOptions = {
   resolveInstallPaths?: () => string[];
   /** Whether PwrSnap's local MCP socket or pipe accepts a connection. */
   isPwrSnapListening?: () => Promise<boolean>;
+  /** Whether PwrGit's local MCP socket or pipe accepts a connection. */
+  isPwrGitListening?: () => Promise<boolean>;
   /** Where PwrGit may be installed; its relay is found inside. */
   resolvePwrGitInstallPaths?: () => string[];
   settings?: GatewaySettings;
@@ -370,6 +372,39 @@ function runsLocalProcess(connection: Pick<McpConnectionRecord, "kind">): boolea
 
 function isPwrSuiteRelayKind(kind: McpConnectionRecord["kind"]): kind is PwrSuiteRelayApp {
   return kind === "pwrsnap" || kind === "pwrgit";
+}
+
+const ENDED_LOCAL_SESSION_ERROR =
+  "The MCP desktop connection ended. Start the desktop yourself, then turn this connection off and on in the thread MCP access panel. Search tools again and reread relevant skills/resources. Previously injected text may remain in the conversation. Never replay a write or reuse its approval.";
+
+/**
+ * What a thread's request may do once its session's process has ended.
+ *
+ * An operator's command that exits is never started again for the thread:
+ * it may exit on every start. A PwrSnap or PwrGit relay ends whenever its
+ * app quits, an update relaunch included, so it starts again once the app
+ * answers on its socket or pipe. Only a thread's own tool call restarts one,
+ * because the new session opens the app's approval window: a listing, a
+ * read, a request an agent client makes on its own, or a delegated Job
+ * Monitor's call with no operator watching must never raise it.
+ */
+export async function endedLocalSessionRestart(input: {
+  kind: McpConnectionRecord["kind"];
+  operation: unknown;
+  delegated: boolean;
+  /** Asked only for a relay's own tool call. */
+  isAppListening: () => Promise<boolean>;
+}): Promise<"restart" | "ended" | "app_closed"> {
+  if (!isPwrSuiteRelayKind(input.kind) || input.delegated) return "ended";
+  if (input.operation !== "tools/call" && input.operation !== "gateway/tools/call") return "ended";
+  return await input.isAppListening() ? "restart" : "app_closed";
+}
+
+function endedRelaySessionError(app: PwrSuiteRelayApp, outcome: "ended" | "app_closed"): string {
+  const name = app === "pwrsnap" ? "PwrSnap" : "PwrGit";
+  return outcome === "app_closed"
+    ? `${name} is not open, or its Local Agent Access is off, so this thread's ${name} session cannot start. Ask the operator to open ${name}, then call the tool again. Never replay a write or reuse its approval.`
+    : `${name} closed, so this thread's ${name} session ended. Call a ${name} tool to start a new session once ${name} is open; ${name} asks the operator to approve it. Search tools again and reread relevant skills/resources. Never replay a write or reuse its approval.`;
 }
 
 
@@ -587,6 +622,7 @@ export class McpConnectionGatewayService {
   private readonly openPath: (path: string) => Promise<string>;
   private readonly resolveInstallPaths: () => string[];
   private readonly isPwrSnapListening: () => Promise<boolean>;
+  private readonly isPwrGitListening: () => Promise<boolean>;
   private readonly resolvePwrGitInstallPaths: () => string[];
   private readonly settings: GatewaySettings;
   private readonly gatewayEnabled: () => boolean;
@@ -740,6 +776,8 @@ export class McpConnectionGatewayService {
       options.resolveInstallPaths ?? (() => defaultPwrSuiteInstallPaths("pwrsnap"));
     this.isPwrSnapListening =
       options.isPwrSnapListening ?? (async () => await isPwrSuiteEndpointListening("pwrsnap"));
+    this.isPwrGitListening =
+      options.isPwrGitListening ?? (async () => await isPwrSuiteEndpointListening("pwrgit"));
     this.resolvePwrGitInstallPaths =
       options.resolvePwrGitInstallPaths ?? (() => defaultPwrSuiteInstallPaths("pwrgit"));
     this.settings = options.settings ?? getDesktopSettingsService();
@@ -2425,6 +2463,14 @@ export class McpConnectionGatewayService {
     return this.resolveInstallPaths().find((candidate) => existsSync(candidate));
   }
 
+  private async isRelayAppListening(app: PwrSuiteRelayApp): Promise<boolean> {
+    try {
+      return await (app === "pwrsnap" ? this.isPwrSnapListening() : this.isPwrGitListening());
+    } catch {
+      return false;
+    }
+  }
+
   /** The relay inside the first install of the app that has one. */
   private findRelay(app: PwrSuiteRelayApp): string | undefined {
     return findPwrSuiteRelay(
@@ -2634,13 +2680,26 @@ export class McpConnectionGatewayService {
     token: string,
     grant: BridgeGrant,
     discovery: McpDiscovery,
+    request: { operation: unknown; delegated: boolean },
   ): Promise<Client> {
     const connection = this.requireAvailableConnection(grant.connectionId);
     discovery.remaining();
     const existing = this.upstreamSessions.get(token);
     if (existing) return existing.client;
     if (this.disconnectedStdioGrants.has(token)) {
-      throw new Error("The MCP desktop connection ended. Start the desktop yourself, then turn this connection off and on in the thread MCP access panel. Search tools again and reread relevant skills/resources. Previously injected text may remain in the conversation. Never replay a write or reuse its approval.");
+      const kind = connection.kind;
+      if (!isPwrSuiteRelayKind(kind)) throw new Error(ENDED_LOCAL_SESSION_ERROR);
+      const outcome = await endedLocalSessionRestart({
+        kind,
+        ...request,
+        isAppListening: async () => await this.isRelayAppListening(kind),
+      });
+      if (outcome !== "restart") throw new Error(endedRelaySessionError(kind, outcome));
+      discovery.remaining();
+      // Another request may have restarted it while this one probed.
+      const restarted = this.upstreamSessions.get(token);
+      if (restarted) return restarted.client;
+      this.disconnectedStdioGrants.delete(token);
     }
     let pending = this.upstreamStarts.get(token);
     if (!pending) {
@@ -2728,7 +2787,12 @@ export class McpConnectionGatewayService {
           this.pwrSnapMediaLinks.forget(token);
           this.evictConnectionToolInventory(connection.id);
           if (runsLocalProcess(connection)) this.disconnectedStdioGrants.add(token);
-          this.sendBridgeEvent(token, { method: "connection/closed" });
+          // The bridge closes its server on this event, and its agent cannot
+          // reconnect it. A relay's next tool call starts a new session once
+          // its app is back, so that bridge stays up to make the call.
+          if (!isPwrSuiteRelayKind(connection.kind)) {
+            this.sendBridgeEvent(token, { method: "connection/closed" });
+          }
         }
       },
     });
@@ -3951,7 +4015,10 @@ export class McpConnectionGatewayService {
         if (delegated && operation !== "gateway/tools/list" && operation !== "gateway/tools/call") {
           throw new Error("Delegated MCP access requires the read-only gateway.");
         }
-        const client = await this.ensureUpstreamClient(token, grant, discovery);
+        const client = await this.ensureUpstreamClient(token, grant, discovery, {
+          operation,
+          delegated: Boolean(delegated),
+        });
         // Every request on the session is counted, so a form is never handed
         // to one caller while another may be the one it is for. Only a tool
         // call from a caller that can show it gets a route. A Job Monitor's
