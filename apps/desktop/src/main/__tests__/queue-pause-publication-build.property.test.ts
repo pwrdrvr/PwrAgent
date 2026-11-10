@@ -29,22 +29,30 @@ function fixture() {
 
 const windowsFile = fc.tuple(fc.constantFrom("C", "D", "Z"), fc.array(fc.nat(999), { minLength: 1, maxLength: 5 }))
   .map(([drive, directories]) => path.win32.join(`${drive}:\\`, ...directories.map(n => `directory${n}`), "queue-pause-publication-driver.ts"));
+const absoluteWindowsFile = fc.oneof(windowsFile, windowsFile.map(file => file.replaceAll("\\", "/")),
+  fc.nat(999).map(n => `\\\\server\\share\\directory${n}\\driver.ts`));
 
 it("never treats generated Windows file entry points as external dependencies", async () => {
-  await fc.assert(fc.asyncProperty(windowsFile, async file => {
+  await fc.assert(fc.asyncProperty(absoluteWindowsFile, async file => {
     expect(path.win32.isAbsolute(file)).toBe(true);
     const host = fixture();
     expect(await host.resolve(file, "entry-point")).toBeUndefined();
     expect(host.dependencies).toEqual([]);
-  }));
+  }), { examples: [["C:\\directory0\\queue-pause-publication-driver.ts"]] });
 });
 
 it("leaves generated absolute Windows source imports with esbuild", async () => {
-  await fc.assert(fc.asyncProperty(windowsFile, fc.constantFrom("import-statement", "require-call", "dynamic-import"), async (file, kind) => {
+  await fc.assert(fc.asyncProperty(absoluteWindowsFile, fc.constantFrom("import-statement", "require-call", "dynamic-import"), async (file, kind) => {
     const host = fixture();
     expect(await host.resolve(file, kind)).toBeUndefined();
     expect(host.dependencies).toEqual([]);
-  }));
+  }), { examples: [["C:\\directory0\\queue-pause-publication-driver.ts", "import-statement"]] });
+});
+
+it("leaves relative entry points with esbuild even when host module lookup succeeds", async () => {
+  const host = fixture();
+  expect(await host.resolve("driver.ts", "entry-point")).toBeUndefined();
+  expect(host.dependencies).toEqual([]);
 });
 
 it("keeps the exact failed Windows driver entry point in the bundle", async () => {

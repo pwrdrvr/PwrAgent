@@ -8,6 +8,7 @@ export function queuePausePublicationPlugin(specDir: string, resolveDependency: 
     builder.onResolve({ filter: /\?raw$/ }, args => ({ path: path.resolve(args.resolveDir, args.path.slice(0, -4)), namespace: "pause-raw" }));
     builder.onLoad({ filter: /.*/, namespace: "pause-raw" }, async args => ({ contents: await readFile(args.path, "utf8"), loader: "text" }));
     builder.onResolve({ filter: /^[^./]/ }, args => {
+      if (args.kind === "entry-point" || path.isAbsolute(args.path) || path.win32.isAbsolute(args.path)) return;
       if (args.path.startsWith("node:") || args.path === "electron"
         || args.path.startsWith("@pwragent/") || args.path.startsWith("@pwrdrvr/codex-app-server-protocol")) return;
       try { return { path: resolveDependency(args.path), external: true }; } catch { return; }
