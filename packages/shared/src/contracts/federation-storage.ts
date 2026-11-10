@@ -56,6 +56,7 @@ export interface FederationStorage {
     pinnedPublicKeyPem?: string;
   }) | undefined;
   listPeers(options?: { includeRevoked?: boolean }): FederationPeerSummary[];
+  setPeerRole(peerId: FederationPeerId, role: import("./federation").FederationPeerRole, updatedAt: number): void;
   revokePeer(peerId: FederationPeerId, revokedAt: number): void;
   createEnrollment(params: {
     token: string;

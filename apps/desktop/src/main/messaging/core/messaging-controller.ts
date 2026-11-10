@@ -1,3 +1,4 @@
+import { containedMessagingBindingMatches } from "@pwragent/shared";
 import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import { finalTurnOutputText } from "@pwragent/shared";
@@ -19002,6 +19003,12 @@ export class MessagingController {
   ): Promise<{ owns: boolean; allowed: boolean; permission?: string }> {
     const source = this.retainedRequestSource(context);
     if (!source || !this.isChannelInScope(source.event.channel)) return { owns: false, allowed: false };
+    if (context.containedPeer) {
+      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
+      if (!source.bindingId || binding?.id !== source.bindingId || !containedMessagingBindingMatches(context, binding)) {
+        return { owns: true, allowed: false, permission: "federation.remote_control" };
+      }
+    }
     if (!this.retainedRequestCanCrossInstance(context, source)) return { owns: true, allowed: false, permission: "federation.remote_control" };
     if (!await this.retainedSourceIsAuthorized(source, false)) return { owns: true, allowed: false, permission: "message.reply" };
     return this.checkDynamicToolPermission(check, source);

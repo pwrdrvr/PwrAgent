@@ -32,6 +32,8 @@ export const FEDERATION_CAPABILITIES = [
   "messaging_files",
   "pwrsnap_connection",
   "gateway_relay",
+  "peer_roles_v1",
+  "contained_messaging_upload_v1",
   "remote_pty",
   "service_forward_v1",
   /** Windowed, owner-pushed service streams; see `FEDERATION_SERVICE_V2_CAPABILITY`. */
@@ -387,7 +389,12 @@ export type FederationTransferStats = {
   lastActivityAt: number;
 };
 
+/** Receiver-owned permission role, independent of the peer's topology role. */
+export type FederationPeerRole = "full" | "contained";
+
 export type FederationPeerSummary = {
+  /** Missing legacy values retain full access; only local operator actions change this. */
+  permissionRole?: FederationPeerRole;
   id: FederationPeerId;
   label: string;
   role: FederationInstanceRole;
@@ -748,6 +755,9 @@ export function isFederationPinDisposition(
 ): value is FederationPinDisposition {
   return value === "forget" || value === "remember";
 }
+
+export type SetFederationPeerRoleRequest = { peerId: FederationPeerId; role: FederationPeerRole };
+export type SetFederationPeerRoleResponse = { peer: FederationPeerSummary };
 
 export type RevokeFederationPeerRequest = {
   peerId: FederationPeerId;

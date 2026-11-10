@@ -248,11 +248,11 @@ export function completeFederationEnrollment(params: {
     usedAt: params.now,
   });
 
-  return {
-    accepted: true,
-    peer,
-    capabilities: peer.capabilities,
-  };
+  const storedPeer = params.store.getPeer(peer.id) ?? peer;
+  const policy = evaluateFederationSessionPolicy({ peer: storedPeer,
+    protocolVersion: params.peer.protocolVersion, requestedCapabilities: peer.capabilities });
+  if (!policy.accepted) return policy;
+  return { accepted: true, peer: storedPeer, capabilities: policy.capabilities };
 }
 
 export function authenticateFederationReconnect(params: {

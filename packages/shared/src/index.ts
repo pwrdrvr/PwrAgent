@@ -1,3 +1,4 @@
+export { containedMessagingBindingMatches } from "./contained-messaging";
 export * from "./contracts/normalized-app-server";
 export * from "./backend-selection";
 export * from "./command-action-labels";

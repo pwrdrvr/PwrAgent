@@ -42,17 +42,8 @@ export function evaluateFederationSessionPolicy(params: {
     };
   }
 
-  // Enrollment is identity trust, not a capability allowlist: federation
-  // pairs instances owned by the same operator, so an enrolled peer is
-  // granted whatever capability set its build advertises. The stored
-  // peer row's capabilities are informational (refreshed on reconnect
-  // for the UI), never an authorization boundary — pinning them at
-  // enrollment time would hard-fail every pairing the moment a newer
-  // build adds a capability to its default set. Per-peer narrowing is a
-  // future RBAC concern, deliberately out of scope. Unknown capability
-  // names from newer builds are filtered at the transport layer before
-  // reaching this policy, so the grant below is always within what THIS
-  // build understands.
+  // Advertisements negotiate protocol support; receiver-owned roles bound
+  // authority. Method decisions additionally constrain contained requests.
   if (params.requestedCapabilities.length === 0) {
     return {
       accepted: false,
@@ -62,6 +53,7 @@ export function evaluateFederationSessionPolicy(params: {
 
   return {
     accepted: true,
-    capabilities: params.requestedCapabilities.slice(),
+    capabilities: params.requestedCapabilities.filter((capability) =>
+      params.peer?.permissionRole !== "contained" || capability !== "gateway_relay"),
   };
 }

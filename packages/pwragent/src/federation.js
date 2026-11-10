@@ -3,6 +3,7 @@ import { readFileSync, lstatSync } from "node:fs";
 import { hostname, arch, platform, release } from "node:os";
 import path from "node:path";
 import {
+  assertFederationEgress, appendFederationRefusalAudit, FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD,
   connectFederationClient, FederationGatewayWebSocketServer, FederationRouter,
   generateFederationIdentityKeyPair, generateFederationNoiseStaticKeyPair,
   noiseKeyPairFromRawPrivate, decodeFederationInvite, encodeFederationInvite,
@@ -13,7 +14,7 @@ import { setupHandoffs, HANDOFF_CAPABILITIES } from "./handoffs.js";
 import { atomicJson } from "./store.js";
 import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
-export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "durable_turn_requests_v1", "durable_steer_requests_v1", "turn_queue_pause", "turn_queue_reorder", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
+export const HEADLESS_CAPABILITIES = ["contained_messaging_upload_v1", "peer_roles_v1", "remote_window", "thread_navigation", "thread_detail", "turn_control", "durable_turn_requests_v1", "durable_steer_requests_v1", "turn_queue_pause", "turn_queue_reorder", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
 
 const RECEIVER_PERMISSIONS = Object.freeze({ remoteShells: true, portForwarding: false, filePush: true, filePull: false, filePullOutsideThreadDirectories: false });
 
@@ -39,6 +40,7 @@ export class HeadlessFederation {
     this.runtime = runtime;
     this.profile = profile;
     this.onFailure = onFailure;
+    this.permissionRole = "contained";
     this.connections = new Map();
     this.endpoints = new Map();
     this.remotePeers = new Map();
@@ -90,7 +92,9 @@ export class HeadlessFederation {
 
   setupRouter() {
     this.router = new FederationRouter({ localInstanceId: this.state.instanceId,
-      trustedRelayPeerId: () => this.state.gateway?.gatewayInstanceId, methodCapabilities: { ...METHOD_CAPABILITIES, ...FEDERATION_PTY_METHOD_CAPABILITIES, ...HANDOFF_CAPABILITIES,
+      peerRole: (id) => this.state.peers[id]?.permissionRole ?? "full",
+      auditRefusal: (event) => appendFederationRefusalAudit(path.dirname(this.file), event),
+      trustedRelayPeerId: () => this.state.gateway?.gatewayInstanceId, methodCapabilities: { [FEDERATION_PEER_ROLE_METHOD]: "peer_roles_v1", ...METHOD_CAPABILITIES, ...FEDERATION_PTY_METHOD_CAPABILITIES, ...HANDOFF_CAPABILITIES,
         "outpost.projects.list": "thread_navigation", "outpost.projects.create": "environment_actions",
         "outpost.projects.add": "environment_actions", "outpost.projects.remove": "environment_actions" },
       additionalRequiredCapabilities: (envelope) => {
@@ -101,6 +105,7 @@ export class HeadlessFederation {
         if (origin?.kind === "messaging" || origin?.causalMessagingSource) required.push("messaging_route");
         return required;
       } });
+    this.router.registerHandler(FEDERATION_PEER_ROLE_METHOD, (envelope) => ({ role: this.state.peers[envelope.sourceInstanceId]?.permissionRole ?? "full" }));
     this.handoffs = setupHandoffs(this, path.dirname(this.file));
     registerFederationPtyHandlers({ router: this.router, service: this.pty });
     for (const [method, command] of [["list", "project-list"], ["create", "project-create"], ["add", "project-add"], ["remove", "project-remove"]]) {
@@ -126,7 +131,7 @@ export class HeadlessFederation {
 
   status() {
     return { enabled: Boolean(this.state), supportedCapabilities: HEADLESS_CAPABILITIES, messagingService: "consumer-only", instanceId: this.state?.instanceId,
-      label: this.state?.label, lifecycle: this.state?.lifecycle, listener: this.listenerAddress,
+      permissionRole: this.permissionRole, label: this.state?.label, lifecycle: this.state?.lifecycle, listener: this.listenerAddress,
       gateway: this.state?.gateway ? { instanceId: this.state.gateway.gatewayInstanceId,
         endpoint: this.state.gateway.endpoint, status: this.client ? "connected" : "unreachable", error: this.connectionError } : undefined,
       peers: [...this.connections.keys()].map((id) => ({ id, status: "connected" })) };
@@ -171,6 +176,7 @@ export class HeadlessFederation {
       getPeer: (id) => this.state.peers[id],
       upsertPeer: ({ peer, clearRevocation }) => {
         const existing = this.state.peers[peer.id];
+        peer = { ...peer, permissionRole: existing?.permissionRole ?? "full" };
         this.state.peers[peer.id] = existing?.revokedAt && !clearRevocation ? { ...peer, status: "revoked", revokedAt: existing.revokedAt } : peer;
         this.save();
       },
@@ -247,6 +253,16 @@ export class HeadlessFederation {
       this.retryDelay = 1000;
       this.register(gateway.gatewayInstanceId, client.capabilities, client);
       client.startReceiving();
+      // Old receivers cannot establish full egress authority. Start contained
+      // on every connection and accept role information only from the pinned gateway.
+      this.permissionRole = "contained";
+      if (client.capabilities.includes("peer_roles_v1")) {
+        const revision = this.roleRevision ?? 0;
+        try {
+          const result = await this.endpoint(gateway.gatewayInstanceId).request({ method: FEDERATION_PEER_ROLE_METHOD, params: {} });
+          if (this.client === client && revision === (this.roleRevision ?? 0)) this.permissionRole = result?.role === "full" ? "full" : "contained";
+        } catch { /* An old or unavailable role service cannot widen egress. */ }
+      }
     } catch (error) {
       if (this.stopping || generation !== this.generation) return;
       this.connectionError = ["revoked_peer", "unknown_peer", "missing_invite"].includes(error.message) ? error.message : "connection_failed";
@@ -265,7 +281,28 @@ export class HeadlessFederation {
     this.retryDelay = Math.min(30000, this.retryDelay * 2);
   }
 
+  guardEgress(envelope) {
+    // Transit traffic belongs to its authenticated original sender. A standalone
+    // listener has no upstream-assigned role; enrollment starts fail-closed.
+    if (!this.state.gateway || envelope.sourceInstanceId !== this.state.instanceId) return;
+    try { assertFederationEgress(this.permissionRole, envelope); }
+    catch (error) {
+      appendFederationRefusalAudit(path.dirname(this.file), { peerId: this.state.instanceId,
+        method: envelope.method || envelope.kind, role: this.permissionRole, createdAt: Date.now() });
+      throw error;
+    }
+  }
+
   register(id, capabilities, connection) {
+    const send = connection.sendEnvelope.bind(connection);
+    connection.sendEnvelope = (envelope) => { this.guardEgress(envelope); return send(envelope); };
+    if (connection.sendEnvelopeWithBackpressure) {
+      const sendWithBackpressure = connection.sendEnvelopeWithBackpressure.bind(connection);
+      connection.sendEnvelopeWithBackpressure = async (envelope) => {
+        this.guardEgress(envelope);
+        return await sendWithBackpressure(envelope);
+      };
+    }
     this.connections.set(id, connection);
     this.pty.notifyPeerConnected(id);
     this.router.registerConnection({ peerId: id, capabilities, sendEnvelope: (envelope) => connection.sendEnvelope(envelope) });
@@ -273,6 +310,7 @@ export class HeadlessFederation {
 
   unregister(id, connection) {
     if (this.connections.get(id) !== connection) return;
+    this.permissionRole = "contained";
     this.connections.delete(id);
     this.router.unregisterConnection(id);
     if (id === this.state.gateway?.gatewayInstanceId) { this.remotePeers.clear(); this.peerDirectory.clear(); }
@@ -342,7 +380,16 @@ export class HeadlessFederation {
         const outbound = await loadFile(capabilities);
         if (!outbound.ok) return { ok: false, error: { code: outbound.code, message: outbound.message } };
         // Transfer the validated snapshot, never reopen its original path.
-        file = await pushFederationFile(endpoint, outbound.data, "messaging-upload.bin");
+        if (this.state.gateway && this.permissionRole === "contained" && !route.capabilities.includes("contained_messaging_upload_v1")) {
+          return { ok: false, error: { code: "unsupported_operation", message: "The messaging owner needs scoped upload support for contained Outposts" } };
+        }
+        const upload = this.state.gateway && this.permissionRole === "contained" ? {
+          request: (part) => endpoint.request({ ...part, method: "messaging.destination.v2", params: {
+            kind: "upload", authorization: { kind: "authorize", context: request.context, check },
+            method: part.method, input: part.params,
+          } }),
+        } : endpoint;
+        file = await pushFederationFile(upload, outbound.data, "messaging-upload.bin");
         request = { ...request, args: { ...request.args, path: "", filename: outbound.filename } };
       }
       return await endpoint.request({ method: "messaging.destination", params: { kind: "request", request, ...(file ? { file } : {}) } });
@@ -352,6 +399,19 @@ export class HeadlessFederation {
   }
 
   receive(envelope, peerId) {
+    if (envelope.kind === "notification" && envelope.method === FEDERATION_PEER_ROLE_CHANGED_METHOD) {
+      if (peerId === this.state.gateway?.gatewayInstanceId && envelope.sourceInstanceId === peerId
+        && envelope.targetInstanceId === this.state.instanceId) {
+        this.roleRevision = (this.roleRevision ?? 0) + 1;
+        this.permissionRole = envelope.params?.role === "full" ? "full" : "contained";
+      }
+      return;
+    }
+    if (envelope.kind !== "request" && this.router.checkPeerRole(envelope, peerId)) {
+      appendFederationRefusalAudit(path.dirname(this.file), { peerId, method: envelope.method || envelope.kind,
+        role: "contained", createdAt: Date.now() });
+      return;
+    }
     if (envelope.kind === "notification" && envelope.method === "federation.peerDirectoryPage") {
       // Only the pinned gateway can replace routing metadata. A sibling's
       // relayed notification must never authorize a handoff destination.

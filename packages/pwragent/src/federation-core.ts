@@ -3,6 +3,9 @@ export * from "@pwragent/federation/federation-identity";
 export * from "@pwragent/federation/federation-noise";
 export * from "@pwragent/federation/federation-enrollment";
 export * from "@pwragent/federation/federation-router";
+export * from "@pwragent/federation/federation-egress";
+export * from "@pwragent/federation/federation-refusal-audit";
+export { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD, CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 export * from "@pwragent/federation/federation-rpc";
 export { FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION } from "@pwragent/shared";
 

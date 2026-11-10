@@ -16,6 +16,7 @@ export const FEDERATION_READ_INSTANCE_LOAD_CHANNEL =
 export const FEDERATION_GET_DIAGNOSTICS_CHANNEL = "federation:get-diagnostics";
 export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
 export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
+export const FEDERATION_SET_PEER_ROLE_CHANNEL = "federation:set-peer-role";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const FEDERATION_HANDOFF_THREAD_CHANNEL = "federation:handoff-thread";
 export const FEDERATION_CANCEL_HANDOFF_THREAD_CHANNEL =

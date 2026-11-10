@@ -32,6 +32,7 @@ export type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationS
 const FEDERATION_AUDIT_REPEAT_COLLAPSE_WINDOW_MS = 10 * 60 * 1000;
 
 type FederationPeerPayload = {
+  permissionRole?: import("@pwragent/shared").FederationPeerRole;
   capabilities?: FederationCapability[];
   protocolVersion?: number;
   endpoint?: string;
@@ -113,6 +114,7 @@ export class FederationStore implements FederationStorage {
       : params.peer.revokedAt ?? existing?.revokedAt;
     const status = revokedAt === undefined ? params.peer.status : "revoked";
     const payload: FederationPeerPayload = {
+      permissionRole: existing?.permissionRole ?? "full",
       capabilities: params.peer.capabilities,
       protocolVersion: params.peer.protocolVersion,
       endpoint: params.peer.endpoint,
@@ -191,6 +193,16 @@ export class FederationStore implements FederationStorage {
           )
           .all() as FederationPeerRow[]);
     return rows.map(rowToPeer);
+  }
+
+  setPeerRole(peerId: FederationPeerId, role: import("@pwragent/shared").FederationPeerRole, updatedAt: number): void {
+    if (role !== "full" && role !== "contained") throw new Error("Invalid federation permission role.");
+    const peer = this.getPeer(peerId);
+    if (!peer || !peer.pinnedPublicKeyPem) throw new Error("Peer is not locally enrolled.");
+    if (peer.permissionRole === role) return;
+    this.stateDb.raw.prepare(
+      `UPDATE federation_peers SET payload = json_set(payload, '$.permissionRole', ?), updated_at = ? WHERE peer_id = ?`,
+    ).run(role, updatedAt, peerId);
   }
 
   revokePeer(peerId: FederationPeerId, revokedAt: number): void {
@@ -497,6 +509,7 @@ function rowToPeer(row: FederationPeerRow): FederationPeerSummary & {
     label: row.label,
     role: normalizeFederationInstanceRole(row.role) ?? "client",
     status: row.status as FederationConnectionState,
+    permissionRole: payload.permissionRole === undefined || payload.permissionRole === "full" ? "full" : "contained",
     capabilities: payload.capabilities ?? [],
     protocolVersion: payload.protocolVersion,
     endpoint: payload.endpoint,

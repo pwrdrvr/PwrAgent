@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   connectFederationClient, decodeFederationInvite, FederationRpcEndpoint,
+  FEDERATION_BACKEND_METHOD_CAPABILITIES,
   generateFederationIdentityKeyPair, generateNoiseStaticKeyPair, pushFederationFile, FederationReplacementReceiver,
 } from "../dist/federation-core.js";
 import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
@@ -457,4 +458,57 @@ test("messaging origins never replace required handoff capabilities", { timeout:
     }
   }
   assert.equal(h.calls().filter((call) => ["thread/fork", "thread/archive", "fs/readFile"].includes(call.method)).length, 0);
+});
+
+
+test("a contained peer advertising every capability is refused and audited by the encrypted gateway", async (t) => {
+  const h = await setup(t);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: 0 })).invite);
+  let v = await viewer(invite);
+  const identity = v.identity;
+  v.connection.close();
+  await h.stop(h.daemon);
+  const file = path.join(h.directory, "federation.json");
+  const state = JSON.parse(readFileSync(file, "utf8"));
+  state.peers[identity.id].permissionRole = "contained";
+  writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
+  await h.start();
+  v = await viewer(invite, identity, "reconnect");
+  t.after(() => v.connection.close());
+  assert.equal(v.connection.capabilities.includes("gateway_relay"), false);
+  assert.deepEqual(await v.rpc.request({ method: "federation.peerRole.v1", params: {} }), { role: "contained" });
+  const relayed = new FederationRpcEndpoint({ localInstanceId: identity.id, remoteInstanceId: "other-peer",
+    sendEnvelope: (envelope) => v.connection.sendEnvelope(envelope), defaultTimeoutMs: 3000 });
+  const receive = v.rpc.receiveEnvelope.bind(v.rpc);
+  v.rpc.receiveEnvelope = (envelope) => relayed.receiveEnvelope(envelope) || receive(envelope);
+  const methods = [...Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES), "file.push.begin", "file.pull", "pty.open", "service.open", "thread.handoff.send", "unmapped.futureMethod"];
+  for (const endpoint of [v.rpc, relayed]) for (const method of methods) {
+    await assert.rejects(endpoint.request({ method, params: { secret: "fixture-payload-must-stay-private" } }), /capability_denied/);
+  }
+  const audit = readFileSync(path.join(h.directory, "federation-refusals.jsonl"), "utf8");
+  assert.equal(audit.includes("fixture-payload-must-stay-private"), false);
+  const entries = audit.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(entries.length, methods.length * 2);
+  assert.ok(entries.every((entry) => entry.peerId === identity.id && entry.role === "contained" && Number.isFinite(entry.createdAt)));
+});
+
+test("the Outpost transport guard blocks direct callers and preserves requested replies", async (t) => {
+  const h = await setup(t);
+  const sent = [];
+  const federation = Object.assign(Object.create(HeadlessFederation.prototype), {
+    state: { instanceId: "outpost", gateway: { gatewayInstanceId: "receiver" }, peers: {} },
+    file: path.join(h.directory, "federation.json"), permissionRole: "contained",
+    connections: new Map(), pty: { notifyPeerConnected() {} }, router: { registerConnection() {} },
+  });
+  const connection = { sendEnvelope: (envelope) => sent.push(envelope), sendEnvelopeWithBackpressure: async (envelope) => sent.push(envelope) };
+  federation.register("receiver", HEADLESS_CAPABILITIES, connection);
+  for (const method of Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES)) {
+    const request = { id: "attempt", kind: "request", method, sourceInstanceId: "outpost", targetInstanceId: "receiver", protocolVersion: 1, createdAt: 1, params: {} };
+    assert.throws(() => connection.sendEnvelope(request), /capability_denied/);
+    await assert.rejects(connection.sendEnvelopeWithBackpressure(request), /capability_denied/);
+  }
+  assert.deepEqual(sent, []);
+  connection.sendEnvelope({ id: "reply", kind: "response", requestId: "viewer-request", sourceInstanceId: "outpost", targetInstanceId: "receiver", protocolVersion: 1, createdAt: 1, result: {} });
+  connection.sendEnvelope({ id: "messaging", kind: "request", method: "messaging.destination", sourceInstanceId: "outpost", targetInstanceId: "receiver", protocolVersion: 1, createdAt: 1, params: {} });
+  assert.equal(sent.length, 2);
 });

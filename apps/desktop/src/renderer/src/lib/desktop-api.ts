@@ -279,6 +279,8 @@ import type {
   SetRemoteThreadLocalPinResponse,
   ResetFederationEnrollmentRequest,
   ResetFederationEnrollmentResponse,
+  SetFederationPeerRoleRequest,
+  SetFederationPeerRoleResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
@@ -958,6 +960,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   importFederationInvite?: (
     request: ImportFederationInviteRequest,
   ) => Promise<ImportFederationInviteResponse>;
+  setFederationPeerRole?: (request: SetFederationPeerRoleRequest) => Promise<SetFederationPeerRoleResponse>;
   revokeFederationPeer?: (
     request: RevokeFederationPeerRequest,
   ) => Promise<RevokeFederationPeerResponse>;
