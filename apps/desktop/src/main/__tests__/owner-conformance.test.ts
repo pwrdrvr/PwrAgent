@@ -85,6 +85,7 @@ type OwnerHost = {
   methods: Set<string>;
   events: AgentEvent[];
   workspace: string;
+  providerSteerCount(): number;
   local?: LocalOwnerNavigationTransport;
   close(): Promise<void>;
 };
@@ -176,6 +177,7 @@ async function startDesktopOwner(
     sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
   return {
     name: "desktop", client: new FederationRemoteBackendClient(rpc), methods, events, workspace,
+    providerSteerCount: () => OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/steer").length,
     local: new LocalOwnerNavigationTransport(backend),
     close: async () => {
       stopEvents();
@@ -202,6 +204,8 @@ async function startOutpostOwner(): Promise<OwnerHost> {
     METHOD_CAPABILITIES: Record<string, FederationCapability>;
   };
   return { name: "outpost", client: outpost.client, methods: new Set(Object.keys(backend.METHOD_CAPABILITIES)),
+    providerSteerCount: () => readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")
+      .trim().split("\n").map(line => JSON.parse(line)).filter(item => item.method === "turn/steer").length,
     events: outpost.events, workspace: outpost.workspace, close: outpost.close };
 }
 
@@ -816,7 +820,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   });
 
-  it("keeps generated steering responses equal and retains desktop acceptance through host effect failures", async () => {
+  it("keeps generated steering responses and duplicate native delivery equal across both actual owners", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
     try {
@@ -835,23 +839,27 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const requests = turns.map((turn) => ({ backend: "codex" as const, threadId: turn.threadId,
           expectedTurnId: turn.turnId, requestId: `steer-${i}`, input: [{ type: "text" as const, text: `Steer ${command.text}` }] }));
         const before = OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/steer").length;
+        const outpostBefore = outpost.providerSteerCount();
         for (let failure = 0; failure < command.failures; failure += 1) {
           retain.mockRejectedValueOnce(new Error("Fixture attachment retention failed"));
           const attempts = await Promise.allSettled(Array.from({ length: command.copies }, () => desktop.client.steerTurn(requests[0])));
           expect(attempts.map((attempt) => attempt.status)).toEqual(Array(command.copies).fill("rejected"));
           expect(OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/steer")).toHaveLength(before + 1);
         }
-        const [desktopResults, outpostResult] = await Promise.all([
+        const [desktopResults, outpostResults] = await Promise.all([
           Promise.all(Array.from({ length: command.copies }, () => desktop.client.steerTurn(requests[0]))),
-          outpost.client.steerTurn(requests[1]),
+          Promise.all(Array.from({ length: command.copies }, () => outpost!.client.steerTurn(requests[1]))),
         ]);
-        for (const [index, results] of [[0, desktopResults], [1, [outpostResult]]] as const) {
+        for (const [index, results] of [[0, desktopResults], [1, outpostResults]] as const) {
           for (const result of results) expect(result).toEqual({ backend: "codex", threadId: turns[index].threadId,
             turnId: turns[index].turnId, disposition: "steered" });
         }
-        await expect(desktop.client.steerTurn({ ...requests[0], input: [{ type: "text", text: "Changed input" }] }))
-          .rejects.toThrow("reused with different input");
+        for (const [index, host] of hosts.entries()) {
+          await expect(host.client.steerTurn({ ...requests[index], input: [{ type: "text", text: "Changed input" }] }))
+            .rejects.toThrow("reused with different input");
+        }
         expect(OwnerConformanceCodexTransport.requests.filter((item) => item.method === "turn/steer")).toHaveLength(before + 1);
+        expect(outpost.providerSteerCount()).toBe(outpostBefore + 1);
       }
       await Promise.all(hosts.map((host, index) => host.client.interruptTurn(turns[index])));
       await Promise.all(hosts.map(settle));

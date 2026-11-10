@@ -126,8 +126,8 @@ try {
       createdAt: 1, updatedAt: 2, executionMode: "auto", linkedDirectories: [] } }), { mode: 0o600 });
   const packageRoot = path.resolve(path.dirname(realpathSync(cli)), "..");
   const installed = file => import(pathToFileURL(path.join(packageRoot, file)).href);
-  const [{ openOutpostProfileRuntime }, { JobStore }, { HeadlessBackend }] = await Promise.all([
-    installed("dist/federation-core.js"), installed("src/store.js"), installed("src/federation-backend.js"),
+  const [{ openOutpostProfileRuntime }, { JobStore }, { HeadlessBackend }, { Runtime }] = await Promise.all([
+    installed("dist/federation-core.js"), installed("src/store.js"), installed("src/federation-backend.js"), installed("src/runtime.js"),
   ]);
   const profile = openOutpostProfileRuntime({ stateDirectory: state, profileName: "t", cwd: workspace });
   try {
@@ -182,8 +182,38 @@ try {
       membership = new HeadlessBackend(runtime, () => {});
       await membership.initialize();
     }
+    // Exercise the actual packaged host wiring with its installed coordinators
+    // and native storage. An accepted steer survives refused origin retention.
+    const controlled = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
+    let steers = 0;
+    let interrupts = 0;
+    const threadId = store.get("smoke").threadId;
+    controlled.codex = {
+      steerTurn: async () => { steers++; return { threadId, turnId: "packed-control" }; },
+      interruptTurn: async () => {
+        interrupts++;
+        controlled.notification({ method: "turn/completed", params: { threadId, turn: { id: "packed-control", status: "interrupted" } } });
+        return {};
+      },
+    };
+    const controller = new HeadlessBackend(controlled, () => {});
+    controlled.onEvent = message => controller.event(message);
+    controller.authenticateOrigin = origin => origin;
+    controlled.save({ version: 1, id: "packed-control", fingerprint: "accepted-control", threadId, turnId: "packed-control", status: "running", createdAt: new Date().toISOString() });
+    controlled.active = "packed-control";
+    const save = store.save.bind(store);
+    let refuseOrigin = true;
+    store.save = job => { if (refuseOrigin && job.messageOrigin) { refuseOrigin = false; throw new Error("origin refused"); } return save(job); };
+    const request = { backend: "codex", threadId, expectedTurnId: "packed-control", requestId: "one-steer", input: [{ type: "text", text: "packed steer" }], messageOrigin: { kind: "agent" } };
+    await assert.rejects(controller.handle("steerTurn", request), /origin refused/);
+    await Promise.all(Array.from({ length: 3 }, () => controller.handle("controlActiveTurn", { ...request, operation: "steer" })));
+    await assert.rejects(controller.handle("steerTurn", { ...request, input: [{ type: "text", text: "changed" }] }), /reused with different input/);
+    await controller.handle("controlActiveTurn", { backend: "codex", threadId, expectedTurnId: "packed-control", requestId: "stop", operation: "stop" });
+    assert.equal(steers, 1);
+    assert.equal(interrupts, 1);
+    assert.equal(store.get("packed-control").status, "interrupted");
   } finally { profile.close(); }
-  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery and native Codex retirement with pending imports/accepted jobs retained");
+  console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, shared steering retention/retry and interruption");
 } finally {
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) {

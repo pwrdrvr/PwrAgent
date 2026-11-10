@@ -16,6 +16,9 @@ export interface ThreadSteeringLifecycleHost {
   complete(params: SteerTurnRequest, result: SteerTurnResponse, origin?: AppServerThreadMessageOrigin): Promise<void>;
 }
 
+export type ThreadSteeringLifecyclePorts = Pick<ThreadSteeringLifecycleHost, "submit">
+  & Partial<Pick<ThreadSteeringLifecycleHost, "complete">>;
+
 type AcceptedSteer = {
   params: SteerTurnRequest;
   origin?: AppServerThreadMessageOrigin;
@@ -52,7 +55,7 @@ function turnKey(params: { backend: AppServerBackendKind; threadId: string; turn
 export class ThreadSteeringLifecycle {
   private readonly turns = new Map<string, Map<string, AcceptedSteer>>();
 
-  constructor(private readonly host: ThreadSteeringLifecycleHost) {}
+  constructor(private readonly host: ThreadSteeringLifecyclePorts) {}
 
   async steerTurn(params: SteerTurnRequest, origin?: AppServerThreadMessageOrigin): Promise<SteerTurnResponse> {
     const key = turnKey({ ...params, turnId: params.expectedTurnId });
@@ -91,7 +94,7 @@ export class ThreadSteeringLifecycle {
         // retry this effect, never the provider. Clear only a completed effect.
         await entry.submission.complete?.();
         entry.submission.complete = undefined;
-        await this.host.complete(entry.params, entry.submission.response, entry.origin);
+        await this.host.complete?.(entry.params, entry.submission.response, entry.origin);
         return entry.submission.response;
       });
       entry.completion = completion;

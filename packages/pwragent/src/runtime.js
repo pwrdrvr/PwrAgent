@@ -5,7 +5,7 @@ import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMes
 import { Codex } from "./codex.js";
 import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
-import { ThreadCreationLifecycle, ThreadTurnStartLifecycle } from "../dist/federation-core.js";
+import { ThreadCreationLifecycle, ThreadInterruptionLifecycle, ThreadTurnStartLifecycle } from "../dist/federation-core.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
@@ -23,6 +23,7 @@ export class Runtime {
     this.toolLedger = new Map();
     this.toolLedgerCount = readdirSync(this.toolLedgerDirectory).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).length;
     this.loadedThreads = new Set();
+    this.pendingSteeringOrigins = new Map();
     this.onFailure = onFailure;
     this.threadCreations = new ThreadCreationLifecycle();
     this.turnStarts = new ThreadTurnStartLifecycle({
@@ -82,16 +83,19 @@ export class Runtime {
         if (!ACTIVE.has(job.status)) return job;
         if (!job.turnId) throw new Error("Turn is still starting; retry interrupt after its turn ID is confirmed");
         if (job.status === "interrupting") return job;
-        this.save({ ...job, status: "interrupting" });
-        try {
-          await this.codex.interruptTurn({ threadId: job.threadId, turnId: job.turnId });
-        } catch (error) {
-          const current = this.store.get(job.id);
-          if (current.status === "interrupting" && current.turnId === job.turnId) {
-            this.save({ ...current, status: job.status });
+        await new ThreadInterruptionLifecycle({ interruptCodex: async (target) => {
+          this.save({ ...job, status: "interrupting" });
+          try {
+            await this.codex.interruptTurn({ threadId: target.threadId, turnId: target.turnId });
+          } catch (error) {
+            const current = this.store.get(job.id);
+            if (current.status === "interrupting" && current.turnId === job.turnId) {
+              this.save({ ...current, status: job.status });
+            }
+            throw error;
           }
-          throw error;
-        }
+          return { threadId: job.threadId, turnId: job.turnId };
+        } }).interruptTurn({ backend: "codex", threadId: job.threadId, turnId: job.turnId });
         return this.store.get(job.id);
       }
       default: throw new Error(`Unknown command: ${method}`);
@@ -191,10 +195,13 @@ export class Runtime {
 
   notification({ method, params }) {
     if (method === "thread/closed") this.loadedThreads.delete(params?.threadId);
-    if (!["turn/completed", "turn/failed"].includes(method) || !this.active) return;
+    if (!["turn/completed", "turn/failed"].includes(method)) return;
     // A process-loss failure is synthesized by the client, not a confirmed
     // provider result. Shutdown preserves this job as unknown.
     if (this.codexFailure) return;
+    const turnId = params?.turn?.id ?? params?.turnId;
+    if (params?.threadId && turnId) this.onTurnTerminal?.({ backend: "codex", threadId: params.threadId, turnId });
+    if (!this.active) return;
     const job = this.store.get(this.active);
     if (params?.threadId !== job.threadId) return;
     if (!job.turnId) this.earlyCompletion = params;
@@ -237,9 +244,24 @@ export class Runtime {
     return result;
   }
 
+  fenceSteeringMessaging(jobId) {
+    const pending = this.pendingSteeringOrigins.get(jobId) || new Set();
+    const token = Symbol();
+    pending.add(token);
+    this.pendingSteeringOrigins.set(jobId, pending);
+    return () => {
+      pending.delete(token);
+      if (!pending.size && this.pendingSteeringOrigins.get(jobId) === pending) this.pendingSteeringOrigins.delete(jobId);
+    };
+  }
+
   async messagingRequest(request) {
     const job = this.active && this.store.get(this.active);
     if (!job || job.threadId !== request.context.threadId || (job.turnId && job.turnId !== request.context.turnId)) return { ok: false, error: { code: "forbidden", message: "Messaging call does not belong to the active outpost turn" } };
+    // Native tools can arrive before a steering RPC resolves. Until every
+    // attributed steer is refused or retained, the durable origin is stale.
+    // Refuse immediately: waiting here could deadlock the provider's RPC.
+    if (this.pendingSteeringOrigins?.get(job.id)?.size) return { ok: false, error: { code: "forbidden", message: "Messaging is unavailable while steering origin acceptance is pending" } };
     const origin = job.messageOrigin;
     const scoped = { ...request, context: { ...request.context, causalMessagingSource: origin?.causalMessagingSource,
       causalMessagingAmbiguous: origin?.causalMessagingAmbiguous } };
@@ -287,6 +309,7 @@ export class Runtime {
   finish(id, status, reason) {
     const confirmed = this.acceptedTurn?.jobId === id ? { threadId: this.acceptedTurn.threadId, turnId: this.acceptedTurn.turnId } : {};
     this.save({ ...this.store.get(id), ...confirmed, status, ...(reason ? { reason: String(reason).slice(0, 4096) } : {}), finishedAt: new Date().toISOString() });
+    this.pendingSteeringOrigins?.delete(id);
     if (this.active === id) this.active = null;
   }
 

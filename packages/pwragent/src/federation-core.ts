@@ -34,6 +34,9 @@ export { ThreadTitleLifecycle } from "@pwragent/owner-core/thread-title-lifecycl
 export { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
 export { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 export { ThreadCreationLifecycle } from "@pwragent/owner-core/thread-creation-lifecycle";
+export { ThreadSteeringLifecycle } from "@pwragent/owner-core/thread-steering-lifecycle";
+export { ThreadSteerSubmissionLifecycle } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
+export { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
 export { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 export { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
