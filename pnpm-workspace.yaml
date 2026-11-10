@@ -183,7 +183,7 @@ overrides:
   "tmp": "0.2.7"
   "undici@6": "6.29.1"
   "undici@7": "7.30.1"
-  "ws": "8.22.0"
+  "ws": "8.22.1"
 
 patchedDependencies:
   # Preserve legacy packaging APIs when adopting minimatch's named exports

@@ -9,7 +9,7 @@
   "dependencies": {
     "@pwragent/messaging-interface": "workspace:*",
     "grammy": "^1.46.0",
-    "marked": "18.1.1"
+    "marked": "18.1.2"
   },
   "devDependencies": {
     "vitest": "^5.0.1"
