@@ -37,7 +37,10 @@ def runtime(root, suffix=""):
     (package / "dist/version").write_text("44.10.1\n")
     (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.github.Electron"}))
     (contents / "MacOS/Electron").write_bytes(os.urandom(8192))
-    return package / "dist"
+    dist = package / "dist"
+    (package / "fixture-artifact.json").write_text(json.dumps({
+        "files": cleanup.content_inventory(dist), "mode": dist.stat().st_mode & 0o777}))
+    return dist
 
 
 def cache(root, path="node_modules/.vitest-cache"):
@@ -69,7 +72,11 @@ class CleanupTests(unittest.TestCase):
         return cleanup.audit(self.project, snapshot, metadata)
 
     def clean(self, report, snapshot_fn=lambda: IDLE, metadata=private):
-        return cleanup.clean(report, snapshot_fn, metadata)
+        def verify(path):
+            pinned = json.loads((path.parent / "fixture-artifact.json").read_text())
+            if cleanup.content_inventory(path) != pinned["files"] or path.stat().st_mode & 0o777 != pinned["mode"]:
+                raise cleanup.Unsafe("Runtime differs from fixture artifact")
+        return cleanup.clean(report, snapshot_fn, metadata, verify_fn=verify)
 
     def test_git_is_the_discovery_oracle(self):
         extra = self.base / "unregistered-project"
@@ -197,6 +204,7 @@ class CleanupTests(unittest.TestCase):
                     "files": cleanup.content_inventory(cache_root / "dist")}))
                 relative = "Electron.app/Contents/MacOS/Electron"
                 original_inode = (dist / relative).stat().st_ino
+                original_directory_inode = dist.stat().st_ino
                 original_bytes = (dist / relative).read_bytes()
                 def published():
                     return dist.exists() and (dist / relative).stat().st_ino != original_inode
@@ -226,12 +234,92 @@ class CleanupTests(unittest.TestCase):
                     self.assertEqual(len(backups), 1)
                     self.assertEqual((backups[0] / relative).stat().st_ino, original_inode)
                     self.assertEqual((backups[0] / relative).read_bytes(), original_bytes)
-                    self.assertTrue(any(item["path"] == str(backups[0]) for item in result["preserved"]))
+                    retained = next(item for item in result["preserved"] if item["path"] == str(backups[0]))
+                    self.assertEqual(retained["inode"], original_directory_inode)
+                    self.assertEqual(retained["witness"]["inode"], original_inode)
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS runtime preparation")
     def test_cache_root_follows_configured_home_or_explicit_override(self):
         subprocess.run(["node", "--test", str(SKILL / "tests/prepare-runtime-cache-root.test.mjs")],
             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_clean_preserves_runtime_changes_against_verified_artifact(self):
+        for mutation in ("bytes", "mode", "link", "root-mode", "none"):
+            with self.subTest(mutation=mutation):
+                dist = runtime(self.linked, "-clean-" + mutation)
+                cache_root = self.base / ("cache-clean-" + mutation)
+                shutil.copytree(dist, cache_root / "dist", symlinks=True)
+                identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+                (cache_root / "runtime.json").write_text(json.dumps({"identity": identity,
+                    "files": cleanup.content_inventory(cache_root / "dist")}))
+                binary = dist / "Electron.app/Contents/MacOS/Electron"
+                if mutation == "bytes":
+                    binary.write_bytes(b"operator's modified runtime")
+                elif mutation == "mode":
+                    binary.chmod(0o700)
+                elif mutation == "link":
+                    (dist / "Electron.app/Contents/custom-link").symlink_to("MacOS/Electron")
+                elif mutation == "root-mode":
+                    dist.chmod((dist.stat().st_mode & 0o777) ^ 0o010)
+                inode, contents = binary.stat().st_ino, binary.read_bytes()
+                report = self.audit()
+                report["candidates"] = [item for item in report["candidates"] if item["path"] == str(dist)]
+                # Exercise the actual verification logic with a controlled
+                # checksum-verified-artifact boundary; no downloads are needed.
+                with mock.patch.object(cleanup, "prepare_runtime", return_value={"cache": str(cache_root), "identity": identity}), \
+                        mock.patch.object(cleanup, "runtime_arch", return_value="arm64"):
+                    result = cleanup.clean(report, snapshot_fn=lambda: IDLE, metadata=private)
+                if mutation == "none":
+                    self.assertFalse(dist.exists())
+                    self.assertEqual([item["path"] for item in result["removed"]], [str(dist)])
+                else:
+                    self.assertTrue(dist.exists())
+                    self.assertEqual(result["removed"], [])
+                    self.assertEqual(binary.stat().st_ino, inode)
+                    self.assertEqual(binary.read_bytes(), contents)
+
+    def test_clean_preserves_runtime_if_verification_fails_or_activity_starts(self):
+        for outcome in ("preparation_failure", "new_activity"):
+            with self.subTest(outcome=outcome):
+                dist = runtime(self.linked, "-" + outcome)
+                cache_root = self.base / ("cache-" + outcome)
+                shutil.copytree(dist, cache_root / "dist", symlinks=True)
+                identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+                (cache_root / "runtime.json").write_text(json.dumps({"identity": identity,
+                    "files": cleanup.content_inventory(cache_root / "dist")}))
+                active = False
+                def prepare(_package, _arch):
+                    nonlocal active
+                    if outcome == "preparation_failure":
+                        raise subprocess.CalledProcessError(1, "fixture-prepare")
+                    active = True
+                    return {"cache": str(cache_root), "identity": identity}
+                def snapshot():
+                    return ([(123, str(self.linked))], []) if active else IDLE
+                report = self.audit()
+                report["candidates"] = [item for item in report["candidates"] if item["path"] == str(dist)]
+                with mock.patch.object(cleanup, "prepare_runtime", side_effect=prepare), \
+                        mock.patch.object(cleanup, "runtime_arch", return_value="arm64"):
+                    result = cleanup.clean(report, snapshot_fn=snapshot, metadata=private)
+                self.assertEqual(result["removed"], [])
+                self.assertTrue(dist.exists())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS APFS sharing oracle")
+    def test_sharing_preserves_modified_runtime_root_mode(self):
+        dist = runtime(self.linked)
+        cache_root = self.base / "cache-root-mode"
+        shutil.copytree(dist, cache_root / "dist", symlinks=True)
+        identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+        (cache_root / "runtime.json").write_text(json.dumps({"identity": identity,
+            "files": cleanup.content_inventory(cache_root / "dist")}))
+        changed_mode = (dist.stat().st_mode & 0o777) ^ 0o010
+        dist.chmod(changed_mode)
+        report = cleanup.audit(self.project, IDLE, for_sharing=True)
+        result = cleanup.share(report, snapshot_fn=lambda: IDLE,
+            prepare_fn=lambda _package, _arch: {"cache": str(cache_root), "identity": identity},
+            arch_fn=lambda _path: "arm64")
+        self.assertEqual(result["shared"], [])
+        self.assertEqual(dist.stat().st_mode & 0o777, changed_mode)
 
     def test_sharing_rejects_content_that_differs_from_pinned_artifact(self):
         dist = runtime(self.linked)

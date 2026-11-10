@@ -308,7 +308,7 @@ def installer_lock(package):
             shutil.rmtree(candidate)
 
 
-def clean(report, snapshot_fn=process_snapshot, metadata=apfs_metadata):
+def clean(report, snapshot_fn=process_snapshot, metadata=apfs_metadata, verify_fn=None):
     if report.get("format") != FORMAT or not shutil.rmtree.avoids_symlink_attacks:
         raise Unsafe("Unsupported plan format or unsafe recursive deletion implementation")
     project = Path(report["project"]).resolve(strict=True)
@@ -335,6 +335,11 @@ def clean(report, snapshot_fn=process_snapshot, metadata=apfs_metadata):
                 safe_directory(root, path)
                 if tree_state(path, metadata)["fingerprint"] != current["fingerprint"]:
                     raise Unsafe("Candidate changed before cleanup")
+                if current["kind"] == "electron":
+                    (verify_fn or verify_installed_runtime)(path)
+                    # Preparation can take time; recheck immediately before moving.
+                    if active_pids(root, snapshot_fn()) or tree_state(path, metadata)["fingerprint"] != current["fingerprint"]:
+                        raise Unsafe("Runtime changed or worktree became active during verification")
                 path.rename(quarantine)
                 moved = True
                 if active_pids(root, snapshot_fn()) or tree_state(quarantine, metadata)["fingerprint"] != current["fingerprint"]:
@@ -342,7 +347,7 @@ def clean(report, snapshot_fn=process_snapshot, metadata=apfs_metadata):
                 shutil.rmtree(quarantine)
                 moved = False
                 result["removed"].append(current)
-        except (OSError, ValueError, Unsafe) as error:
+        except (OSError, ValueError, Unsafe, subprocess.SubprocessError) as error:
             if moved and not path.exists() and not path.is_symlink():
                 try:
                     quarantine.rename(path)
@@ -393,6 +398,32 @@ def runtime_arch(path):
     return {"arm64": "arm64", "x86_64": "x64"}[value]
 
 
+def verified_source(path, cache, version, arch):
+    identity = cache["identity"]
+    if identity.get("version") != version or identity.get("platform") != "darwin" or identity.get("arch") != arch:
+        raise Unsafe("Prepared cache target mismatch")
+    source = Path(cache["cache"]) / "dist"
+    manifest = json.loads((source.parent / "runtime.json").read_text())
+    tree_state(source)  # Reject escaping symlinks and special files before reading content.
+    files = content_inventory(source)
+    if manifest["identity"] != identity or files != manifest["files"]:
+        raise Unsafe("Cache content changed after checksum verification")
+    if stat.S_IMODE(path.lstat().st_mode) != stat.S_IMODE(source.lstat().st_mode):
+        raise Unsafe("Runtime root mode differs from verified artifact")
+    old_files = content_inventory(path)
+    # Legacy Electron installers move the declaration out of dist.
+    wanted = files if (path / "electron.d.ts").exists() else [f for f in files if f["path"] != "electron.d.ts"]
+    if old_files != wanted:
+        raise Unsafe("Existing runtime differs from verified artifact; preserve possible custom data")
+    return source, old_files
+
+
+def verify_installed_runtime(path):
+    arch = runtime_arch(path)
+    cache = prepare_runtime(path.parent, arch)
+    verified_source(path, cache, runtime_identity(path)["version"], arch)
+
+
 def clone_oracle(source, destination):
     """Prove independent inodes, equal clone IDs and zero private allocation."""
     for directory, _, files in os.walk(destination):
@@ -435,20 +466,7 @@ def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch
                 if key not in prepared:
                     prepared[key] = prepare_fn(path.parent, arch)
                 cache = prepared[key]
-                identity = cache["identity"]
-                if identity.get("version") != key[0] or identity.get("platform") != "darwin" or identity.get("arch") != arch:
-                    raise Unsafe("Prepared cache target mismatch")
-                source = Path(cache["cache"]) / "dist"
-                manifest = json.loads((source.parent / "runtime.json").read_text())
-                tree_state(source)  # Reject escaping symlinks and special files before reading content.
-                files = content_inventory(source)
-                if manifest["identity"] != identity or files != manifest["files"]:
-                    raise Unsafe("Cache content changed after checksum verification")
-                old_files = content_inventory(path)
-                # Legacy Electron installers move the declaration out of dist.
-                wanted = files if (path / "electron.d.ts").exists() else [f for f in files if f["path"] != "electron.d.ts"]
-                if old_files != wanted:
-                    raise Unsafe("Existing runtime differs from verified artifact; preserve possible custom data")
+                source, old_files = verified_source(path, cache, key[0], arch)
                 safe_directory(root, path)
                 if tree_state(path)["fingerprint"] != current["fingerprint"] or active_pids(path, snapshot_fn()):
                     raise Unsafe("Runtime changed or became active")
@@ -462,6 +480,7 @@ def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch
                 clone_oracle(source, new)
                 if tree_state(path)["fingerprint"] != current["fingerprint"] or active_pids(path, snapshot_fn()):
                     raise Unsafe("Runtime changed before publication")
+                original_inode = path.lstat().st_ino
                 path.rename(backup)
                 moved = True
                 if active_pids(path, snapshot_fn()) or active_pids(backup, snapshot_fn()):
@@ -475,13 +494,14 @@ def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch
                 # that backup rather than removing a runtime beneath it.
                 snapshot = snapshot_fn()
                 if active_pids(path, snapshot) or active_pids(backup, snapshot):
-                    result["preserved"].append({"path": str(backup), "reason": "New runtime activity; backup retained"})
+                    result["preserved"].append({"path": str(backup), "inode": original_inode, "witness": current["witness"],
+                        "reason": "New runtime activity; backup retained"})
                     stage = None
                 else:
                     backup_removal_safe = True
         except (OSError, ValueError, Unsafe, subprocess.SubprocessError) as error:
             if published and not backup_removal_safe:
-                result["preserved"].append({"path": str(backup),
+                result["preserved"].append({"path": str(backup), "inode": original_inode, "witness": current["witness"],
                     "reason": f"{error}; original backup retained because final safety checks did not succeed"})
                 continue
             if moved and not published:
