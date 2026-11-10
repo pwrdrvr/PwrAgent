@@ -102,7 +102,8 @@ export function describeMcpConnectionAuth(
     const app = connection.kind === "pwrsnap" ? "PwrSnap" : "PwrGit";
     return connection.configured
       ? {
-          label: `Approved in ${app}`,
+          // Nothing is approved ahead of time; each session asks again.
+          label: `Approves in ${app}`,
           description: `PwrAgent starts ${app}'s local relay for each thread. ${app} asks you to approve each session.`,
           tone: "ok",
           canSignIn: false,

@@ -206,9 +206,9 @@ describe("PluginsSettings", () => {
   it.each([
     ["not_installed", false, true, ["Not installed"]],
     ["installed", false, true, ["Update needed"]],
-    ["installed", true, true, ["Not running", "Approved in PwrGit"]],
+    ["installed", true, true, ["Not running", "Approves in PwrGit"]],
     ["running", false, true, ["Update needed"]],
-    ["running", true, true, ["Approved in PwrGit"]],
+    ["running", true, true, ["Approves in PwrGit"]],
   ] as const)(
     "resolves one state line for %s (configured=%s, gateway=%s)",
     async (availability, configured, gatewayEnabled, chips) => {

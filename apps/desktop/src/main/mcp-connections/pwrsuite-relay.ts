@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { connect } from "node:net";
 import { homedir } from "node:os";
@@ -70,10 +70,20 @@ export function pwrSuiteRelayPath(
 /** The relay inside the first installation that has one. */
 export function findPwrSuiteRelay(app: PwrSuiteRelayApp, installPaths: readonly string[]): string | undefined {
   for (const installedPath of installPaths) {
-    const relay = pwrSuiteRelayPath(app, installedPath);
+    // `/usr/bin/pwrsnap` is a link into the install directory that holds
+    // `resources/`, so resolve it before looking beside it.
+    const relay = pwrSuiteRelayPath(app, resolveInstallPath(installedPath));
     if (relay && existsSync(relay)) return relay;
   }
   return undefined;
+}
+
+function resolveInstallPath(installedPath: string): string {
+  try {
+    return realpathSync(installedPath);
+  } catch {
+    return installedPath;
+  }
 }
 
 /** The socket the relay connects to on macOS and Linux. */

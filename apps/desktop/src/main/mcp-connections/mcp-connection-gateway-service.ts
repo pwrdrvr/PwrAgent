@@ -767,10 +767,8 @@ export class McpConnectionGatewayService {
         "broker/pwrsnap-status",
       );
     }
-    const [relay, listening] = await Promise.all([
-      Promise.resolve(this.findRelay("pwrsnap")),
-      this.isPwrSnapListening(),
-    ]);
+    const relay = this.findRelay("pwrsnap");
+    const listening = await this.isPwrSnapListening();
     const installed = listening || Boolean(this.findInstalledPath());
     // The relay ships with PwrSnap 1.3.0 and later. An older PwrSnap only
     // serves the loopback OAuth listener this build no longer uses.

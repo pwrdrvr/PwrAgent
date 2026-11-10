@@ -33,16 +33,7 @@ export function PwrGitConnectionPrompt(props: {
         + "being told where anything lives.",
     },
     readStatus: desktopApi?.readPwrGitConnectionStatus,
-    connect: desktopApi?.connectPwrGit
-      ? async () => {
-          const response = await desktopApi.connectPwrGit!();
-          // `status.detail` already says what to do when Connect could not
-          // finish; repeating it would say the same sentence twice.
-          return { status: response.status };
-        }
-      : undefined,
     openApp: desktopApi?.openPwrGit,
-    waitingLine: "Connecting to PwrGit…",
     // PwrGit has no federation surface yet, so a remote tile only appears
     // once the owner reports the connection configured.
     remoteNeedsRunning: false,
