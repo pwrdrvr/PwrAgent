@@ -145,15 +145,15 @@ function describeSeries(key: string, reading: UsageLimitReading, points: LimitPo
     const elapsed = before.resetAt !== undefined && before.resetAt <= after.at;
     // A window that elapsed and filled back up past its old level still reset.
     if (!dropped && !(elapsed && after.resetAt !== undefined && after.resetAt > before.resetAt!)) continue;
-    // An early reset that moved the schedule says when the new window began.
-    // Without that, a gap in readings (an idle instance, or one that took no
-    // turns since) would restart the window at the next reading it saw.
+    // A moved schedule says when the new window began, even if the old
+    // deadline has now passed. That obsolete deadline can fall inside the
+    // current window; treating it as the reset would charge all current usage
+    // to the time since that deadline instead of the whole current window.
     const began = after.resetAt !== undefined && after.resetAt !== before.resetAt && reading.windowMinutes
       ? after.resetAt - reading.windowMinutes * 60_000 : undefined;
-    resets.push(elapsed
-      ? { at: before.resetAt!, kind: "scheduled", after: before.at, before: after.at }
-      : { at: began !== undefined && began > before.at && began <= after.at ? began : after.at,
-        kind: "unscheduled", after: before.at, before: after.at });
+    const at = began !== undefined && began > before.at && began <= after.at ? began
+      : elapsed ? before.resetAt! : after.at;
+    resets.push({ at, kind: at === before.resetAt ? "scheduled" : "unscheduled", after: before.at, before: after.at });
   }
   const latest = points.at(-1)!;
   const lastReset = resets.at(-1);

@@ -42,6 +42,17 @@ describe("usage limit history", () => {
     expect(series.pacePerHour).toBeCloseTo(22 / 6);
   });
 
+  it("does not charge a whole week's usage to the half hour since an obsolete deadline", () => {
+    const before = weekly(t0 - 28 * HOUR, 47, t0 + 41 * HOUR);
+    const after = weekly(t0 + 41.5 * HOUR, 53);
+    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const series = sinceResetSeries(account)!;
+    expect(series.windowStart).toBe(t0);
+    expect(series.resets).toEqual([{ at: t0, kind: "unscheduled", after: before.observedAt, before: after.observedAt }]);
+    expect(series.pacePerHour).toBeCloseTo(53 / 41.5);
+    expect(projectLimit(series)).toEqual({ kind: "full", at: after.observedAt + 47 / (53 / 41.5) * HOUR });
+  });
+
   it("restarts where an early reset was first seen when its new schedule began before the previous reading", () => {
     // The new schedule claims a start three hours ago, but a reading an hour
     // ago was still in the old window, so the reset came after that reading.
