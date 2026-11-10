@@ -24,6 +24,22 @@ it("uses the shared bootstrap for Windows setup and every Windows action", () =>
   }
 });
 
+it("keeps POSIX and Windows Codex setup on the Electron cache lifecycle path", () => {
+  const posix = environment.match(/\[setup\]\s*script = '''([\s\S]*?)'''/)[1];
+  const windows = environment.match(/\[setup\.win32\]\s*script = '''([\s\S]*?)'''/)[1];
+  // Setup must run ordinary lifecycle-enabled installs on every host. Calling
+  // install-electron or unzipping separately bypasses the extraction cache.
+  expect(posix.split("\n").filter((line) => line.includes("pnpm"))).toEqual(["pnpm install"]);
+  expect(windows.split("\n").filter((line) => line.startsWith("& $pnpmCommand"))).toEqual(["& $pnpmCommand install"]);
+  for (const script of [posix, windows]) {
+    expect(script).not.toMatch(/ignore.scripts|install-electron|unzip|Expand-Archive|PWRAGENT_HOME\s*=/i);
+  }
+  const workspace = readFileSync(path.join(root, "pnpm-workspace.yaml"), "utf8");
+  expect(workspace).toMatch(/^ignoreScripts: false$/m);
+  const desktop = JSON.parse(readFileSync(path.join(root, "apps/desktop/package.json"), "utf8"));
+  expect(desktop.scripts.postinstall.split(" && ")[0]).toBe("node scripts/ensure-electron-runtime.mjs");
+});
+
 describe.skipIf(process.platform !== "win32")("Windows environment bootstrap", () => {
   function fixture({ existingVersion, npmFailure, nvmFailure, nativePnpm = false, nodeVersion = process.versions.node, missingExecutable = false } = {}) {
     const started = performance.now();

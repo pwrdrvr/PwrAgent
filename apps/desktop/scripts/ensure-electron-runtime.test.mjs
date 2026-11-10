@@ -39,7 +39,7 @@ function fixture(version = "44.10.1", bytes = randomBytes(1024 * 1024)) {
   return { root, zip, version, bytes };
 }
 
-function prepareInstall({ root, zip, version }, name) {
+function prepareInstall({ root, zip, version }, name, { platform = "darwin", arch = "arm64" } = {}) {
   const target = join(root, name);
   const electron = join(target, "node_modules/electron");
   mkdirSync(join(electron, "node_modules/@electron/get"), { recursive: true });
@@ -52,7 +52,7 @@ function prepareInstall({ root, zip, version }, name) {
   }
   writeFileSync(join(electron, "package.json"), JSON.stringify({ name: "electron", version }));
   writeFileSync(join(electron, "checksums.json"), JSON.stringify({
-    [`electron-v${version}-darwin-arm64.zip`]: hash(readFileSync(zip)),
+    [`electron-v${version}-${platform}-${arch}.zip`]: hash(readFileSync(zip)),
   }));
   writeFileSync(join(electron, "node_modules/@electron/get/index.js"),
     `exports.downloadArtifact = async (options) => {
@@ -60,12 +60,12 @@ function prepareInstall({ root, zip, version }, name) {
       return ${JSON.stringify(zip)};
     };\n`);
   const options = {
-    env: { ...process.env, PWRAGENT_HOME: join(root, "home"), npm_config_platform: "darwin", npm_config_arch: "arm64" },
+    env: { ...process.env, PWRAGENT_HOME: join(root, "home"), npm_config_platform: platform, npm_config_arch: arch },
     stdio: "pipe",
   };
   return {
     electron,
-    binary: join(electron, "dist/Electron.app/Contents/MacOS/Electron"),
+    binary: join(electron, "dist", platformPath(platform)),
     run: () => execAsync(process.execPath, [join(target, "install.mjs")], options),
     runSync: () => execFileSync(process.execPath, [join(target, "install.mjs")], options),
   };
@@ -76,6 +76,23 @@ function installAt(setup, name) {
   install.runSync();
   return install.binary;
 }
+
+it("runs the production entry point for the native host and reuses the same cache across project layouts", async () => {
+  const setup = fixture("44.10.1", randomBytes(8192));
+  const host = { platform: process.platform, arch: process.arch };
+  const installs = ["pwragent/apps/desktop", "pwrgit/app", "pwrsnap/desktop"].map((name) => prepareInstall(setup, name, host));
+  const results = await Promise.allSettled(installs.map((install) => install.run()));
+  for (const result of results) expect(result.status, result.reason?.stderr).toBe("fulfilled");
+  for (const install of installs) expect(readFileSync(install.binary)).toEqual(setup.bytes);
+  const cache = join(setup.root, "home/cache/electron-runtime/v1");
+  const keys = readdirSync(cache).filter((name) => /^[a-f0-9]{64}$/.test(name));
+  expect(keys).toHaveLength(1);
+  const { identity } = JSON.parse(readFileSync(join(cache, keys[0], "runtime.json"), "utf8"));
+  expect(identity).toMatchObject({ version: setup.version, ...host });
+  const requests = readFileSync(join(setup.root, "requests.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  expect(requests).toHaveLength(3);
+  for (const request of requests) expect(request).toMatchObject({ version: setup.version, ...host });
+}, 60_000);
 
 it.skipIf(process.platform !== "darwin")("APFS oracle: repeated extraction shares blocks with independent writable files", () => {
   const setup = fixture();

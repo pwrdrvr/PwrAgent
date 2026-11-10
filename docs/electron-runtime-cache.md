@@ -7,6 +7,18 @@ It reuses verified extracted artifacts under
 `~/.pwragent/cache/electron-runtime/v1`). It never shares a mutable
 `node_modules` directory or links workspace packages to another checkout.
 
+PwrGit and PwrSnap can consume the same cache by retaining this exact default
+directory, format and identity fields; the product name is not part of the key.
+Application state directories remain independent. An explicit `PWRAGENT_HOME`
+override also isolates the cache, which disposable tests rely on.
+
+Both `.codex/environments/environment.toml` setup variants reach this installer
+through ordinary `pnpm install` and the desktop postinstall hook. The default
+POSIX setup serves macOS and Linux; Windows uses its PowerShell bootstrap and
+`& $pnpmCommand install`. Neither setup performs a separate Electron download or
+disables lifecycle scripts. Regression tests protect that chain, and a native
+entry-point test exercises three different project layouts against one cache.
+
 ## Why pnpm did not share these files
 
 The 2026-11-10 read-only audit supplied for this investigation found 92 Electron
