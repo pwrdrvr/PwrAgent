@@ -1,5 +1,4 @@
 import { sandboxerStub } from "./helpers/sandboxer-stub";
-import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,17 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PwrGitConnectionService } from "../mcp-connections/pwrgit-connection-service";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
+import { pwrSuiteInstall, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 
-const ENDPOINT = "http://127.0.0.1:51731/mcp";
-// PwrGit's desktop HTTP surface has no /health, /pair/* or bundled stdio helper.
-const METADATA = {
-  resource: ENDPOINT,
-  resource_name: "PwrGit",
-  authorization_servers: ["http://127.0.0.1:51731/"],
-};
 const services: McpConnectionGatewayService[] = [];
 const directories: string[] = [];
 const gateways = new Map<PwrGitConnectionService, McpConnectionGatewayService>();
+
 function settings(initial?: string) {
   let value = initial;
   let shared: string | undefined;
@@ -33,170 +27,120 @@ function settings(initial?: string) {
     clearPwrGitMcpCredential: vi.fn(async () => { value = undefined; }),
   };
 }
-function reachable(input: string | URL) {
-  if (String(input) === ENDPOINT) return Promise.resolve(new Response(null, { status: 405 }));
-  if (String(input).endsWith("/.well-known/oauth-protected-resource/mcp")) {
-    return Promise.resolve(Response.json(METADATA));
-  }
-  return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
+
+function pwrGitInstall(options: { relay?: boolean } = {}): string {
+  return pwrSuiteInstall("pwrgit", options);
 }
-function create(options: ConstructorParameters<typeof PwrGitConnectionService>[0] & {
+
+function create(options: {
+  installs?: () => string[];
+  listening?: () => boolean;
   settings?: ReturnType<typeof settings>;
   gatewayEnabled?: () => boolean;
+  openPath?: (path: string) => Promise<string>;
+  fetchFn?: typeof fetch;
+  openExternal?: (url: string) => Promise<void>;
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "pwrgit-gateway-test-"));
   directories.push(directory);
+  const installs = options.installs ?? (() => [pwrGitInstallDefault]);
   const gateway = new McpConnectionGatewayService({
     sandboxer: sandboxerStub(),
     settings: options.settings ?? settings(),
-    fetchFn: options.fetchFn ?? reachable,
+    fetchFn: options.fetchFn ?? (async () => { throw new Error("PwrGit has no network endpoint."); }),
     openExternal: options.openExternal,
     leaseManager: null,
     registry: new McpConnectionRegistry({ configPath: join(directory, "config.toml") }),
     gatewayEnabled: options.gatewayEnabled ?? (() => true),
+    resolvePwrGitInstallPaths: installs,
   });
   const service = new PwrGitConnectionService({
-    fetchFn: reachable, resolveInstallPaths: () => [], ...options, gateway,
+    gateway,
+    resolveInstallPaths: installs,
+    isListening: async () => options.listening?.() ?? true,
+    ...(options.openPath ? { openPath: options.openPath } : {}),
   });
   services.push(gateway);
   gateways.set(service, gateway);
   return service;
 }
+
+let pwrGitInstallDefault = "";
+
 afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.close()));
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  removePwrSuiteInstalls();
   gateways.clear();
 });
 
-describe("PwrGit OAuth connection", () => {
-  it("recognizes the running OAuth endpoint without the obsolete health or pairing API", async () => {
-    const fetchFn = vi.fn(reachable);
-    await expect(create({ fetchFn }).readStatus()).resolves.toMatchObject({
-      availability: "running", configured: false, connectionId: "pwrgit",
+describe("PwrGit local relay connection", () => {
+  it("reads PwrGit's install, relay, and listener as three separate facts", async () => {
+    const withRelay = pwrGitInstall();
+    const withoutRelay = pwrGitInstall({ relay: false });
+    const fetchFn = vi.fn(async () => { throw new Error("PwrGit has no network endpoint."); });
+    const status = async (installs: string[], listening: boolean) =>
+      await create({ installs: () => installs, listening: () => listening, fetchFn }).readStatus();
+
+    await expect(status([], false)).resolves.toEqual({
+      connectionId: "pwrgit", displayName: "PwrGit", availability: "not_installed", configured: false,
     });
-    expect(fetchFn.mock.calls.map(([url]) => String(url))).toEqual([
-      ENDPOINT, "http://127.0.0.1:51731/.well-known/oauth-protected-resource/mcp",
-    ]);
+    await expect(status([withoutRelay], false)).resolves.toMatchObject({
+      availability: "installed", configured: false, detail: expect.stringContaining("0.56.0"),
+    });
+    await expect(status([withRelay], false)).resolves.toMatchObject({
+      availability: "installed", configured: true, detail: expect.stringContaining("Local Agent Access"),
+    });
+    const running = await status([withRelay], true);
+    expect(running).toMatchObject({ availability: "running", configured: true });
+    expect(running.detail).toBeUndefined();
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("does not mistake a different service or a 404 for a running PwrGit", async () => {
-    for (const fetchFn of [
-      async () => Response.json({ error: "not_found" }, { status: 404 }),
-      async (input: string | URL) => String(input) === ENDPOINT
-        ? new Response(null, { status: 405 }) : Response.json({ ...METADATA, resource_name: "Other" }),
-    ]) {
-      await expect(create({ fetchFn }).readStatus()).resolves.toMatchObject({ availability: "not_installed" });
-    }
-  });
-
-  it("preserves saved authorization while honestly reporting an unreachable endpoint", async () => {
-    const service = create({
-      settings: settings(JSON.stringify({ tokens: { access_token: "stored" } })),
-      resolveInstallPaths: () => [fileURLToPath(import.meta.url)],
-      fetchFn: async () => { throw new Error("ECONNREFUSED"); },
-    });
-    await expect(service.readStatus()).resolves.toMatchObject({
-      configured: true, availability: "installed", detail: expect.stringContaining("cannot reach"),
-    });
-  });
-
-  it("requires a running desktop without launching an installed PwrGit", async () => {
+  it("connects only while PwrGit listens, never launches it, and drops a pre-IPC OAuth token", async () => {
+    let installs = [pwrGitInstall({ relay: false })];
+    let listening = false;
     const openPath = vi.fn(async () => "");
+    const openExternal = vi.fn(async () => undefined);
+    const store = settings(JSON.stringify({ tokens: { access_token: "legacy-oauth", token_type: "bearer" } }));
     const service = create({
-      resolveInstallPaths: () => [fileURLToPath(import.meta.url)],
-      fetchFn: async () => { throw new Error("ECONNREFUSED"); },
-      openPath,
+      installs: () => installs, listening: () => listening, settings: store, openPath, openExternal,
     });
+
     await expect(service.connect()).resolves.toMatchObject({
-      outcome: "needs_local_agent_access", status: { availability: "installed" },
+      outcome: "needs_update", status: { availability: "installed", configured: false },
     });
+    installs = [pwrGitInstall()];
+    await expect(service.connect()).resolves.toMatchObject({
+      outcome: "needs_local_agent_access", status: { availability: "installed", configured: true },
+    });
+    listening = true;
+    await expect(service.connect()).resolves.toMatchObject({
+      outcome: "connected", status: { availability: "running", configured: true },
+    });
+    expect(await store.resolvePwrGitMcpCredential()).toBeUndefined();
     expect(openPath).not.toHaveBeenCalled();
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
-  it("does not treat a legacy direct-launch token as an OAuth authorization", async () => {
-    await expect(create({ settings: settings(JSON.stringify({ token: "legacy" })) }).readStatus())
-      .resolves.toMatchObject({ configured: false, availability: "running" });
-  });
-
-  it("issues reusable, revocable thread grants without giving agents the provider token", async () => {
-    const service = create({ settings: settings(JSON.stringify({ tokens: { access_token: "private-provider-token" } })) });
+  it("issues reusable, revocable thread grants that name no PwrGit executable", async () => {
+    pwrGitInstallDefault = pwrGitInstall();
+    const service = create();
     const first = await service.registerBridge("pwrgit", "grok-thread");
     const second = await service.registerBridge("pwrgit", "grok-thread");
     expect(second.server).toEqual(first.server);
     expect(first.server.name).toBe("pwrgit");
     expect(first.server.env.PWRAGENT_MCP_CONNECTION_TOKEN).toBeTruthy();
-    expect(JSON.stringify(first.server)).not.toContain("private-provider-token");
-    expect(JSON.stringify(first.server)).not.toContain("pwrgit-mcp.mjs");
+    // The agent gets PwrAgent's bridge; only the gateway starts the relay.
+    expect(JSON.stringify(first.server)).not.toContain("pwrgit-mcp");
     first.revoke();
     expect((await service.registerBridge("pwrgit", "grok-thread")).server).not.toEqual(first.server);
   });
-  it("authorizes through OAuth and proxies tools with PwrAgent as the client", async () => {
-    const store = settings();
-    let registration: Record<string, unknown> | undefined;
-    const fetchFn = vi.fn(async (input: string | URL, init?: RequestInit): Promise<Response> => {
-      const url = String(input);
-      if (url.includes("oauth-protected-resource")) return Response.json(METADATA);
-      if (url.includes("/.well-known/")) return Response.json({
-        issuer: "http://127.0.0.1:51731/",
-        authorization_endpoint: "http://127.0.0.1:51731/authorize",
-        token_endpoint: "http://127.0.0.1:51731/token",
-        registration_endpoint: "http://127.0.0.1:51731/register",
-        response_types_supported: ["code"], code_challenge_methods_supported: ["S256"],
-      });
-      if (url.endsWith("/register")) {
-        registration = JSON.parse(String(init?.body));
-        return Response.json({ ...registration, client_id: "pwragent-test-client" });
-      }
-      if (url.endsWith("/token")) {
-        expect(String(init?.body)).toContain("code_verifier=");
-        return Response.json({ access_token: "provider-secret", token_type: "Bearer" });
-      }
-      if (url === ENDPOINT && init?.method === "POST") {
-        expect(new Headers(init.headers).get("authorization")).toBe("Bearer provider-secret");
-        const request = JSON.parse(String(init.body));
-        if (request.method === "notifications/initialized") return new Response(null, { status: 202 });
-        const result = request.method === "initialize"
-          ? { protocolVersion: "2025-03-26", serverInfo: { name: "pwrgit", version: "1.0.0" }, capabilities: { tools: {} } }
-          : { tools: [{ name: "pwrgit_app_profiles", inputSchema: { type: "object" } }] };
-        return Response.json({ jsonrpc: "2.0", id: request.id, result });
-      }
-      if (url === ENDPOINT) return new Response(null, { status: 405 });
-      throw new Error(`Unexpected test request: ${url}`);
-    });
-    const service = create({ settings: store, fetchFn, openExternal: async (url) => {
-      const authorization = new URL(url);
-      expect(authorization.pathname).toBe("/authorize");
-      expect(authorization.searchParams.get("scope")).toBe(
-        "repository.roots.read repository.checkout.locate repository.metadata.read forge.status.read status.subscribe",
-      );
-      const callback = new URL(authorization.searchParams.get("redirect_uri")!);
-      callback.searchParams.set("state", authorization.searchParams.get("state")!);
-      callback.searchParams.set("code", "approved-test-code");
-      const response = await fetch(callback);
-      const page = await response.text();
-      expect(page).toContain("Connecting PwrAgent to PwrGit");
-      expect(page).not.toContain("PwrSnap");
-    } });
-    await expect(service.connect()).resolves.toMatchObject({ outcome: "connected", status: { configured: true } });
-    expect(registration?.client_name).toBe("PwrAgent");
-    expect(JSON.parse((await store.resolveMcpConnectionCredentials())!).credentials.pwrgit.tokens.access_token).toBe("provider-secret");
-    expect(await store.resolvePwrGitMcpCredential()).toBeUndefined();
-    const registrationBridge = await service.registerBridge("pwrgit", "test-thread");
-    const bridge = gateways.get(service) as unknown as {
-      dispatchBridgeOperation: (token: string, grant: { connectionId: string }, op: string, params: unknown) => Promise<unknown>;
-    };
-    await expect(bridge.dispatchBridgeOperation(registrationBridge.server.env.PWRAGENT_MCP_CONNECTION_TOKEN!, { connectionId: "pwrgit" }, "tools/list", {})).resolves.toMatchObject({
-      tools: [{ name: "pwrgit_app_profiles" }],
-    });
-    expect(fetchFn.mock.calls.some(([url]) => /\/health|\/pair\//u.test(String(url)))).toBe(false);
-  });
 
-  it("enforces global and connection switches without losing authorization", async () => {
+  it("enforces global and connection switches, and keeps the relay configured through a disconnect", async () => {
+    pwrGitInstallDefault = pwrGitInstall();
     let enabled = true;
-    const service = create({
-      settings: settings(JSON.stringify({ tokens: { access_token: "stored", token_type: "bearer" } })),
-      gatewayEnabled: () => enabled,
-    });
+    const service = create({ gatewayEnabled: () => enabled });
     const gateway = gateways.get(service)!;
     await service.registerBridge("pwrgit", "one");
     enabled = false;
@@ -207,9 +151,9 @@ describe("PwrGit OAuth connection", () => {
     await expect(service.readStatus()).resolves.toMatchObject({ configured: true });
     await gateway.setConnectionEnabled("pwrgit", true);
     await expect(service.registerBridge("pwrgit", "two")).resolves.toBeDefined();
+    // There is no credential to discard: PwrGit approves each session.
     await gateway.disconnectConnection("pwrgit");
-    await expect(service.readStatus()).resolves.toMatchObject({ configured: false });
+    await expect(service.readStatus()).resolves.toMatchObject({ configured: true });
     await expect(gateway.removeConnection("pwrgit")).rejects.toThrow("Built-in");
   });
-
 });

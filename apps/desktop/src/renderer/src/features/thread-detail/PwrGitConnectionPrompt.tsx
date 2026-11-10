@@ -33,23 +33,7 @@ export function PwrGitConnectionPrompt(props: {
         + "being told where anything lives.",
     },
     readStatus: desktopApi?.readPwrGitConnectionStatus,
-    connect: desktopApi?.connectPwrGit
-      ? async () => {
-          const response = await desktopApi.connectPwrGit!();
-          // A response without detail is one whose `status.detail` already
-          // says what to do (the switch to turn on); repeating it would say
-          // the same sentence twice.
-          return {
-            status: response.status,
-            ...(response.outcome !== "connected" && response.detail
-              ? { error: response.detail }
-              : {}),
-          };
-        }
-      : undefined,
     openApp: desktopApi?.openPwrGit,
-    waitingLine: "Approve the connection in PwrGit",
-    connectsWhileClosed: false,
     // PwrGit has no federation surface yet, so a remote tile only appears
     // once the owner reports the connection configured.
     remoteNeedsRunning: false,

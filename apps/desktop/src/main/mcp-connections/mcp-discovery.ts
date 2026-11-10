@@ -86,8 +86,7 @@ export class McpDiscovery {
       // A local command's launch failure is composed by PwrAgent from the
       // exit status alone; its stderr travels separately, to Settings only.
       const localMessage = error instanceof Error && (
-        error.message.startsWith("PwrSnap rejected this connection's authorization.")
-        || error.message === "The MCP connection changed while its session was opening. Retry discovery."
+        error.message === "The MCP connection changed while its session was opening. Retry discovery."
         || error.name === "McpStdioLaunchError"
       ) ? error.message : undefined;
       const detail = diagnostic.kind === "deadline" ? "discovery deadline expired"

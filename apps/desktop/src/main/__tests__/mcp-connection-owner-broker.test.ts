@@ -1,10 +1,11 @@
 import { sandboxerStub } from "./helpers/sandboxer-stub";
+import { pwrSuiteInstallOptions, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createServer, type Socket } from "node:net";
 import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { AppRuntimeInstanceStore, RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "../state/app-runtime-instance-store";
 import {
@@ -39,6 +40,8 @@ function createSettings() {
     savePwrSnapMcpCredential: vi.fn(async () => undefined),
   };
 }
+
+afterEach(removePwrSuiteInstalls);
 
 describe("MCP connection owner broker", () => {
   it("keeps the dead-owner safety grace and recovers when it expires", async () => {
@@ -243,6 +246,7 @@ describe("MCP connection owner broker", () => {
     let parentSelected = true;
     const owner = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
+      ...pwrSuiteInstallOptions(),
       bridgeEntryPath: "/owner/mcp-connection-bridge.js",
       readGatewaySelection: async (context) => context.threadId === "gateway-fixture" || (context.threadId === "parent" && parentSelected) ? [id] : [],
       brokerDiscovery: discovery,

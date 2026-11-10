@@ -35,21 +35,8 @@ export function PwrSnapConnectionPrompt(props: {
     readStatus: desktopApi?.readPwrSnapConnectionStatus
       ? async () => await desktopApi.readPwrSnapConnectionStatus!()
       : undefined,
-    connect: desktopApi?.connectPwrSnap
-      ? async () => {
-          const response = await desktopApi.connectPwrSnap!();
-          return {
-            status: response.status,
-            ...(response.outcome === "needs_local_agent_access"
-              ? { error: "Turn on Local Agent Access in PwrSnap, then Connect again" }
-              : {}),
-          };
-        }
-      : undefined,
     openApp: desktopApi?.openPwrSnap,
-    waitingLine: "Connecting to PwrSnap…",
-    connectsWhileClosed: true,
-    // A remote tile needs the owner's PwrSnap running as well as paired:
+    // A remote tile needs the owner's PwrSnap running as well as installed:
     // the viewer's install state never stands in for the owner's.
     remoteNeedsRunning: true,
   }), [desktopApi]);

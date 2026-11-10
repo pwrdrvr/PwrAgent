@@ -1,47 +1,32 @@
 import { externalLinks as shell } from "../owner-host";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { ConnectPwrGitResponse, OpenPwrGitResponse, PwrGitConnectionStatus } from "@pwragent/shared";
-import { getMcpConnectionGatewayService, type McpConnectionGatewayService } from "./mcp-connection-gateway-service";
+import {
+  getMcpConnectionGatewayService,
+  pwrSuiteUpdateDetail,
+  type McpConnectionGatewayService,
+} from "./mcp-connection-gateway-service";
+import { defaultPwrSuiteInstallPaths, isPwrSuiteEndpointListening } from "./pwrsuite-relay";
 
-const ENDPOINT = "http://127.0.0.1:51731/mcp";
+const NOT_LISTENING_DETAIL = "Open PwrGit and turn on Local Agent Access to connect agents.";
+
 export type PwrGitConnectionServiceOptions = {
   gateway?: Pick<McpConnectionGatewayService, "listConnections" | "authorizeConnection" | "registerBridge">;
-  fetchFn?: (input: string | URL, init?: RequestInit) => Promise<Response>;
+  /** Whether PwrGit's local MCP socket or pipe accepts a connection. */
+  isListening?: () => Promise<boolean>;
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
   resolveInstallPaths?: () => string[];
 };
 
-function resolveDefaultPwrGitInstallPaths(): string[] {
-  if (process.platform === "darwin") {
-    return [
-      "/Applications/PwrGit.app",
-      join(homedir(), "Applications", "PwrGit.app"),
-    ];
-  }
-  if (process.platform === "win32") {
-    return [
-      process.env.LOCALAPPDATA
-        ? join(process.env.LOCALAPPDATA, "Programs", "PwrGit", "PwrGit.exe")
-        : "",
-      process.env.ProgramFiles
-        ? join(process.env.ProgramFiles, "PwrGit", "PwrGit.exe")
-        : "",
-      process.env["ProgramFiles(x86)"]
-        ? join(process.env["ProgramFiles(x86)"]!, "PwrGit", "PwrGit.exe")
-        : "",
-    ].filter(Boolean);
-  }
-  return [
-    "/usr/bin/pwrgit",
-    "/opt/PwrGit/pwrgit",
-    join(homedir(), "Applications", "PwrGit.AppImage"),
-  ];
-}
-
-/** Product discovery/UI adapter only. The profile gateway owns OAuth and every relay. */
+/**
+ * Product discovery/UI adapter only. The profile gateway owns every relay.
+ *
+ * PwrGit 0.56.0 and later serve MCP only over a protected Unix socket or
+ * Windows named pipe. The gateway reaches it through the `pwrgit-mcp` relay
+ * inside the PwrGit install, and PwrGit approves each session in its own
+ * window, so there is nothing here to sign in to.
+ */
 export class PwrGitConnectionService {
   private connectPromise?: Promise<ConnectPwrGitResponse>;
 
@@ -53,19 +38,27 @@ export class PwrGitConnectionService {
   }
 
   async readStatus(): Promise<PwrGitConnectionStatus> {
-    const [connections, running] = await Promise.all([
-      this.gateway.listConnections(), this.isEndpointAvailable(),
+    const [connections, listening] = await Promise.all([
+      this.gateway.listConnections(), this.isListening(),
     ]);
-    const installed = running || Boolean(this.findInstalledPath());
+    const installed = listening || Boolean(this.findInstalledPath());
     const connection = connections.find((entry) => entry.id === "pwrgit");
+    // The gateway reports configured once this machine has a PwrGit with
+    // the relay; an older PwrGit only serves the retired loopback OAuth.
+    const configured = connection?.configured ?? false;
+    const detail = !installed
+      ? undefined
+      : !configured
+        ? connection?.detail ?? pwrSuiteUpdateDetail("pwrgit")
+        : !listening
+          ? NOT_LISTENING_DETAIL
+          : undefined;
     return {
       connectionId: "pwrgit",
       displayName: "PwrGit",
-      availability: running ? "running" : installed ? "installed" : "not_installed",
-      configured: connection?.configured ?? false,
-      ...(!running && installed
-        ? { detail: "PwrAgent cannot reach PwrGit. Open PwrGit and enable Local Agent Access." }
-        : connection?.detail ? { detail: connection.detail } : {}),
+      availability: listening ? "running" : installed ? "installed" : "not_installed",
+      configured,
+      ...(detail ? { detail } : {}),
     };
   }
 
@@ -100,31 +93,23 @@ export class PwrGitConnectionService {
   }
 
   private async connectNow(): Promise<ConnectPwrGitResponse> {
-    if (!(await this.isEndpointAvailable())) {
-      return { outcome: "needs_local_agent_access", status: await this.readStatus() };
+    const status = await this.readStatus();
+    if (status.availability !== "not_installed" && !status.configured) {
+      return { outcome: "needs_update", status };
+    }
+    if (status.availability !== "running") {
+      return { outcome: "needs_local_agent_access", status };
     }
     await this.gateway.authorizeConnection("pwrgit");
-    return { outcome: "connected", status: await this.readStatus() };
+    return { outcome: "connected", status };
   }
 
   private findInstalledPath(): string | undefined {
-    return (this.options.resolveInstallPaths ?? resolveDefaultPwrGitInstallPaths)().find(existsSync);
+    return (this.options.resolveInstallPaths ?? (() => defaultPwrSuiteInstallPaths("pwrgit")))().find(existsSync);
   }
 
-  private async isEndpointAvailable(): Promise<boolean> {
-    const fetchFn = this.options.fetchFn ?? globalThis.fetch;
-    try {
-      const response = await fetchFn(ENDPOINT, { method: "GET", signal: AbortSignal.timeout(1_000) });
-      if (!(response.ok || response.status === 401 || response.status === 405)) return false;
-      const metadataResponse = await fetchFn(new URL("/.well-known/oauth-protected-resource/mcp", ENDPOINT), {
-        signal: AbortSignal.timeout(1_000),
-      });
-      if (!metadataResponse.ok) return false;
-      const metadata = await metadataResponse.json() as { resource?: unknown; resource_name?: unknown };
-      return metadata?.resource === ENDPOINT && metadata.resource_name === "PwrGit";
-    } catch {
-      return false;
-    }
+  private async isListening(): Promise<boolean> {
+    return await (this.options.isListening ?? (async () => await isPwrSuiteEndpointListening("pwrgit")))();
   }
 }
 

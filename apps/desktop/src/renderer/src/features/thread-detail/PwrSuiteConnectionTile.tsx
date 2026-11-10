@@ -5,8 +5,13 @@ import {
   type PwrGitConnectionStatus,
   type PwrSnapConnectionStatus,
 } from "@pwragent/shared";
-import type { PwrSuiteAppId } from "../../../../shared/pwrsuite-installer";
+import {
+  PWRSUITE_PRODUCT_URLS,
+  type PwrSuiteAppId,
+} from "../../../../shared/pwrsuite-installer";
+import { PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { openExternalUrl } from "../../lib/open-external-url";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
 import {
   PwrSuiteInstallAction,
@@ -33,14 +38,8 @@ export type PwrSuiteConnectionApp<Status extends PwrSuiteConnectionStatus> = {
   pitch: string;
   about: { title: string; body: string };
   readStatus: (() => Promise<Status>) | undefined;
-  /** Pairs and answers the status to show, or a short reason it did not. */
-  connect: (() => Promise<{ status: Status; error?: string }>) | undefined;
   openApp: (() => Promise<{ opened: boolean; error?: string }>) | undefined;
-  /** The tile's line while Connect waits on the app. */
-  waitingLine: string;
-  /** PwrSnap pairs whether or not it is open; PwrGit has to be running. */
-  connectsWhileClosed: boolean;
-  /** PwrSnap's remote tile needs the owner's app running, not just paired. */
+  /** PwrSnap's remote tile needs the owner's app running, not just installed. */
   remoteNeedsRunning: boolean;
 };
 
@@ -53,9 +52,9 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
   onEnabledChange: (enabled: boolean) => Promise<void>;
 }) {
   const { config } = props;
-  const [busy, setBusy] = useState<"connect" | "other">();
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const { status, setStatus, refresh, unreachable, readError } =
+  const { status, refresh, unreachable, readError } =
     usePwrSuiteConnectionStatus(config.readStatus, () => setError(undefined));
   const backendSupported = backendLoadsMcpConnections(props.backend);
   const configured = status?.configured === true;
@@ -71,18 +70,15 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
       : undefined,
   );
 
-  const runAction = async (
-    kind: "connect" | "other",
-    action: () => Promise<void>,
-  ): Promise<void> => {
-    setBusy(kind);
+  const runAction = async (action: () => Promise<void>): Promise<void> => {
+    setBusy(true);
     setError(undefined);
     try {
       await action();
     } catch (cause) {
       setError(connectionActionError(cause));
     } finally {
-      setBusy(undefined);
+      setBusy(false);
     }
   };
 
@@ -91,10 +87,10 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
       <span>{visibleLabel}</span>
       <SettingsSwitch
         checked={props.enabled}
-        disabled={busy !== undefined || !backendSupported || unreachable}
+        disabled={busy || !backendSupported || unreachable}
         label={label}
         onChange={(enabled) => {
-          void runAction("other", async () => await props.onEnabledChange(enabled));
+          void runAction(async () => await props.onEnabledChange(enabled));
         }}
       />
     </div>
@@ -135,15 +131,6 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
     );
   }
 
-  const connect = async (): Promise<void> => {
-    if (!config.connect) {
-      throw new Error(`${config.name} connections require the desktop app.`);
-    }
-    const response = await config.connect();
-    setStatus(response.status);
-    if (response.error) setError(response.error);
-  };
-
   const openApp = async (): Promise<void> => {
     const response = await config.openApp?.();
     if (response && !response.opened) {
@@ -159,8 +146,6 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
     [line, tone] = [error, "error"];
   } else if (readError) {
     [line, tone] = [readError, "state"];
-  } else if (busy === "connect") {
-    [line, tone] = [config.waitingLine, "state"];
   } else if (installLine) {
     [line, tone] = [installLine.text, installLine.tone];
   } else if (configured && !backendSupported) {
@@ -171,7 +156,6 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
     [line, tone] = [`Connected · ${config.name} isn’t open`, "state"];
   }
 
-  const canConnect = !configured && (running || (installed && config.connectsWhileClosed));
   let action;
   if (!status || unreachable) {
     action = (
@@ -185,27 +169,26 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
     );
   } else if (configured && running) {
     action = threadSwitch(`Use ${config.name} in this thread`, "Use in thread");
-  } else if (canConnect) {
+  } else if (!configured) {
+    // Installed, but too old to ship the relay PwrAgent starts. Neither
+    // opening it nor connecting to it helps until it is updated.
     action = (
       <button
-        aria-label={busy === "connect" ? undefined : `Connect to ${config.name}`}
-        className={
-          "button " + (busy === "connect" ? "button--secondary" : "button--primary")
-        }
-        disabled={busy !== undefined}
+        className="button button--secondary"
         type="button"
-        onClick={() => void runAction("connect", connect)}
+        onClick={() => openExternalUrl(PWRSUITE_PRODUCT_URLS[config.app])}
       >
-        {busy === "connect" ? "Waiting…" : "Connect"}
+        {`Update ${config.name}`}
+        <PopoutIcon size={12} />
       </button>
     );
   } else {
     action = (
       <button
         className="button button--secondary"
-        disabled={busy !== undefined}
+        disabled={busy}
         type="button"
-        onClick={() => void runAction("other", openApp)}
+        onClick={() => void runAction(openApp)}
       >
         {`Open ${config.name}`}
       </button>

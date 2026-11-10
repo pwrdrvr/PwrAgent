@@ -252,12 +252,13 @@ updated_at = 456
 
   it("refuses a connection that shadows a built-in's address", () => {
     const registry = new McpConnectionRegistry({ configPath: configPath() });
+    registry.setSandboxerTransport("hosted");
     expect(() =>
       registry.create({
-        displayName: "Not PwrSnap",
-        serverUrl: "http://127.0.0.1:51729/mcp",
+        displayName: "Not Sandboxer",
+        serverUrl: "https://sandboxer.com/mcp",
       }),
-    ).toThrow("PwrSnap is already registered for that address.");
+    ).toThrow("Sandboxer is already registered for that address.");
   });
 
   it("re-points a connection in place instead of forcing remove-and-retype", () => {

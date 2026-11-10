@@ -133,12 +133,35 @@ function createDesktopApi(
   } as unknown as DesktopApi;
 }
 
+/** The PwrGit row in Settings → Plugins. It has no URL to find it by. */
+async function findPwrGitRow(): Promise<HTMLElement> {
+  return await waitFor(() => {
+    const found = screen.getAllByText("PwrGit")
+      .map((element) => element.closest("article.settings-mcp-row"))
+      .find((element): element is HTMLElement => element instanceof HTMLElement);
+    expect(found).toBeDefined();
+    return found!;
+  });
+}
+
+function pwrGitRecord(configured: boolean) {
+  return {
+    id: "pwrgit", displayName: "PwrGit", serverUrl: "stdio:pwrgit",
+    kind: "pwrgit", authMode: "none", enabled: true, configured,
+    state: "ready", createdAt: 0, updatedAt: 0,
+  } as const;
+}
+
 describe("PluginsSettings", () => {
+  // PwrGit has nothing to sign in to: the next step is always the app itself
+  // (get it, update it to a release with the relay, open it), and a running
+  // PwrGit with its relay needs no action at all.
   it.each([
     ["not_installed", false, "Get PwrGit"],
-    ["installed", false, "Open PwrGit"],
-    ["running", false, "Connect"],
-    ["running", true, "Reauthorize"],
+    ["installed", false, "Update PwrGit"],
+    ["installed", true, "Open PwrGit"],
+    ["running", false, "Update PwrGit"],
+    ["running", true, undefined],
   ] as const)("offers managed PwrGit actions for %s (configured=%s)", async (availability, configured, action) => {
     const api = createDesktopApi([]);
     const status = { connectionId: "pwrgit", displayName: "PwrGit", availability, configured } as const;
@@ -147,15 +170,13 @@ describe("PluginsSettings", () => {
     api.openPwrGit = vi.fn().mockResolvedValue({ opened: true });
     api.openPwrGitDownload = vi.fn().mockResolvedValue({ opened: true });
     api.setMcpConnectionEnabled = vi.fn();
-    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
-      id: "pwrgit", displayName: "PwrGit", serverUrl: "http://127.0.0.1:51731/mcp",
-      kind: "pwrgit", authMode: "oauth", enabled: true, configured,
-      state: configured ? "ready" : "disconnected", createdAt: 0, updatedAt: 0,
-    }] });
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [pwrGitRecord(configured)] });
     render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
-    const endpoint = await screen.findByText("http://127.0.0.1:51731/mcp");
-    const row = within(endpoint.closest("article")!);
-    const button = await row.findByRole("button", { name: action });
+    const row = within(await findPwrGitRow());
+    await waitFor(() => expect(api.readPwrGitConnectionStatus).toHaveBeenCalled());
+    for (const stale of ["Connect", "Authorize", "Reauthorize"]) {
+      expect(row.queryByRole("button", { name: stale })).not.toBeInTheDocument();
+    }
     expect(row.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
     // The availability switch is withheld until PwrAgent actually holds
     // credentials. `enabled` defaults to true, so rendering it unconditionally
@@ -169,23 +190,25 @@ describe("PluginsSettings", () => {
     } else {
       expect(availabilitySwitch).not.toBeInTheDocument();
     }
-    fireEvent.click(button);
-    const invoked = availability === "not_installed" ? api.openPwrGitDownload
-      : availability === "installed" ? api.openPwrGit : api.connectPwrGit;
+    if (!action) {
+      expect(row.queryByRole("button", { name: /PwrGit$/ })).not.toBeInTheDocument();
+      return;
+    }
+    fireEvent.click(await row.findByRole("button", { name: action }));
+    const invoked = action === "Open PwrGit" ? api.openPwrGit : api.openPwrGitDownload;
     await waitFor(() => expect(invoked).toHaveBeenCalled());
+    expect(api.connectPwrGit).not.toHaveBeenCalled();
   });
 
-  // The credential chip speaks the Codex list's vocabulary; only the setup
-  // states that list has no word for -- the app is missing or not running --
-  // keep a headline chip of their own. Until the app runs there is nothing to
-  // sign in to, so an empty credential says nothing the Get/Open action does
-  // not; credentials held from before still do.
+  // PwrGit signs in to nothing: it approves each session itself. `configured`
+  // means this machine's PwrGit ships the relay. Only states the Codex list
+  // has no word for -- missing, not running, too old -- keep a headline chip.
   it.each([
     ["not_installed", false, true, ["Not installed"]],
-    ["installed", false, true, ["Not running"]],
-    ["installed", true, true, ["Not running", "Signed in"]],
-    ["running", false, true, ["Sign-in required"]],
-    ["running", true, true, ["Signed in"]],
+    ["installed", false, true, ["Update needed"]],
+    ["installed", true, true, ["Not running", "Approves in PwrGit"]],
+    ["running", false, true, ["Update needed"]],
+    ["running", true, true, ["Approves in PwrGit"]],
   ] as const)(
     "resolves one state line for %s (configured=%s, gateway=%s)",
     async (availability, configured, gatewayEnabled, chips) => {
@@ -193,11 +216,7 @@ describe("PluginsSettings", () => {
       const status = { connectionId: "pwrgit", displayName: "PwrGit", availability, configured } as const;
       api.readPwrGitConnectionStatus = vi.fn().mockResolvedValue(status);
       api.setMcpConnectionEnabled = vi.fn();
-      api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
-        id: "pwrgit", displayName: "PwrGit", serverUrl: "http://127.0.0.1:51731/mcp",
-        kind: "pwrgit", authMode: "oauth", enabled: true, configured,
-        state: configured ? "ready" : "disconnected", createdAt: 0, updatedAt: 0,
-      }] });
+      api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [pwrGitRecord(configured)] });
       const snapshot = createSnapshot();
       render(
         <PluginsSettings
@@ -211,10 +230,10 @@ describe("PluginsSettings", () => {
           }}
         />,
       );
-      const endpoint = await screen.findByText("http://127.0.0.1:51731/mcp");
-      const article = endpoint.closest("article")!;
+      const article = await findPwrGitRow();
       const row = within(article);
       expect(await row.findByText(chips[0])).toBeInTheDocument();
+      expect(row.queryByText("stdio:pwrgit")).not.toBeInTheDocument();
       expect(
         Array.from(
           article.querySelectorAll(".settings-mcp-row__chips > .settings-pathrow__chip"),
@@ -232,11 +251,7 @@ describe("PluginsSettings", () => {
       connectionId: "pwrgit", displayName: "PwrGit", availability: "running", configured: true,
     });
     api.setMcpConnectionEnabled = vi.fn();
-    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
-      id: "pwrgit", displayName: "PwrGit", serverUrl: "http://127.0.0.1:51731/mcp",
-      kind: "pwrgit", authMode: "oauth", enabled: true, configured: true,
-      state: "ready", createdAt: 0, updatedAt: 0,
-    }] });
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [pwrGitRecord(true)] });
     const snapshot = createSnapshot();
     render(
       <PluginsSettings
@@ -250,8 +265,7 @@ describe("PluginsSettings", () => {
         }}
       />,
     );
-    const endpoint = await screen.findByText("http://127.0.0.1:51731/mcp");
-    const row = within(endpoint.closest("article")!);
+    const row = within(await findPwrGitRow());
     // The switch went dim with the reason stated 400px away, at the section
     // top. A row-level consequence needs a row-level reason.
     expect(await row.findByText("Gateway off")).toBeInTheDocument();
@@ -912,38 +926,6 @@ describe("PluginsSettings", () => {
   });
 
   /**
-   * Connect on a local app ends in the same browser sign-in as Reauthorize,
-   * but it ran on a latch of its own: a disabled "Connecting..." that nothing
-   * could call off.
-   */
-  it("lets a local app's Connect be called off like any other sign-in", async () => {
-    const api = createDesktopApi([]);
-    const cancel = vi.fn().mockResolvedValue({ connectionId: "pwrgit" });
-    api.readPwrGitConnectionStatus = vi.fn().mockResolvedValue({
-      connectionId: "pwrgit", displayName: "PwrGit",
-      availability: "running", configured: false,
-    });
-    api.connectPwrGit = vi.fn(() => new Promise<never>(() => {}));
-    api.cancelMcpConnectionAuthorization = cancel;
-    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
-      id: "pwrgit", displayName: "PwrGit", serverUrl: "http://127.0.0.1:51731/mcp",
-      kind: "pwrgit", authMode: "oauth", enabled: true, configured: false,
-      state: "disconnected", createdAt: 0, updatedAt: 0,
-    }] });
-    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
-
-    const row = within(
-      (await screen.findByText("http://127.0.0.1:51731/mcp")).closest("article")!,
-    );
-    fireEvent.click(await row.findByRole("button", { name: "Connect" }));
-    fireEvent.click(
-      await row.findByRole("button", { name: "Cancel sign-in to PwrGit" }),
-    );
-
-    expect(await row.findByRole("button", { name: "Connect" })).toBeEnabled();
-    expect(cancel).toHaveBeenCalledWith({ connectionId: "pwrgit" });
-  });
-  /**
    * The endpoint is the one thing in the row an operator hands to something
    * else verbatim — a `curl`, a bug report, the agent's own config when a
    * server turns out to belong there instead. It was selectable text in a row
@@ -1354,44 +1336,40 @@ describe("PluginsSettings", () => {
     });
 
     it.each([false, true])("refreshes authentication after a rejected tool listing (refresh=%s)", async (refresh) => {
-      const connection = managed({ id: "pwrsnap", displayName: "PwrSnap", kind: "pwrsnap" });
+      const connection = managed();
       const api = managedApi([connection]);
       let configured = true;
       api.listMcpConnections = vi.fn(async () => ({
         connections: [{ ...connection, configured, state: configured ? "ready" as const : "disconnected" as const }],
       }));
-      api.readPwrSnapConnectionStatus = vi.fn(async () => ({
-        connectionId: "pwrsnap", displayName: "PwrSnap", availability: "running", configured,
-      } as const));
       let rejectListing!: (error: Error) => void;
       const listing = vi.fn(() => new Promise<never>((_resolve, reject) => {
         rejectListing = reject;
       }));
       api.listMcpConnectionTools = refresh
-        ? vi.fn().mockResolvedValueOnce({ connectionId: "pwrsnap", tools: ["fixture_tool"], fetchedAt: 1 })
+        ? vi.fn().mockResolvedValueOnce({ connectionId: "datadog", tools: ["fixture_tool"], fetchedAt: 1 })
           .mockImplementation(listing)
         : listing;
       render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
 
-      const row = within(await findRow("PwrSnap"));
+      const row = within(await findRow("Datadog"));
       expect(row.getByText("Signed in")).toBeInTheDocument();
       expect(screen.getByText("1 ready")).toBeInTheDocument();
       if (refresh) {
         await row.findByText("1 tool");
-        fireEvent.click(row.getByRole("button", { name: /^PwrSnap/ }));
+        fireEvent.click(row.getByRole("button", { name: /^Datadog/ }));
         fireEvent.click(row.getByRole("button", { name: "Test connection" }));
       }
       await waitFor(() => expect(listing).toHaveBeenCalledOnce());
       await act(async () => {
         configured = false;
-        rejectListing(new Error("PwrSnap rejected this connection's authorization."));
+        rejectListing(new Error("Datadog rejected this connection's authorization."));
       });
 
       expect(await row.findByText("Sign-in required")).toBeInTheDocument();
       expect(row.queryByText("Signed in")).not.toBeInTheDocument();
-      expect(row.getByRole("button", { name: "Connect" })).toBeInTheDocument();
+      expect(row.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
       expect(screen.getByText("0 ready · 1 to set up")).toBeInTheDocument();
-      expect(api.readPwrSnapConnectionStatus).toHaveBeenCalledTimes(2);
       expect(api.listMcpConnections).toHaveBeenCalledTimes(2);
       expect(row.queryByText("fixture_tool")).not.toBeInTheDocument();
     });

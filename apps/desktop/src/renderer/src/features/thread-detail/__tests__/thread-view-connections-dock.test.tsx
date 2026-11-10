@@ -90,7 +90,7 @@ describe("ThreadView launchpad connections dock", () => {
     });
     const group = screen.getByRole("group", { name: "Connections" });
     expect(
-      await within(group).findByRole("button", { name: "Connect to PwrSnap" }),
+      await within(group).findByRole("button", { name: "Update PwrSnap" }),
     ).toBeInTheDocument();
     // Only the launchpad offers the cards; the rail has no tab for them yet.
     expect(screen.queryByRole("tab", { name: "Connections" })).not.toBeInTheDocument();
@@ -125,7 +125,7 @@ describe("ThreadView launchpad connections dock", () => {
     });
     // The cards keep their controls in the rail.
     expect(
-      await within(rail).findByRole("button", { name: "Connect to PwrSnap" }),
+      await within(rail).findByRole("button", { name: "Update PwrSnap" }),
     ).toBeInTheDocument();
 
     fireEvent.click(within(rail).getByRole("button", { name: "Show on new thread" }));
@@ -139,7 +139,7 @@ describe("ThreadView launchpad connections dock", () => {
       onLaunchpadConnectionsDockChange: onDockChange,
     });
     const group = screen.getByRole("group", { name: "Connections" });
-    await within(group).findByRole("button", { name: "Connect to PwrSnap" });
+    await within(group).findByRole("button", { name: "Update PwrSnap" });
     // A button activated from the keyboard reports a click with detail 0.
     fireEvent.click(within(group).getByRole("button", { name: "Move to sidebar" }), { detail: 0 });
     view.rerender(launchpadView({
@@ -149,14 +149,14 @@ describe("ThreadView launchpad connections dock", () => {
     expect(screen.getByRole("tab", { name: "Connections" })).toHaveFocus();
 
     const rail = screen.getByRole("complementary", { name: "New thread context" });
-    await within(rail).findByRole("button", { name: "Connect to PwrSnap" });
+    await within(rail).findByRole("button", { name: "Update PwrSnap" });
     fireEvent.click(within(rail).getByRole("button", { name: "Show on new thread" }), { detail: 0 });
     view.rerender(launchpadView({
       launchpadConnectionsDock: "launchpad",
       onLaunchpadConnectionsDockChange: onDockChange,
     }));
     expect(screen.getByRole("button", { name: "Move to sidebar" })).toHaveFocus();
-    await screen.findByRole("button", { name: "Connect to PwrSnap" });
+    await screen.findByRole("button", { name: "Update PwrSnap" });
   });
 
   it("keeps the cards in the rail when the stored choice is the sidebar", async () => {
@@ -170,7 +170,7 @@ describe("ThreadView launchpad connections dock", () => {
     expect(tab).not.toHaveClass("is-landing");
     // Let the card's status read land before leaving the tab.
     expect(
-      await screen.findByRole("button", { name: "Connect to PwrSnap" }),
+      await screen.findByRole("button", { name: "Update PwrSnap" }),
     ).toBeInTheDocument();
     // The provider tab is still one click away.
     fireEvent.click(screen.getByRole("tab", { name: "AI provider info" }));
@@ -193,7 +193,7 @@ describe("ThreadView launchpad connections dock", () => {
     renderLaunchpad({});
     const group = screen.getByRole("group", { name: "Connections" });
     expect(
-      await within(group).findByRole("button", { name: "Connect to PwrSnap" }),
+      await within(group).findByRole("button", { name: "Update PwrSnap" }),
     ).toBeInTheDocument();
     expect(
       within(group).queryByRole("button", { name: "Move to sidebar" }),

@@ -1,4 +1,5 @@
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
+import { pwrSuiteInstallOptions, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
@@ -187,6 +188,7 @@ describe("backend MCP gateway dispatch", () => {
     await Promise.all(brokers.splice(0).map((broker) => broker.close()));
     db.close();
     rmSync(directory, { recursive: true, force: true });
+    removePwrSuiteInstalls();
   });
 
   function approval(excludeRequestId?: string) {
@@ -569,7 +571,7 @@ describe("backend MCP gateway dispatch", () => {
         }]),
       ) });
       const broker = new McpConnectionGatewayService({
-        registry: connections, sandboxer, leaseManager: null,
+        registry: connections, sandboxer, leaseManager: null, ...pwrSuiteInstallOptions(),
         settings: {
           resolveMcpConnectionCredentials: async () => credentials,
           resolvePwrSnapMcpCredential: async () => undefined,
@@ -620,7 +622,7 @@ select_for_new_threads = true
       sandboxer: { resourceUrl: "https://legacy.example/mcp", tokens: { access_token: "legacy-token", token_type: "bearer" } },
     } }));
     const broker = new McpConnectionGatewayService({
-      registry: connections, sandboxer, leaseManager: null,
+      registry: connections, sandboxer, leaseManager: null, ...pwrSuiteInstallOptions(),
       settings: {
         resolveMcpConnectionCredentials: credentialRead,
         resolvePwrSnapMcpCredential: async () => undefined, resolvePwrGitMcpCredential: async () => undefined,
@@ -653,6 +655,7 @@ select_for_new_threads = true
     if (readOnly) connections.setToolApproval("pwrsnap", "prompt");
     const broker = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
+      ...pwrSuiteInstallOptions(),
       registry: connections,
       leaseManager: null,
       readGatewaySelection: async (context) => (await store.getThreadOverlayState(context))?.mcpConnectionIds ?? [],

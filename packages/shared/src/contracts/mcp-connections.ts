@@ -103,13 +103,6 @@ export const SANDBOXER_LINKS: Readonly<Record<Exclude<SandboxerLinkTarget, "dash
 export type OpenSandboxerLinkRequest = { target: SandboxerLinkTarget };
 export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
 
-/**
- * Shown on the New thread PwrSnap band next to the Connect to PwrSnap button
- * after PwrSnap rejected the stored session.
- */
-export const PWRSNAP_SESSION_REJECTED_DETAIL =
-  "PwrSnap rejected this connection's authorization. Choose Connect to PwrSnap to connect again.";
-
 export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
@@ -709,30 +702,23 @@ export type ReadPwrSnapConnectionStatusRequest = {
   federationTarget?: FederationRemoteTarget;
 };
 
+/**
+ * `needs_update`: this PwrSnap predates 1.3.0 and has no local relay.
+ * `needs_local_agent_access`: PwrSnap is closed or Local Agent Access is off.
+ */
 export type ConnectPwrSnapResponse = {
   status: PwrSnapConnectionStatus;
-  outcome: "connected" | "needs_local_agent_access";
+  outcome: "connected" | "needs_local_agent_access" | "needs_update";
 };
 
+/**
+ * `needs_update`: this PwrGit predates 0.56.0 and has no local relay.
+ * `needs_local_agent_access`: PwrGit is closed or Local Agent Access is off.
+ * `status.detail` says what to do for either.
+ */
 export type ConnectPwrGitResponse = {
   status: PwrGitConnectionStatus;
-  outcome:
-    | "connected"
-    | "needs_local_agent_access"
-    /**
-     * PwrGit answered but pairing could not finish: its MCP server was not
-     * found beside the app, it stopped answering, or the approved credential
-     * could not be stored.
-     */
-    | "unavailable"
-    | "declined"
-    | "timed_out";
-  /**
-   * What to show for a non-connected outcome. Absent when `status.detail`
-   * already says everything there is to say, so the card does not stack the
-   * same sentence twice.
-   */
-  detail?: string;
+  outcome: "connected" | "needs_local_agent_access" | "needs_update";
 };
 
 export type OpenPwrSnapResponse = {
@@ -934,6 +920,20 @@ export function resolveMcpConnectionSetup(
     return connection.enabled
       ? build("ready", "Signed in", `Turn Sandboxer on in a thread's MCP access. ${billing}`, "ok")
       : build("parked", "Parked", `Turn on Offer to threads, then turn Sandboxer on in a thread's MCP access. ${billing}`, "warn");
+  }
+
+  if (
+    (connection.kind === "pwrsnap" || connection.kind === "pwrgit")
+    && !configured
+    && localAvailability !== "not_installed"
+  ) {
+    // Installed, but too old to have the relay PwrAgent starts.
+    return build(
+      "app_not_running",
+      "Update needed",
+      connection.detail ?? `Update ${name}, then turn on Local Agent Access.`,
+      "warn",
+    );
   }
 
   if (connection.kind === "stdio") {

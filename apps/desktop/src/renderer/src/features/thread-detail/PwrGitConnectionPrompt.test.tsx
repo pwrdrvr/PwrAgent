@@ -253,7 +253,7 @@ describe("PwrGitConnectionPrompt", () => {
         backend="codex"
         desktopApi={{
           readPwrGitConnectionStatus: async () =>
-            status({ availability: "installed" }),
+            status({ availability: "installed", configured: true }),
           openPwrGit,
         }}
         enabled={false}
@@ -276,6 +276,8 @@ describe("PwrGitConnectionPrompt", () => {
         desktopApi={{
           readPwrGitConnectionStatus: async () =>
             status({
+              availability: "installed",
+              configured: true,
               detail:
                 "Turn on Settings → Agents → Local agent access in PwrGit, then connect.",
             }),
@@ -288,28 +290,32 @@ describe("PwrGitConnectionPrompt", () => {
     expect(await screen.findByText(/Local agent access/i)).toBeTruthy();
   });
 
-  it("surfaces a declined pairing instead of failing silently", async () => {
-    render(
-      <PwrGitConnectionPrompt
-        backend="codex"
-        desktopApi={{
-          readPwrGitConnectionStatus: async () => status(),
-          connectPwrGit: async () => ({
-            status: status(),
-            outcome: "declined" as const,
-            detail: "The operator declined this request.",
-          }),
-        }}
-        enabled={false}
-        onEnabledChange={vi.fn()}
-      />,
-    );
+  // An install without the relay cannot be connected or fixed by opening it.
+  it.each(["running", "installed"] as const)(
+    "sends an older PwrGit that is %s to the update, never to Connect or Open",
+    async (availability) => {
+      const open = vi.spyOn(window, "open").mockImplementation(() => null);
+      const detail = "Update PwrGit to 0.56.0 or later, then turn on Local Agent Access.";
+      try {
+        render(
+          <PwrGitConnectionPrompt
+            backend="codex"
+            desktopApi={{ readPwrGitConnectionStatus: async () => status({ availability, detail }) }}
+            enabled={false}
+            onEnabledChange={vi.fn()}
+          />,
+        );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Connect to PwrGit" }));
-    expect(
-      await screen.findByText("The operator declined this request."),
-    ).toBeTruthy();
-  });
+        expect(await screen.findByText(detail)).toBeTruthy();
+        expect(screen.queryByRole("switch")).toBeNull();
+        expect(screen.queryByRole("button", { name: /Connect|Open PwrGit/ })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Update PwrGit" }));
+        expect(open).toHaveBeenCalledWith("https://pwrgit.com", "_blank", "noopener,noreferrer");
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
 
   it("offers a per-thread switch once connected", async () => {
     const onEnabledChange = vi.fn(async () => undefined);
@@ -410,46 +416,6 @@ describe("PwrGitConnectionPrompt", () => {
     }
   });
 
-  it("does not let a read that started before Connect undo its answer", async () => {
-    let answerStaleRead!: (value: PwrGitConnectionStatus) => void;
-    const readPwrGitConnectionStatus = vi.fn<() => Promise<PwrGitConnectionStatus>>()
-      .mockResolvedValueOnce(status())
-      .mockImplementationOnce(
-        () => new Promise((resolve) => {
-          answerStaleRead = resolve;
-        }),
-      );
-    render(
-      <PwrGitConnectionPrompt
-        backend="codex"
-        desktopApi={{
-          readPwrGitConnectionStatus,
-          connectPwrGit: async () => ({
-            status: status({ configured: true }),
-            outcome: "connected" as const,
-          }),
-        }}
-        enabled={false}
-        onEnabledChange={vi.fn()}
-      />,
-    );
-
-    const connect = await screen.findByRole("button", { name: "Connect to PwrGit" });
-    // The operator switches to PwrGit to approve and back: a focus re-read
-    // starts while the pairing is still waiting.
-    act(() => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    await act(async () => {
-      fireEvent.click(connect);
-    });
-    await screen.findByRole("switch", { name: /Use PwrGit in this thread/i });
-
-    await act(async () => answerStaleRead(status()));
-    expect(screen.getByRole("switch", { name: /Use PwrGit in this thread/i })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Connect to PwrGit" })).toBeNull();
-  });
-
   it("keeps the last status it read when a later read fails", async () => {
     const readPwrGitConnectionStatus = vi.fn<() => Promise<PwrGitConnectionStatus>>()
       .mockResolvedValueOnce(status({ configured: true }))
@@ -477,11 +443,11 @@ describe("PwrGitConnectionPrompt", () => {
       <PwrGitConnectionPrompt
         backend="codex"
         desktopApi={{
-          readPwrGitConnectionStatus: async () => status(),
-          connectPwrGit: async () => {
+          readPwrGitConnectionStatus: async () => status({ availability: "installed", configured: true }),
+          openPwrGit: async () => {
             throw new Error(
-              "Error invoking remote method 'mcp-connection:pwrgit-connect': "
-                + "Error: PwrGit declined the connection.",
+              "Error invoking remote method 'mcp-connection:pwrgit-open': "
+                + "Error: PwrGit could not be opened.",
             );
           },
         }}
@@ -490,36 +456,10 @@ describe("PwrGitConnectionPrompt", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Connect to PwrGit" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open PwrGit" }));
     expect((await screen.findByRole("status")).textContent).toBe(
-      "PwrGit declined the connection.",
+      "PwrGit could not be opened.",
     );
-  });
-
-  it("does not repeat the status instruction as an error after a failed connect", async () => {
-    const detail =
-      "Turn on Settings → Agents → Local agent access in PwrGit, then connect.";
-    render(
-      <PwrGitConnectionPrompt
-        backend="codex"
-        desktopApi={{
-          readPwrGitConnectionStatus: async () => status({ detail }),
-          connectPwrGit: async () => ({
-            status: status({ detail }),
-            outcome: "needs_local_agent_access" as const,
-          }),
-        }}
-        enabled={false}
-        onEnabledChange={vi.fn()}
-      />,
-    );
-
-    fireEvent.click(await screen.findByRole("button", { name: "Connect to PwrGit" }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Connect to PwrGit" })).toBeTruthy(),
-    );
-    expect(screen.getAllByText(detail)).toHaveLength(1);
-    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("renders nothing when a remote owner does not report PwrGit available", async () => {

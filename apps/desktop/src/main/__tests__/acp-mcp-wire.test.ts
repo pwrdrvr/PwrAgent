@@ -1,4 +1,5 @@
 import { sandboxerStub } from "./helpers/sandboxer-stub";
+import { pwrSuiteInstallOptions, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 import schema from "@agentclientprotocol/sdk/schema/schema.json";
 import Ajv2020 from "ajv/dist/2020.js";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -37,6 +38,7 @@ function validatingTransport() {
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
+  removePwrSuiteInstalls();
 });
 
 describe("ACP MCP request serialization", () => {
@@ -54,6 +56,7 @@ describe("ACP MCP request serialization", () => {
     const store = new AcpSessionStore(db);
     const snap = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
+      ...pwrSuiteInstallOptions(),
       leaseManager: null,
       gatewayEnabled: () => true,
       settings: {} as never,
