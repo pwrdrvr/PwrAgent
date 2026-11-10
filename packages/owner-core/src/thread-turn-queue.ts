@@ -483,7 +483,7 @@ export class ThreadTurnQueue {
             holdReason,
           }
         : entry;
-      const index = options?.queueIndex ?? queue.length;
+      const index = Math.min(options?.queueIndex ?? queue.length, queue.length);
       queue.splice(index, 0, queuedEntry);
       options?.onAdmission?.();
       const position = index + 1;
