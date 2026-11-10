@@ -5172,7 +5172,7 @@ describe("app server ipc", () => {
     expect(page.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
   });
 
-  it("reads every instance's drafts in one viewer page without waiting on a peer", async () => {
+  it.each(["main-sidebar", "exact-link"] as const)("reads viewer exact rows without waiting on a peer (consumer=%s)", async (consumer) => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const base = { source: "codex" as const, titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } };
@@ -5202,11 +5202,12 @@ describe("app server ipc", () => {
       { backend: "codex" as const, threadId: "pinned-draft", ownerInstanceId: "peer-a" },
     ];
     const page = await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90204, once: vi.fn() } }, {
-      protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      protocol: 2, consumer, inventory: "viewer",
       query: { kind: "exact", identities, includeAncestry: true, resolveFromOwners: true },
     }) as import("@pwragent/shared").NavigationQueryPage;
     // A pinned draft already comes from the pins; only the others are watched.
-    expect(federationMock.remoteThreadSummaries.resolveWatchedThreads).toHaveBeenLastCalledWith([peerRef, heldRef]);
+    expect(federationMock.remoteThreadSummaries.resolveWatchedThreads).toHaveBeenLastCalledWith([peerRef, heldRef],
+      { cacheOnly: consumer === "exact-link" });
     expect(federationMock.runtime.remoteNavigationQueryPage).not.toHaveBeenCalled();
     const byId = new Map(page.entries.map((entry) => [entry.row.id, entry]));
     expect([...byId.keys()].sort()).toEqual(["held-draft", "local-draft", "local-parent", "peer-draft", "pinned-draft"]);

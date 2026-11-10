@@ -29,7 +29,8 @@ const IDLE: ThreadInfo = { factsState: "idle", cost: { state: "idle" } };
 /**
  * A thread chip's hover card data, read when the card opens, never per
  * render. A loaded row answers at once; a thread outside the loaded rows is
- * one exact navigation read; cost is one stored-totals read, cached briefly.
+ * one exact navigation read, shared with the chip's encounter cache; cost
+ * is one stored-totals read, cached briefly.
  */
 export function useThreadInfo(link: ResolvedThreadLink): {
   info: ThreadInfo;
@@ -64,7 +65,10 @@ export function useThreadInfo(link: ResolvedThreadLink): {
     });
     if (!loaded && api?.getNavigationQueryPage) {
       readThreadInfoRow(api, target, windowTarget).then(
-        (row) => settle(row ? { facts: threadInfoFacts(row), factsState: "ready" } : { factsState: "missing" }),
+        (row) => {
+          if (row) void threadLinks?.hydrate?.(target).catch(() => {});
+          settle(row ? { facts: threadInfoFacts(row), factsState: "ready" } : { factsState: "missing" });
+        },
         () => settle({ factsState: "ready" }),
       );
     }

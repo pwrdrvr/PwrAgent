@@ -21,6 +21,9 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { getDesktopApi } from "./desktop-api";
+import { readRendererFederationTarget } from "./federation-window";
+import { observeThreadLinkRows, readThreadLinkRow, type ThreadLinkRow } from "./thread-link-rows";
 
 export type ResolvedThreadLink = {
   backend: AppServerBackendKind;
@@ -53,6 +56,8 @@ export type ThreadLinkContextValue = {
   show: (link: ResolvedThreadLink) => void;
   getSnapshot: (link: ResolvedThreadLink) => ResolvedThreadLink;
   subscribe: (link: ResolvedThreadLink, listener: () => void) => () => void;
+  /** Resolve an encountered off-page identity once, without mounting or watching it. */
+  hydrate?: (link: ResolvedThreadLink) => Promise<void>;
   /**
    * Which sidebar card a hovered or focused thread link points at. Sources
    * (`ThreadChip`, the title-bar link) write it through
@@ -296,6 +301,28 @@ class ThreadLinkMetadataStore {
     };
   }
 
+  async hydrate(link: ResolvedThreadLink, load: () => Promise<ThreadLinkRow | undefined>): Promise<void> {
+    const key = threadLinkKey(link);
+    const previous = this.links.get(key);
+    const row = await load();
+    // A navigation page that arrived while this read ran is newer. An
+    // unmounted chip must not leave unbounded metadata in this store either.
+    if (!row || this.links.get(key) !== previous || this.admittedKeys.has(key) || !this.listeners.has(key)) return;
+    const next: ResolvedThreadLink = {
+      ...link,
+      // A cached thread name is shared by links to different messages.
+      messageId: undefined,
+      title: row.title,
+      titleSource: row.titleSource,
+      gitBranch: row.gitBranch,
+      linkedDirectories: row.linkedDirectories,
+      ...(row.federation?.instanceLabel ? { instanceLabel: row.federation.instanceLabel } : {}),
+    };
+    if (sameThreadLink(this.links.get(key), next)) return;
+    this.links.set(key, next);
+    for (const listener of this.listeners.get(key) ?? []) listener();
+  }
+
   update(threads: NavigationThreadSummary[]): void {
     const nextLinks = new Map<string, ResolvedThreadLink>();
     const changedKeys = new Set<string>();
@@ -347,6 +374,8 @@ export function useThreadLinks(): ThreadLinkContextValue | undefined {
 
 export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink {
   const links = useThreadLinks();
+  const linkRef = useRef(link);
+  linkRef.current = link;
   const subscribe = useCallback(
     (listener: () => void) => links?.subscribe(link, listener) ?? (() => {}),
     [link, links],
@@ -361,6 +390,16 @@ export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink 
     getSnapshot,
     () => link,
   );
+  const identity = threadLinkKey(link);
+  useEffect(() => {
+    const target = linkRef.current;
+    if (!target.inThreadList && !links?.readSummary?.(target)) {
+      // Failures stay unknown and retryable when the operator opens the card.
+      void links?.hydrate?.(target).catch(() => {});
+    }
+    // Only a different identity needs another encounter read. Metadata
+    // updates must not turn this into a refresh loop.
+  }, [identity, links]);
   return useMemo(
     () => link.messageId
       ? { ...liveLink, messageId: link.messageId }
@@ -557,6 +596,11 @@ export function ThreadLinkProvider(props: {
   const metadataKey = threadLinkMetadataKey(threads);
 
   useLayoutEffect(() => {
+    const api = getDesktopApi();
+    if (api) observeThreadLinkRows(api, threads, readRendererFederationTarget());
+  }, [threads]);
+
+  useLayoutEffect(() => {
     metadataStore.update(threadsRef.current);
   }, [metadataKey, metadataStore]);
 
@@ -678,6 +722,11 @@ export function ThreadLinkProvider(props: {
       },
       subscribe(link, listener) {
         return metadataStore.subscribe(link, listener);
+      },
+      async hydrate(link) {
+        const api = getDesktopApi();
+        if (!api?.getNavigationQueryPage) return;
+        await metadataStore.hydrate(link, () => readThreadLinkRow(api, link, readRendererFederationTarget()));
       },
       hoverTarget: hoverStore,
       readSummary(link) {

@@ -35,6 +35,7 @@ export function loadViewerWatchedNavigationRows(
   cache: Pick<RemoteThreadSummaryCache, "resolveWatchedThreads">,
   identities: readonly NavigationIdentity[],
   pins: readonly NavigationThreadSummary[],
+  options: { cacheOnly?: boolean } = {},
 ): NavigationThreadSummary[] {
   const pinned = new Set(pins.flatMap((pin) => pin.federation ? [federatedThreadIdentityKey(pin.federation.ref)] : []));
   const refs = identities.flatMap((identity) => identity.ownerInstanceId ? [buildFederatedThreadRef({
@@ -42,7 +43,7 @@ export function loadViewerWatchedNavigationRows(
   })] : []).filter((ref) => !pinned.has(federatedThreadIdentityKey(ref)));
   if (!refs.length) return [];
   // An owner's pin order is not this viewer's; only a viewer pin ranks a row here.
-  return cache.resolveWatchedThreads(refs).flatMap(({ pinnedRank: _ownerRank, ...thread }) =>
+  return cache.resolveWatchedThreads(refs, options).flatMap(({ pinnedRank: _ownerRank, ...thread }) =>
     thread.federation && !pinned.has(federatedThreadIdentityKey(thread.federation.ref)) ? [thread] : []);
 }
 
