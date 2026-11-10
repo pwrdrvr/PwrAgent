@@ -559,6 +559,9 @@ test("a contained peer advertising every capability is refused and audited by th
   for (const endpoint of [v.rpc, relayed]) for (const method of methods) {
     await assert.rejects(endpoint.request({ method, params: { secret: "fixture-payload-must-stay-private" } }), /capability_denied/);
   }
+  // A denial can reach the viewer before the owner's synchronous audit append
+  // finishes. Fence the owner's event loop before inspecting its journal.
+  await h.rpc("status");
   const audit = readFileSync(path.join(h.directory, "federation-refusals.jsonl"), "utf8");
   assert.equal(audit.includes("fixture-payload-must-stay-private"), false);
   const entries = audit.trim().split("\n").map((line) => JSON.parse(line));
