@@ -105,16 +105,16 @@ export class ThreadCorrespondenceStore {
     source: ThreadRef,
     destination: ThreadRef,
     queueEntryId: string,
-  ): CorrespondenceRecord | undefined {
-    const record = [...this.load(source).values()].find((candidate) =>
+  ): CorrespondenceRecord[] {
+    const records = [...this.load(source).values()].filter((candidate) =>
       candidate.queueEntryId === queueEntryId
       && candidate.destination.backend === destination.backend
       && candidate.destination.threadId === destination.threadId
       && candidate.destination.instanceId === destination.instanceId);
-    if (!record) return undefined;
-    const updated = { ...record, state: "cancelled" as const };
-    this.update(source, record.id, { state: "cancelled" });
-    return updated;
+    return records.map((record) => {
+      this.update(source, record.id, { state: "cancelled" });
+      return { ...record, state: "cancelled" as const };
+    });
   }
 
   message(source: ThreadRef, id: string): AppServerThreadMessageEntry | undefined {

@@ -9,7 +9,8 @@ const input = (text: string) => [{ type: "text" as const, text }];
 const drain = async () => { for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve)); };
 
 it("a sender retires every receipt sharing the replaced remote batch without rewriting any accepted prompt", () => {
-  fc.assert(fc.property(fc.array(fc.string(), { minLength: 2, maxLength: 6 }), texts => {
+  // The production agent-message caller requires a nonempty prompt.
+  fc.assert(fc.property(fc.array(fc.string({ minLength: 1, maxLength: 80 }).filter(text => Boolean(text.trim())), { minLength: 2, maxLength: 6 }), texts => {
     // A remote owner cannot update this sender's local correspondence files.
     // Its acceptance response must retire every contribution to the old batch.
     const store = new ThreadCorrespondenceStore();
@@ -27,7 +28,7 @@ it("a sender retires every receipt sharing the replaced remote batch without rew
       expect(receipt.text.endsWith(`\n\n${text}`)).toBe(true);
     });
     expect(replay.messages.find(message => message.id === "other-owner")!.text).toContain("Queued");
-  }));
+  }), { examples: [[["!", "!"]]] });
 });
 
 it("sender receipts retain original accepted input while cancellation and fresh acceptance use separate records", () => {
@@ -37,8 +38,8 @@ it("sender receipts retain original accepted input while cancellation and fresh 
     const accepted = { id: "old-receipt", source, destination: ref, input: input(original), createdAt: 1,
       state: "queued" as const, queueEntryId: "old-acceptance" };
     store.record(accepted);
-    expect(store.cancelQueuedInput(source, { ...ref, threadId: "other" }, accepted.queueEntryId)).toBeUndefined();
-    expect(store.cancelQueuedInput(source, ref, accepted.queueEntryId)).toEqual({ ...accepted, state: "cancelled" });
+    expect(store.cancelQueuedInput(source, { ...ref, threadId: "other" }, accepted.queueEntryId)).toEqual([]);
+    expect(store.cancelQueuedInput(source, ref, accepted.queueEntryId)).toEqual([{ ...accepted, state: "cancelled" }]);
     store.record({ ...accepted, id: "new-receipt", input: input(replacement), createdAt: 2, queueEntryId: "new-acceptance" });
     const replay = store.appendToReplay(source, { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } });
     expect(replay.messages.map(message => message.id)).toEqual(["old-receipt", "new-receipt"]);

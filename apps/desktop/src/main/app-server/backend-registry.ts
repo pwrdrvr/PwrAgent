@@ -47139,7 +47139,7 @@ export class DesktopBackendRegistry {
           const replaced = this.correspondenceStore.cancelQueuedInput(source, {
             backend, threadId, ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
           }, request.args.replaceQueueEntryId);
-          if (replaced) this.publishCorrespondenceMessage(source, replaced.id);
+          for (const record of replaced) this.publishCorrespondenceMessage(source, record.id);
           this.correspondenceStore.record({
             id: correspondenceId, source, destination: { ...threadLinkRef, title: targetTitle },
             input, createdAt: Date.now(), state: "sending",
