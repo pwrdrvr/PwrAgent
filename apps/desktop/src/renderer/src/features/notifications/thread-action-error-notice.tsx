@@ -1,4 +1,5 @@
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
+import { InstanceChip } from "../federation/InstanceGlyph";
 
 /**
  * Thread lifecycle actions that can fail *after* the control that started
@@ -76,6 +77,10 @@ export function threadActionErrorNoticeId(kind: ThreadActionErrorKind): string {
 export function resolveThreadActionErrorNotice(
   signal: ThreadActionErrorSignal,
 ): AppNoticeToastNotice {
+  // Electron preserves only the thrown message across invoke(), including its
+  // transport prefix. Recognize the complete known offline error, not text an
+  // unrelated failure happens to quote. The chip resolves live directory names.
+  const offlinePeer = /^(?:Error invoking remote method '[^'\r\n]+': )?(?:FederationPeerUnavailableError: )?Federation peer (\S+) (?:is not connected|disconnected)\.$/.exec(signal.message);
   return {
     // Sticky: a backend failure the operator never saw is worse than a
     // toast they have to dismiss. The producer clears it on the next
@@ -85,7 +90,15 @@ export function resolveThreadActionErrorNotice(
     autoDismiss: false,
     copyText: signal.message,
     id: threadActionErrorNoticeId(signal.kind),
-    message: signal.message,
+    message: offlinePeer
+      ? "This peer is not connected. Reconnect it and try again."
+      : signal.message,
+    ...(offlinePeer ? {
+      messageContent: <>
+        <InstanceChip instanceId={offlinePeer[1]} label="Unknown peer" />
+        {" is not connected. Reconnect it and try again."}
+      </>,
+    } : {}),
     title: THREAD_ACTION_ERROR_TITLES[signal.kind],
     tone: "error",
   };

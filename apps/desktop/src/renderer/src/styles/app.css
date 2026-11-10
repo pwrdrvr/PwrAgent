@@ -11410,6 +11410,12 @@ a.button {
   font-size: 12px;
 }
 
+.app-notice-toast__message .chip--instance {
+  height: 20px;
+  font-size: 11px;
+  vertical-align: middle;
+}
+
 /* Machine state is mono, as paths and ids are everywhere else. */
 .app-notice-toast__facts {
   display: grid;

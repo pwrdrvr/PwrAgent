@@ -50,6 +50,8 @@ export type AppNoticeToastNotice = {
   id: string;
   title: string;
   message: string;
+  /** Rich in-window message; `message` remains the plain-text fallback. */
+  messageContent?: ReactNode;
   /** Offers a profile-scoped dismissal for this one Codex development warning. */
   skillQuestionsWarning?: boolean;
   /** Offers a profile-scoped dismissal saved under this Codex warning id. */
@@ -289,7 +291,7 @@ export function AppNoticeToast(props: {
             {props.notice.status.label}
           </p>
         ) : null}
-        <p className="app-notice-toast__message">{props.notice.message}</p>
+        <p className="app-notice-toast__message">{props.notice.messageContent ?? props.notice.message}</p>
         {props.notice.threadLink && props.onOpenThread ? (
           <div className="app-notice-toast__thread-link">
             <ThreadChip
