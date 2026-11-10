@@ -1,0 +1,30 @@
+{
+  "mutate_thread unlock": {
+    "commits": 1,
+    "note": "Actual desktop unlock plus independent held-result admission and real drain; setup excluded; only the existing lock-clear commit",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "overlapping failure": {
+    "commits": 1,
+    "note": "Actual registered unlock and queue lifecycle, including real drain and sender correspondence; setup excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "overlapping title": {
+    "commits": 1,
+    "note": "Actual registered unlock and queue lifecycle, including real drain and sender correspondence; setup excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "registered unlock": {
+    "commits": 1,
+    "note": "Actual desktop unlock plus independent held-result admission and real drain; setup excluded; only the existing lock-clear commit",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  }
+}

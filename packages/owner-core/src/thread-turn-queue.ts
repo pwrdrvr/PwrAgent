@@ -955,31 +955,56 @@ export class ThreadTurnQueue {
     const key = this.keyFor(params);
     const hold = this.heldQueues.get(key);
     if (!hold?.reasons.some(shouldRelease)) return false;
-    const queue = this.queuedEntries.get(key) ?? [];
-    const kept = new Set<string>();
-    let ahead: string | undefined;
-    for (let index = 0; index < queue.length; index += 1) {
-      const current = queue[index];
-      if (!current?.manualReleaseRequired) continue;
-      if (current.holdReason !== undefined && !shouldRelease(current.holdReason)) {
-        ahead = current.holdReason;
-        kept.add(ahead);
-        continue;
+    // Publication can await a newer failure's held events. Keep pending
+    // drains out until that publication finishes covering the live FIFO.
+    // Do not serialize lifecycle callbacks: they may release another cause.
+    this.dispatchSuspensions.set(key, (this.dispatchSuspensions.get(key) ?? 0) + 1);
+    try {
+      const queue = this.queuedEntries.get(key) ?? [];
+      const kept = new Set<string>();
+      const updatedEntries: ThreadTurnQueueEntry[] = [];
+      let ahead: string | undefined;
+      for (let index = 0; index < queue.length; index += 1) {
+        const current = queue[index];
+        if (!current?.manualReleaseRequired) continue;
+        if (current.holdReason !== undefined && !shouldRelease(current.holdReason)) {
+          ahead = current.holdReason;
+          kept.add(ahead);
+          continue;
+        }
+        const updated: ThreadTurnQueueEntry = ahead
+          ? { ...current, holdReason: ahead }
+          : { ...current, manualReleaseRequired: undefined, holdReason: undefined };
+        queue[index] = updated;
+        updatedEntries.push(updated);
       }
-      const updated: ThreadTurnQueueEntry = ahead
-        ? { ...current, holdReason: ahead }
-        : { ...current, manualReleaseRequired: undefined, holdReason: undefined };
-      queue[index] = updated;
-      await this.emit(ahead
-        ? { type: "held", entry: updated, position: index + 1, reason: ahead }
-        : { type: "queued", entry: updated, position: index + 1 });
+      // Commit this release before publication can admit another independent
+      // hold. Its new reasons and entries must not be replaced by this snapshot.
+      // A reason no held entry carries any more has nothing left to hold.
+      const reasons = hold.reasons.filter((reason) => kept.has(reason));
+      if (reasons.length > 0) this.heldQueues.set(key, { ...hold, reasons });
+      else this.heldQueues.delete(key);
+      for (const released of updatedEntries) {
+        const live = this.queuedEntries.get(key);
+        const index = live?.findIndex(entry => entry.id === released.id) ?? -1;
+        const entry = live?.[index];
+        // A title or input refresh keeps this release's transition. A newer
+        // hold/release or cancellation owns any different live hold state.
+        if (!entry || entry.manualReleaseRequired !== released.manualReleaseRequired
+          || entry.holdReason !== released.holdReason) continue;
+        await this.emit(entry.manualReleaseRequired && entry.holdReason !== undefined
+          ? { type: "held", entry, position: index + 1, reason: entry.holdReason }
+          : { type: "queued", entry, position: index + 1 });
+      }
+      return true;
+    } finally {
+      const remaining = (this.dispatchSuspensions.get(key) ?? 1) - 1;
+      if (remaining) this.dispatchSuspensions.set(key, remaining);
+      else {
+        this.dispatchSuspensions.delete(key);
+        this.scheduleDrain(key);
+      }
     }
-    // A reason no held entry carries any more has nothing left to hold.
-    const reasons = hold.reasons.filter((reason) => kept.has(reason));
-    if (reasons.length > 0) this.heldQueues.set(key, { ...hold, reasons });
-    else this.heldQueues.delete(key);
-    this.scheduleDrain(key);
-    return true;
   }
 
   async releaseEntryWithDisposition(

@@ -56,6 +56,7 @@ import { canonicalDurableSteerRequest, canonicalDurableTurnRequest, type SubmitD
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
+import { parseThreadCorrespondenceMessage, threadLockRefusalMessage } from "@pwragent/shared";
 
 // Desktop serves peers from process singletons; point them at this owner.
 const desktopOwner = vi.hoisted(() => ({ registry: undefined as unknown }));
@@ -324,6 +325,136 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it.each(["failure", "title"] as const)("desktop unlock preserves review and sender lifecycle during overlapping %s publication", async overlap => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const queue = registry["threadTurnQueue"];
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const source = { backend: "codex" as const, threadId: "invented-sender" };
+      const text = "Invented immutable report from a child thread, long enough to receive a generated queue title.";
+      const input = [{ type: "text" as const, text }];
+      await host.client.setThreadLock({ ...identity, locked: true, note: "old lock" });
+      for (let index = 0; index < 2; index++) {
+        registry["correspondenceStore"].record({ id: `message-${index}`, source, destination: identity, input, createdAt: index, state: "sending" });
+        await queue.submitHeld({ ...identity, id: `waiting-${index}`, origin: "manual", input, paused: overlap === "title" || index === 0,
+          messageOrigin: { kind: "agent", sourceThread: { ...source, messageId: `message-${index}` } } }, "prior review");
+      }
+      const senderState = () => [0, 1].map(index => parseThreadCorrespondenceMessage(registry["correspondenceStore"].message(source, `message-${index}`)?.text ?? "")?.state);
+      await queue.releaseThread({ ...identity, turnId: "prior-native", status: "turn/failed", errorMessage: threadLockRefusalMessage({ note: "old lock" }) });
+      expect(senderState()).toEqual(["held", "held"]);
+      let armed = true, yieldingFailure = false;
+      stop = registry.onEvent(async event => {
+        if (event.notification.method !== "thread/turnQueue/updated") return;
+        const params = event.notification.params;
+        if (armed && params.queueEntryId === "waiting-0" && params.status === "queued" && !params.manualReleaseRequired) {
+          armed = false;
+          if (overlap === "failure") {
+            yieldingFailure = true;
+            await queue.releaseThread({ ...identity, turnId: "new-native", status: "turn/failed", errorMessage: "new review" });
+          } else {
+            expect(registry["applyQueuedMessageTitle"]({ entryId: "waiting-1", ...identity, source: text }, "Generated report title")).toBe(true);
+          }
+        } else if (yieldingFailure && params.status === "held") {
+          yieldingFailure = false;
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+      });
+      queue.scheduleThreadDrain(identity);
+      const { writes } = await measureSqliteWrites(async () => {
+        await host.client.setThreadLock({ ...identity, locked: false });
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+      expect(senderState()).toEqual(overlap === "failure" ? ["held", "held"] : ["queued", "queued"]);
+      expect(queue.getQueuedEntries(identity).map(entry => entry.manualReleaseRequired === true)).toEqual([overlap === "failure", overlap === "failure"]);
+      expect(queue.getQueuedEntries(identity).map(entry => entry.input)).toEqual([input, input]);
+      if (overlap === "title") expect(queue.getQueuedEntries(identity)[1]?.title).toBe("Generated report title");
+      expectSqliteWriteBudget({ budgetFile: "queue-unlock-hold-publication-write-budgets.json", scenario: `overlapping ${overlap}`,
+        note: "Actual registered unlock and queue lifecycle, including real drain and sender correspondence; setup excluded", writes });
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
+  });
+
+  it.each(["registered unlock", "mutate_thread unlock"] as const)("%s preserves actionable independent review during queue publication", async caller => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.setThreadLock({ ...identity, locked: true, note: "old lock" });
+      const held = (id: string, reason: string) => registry.submitHeldTurn({ ...identity, queueEntryId: id,
+        input: [{ type: "text", text: `Invented result ${id}` }], holdReason: reason });
+      await held("older-result", threadLockRefusalMessage({ note: "old lock" }));
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (event.notification.method !== "thread/turnQueue/updated") return;
+        const params = event.notification.params;
+        if (armed && params.queueEntryId === "older-result" && params.status === "queued" && !params.manualReleaseRequired) {
+          armed = false;
+          await held("new-result", "independent review");
+        }
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        if (caller === "registered unlock") await host.client.setThreadLock({ ...identity, locked: false });
+        else expect(await registry["threadInspectionHandler"]({ operation: "mutate_thread", context: identity, args: { ...identity, locked: false } })).toMatchObject({ ok: true });
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-unlock-hold-publication-write-budgets.json", scenario: caller,
+        note: "Actual desktop unlock plus independent held-result admission and real drain; setup excluded; only the existing lock-clear commit", writes });
+      const request = { protocol: 2 as const, ref: identity };
+      expect((await host.client.getNavigationQueueProjection(request)).entries.map(entry => ({ id: entry.queueEntryId, held: entry.manualReleaseRequired })).sort((a, b) => a.id.localeCompare(b.id)))
+        .toEqual([{ id: "new-result", held: true }, { id: "older-result", held: true }]);
+      expect(await host.client.cancelQueuedTurn({ queueEntryId: "new-result" })).toMatchObject({ cancelled: true });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect((await host.client.getNavigationQueueProjection(request)).entries).toMatchObject([{ queueEntryId: "older-result", manualReleaseRequired: true }]);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+      const events = host.events.filter(event => event.notification.method === "thread/turnQueue/updated"
+        && event.notification.params.queueEntryId === "older-result");
+      expect(events.at(-1)?.notification.params).toMatchObject({ status: "held", manualReleaseRequired: true });
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "older-result" })).toMatchObject({ disposition: "started" });
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
+  });
+
+  it("shutdown and a fresh owner never restore an unlock's independently held input", async () => {
+    const root = await realpath(await mkdtemp("/tmp/pwragent-qun-"));
+    let host: OwnerHost | undefined;
+    let stop = () => {};
+    try {
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.setThreadLock({ ...identity, locked: true });
+      await registry.submitHeldTurn({ ...identity, queueEntryId: "older-result", input: [{ type: "text", text: "Invented held result" }], holdReason: threadLockRefusalMessage({}) });
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (armed && event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.queueEntryId === "older-result" && !event.notification.params.manualReleaseRequired) {
+          armed = false;
+          await registry.submitHeldTurn({ ...identity, queueEntryId: "new-result", input: [{ type: "text", text: "Invented independent review" }], holdReason: "independent review" });
+        }
+      });
+      await host.client.setThreadLock({ ...identity, locked: false });
+      await host.client.cancelQueuedTurn({ queueEntryId: "new-result" });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: "older-result" })).input).toEqual([{ type: "text", text: "Invented held result" }]);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+      stop();
+      await host.close();
+      host = undefined;
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "older-result" })).toMatchObject({ disposition: "not_found" });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+    } finally { stop(); await host?.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it("registered desktop Retry preserves a new held result arriving during release publication", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();
