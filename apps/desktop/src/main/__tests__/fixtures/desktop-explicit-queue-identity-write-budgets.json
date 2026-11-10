@@ -1,0 +1,9 @@
+{
+  "waiting-identity-admissions-100": {
+    "commits": 0,
+    "note": "100 registered ordinary admissions with three concurrent matching retries, changed-input refusals, reads, pauses and hash cancellations; native setup excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}
