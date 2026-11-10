@@ -150,11 +150,18 @@ describe("nested row inset", () => {
       });
     }
     const arithmetic = expression.replace(/min\(/g, "Math.min(").replace(/calc\(/g, "(").replace(/(\d)px/g, "$1");
-    if (!/^[\d\s.+\-*/(),Mathmin]+$/.test(arithmetic)) throw new Error(`not arithmetic: ${arithmetic}`);
+    if (!/^(?:Math\.min|[\d\s.+\-*/(),])+$/.test(arithmetic)) throw new Error(`not arithmetic: ${arithmetic}`);
     return Number(new Function(`return ${arithmetic};`)());
   }
 
-  const topLevelInset = Number(declaration(".thread-row", "padding").split(/\s+/)[1]!.replace("px", ""));
+  /** The left side of `.thread-row`'s padding, from its longhand or any shorthand form. */
+  const topLevelInset = (() => {
+    const body = rulesMentioning(".thread-row").find((rule) => rule.selectors.includes(".thread-row"))!.body;
+    const longhand = body.match(/(?:^|[;\s])padding-left:\s*([^;]+);/)?.[1];
+    if (longhand) return px(longhand.trim(), {});
+    const sides = declaration(".thread-row", "padding").split(/\s+/);
+    return px(sides[[0, 0, 1, 1, 3][sides.length]!]!, {});
+  })();
   const topLevelToggle = px(declaration(".thread-row__subthread-toggle", "left"), {});
   const shellInset = rulesMentioning(".thread-row-shell--nested")
     .find((rule) => rule.selectors.includes(".thread-row-shell--nested"))
@@ -186,6 +193,48 @@ describe("nested row inset", () => {
   // X-ray lifts one row out of the list; it runs in Compact and Minimal only.
   const xrayInset = (vars: Record<string, string>) =>
     px(declaration(".thread-row-shell[data-xray-target] > .thread-row", "padding-left"), vars);
+
+  /**
+   * Selector specificity as [ids, classes/attributes/pseudo-classes, types],
+   * enough for the selectors below: `:not()` and `:is()` take their most
+   * specific argument, and `*` counts nothing.
+   */
+  function specificity(selector: string): [number, number, number] {
+    const total: [number, number, number] = [0, 0, 0];
+    const add = (part: [number, number, number]) => part.forEach((value, index) => { total[index]! += value; });
+    let rest = selector;
+    for (let match = rest.match(/:(?:not|is)\(/); match; match = rest.match(/:(?:not|is)\(/)) {
+      let depth = 1;
+      let end = match.index! + match[0].length;
+      for (; depth > 0; end += 1) depth += rest[end] === "(" ? 1 : rest[end] === ")" ? -1 : 0;
+      const inner = splitSelectorList(rest.slice(match.index! + match[0].length, end - 1)).map(specificity);
+      add(inner.reduce((best, next) => (compare(next, best) > 0 ? next : best), [0, 0, 0]));
+      rest = rest.slice(0, match.index) + " " + rest.slice(end);
+    }
+    total[0] += (rest.match(/#[\w-]+/g) ?? []).length;
+    total[1] += (rest.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+/g) ?? []).length;
+    total[2] += (rest.replace(/\[[^\]]+\]/g, " ").match(/(?:^|[\s>+~])[a-z][\w-]*/g) ?? []).length;
+    return total;
+  }
+  function compare(left: [number, number, number], right: [number, number, number]): number {
+    return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+  }
+  const selectorsOf = (body: { selectors: string[] } | undefined) => body?.selectors ?? [];
+
+  it("lets the density and X-ray rules out-rank the nested rules the model reads past", () => {
+    const nestedRow = specificity(".thread-row-shell--nested .thread-row");
+    const nestedToggle = specificity(".thread-row-shell--nested .thread-row__subthread-toggle");
+    expect(compare(specificity(".thread-row-shell[data-xray-target] > .thread-row"), nestedRow)).toBeGreaterThan(0);
+    for (const density of ["compact", "minimal"]) {
+      const rules = rulesMentioning(`[data-density="${density}"]`);
+      const row = rules.find((rule) => rule.selectors[0]!.includes(" .thread-row:not(") && /padding-left:/.test(rule.body));
+      const toggle = rules.find((rule) => rule.selectors[0]!.includes(".thread-row-shell--nested"));
+      expect(selectorsOf(row)).toHaveLength(2);
+      expect(selectorsOf(toggle)).toHaveLength(2);
+      for (const selector of selectorsOf(row)) expect(compare(specificity(selector), nestedRow), selector).toBeGreaterThan(0);
+      for (const selector of selectorsOf(toggle)) expect(compare(specificity(selector), nestedToggle), selector).toBeGreaterThan(0);
+    }
+  });
 
   for (const [density, layout] of Object.entries(layouts)) {
     it(`${density}: steps each depth in 12px up to the cap, and keeps the chevron's top-level distance`, () => {
