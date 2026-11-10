@@ -14212,6 +14212,38 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it.each(["started", "busy", "blocked"] as const)("owner disposition oracle permits Retry during a live turn and retains unadmitted input (%s)", async disposition => {
+    // The owner knows whether this held identity can steer. Its disposition,
+    // rather than the viewer's active-turn flag, decides whether input left.
+    const draftStore = createComposerDraftStore();
+    const scope = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scope, [{
+      id: "backend-queued:held-1", queueEntryId: "held-1", manualReleaseRequired: true,
+      holdReason: "Review before retry", text: "Invented immutable held input",
+      imageAttachments: [], fileAttachments: [],
+    }]);
+    const releaseQueuedTurn = vi.fn(async () => ({ queueEntryId: "held-1", disposition,
+      ...(disposition === "started" ? { turnId: "native-owner" } : {}),
+      ...(disposition === "blocked" ? { errorMessage: "Owner still refuses" } : {}),
+    }));
+    const onUserRepliedToThread = vi.fn(), startTurn = vi.fn(), steerTurn = vi.fn();
+    render(<Composer backends={[backendSummary("codex")]} desktopApi={{
+      onAgentEvent: () => () => undefined, releaseQueuedTurn, startTurn, steerTurn,
+    }} disabled={false} activeTurnId="native-owner" draftStore={draftStore}
+    onUserRepliedToThread={onUserRepliedToThread} skills={[]} thread={{
+      id: "thread-1", title: "Invented live owner", titleSource: "explicit", source: "codex",
+      executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    await clickButton("Retry");
+    expect(releaseQueuedTurn).toHaveBeenCalledExactlyOnceWith({ queueEntryId: "held-1" });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(onUserRepliedToThread).toHaveBeenCalledTimes(disposition === "started" ? 1 : 0);
+    expect(draftStore.getQueuedTurns(scope).map(entry => ({ id: entry.queueEntryId, text: entry.text })))
+      .toEqual(disposition === "started" ? [] : [{ id: "held-1", text: "Invented immutable held input" }]);
+  });
+
   it("releases a held backend queue entry only when the operator retries it", async () => {
     const draftStore = createComposerDraftStore();
     draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{

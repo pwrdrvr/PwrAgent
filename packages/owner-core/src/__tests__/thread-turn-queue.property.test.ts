@@ -10,6 +10,55 @@ const THREAD = { backend: "codex" as const, threadId: "model-thread" };
 const REASONS = ["locked", "awaiting-review", "target-ended"] as const;
 const FAILURE = "The previous turn failed. Review the error before retrying queued messages.";
 
+it("Retry admits only eligible held guidance while preserving the running queue owner", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (steerable, tracked) => {
+    const steers: string[] = [], starts: string[] = [];
+    let active = false;
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => active,
+      canSteerThread: () => active && steerable,
+      startTurn: async entry => { active = true; starts.push(entry.id); return { ...THREAD, turnId: "native-owner" }; },
+      steerTurn: async entry => { steers.push(entry.id); return { ...THREAD, turnId: "native-owner" }; },
+    });
+    try {
+      if (tracked) await queue.submit({ ...THREAD, id: "owner", origin: "manual", input: [] });
+      else active = true;
+      await queue.submitHeld({ ...THREAD, id: "guidance", origin: "manual", delivery: "queued-steer", input: [] }, "review");
+      const result = await queue.releaseEntryWithDisposition("guidance");
+      expect(result.disposition).toBe(steerable ? "started" : "busy");
+      expect(steers).toEqual(steerable ? ["guidance"] : []);
+      expect(starts).toEqual(tracked ? ["owner"] : []);
+      expect(active).toBe(true);
+      expect(queue.getQueuedEntries(THREAD).map(entry => ({ id: entry.id, held: entry.manualReleaseRequired })))
+        .toEqual(steerable ? [] : [{ id: "guidance", held: true }]);
+    } finally { queue.close(); }
+  }));
+});
+
+it("Retry preserves review holds behind dispatch gates and never admits after close", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("dispatch", "closed", "close-during-release"), async gate => {
+    let held = false, closeOnRelease = false, sends = 0;
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      canSteerThread: () => true,
+      isDispatchHeld: () => held,
+      startTurn: async () => { throw new Error("Running native owner must not be replaced"); },
+      steerTurn: async () => { sends++; return { ...THREAD, turnId: "native-owner" }; },
+      onLifecycle: event => { if (closeOnRelease && event.type === "queued") queue.close(); },
+    });
+    try {
+      await queue.submitHeld({ ...THREAD, id: "guidance", origin: "manual", delivery: "queued-steer", input: [] }, "review");
+      const before = queue.getQueuedEntries(THREAD);
+      held = gate === "dispatch";
+      closeOnRelease = gate === "close-during-release";
+      if (gate === "closed") queue.close();
+      expect(await queue.releaseEntryWithDisposition("guidance")).toMatchObject({ disposition: "busy" });
+      expect(sends).toBe(0);
+      if (!closeOnRelease) expect(queue.getQueuedEntries(THREAD)).toEqual(before);
+    } finally { queue.close(); }
+  }));
+});
+
 type ModelEntry = { id: string; holds: string[]; paused: boolean };
 type Model = {
   arrivals: string[];

@@ -342,6 +342,202 @@ it.skipIf(process.platform === "win32")("a refused steering claim cannot restore
   });
 });
 
+it.skipIf(process.platform === "win32")("explicit Retry of unclaimed held guidance reaches the live native owner exactly once", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("lock", "claim"), fc.integer({ min: 1, max: 4 }), async (refusal, copies) => {
+    await fixture(async ({ runtime, backend, store, steers, starts, submit, value, terminal, events }: any) => {
+      const request = value("retry-guidance", "Invented held guidance");
+      const accepted = await submit(request), id = accepted.queueEntryId;
+      const prior = store.get(id), save = store.save.bind(store);
+      runtime.threadLocked = () => refusal === "lock";
+      store.save = (job: any) => {
+        if (refusal === "claim" && job.id === id && job.status === "starting") throw new Error("claim refused");
+        return save(job);
+      };
+      await drain();
+      expect(store.get(id)).toMatchObject({ status: "queued", fingerprint: prior.fingerprint });
+      expect(store.get(id).turnId).toBeUndefined();
+      expect(backend.queuedTurns(ref.threadId)[0]).toMatchObject({ queueEntryId: id, manualReleaseRequired: true });
+      expect(steers).toEqual([]);
+      runtime.threadLocked = () => false;
+      store.save = save;
+      // Repeating acceptance never releases a review hold. Only Retry does.
+      for (let i = 0; i < copies; i++) await submit(request);
+      await drain();
+      expect(steers).toEqual([]);
+      expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: id })).toMatchObject({ disposition: "started", turnId: "turn-1" });
+      await drain();
+      expect(steers.map((call: any) => ({ input: call.input, turnId: call.expectedTurnId }))).toMatchObject([{ input: request.input, turnId: "turn-1" }]);
+      expect(starts).toHaveLength(1);
+      expect(runtime.active).toBe("active");
+      expect(backend.activeJob(ref).id).toBe("active");
+      expect(store.get(id)).toMatchObject({ fingerprint: prior.fingerprint, status: "running", turnId: "turn-1", messageOrigin: prior.messageOrigin });
+      expect(events.some((event: any) => event.method === "thread/turnQueue/updated" && event.params.queueEntryId === id && event.params.status === "started")).toBe(true);
+      for (let i = 0; i < copies; i++) {
+        expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: id })).toMatchObject({ disposition: "not_found" });
+        await submit(request);
+      }
+      terminal(); await drain();
+      expect(store.get(id)).toMatchObject({ status: "completed", fingerprint: prior.fingerprint, turnId: "turn-1" });
+      expect(steers).toHaveLength(1);
+    });
+  }), { numRuns: 8, examples: [["lock", 1], ["claim", 1]] });
+});
+
+it.skipIf(process.platform === "win32")("held guidance Retry preserves live refusals, pauses, order and immutable acceptance", async () => {
+  const gates = ["lock", "intake", "creating", "uncertain", "dispatch", "stopping", "retired", "project", "interrupting"];
+  for (const gate of gates) {
+    await fixture(async ({ runtime, backend, store, steers, submit, value }: any) => {
+      const accepted = await submit(value("gated-guidance")), id = accepted.queueEntryId;
+      runtime.threadLocked = () => true; await drain();
+      runtime.threadLocked = () => false;
+      const job = store.get(id), before = backend.queueProjection({ protocol: 2, ref });
+      const owns = runtime.ownsThread, cwd = runtime.threadCwd, dispatch = Promise.resolve();
+      if (gate === "lock") runtime.threadLocked = () => true;
+      if (gate === "intake") runtime.intakeBusy = true;
+      if (gate === "creating") backend.creating = true;
+      if (gate === "uncertain") runtime.uncertain = true;
+      if (gate === "dispatch") runtime.dispatches.set("fixture-pending", dispatch);
+      if (gate === "stopping") runtime.stopping = true;
+      if (gate === "retired") runtime.ownsThread = () => false;
+      if (gate === "project") runtime.threadCwd = () => path.join(runtime.workspace, "missing");
+      if (gate === "interrupting") {
+        runtime.codex.interruptTurn = async () => ({});
+        await runtime.handle("interrupt", { id: "active" });
+      }
+      try {
+        expect(["blocked", "busy"]).toContain((await backend.handle("backend.releaseQueuedTurn", { queueEntryId: id })).disposition);
+        expect(backend.queueProjection({ protocol: 2, ref })).toEqual(before);
+        expect(store.get(id)).toEqual(job);
+        expect(steers).toEqual([]);
+      } finally {
+        runtime.threadLocked = () => false; runtime.intakeBusy = false; backend.creating = false;
+        runtime.uncertain = false; runtime.stopping = false; runtime.dispatches.delete("fixture-pending");
+        runtime.ownsThread = owns; runtime.threadCwd = cwd;
+      }
+    });
+  }
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 5 }), fc.boolean(), async (count, cancel) => {
+    await fixture(async ({ runtime, backend, store, steers, submit, value }: any) => {
+      const accepted = [];
+      for (let i = 0; i < count; i++) accepted.push(await submit(value(`held-${i}`)));
+      const paused = accepted[0].queueEntryId, next = accepted.at(-1).queueEntryId;
+      const fingerprints = accepted.map(result => store.get(result.queueEntryId).fingerprint);
+      const pause = await runtime.setQueuedTurnPaused({ queueEntryId: paused, paused: true });
+      await runtime.moveQueuedTurn({ queueEntryId: next, beforeQueueEntryId: accepted[1].queueEntryId });
+      runtime.threadLocked = () => true; await drain(); runtime.threadLocked = () => false;
+      expect(await runtime.releaseQueuedTurn({ queueEntryId: paused })).toMatchObject({ disposition: "not_head" });
+      if (cancel && count > 2) await runtime.cancelQueuedTurn({ queueEntryId: accepted[1].queueEntryId });
+      const fifo = runtime.turnQueue.getQueuedEntries(ref).filter((entry: any) => !entry.paused).map((entry: any) => entry.input[0].text);
+      expect(await runtime.releaseQueuedTurn({ queueEntryId: next })).toMatchObject({ disposition: "started", turnId: "turn-1" });
+      await drain();
+      expect(steers.map((call: any) => call.input[0].text)).toEqual(fifo);
+      expect(backend.queuedTurns(ref.threadId)).toMatchObject([{ queueEntryId: paused, paused: true, pauseRevision: pause.pauseRevision }]);
+      expect(accepted.map(result => store.get(result.queueEntryId).fingerprint)).toEqual(fingerprints);
+      await runtime.setQueuedTurnPaused({ queueEntryId: paused, paused: false }); await drain();
+      expect(steers.at(-1).input[0].text).toBe("held-0");
+      expect(runtime.active).toBe("active");
+    });
+  }), { numRuns: 8 });
+});
+
+it.skipIf(process.platform === "win32")("retried guidance retains claim ownership through concurrent controls, new holds and late terminals", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("completed", "failed", "interrupted", "stop"), async status => {
+    await fixture(async ({ runtime, backend, store, steers, starts, submit, value, terminal }: any) => {
+      const request = value("held-guidance"), accepted = await submit(request), id = accepted.queueEntryId;
+      runtime.threadLocked = () => true; await drain(); runtime.threadLocked = () => false;
+      let entered!: () => void, acknowledge!: () => void;
+      const native = new Promise<void>(resolve => { entered = resolve; });
+      const ack = new Promise<void>(resolve => { acknowledge = resolve; });
+      runtime.codex.steerTurn = async (call: any) => { steers.push(call); entered(); await ack; return { turnId: call.expectedTurnId }; };
+      const retry = runtime.releaseQueuedTurn({ queueEntryId: id });
+      await native;
+      try {
+        expect(store.get(id)).toMatchObject({ status: "starting", turnId: "turn-1" });
+        expect(await runtime.releaseQueuedTurn({ queueEntryId: id })).toMatchObject({ disposition: "not_found" });
+        expect(await runtime.cancelQueuedTurn({ queueEntryId: id })).toMatchObject({ disposition: "already_admitted", cancelled: false });
+        expect(await runtime.setQueuedTurnPaused({ queueEntryId: id, paused: true })).toMatchObject({ disposition: "not_found" });
+        expect(await runtime.moveQueuedTurn({ queueEntryId: id })).toMatchObject({ disposition: "not_found" });
+        const reservation = runtime.dispatches.get(id);
+        expect(reservation).toBeDefined();
+        let retried = false;
+        const duplicate = submit(request).then((result: any) => { retried = true; return result; });
+        await drain();
+        expect(retried).toBe(false);
+        const waiting = runtime.submit({ id: "late-review", threadId: ref.threadId, prompt: "Invented new review hold" },
+          { delivery: "queued-steer", manualReleaseRequired: true, holdReason: "Independent later review" });
+        expect(runtime.active).toBe("active");
+        let stopped: Promise<void> | undefined;
+        if (status === "stop") stopped = runtime.stop();
+        else terminal("turn-1", status);
+        expect(starts).toHaveLength(1);
+        await drain();
+        expect(runtime.dispatches.get(id)).toBe(reservation);
+        expect(retried).toBe(false);
+        acknowledge();
+        await retry; await duplicate; await stopped; await drain();
+        expect(retried).toBe(true);
+        expect(runtime.dispatches.has(id)).toBe(false);
+        expect(store.get(id)).toMatchObject({ status: status === "stop" ? "unknown" : status, turnId: "turn-1" });
+        expect(steers).toHaveLength(1);
+        expect(starts).toHaveLength(1);
+        if (status === "stop") expect(store.get(waiting.id).status).toBe("unknown");
+        else expect(backend.queuedTurns(ref.threadId)[0]).toMatchObject({ queueEntryId: waiting.id, manualReleaseRequired: true });
+        expect(await runtime.releaseQueuedTurn({ queueEntryId: id })).toMatchObject({ disposition: "not_found" });
+      } finally { acknowledge(); await retry; }
+    });
+  }), { numRuns: 8, examples: [["completed"], ["stop"]] });
+});
+
+it.skipIf(process.platform === "win32")("budgets explicit held guidance Retry without reacceptance or replay writes", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const budgetFile = "outpost-held-steer-retry-write-budgets.json";
+  const measure = async (scenario: string, note: string, work: () => Promise<void>) => {
+    const { writes } = await measureSqliteWrites(work);
+    expectSqliteWriteBudget({ budgetFile, scenario, note, writes });
+  };
+  try {
+    for (const phase of ["accepted", "claim-refused", "native-uncertain", "confirmation-uncertain"]) {
+      await fixture(async ({ runtime, store, submit, value, steers }: any) => {
+        const request = value("retry-budget"), accepted = await submit(request), id = accepted.queueEntryId;
+        runtime.threadLocked = () => true; await drain(); runtime.threadLocked = () => false;
+        const before = store.get(id), save = store.save.bind(store);
+        if (phase === "native-uncertain") runtime.codex.steerTurn = async (call: any) => { steers.push(call); throw new Error("uncertain"); };
+        store.save = (job: any) => {
+          if (job.id === id && ((phase === "claim-refused" && job.status === "starting")
+            || (phase === "confirmation-uncertain" && job.status === "running"))) throw new Error("refused");
+          return save(job);
+        };
+        await measure(phase, "One explicit Retry of an already accepted unclaimed held steer; setup and original acceptance excluded", async () => {
+          const result = await runtime.releaseQueuedTurn({ queueEntryId: id });
+          expect(result.disposition).toBe(phase === "claim-refused" ? "blocked" : "started");
+          await drain();
+        });
+        expect(store.get(id).fingerprint).toBe(before.fingerprint);
+        const sends = steers.length;
+        await measure(`${phase}-100-retries`, "One hundred repeated acceptances, explicit retries and reads; no extra native send", async () => {
+          for (let i = 0; i < 100; i++) {
+            await submit(request); await runtime.releaseQueuedTurn({ queueEntryId: id });
+            runtime.turnQueue.getAllQueuedEntries();
+          }
+        });
+        expect(steers).toHaveLength(sends);
+        store.save = save;
+        if (phase === "accepted") await measure("stop-after-retry", "Shutdown settles original and retried guidance without replay", async () => { await runtime.stop(); });
+      });
+    }
+    await fixture(async ({ runtime, submit, value }: any) => {
+      const accepted = await submit(value("gated-budget"));
+      runtime.threadLocked = () => true; await drain(); runtime.threadLocked = () => false;
+      runtime.intakeBusy = true;
+      try {
+        await measure("gated-100-retries", "One hundred live-gated retries preserve the hold and make no writes", async () => {
+          for (let i = 0; i < 100; i++) expect(await runtime.releaseQueuedTurn({ queueEntryId: accepted.queueEntryId })).toMatchObject({ disposition: "busy" });
+        });
+      } finally { runtime.intakeBusy = false; }
+    });
+  } finally { vi.unstubAllEnvs(); }
+});
+
 it.skipIf(process.platform === "win32")("budgets individual queued steering at acceptance, target claim, terminal and recovery boundaries", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   vi.useFakeTimers({ toFake: ["Date"] });

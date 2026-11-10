@@ -23189,6 +23189,18 @@ export class DesktopBackendRegistry {
   async releaseQueuedTurnWithDisposition(
     entryId: string,
   ): Promise<ReleaseQueuedTurnResponse> {
+    const entry = this.threadTurnQueue.getAllQueuedEntries().find((candidate) => candidate.id === entryId);
+    if (entry?.delivery === "queued-steer" && entry.manualReleaseRequired && this.getActiveTurnForThread(entry)) {
+      const backend = (await this.listBackends({ includeUnavailable: true })).backends
+        .find((candidate) => candidate.kind === entry.backend);
+      // The queue's live-owner check is optimistic. Confirm provider support
+      // before Retry clears review holds, then recheck the live FIFO after IO.
+      const head = this.threadTurnQueue.getQueuedEntries(entry).find((candidate) => !candidate.paused);
+      if (!backend?.capabilities.steerTurn && head?.id === entryId
+        && head.manualReleaseRequired && this.getActiveTurnForThread(head)) {
+        return { queueEntryId: entryId, disposition: "busy" };
+      }
+    }
     const result = await this.threadTurnQueue.releaseEntryWithDisposition(entryId);
     return {
       queueEntryId: entryId,

@@ -115,6 +115,17 @@ control calls; native interruption stays with the original active job.
 The existing job payload retains a bounded delivery enum and captured native
 identity, never prompt text. No schema, timer or inherited budget changes.
 
+`outpost-held-steer-retry-write-budgets.json` measures explicit Retry after an
+individual guidance entry was accepted and held before its native claim.
+Successful target claim, original-owner origin retention and running confirmation
+cost three commits/12,360 observed WAL bytes (1.236 MB/day at 100 retries/day).
+Native uncertainty costs two commits/8,240 bytes (0.824 MB/day); confirmation
+uncertainty costs three/12,360. A refused claim and each 100 duplicate or gated
+retries cost zero commits and add no native resend. Shutdown after successful
+Retry settles original and guidance jobs in two commits/8,240 bytes. Setup and
+acceptance are excluded; real drains/timers and all inherited budgets remain
+unchanged. Retry adds no persistence site or idle write.
+
 Shared `AcpSessionStore` and `AcpAvailableCommandsStore` implement owner-core
 ACP session metadata and last-observed command ports. Desktop's private bindings
 retain both explicitly typed runtime factories and their app-state construction
