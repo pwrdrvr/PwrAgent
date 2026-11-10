@@ -589,6 +589,8 @@ import {
   type ThreadUsageLineRecord,
   type PrSummary,
   type ThreadPullRequestWatchSummary,
+  type ThreadMaintenanceRunStage,
+  type ThreadMaintenanceRunItem,
   type SetThreadCheckoutHibernationResponse,
   type ThreadHibernatedWorkspace,
   type WorktreeSnapshotSummary,
@@ -854,6 +856,7 @@ import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
 import { hasWorktreeRegistration, inspectRegisterableWorktree, sameRegisteredWorktree } from "./worktree-maintenance-registration";
 import { protectiveMaintenanceWatches, type MaintenancePrObservation } from "./maintenance-pr-watches";
+import { runMaintenanceItems } from "./maintenance-runner";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
 import {
@@ -17286,6 +17289,19 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** Removing an identified checkout cannot attach an unknown owner. Keep
+   * the ordinary workspace writer fence without invalidating the fleet as
+   * an unidentified directory move would. The queue owns overlapping paths. */
+  private async withHibernatingCheckout<T>(owner: string, worktreePath: string, work: () => Promise<T>): Promise<T> {
+    const finish = this.archiveWorkspaceOwnership.beginMutation(owner, true);
+    try {
+      await this.archiveWorkspaceOwnership.assertAvailable([worktreePath]);
+      return await work();
+    } finally {
+      await this.archiveWorkspaceOwnership.refresh(finish(), async () => [worktreePath]);
+    }
+  }
+
   /**
    * Hibernates one idle thread's checkout: snapshot, re-check, remove, then
    * one SQLite commit for the snapshot record. Housekeeping order matches
@@ -17296,7 +17312,7 @@ export class DesktopBackendRegistry {
   private async hibernateIdleCheckout(
     candidate: ThreadArchiveCandidate,
     policy: DesktopCheckoutHibernationPolicy,
-    options: { reviewed?: boolean } = {},
+    options: { reviewed?: boolean; context?: ArchiveCleanupContext; onStage?: (stage: ThreadMaintenanceRunStage) => void } = {},
   ): Promise<boolean | string> {
     const target = hibernationTarget(candidate);
     if ("keep" in target) return target.keep;
@@ -17317,17 +17333,26 @@ export class DesktopBackendRegistry {
         // snapshot holds exactly these files.
         let saved: Extract<Awaited<ReturnType<typeof inspectHibernationWorkspace>>, { keep?: undefined }> | undefined;
         try {
-          snapshot = await this.withArchiveWorkspaceWrite([target.worktreePath], async () => await this.worktreeArchiveService.hibernate({
+          snapshot = await this.withHibernatingCheckout(key, target.worktreePath, async () => await this.worktreeArchiveService.hibernate({
             backend, threadId,
             worktreePath: target.worktreePath,
             repositoryPath: target.repositoryPath,
             capSnapshotBytes: policy.maxSnapshotMb * 1024 * 1024,
+            onStage: options.onStage,
             beforeRemove: async () => {
+              options.onStage?.("checking");
               // Checks 1 to 5 again, against fresh thread state.
               const current = await this.refreshAutoArchiveCandidate(candidate, { deferOwnership: true });
-              const all = await this.listAutoArchiveCandidates();
-              current.managedWorktreePath = await this.managedMaintenanceCheckout(current.thread, this.maintenanceOwnershipInventory(all, current));
+              const inventory = options.context ? await options.context.withInventory!(async () =>
+                await this.readPacedArchiveCleanupInventory({ backend, threadId, context: options.context, ownershipScope: target.worktreePath })) : undefined;
+              // Membership is authoritative even when an archived provider
+              // row has no archivedAt timestamp. Only active owners hold it.
+              const all = inventory ? inventory.activeThreads.map((thread) => ({ thread }))
+                : await this.listAutoArchiveCandidates();
+              current.managedWorktreePath = await this.managedMaintenanceCheckout(current.thread,
+                inventory ?? this.maintenanceOwnershipInventory(all, current));
               const assertCurrent = () => {
+                options.context?.assertCurrent();
                 // A reviewed run uses the policy it was reviewed under, so a
                 // change to Settings does not cancel it; the sweep's does.
                 if (reservation.cancelled || this.closed
@@ -17372,6 +17397,7 @@ export class DesktopBackendRegistry {
         }
         // The one commit a hibernation makes. Recorded even if the operator
         // acted meanwhile: the checkout is gone and this is its only record.
+        options.onStage?.("recording");
         await this.overlayStore.upsertWorktreeSnapshot({ backend, threadId, snapshot });
         this.checkoutRestoreFailures.delete(key);
         this.undeliveredCheckoutRestoreFailures.delete(key);
@@ -39882,6 +39908,8 @@ export class DesktopBackendRegistry {
     /** Limit removal to these reviewed checkouts. Empty folders only when asked. */
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
+    onItem?: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    stopped?: () => boolean;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     // A manual sweep joins startup repair rather than queuing duplicate removals.
     // Read-only audits never join a mutating pass. A reviewed selection waits
@@ -39965,7 +39993,10 @@ export class DesktopBackendRegistry {
 
   /** Remove only reviewed archived checkouts. Each removal still takes fresh
    * ownership admission and snapshots changes, exactly like the repair pass. */
-  async removeArchivedCheckouts(selection: { worktreePaths: string[]; emptyFolders: boolean }): Promise<{
+  async removeArchivedCheckouts(selection: { worktreePaths: string[]; emptyFolders: boolean }, options?: {
+    onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    stopped: () => boolean;
+  }): Promise<{
     removed: { worktreePath: string }[];
     kept: { worktreePath: string; reason: string }[];
     failed: { worktreePath: string; message: string }[];
@@ -39975,6 +40006,7 @@ export class DesktopBackendRegistry {
     const selected = new Set(selection.worktreePaths.map(normalizeWorktreePathForComparison));
     const report = await this.repairArchivedThreadWorktrees({
       select: { worktreePaths: selected, emptyFolders: selection.emptyFolders },
+      ...options,
     });
     const result = {
       removed: [] as { worktreePath: string }[],
@@ -40066,8 +40098,23 @@ export class DesktopBackendRegistry {
   }
 
   /** Hibernate one reviewed checkout, with every check run again first. */
-  async hibernateReviewedCheckout(candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy): Promise<boolean | string> {
-    return await this.hibernateIdleCheckout(candidate, policy, { reviewed: true });
+  async hibernateReviewedCheckout(candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy,
+    onStage?: (stage: ThreadMaintenanceRunStage) => void): Promise<boolean | string> {
+    const target = hibernationTarget(candidate);
+    if ("keep" in target) return target.keep;
+    const { source: backend, id: threadId } = candidate.thread;
+    let outcome: boolean | string = false;
+    onStage?.("waitingForWorker");
+    await this.archiveCleanupQueue.enqueue(`hibernate:${buildThreadIdentityKey(backend, threadId)}`, async (context) => {
+      context.setWorktreePath?.(target.worktreePath);
+      onStage?.("waiting");
+      outcome = await context.withWorktree!(target.worktreePath, async () => {
+        onStage?.("checking");
+        return await this.hibernateIdleCheckout(candidate, policy, { reviewed: true, context, onStage });
+      });
+      return { backend, threadId, archivedAt: Date.now(), cleanup: [] };
+    });
+    return outcome;
   }
 
   private async runArchivedThreadWorktreeRepair(options: {
@@ -40076,6 +40123,8 @@ export class DesktopBackendRegistry {
     select?: { worktreePaths: ReadonlySet<string>; emptyFolders: boolean };
     onProgress?: (completed: number, total: number, report?: ArchivedWorktreeRepairReport) => void;
     onDiscoveryProgress?: (progress: MaintenanceDiscoveryProgress) => void;
+    onItem?: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
+    stopped?: () => boolean;
   } = {}): Promise<ArchivedWorktreeRepairReport> {
     await this.subAgentStartupReconciliation;
     if (this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn() || !this.codexClient.listArchiveCleanupThreadsPage) {
@@ -40269,10 +40318,18 @@ export class DesktopBackendRegistry {
     const total = report.candidates.length + report.emptyContainerCandidates.length;
     options.onProgress?.(0, total, report);
     let completed = 0;
-    for (const candidate of report.candidates) {
+    await runMaintenanceItems(report.candidates, async (candidate) => {
       assertCurrent();
+      if (options.stopped?.()) {
+        report.cleanup.push({ worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false, skippedReason: "Stopped before removing" });
+        options.onItem?.({ path: candidate.worktreePath, status: "kept", reason: "Stopped before removing" });
+        options.onProgress?.(++completed, total, report);
+        return;
+      }
+      options.onItem?.({ path: candidate.worktreePath, status: "running", stage: "waiting" });
       const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
       const completion = this.enqueueArchiveRepair(key, candidate.worktreePath, async (context) => {
+        options.onItem?.({ path: candidate.worktreePath, status: "running", stage: "checking" });
         // This complete inventory is preliminary only. archiveThreadWorktrees
         // still performs a fresh authoritative ownership scan before removal.
         const candidateKey = canonicalKeys.get(normalizeWorktreePathForComparison(candidate.worktreePath))!;
@@ -40286,6 +40343,7 @@ export class DesktopBackendRegistry {
           backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
           cleanup: await this.archiveThreadWorktrees({
             ...inventory, backend: candidate.backend, thread, context,
+            onStage: (stage) => options.onItem?.({ path: candidate.worktreePath, status: "running", stage }),
           }),
         };
       });
@@ -40294,15 +40352,22 @@ export class DesktopBackendRegistry {
           backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
         });
         report.cleanup.push(...result.cleanup);
+        for (const item of result.cleanup) {
+          if (!item.worktreePath) continue;
+          options.onItem?.({ path: item.worktreePath, status: item.removedWorktree ? "done" : item.error ? "failed" : "kept",
+            reason: item.error ? "Removal failed" : item.skippedReason, detail: item.error });
+        }
       } catch (error) {
         assertCurrent();
         report.cleanup.push({ worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
           error: error instanceof Error ? error.message : String(error) });
+        options.onItem?.({ path: candidate.worktreePath, status: "failed", reason: "Removal failed", detail: error instanceof Error ? error.message : String(error) });
       }
       options.onProgress?.(++completed, total, report);
-    }
+    });
     for (const candidate of report.emptyContainerCandidates) {
       assertCurrent();
+      if (options.stopped?.()) break;
       const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
       const completion = this.enqueueArchiveRepair(key, candidate.worktreePath, async (context) => {
         const containerPath = await this.worktreeContainerService.containerPath(candidate.worktreePath);
@@ -41263,6 +41328,7 @@ export class DesktopBackendRegistry {
   }
 
   private async archiveThreadWorktrees(params: {
+    onStage?: (stage: ThreadMaintenanceRunStage) => void;
     activeThreads: AppServerThreadSummary[];
     archivedThreads: AppServerThreadSummary[];
     backend: AppServerBackendKind;
@@ -41400,8 +41466,10 @@ export class DesktopBackendRegistry {
           threadId: params.thread.id,
           worktreePath: candidate.worktreePath,
           repositoryPath: candidate.repositoryPath,
+          onStage: params.onStage,
           maxSnapshotBytes: this.reviewedSnapshotLimitFor(params.backend, params.thread.id),
           beforeRemove: params.context && this.codexClient.listArchiveCleanupThreadsPage ? async () => {
+            params.onStage?.("checking");
             this.archiveWorktreeRemovalAdmissions.add(admission);
             this.archiveWorkspaceOwnership.beginAdmission(scope);
             const current = await this.findThreadForArchiveCleanup({
@@ -41448,6 +41516,7 @@ export class DesktopBackendRegistry {
           } : undefined,
         });
         removedSnapshot = snapshot;
+        params.onStage?.("recording");
         backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
           backend: params.backend,
           threadId: params.thread.id,

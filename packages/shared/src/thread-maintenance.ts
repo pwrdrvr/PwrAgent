@@ -338,6 +338,30 @@ export type ThreadMaintenanceStepResult = {
   allocatedBytesRemoved?: number;
 };
 
+/** Live stages describe actual work; a completed item retains its outcome. */
+export type ThreadMaintenanceRunStage = "checking" | "archiving" | "snapshotting" | "verifying" | "waitingForWorker" | "waiting" | "removing" | "recording";
+
+export type ThreadMaintenanceRunItem = {
+  itemId: string;
+  step: ThreadMaintenanceScanStep;
+  action: "archive" | "hibernate" | "removeCheckout" | "trashCheckout" | "removeBuildOutput" | "removeEmptyFolders";
+  object: string;
+  path?: string;
+  backend?: string;
+  threadId?: string;
+  status: "queued" | "running" | "done" | "kept" | "failed";
+  stage?: ThreadMaintenanceRunStage;
+  reason?: string;
+  detail?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  /** Strict completion order within the run, including equal timestamps
+   * and wall-clock corrections. Older owners omit it. */
+  finishedOrder?: number;
+  /** Allocation removed, not measured volume space recovered. */
+  allocatedBytesRemoved?: number;
+};
+
 export type ThreadMaintenanceRun = {
   runId: string;
   /** Grows with every snapshot main publishes, across runs. The newest
@@ -350,6 +374,10 @@ export type ThreadMaintenanceRun = {
   current?: { step: ThreadMaintenanceStep; processed: number; total: number; object?: string };
   steps: ThreadMaintenanceStepResult[];
   problems: ThreadMaintenanceProblem[];
+  /** All requested operations, including queued and successful ones. Kept
+   * for the whole session so minimizing or reopening never loses history.
+   * Absent from older owners. */
+  items?: ThreadMaintenanceRunItem[];
   stopRequested?: boolean;
 };
 
