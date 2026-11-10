@@ -138,7 +138,9 @@ test("remote terminal input, resize, peer ownership, reconnect, history and shut
   const thread = await v.call("backend.startThread", { cwd: project.path });
   const session = await v.call("pty.open", { backend: "codex", threadId: thread.threadId, cols: 80, rows: 24 });
   assert.equal(session.cwd, project.path);
-  await v.call("pty.input", { sessionId: session.sessionId, dataBase64: Buffer.from("printf 'OUTPOST_PTY_OK\\n'; printf '%s' $$ > terminal-shell.pid; pwd\n").toString("base64") });
+  // A shell may ignore SIGHUP. Shutdown must close its PTY master and observe
+  // exit, rather than returning after node-pty's signal-only kill().
+  await v.call("pty.input", { sessionId: session.sessionId, dataBase64: Buffer.from("trap '' HUP; printf 'OUTPOST_PTY_OK\\n'; printf '%s' $$ > terminal-shell.pid; pwd\n").toString("base64") });
   await eventually(() => v.events.some((event) => event.method === "pty.output" && Buffer.from(event.params.dataBase64, "base64").toString().includes("OUTPOST_PTY_OK")));
   await v.call("pty.resize", { sessionId: session.sessionId, cols: 103, rows: 31 });
   await v.call("pty.input", { sessionId: session.sessionId, dataBase64: Buffer.from("stty size\n").toString("base64") });
