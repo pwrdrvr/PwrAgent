@@ -52,7 +52,8 @@ export function PullRequestCopyMenuItems(props: {
             role="menuitem"
             type="button"
             className="thread-context-menu__pr"
-            aria-label={`Copy URL of ${label}, ${title}`}
+            // Visible text first (WCAG 2.5.3, label in name).
+            aria-label={`${label} ${title}, copy URL`}
             title={pr.url}
             onClick={() => props.onCopy(pr.url)}
           >

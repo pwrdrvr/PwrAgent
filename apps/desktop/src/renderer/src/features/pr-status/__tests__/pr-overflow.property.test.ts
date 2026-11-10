@@ -107,13 +107,14 @@ describe("resolvePrOverflow", () => {
   it("turns the overflow chip red when a hidden open PR is failing", () => {
     fc.assert(fc.property(specsArb, (specs) => {
       const overflow = resolvePrOverflow(build(specs))!;
-      const state = resolvePrChipPresentation(overflow.restRepresentative).chipState;
+      const representative = overflow.restRollup.representative;
+      const state = resolvePrChipPresentation(representative).chipState;
       const hiddenOpen = overflow.rest.filter((pr) => pr.lifecycleState === "open");
       if (hiddenOpen.some((pr) => pr.checkState === "failing")) {
         expect(state).toBe("failing");
       }
       if (hiddenOpen.length > 0) {
-        expect(overflow.restRepresentative.lifecycleState).toBe("open");
+        expect(representative.lifecycleState).toBe("open");
       }
     }));
   });

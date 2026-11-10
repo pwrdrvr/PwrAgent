@@ -450,6 +450,11 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           : undefined
       }
       onContextMenu={(event) => {
+        // React bubbles events from portals the row mounts (the PR list,
+        // the reaction picker) here too; they own their own menus.
+        if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) {
+          return;
+        }
         event.preventDefault();
         props.onOpenContextMenu(props.thread, {
           x: event.clientX,

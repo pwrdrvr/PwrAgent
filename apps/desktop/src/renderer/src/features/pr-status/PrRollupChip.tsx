@@ -125,7 +125,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const overflow = props.variant === "overflow" ? resolvePrOverflow(props.prs) : undefined;
   // The PRs the chip itself speaks for: all of them, or the ones the lead
   // chip beside it leaves out. The list always holds every PR.
-  const chipRollup = overflow ? resolvePrRollup(overflow.rest)! : rollup;
+  const chipRollup = overflow?.restRollup ?? rollup;
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
   const presentation = resolvePrChipPresentation(chipRollup.representative);
   const leadLabel = rollup.lead && !overflow
@@ -584,7 +584,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                         cardUrl === pr.url && cardVisible ? cardId : undefined
                       }
                       onFocus={(event) => {
-                        if (!openingMenuRef.current) showRowCard(pr, event.currentTarget, true);
+                        // Focus back from this row's own menu shows no card.
+                        if (!openingMenuRef.current && menuTargetUrl !== pr.url) {
+                          showRowCard(pr, event.currentTarget, true);
+                        }
                       }}
                       onBlur={hideRowCard}
                       onClick={openRow}

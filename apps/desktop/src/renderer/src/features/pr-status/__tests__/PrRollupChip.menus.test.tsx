@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import fc from "fast-check";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
@@ -122,6 +123,56 @@ describe("PrRollupChip right-click in the list", () => {
     fireEvent.contextMenu(within(list()).getByRole("button", { name: "Detach all" }));
     expect(onRowContextMenu).not.toHaveBeenCalled();
     expect(onOpenContextMenu).not.toHaveBeenCalled();
+  });
+});
+
+describe("PrRollupChip right-click rule", () => {
+  /**
+   * For any list and any row: the right-click opens that row's PR menu, never
+   * the thread row's, keeps the list open, and outlines that row alone.
+   */
+  it("opens the clicked row's menu for every list size and row", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 2, max: 8 }).chain((count) =>
+        fc.tuple(fc.constant(count), fc.nat(count - 1), fc.constantFrom<"open" | "merged">("open", "merged"))),
+      ([count, index, lifecycle]) => {
+        const prs = Array.from({ length: count }, (_, i) => pr(20 + i, {
+          createdAt: 1_000 + i,
+          ...(lifecycle === "merged" && i % 2 === 1
+            ? { lifecycleState: "merged" as const, state: "merged" as const, mergedAt: 5_000 + i }
+            : {}),
+        }));
+        const { onRowContextMenu, onOpenContextMenu } = renderInRow({ prs });
+        try {
+          fireEvent.click(screen.getByRole("button", { name: /pull requests/ }));
+          const rows = within(list()).getAllByRole("listitem");
+          expect(rows).toHaveLength(count);
+          fireEvent.contextMenu(rows[index]!);
+          expect(onRowContextMenu).not.toHaveBeenCalled();
+          expect(onOpenContextMenu).toHaveBeenCalledOnce();
+          const target = onOpenContextMenu.mock.calls[0]![0] as PrSummary;
+          // The menu is for the PR the clicked row shows.
+          expect(within(rows[index]!).getByRole("button").getAttribute("aria-label"))
+            .toContain(`#${target.number}`);
+          expect(list()).toBeInTheDocument();
+          expect(rows.filter((row) => row.classList.contains("is-menu-target"))).toEqual([rows[index]]);
+        } finally {
+          cleanup();
+        }
+      },
+    ), { numRuns: 40 });
+  });
+
+  it("shows no card when the menu hands focus back to its row", () => {
+    renderInRow();
+    fireEvent.click(screen.getByRole("button", { name: /2 pull requests/ }));
+    const row = within(list()).getAllByRole("listitem")[0]!;
+    fireEvent.contextMenu(row);
+    const menu = mountMenu();
+    act(() => menu.focus());
+    menu.remove();
+    act(() => within(row).getByRole("button").focus());
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 });
 

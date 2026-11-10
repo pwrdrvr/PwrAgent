@@ -163,8 +163,8 @@ export type PrOverflow = {
   lead: PrSummary;
   /** Every other PR, in list order. */
   rest: PrSummary[];
-  /** The PR whose state the overflow chip wears. */
-  restRepresentative: PrSummary;
+  /** The rest's own rollup: the overflow chip wears its representative. */
+  restRollup: PrRollup;
 };
 
 export function resolvePrOverflow(prs: readonly PrSummary[]): PrOverflow | undefined {
@@ -178,7 +178,7 @@ export function resolvePrOverflow(prs: readonly PrSummary[]): PrOverflow | undef
   return {
     lead,
     rest,
-    restRepresentative: resolvePrRollup(rest)!.representative,
+    restRollup: resolvePrRollup(rest)!,
   };
 }
 
