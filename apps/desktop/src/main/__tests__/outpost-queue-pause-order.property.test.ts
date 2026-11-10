@@ -234,6 +234,41 @@ it.skipIf(process.platform === "win32")("resuming or moving waiting input cannot
   }), { numRuns: 12 });
 });
 
+it.skipIf(process.platform === "win32")("pause and order controls preserve the parent's same-FIFO held-release admission", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom("pause", "resume", "move-before", "move-back"), fc.nat({ max: 2 }), fc.nat({ max: 2 }), async (command, target, observation) => {
+    await fixture(async (runtime, backend, store, _profile, _events, sent) => {
+      for (let n = 0; n < 3; n++) runtime.submit({ id: `waiting${n}`, threadId: ref.threadId, prompt: `waiting${n}` });
+      terminal(runtime, "turn-1", "failed"); await settle();
+      expect(backend.queuedTurns(ref.threadId).every((entry: any) => entry.manualReleaseRequired)).toBe(true);
+      const accepted = store.get("waiting0");
+      const observe = runtime.onEvent;
+      let control: Promise<any> | undefined;
+      runtime.onEvent = (event: any) => {
+        observe(event);
+        if (!control && event.method === "headless/queueChanged" && event.params.type === "queued"
+          && event.params.entry.id === `waiting${observation}`) {
+          const queueEntryId = `waiting${target}`;
+          control = command.startsWith("move")
+            ? backend.handle("backend.moveQueuedTurn", { queueEntryId, beforeQueueEntryId: command === "move-before" ? "waiting0" : undefined })
+            : backend.handle("backend.setQueuedTurnPaused", { queueEntryId, paused: command === "pause" });
+        }
+      };
+      const release = await backend.handle("backend.releaseQueuedTurn", { queueEntryId: "waiting0" });
+      // The accepted Retry owns the first admission decision. A concurrent
+      // control cannot spend its manual hold and turn it into a busy reply.
+      expect(release).toMatchObject({ disposition: "started", turnId: "turn-2" });
+      expect(control).toBeDefined();
+      const result = await control;
+      if (target === 0) expect(result.disposition).toBe("not_found");
+      else expect(["updated", "unchanged", "moved", "anchor_not_found"]).toContain(result.disposition);
+      expect(store.get("waiting0")).toMatchObject({ status: "running", fingerprint: accepted.fingerprint, turnId: "turn-2" });
+      expect(runtime.dispatches.size).toBe(0);
+      expect(runtime.queueRelease).toBeNull();
+      expect(sent).toEqual(["active", "waiting0"]);
+    });
+  }), { numRuns: 12, examples: [["pause", 0, 0], ["resume", 1, 0], ["move-before", 1, 0], ["move-back", 0, 0]] });
+});
+
 it.skipIf(process.platform === "win32")("accepted confirmation failure after resume never exposes a retryable queue entry", async () => {
   await fc.assert(fc.asyncProperty(fc.boolean(), async early => {
     await fixture(async (runtime, backend, store, _profile, _events, sent) => {
