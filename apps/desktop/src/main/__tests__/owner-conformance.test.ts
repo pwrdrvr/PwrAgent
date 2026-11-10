@@ -327,8 +327,9 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
   it("actual desktop ACP acceptance survives a session-read refusal in started publication", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const backend = "acp:gemini" as const, threadId = "publication-acp";
-    let failRead = false, refusedReads = 0, confirmed: { turnId: string } | undefined;
+    let failRead = false, refusedReads = 0, readFailureStack = "", confirmed: { turnId: string } | undefined;
     const desktop = await startDesktopOwner(null, async (db, workspace) => {
       const script = `
         const fs = require("node:fs");
@@ -356,8 +357,13 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const internal = registry as unknown as { startTurnNow: (params: { backend: AppServerBackendKind; threadId: string; input: unknown[] }) => Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> };
     const start = internal.startTurnNow.bind(internal);
     const get = AcpSessionStore.prototype.getSession;
-    const reader = vi.spyOn(AcpSessionStore.prototype, "getSession").mockImplementation(function (...args) {
-      if (failRead) { failRead = false; refusedReads++; throw new Error("Native session metadata unavailable"); }
+    const reader = vi.spyOn(AcpSessionStore.prototype, "getSession").mockImplementation(function (this: AcpSessionStore, ...args) {
+      if (failRead) {
+        failRead = false; refusedReads++;
+        const error = new Error("Native session metadata unavailable");
+        readFailureStack = error.stack ?? "";
+        throw error;
+      }
       return get.apply(this, args);
     });
     const submission = vi.spyOn(internal, "startTurnNow").mockImplementation(async params => {
@@ -371,20 +377,24 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     try {
       await registry.submitHeldTurn({ ...identity, queueEntryId: "accepted", origin: "scheduled",
         input: [{ type: "text", text: "Immutable ACP input" }], holdReason: "Review before starting" });
-      await desktop.client.startTurn({ ...identity, queueEntryId: "next", delivery: "new_turn", input: [{ type: "text", text: "Next ACP input" }] });
-      await desktop.client.setQueuedTurnPaused({ queueEntryId: "next", paused: true });
-      const result = await desktop.client.releaseQueuedTurn({ queueEntryId: "accepted" });
+      let result: Awaited<ReturnType<typeof desktop.client.releaseQueuedTurn>>;
+      const { writes } = await measureSqliteWrites(async () => {
+        result = await desktop.client.releaseQueuedTurn({ queueEntryId: "accepted" });
+        await vi.waitFor(() => expect(desktop.events.some(event => event.notification.method === "turn/completed"
+          && event.notification.params.turnId === confirmed!.turnId)).toBe(true));
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-started-publication-write-budgets.json", scenario: "desktop-acp-started-read-refusal",
+        note: "Actual ACP held Retry, native prompt and terminal through started publication metadata refusal; setup/admission excluded", writes });
       expect(refusedReads).toBe(1);
-      await vi.waitFor(() => expect(desktop.events.some(event => event.notification.method === "turn/completed"
-        && event.notification.params.turnId === confirmed!.turnId)).toBe(true));
-      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(readFailureStack).toContain("emitTurnQueueLifecycle");
+      expect(readFailureStack).toContain("getCachedThreadSummary");
       const requests = readFileSync(path.join(desktop.workspace, "publication-acp.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
       expect(requests.filter(request => request.method === "session/prompt")).toHaveLength(1);
-      expect(result).toMatchObject({ disposition: "started", turnId: confirmed!.turnId });
-      expect((await desktop.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
-        .toMatchObject([{ queueEntryId: "next", paused: true, manualReleaseRequired: false }]);
+      expect(result!).toMatchObject({ disposition: "started", turnId: confirmed!.turnId });
+      expect((await desktop.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
       expect(await desktop.client.cancelQueuedTurn({ queueEntryId: "accepted" })).toMatchObject({ cancelled: false, disposition: "already_admitted" });
-    } finally { submission.mockRestore(); reader.mockRestore(); await desktop.close(); }
+    } finally { submission.mockRestore(); reader.mockRestore(); await desktop.close(); vi.unstubAllEnvs(); }
   });
 
   it("actual desktop provider refusal holds waiting input before blocked-event cancellation drains it", async () => {

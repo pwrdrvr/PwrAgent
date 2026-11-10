@@ -1174,6 +1174,7 @@ export class ThreadTurnQueue {
     if (queue.length === 0) this.queuedEntries.delete(key);
     this.dropSpentHold(key);
     const holdRevision = this.heldQueues.get(key)?.revision;
+    let accepted = false;
     try {
       if (steer && this.options.steerTurn) {
         // Shift and claim synchronously. The backend now owns this immutable
@@ -1200,6 +1201,7 @@ export class ThreadTurnQueue {
           this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
           this.rememberAdmittedEntry({ entryId: next.id, turnId: result.turnId });
           delivered = true;
+          accepted = true;
           await this.emit({ type: "started", entry: next, turnId: result.turnId });
           return "started";
         } finally {
@@ -1210,6 +1212,8 @@ export class ThreadTurnQueue {
       await this.startEntry(next, { deferFailureEvent: true });
       return "started";
     } catch (error) {
+      // Publication cannot put native-accepted guidance back in the FIFO.
+      if (accepted) return "started";
       this.recentlyAdmittedEntries.delete(next.id);
       // A rejected start says nothing about whether this thread can safely
       // accept a different queued request. Keep this entry at the FIFO head
@@ -1256,8 +1260,10 @@ export class ThreadTurnQueue {
     const attempt = Symbol("queue admission");
     this.applyAdmission(key, { type: "begin", attempt });
     this.rememberAdmittedEntry({ entryId: entry.id });
+    let accepted: ThreadTurnQueueStartResult | undefined;
     try {
       const result = await this.options.startTurn(entry);
+      accepted = result;
       const admission = this.applyAdmission(key, { type: "acknowledge", attempt, turnId: result.turnId });
       if (admission.phase !== "acknowledged" || admission.attempt !== attempt) return result;
       // Completion may precede the acknowledgement. Publish start then terminal,
@@ -1267,23 +1273,35 @@ export class ThreadTurnQueue {
         entryId: entry.id,
         turnId: result.turnId,
       });
-      await this.emit({ type: "started", entry, turnId: result.turnId });
-      const completedAdmission = this.admissions.get(key);
-      const terminal = completedAdmission?.phase === "acknowledged" && completedAdmission.attempt === attempt
-        ? completedAdmission.terminal : undefined;
-      if (terminal) {
-        if (admission.terminal) {
-          this.rememberTerminal(key, terminal.turnId);
-          await this.emit({ type: "terminal", entry, turnId: terminal.turnId, status: terminal.status });
-          if (terminal.status === "turn/failed") {
-            await this.holdAfterTurnFailure(key, terminal.errorMessage);
+      try {
+        await this.emit({ type: "started", entry, turnId: result.turnId });
+      } finally {
+        // A terminal buffered during native submission/publication still owns
+        // completion even when the started observer rejects.
+        const completedAdmission = this.admissions.get(key);
+        const terminal = completedAdmission?.phase === "acknowledged" && completedAdmission.attempt === attempt
+          ? completedAdmission.terminal : undefined;
+        if (terminal) {
+          if (admission.terminal) {
+            this.rememberTerminal(key, terminal.turnId);
+            try {
+              await this.emit({ type: "terminal", entry, turnId: terminal.turnId, status: terminal.status });
+            } finally {
+              if (terminal.status === "turn/failed") {
+                await this.holdAfterTurnFailure(key, terminal.errorMessage);
+              }
+            }
+          } else {
+            await this.settleRelease(key, { backend: entry.backend, threadId: entry.threadId, ...terminal });
           }
-        } else {
-          await this.settleRelease(key, { backend: entry.backend, threadId: entry.threadId, ...terminal });
         }
       }
       return result;
     } catch (error) {
+      // Once the host transfers native ownership, only publication remains.
+      // Keep that accepted identity, including unknown native outcomes, so a
+      // caller or queued drain cannot restore/resend its immutable input.
+      if (accepted) return accepted;
       this.recentlyAdmittedEntries.delete(entry.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
       if (!options?.deferFailureEvent) {

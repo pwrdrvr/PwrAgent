@@ -16,6 +16,58 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
+it.skipIf(process.platform === "win32").each([false, true])("actual Outpost synchronous started-observer failure retains native acceptance (steer=%s)", async steer => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  // JobStore's unchanged-payload guard uses updatedAt; timers/drains stay real.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-09T14:00:00Z"));
+  try {
+    await fixture(async (runtime, backend, store) => {
+      const starts: string[] = [], steers: string[] = [];
+      runtime.codex = {
+        startTurn: async (params: any) => { const text = params.input[0].text; starts.push(text); return { threadId: "native", turnId: `turn-${text}` }; },
+        steerTurn: async (params: any) => { steers.push(params.input[0].text); return { threadId: "native", turnId: params.expectedTurnId }; },
+        stop: async () => {},
+      };
+      runtime.submit({ id: "original", threadId: "native", prompt: "original" }); await runtime.work;
+      const request = { id: "accepted", threadId: "native", prompt: "Immutable accepted input" };
+      const controls = { paused: true, pauseRevision: 1, ...(steer ? { delivery: "queued-steer" } : {}) };
+      const accepted = runtime.submit(request, controls); await runtime.work;
+      const next = runtime.submit({ id: "next", threadId: "native", prompt: "Immutable next input" }, { paused: true, pauseRevision: 1 }); await runtime.work;
+      let rejected = 0;
+      const observe = runtime.onEvent;
+      runtime.onEvent = (event: any) => {
+        observe(event);
+        if (event.method === "headless/queueChanged" && event.params.type === "started" && event.params.entry.id === "accepted") {
+          rejected++; throw new Error("Synchronous started observer rejected");
+        }
+      };
+      const { writes } = await measureSqliteWrites(async () => {
+        await runtime.setQueuedTurnPaused({ queueEntryId: "accepted", paused: false });
+        if (!steer) runtime.notification({ method: "turn/completed", params: { threadId: "native", turn: { id: "turn-original", status: "completed" } } });
+        for (let i = 0; i < 24; i++) await tick();
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-started-publication-write-budgets.json", scenario: steer ? "outpost-steer-observer-rejection" : "outpost-start-observer-rejection",
+        note: "Actual queued native acceptance through synchronous started observer rejection with real drains; admission/setup excluded", writes });
+      expect(rejected).toBe(1);
+      const turnId = steer ? "turn-original" : "turn-Immutable accepted input";
+      expect(store.get("accepted")).toMatchObject({ fingerprint: accepted.fingerprint, status: "running", turnId });
+      expect(runtime.active).toBe(steer ? "original" : "accepted");
+      expect(backend.activeJob({ threadId: "native" }).id).toBe(steer ? "original" : "accepted");
+      expect(runtime.turnQueue.getAllQueuedEntries()).toMatchObject([{ id: "next", paused: true }]);
+      for (let i = 0; i < 100; i++) expect(runtime.submit(request, controls).fingerprint).toBe(accepted.fingerprint);
+      expect(starts).toEqual(steer ? ["original"] : ["original", "Immutable accepted input"]);
+      expect(steers).toEqual(steer ? ["Immutable accepted input"] : []);
+      expect(await runtime.cancelQueuedTurn({ queueEntryId: "accepted" })).toMatchObject({ cancelled: false, disposition: "already_admitted" });
+      runtime.notification({ method: "turn/completed", params: { threadId: "native", turn: { id: turnId, status: "completed" } } });
+      for (let i = 0; i < 24; i++) await tick();
+      expect(store.get("accepted")).toMatchObject({ fingerprint: accepted.fingerprint, status: "completed", turnId });
+      await runtime.stop();
+      expect(store.get("next")).toMatchObject({ fingerprint: next.fingerprint, status: "unknown" });
+    });
+  } finally { vi.useRealTimers(); vi.unstubAllEnvs(); }
+});
+
 // The executable Runtime's private-directory contract supports Linux/macOS.
 async function fixture(work: (runtime: any, backend: any, store: any, profile: any, events: any[]) => Promise<void>) {
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("src/store.js"), load("src/runtime.js"), load("src/federation-backend.js")]);

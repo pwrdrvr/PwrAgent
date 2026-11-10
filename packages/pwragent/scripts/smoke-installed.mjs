@@ -473,6 +473,46 @@ try {
     assert.equal(afterHeld.submit({ id: pending[1].id, threadId, prompt: "next" }).status, "unknown");
     assert.equal(store.get(pending[1].id).fingerprint, pending[1].fingerprint);
     await afterHeld.stop();
+    for (const steer of [false, true]) {
+      const acceptedRuntime = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
+      const acceptedOwner = new HeadlessBackend(acceptedRuntime, () => {}, () => "packed-owner");
+      const sends = [], originalId = `packed-publication-original-${steer}`, acceptedId = `packed-publication-accepted-${steer}`;
+      let rejected = 0;
+      acceptedRuntime.codex = {
+        stop: async () => {},
+        startTurn: async ({ input }) => { sends.push(input[0].text); return { threadId, turnId: `native-${sends.length}` }; },
+        steerTurn: async ({ input, expectedTurnId }) => { sends.push(input[0].text); return { threadId, turnId: expectedTurnId }; },
+      };
+      acceptedRuntime.loadedThreads.add(threadId);
+      acceptedRuntime.onEvent = message => {
+        acceptedOwner.event(message);
+        if (message.method === "headless/queueChanged" && message.params.type === "started" && message.params.entry.id === acceptedId) {
+          rejected++; throw new Error("Packed started observer rejected");
+        }
+      };
+      acceptedRuntime.submit({ id: originalId, threadId, prompt: "original" }); await acceptedRuntime.work;
+      const request = { id: acceptedId, threadId, prompt: "Immutable packed accepted input" };
+      const controls = steer ? { delivery: "queued-steer" } : undefined;
+      const accepted = acceptedRuntime.submit(request, controls); await acceptedRuntime.work;
+      if (!steer) acceptedRuntime.notification({ method: "turn/completed", params: { threadId, turn: { id: "native-1", status: "completed" } } });
+      for (let i = 0; i < 24; i++) await new Promise(resolve => setImmediate(resolve));
+      const turnId = steer ? "native-1" : "native-2";
+      assert.equal(rejected, 1);
+      assert.equal(store.get(acceptedId).status, "running");
+      assert.equal(store.get(acceptedId).fingerprint, accepted.fingerprint);
+      assert.equal(acceptedRuntime.active, steer ? originalId : acceptedId);
+      assert.deepEqual(acceptedRuntime.turnQueue.getAllQueuedEntries(), []);
+      assert.equal((await acceptedOwner.handle("backend.cancelQueuedTurn", { queueEntryId: acceptedId })).disposition, "already_admitted");
+      acceptedRuntime.notification({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } });
+      for (let i = 0; i < 24; i++) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(store.get(acceptedId).status, "completed");
+      await acceptedRuntime.stop();
+      const afterAccepted = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
+      assert.equal(afterAccepted.submit(request, controls).status, "completed");
+      assert.deepEqual(afterAccepted.turnQueue.getAllQueuedEntries(), []);
+      assert.deepEqual(sends, ["original", "Immutable packed accepted input"]);
+      await afterAccepted.stop();
+    }
   } finally { profile.close(); }
   console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue and steering receipts/caller isolation/cancellation, shared steering retention/retry and interruption");
 } finally {
