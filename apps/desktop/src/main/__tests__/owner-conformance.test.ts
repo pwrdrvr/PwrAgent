@@ -328,6 +328,52 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("registered Claude SDK background, loop and cron hooks retain separate immutable held prompts", async () => {
+    const desktop = await startDesktopOwner(null, async (_db, workspace) => {
+      await writeFile(path.join(workspace, "claude.js"), readFileSync(path.join(process.cwd(),
+        "apps/desktop/src/main/__tests__/fixtures/claude-self-started-cli.cjs")));
+    }, workspace => ({ store: new ClaudeSessionStore(path.join(workspace, "sessions")),
+      inspectInstallation: async () => ({ executable: path.join(workspace, "claude.js"), authStatus: "signed-in" }),
+      discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [], getSessionInfo: async () => undefined }));
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const ref = await desktop.client.startThread({ backend: "claude", cwd: desktop.workspace });
+      await desktop.client.startTurn({ ...ref, input: [{ type: "text", text: "Start invented background work" }] });
+      await vi.waitFor(() => expect(desktop.events.some(event => event.backend === "claude"
+        && event.notification.method === "turn/completed")).toBe(true));
+      await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
+      const wakes = [
+        { source: "system", prompt: "Invented task notification" },
+        { source: "loop_wakeup", prompt: "Invented loop fire" },
+        { source: "schedule_wakeup", prompt: "Invented cron fire" },
+        { source: "schedule_wakeup", prompt: "Invented cron fire" },
+      ];
+      const snapshots = new Map<string, Awaited<ReturnType<typeof desktop.client.readQueuedTurn>>>();
+      for (const [index, wake] of wakes.entries()) {
+        const file = path.join(desktop.workspace, "wake-requests.json");
+        await writeFile(`${file}.tmp`, JSON.stringify(wakes.slice(0, index + 1)));
+        await rename(`${file}.tmp`, file);
+        await vi.waitFor(() => expect(existsSync(path.join(desktop.workspace, "hook-results.jsonl"))
+          && readFileSync(path.join(desktop.workspace, "hook-results.jsonl"), "utf8").trim().split("\n").length).toBe(index + 1));
+        const rows = (await desktop.client.getNavigationQueueProjection({ protocol: 2, ref })).entries;
+        expect(rows).toHaveLength(Math.min(index + 1, 3));
+        const id = rows.at(-1)!.queueEntryId;
+        if (index < 3) {
+          expect(snapshots.has(id)).toBe(false);
+          const snapshot = await desktop.client.readQueuedTurn({ ...ref, queueEntryId: id });
+          expect(snapshot.input).toEqual([{ type: "text", text: wake.prompt }]);
+          snapshots.set(id, snapshot);
+        }
+        for (const [queueEntryId, snapshot] of snapshots) {
+          expect(await desktop.client.readQueuedTurn({ ...ref, queueEntryId })).toEqual(snapshot);
+        }
+      }
+      const results = readFileSync(path.join(desktop.workspace, "hook-results.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(results.every(result => result.outputs.some((output: { decision?: string }) => output.decision === "block"))).toBe(true);
+      expect(readFileSync(path.join(desktop.workspace, "native-inputs.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
+    } finally { await desktop.close(); }
+  });
+
   it("self-started held admissions preserve every immutable acceptance and deduplicate only waiting prompts", async () => {
     const host = await startDesktopOwner();
     const registry = desktopOwner.registry as DesktopBackendRegistry;
