@@ -1138,7 +1138,12 @@ export class DesktopFederationRuntime {
 
   async consumeMessagingFile(sourceInstanceId: string, file: FilePushResult): Promise<Uint8Array> {
     if (!this.receiverPermissions().filePush) throw new Error("Incoming files are disabled on the messaging owner.");
-    const bytes = await this.messagingFileReceipts.consume(this.peerRole(sourceInstanceId) === "contained" ? `contained-messaging:${sourceInstanceId}` : sourceInstanceId, file, FILE_PUSH_MAX_BYTES);
+    // Receipt scope belongs to the acknowledged upload, so promotion must not
+    // invalidate a scoped receipt. A contained peer still cannot claim a
+    // general upload; both accepted scopes remain bound to the same source.
+    const sources = [`contained-messaging:${sourceInstanceId}`];
+    if (this.peerRole(sourceInstanceId) === "full") sources.push(sourceInstanceId);
+    const bytes = await this.messagingFileReceipts.consume(sources, file, FILE_PUSH_MAX_BYTES);
     if (!this.receiverPermissions().filePush) throw new Error("Incoming files were disabled during the transfer.");
     return bytes;
   }
@@ -2193,6 +2198,8 @@ export class DesktopFederationRuntime {
     const connection = this.router?.getConnection(peerId);
     if (connection && role === "contained") {
       connection.capabilities = connection.capabilities.filter((capability) => capability !== "gateway_relay");
+    } else if (connection?.relaySupported && !connection.capabilities.includes("gateway_relay")) {
+      connection.capabilities = [...connection.capabilities, "gateway_relay"];
     }
     if (this.router?.getConnection(peerId)) this.sendEnvelopeToTarget(peerId, { id: randomUUID(), kind: "notification",
       method: FEDERATION_PEER_ROLE_CHANGED_METHOD, params: { role }, protocolVersion: FEDERATION_PROTOCOL_VERSION,
@@ -5012,6 +5019,7 @@ export class DesktopFederationRuntime {
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,
+      relaySupported: connection.relaySupported ?? connection.capabilities.includes("gateway_relay"),
       peerDirectoryPaging: connection.peerDirectoryPaging,
       navigationQueryProtocol: connection.navigationQueryProtocol,
       sendEnvelope: connection.sendEnvelope,

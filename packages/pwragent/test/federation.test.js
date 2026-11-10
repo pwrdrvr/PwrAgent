@@ -605,3 +605,36 @@ test("standalone Outpost egress follows receiver authority across late replies, 
     }
   }));
 });
+
+test("upstream egress authority survives downstream disconnects and stale closes", () => {
+  fc.assert(fc.property(fc.array(fc.constantFrom("viewer", "gateway", "reconnect", "stale"), { minLength: 1, maxLength: 30 }), (commands) => {
+    let expected = "full";
+    let gateway = {};
+    const federation = Object.assign(Object.create(HeadlessFederation.prototype), {
+      state: { instanceId: "outpost", gateway: { gatewayInstanceId: "gateway" } }, permissionRole: "full",
+      connections: new Map([["gateway", gateway]]), egressRoles: new Map(), roleRevisions: new Map(),
+      remotePeers: new Map(), peerDirectory: new FederationReplacementReceiver(), ptyRoutes: new Map(),
+      endpoints: new Map(), subscriptions: new Map(), pty: { notifyPeerDisconnected() {} },
+      router: { unregisterConnection() {} },
+    });
+    for (const command of commands) {
+      if (command === "reconnect") {
+        gateway = {};
+        federation.connections.set("gateway", gateway);
+        federation.permissionRole = "full"; // Authenticated gateway role response.
+        expected = "full";
+      } else if (command === "viewer") {
+        const viewer = {};
+        federation.connections.set("viewer", viewer);
+        federation.unregister("viewer", viewer);
+      } else if (command === "stale") federation.unregister("gateway", {});
+      else {
+        federation.unregister("gateway", gateway);
+        expected = "contained";
+      }
+      const send = () => federation.guardEgress({ kind: "request", method: "backend.startThread", sourceInstanceId: "outpost" }, "gateway");
+      assert.equal(federation.permissionRole, expected);
+      if (expected === "full") assert.doesNotThrow(send);
+    }
+  }));
+});

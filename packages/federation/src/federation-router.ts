@@ -19,6 +19,8 @@ export type FederationRouterConnection = {
   navigationQueryProtocol?: 2;
   peerId: FederationInstanceId;
   capabilities: readonly FederationCapability[];
+  /** Authenticated protocol support before the receiver's role restriction. */
+  relaySupported?: boolean;
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
   sendEnvelopeWithBackpressure?: (
     envelope: FederationProtocolEnvelope,

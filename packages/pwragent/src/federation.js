@@ -328,7 +328,7 @@ export class HeadlessFederation {
 
   unregister(id, connection) {
     if (this.connections.get(id) !== connection) return;
-    this.permissionRole = "contained";
+    if (id === this.state.gateway?.gatewayInstanceId) this.permissionRole = "contained";
     this.connections.delete(id);
     this.egressRoles?.delete(id);
     this.roleRevisions?.delete(id);
