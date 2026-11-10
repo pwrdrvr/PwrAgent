@@ -141,9 +141,9 @@ import {
 import { CODEX_MISSING_THREAD_EVALUATION_DELAY_MS } from "../app-server/backend-registry-runtime-helpers";
 import {
   DesktopBackendRegistry,
-  QUIET_RESTART_STEER_TEXT,
   reviewStartFailureFingerprint,
 } from "../app-server/backend-registry";
+import { QUIET_RESTART_STEER_TEXT } from "../app-server/thread-restart-helpers";
 import { withTokenMiserBridgeDescriptorEnv } from "../app-server/codex-thread-config";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
