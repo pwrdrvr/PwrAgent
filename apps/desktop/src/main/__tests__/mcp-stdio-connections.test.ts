@@ -13,6 +13,7 @@ import { buildCodexConnectionMcpServerName } from "../app-server/backend-registr
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
 import { pwrSuiteRelayPath } from "../mcp-connections/pwrsuite-relay";
+import { pwrSuiteInstall, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 
 /*
  * A local command (stdio) MCP server, driven end to end through the gateway
@@ -265,6 +266,7 @@ afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.destroy();
   await Promise.all(services.splice(0).map(async (service) => await service.close()));
   vi.unstubAllEnvs();
+  removePwrSuiteInstalls();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { force: true, recursive: true });
   }
@@ -507,11 +509,8 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     const fixture = makeFixture();
     // An install whose relay is the fake server: PwrAgent must start exactly
     // the file inside the install, not anything on PATH.
-    const app = path.join(fixture.root, process.platform === "darwin" ? `${name}.app` : id);
+    const app = pwrSuiteInstall(id);
     const relay = pwrSuiteRelayPath(id, app)!;
-    fs.mkdirSync(path.dirname(relay), { recursive: true });
-    if (process.platform !== "darwin") fs.writeFileSync(app, "");
-    fs.mkdirSync(app, { recursive: true });
     fs.copyFileSync(fixture.command, relay);
     fs.chmodSync(relay, 0o755);
     fs.rmSync(fixture.command);
