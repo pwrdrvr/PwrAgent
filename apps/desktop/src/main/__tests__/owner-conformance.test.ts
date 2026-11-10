@@ -1065,6 +1065,38 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   });
 
+  it("generated desktop sender replacement retires immutable queue identities before admitting changed input", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.string({ minLength: 1, maxLength: 80 }).filter(text => Boolean(text.trim())), { minLength: 1, maxLength: 4 }),
+      async edits => {
+        const host = await startDesktopOwner();
+        try {
+          const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+          await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+          const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender" } };
+          let accepted = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Original accepted input" }], messageOrigin });
+          for (const text of edits) {
+            const oldId = accepted.queueEntryId!;
+            const original = await host.client.readQueuedTurn({ ...identity, queueEntryId: oldId });
+            const originalInput = structuredClone(original.input);
+            const offset = host.events.length;
+            accepted = await host.client.replaceQueuedMessage({ ...identity, queueEntryId: oldId, input: [{ type: "text", text }], messageOrigin });
+            // Each accepted identity names one immutable input. Changing it
+            // retires the old row and admits a fresh row, even inside a batch.
+            expect(accepted.queueEntryId).not.toBe(oldId);
+            await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: oldId })).rejects.toThrow();
+            expect(original.input).toEqual(originalInput);
+            expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).toMatchObject({ input: [{ type: "text", text }] });
+            const updates = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
+              ? [[event.notification.params.queueEntryId, event.notification.params.status]] : []);
+            expect(updates).toEqual([[oldId, "cancelled"], [accepted.queueEntryId, "queued"]]);
+            expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([accepted.queueEntryId]);
+          }
+        } finally { await host.close(); }
+      },
+    ), { numRuns: 4, examples: [[["!"]]] });
+  });
+
   it("the production federated message caller replaces only its sender's waiting input on both registered owners", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
