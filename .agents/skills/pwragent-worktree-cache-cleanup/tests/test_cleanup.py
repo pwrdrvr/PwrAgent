@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import plistlib
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -121,6 +122,84 @@ class CleanupTests(unittest.TestCase):
         report = self.audit(snapshot_retained)
         self.assertEqual(len(report["candidates"]), 1)
         self.assertFalse(report["candidates"][0]["shares_blocks"])
+
+    def test_busy_worktree_does_not_prevent_sharing_an_unused_runtime(self):
+        runtime(self.linked)
+        cache(self.linked)
+        busy = ([(123, str(self.linked))], [])
+        report = cleanup.audit(self.project, busy, private, for_sharing=True)
+        self.assertEqual([item["kind"] for item in report["candidates"]], ["electron"])
+        self.assertEqual(report["worktrees"][1]["status"], "scanned")
+        self.assertEqual(cleanup.summary(report)["active_worktrees"], 1)
+
+    def test_loaded_runtime_is_never_a_sharing_candidate(self):
+        dist = runtime(self.linked)
+        busy = ([(123, str(dist / "Electron.app/Contents/MacOS/Electron"))], [])
+        report = cleanup.audit(self.project, busy, private, for_sharing=True)
+        self.assertEqual(report["candidates"], [])
+        self.assertTrue(dist.exists())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS APFS sharing oracle")
+    def test_sharing_preserves_content_and_isolates_inodes_in_a_busy_worktree(self):
+        dist = runtime(self.linked)
+        cache_root = self.base / "runtime-cache"
+        shutil.copytree(dist, cache_root / "dist", symlinks=True)
+        identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+        manifest = {"identity": identity, "files": cleanup.content_inventory(cache_root / "dist")}
+        (cache_root / "runtime.json").write_text(json.dumps(manifest))
+        busy = ([(123, str(self.linked))], [])
+        before = cleanup.content_inventory(dist)
+        original_inode = (dist / "Electron.app/Contents/MacOS/Electron").stat().st_ino
+        report = cleanup.audit(self.project, busy, for_sharing=True)
+        result = cleanup.share(report, snapshot_fn=lambda: busy,
+            prepare_fn=lambda _package, _arch: {"cache": str(cache_root), "identity": identity},
+            arch_fn=lambda _path: "arm64")
+        self.assertEqual(result["preserved"], [])
+        self.assertEqual(len(result["shared"]), 1)
+        self.assertEqual(cleanup.content_inventory(dist), before)
+        self.assertNotEqual((dist / "Electron.app/Contents/MacOS/Electron").stat().st_ino, original_inode)
+        cleanup.clone_oracle(cache_root / "dist", dist)
+        cached_file = cache_root / "dist/Electron.app/Contents/MacOS/Electron"
+        cached_bytes = cached_file.read_bytes()
+        (dist / "Electron.app/Contents/MacOS/Electron").write_bytes(b"worktree-private modification")
+        self.assertEqual(cached_file.read_bytes(), cached_bytes)
+        self.assertTrue((self.linked / "source.txt").exists())
+        self.assertEqual(list(dist.parent.glob(".sharing-install-*")), [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS APFS sharing oracle")
+    def test_sharing_restores_original_when_runtime_starts_during_publication(self):
+        dist = runtime(self.linked)
+        cache_root = self.base / "runtime-cache"
+        shutil.copytree(dist, cache_root / "dist", symlinks=True)
+        identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+        (cache_root / "runtime.json").write_text(json.dumps({"identity": identity,
+            "files": cleanup.content_inventory(cache_root / "dist")}))
+        original_inode = (dist / "Electron.app/Contents/MacOS/Electron").stat().st_ino
+        snapshots = iter([IDLE, IDLE, IDLE, ([(123, str(dist / "Electron.app/Contents/MacOS/Electron"))], [])])
+        report = cleanup.audit(self.project, IDLE, for_sharing=True)
+        result = cleanup.share(report, snapshot_fn=lambda: next(snapshots),
+            prepare_fn=lambda _package, _arch: {"cache": str(cache_root), "identity": identity},
+            arch_fn=lambda _path: "arm64")
+        self.assertEqual(result["shared"], [])
+        self.assertEqual((dist / "Electron.app/Contents/MacOS/Electron").stat().st_ino, original_inode)
+        self.assertEqual(list(dist.parent.glob(".sharing-install-*")), [])
+
+    def test_sharing_rejects_content_that_differs_from_pinned_artifact(self):
+        dist = runtime(self.linked)
+        cache_root = self.base / "runtime-cache"
+        shutil.copytree(dist, cache_root / "dist", symlinks=True)
+        identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+        (cache_root / "runtime.json").write_text(json.dumps({"identity": identity,
+            "files": cleanup.content_inventory(cache_root / "dist")}))
+        unique = dist / "Electron.app/Contents/unique-user-data"
+        unique.write_text("preserve")
+        report = cleanup.audit(self.project, IDLE, for_sharing=True)
+        result = cleanup.share(report, snapshot_fn=lambda: IDLE,
+            prepare_fn=lambda _package, _arch: {"cache": str(cache_root), "identity": identity},
+            arch_fn=lambda _path: "arm64")
+        self.assertEqual(result["shared"], [])
+        self.assertIn("differs", result["preserved"][0]["reason"])
+        self.assertEqual(unique.read_text(), "preserve")
 
     def test_current_process_activity_preserves_the_entire_worktree(self):
         target = cache(self.linked)

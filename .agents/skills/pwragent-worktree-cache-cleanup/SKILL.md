@@ -1,16 +1,38 @@
 ---
 name: pwragent-worktree-cache-cleanup
-description: Audit and manually clean a selected PwrAgent Git project's worktrees of repo-local Vitest caches and APFS-confirmed non-clone Electron runtimes. Use for operator-requested disk reclamation on macOS, not automatic product retention or worktree deletion.
+description: Audit and manually clean a selected PwrAgent Git project's worktrees of repo-local Vitest caches and APFS-confirmed non-clone Electron runtimes, including conversion to shared clones. Use for operator-requested disk reclamation on macOS, not automatic product retention or worktree deletion.
 ---
 
 # PwrAgent worktree cache cleanup
 
-Use the self-contained [cleanup script](scripts/cleanup_worktree_caches.py) with
+Use the [cleanup script](scripts/cleanup_worktree_caches.py) with
 Python 3.9+ on macOS. Resolve script paths relative to this skill's directory.
 This skill lives only in PwrAgent's `.agents/skills/`. Its script can audit
 worktrees on older branches when invoked from a checkout containing this skill.
 
-First produce a report, using the selected project's repository or worktree:
+For Electron, prefer conversion to verified shared clones: use `audit-share`
+and then `share` with an approved report. This includes busy worktrees when the
+runtime itself is unused. A loaded runtime is preserved. Existing runtime bytes,
+modes and links must match the package-checksummed artifact; modified runtimes
+are preserved. Architecture comes from the installed Mach-O executable.
+
+```sh
+python3 scripts/cleanup_worktree_caches.py audit-share \
+  --project /Users/huntharo/github/PwrAgnt \
+  --report /private/tmp/pwragent-electron-sharing-plan.json
+python3 scripts/cleanup_worktree_caches.py share \
+  --project /Users/huntharo/github/PwrAgnt \
+  --report /private/tmp/pwragent-electron-sharing-plan.json
+```
+
+`share` uses this checkout's merged Electron installer to prepare and verify the
+version/platform/architecture-keyed cache. It independently clones each runtime,
+checks contents and APFS private bytes/clone IDs/inodes, and publishes under the
+installer lock. It leaves source and package declarations untouched. If activity
+starts during publication, it restores or retains the original rather than
+removing a loaded runtime. Per-path results go beside the plan as `.result.json`.
+
+For cache removal, first produce a report using the selected repository:
 
 ```sh
 python3 scripts/cleanup_worktree_caches.py audit \
@@ -47,16 +69,18 @@ approved identity and fingerprint. An edited report cannot add arbitrary paths.
   oracle. Any shared-block flag preserves the entire runtime, including a clone
   with private modifications. `du`, equal hashes and private bytes alone do not
   establish that a runtime is unshared.
-- Worktrees referenced by current-user processes are skipped, including open
-  shells. Process checks must succeed; do not bypass them when the execution
+- For `audit`/`clean`, worktrees referenced by current-user processes are skipped,
+  including open shells. For `audit-share`/`share`, activity is checked against the
+  runtime itself; a shell or test elsewhere in the worktree does not block sharing.
+  Process checks must succeed; do not bypass them when the execution
   sandbox denies `ps` or `lsof`. Request read-only host process access instead.
   The Electron installer lock prevents concurrent installation. Candidates are
   renamed and checked again before removal; new activity restores the old path
   when possible, otherwise reports the retained quarantine path.
 
 This operation does not stop apps, delete worktrees, edit source, clean `.local`
-or desktop `out/`, or touch global pnpm/Electron caches. No sudo or GUI is
-needed. Report allocated bytes separately from measured private bytes: APFS
+or desktop `out/`, or remove global pnpm/Electron caches. Sharing may populate
+the verified Electron extraction cache. No sudo or GUI is needed. Report allocated bytes separately from measured private bytes: APFS
 snapshots can retain deleted blocks, so allocation is not an immediate free-space
 promise. Zero private bytes alone also does not establish a clone. Report
 per-path failures; do not retry a deletion blindly.

@@ -226,7 +226,7 @@ def tracked(root, path):
     return bool(git(root, "ls-files", "-z", "--", str(path.relative_to(root))))
 
 
-def audit(project, snapshot=None, metadata=apfs_metadata, progress=None):
+def audit(project, snapshot=None, metadata=apfs_metadata, progress=None, for_sharing=False):
     project = project.resolve(strict=True)
     common = common_dir(project)
     snapshot = process_snapshot() if snapshot is None else snapshot
@@ -244,14 +244,20 @@ def audit(project, snapshot=None, metadata=apfs_metadata, progress=None):
             if common_dir(root) != common or "locked" in record or "prunable" in record or "bare" in record:
                 raise Unsafe("Locked, prunable, bare or foreign worktree")
             pids = active_pids(root, snapshot)
-            if pids:
+            if pids and not for_sharing:
                 entry.update(status="active", pids=pids)
                 continue
             entry["status"] = "scanned"
+            if pids:
+                entry["pids"] = pids
             for kind, path in candidate_paths(root):
+                if for_sharing and kind != "electron":
+                    continue
                 detail = {"kind": kind, "worktree": str(root), "path": str(path)}
                 try:
                     safe_directory(root, path)
+                    if for_sharing and active_pids(path, snapshot):
+                        raise Unsafe("Electron runtime is in use")
                     if tracked(root, path):
                         raise Unsafe("Contains tracked files")
                     if kind == "electron":
@@ -348,9 +354,150 @@ def clean(report, snapshot_fn=process_snapshot, metadata=apfs_metadata):
     return result
 
 
+def content_inventory(root):
+    """Match the installer's byte/mode/link inventory; do not follow links."""
+    entries = []
+    def visit(directory):
+        for item in sorted(directory.iterdir()):
+            info = item.lstat()
+            entry = {"path": str(item.relative_to(root)), "mode": (info.st_mode & 0o777)}
+            if item.is_symlink():
+                entry["link"] = os.readlink(item)
+            elif item.is_dir():
+                entry["directory"] = True
+            elif item.is_file():
+                digest = hashlib.sha256()
+                with item.open("rb") as stream:
+                    for block in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(block)
+                entry["sha256"] = digest.hexdigest()
+            else:
+                raise Unsafe("Unsupported runtime entry")
+            entries.append(entry)
+            if entry.get("directory"):
+                visit(item)
+    visit(root)
+    return entries
+
+
+def prepare_runtime(package, arch):
+    helper = Path(__file__).with_name("prepare-electron-runtime.mjs")
+    return json.loads(subprocess.check_output(["node", str(helper), str(package), arch]))
+
+
+def runtime_arch(path):
+    executable = path / "Electron.app/Contents/MacOS/Electron"
+    value = subprocess.check_output(["/usr/bin/lipo", "-archs", str(executable)], text=True).strip()
+    if value not in ("arm64", "x86_64"):
+        raise Unsafe(f"Unsupported runtime architecture: {value}")
+    return {"arm64": "arm64", "x86_64": "x64"}[value]
+
+
+def clone_oracle(source, destination):
+    """Prove independent inodes, equal clone IDs and zero private allocation."""
+    for directory, _, files in os.walk(destination):
+        for name in files:
+            clone = Path(directory) / name
+            if clone.is_symlink():
+                continue
+            original = source / clone.relative_to(destination)
+            info, source_info = clone.stat(), original.stat()
+            if (info.st_dev, info.st_ino) == (source_info.st_dev, source_info.st_ino) or info.st_nlink != 1:
+                raise Unsafe("Runtime clone is not independently owned")
+            attrs, source_attrs = apfs_metadata(clone), apfs_metadata(original)
+            if info.st_blocks and (attrs["private_bytes"] or not attrs["sharing_flags"] & SHARING_FLAGS
+                    or attrs["clone_id"] != source_attrs["clone_id"]):
+                raise Unsafe(f"Runtime file is not APFS shared: {clone}")
+
+
+def share(report, snapshot_fn=process_snapshot, prepare_fn=prepare_runtime, arch_fn=runtime_arch):
+    """Replace unused private runtimes with verified clones, even in busy worktrees."""
+    if report.get("format") != FORMAT or not shutil.rmtree.avoids_symlink_attacks:
+        raise Unsafe("Unsupported plan or recursive deletion implementation")
+    project = Path(report["project"]).resolve(strict=True)
+    if str(common_dir(project)) != report["common_dir"]:
+        raise Unsafe("Project Git identity changed")
+    fresh = audit(project, snapshot_fn(), for_sharing=True)
+    available = {item["id"]: item for item in fresh["candidates"]}
+    result, prepared = {"shared": [], "preserved": []}, {}
+    for approved in report["candidates"]:
+        current = available.get(approved["id"])
+        if current is None or any(approved.get(key) != current.get(key) for key in ("path", "worktree", "kind", "fingerprint")):
+            result["preserved"].append({"path": approved.get("path"), "reason": "Changed or runtime in use"})
+            continue
+        path, root = Path(current["path"]), Path(current["worktree"])
+        stage, moved, published = None, False, False
+        try:
+            with installer_lock(path.parent):
+                arch = arch_fn(path)
+                key = (current["version"], arch)
+                if key not in prepared:
+                    prepared[key] = prepare_fn(path.parent, arch)
+                cache = prepared[key]
+                identity = cache["identity"]
+                if identity.get("version") != key[0] or identity.get("platform") != "darwin" or identity.get("arch") != arch:
+                    raise Unsafe("Prepared cache target mismatch")
+                source = Path(cache["cache"]) / "dist"
+                manifest = json.loads((source.parent / "runtime.json").read_text())
+                tree_state(source)  # Reject escaping symlinks and special files before reading content.
+                files = content_inventory(source)
+                if manifest["identity"] != identity or files != manifest["files"]:
+                    raise Unsafe("Cache content changed after checksum verification")
+                old_files = content_inventory(path)
+                # Legacy Electron installers move the declaration out of dist.
+                wanted = files if (path / "electron.d.ts").exists() else [f for f in files if f["path"] != "electron.d.ts"]
+                if old_files != wanted:
+                    raise Unsafe("Existing runtime differs from verified artifact; preserve possible custom data")
+                safe_directory(root, path)
+                if tree_state(path)["fingerprint"] != current["fingerprint"] or active_pids(path, snapshot_fn()):
+                    raise Unsafe("Runtime changed or became active")
+                stage = Path(tempfile.mkdtemp(prefix=".sharing-install-", dir=path.parent))
+                new, backup = stage / "dist", stage / "previous-dist"
+                subprocess.run(["/bin/cp", "-cRpP", str(source), str(new)], check=True)
+                if not (path / "electron.d.ts").exists() and (new / "electron.d.ts").exists():
+                    (new / "electron.d.ts").unlink()
+                if content_inventory(new) != old_files:
+                    raise Unsafe("Clone content verification failed")
+                clone_oracle(source, new)
+                if tree_state(path)["fingerprint"] != current["fingerprint"] or active_pids(path, snapshot_fn()):
+                    raise Unsafe("Runtime changed before publication")
+                path.rename(backup)
+                moved = True
+                if active_pids(path, snapshot_fn()) or active_pids(backup, snapshot_fn()):
+                    raise Unsafe("Runtime became active during publication")
+                new.rename(path)
+                published = True
+                witness = tree_state(path)["witness"]
+                result["shared"].append({"path": str(path), "version": key[0], "arch": arch,
+                                         "cache": str(source), "witness": witness})
+                # A just-started app might still map the original inodes. Keep
+                # that backup rather than removing a runtime beneath it.
+                snapshot = snapshot_fn()
+                if active_pids(path, snapshot) or active_pids(backup, snapshot):
+                    result["preserved"].append({"path": str(backup), "reason": "New runtime activity; backup retained"})
+                    stage = None
+        except (OSError, ValueError, Unsafe, subprocess.SubprocessError) as error:
+            if moved and not published:
+                try:
+                    if not path.exists() and not path.is_symlink():
+                        backup.rename(path)
+                        moved = False
+                except OSError as restore_error:
+                    error = Unsafe(f"{error}; restore failed: {restore_error}")
+                if moved:
+                    stage = None
+                    error = Unsafe(f"{error}; original retained at {backup}")
+            result["preserved"].append({"path": str(path), "reason": str(error)})
+        finally:
+            if stage is not None:
+                shutil.rmtree(stage)
+        print(json.dumps({"runtimes_shared": len(result["shared"]), "preserved": len(result["preserved"])}), file=sys.stderr, flush=True)
+    return result
+
+
 def summary(report):
     return {"registered_worktrees": len(report["worktrees"]),
-            "active_worktrees": sum(entry.get("status") == "active" for entry in report["worktrees"]),
+            "active_worktrees": sum(bool(entry.get("pids")) for entry in report["worktrees"]),
             "candidates": {kind: {"count": sum(item["kind"] == kind for item in report["candidates"]),
                 "private_bytes": sum(item["private_bytes"] for item in report["candidates"] if item["kind"] == kind),
                 "allocated_bytes": sum(item["allocated_bytes"] for item in report["candidates"] if item["kind"] == kind)}
@@ -360,14 +507,14 @@ def summary(report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("audit", "clean"))
+    parser.add_argument("mode", choices=("audit", "clean", "audit-share", "share"))
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     if sys.platform != "darwin":
         parser.error("This APFS cleanup tool is macOS-only; nothing was removed")
-    if args.mode == "audit":
-        report = audit(args.project, progress=lambda value: print(json.dumps(value), file=sys.stderr, flush=True))
+    if args.mode in ("audit", "audit-share"):
+        report = audit(args.project, for_sharing=args.mode == "audit-share", progress=lambda value: print(json.dumps(value), file=sys.stderr, flush=True))
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps({**summary(report), "report": str(args.report.resolve())}))
@@ -375,7 +522,11 @@ def main():
         report = json.loads(args.report.read_text())
         if common_dir(args.project.resolve(strict=True)) != Path(report["common_dir"]):
             parser.error("--project does not own this plan")
-        result = clean(report)
+        result = share(report) if args.mode == "share" else clean(report)
+        if args.mode == "share":
+            args.report.with_suffix(".result.json").write_text(json.dumps(result, indent=2) + "\n")
+            print(json.dumps({"shared": len(result["shared"]), "preserved": result["preserved"]}))
+            return
         print(json.dumps({"removed": len(result["removed"]), "preserved": result["preserved"],
                           "removed_private_bytes": sum(item["private_bytes"] for item in result["removed"]),
                           "removed_allocated_bytes": sum(item["allocated_bytes"] for item in result["removed"])}))
