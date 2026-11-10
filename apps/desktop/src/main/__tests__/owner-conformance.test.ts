@@ -337,6 +337,31 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       }
     } finally { await outpost?.close(); await desktop.close(); }
   }, 120_000);
+  it("both actual owners release held input and cancel waiting entries without interrupting admitted provider turns", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      for (const host of [desktop, outpost]) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        await host.client.startTurn({ ...identity, queueEntryId: "failure", input: [{ type: "text", text: "fail" }] });
+        const waiting = await host.client.startTurn({ ...identity, queueEntryId: "waiting", input: [{ type: "text", text: "slow" }] });
+        const deleted = await host.client.startTurn({ ...identity, queueEntryId: "deleted", input: [{ type: "text", text: "deleted" }] });
+        expect(await host.client.cancelQueuedTurn({ queueEntryId: deleted.queueEntryId! })).toMatchObject({ cancelled: true, disposition: "cancelled" });
+        expect(await host.client.cancelQueuedTurn({ queueEntryId: active.queueEntryId! })).toMatchObject({ cancelled: false, disposition: "already_admitted", turnId: active.turnId });
+        await host.client.interruptTurn(active);
+        const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: identity.threadId } };
+        await expect.poll(async () => (await host.client.getNavigationQueueProjection(request)).entries[0]?.manualReleaseRequired).toBe(true);
+        const released = await host.client.releaseQueuedTurn({ queueEntryId: waiting.queueEntryId! });
+        expect(released).toMatchObject({ disposition: "started" });
+        expect(await host.client.cancelQueuedTurn({ queueEntryId: waiting.queueEntryId! })).toMatchObject({ cancelled: false, disposition: "already_admitted", turnId: released.turnId });
+        expect(await host.client.releaseQueuedTurn({ queueEntryId: waiting.queueEntryId! })).toMatchObject({ disposition: "not_found" });
+        expect((await host.client.getNavigationQueueProjection(request)).entries).toEqual([]);
+        await host.client.interruptTurn({ ...identity, turnId: released.turnId! });
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
+  }, 120_000);
   it("both actual owners name first turns through the supported restricted Codex helper without exposing ephemeral threads", async () => {
     const title = "Repair login regression";
     const desktop = await startDesktopOwner(null, undefined, undefined, undefined, title);
@@ -1405,7 +1430,12 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         "backend.startTurn [start its first turn] event thread/turnQueue/updated: desktop sends it, outpost does not",
       ]);
       expect(measured.differences.filter(difference => queueConvergence.has(difference))).toEqual([]);
-      const change = describeBaselineChange({ ...baseline, differences: baseline.differences.filter(difference => !queueConvergence.has(difference)) }, measured);
+      const queueControls = ["backend.cancelQueuedTurn", "backend.releaseQueuedTurn"];
+      expect(queueControls.every(method => measured.sharedMethods.includes(method))).toBe(true);
+      const change = describeBaselineChange({ ...baseline,
+        sharedMethods: [...new Set([...baseline.sharedMethods, ...queueControls])].sort(),
+        differences: baseline.differences.filter(difference => !queueConvergence.has(difference)),
+      }, measured);
       if (change) throw new Error(change);
     } finally {
       await outpost?.close();

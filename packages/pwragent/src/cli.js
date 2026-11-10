@@ -21,6 +21,7 @@ const help = `PwrAgent Headless (experimental, Linux/macOS, Node 22.14+ (22.x) o
   pwragent submit --id JOB --prompt-file /task.txt [--sandbox read-only|workspace-write]
                   [--model MODEL] [--thread THREAD_ID] [--cwd /workspace/project]
   pwragent show|read|interrupt|wait --id JOB
+  pwragent release|cancel --id QUEUED_JOB
   pwragent federation-join --invite-file /invite.txt --gateway ws://127.0.0.1:47830 [--label NAME]
   pwragent federation-invite [--port 47831] [--label NAME]
   pwragent federation-status | federation-leave
@@ -66,7 +67,7 @@ export async function main(args) {
     submit: ["id", "prompt-file", "thread", "model", "sandbox", "cwd"],
     "project-list": [], "project-create": ["name", "label"], "project-clone": ["name", "remote", "label"],
     "project-add": ["path", "label"], "project-remove": ["path"], "git-auth-configure": ["config-file"],
-    show: ["id"], read: ["id"], interrupt: ["id"], wait: ["id"], status: [], list: [], version: [],
+    show: ["id"], read: ["id"], interrupt: ["id"], wait: ["id"], release: ["id"], cancel: ["id"], status: [], list: [], version: [],
     "federation-join": ["invite-file", "gateway", "label"],
     "federation-invite": ["port", "label"],
     "federation-status": [], "federation-leave": [], "federation-revoke": ["peer"],

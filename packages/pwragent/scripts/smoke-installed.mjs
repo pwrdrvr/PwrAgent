@@ -25,9 +25,9 @@ function launch(args) {
   child.done = new Promise((resolve, reject) => { child.on("error", reject); child.on("exit", resolve); });
   return child;
 }
-async function command(args) {
+async function command(args, expectedCode = 0) {
   const child = launch(args);
-  assert.equal(await child.done, 0, child.errors);
+  assert.equal(await child.done, expectedCode, child.errors);
   return child.output;
 }
 async function start() {
@@ -129,6 +129,22 @@ try {
   assert.equal(JSON.parse(await command(["wait", "--id", "queue-waiting"])).status, "completed");
   const queueCalls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(queueCalls.filter(call => call.method === "turn/start" && call.params.input[0].text === "installed-queued-input").length, 1);
+  writeFileSync(prompt, "slow");
+  await command(["submit", "--id", "control-active", "--thread", owned.threadId, "--prompt-file", prompt]);
+  writeFileSync(prompt, "fail");
+  await command(["submit", "--id", "control-fail", "--thread", owned.threadId, "--prompt-file", prompt]);
+  writeFileSync(prompt, "installed-released-input");
+  await command(["submit", "--id", "control-held", "--thread", owned.threadId, "--prompt-file", prompt]);
+  writeFileSync(prompt, "installed-deleted-input");
+  await command(["submit", "--id", "control-delete", "--thread", owned.threadId, "--prompt-file", prompt]);
+  assert.equal(JSON.parse(await command(["cancel", "--id", "control-delete"])).disposition, "cancelled");
+  await command(["interrupt", "--id", "control-active"]);
+  assert.equal(JSON.parse(await command(["wait", "--id", "control-fail"], 2)).status, "failed");
+  assert.equal(JSON.parse(await command(["release", "--id", "control-held"])).disposition, "started");
+  assert.equal(JSON.parse(await command(["wait", "--id", "control-held"])).status, "completed");
+  const controlCalls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(controlCalls.filter(call => call.method === "turn/start" && call.params.input[0].text === "installed-released-input").length, 1);
+  assert.equal(controlCalls.filter(call => call.method === "turn/start" && call.params.input[0].text === "installed-deleted-input").length, 0);
   await stop(daemon);
   // Actual profile discovery must work from the installed bundle with no
   // provider process or retained Claude inventory.

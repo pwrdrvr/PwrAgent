@@ -1,0 +1,7 @@
+{
+  "admitted-retries": {"commits": 0, "note": "1000 repeated release/cancel/projection reads; no provider sends or writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "blocked-retries": {"commits": 0, "note": "1000 live handoff-gated retries preserve the shared hold and durable acceptance", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "cancelled-retries": {"commits": 0, "note": "1000 repeated release/cancel/projection reads; no provider sends or writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "held-cancellation": {"commits": 1, "note": "One held job's durable cancellation before shared FIFO removal; no provider send", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "held-release": {"commits": 3, "note": "One explicit held retry through existing dispatch/identity/confirmation boundaries; acceptance and terminal excluded", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 3}
+}
