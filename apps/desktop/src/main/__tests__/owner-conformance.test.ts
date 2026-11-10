@@ -328,6 +328,49 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("self-started held admissions preserve every immutable acceptance and deduplicate only waiting prompts", async () => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+    try {
+      await fc.assert(fc.asyncProperty(fc.array(fc.integer({ min: 0, max: 4 }), { minLength: 2, maxLength: 12 }),
+        fc.string({ maxLength: 20 }), async (wakes, suffix) => {
+          const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+          const snapshots = new Map<string, Awaited<ReturnType<typeof host.client.readQueuedTurn>>>();
+          const ids = new Map<string, string>();
+          await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
+          await registry.submitHeldTurn({ ...identity, queueEntryId: `review:${identity.threadId}`,
+            input: [{ type: "text", text: "Independent review" }], holdReason: "Independent review" });
+          const neighbors = structuredClone(queue.getQueuedEntries(identity));
+          try {
+            for (const wake of wakes) {
+              const prompt = `Wake ${wake}: ${suffix}`;
+              expect(await registry.holdBackendSelfStartedTurn({ ...identity, prompt,
+                source: ["task_notification", "loop_wakeup", "cron"][wake % 3] as "task_notification" | "loop_wakeup" | "cron" })).toBe(true);
+              const waiting = queue.getQueuedEntries(identity);
+              if (!ids.has(prompt)) {
+                const entry = waiting.at(-1)!;
+                ids.set(prompt, entry.id);
+                expect(entry.input).toEqual([{ type: "text", text: prompt }]);
+                expect(entry.messageOrigin).toEqual({ kind: "pwragent" });
+                expect(snapshots.has(entry.id)).toBe(false);
+                snapshots.set(entry.id, await host.client.readQueuedTurn({ ...identity, queueEntryId: entry.id }));
+              }
+              expect(waiting.map(entry => entry.id)).toEqual([...neighbors.map(entry => entry.id), ...ids.values()]);
+              expect(waiting.slice(0, neighbors.length)).toEqual(neighbors);
+              for (const [id, snapshot] of snapshots) {
+                expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: id })).toEqual(snapshot);
+              }
+              expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId))
+                .toEqual(waiting.map(entry => entry.id));
+            }
+          } finally {
+            for (const entry of queue.getQueuedEntries(identity)) await host.client.cancelQueuedTurn({ queueEntryId: entry.id });
+          }
+        }), { numRuns: 25, examples: [[[0, 1, 0], ""]] });
+    } finally { await host.close(); }
+  });
+
   it("actual desktop ACP acceptance survives a session-read refusal in started publication", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const backend = "acp:gemini" as const, threadId = "publication-acp";
