@@ -1,6 +1,6 @@
 import { threadRowInstanceKey } from "./thread-row-instance";
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryChildren, buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -67,7 +67,7 @@ import { isFederationViewerWindow, readRendererFederationTarget } from "../../li
 import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
-import { SubthreadPagination } from "./SubthreadPagination";
+import { renderSubthreadPages } from "./SubthreadPagination";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
   SignalCount,
@@ -90,7 +90,7 @@ import {
   useNavigationDirectoryDisclosure,
   type NavigationDirectoryDisclosure,
 } from "../../lib/useNavigationDirectoryDisclosure";
-import { createSubthreadTrays } from "./subthread-trays";
+import { createSubthreadTrays, ordinaryChildCountOf } from "./subthread-trays";
 import {
   interleaveStartingSubthreads,
   isSubthreadLaunchpadDraft,
@@ -1070,6 +1070,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       pinOrdering.movePinnedThreadByKeyboard(thread, direction);
     },
   );
+  // A tray row folds its own sub-threads only where its chevron can draw:
+  // folding behind a missing control would strand the rows it hides.
+  const canFoldSubthreads = (thread: NavigationThreadSummary): boolean =>
+    Boolean(props.onSetSubthreadsCollapsed) && threadSupportsFederationCapability(thread, "thread_grouping");
+  const foldsSubthreads = (thread: NavigationThreadSummary): boolean =>
+    isSubthreadSectionCollapsed(thread) && canFoldSubthreads(thread);
   const toggleSubthreads = useEventCallback((thread: NavigationThreadSummary) => {
     void props.onSetSubthreadsCollapsed?.(
       thread,
@@ -1180,7 +1186,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ...expandedThreadModel.selectedUnpinnedThreads,
       ...expandedThreadModel.unpinnedThreads,
     ];
-    const trays = createSubthreadTrays(childThreadsByParentKey, roots, ownerChildOrder);
+    const trays = createSubthreadTrays(childThreadsByParentKey, roots, ownerChildOrder, { isCollapsed: foldsSubthreads });
     const selectedRoot = roots.find((thread) => threadSummaryIdentityKey(thread) === props.selectedItemKey);
     const selectedTrayRoot = selectedRoot ? undefined : roots.find((thread) =>
       trays.subtree(threadSummaryIdentityKey(thread)).some((child) =>
@@ -1201,13 +1207,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
       const children = trays.subtree(parentKey);
       const directChildKeys = trays.directChildKeys(parentKey);
       const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
-      const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
-        ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
-      const childResources = [childResourceId, `${childResourceId}:viewer`]
-        .flatMap((id) => {
-          const resource = props.pagedNavigation?.resources.get(id);
-          return resource ? [resource] : [];
-        });
       const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
       const trayEntries = interleaveStartingSubthreads({
         trayKey: parentKey,
@@ -1267,6 +1266,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
               }
               const child = entry.thread;
               const childKey = threadSummaryIdentityKey(child);
+              // A sub-thread with its own sub-threads folds them, as a
+              // top-level row does. Native workers keep their own disclosure.
+              const childSubthreadCount = ordinaryChildCounts.get(childKey) ?? ordinaryChildCountOf(child);
               // A row plus its own worker group, as siblings of this list. A
               // wrapping element would break the tray's flat list semantics.
               return [
@@ -1294,6 +1296,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selected={props.selectedThreadKeys?.has(childKey)}
+                subthreadCount={childSubthreadCount}
+                subthreadsCollapsed={isSubthreadSectionCollapsed(child)}
+                onToggleSubthreads={childSubthreadCount > 0 && canFoldSubthreads(child) ? toggleSubthreads : undefined}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
@@ -1324,15 +1329,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   thread={child}
                 />
               ) : null,
+              // A sub-thread pages its own children. Its control closes its
+              // subtree, so it never reads as the tray owner's.
+              ...trays.pagesAfter(childKey).flatMap((pageParent) =>
+                renderSubthreadPages(pageParent, props.pagedNavigation)),
               ];
             })}
-            {childResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((childResource) => (
-              <SubthreadPagination
-                key={childResource.id}
-                resource={childResource}
-                pagedNavigation={props.pagedNavigation}
-              />
-            ))}
+            {renderSubthreadPages(parent, props.pagedNavigation)}
           </div>
         </div>
       );

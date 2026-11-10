@@ -1,4 +1,6 @@
 import type { ReactElement } from "react";
+import type { NavigationThreadSummary } from "@pwragent/shared";
+import { isNavigationPeerUnavailable, navigationIdentityKey } from "../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { SidebarShowMore } from "./SidebarShowMore";
@@ -44,4 +46,34 @@ export function SubthreadPagination(props: {
       ) : null}
     </div>
   );
+}
+
+/**
+ * A parent's loaded child pages: its owner's, plus this machine's own when
+ * the parent belongs to a peer. Every row with sub-threads pages its own
+ * children, a sub-thread as much as a top-level row.
+ */
+export function subthreadPageResources(
+  parent: NavigationThreadSummary,
+  resources: ReadonlyMap<string, NavigationWindowResource> | undefined,
+): NavigationWindowResource[] {
+  const owner = parent.federation?.ref.target;
+  const id = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
+    ownerInstanceId: owner?.scope === "remote" ? owner.instanceId : undefined })}`;
+  return [id, `${id}:viewer`].flatMap((resourceId) => {
+    const resource = resources?.get(resourceId);
+    return resource ? [resource] : [];
+  });
+}
+
+/** `SubthreadPagination` for each of a parent's reachable child pages. */
+export function renderSubthreadPages(
+  parent: NavigationThreadSummary,
+  pagedNavigation: ReturnType<typeof useBoundedNavigationWindow> | undefined,
+): ReactElement[] {
+  return subthreadPageResources(parent, pagedNavigation?.resources)
+    .filter((resource) => !isNavigationPeerUnavailable(resource.state.error))
+    .map((resource) => (
+      <SubthreadPagination key={resource.id} resource={resource} pagedNavigation={pagedNavigation} />
+    ));
 }

@@ -85,3 +85,64 @@ it("partitions every forest into its lens roots and trays, preserving promoted d
 it("reserves a promoted child before walking its ancestor's tray (shrunk #2769 regression)", () => {
   checkTrays([{ parent: 0, promoted: false, collapsed: false }, { parent: 1, promoted: true, collapsed: false }], false);
 });
+
+/**
+ * The model for a tray whose rows each draw their own disclosure toggle. A
+ * row renders when it is a lens root, or when no non-root ancestor between it
+ * and its nearest root is folded. Every rendered, unfolded mid-level parent
+ * with a child page gets exactly one paging slot, after its last rendered row:
+ * a mid-level parent's page grows past 10 rows only through that slot.
+ */
+function checkCollapsibleTrays(nodes: Node[], reverseRoots: boolean) {
+  const parents = nodes.map((node, index) => node.parent % (index + 1) - 1);
+  const rows: NavigationThreadSummary[] = nodes.map((node, index) => ({ ...row(`thread-${index}`), subthreadsCollapsed: node.collapsed }));
+  const keys = rows.map(threadSummaryIdentityKey);
+  const children = new Map<string, NavigationThreadSummary[]>();
+  rows.forEach((entry, index) => {
+    const parent = parents[index]!;
+    if (parent >= 0) children.set(keys[parent]!, [...(children.get(keys[parent]!) ?? []), entry]);
+  });
+  const isRoot = (index: number) => parents[index] === -1 || nodes[index]!.promoted;
+  const roots = rows.filter((_, index) => isRoot(index));
+  if (reverseRoots) roots.reverse();
+  const trays = createSubthreadTrays(children, roots, undefined, {
+    isCollapsed: (thread) => thread.subthreadsCollapsed === true,
+  });
+
+  const shown = (index: number): boolean => {
+    for (let parent = parents[index]!; !isRoot(index); index = parent, parent = parents[index]!) {
+      if (isRoot(parent)) return true;
+      if (nodes[parent]!.collapsed) return false;
+    }
+    return true;
+  };
+  const rendered = roots.flatMap((root) => [root, ...trays.subtree(threadSummaryIdentityKey(root))]);
+  expect(rendered.map(threadSummaryIdentityKey).sort())
+    .toEqual(keys.filter((_, index) => shown(index)).sort());
+
+  for (const root of roots) {
+    const tray = trays.subtree(threadSummaryIdentityKey(root)).map(threadSummaryIdentityKey);
+    const slots = tray.flatMap((key, at) => trays.pagesAfter(key).map((parent) => ({ parentKey: threadSummaryIdentityKey(parent), at })));
+    const expected = tray.filter((key) => {
+      const index = keys.indexOf(key);
+      return !nodes[index]!.collapsed && children.has(key);
+    });
+    expect(slots.map((slot) => slot.parentKey).sort()).toEqual([...expected].sort());
+    for (const { parentKey, at } of slots) {
+      const start = tray.indexOf(parentKey);
+      const depth = trays.depth(parentKey);
+      let end = start;
+      while (end + 1 < tray.length && trays.depth(tray[end + 1]!) > depth) end += 1;
+      expect(at).toBe(end);
+    }
+    for (const key of tray) {
+      // Innermost first: the deeper parent's control comes before its ancestor's.
+      const depths = trays.pagesAfter(key).map((parent) => trays.depth(threadSummaryIdentityKey(parent)));
+      expect(depths).toEqual([...depths].sort((left, right) => right - left));
+    }
+  }
+}
+
+it("folds a collapsed mid-level parent and gives each open one its own paging slot after its subtree", () => {
+  fc.assert(fc.property(forest, fc.boolean(), checkCollapsibleTrays));
+});

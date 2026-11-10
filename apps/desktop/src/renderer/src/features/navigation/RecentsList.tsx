@@ -1,7 +1,7 @@
 import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { Children, Fragment, useEffect, useId, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useRecoverableState } from "../../lib/RendererRecoveryState";
@@ -24,7 +24,7 @@ import { useDropIndicatorController } from "./drag-drop";
 import type { NestThreadHandler } from "./thread-nest-drop";
 import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
 import { useThreadNestDrag } from "./useThreadNestDrag";
-import { createSubthreadTrays } from "./subthread-trays";
+import { createSubthreadTrays, ordinaryChildCountOf } from "./subthread-trays";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
   threadSummaryIdentityKey,
@@ -37,7 +37,7 @@ import {
 } from "./NativeSubAgentsDisclosure";
 import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
-import { SubthreadPagination } from "./SubthreadPagination";
+import { renderSubthreadPages, subthreadPageResources } from "./SubthreadPagination";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
 import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import { AttentionReviewReadout, AttentionTurnReadouts, describeAttentionCounts } from "./AttentionSignals";
@@ -282,28 +282,24 @@ export function RecentsList(props: RecentsListProps) {
   // depth-first order. The owner keys each child under its *true* parent,
   // so a grandchild is filed under a row that is itself a child; rendering
   // only direct children would silently drop it from this lens.
+  // A tray row folds its own sub-threads only where its chevron can draw:
+  // folding behind a missing control would strand the rows it hides.
+  const canFoldSubthreads = (thread: NavigationThreadSummary): boolean =>
+    Boolean(props.onSetSubthreadsCollapsed) && threadSupportsFederationCapability(thread, "thread_grouping");
   const trays = createSubthreadTrays(childrenByParentKey, [...pinnedRoots, ...topLevelThreads],
-    readOwnerChildOrder(props.pagedNavigation?.resources ?? new Map(), presentation));
+    readOwnerChildOrder(props.pagedNavigation?.resources ?? new Map(), presentation),
+    { isCollapsed: (thread) => isSubthreadSectionCollapsed(thread) && canFoldSubthreads(thread) });
   const renderedThreadKeys = new Set(topLevelKeys);
   for (const key of topLevelKeys) {
     for (const child of trays.subtree(key)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
   }
-  const childResourcesOf = (parent: NavigationThreadSummary) => {
-    const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
-      ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
-    return [childResourceId, `${childResourceId}:viewer`]
-      .flatMap((id) => {
-        const resource = props.pagedNavigation?.resources.get(id);
-        return resource ? [resource] : [];
-      });
-  };
   const startingThreads = selectUnlandedStartingThreads(props.startingThreads, renderedThreadKeys);
   // A rendered ancestor is still revealing the thread while its tray is shut,
   // or open with its children page on the way. Once that page has landed
   // without the thread (it is further down the tray), the thread needs a row.
   const trayStillRevealing = (parent: NavigationThreadSummary): boolean => {
     if (isSubthreadSectionCollapsed(parent)) return true;
-    const resources = childResourcesOf(parent);
+    const resources = subthreadPageResources(parent, props.pagedNavigation?.resources);
     return resources.length === 0 || resources.some((resource) => resource.loading || !resource.state.page);
   };
   const visitingThread = props.visitingThread
@@ -365,7 +361,6 @@ export function RecentsList(props: RecentsListProps) {
     const directChildKeys = trays.directChildKeys(parentKey);
     const directChildKeySet = new Set(directChildKeys);
     const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
-    const childResources = childResourcesOf(parent);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
     const canManageSubthreads = threadSupportsFederationCapability(
       parent,
@@ -412,6 +407,9 @@ export function RecentsList(props: RecentsListProps) {
           }
           const child = entry.thread;
           const childKey = threadSummaryIdentityKey(child);
+          // A sub-thread with its own sub-threads folds them, as a top-level
+          // row does. Native workers keep their own disclosure.
+          const childSubthreadCount = ordinaryChildCountOf(child);
           // Any row in the tray drags to nest it under another row, a sole
           // child or a grandchild too; only direct children also reorder.
           const draggable =
@@ -441,6 +439,9 @@ export function RecentsList(props: RecentsListProps) {
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey}
               selected={props.selectedThreadKeys?.has(childKey)}
+              subthreadCount={childSubthreadCount}
+              subthreadsCollapsed={isSubthreadSectionCollapsed(child)}
+              onToggleSubthreads={childSubthreadCount > 0 && canFoldSubthreads(child) ? toggleSubthreads : undefined}
               thinkingThreadKeys={props.thinkingThreadKeys}
               agentCommandThreadKeys={props.agentCommandThreadKeys}
               thread={child}
@@ -468,15 +469,13 @@ export function RecentsList(props: RecentsListProps) {
                 thread={child}
               />
             ) : null,
+            // A sub-thread pages its own children. Its control closes its
+            // subtree, so it never reads as the tray owner's.
+            ...trays.pagesAfter(childKey).flatMap((pageParent) =>
+              renderSubthreadPages(pageParent, props.pagedNavigation)),
           ];
         })}
-        {childResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((childResource) => (
-          <SubthreadPagination
-            key={childResource.id}
-            resource={childResource}
-            pagedNavigation={props.pagedNavigation}
-          />
-        ))}
+        {renderSubthreadPages(parent, props.pagedNavigation)}
       </div>
     );
   };

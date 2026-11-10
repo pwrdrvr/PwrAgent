@@ -1,6 +1,7 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { sortSubthreadSummaries } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 
 export type SubthreadTrays = {
   /**
@@ -26,6 +27,24 @@ export type SubthreadTrays = {
    * names direct children.
    */
   subtree: (trayKey: string) => NavigationThreadSummary[];
+  /**
+   * The descendant parents whose rendered subtree ends at `threadKey`,
+   * innermost first. Each one owns its own child page, so its paging control
+   * belongs right after its last rendered row: below the tray, a mid-level
+   * parent's "Load more" would read as the tray owner's. A tray owner is never
+   * listed; its control trails the whole tray.
+   */
+  pagesAfter: (threadKey: string) => readonly NavigationThreadSummary[];
+};
+
+export type SubthreadTrayOptions = {
+  /**
+   * Whether a descendant row's own sub-threads are folded away. Pass it only
+   * where every descendant with children renders its own disclosure toggle:
+   * a fold with no control on screen hides rows the operator cannot reach.
+   * A tray owner's own collapse is the caller's to honor.
+   */
+  isCollapsed?: (thread: NavigationThreadSummary) => boolean;
 };
 
 /**
@@ -37,11 +56,11 @@ export type SubthreadTrays = {
  * workers. Collapsing the relationship itself instead would leave a grandchild
  * pointing at a row it does not belong to.
  *
- * A descendant's own `subthreadsCollapsed` is deliberately not consulted. Only
- * a tray owner renders a disclosure toggle, so honoring an intermediate row's
- * collapse would hide its children behind a control that is nowhere on screen
- * — the invisible-row failure these trays exist to prevent. A tray owner's own
- * collapse is honored by the caller.
+ * A descendant's own collapse is consulted only through `options.isCollapsed`.
+ * A caller passes it when it draws a disclosure toggle on every descendant
+ * that has children; without that toggle, honoring the fold would hide rows
+ * behind a control that is nowhere on screen — the invisible-row failure these
+ * trays exist to prevent. A tray owner's own collapse is honored by the caller.
  *
  * Reserve every presentation root before walking any descendants. A promoted
  * root can also appear in an ancestor's child page; its own tray must keep
@@ -56,10 +75,12 @@ export function createSubthreadTrays(
   childrenByParentKey: ReadonlyMap<string, NavigationThreadSummary[]>,
   owners: readonly NavigationThreadSummary[],
   ownerChildOrder?: ReadonlyMap<string, readonly string[]>,
+  options: SubthreadTrayOptions = {},
 ): SubthreadTrays {
   const subtreeByTrayKey = new Map<string, NavigationThreadSummary[]>();
   const directChildKeysByTrayKey = new Map<string, string[]>();
   const depthByThreadKey = new Map<string, number>();
+  const pagesAfterByThreadKey = new Map<string, NavigationThreadSummary[]>();
   const placedThreadKeys = new Set(owners.map(threadSummaryIdentityKey));
 
   const collectSubtree = (
@@ -96,7 +117,17 @@ export function createSubthreadTrays(
       directChildKeys?.push(childKey);
       tray.push(child);
       depthByThreadKey.set(childKey, depth);
+      if (options.isCollapsed?.(child)) continue;
       collectSubtree(trayKey, child, childKey, depth + 1);
+      // A parent with a child page (or one still loading) closes its subtree
+      // here. Recursion has already closed every deeper parent, so the list
+      // stays innermost first.
+      if (childrenByParentKey.get(childKey)?.length || ordinaryChildCountOf(child) > 0) {
+        const lastKey = threadSummaryIdentityKey(tray[tray.length - 1]!);
+        const closes = pagesAfterByThreadKey.get(lastKey);
+        if (closes) closes.push(child);
+        else pagesAfterByThreadKey.set(lastKey, [child]);
+      }
     }
   };
 
@@ -108,9 +139,17 @@ export function createSubthreadTrays(
   return {
     depth: (threadKey) => depthByThreadKey.get(threadKey) ?? 1,
     directChildKeys: (trayKey) => directChildKeysByTrayKey.get(trayKey) ?? [],
+    pagesAfter: (threadKey) => pagesAfterByThreadKey.get(threadKey) ?? NO_PAGES,
     subtree: (trayKey) => subtreeByTrayKey.get(trayKey) ?? [],
   };
 }
+
+/** The owner's count of a row's ordinary sub-threads, loaded or not. */
+export function ordinaryChildCountOf(thread: NavigationPresentedThread): number {
+  return thread.ordinaryChildCount ?? 0;
+}
+
+const NO_PAGES: readonly NavigationThreadSummary[] = [];
 
 /**
  * A parent's own `subthreadOrder` wins: only this window's optimistic reorder
