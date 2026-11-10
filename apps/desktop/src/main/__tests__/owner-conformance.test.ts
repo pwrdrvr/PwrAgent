@@ -326,6 +326,77 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("actual desktop ACP acceptance survives a session-read refusal in started publication", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const backend = "acp:gemini" as const, threadId = "publication-acp";
+    let failRead = false, refusedReads = 0, readFailureStack = "", confirmed: { turnId: string } | undefined;
+    const desktop = await startDesktopOwner(null, async (db, workspace) => {
+      const script = `
+        const fs = require("node:fs");
+        const rl = require("node:readline").createInterface({ input: process.stdin });
+        const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
+        rl.on("line", line => {
+          const message = JSON.parse(line);
+          fs.appendFileSync(${JSON.stringify(path.join(workspace, "publication-acp.jsonl"))}, line + "\\n");
+          if (message.id === undefined) return;
+          if (message.method === "session/prompt") send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: message.params.sessionId,
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Accepted publication fixture." } } } });
+          send({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { protocolVersion: 1 } : {} });
+        });`;
+      new AcpAgentStore(db).upsertInstalledAgent({ backendId: backend, registryId: "gemini", name: "Publication fixture",
+        distributionKind: "local", distributionSource: "fixture", installStatus: "installed", authStatus: "not-required",
+        verificationStatus: "not-applicable", allowlistRuleId: "fixture", installedAt: 1000, updatedAt: 1000,
+        launchDescriptor: { backendId: backend, registryId: "gemini", distributionKind: "local",
+          command: process.execPath, args: ["-e", script], env: {} },
+      });
+      new AcpSessionStore(db).upsertSession({ backendId: backend, sessionId: threadId, title: "Publication fixture",
+        cwd: workspace, createdAt: 1000, updatedAt: 1000, executionMode: "default", status: "idle" });
+    });
+    const identity = { backend, threadId };
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const internal = registry as unknown as { startTurnNow: (params: { backend: AppServerBackendKind; threadId: string; input: unknown[] }) => Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> };
+    const start = internal.startTurnNow.bind(internal);
+    const get = AcpSessionStore.prototype.getSession;
+    const reader = vi.spyOn(AcpSessionStore.prototype, "getSession").mockImplementation(function (this: AcpSessionStore, ...args) {
+      if (failRead) {
+        failRead = false; refusedReads++;
+        const error = new Error("Native session metadata unavailable");
+        readFailureStack = error.stack ?? "";
+        throw error;
+      }
+      return get.apply(this, args);
+    });
+    const submission = vi.spyOn(internal, "startTurnNow").mockImplementation(async params => {
+      const result = await start(params);
+      confirmed = result;
+      // Fail only a real native metadata read AFTER the actual provider path
+      // returns. The queue's started-event builder reads that same port.
+      failRead = true;
+      return result;
+    });
+    try {
+      await registry.submitHeldTurn({ ...identity, queueEntryId: "accepted", origin: "scheduled",
+        input: [{ type: "text", text: "Immutable ACP input" }], holdReason: "Review before starting" });
+      let result: Awaited<ReturnType<typeof desktop.client.releaseQueuedTurn>>;
+      const { writes } = await measureSqliteWrites(async () => {
+        result = await desktop.client.releaseQueuedTurn({ queueEntryId: "accepted" });
+        await vi.waitFor(() => expect(desktop.events.some(event => event.notification.method === "turn/completed"
+          && event.notification.params.turnId === confirmed!.turnId)).toBe(true));
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-started-publication-write-budgets.json", scenario: "desktop-acp-started-read-refusal",
+        note: "Actual ACP held Retry, native prompt and terminal through started publication metadata refusal; setup/admission excluded", writes });
+      expect(refusedReads).toBe(1);
+      expect(readFailureStack).toContain("emitTurnQueueLifecycle");
+      expect(readFailureStack).toContain("getCachedThreadSummary");
+      const requests = readFileSync(path.join(desktop.workspace, "publication-acp.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(requests.filter(request => request.method === "session/prompt")).toHaveLength(1);
+      expect(result!).toMatchObject({ disposition: "started", turnId: confirmed!.turnId });
+      expect((await desktop.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(await desktop.client.cancelQueuedTurn({ queueEntryId: "accepted" })).toMatchObject({ cancelled: false, disposition: "already_admitted" });
+    } finally { submission.mockRestore(); reader.mockRestore(); await desktop.close(); vi.unstubAllEnvs(); }
+  });
+
   it("actual desktop provider refusal holds waiting input before blocked-event cancellation drains it", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const root = await realpath(await mkdtemp("/tmp/pa-refuse-"));

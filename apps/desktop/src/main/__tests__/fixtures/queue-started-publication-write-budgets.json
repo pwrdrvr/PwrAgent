@@ -1,0 +1,23 @@
+{
+  "desktop-acp-started-read-refusal": {
+    "commits": 6,
+    "note": "Actual ACP held Retry, native prompt and terminal through started publication metadata refusal; setup/admission excluded",
+    "observedWalBytes": 82400,
+    "rowsChanged": 6,
+    "statements": 6
+  },
+  "outpost-start-observer-rejection": {
+    "commits": 4,
+    "note": "Actual queued native acceptance through synchronous started observer rejection with real drains; admission/setup excluded",
+    "observedWalBytes": 12360,
+    "rowsChanged": 3,
+    "statements": 4
+  },
+  "outpost-steer-observer-rejection": {
+    "commits": 2,
+    "note": "Actual queued native acceptance through synchronous started observer rejection with real drains; admission/setup excluded",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  }
+}

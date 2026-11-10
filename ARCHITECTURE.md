@@ -355,6 +355,9 @@ memory. Cancellation settles the job before dispatch, and shutdown or recovery
 settles unfinished queued jobs as unknown without restoring or replaying input.
 New-thread jobs still require an idle host. Confirmed provider acceptance cannot
 return to a retryable FIFO after a host confirmation failure.
+The queue also retains that acceptance when its started lifecycle publication
+rejects. Buffered native terminals still settle ownership and install failure
+holds; observer failures cannot restore accepted start or steering input.
 Ordinary authenticated agent messages without requested settings or explicit
 `new_turn` delivery use the same queue's individual `submitSteer` admission on
 Outpost. Each accepted job retains its own input and delivery fingerprint;
