@@ -2,7 +2,7 @@ import type { OwnerJobRecord, OwnerJobStorage } from "@pwragent/owner-core/owner
 import type { StateDb } from "./state-db";
 
 export const ACTIVE_OWNER_JOB_STATUSES = new Set(["starting", "running", "interrupting"]);
-const STATUSES = new Set([...ACTIVE_OWNER_JOB_STATUSES, "completed", "failed", "interrupted", "blocked", "unknown"]);
+const STATUSES = new Set([...ACTIVE_OWNER_JOB_STATUSES, "queued", "completed", "failed", "interrupted", "blocked", "unknown"]);
 const FIELDS = ["version", "id", "status", "fingerprint", "threadId", "turnId", "model", "sandbox", "cwd",
   "messageOrigin", "reasoningEffort", "serviceTier", "messagingFileTools", "createdAt", "updatedAt", "finishedAt", "reason"] as const;
 
@@ -57,7 +57,7 @@ export class SqliteOwnerJobStore implements OwnerJobStorage {
   recover(): void {
     withOwnerDataDurability(this.db, () => this.db.raw.transaction(() => {
       for (const job of this.list()) {
-        if (ACTIVE_OWNER_JOB_STATUSES.has(job.status)) this.save({ ...job, status: "unknown",
+        if (job.status === "queued" || ACTIVE_OWNER_JOB_STATUSES.has(job.status)) this.save({ ...job, status: "unknown",
           reason: "Daemon stopped before a terminal outcome was recorded; no work was replayed", updatedAt: new Date().toISOString() });
       }
     }).immediate());

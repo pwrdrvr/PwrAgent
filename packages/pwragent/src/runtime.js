@@ -5,7 +5,7 @@ import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMes
 import { Codex } from "./codex.js";
 import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
-import { ThreadCreationLifecycle, ThreadInterruptionLifecycle, ThreadTurnStartLifecycle } from "../dist/federation-core.js";
+import { ThreadCreationLifecycle, ThreadInterruptionLifecycle, ThreadTurnStartLifecycle, ThreadTurnQueue } from "../dist/federation-core.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
@@ -25,6 +25,15 @@ export class Runtime {
     this.loadedThreads = new Set();
     this.pendingSteeringOrigins = new Map();
     this.onFailure = onFailure;
+    // Stable-ID retries await their own provider dispatch, even when another
+    // accepted submission has already returned from enqueueing.
+    this.dispatches = new Map();
+    this.turnQueue = new ThreadTurnQueue({
+      startTurn: entry => this.dispatchJob(this.store.get(entry.id), entry.input[0].text),
+      isThreadActive: ({ threadId }) => Boolean(this.active && this.store.get(this.active).threadId === threadId),
+      isDispatchHeld: () => Boolean(this.stopping || this.uncertain || this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()),
+      onLifecycle: event => this.queueEvent(event),
+    });
     this.threadCreations = new ThreadCreationLifecycle();
     this.turnStarts = new ThreadTurnStartLifecycle({
       assertAvailable: () => { if (this.stopping) throw new Error("Daemon is stopping"); },
@@ -80,6 +89,10 @@ export class Runtime {
       }
       case "interrupt": {
         const job = this.store.get(params.id);
+        if (job.status === "queued") {
+          if (!this.turnQueue.cancelEntry(job.id, "Interrupted before dispatch")) throw new Error("Job is being admitted; retry interrupt");
+          return this.store.get(job.id);
+        }
         if (!ACTIVE.has(job.status)) return job;
         if (!job.turnId) throw new Error("Turn is still starting; retry interrupt after its turn ID is confirmed");
         if (job.status === "interrupting") return job;
@@ -103,6 +116,7 @@ export class Runtime {
   }
 
   submit(params) {
+    if (this.stopping) throw new Error("Daemon is stopping");
     const { id, prompt, threadId = null, model = null, sandbox = "read-only", reasoningEffort = null, serviceTier = null } = params;
     if (!validId(id)) throw new Error("Job ID must be 1–80 letters, digits, underscores or hyphens, beginning with a letter or digit");
     if (typeof prompt !== "string" || !prompt.trim() || Buffer.byteLength(prompt) > 256 * 1024) {
@@ -127,22 +141,74 @@ export class Runtime {
       return prior;
     }
     if (this.intakeBusy) throw new Error("Outpost thread intake is in progress; no job was queued");
-    if (this.active) throw new Error(`Daemon is busy with job ${this.active}; no job was queued`);
+    if (!threadId && (this.active || this.dispatches.size || this.turnQueue.getAllQueuedEntries().length || this.threadCreationBusy?.() || this.uncertain)) {
+      throw new Error("Daemon is busy; no new-thread job was queued");
+    }
     if (this.store.jobs.size >= 10000) throw new Error("Job retention limit reached (10000); use a new profile");
-    const job = this.save({ version: 1, id, fingerprint, status: "starting", threadId,
+    const status = threadId && !this.turnQueue.canStartImmediately({ backend: "codex", threadId }) ? "queued" : "starting";
+    const job = this.save({ version: 1, id, fingerprint, status, threadId,
       model, sandbox, cwd, messageOrigin: params.messageOrigin, reasoningEffort, serviceTier, createdAt: new Date().toISOString() });
-    this.active = id;
+    // A committed acceptance observer can initiate shutdown synchronously.
+    // Its cancellation sweep ran before this entry existed in the live FIFO.
+    if (this.stopping) {
+      this.finish(id, "unknown", "Daemon stopped after acceptance; no work was replayed");
+      this.work = Promise.resolve();
+      return job;
+    }
+    this.work = threadId ? this.turnQueue.submit({ id, backend: "codex", threadId,
+      origin: params.messageOrigin ? "messaging" : "manual", messageOrigin: structuredClone(job.messageOrigin),
+      input: [{ type: "text", text: prompt }], createdAt: Date.parse(job.createdAt),
+    }).catch(() => {}) : this.dispatchJob(job, prompt).catch(() => {});
+    // The durable acceptance precedes inference. Socket loss cannot cancel it.
+    return job;
+  }
+
+  dispatchJob(job, prompt) {
+    if (this.stopping || this.uncertain) throw new Error("Daemon cannot dispatch work");
+    if (this.active || this.dispatches.size || this.intakeBusy || this.threadCreationBusy?.()) throw new Error("Outpost is busy");
+    if (job.threadId && this.threadLocked?.(job.threadId)) throw new Error("Thread handoff is in progress");
+    if (!ACTIVE.has(job.status) && job.status !== "queued") throw new Error("Job already has an outcome; no work was replayed");
+    this.active = job.id;
     this.earlyCompletion = null;
     this.blockedReason = null;
     this.acceptedTurn = null;
-    this.work = this.start(job, prompt).catch((error) => {
-      const current = this.store.get(id);
-      if (ACTIVE.has(current.status)) {
-        this.finish(id, this.acceptedTurn || this.codexFailure || this.stopping ? "unknown" : "failed", error.message);
+    const work = Promise.resolve().then(async () => {
+      try {
+        if (job.status === "queued") this.save({ ...this.store.get(job.id), status: "starting", reason: undefined });
+        await this.start(job, prompt);
+        const current = this.store.get(job.id);
+        if (!current.turnId) throw new Error("Provider did not confirm a turn identity");
+        return { backend: "codex", threadId: current.threadId, turnId: current.turnId };
+      } catch (error) {
+        const accepted = this.acceptedTurn?.jobId === job.id ? this.acceptedTurn : null;
+        const current = this.store.get(job.id);
+        if (accepted || this.codexFailure || this.stopping) {
+          this.uncertain = true;
+          if (ACTIVE.has(current.status)) this.finish(job.id, "unknown", error.message);
+          // Accepted input must never return to a retryable FIFO after a host
+          // confirmation failure, even if diagnostics cannot stop this host.
+          if (accepted) return { backend: "codex", threadId: accepted.threadId, turnId: accepted.turnId };
+        } else if (job.status === "queued") {
+          this.save({ ...current, status: "queued", reason: error.message });
+          this.active = null;
+        } else if (ACTIVE.has(current.status)) this.finish(job.id, "failed", error.message);
+        throw error;
       }
+    }).finally(() => {
+      this.dispatches.delete(job.id);
+      this.turnQueue.drainAll();
     });
-    // The durable acceptance precedes inference. Socket loss cannot cancel it.
-    return job;
+    this.dispatches.set(job.id, work);
+    return work;
+  }
+
+  queueEvent(event) {
+    if (event.type === "cancelled") {
+      const job = this.store.get(event.entry.id);
+      if (job.status === "queued") this.finish(job.id, this.stopping ? "unknown" : "interrupted", event.reason);
+    }
+    try { this.onEvent?.({ method: "headless/queueChanged", params: event }); }
+    catch (error) { this.reportFailure(error); }
   }
 
   async start(job, prompt) {
@@ -201,11 +267,18 @@ export class Runtime {
     if (this.codexFailure) return;
     const turnId = params?.turn?.id ?? params?.turnId;
     if (params?.threadId && turnId) this.onTurnTerminal?.({ backend: "codex", threadId: params.threadId, turnId });
-    if (!this.active) return;
-    const job = this.store.get(this.active);
-    if (params?.threadId !== job.threadId) return;
-    if (!job.turnId) this.earlyCompletion = params;
-    else if (params.turn?.id === job.turnId) this.complete(params);
+    if (this.active) {
+      const job = this.store.get(this.active);
+      if (params?.threadId === job.threadId) {
+        if (!job.turnId) this.earlyCompletion = params;
+        else if (params.turn?.id === job.turnId) this.complete(params);
+      }
+    }
+    if (params?.threadId && turnId) {
+      void this.turnQueue.releaseThread({ backend: "codex", threadId: params.threadId, turnId,
+        status: method === "turn/failed" || params.turn?.status === "failed" ? "turn/failed" : method,
+        errorMessage: params.turn?.error?.message }).catch(error => this.reportFailure(error));
+    }
   }
 
   complete(params) {
@@ -311,12 +384,16 @@ export class Runtime {
     this.save({ ...this.store.get(id), ...confirmed, status, ...(reason ? { reason: String(reason).slice(0, 4096) } : {}), finishedAt: new Date().toISOString() });
     this.pendingSteeringOrigins?.delete(id);
     if (this.active === id) this.active = null;
+    this.turnQueue.drainAll();
   }
 
   async stop() {
     this.stopping = true;
+    this.turnQueue.close();
+    for (const entry of this.turnQueue.getAllQueuedEntries()) this.turnQueue.cancelEntry(entry.id, "Daemon stopped; no queued work was replayed");
     await this.codex.stop();
     try {
+      await Promise.allSettled([...this.dispatches.values()]);
       await this.work;
       await this.settleTitles?.();
     } finally {

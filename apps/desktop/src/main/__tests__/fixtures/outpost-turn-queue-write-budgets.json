@@ -1,0 +1,12 @@
+{
+  "acceptance-observer-shutdown": {"commits": 2, "note": "Durable acceptance and unknown outcome when its observer immediately stops the host; zero provider sends", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
+  "duplicate-projection": {"commits": 0, "note": "1000 matching queued retries and live queue projections; no sends or writes", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "queued-acceptance": {"commits": 1, "note": "One continued-thread acceptance behind an active provider job; prompt remains transient", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "queued-cancellation": {"commits": 1, "note": "One queued job cancelled before provider admission", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "queued-confirmation-refusal": {"commits": 3, "note": "Queued dispatch only, after acceptance/prior terminal; lock blocks before writes, native refusal holds, confirmation refusal preserves accepted IDs as unknown", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 3},
+  "queued-crash-recovery": {"commits": 1, "note": "One recovery transaction settles both the active and queued jobs as unknown, with no input replay", "observedWalBytes": 4120, "rowsChanged": 2, "statements": 2},
+  "queued-dispatch-terminal": {"commits": 5, "note": "Prior terminal plus one queued dispatch/identity/confirmation/terminal; existing thread already explicitly named", "observedWalBytes": 16480, "rowsChanged": 4, "statements": 5},
+  "queued-lock-refusal": {"commits": 0, "note": "Queued dispatch only, after acceptance/prior terminal; lock blocks before writes, native refusal holds, confirmation refusal preserves accepted IDs as unknown", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "queued-native-refusal": {"commits": 3, "note": "Queued dispatch only, after acceptance/prior terminal; lock blocks before writes, native refusal holds, confirmation refusal preserves accepted IDs as unknown", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 3},
+  "queued-shutdown": {"commits": 2, "note": "Graceful shutdown settles one active and one queued job without replay; setup and acceptance excluded", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2}
+}

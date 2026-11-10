@@ -302,6 +302,41 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("queues generated continued turns through both actual owners and projects their provider-owned dispatch order", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      for (const host of [desktop, outpost]) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto" });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const count = fc.sample(fc.integer({ min: 1, max: 3 }), 1)[0]!;
+        const accepted = [];
+        for (let i = 0; i < count; i++) {
+          accepted.push(await host.client.startTurn({ ...identity, queueEntryId: `waiting-${i}`, input: [{ type: "text", text: "slow" }] }));
+        }
+        expect(accepted.map(result => result.queueStatus)).toEqual(Array(count).fill("queued"));
+        const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: identity.threadId } };
+        const queue = await host.client.getNavigationQueueProjection(request);
+        expect(queue.entries.map(entry => entry.queueEntryId)).toEqual(accepted.map(result => result.queueEntryId));
+        expect(queue.entries.map(entry => entry.position)).toEqual(Array.from({ length: count }, (_, i) => i));
+        expect((await host.client.getNavigationQueueProjection({ ...request, knownRevision: queue.revision })).unchanged).toBe(true);
+        let turn = active;
+        for (let i = 0; i < count; i++) {
+          await host.client.interruptTurn(turn);
+          await expect.poll(async () => {
+            const next = (await host.client.resolveThreadAdmissionState(request.ref)).activeTurn?.turnId;
+            return Boolean(next && next !== turn.turnId);
+          }).toBe(true);
+          const next = (await host.client.resolveThreadAdmissionState(request.ref)).activeTurn;
+          expect(next?.turnId).toBeTruthy();
+          turn = { ...identity, turnId: next!.turnId };
+          expect((await host.client.getNavigationQueueProjection(request)).entries).toHaveLength(count - i - 1);
+        }
+        await host.client.interruptTurn(turn);
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
+  }, 120_000);
   it("both actual owners name first turns through the supported restricted Codex helper without exposing ephemeral threads", async () => {
     const title = "Repair login regression";
     const desktop = await startDesktopOwner(null, undefined, undefined, undefined, title);
@@ -1363,7 +1398,14 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const baseline: OwnerConformanceBaseline = existsSync(BASELINE_PATH)
         ? JSON.parse(readFileSync(BASELINE_PATH, "utf8"))
         : { sharedMethods: [], differences: [] };
-      const change = describeBaselineChange(baseline, measured);
+      // Keep the inherited historical snapshot byte-identical, while requiring
+      // these two actual queue differences to stay fixed on both live owners.
+      const queueConvergence = new Set([
+        "backend.startTurn [start its first turn] response $.queueEntryId: desktop string, outpost missing",
+        "backend.startTurn [start its first turn] event thread/turnQueue/updated: desktop sends it, outpost does not",
+      ]);
+      expect(measured.differences.filter(difference => queueConvergence.has(difference))).toEqual([]);
+      const change = describeBaselineChange({ ...baseline, differences: baseline.differences.filter(difference => !queueConvergence.has(difference)) }, measured);
       if (change) throw new Error(change);
     } finally {
       await outpost?.close();

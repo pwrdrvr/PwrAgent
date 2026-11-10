@@ -53,6 +53,36 @@ test("acceptance survives a socket disappearing before the response", { timeout 
   assert.equal(h.calls().filter((m) => m.method === "turn/start").length, 1);
 });
 
+test("real CLI queues continued jobs, cancels before dispatch and never replays unfinished queue input after restart", { timeout }, async (t) => {
+  const h = await setup(t);
+  await h.submit("seed", "hello");
+  const { threadId } = await h.finished("seed");
+  await h.submit("active", "slow", { threadId });
+  await eventually(async () => (await h.rpc("show", { id: "active" })).turnId);
+  const prompt = path.join(h.root, "queued.txt");
+  writeFileSync(prompt, "queued-cli");
+  const submitted = h.launch(["submit", "--id", "queued", "--thread", threadId, "--prompt-file", prompt]);
+  assert.equal((await submitted.done).code, 0, submitted.errors);
+  assert.equal(JSON.parse(submitted.output).status, "queued");
+  await h.submit("cancelled", "cancelled", { threadId });
+  assert.equal((await h.rpc("interrupt", { id: "cancelled" })).status, "interrupted");
+  const waiter = h.launch(["wait", "--id", "queued"]);
+  await h.rpc("interrupt", { id: "active" });
+  assert.equal((await waiter.done).code, 0, waiter.errors);
+  assert.equal((await h.finished("queued")).status, "completed");
+  assert.deepEqual(h.calls().filter(call => call.method === "turn/start").map(call => call.params.input[0].text), ["hello", "slow", "queued-cli"]);
+  await h.submit("shutdown-active", "slow", { threadId });
+  await eventually(async () => (await h.rpc("show", { id: "shutdown-active" })).turnId);
+  const accepted = await h.submit("shutdown-queued", "never-replay", { threadId });
+  assert.equal(accepted.status, "queued");
+  assert.equal((await h.stop(h.daemon)).code, 0);
+  await h.start();
+  const recovered = await h.submit("shutdown-queued", "never-replay", { threadId });
+  assert.equal(recovered.status, "unknown");
+  assert.equal(recovered.fingerprint, accepted.fingerprint);
+  assert.equal(h.calls().filter(call => call.method === "turn/start").length, 4);
+});
+
 test("concurrent submit has one owner; busy rejects without a queued record; duplicate daemon cannot disturb owner", { timeout }, async (t) => {
   const h = await setup(t);
   const outcomes = await Promise.allSettled([h.submit("one", "slow"), h.submit("two", "slow")]);

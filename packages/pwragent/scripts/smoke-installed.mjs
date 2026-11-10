@@ -115,6 +115,20 @@ try {
   assert.equal(calls.filter((call) => call.method === "turn/start").length, 2, "one user turn and one ephemeral title helper; no replay after restart");
   assert.equal(calls.filter((call) => call.method === "thread/start" && call.params.ephemeral === true).length, 1);
   assert.equal(calls.filter((call) => call.method === "thread/unsubscribe").length, 1);
+  const owned = JSON.parse(await command(["show", "--id", "smoke"]));
+  writeFileSync(prompt, "slow");
+  await command(["submit", "--id", "queue-active", "--thread", owned.threadId, "--prompt-file", prompt]);
+  const queueDeadline = Date.now() + 10000;
+  while (!JSON.parse(await command(["show", "--id", "queue-active"])).turnId) {
+    assert.ok(Date.now() < queueDeadline, "Installed active queue turn did not confirm");
+    await delay(20);
+  }
+  writeFileSync(prompt, "installed-queued-input");
+  assert.equal(JSON.parse(await command(["submit", "--id", "queue-waiting", "--thread", owned.threadId, "--prompt-file", prompt])).status, "queued");
+  await command(["interrupt", "--id", "queue-active"]);
+  assert.equal(JSON.parse(await command(["wait", "--id", "queue-waiting"])).status, "completed");
+  const queueCalls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(queueCalls.filter(call => call.method === "turn/start" && call.params.input[0].text === "installed-queued-input").length, 1);
   await stop(daemon);
   // Actual profile discovery must work from the installed bundle with no
   // provider process or retained Claude inventory.

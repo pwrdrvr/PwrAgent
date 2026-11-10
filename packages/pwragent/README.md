@@ -169,7 +169,10 @@ select `workspace-write` explicitly when edits are wanted.
 - Each job ID is immutable. Retrying the same ID and input returns its existing
   record, even after reconnect/restart. Different input with that ID fails.
   A timeout or lost CLI response is a reason to inspect/retry the same ID, not
-  create another job. There is no queue: a new ID while busy is rejected.
+  create another job. Continued-thread jobs wait in the shared owner's FIFO
+  while busy. New-thread jobs still require an idle daemon. Waiting input stays
+  in memory; shutdown or crash recovery settles unfinished jobs as `unknown`
+  without replay. `interrupt` cancels a waiting job before provider dispatch.
 - Both thread and turn setup specify `approvalPolicy: never`. Full access is
   not offered. Turn sandbox policy disables tool network access; workspace-write
   grants the thread's registered project directory and excludes ambient temporary directories.
@@ -291,8 +294,10 @@ errors rather than falling back to the viewer's machine. Read-only peers cannot
 create or control turns. Event subscriptions select both class and thread; no
 transcript is broadcast without demand. Navigation uses the current bounded
 protocol-2 pages, and remote submissions carrying a stable `queueEntryId` reuse
-the same durable job after a lost response. There is still no turn queue: a
-second distinct submission while busy is rejected.
+the same durable job after a lost response. Continued-thread submissions use the
+shared turn queue, return `queueStatus: queued` when waiting, and publish typed
+queue events and paged queue projections. A failed dispatch holds its FIFO;
+held-entry retry/edit controls are not yet exposed by this host.
 
 Directory launchpads and `create_instance_thread` can create an independent
 thread and start its first text turn in a registered owner-side project. Supply

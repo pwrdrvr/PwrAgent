@@ -65,13 +65,13 @@ export function setupHandoffs(federation, directory) {
     backend: {
       withThreadHandoff: async (id, work) => {
         backend.owned(id);
-        if (locked.has(id) || runtime.active || backend.creating || runtime.intakeBusy) throw new Error("Wait for the outpost to become idle before handoff");
+        if (locked.has(id) || runtime.active || runtime.dispatches?.size || runtime.uncertain || runtime.turnQueue?.getAllQueuedEntries().length || backend.creating || runtime.intakeBusy) throw new Error("Wait for the outpost to become idle before handoff");
         locked.add(id);
         try { return await work(); } finally { locked.delete(id); }
       },
       exportThreadForHandoff: async (id) => {
         const owned = backend.owned(id);
-        if (runtime.active) throw new Error("Wait for the source turn to finish");
+        if (runtime.active || runtime.dispatches?.size || runtime.uncertain || runtime.turnQueue?.getAllQueuedEntries().length) throw new Error("Wait for the source turn to finish");
         const exported = await runtime.codex.exportThreadForHandoff(id);
         return { ...exported, replay: (await backend.readThread(id)).replay,
           cwd: runtime.projects.resolve(owned.cwd || runtime.workspace),
@@ -79,7 +79,7 @@ export function setupHandoffs(federation, directory) {
           ...(owned.titleSource === "fallback" ? {} : { title: owned.title }) };
       },
       forkThread: async (request) => {
-        if (runtime.active || backend.creating) throw new Error("Outpost is busy");
+        if (runtime.active || runtime.dispatches?.size || runtime.uncertain || runtime.turnQueue?.getAllQueuedEntries().length || backend.creating) throw new Error("Outpost is busy");
         backend.creating = true;
         try {
           const cwd = runtime.projects.contained(await realpath(request.directoryPath));
@@ -92,7 +92,7 @@ export function setupHandoffs(federation, directory) {
           runtime.loadedThreads.add(id);
           backend.invalidate(id);
           return { threadId: id };
-        } finally { backend.creating = false; }
+        } finally { backend.creating = false; runtime.turnQueue.drainAll(); }
       },
       readThread: async ({ threadId }) => ({ replay: (await backend.readThread(threadId)).replay }),
       archiveThread: async ({ threadId }) => {
@@ -126,7 +126,7 @@ export function setupHandoffs(federation, directory) {
       if (prior.result) return prior.result;
       throw new Error("Intake outcome is uncertain; inspect destination threads before starting a new handoff");
     } catch (error) { if (error.code !== "ENOENT") throw error; }
-    if (runtime.active || backend.creating || runtime.intakeBusy) throw new Error("Outpost is busy; no intake was started");
+    if (runtime.active || runtime.dispatches?.size || runtime.uncertain || runtime.turnQueue?.getAllQueuedEntries().length || backend.creating || runtime.intakeBusy) throw new Error("Outpost is busy; no intake was started");
     runtime.intakeBusy = true;
     try {
       atomicJson(file, { fingerprint, status: "pending" });

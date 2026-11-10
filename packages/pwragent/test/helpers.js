@@ -26,7 +26,7 @@ export async function runCompletedTurn(h, start, wait = eventually) {
   // Only that exact job's completion permits the workflow's next action.
   await wait(async () => {
     const job = (await h.rpc("list")).find((job) => job.threadId === turn.threadId && job.turnId === turn.turnId);
-    if (!job || ACTIVE.has(job.status)) return false;
+    if (!job || job.status === "queued" || ACTIVE.has(job.status)) return false;
     if (job.status !== "completed") throw new Error(`Expected a completed turn; got ${job.status}`);
     return true;
   });

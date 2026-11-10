@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { buildThreadIdentityKey, isAppServerBackendKind, NavigationQueryStore, ThreadNamingLifecycle, projectProviderThreadSummary, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
+import { buildThreadIdentityKey, isAppServerBackendKind, NavigationQueryStore, NavigationQueryError, ThreadNamingLifecycle, projectProviderThreadSummary, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
 import { ThreadCreationLifecycle, ThreadSteeringLifecycle, ThreadSteerSubmissionLifecycle, ThreadTitleGenerationService, ThreadTitleLifecycle } from "../dist/federation-core.js";
@@ -105,6 +105,7 @@ export class HeadlessBackend {
     runtime.ownsThread = (id) => this.threads.has(id) && !this.threads.get(id).archived;
     runtime.threadCwd = (id) => this.owned(id).cwd || runtime.workspace;
     runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
+    runtime.threadCreationBusy = () => this.creating;
     this.latestJobs = new Map();
     this.syncJobs();
     this.steerSubmissions = new ThreadSteerSubmissionLifecycle({
@@ -204,7 +205,10 @@ export class HeadlessBackend {
       if (!job.threadId) continue;
       this.threads.retainAcceptedJobThread(job.threadId);
       const previous = this.latestJobs.get(job.threadId);
-      if (!previous || previous.id === job.id || job.createdAt > previous.createdAt) this.latestJobs.set(job.threadId, job);
+      // Waiting admissions cannot displace provider work. A refusal may still
+      // return that same projected job from starting to held queued state.
+      if ((job.status !== "queued" || previous?.id === job.id) && (!previous || previous.id !== this.runtime.active || previous.id === job.id)
+        && (!previous || previous.id === job.id || this.runtime.active === job.id || job.createdAt > previous.createdAt)) this.latestJobs.set(job.threadId, job);
       // Acceptance keeps its existing metadata boundary even when a read-only
       // job projection can already resolve the identity before finalization.
       if (this.threads.storage.getThreadMetadata({ backend: "codex", threadId: job.threadId })
@@ -222,6 +226,39 @@ export class HeadlessBackend {
 
   latest(id) {
     return this.latestJobs.get(id);
+  }
+
+  queuedTurns(threadId) {
+    return (this.runtime.turnQueue?.getQueuedEntries({ backend: "codex", threadId }) || []).map((entry, position) => {
+      const text = entry.input.map(item => item.text).join("\n").trim();
+      return { queueEntryId: entry.id, origin: entry.origin, displayText: text.length > 200 ? `${text.slice(0, 200)}…` : text,
+        createdAt: entry.createdAt, position,
+        ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
+        ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.paused ? { paused: true } : {}), ...(entry.pauseRevision ? { pauseRevision: entry.pauseRevision } : {}) };
+    });
+  }
+
+  queueProjection(params) {
+    if (params.protocol !== 2 || !params.ref || typeof params.ref.threadId !== "string" || !params.ref.threadId || params.ref.threadId.length > 1024) {
+      throw new NavigationQueryError("navigation_invalid_request", "Expected owner navigation protocol 2 and thread identity");
+    }
+    const entries = this.queuedTurns(params.ref.threadId);
+    const revision = digest(entries);
+    if (!params.cursor && params.knownRevision === revision) return { protocol: 2, ref: params.ref, revision, readiness: "ready", complete: true, entries: [], unchanged: true };
+    let offset = 0;
+    if (params.cursor) {
+      if (typeof params.cursor !== "string" || params.cursor.length > 512) throw new NavigationQueryError("navigation_invalid_request", "Invalid queue cursor");
+      let cursor;
+      try { cursor = JSON.parse(Buffer.from(params.cursor, "base64url").toString("utf8")); }
+      catch { throw new NavigationQueryError("navigation_invalid_request", "Invalid queue cursor"); }
+      if (!cursor || cursor.revision !== revision) throw new NavigationQueryError("navigation_cursor_expired", "Queue changed while paging; restart from its current revision");
+      if (!Number.isSafeInteger(cursor.offset) || cursor.offset < 0 || cursor.offset > entries.length) throw new NavigationQueryError("navigation_invalid_request", "Invalid queue cursor offset");
+      offset = cursor.offset;
+    }
+    const end = Math.min(offset + 100, entries.length);
+    return { protocol: 2, ref: params.ref, revision, readiness: "ready", complete: end === entries.length, entries: entries.slice(offset, end),
+      ...(end < entries.length ? { nextCursor: Buffer.from(JSON.stringify({ revision, offset: end })).toString("base64url") } : {}) };
   }
 
   activeJob(params) {
@@ -261,6 +298,18 @@ export class HeadlessBackend {
   }
 
   event(message) {
+    if (message.method === "headless/queueChanged") {
+      const { entry, type, position, turnId, status, error, reason } = message.params;
+      const summary = this.queuedTurns(entry.threadId).find(item => item.queueEntryId === entry.id);
+      this.publish({ backend: "codex", notification: { method: "thread/turnQueue/updated", params: {
+        threadId: entry.threadId, queueEntryId: entry.id, queueEntryCreatedAt: entry.createdAt,
+        origin: entry.origin, messageOrigin: entry.messageOrigin, status: type, position, turnId,
+        ...(summary ? { displayText: summary.displayText, manualReleaseRequired: summary.manualReleaseRequired } : {}),
+        ...(error || reason ? { errorMessage: error?.message || reason } : {}), ...(status ? { terminalStatus: status } : {}),
+      } } }, "transcript");
+      this.invalidate(entry.threadId, "thread/turnQueue/updated");
+      return;
+    }
     if (["thread/started", "thread/name/updated", "thread/archived", "thread/unarchived", "turn/completed"].includes(message.method)) this.providerMutationVersion++;
     if (message.method === "headless/turnStarted") {
       const { threadId, jobId, prompt } = message.params;
@@ -276,7 +325,7 @@ export class HeadlessBackend {
     if (message.method === "headless/jobChanged") {
       this.syncJobs([message.params]);
       const job = message.params;
-      if (job.threadId && this.latest(job.threadId) === job) {
+      if (job.status !== "queued" && job.threadId && this.latest(job.threadId)?.id === job.id) {
         const active = ACTIVE.has(job.status);
         // An accepted job starts before Codex assigns its turn ID. Let the
         // shared reducer adopt that ID without allocating another start rank.
@@ -344,7 +393,7 @@ export class HeadlessBackend {
         const summary = this.summary(thread);
         return { protocol: 2, ref: params.ref, revision: digest(summary), readiness: "ready", identity: thread.archived ? "archived" : "present", thread: summary, collections: [] };
       }
-      case "getNavigationQueueProjection": return { protocol: 2, ref: params.ref, revision: "no-queue", readiness: "ready", complete: true, entries: [] };
+      case "getNavigationQueueProjection": return this.queueProjection(params);
       case "releaseNavigationAttentionView": this.navigation.releaseAttentionView(envelope.sourceInstanceId || "local", params.viewId); return {};
       case "resolveThread": {
         const thread = this.threads.get(params.threadId, params.backend ?? "codex");
@@ -506,7 +555,7 @@ export class HeadlessBackend {
   }
 
   async startThread(params) {
-    if (this.runtime.active || this.runtime.intakeBusy || this.creating) throw new Error("Outpost is busy");
+    if (this.runtime.active || this.runtime.dispatches?.size || this.runtime.uncertain || this.runtime.turnQueue?.getAllQueuedEntries().length || this.runtime.intakeBusy || this.creating) throw new Error("Outpost is busy");
     if (params.workMode && params.workMode !== "local") throw new Error("Outpost threads use the configured workspace; worktree creation is unavailable");
     if (this.threads.size >= 10000) throw new Error("Thread retention limit reached");
     const sandbox = sandboxFor(params);
@@ -530,7 +579,7 @@ export class HeadlessBackend {
         failed: (_stage, error) => this.runtime.reportFailure(error),
       });
       return { ...created, executionMode: mode(sandbox) };
-    } finally { this.creating = false; }
+    } finally { this.creating = false; this.runtime.turnQueue.drainAll(); }
   }
 
   async startTurn(params, envelope) {
@@ -543,10 +592,15 @@ export class HeadlessBackend {
     const job = this.runtime.submit({ id: `fed-${digest([envelope.sourceInstanceId, params.queueEntryId || envelope.id])}`, prompt,
       threadId: thread.id, cwd: thread.cwd || this.runtime.workspace, messageOrigin: this.authenticateOrigin?.(params.messageOrigin, envelope), sandbox, model: params.model || thread.model,
       reasoningEffort: params.reasoningEffort || thread.reasoningEffort, serviceTier: params.serviceTier || thread.serviceTier });
-    await this.runtime.work;
+    if (job.status === "queued") {
+      const entry = this.queuedTurns(thread.id).find(entry => entry.queueEntryId === job.id);
+      return { backend: "codex", threadId: thread.id, turnId: `queued:${job.id}`, queueStatus: "queued", queueEntryId: job.id,
+        ...(entry ? { queueEntryCreatedAt: entry.createdAt } : {}) };
+    }
+    await this.runtime.dispatches.get(job.id);
     const started = this.runtime.store.get(job.id);
     if (!started.turnId) throw new Error(started.reason || "Turn was not started");
-    return { backend: "codex", threadId: thread.id, turnId: started.turnId, queueStatus: "started" };
+    return { backend: "codex", threadId: thread.id, turnId: started.turnId, queueStatus: "started", queueEntryId: job.id };
   }
 
   async listBackends() {

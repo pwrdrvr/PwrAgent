@@ -24,7 +24,7 @@ export { resolveMessagingOutboundFile, validateMessagingFileMetadata } from "@pw
 export * from "@pwragent/federation/federation-replacement-receiver";
 export { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
 
-export { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
+export { NavigationQueryStore, NavigationQueryError } from "@pwragent/owner-core/navigation-query-store";
 export { buildThreadIdentityKey, isAppServerBackendKind, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 
 export { CodexAppServerClient } from "@pwragent/owner-core/codex-app-server/client";
@@ -37,6 +37,7 @@ export { ThreadCreationLifecycle } from "@pwragent/owner-core/thread-creation-li
 export { ThreadSteeringLifecycle } from "@pwragent/owner-core/thread-steering-lifecycle";
 export { ThreadSteerSubmissionLifecycle } from "@pwragent/owner-core/thread-steer-submission-lifecycle";
 export { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
+export { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 export { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 export { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";

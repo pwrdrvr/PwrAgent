@@ -24,6 +24,155 @@ test.beforeAll(() => {
   });
 });
 
+test("actual Outpost queued acceptance drains once and hands unfinished outcomes to desktop without replay", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
+  const ref = { backend: "codex" as const, threadId: "thread-smoke" };
+  let headless = "";
+  let fingerprint = "";
+  const app = await launchElectronApp({
+    secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      const workspace = realpathSync(homeRoot);
+      const stateDirectory = path.dirname(stateDbPathForHomeRoot(homeRoot));
+      headless = path.join(stateDirectory, "headless");
+      const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: workspace });
+      try {
+        const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(homeRoot, "codex") }, profile);
+        const runtime = new Runtime({ workspace, store, home: path.join(homeRoot, "codex"), command: "unused", onFailure() {} });
+        let sends = 0;
+        runtime.codex = { startTurn: async () => ({ threadId: ref.threadId, turnId: `queue-turn-${++sends}` }), stop: async () => {} };
+        const backend = new HeadlessBackend(runtime, () => {});
+        runtime.onEvent = (event: unknown) => backend.event(event);
+        backend.persistCreatedNativeThread({ id: ref.threadId, cwd: workspace, title: "Replay smoke thread", titleSource: "explicit", createdAt: Date.now() });
+        runtime.submit({ id: "queue-first", threadId: ref.threadId, prompt: "Invented first input" });
+        await runtime.work;
+        const waiting = { id: "queue-second", threadId: ref.threadId, prompt: "Invented waiting input" };
+        expect(runtime.submit(waiting).status).toBe("queued");
+        expect((await backend.handle("getNavigationQueueProjection", { protocol: 2, ref })).entries).toMatchObject([{ queueEntryId: waiting.id }]);
+        runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "queue-turn-1", status: "completed" } } });
+        for (let n = 0; n < 12; n++) await new Promise<void>(resolve => setImmediate(resolve));
+        expect(store.get(waiting.id)).toMatchObject({ status: "running", turnId: "queue-turn-2" });
+        const pending = runtime.submit({ id: "queue-unfinished", threadId: ref.threadId, prompt: "Invented never-replayed input" });
+        fingerprint = pending.fingerprint;
+        await runtime.stop();
+        expect(store.get("queue-unfinished")).toMatchObject({ status: "unknown", fingerprint });
+        expect(store.get("queue-unfinished")).not.toHaveProperty("turnId");
+        expect(sends).toBe(2);
+      } finally { profile.close(); }
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const queue = await app.window.evaluate(async identity => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return await api.getNavigationQueueProjection!({ protocol: 2, ref: identity });
+    }, ref);
+    expect(queue.entries).toEqual([]);
+    await app.closeApplication();
+    const workspace = realpathSync(app.homeRoot);
+    const profile = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: workspace });
+    try {
+      const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(app.homeRoot, "codex") }, profile);
+      expect(store.get("queue-first")).toMatchObject({ status: "completed", turnId: "queue-turn-1" });
+      expect(store.get("queue-second")).toMatchObject({ status: "unknown", turnId: "queue-turn-2" });
+      expect(store.get("queue-unfinished")).toMatchObject({ status: "unknown", fingerprint });
+    } finally { profile.close(); }
+  } finally { await app.close(); }
+});
+
+test("Outpost creation, stable retries and refused queue dispatch preserve owner state through desktop handover", async () => {
+  test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
+  const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
+  const ref = { backend: "codex" as const, threadId: "thread-smoke" };
+  let headless = "";
+  let acceptedId = "";
+  let refusedId = "";
+  const app = await launchElectronApp({
+    secretStorage: "memory", fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+    async preLaunchHook(homeRoot) {
+      const workspace = realpathSync(homeRoot);
+      const stateDirectory = path.dirname(stateDbPathForHomeRoot(homeRoot));
+      headless = path.join(stateDirectory, "headless");
+      const profile = openOutpostProfileRuntime({ stateDirectory, profileName: "default", cwd: workspace });
+      let finishCreation!: () => void;
+      let finishTurn!: () => void;
+      const creating = new Promise<void>(resolve => { finishCreation = resolve; });
+      const starting = new Promise<void>(resolve => { finishTurn = resolve; });
+      const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+      const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(homeRoot, "codex") }, profile);
+      const runtime = new Runtime({ workspace, store, home: path.join(homeRoot, "codex"), command: "unused", onFailure() {} });
+      try {
+        let sends = 0;
+        runtime.codex = {
+          startThread: async () => { await creating; return { threadId: "created" }; },
+          startTurn: async () => {
+            const sequence = ++sends;
+            if (sequence === 2) await starting;
+            if (sequence === 3) throw new Error("Invented provider refusal");
+            return { threadId: ref.threadId, turnId: `review-turn-${sequence}` };
+          },
+          stop: async () => {},
+        };
+        const backend = new HeadlessBackend(runtime, () => {});
+        runtime.onEvent = (event: unknown) => backend.event(event);
+        backend.persistCreatedNativeThread({ id: ref.threadId, cwd: workspace, title: "Replay smoke thread", titleSource: "explicit", createdAt: Date.now() });
+        const creation = backend.startThread({});
+        expect(runtime.submit({ id: "creation-waiter", threadId: ref.threadId, prompt: "Invented creation waiter" }).status).toBe("queued");
+        finishCreation(); await creation;
+        for (let n = 0; n < 12; n++) await tick();
+        expect(store.get("creation-waiter")).toMatchObject({ status: "running", turnId: "review-turn-1" });
+        runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "review-turn-1", status: "completed" } } });
+        for (let n = 0; n < 12; n++) await tick();
+        const request = { threadId: ref.threadId, input: [{ type: "text", text: "Invented stable input" }], queueEntryId: "stable" };
+        const envelope = { id: "first", sourceInstanceId: "invented-peer" };
+        const first = backend.startTurn(request, envelope);
+        for (let n = 0; n < 12; n++) await tick();
+        expect(sends).toBe(2);
+        const queued = await backend.startTurn({ ...request, queueEntryId: "held", input: [{ type: "text", text: "Invented held input" }] }, { ...envelope, id: "held" });
+        refusedId = queued.queueEntryId;
+        let settled = false;
+        const retry = backend.startTurn(request, envelope).finally(() => { settled = true; });
+        for (let n = 0; n < 12; n++) await tick();
+        expect(settled).toBe(false);
+        finishTurn();
+        const result = await first;
+        expect(await retry).toEqual(result);
+        acceptedId = result.queueEntryId;
+        runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "review-turn-2", status: "completed" } } });
+        for (let n = 0; n < 12; n++) await tick();
+        expect(store.get(refusedId)).toMatchObject({ status: "queued", reason: "Invented provider refusal" });
+        expect(runtime.active).toBeNull();
+        expect(await backend.handle("resolveThreadAdmissionState", { threadId: ref.threadId })).toMatchObject({ threadStatus: "idle" });
+        expect(backend.summary(backend.owned(ref.threadId)).threadStatus).toBe("idle");
+        expect(backend.queuedTurns(ref.threadId)).toMatchObject([{ queueEntryId: refusedId, manualReleaseRequired: true }]);
+        await runtime.stop();
+        expect(store.get(refusedId)).toMatchObject({ status: "unknown" });
+        expect(sends).toBe(3);
+      } finally { finishCreation(); finishTurn(); await runtime.stop(); profile.close(); }
+    },
+  });
+  try {
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    const queue = await app.window.evaluate(async identity => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return await api.getNavigationQueueProjection!({ protocol: 2, ref: identity });
+    }, ref);
+    expect(queue.entries).toEqual([]);
+    await app.closeApplication();
+    const workspace = realpathSync(app.homeRoot);
+    const profile = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: workspace });
+    try {
+      const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(app.homeRoot, "codex") }, profile);
+      expect(store.get(acceptedId)).toMatchObject({ status: "completed", turnId: "review-turn-2" });
+      expect(store.get(refusedId)).toMatchObject({ status: "unknown" });
+      expect(store.get(refusedId)).not.toHaveProperty("turnId");
+    } finally { profile.close(); }
+  } finally { await app.close(); }
+});
+
 test("an Outpost shared helper title reaches the actual desktop renderer and survives owner handover without replay", async () => {
   test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
