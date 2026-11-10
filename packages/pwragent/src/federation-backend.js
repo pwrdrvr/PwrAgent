@@ -623,6 +623,10 @@ export class HeadlessBackend {
     if (!prompt.trim() || Buffer.byteLength(prompt) > 256 * 1024) throw new Error("Prompt must be nonempty and at most 256 KiB");
     if (typeof envelope.id !== "string" || !envelope.id || !envelope.sourceInstanceId) throw new Error("Replacement requires an authenticated request identity");
     const messageOrigin = structuredClone(this.authenticateOrigin?.(params.messageOrigin, envelope));
+    const waiting = this.runtime.queuedEntry(params.queueEntryId), release = this.runtime.queueRelease;
+    // Like cancellation, let a reserved head finish admission before adding
+    // another suspension to its FIFO. Recheck the live identity below.
+    if (waiting && release && waiting.threadId === release.threadId && this.runtime.queuedEntry(release.entryId)) await release.done;
     return this.runtime.turnQueue.withDispatchSuspended(params, () => {
       const runtime = this.runtime;
       if (runtime.stopping || runtime.uncertain || runtime.intakeBusy || this.creating) throw new Error("Outpost cannot replace queued input now");
