@@ -10,9 +10,8 @@ import { HoverCardBridge, type BridgedHoverCard } from "../hover-card-bridge";
  * - At most one card is visible.
  * - Entering a chip while any card is visible shows that chip's card at once
  *   and closes the other. Otherwise the card waits for the hover delay.
- * - Leaving a chip keeps its card for the grace period, then closes it,
- *   unless the pointer reached the card first.
- * - A card the pointer is on stays until the pointer leaves it.
+ * - Leaving a chip or its card keeps the card for the grace period, then
+ *   closes it, unless the pointer reached the card (or chip) first.
  */
 
 const GRACE = 300;
@@ -110,8 +109,7 @@ function stepModel(model: Model, op: Op): void {
     case "leaveCard":
       if (model.visible !== op.card) return;
       model.pointerOnCard = false;
-      model.visible = undefined;
-      model.graceLeft = undefined;
+      model.graceLeft = GRACE;
       return;
     case "advance":
       if (model.graceLeft === undefined) return;

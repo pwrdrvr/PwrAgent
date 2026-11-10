@@ -18,8 +18,8 @@ const windowTimers: Timers = {
  * card without slowing a sweep across chips.
  *
  * - At most one card is visible.
- * - Leaving a chip keeps its card for `graceMs`, the bridge to the card.
- *   Reaching the card holds it until the pointer leaves the card.
+ * - Leaving a chip or its card keeps the card for `graceMs`: the bridge
+ *   between them. Reaching the card holds it there.
  * - Entering any chip while a card is visible closes that card at once and
  *   shows the new one without the hover delay.
  */
@@ -78,9 +78,13 @@ export class HoverCardBridge {
     if (this.visible === card) this.cancelGrace();
   }
 
-  /** The pointer left `card` itself. */
+  /**
+   * The pointer left `card` itself. It gets the same bridge as a chip, so a
+   * move back to its chip keeps it and a move onto another chip still swaps
+   * at once.
+   */
   leaveCard(card: BridgedHoverCard): void {
-    this.close(card);
+    this.leaveTrigger(card);
   }
 
   private close(card: BridgedHoverCard): void {

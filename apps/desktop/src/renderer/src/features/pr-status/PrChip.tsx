@@ -78,7 +78,7 @@ function sidebarAnchorRect(target: HTMLElement): DOMRect {
  * without crossing other rows. A card that fell back over the rows (a narrow
  * window) does not qualify, and neither does one with no laid-out box.
  */
-function cardIsBesideSidebar(card: Element | null, target: HTMLElement): boolean {
+function cardIsBesideSidebar(card: HTMLElement | null, target: HTMLElement): boolean {
   const sidebar = target.closest(".sidebar");
   if (!card || !sidebar) return false;
   const box = card.getBoundingClientRect();
@@ -142,8 +142,10 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
       {/* Pointer shortcuts, out of the Tab order like the chip's ✕: the
           keyboard detaches with Delete on the chip, and copies from its
           menu. */}
+      {/* Hidden from the chip's description: the keyboard cannot reach
+          these, so they would announce controls it cannot use. */}
       {cardActions ? (
-        <div className="pr-status-card__actions">
+        <div className="pr-status-card__actions" aria-hidden="true">
           <button
             type="button"
             tabIndex={-1}
@@ -161,6 +163,9 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
               tabIndex={-1}
               className="pr-status-card__action pr-status-card__action--detach"
               onClick={() => {
+                // The detach warning returns focus to its opener: make that
+                // the chip, which outlives the card.
+                contextMenuInvokerRef.current?.focus();
                 hideTooltip();
                 onDetach(pr);
               }}
@@ -293,7 +298,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         draggable={false}
         // Focus moving onto the card's own buttons keeps it.
         onBlur={(event) => {
-          if (!tooltipController.contains(event.relatedTarget as Node | null)) {
+          const card = tooltipController.getElement();
+          if (!card || !card.contains(event.relatedTarget as Node | null)) {
             tooltipController.hide();
           }
         }}
@@ -352,10 +358,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
           if (
             cardActions
             && tooltipVisible
-            && cardIsBesideSidebar(
-              document.getElementById(tooltipController.tooltipId),
-              event.currentTarget,
-            )
+            && cardIsBesideSidebar(tooltipController.getElement(), event.currentTarget)
           ) {
             sidebarPrCardBridge.leaveTrigger(bridgeCardRef.current);
             return;

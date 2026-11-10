@@ -424,8 +424,8 @@ export function useViewportTooltip(options: {
    */
   update: (content: ReactNode) => void;
   hide: () => void;
-  /** Whether `node` is inside the shown tooltip. */
-  contains: (node: Node | null) => boolean;
+  /** The shown tooltip's element, if any. */
+  getElement: () => HTMLElement | null;
   /** Whether the tooltip is currently shown. */
   visible: boolean;
   tooltipNode: ReactNode;
@@ -852,6 +852,14 @@ export function useViewportTooltip(options: {
             className={className}
             onMouseEnter={interactive ? () => interactiveRef.current?.onPointerEnter() : undefined}
             onMouseLeave={interactive ? () => interactiveRef.current?.onPointerLeave() : undefined}
+            // The portal sits in its trigger's React tree, so presses in an
+            // enterable card would bubble to the trigger's ancestors (a
+            // thread row selects, renames, or starts a drag on them).
+            onPointerDown={interactive ? stopReactPropagation : undefined}
+            onMouseDown={interactive ? stopReactPropagation : undefined}
+            onClick={interactive ? stopReactPropagation : undefined}
+            onDoubleClick={interactive ? stopReactPropagation : undefined}
+            onContextMenu={interactive ? stopReactPropagation : undefined}
             style={{
               position: "fixed",
               pointerEvents: interactive ? "auto" : undefined,
@@ -872,14 +880,11 @@ export function useViewportTooltip(options: {
         )
       : null;
 
-  const contains = useCallback(
-    (node: Node | null): boolean => Boolean(node && tooltipRef.current?.contains(node)),
-    [],
-  );
+  const getElement = useCallback((): HTMLElement | null => tooltipRef.current, []);
 
   return {
     tooltipId,
-    contains,
+    getElement,
     show,
     showAtPointer,
     movePointer,
@@ -889,6 +894,10 @@ export function useViewportTooltip(options: {
     visible,
     tooltipNode,
   };
+}
+
+function stopReactPropagation(event: { stopPropagation: () => void }): void {
+  event.stopPropagation();
 }
 
 /** Keep the whole anchor clear before falling back to viewport clamping. */

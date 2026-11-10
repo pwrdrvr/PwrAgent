@@ -90,8 +90,42 @@ describe("PrChip sidebar card", () => {
     act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS * 3));
     expect(screen.getByRole("tooltip")).toBe(card);
 
+    // Leaving the card bridges too, then closes.
     fireEvent.mouseLeave(card);
+    expect(screen.getByRole("tooltip")).toBe(card);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
     expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("swaps at once from a card to another chip", () => {
+    const { chip } = renderSidebar();
+    const card = hoverUntilCard(chip(11));
+    fireEvent.mouseLeave(chip(11));
+    fireEvent.mouseEnter(card);
+    fireEvent.mouseLeave(card);
+    fireEvent.mouseEnter(chip(12));
+    const cards = screen.getAllByRole("tooltip");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent("Change 12");
+  });
+
+  it("keeps presses inside the card from reaching the row", () => {
+    const onRowClick = vi.fn();
+    const onRowPointerDown = vi.fn();
+    render(
+      <aside className="sidebar">
+        <div onClick={onRowClick} onPointerDown={onRowPointerDown} onDoubleClick={onRowClick}>
+          <PrChip pr={pr(11)} showRepoPrefix={false} onOpen={vi.fn()} cardActions />
+        </div>
+      </aside>,
+    );
+    const card = hoverUntilCard(screen.getByRole("button", { name: /Open acme\/orbit#11 / }));
+    const title = within(card).getByText("Change 11");
+    fireEvent.pointerDown(title);
+    fireEvent.click(title);
+    fireEvent.doubleClick(title);
+    expect(onRowPointerDown).not.toHaveBeenCalled();
+    expect(onRowClick).not.toHaveBeenCalled();
   });
 
   it("closes the card when the bridge runs out", () => {
@@ -126,7 +160,7 @@ describe("PrChip sidebar card", () => {
     let card = hoverUntilCard(chip(11));
     fireEvent.mouseLeave(chip(11));
     fireEvent.mouseEnter(card);
-    const copy = within(card).getByRole("button", { name: "Copy URL" });
+    const copy = within(card).getByRole("button", { name: "Copy URL", hidden: true });
     // A press inside the card is not an outside press.
     fireEvent.pointerDown(copy);
     expect(screen.getByRole("tooltip")).toBe(card);
@@ -135,15 +169,18 @@ describe("PrChip sidebar card", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
 
     card = hoverUntilCard(chip(12));
-    fireEvent.click(within(card).getByRole("button", { name: "Detach" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Detach", hidden: true }));
     expect(onDetach).toHaveBeenCalledExactlyOnceWith(pr(12));
     expect(screen.queryByRole("tooltip")).toBeNull();
+    // The detach warning returns focus to the chip, not a removed button.
+    expect(chip(12)).toHaveFocus();
   });
 
-  it("keeps the footer out of the Tab order", () => {
+  it("keeps the footer out of the Tab order and the chip's description", () => {
     const { chip } = renderSidebar();
     const card = hoverUntilCard(chip(11));
-    for (const button of within(card).getAllByRole("button")) {
+    expect(within(card).queryAllByRole("button")).toHaveLength(0);
+    for (const button of within(card).getAllByRole("button", { hidden: true })) {
       expect(button).toHaveAttribute("tabindex", "-1");
     }
   });
