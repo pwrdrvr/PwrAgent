@@ -209,7 +209,7 @@ it.skipIf(process.platform === "win32")("replacement preserves the parent's rese
         if (!control && event.method === "headless/queueChanged" && event.params.type === "queued"
           && event.params.entry.id === waiting[observation]!.queueEntryId) {
           control = replace(backend, waiting[target]!.queueEntryId, "changed").then(
-            value => ({ value }), error => ({ error }),
+            (value: { queueEntryId: string }) => ({ value }), (error: Error) => ({ error }),
           );
         }
       };
