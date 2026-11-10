@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { DesktopCheckoutHibernationPolicy, PrSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse,
+import type { AppServerThreadSummary, DesktopCheckoutHibernationPolicy, PrSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse,
   ThreadPullRequestWatchSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "../app-server/thread-maintenance-service";
@@ -23,13 +23,14 @@ import {
 import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import { ArchiveWorktreeTransport } from "./fixtures/archive-worktree-transport";
 import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
+import { inspectRegisterableWorktree } from "../app-server/worktree-maintenance-registration";
 
 /**
  * Real Git and real SQLite. Each keep case builds the Git state it names
  * with Git itself, then checks that hibernation leaves the checkout alone.
  */
 
-const probeHook = vi.hoisted(() => ({ onInspect: undefined as undefined | ((call: number) => void), calls: 0 }));
+const probeHook = vi.hoisted(() => ({ onInspect: undefined as undefined | ((call: number) => void), calls: 0, identities: 0 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
 vi.mock("../codex-app-server/stdio-transport", async () => ({
   StdioJsonRpcTransport: (await import("./fixtures/archive-worktree-transport")).ArchiveWorktreeTransport,
@@ -45,6 +46,20 @@ vi.mock("../app-server/checkout-hibernation-workspace", async (importOriginal) =
     },
   };
 });
+vi.mock("../app-server/worktree-maintenance-registration", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../app-server/worktree-maintenance-registration")>();
+  return {
+    ...actual,
+    hasWorktreeRegistration: async (...args: Parameters<typeof actual.hasWorktreeRegistration>) => {
+      probeHook.identities += 1;
+      return await actual.hasWorktreeRegistration(...args);
+    },
+    inspectRegisterableWorktree: async (...args: Parameters<typeof actual.inspectRegisterableWorktree>) => {
+      probeHook.identities += 1;
+      return await actual.inspectRegisterableWorktree(...args);
+    },
+  };
+});
 
 const execute = promisify(execFile);
 const THREAD_ID = "11111111-1111-4111-8111-111111111111";
@@ -54,18 +69,34 @@ const registries: DesktopBackendRegistry[] = [];
 const databases: StateDb[] = [];
 const roots: string[] = [];
 const releases: Array<() => void> = [];
+const fixtureWork = new Set<Promise<unknown>>();
 
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  for (const release of releases.splice(0)) release();
+function ownFixtureWork<T>(work: Promise<T>): Promise<T> {
+  fixtureWork.add(work);
+  const settled = () => { fixtureWork.delete(work); };
+  void work.then(settled, settled);
+  return work;
+}
+
+async function disposeFixtures() {
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
   for (const db of databases.splice(0)) db.close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+}
+
+afterEach(async () => {
+  for (const release of releases.splice(0)) release();
+  // A timeout ends Vitest's wait, not an async property. Drain its current
+  // case before resetting the provider inventory used by the next test.
+  await Promise.all([...fixtureWork].map((work) => work.catch(() => {})));
+  await disposeFixtures();
+  vi.unstubAllEnvs();
   ArchiveWorktreeTransport.threads = [];
   ArchiveWorktreeTransport.requests = [];
   ArchiveWorktreeTransport.onList = undefined;
   probeHook.onInspect = undefined;
   probeHook.calls = 0;
+  probeHook.identities = 0;
 });
 
 const ON: DesktopCheckoutHibernationPolicy = {
@@ -137,14 +168,23 @@ async function sweep(registry: DesktopBackendRegistry) {
 }
 
 /** The provider turn start is out of scope; the restore hook before it is not. */
-function stubProviderTurnStart(registry: DesktopBackendRegistry) {
+function stubProviderTurnStart(registry: DesktopBackendRegistry, onStart?: () => void) {
   return vi.spyOn(registry as unknown as { startTurnWithoutHandoff: (params: { threadId: string }) => Promise<unknown> },
-    "startTurnWithoutHandoff").mockImplementation(async (params) => ({ backend: "codex", threadId: params.threadId, turnId: `turn-${Date.now()}` }));
+    "startTurnWithoutHandoff").mockImplementation(async (params) => {
+      onStart?.();
+      return { backend: "codex", threadId: params.threadId, turnId: `turn-${Date.now()}` };
+    });
 }
 
-function recreateSpy(registry: DesktopBackendRegistry) {
+function recreateSpy(registry: DesktopBackendRegistry, beforeRecreate?: () => Promise<void>) {
   const service = (registry as unknown as { worktreeRecoveryService: { recreate: (...args: unknown[]) => Promise<unknown> } }).worktreeRecoveryService;
-  return vi.spyOn(service, "recreate");
+  const recreate = service.recreate.bind(service);
+  const spy = vi.spyOn(service, "recreate");
+  if (beforeRecreate) spy.mockImplementation(async (...args) => {
+    await beforeRecreate();
+    return await recreate(...args);
+  });
+  return spy;
 }
 
 const probe = (cwd: string, overrides: Partial<{ limitBytes: number; removeRebuildableOutput: boolean }> = {}) =>
@@ -428,16 +468,35 @@ describe("idle checkout hibernation and restore", () => {
     expect(recreate).toHaveBeenCalledTimes(1);
     expect(started).toHaveBeenCalledTimes(2);
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
+  });
 
-    // A queued send: it is admitted as queued while the restore runs.
-    const again = await createFixture();
-    const second = again.open();
-    await sweep(second.registry);
-    const startedAgain = stubProviderTurnStart(second.registry);
-    const submitted = await second.registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] });
+  it("keeps a queued send behind its own checkout restore (lifecycle model)", async () => {
+    // Each provider inventory has one registry owner. The preceding direct
+    // sends must settle and close before a queued-send fixture replaces it.
+    expect(registries).toHaveLength(0);
+    const fixture = await createFixture();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "queued edit\n");
+    const { registry } = fixture.open();
+    await sweep(registry);
+    let restoring!: () => void;
+    const restoreEntered = new Promise<void>((resolve) => { restoring = resolve; });
+    let resume!: () => void;
+    const barrier = new Promise<void>((resolve) => { resume = resolve; });
+    releases.push(resume);
+    const recreate = recreateSpy(registry, async () => { restoring(); await barrier; });
+    let didStart!: () => void;
+    const queuedStart = new Promise<void>((resolve) => { didStart = resolve; });
+    const started = stubProviderTurnStart(registry, didStart);
+    const submitted = await registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] });
     expect(submitted.status).toBe("queued");
-    await vi.waitFor(() => expect(startedAgain).toHaveBeenCalledTimes(1));
-    expect(await exists(again.worktree)).toBe(true);
+    try {
+      await restoreEntered;
+      expect(started).not.toHaveBeenCalled();
+    } finally { resume(); }
+    await queuedStart;
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("queued edit\n");
   });
 
   it("restores with environment setup in two commits", async () => {
@@ -808,35 +867,103 @@ describe("Thread maintenance's hibernate step", () => {
       authorizations: Array.from({ length: ownerCount }, (_, index) => Boolean(mask & (1 << index))),
     })));
   it.each(archivedOwnerReceiptCases)("requires every archived external owner's receipt at hibernation admission: $authorizations (Git oracle)", async ({ authorizations }) => {
-    expect({ registries: registries.length, databases: databases.length, roots: roots.length })
-      .toEqual({ registries: 0, databases: 0, roots: 0 });
-    const { registry, store, directory, worktree, call, internal } = await outsideRegistrationFixture();
-    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
-    expect((await call(worktree)).ok).toBe(true);
-    const service = maintenance(registry);
-    const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
-    expect(scan.hibernate?.items).toHaveLength(1);
-    // Each owner joins after review. Archived conversations do not count as
-    // active users, but their external marker still requires authorization.
-    for (const [index, authorized] of authorizations.entries()) {
-      const other = { backend: "codex" as const, threadId: `archived-external-${index}` };
-      ArchiveWorktreeTransport.threads.push({ ...ArchiveWorktreeTransport.threads[0]!, id: other.threadId, archived: true });
-      await store.replaceWorkspaceLinkedDirectory({ ...other, directory: { ...directory, worktreeOwnership: "external" } });
-      await store.setThreadArchiveTombstone({ ...other, archivedAt: 1 });
-      if (authorized) expect((await call(worktree, "register", other.threadId)).ok).toBe(true);
-    }
-    const allowed = authorizations.every(Boolean);
-    const inspected = await measureSqliteWrites(() => service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 }));
-    expect(inspected.writes.commits).toBe(0);
-    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
-      removeEmptyFolders: false, hibernate: [identity] });
-    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: allowed ? 1 : 0, kept: allowed ? 0 : 1 });
-    expect(await exists(worktree)).toBe(!allowed);
-    expect(Boolean(await snapshotOf(store))).toBe(allowed);
-    expect(inspected.result.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(allowed);
+    await ownFixtureWork((async () => {
+      // Each exhaustive case owns its registry, database and Git checkout until
+      // it settles. None may survive into the next provider inventory.
+      expect({ registries: registries.length, databases: databases.length, roots: roots.length })
+        .toEqual({ registries: 0, databases: 0, roots: 0 });
+      try {
+        const { registry, store, directory, worktree } = await outsideRegistrationFixture();
+        // Registration's operator flow has its own coverage above. Admission
+        // needs real receipts for this exact Git checkout, shared by its owners.
+        const registration = { ...await inspectRegisterableWorktree(worktree), authorizedAt: 1,
+          requestedBy: { backend: "codex" as const, threadId: "registration-agent" } };
+        await store.setThreadWorktreeRegistration({ ...identity, worktreePath: worktree, registration });
+        const service = maintenance(registry);
+        const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
+        expect(scan.hibernate?.items).toHaveLength(1);
+        // Each owner joins after review. Archived conversations do not count as
+        // active users, but their external marker still requires authorization.
+        for (const [index, authorized] of authorizations.entries()) {
+          const other = { backend: "codex" as const, threadId: `archived-external-${index}` };
+          ArchiveWorktreeTransport.threads.push({ ...ArchiveWorktreeTransport.threads[0]!, id: other.threadId, archived: true });
+          await store.replaceWorkspaceLinkedDirectory({ ...other, directory: { ...directory, worktreeOwnership: "external" } });
+          await store.setThreadArchiveTombstone({ ...other, archivedAt: 1 });
+          if (authorized) await store.setThreadWorktreeRegistration({ ...other, worktreePath: worktree, registration });
+        }
+        const allowed = authorizations.every(Boolean);
+        const before = { workspaces: probeHook.calls, identities: probeHook.identities };
+        const inspected = await measureSqliteWrites(() => service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 }));
+        expect(inspected.writes.commits).toBe(0);
+        if (allowed) {
+          // Git owns one checkout, however many conversations refer to it.
+          // A read-only scan must not multiply its probes by owner count.
+          expect({ workspaces: probeHook.calls - before.workspaces, identities: probeHook.identities - before.identities })
+            .toEqual({ workspaces: 1, identities: 1 });
+        }
+        const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+          removeEmptyFolders: false, hibernate: [identity] });
+        expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: allowed ? 1 : 0, kept: allowed ? 0 : 1 });
+        expect(await exists(worktree)).toBe(!allowed);
+        expect(Boolean(await snapshotOf(store))).toBe(allowed);
+        expect(inspected.result.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(allowed);
+      } finally { await disposeFixtures(); }
+    })());
   });
 
-  it.each(["hibernating-owner", "archived-owner"])("revoking the %s receipt cancels an in-flight hibernation before removal", async (ownerKind) => {
+  it("reads one Git identity for a checkout shared with one authorized archived owner (shrunk regression)", async () => {
+    const { registry, store, directory, worktree } = await outsideRegistrationFixture();
+    const registration = { ...await inspectRegisterableWorktree(worktree), authorizedAt: 1,
+      requestedBy: { backend: "codex" as const, threadId: "registration-agent" } };
+    const other = { backend: "codex" as const, threadId: "archived-external" };
+    ArchiveWorktreeTransport.threads.push({ ...ArchiveWorktreeTransport.threads[0]!, id: other.threadId, archived: true });
+    await store.replaceWorkspaceLinkedDirectory({ ...other, directory: { ...directory, worktreeOwnership: "external" } });
+    await store.setThreadArchiveTombstone({ ...other, archivedAt: 1 });
+    for (const owner of [identity, other]) {
+      await store.setThreadWorktreeRegistration({ ...owner, worktreePath: worktree, registration });
+    }
+    const before = probeHook.identities;
+    const candidates = await registry.listAutoArchiveCandidates();
+    expect(candidates.find((candidate) => candidate.thread.id === THREAD_ID)?.managedWorktreePath).toBe(worktree);
+    expect(probeHook.identities - before).toBe(1);
+  });
+
+  it("compares every owner's receipt with the current Git checkout, without retaining the observation (Git oracle property)", async ({ signal }) => {
+    const { registry, store, repo, worktree } = await outsideRegistrationFixture();
+    const old = { ...await inspectRegisterableWorktree(worktree), authorizedAt: 1,
+      requestedBy: { backend: "codex" as const, threadId: "registration-agent" } };
+    await git(repo, ["worktree", "remove", worktree]);
+    await git(repo, ["worktree", "add", worktree, "owned"]);
+    const current = { ...old, ...await inspectRegisterableWorktree(worktree) };
+    const owner = (await registry.listAutoArchiveCandidates()).find((candidate) => candidate.thread.id === THREAD_ID)!.thread;
+    const admission = registry as unknown as {
+      isManagedArchiveCheckout: (inventory: { activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] },
+        worktreePath: string) => Promise<boolean>;
+    };
+    const inventory = async (valid: boolean[]) => {
+      const archivedThreads = valid.map((_, index) => ({ ...owner, id: `receipt-owner-${index}`, archivedAt: 1 }));
+      for (const [index, thread] of archivedThreads.entries()) {
+        await store.setThreadWorktreeRegistration({ backend: "codex", threadId: thread.id, worktreePath: worktree,
+          registration: valid[index] ? current : old });
+      }
+      return { activeThreads: [], archivedThreads };
+    };
+    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 3 }), async (valid) => {
+      signal.throwIfAborted();
+      const owners = await inventory(valid);
+      const before = probeHook.identities;
+      expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(valid.every(Boolean));
+      expect(probeHook.identities - before).toBe(1);
+    }), { numRuns: 25, examples: [[[true, false, true]], [[true, true, true]]] }));
+    const owners = await inventory([true, true]);
+    expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(true);
+    await git(repo, ["worktree", "remove", worktree]);
+    await git(repo, ["worktree", "add", worktree, "owned"]);
+    // Even the same inventory object must get a new physical identity read.
+    expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(false);
+  });
+
+  it.for(["hibernating-owner", "archived-owner"])("revoking the %s receipt cancels an in-flight hibernation before removal", async (ownerKind, { signal }) => {
     const { registry, store, directory, worktree, call, internal } = await outsideRegistrationFixture();
     vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
@@ -856,6 +983,7 @@ describe("Thread maintenance's hibernate step", () => {
     const paused = new Promise<void>((resolve) => { reachedRemoval = resolve; });
     let resume!: () => void;
     const barrier = new Promise<void>((resolve) => { resume = resolve; });
+    releases.push(resume);
     const archive = (registry as unknown as { worktreeArchiveService: WorktreeArchiveService }).worktreeArchiveService;
     const hibernate = archive.hibernate.bind(archive);
     vi.spyOn(archive, "hibernate").mockImplementation(async (params) => await hibernate({ ...params,
@@ -866,9 +994,10 @@ describe("Thread maintenance's hibernate step", () => {
         return assertCurrent;
       },
     }));
-    const run = service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
-      removeEmptyFolders: false, hibernate: [identity] });
-    await paused;
+    const run = ownFixtureWork(service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
+      removeEmptyFolders: false, hibernate: [identity] }));
+    await Promise.race([paused, run.then(() => { throw new Error("Hibernation settled before reaching the removal barrier"); })]);
+    signal.throwIfAborted();
     let cancelled!: () => void;
     const cancellation = new Promise<void>((resolve) => { cancelled = resolve; });
     const lifecycle = registry as unknown as { cancelAutomaticArchive: (backend: "codex", threadId: string) => void };
@@ -908,7 +1037,7 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await exists(fixture.worktree)).toBe(true);
   });
 
-  it("models approval, rejection, observation and revocation without inferring ownership", async () => {
+  it("models approval, rejection, observation and revocation without inferring ownership", async ({ signal }) => {
     const fixture = await outsideRegistrationFixture();
     const { registry, store, worktree, call, internal } = fixture;
     const approval = vi.spyOn(internal, "requestThreadMaintenanceConfirmation");
@@ -918,6 +1047,7 @@ describe("Thread maintenance's hibernate step", () => {
       constructor(readonly operation: "approve" | "cancel" | "revoke" | "observe") {}
       check = () => true;
       async run(model: Model, real: Real) {
+        signal.throwIfAborted();
         if (this.operation !== "observe") {
           approval.mockResolvedValue(this.operation !== "cancel");
           const result = await real.call(real.worktree, this.operation === "revoke" ? "unregister" : "register");
@@ -935,13 +1065,14 @@ describe("Thread maintenance's hibernate step", () => {
       }
       toString() { return this.operation; }
     }
-    await fc.assert(fc.asyncProperty(fc.commands([
+    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.commands([
       fc.constant(new RegistrationCommand("approve")), fc.constant(new RegistrationCommand("cancel")),
       fc.constant(new RegistrationCommand("revoke")), fc.constant(new RegistrationCommand("observe")),
     ], { maxCommands: 6 }), async (commands) => {
+      signal.throwIfAborted();
       await store.setThreadWorktreeRegistration({ ...identity, worktreePath: worktree });
       await fc.asyncModelRun(() => ({ model: { authorized: false }, real: fixture }), commands);
-    }), { numRuns: 10 });
+    }), { numRuns: 10 }));
     expect((await call(worktree, "inspect")).ok).toBe(true);
   });
 

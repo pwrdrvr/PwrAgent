@@ -15,7 +15,7 @@ import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
-import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMessageTarget } from "@pwragent/shared";
+import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMessageTarget, ThreadWorktreeRegistration } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
@@ -41692,11 +41692,23 @@ export class DesktopBackendRegistry {
     const checkout = await canonicalWorktreePaths()(worktreePath);
     const owners = external.get(checkout);
     if (!owners?.size) return false;
+    const registrations: ThreadWorktreeRegistration[] = [];
     for (const thread of owners) {
       const overlay = await this.overlayStore.getThreadOverlayState({ backend: thread.source, threadId: thread.id });
-      if (!await hasWorktreeRegistration(worktreePath, overlay?.worktreeRegistrations)) return false;
+      const registration = overlay?.worktreeRegistrations?.find((entry) => entry.worktreePath === path.resolve(worktreePath));
+      if (!registration) return false;
+      registrations.push(registration);
     }
-    return true;
+    try {
+      // All receipts authorize one physical checkout. Compare them with one
+      // fresh Git observation, rather than spawning the same probes per owner.
+      // This observation belongs only to this admission, never a later scan
+      // or the final check before removal.
+      const observed = await inspectRegisterableWorktree(worktreePath);
+      return registrations.every((registration) => sameRegisteredWorktree(registration, observed));
+    } catch {
+      return false;
+    }
   }
 
   private canonicalArchiveOwnershipIndex(
