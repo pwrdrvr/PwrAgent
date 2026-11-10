@@ -34,7 +34,7 @@ permissions:
 
 jobs:
   # Keep the pull_request trigger path-unfiltered so the required check jobs
-  # exist on every PR. Documentation-only PRs skip those jobs below instead.
+  # exist on every PR. Docs and agent-skill-only PRs skip expensive jobs below.
   changes:
     name: Classify Changes
     runs-on: ubuntu-latest
@@ -55,7 +55,7 @@ jobs:
             };
 
             if (context.eventName !== "pull_request") {
-              fullCi(`${context.eventName} events are never docs-only`);
+              fullCi(`${context.eventName} events always run full CI`);
               return;
             }
 
@@ -80,26 +80,28 @@ jobs:
               return;
             }
 
-            const isDocumentationPath = (path) =>
-              path.startsWith("docs/") || path.toLowerCase().endsWith(".md");
+            const isNonProductPath = (path) =>
+              path.startsWith("docs/")
+              || path.toLowerCase().endsWith(".md")
+              || path.startsWith(".agents/skills/");
             const codeImpactingFile = files.find((file) => {
               const paths = [file.filename, file.previous_filename].filter(Boolean);
-              return paths.some((path) => !isDocumentationPath(path));
+              return paths.some((path) => !isNonProductPath(path));
             });
-            const docsOnly = codeImpactingFile === undefined;
+            const skipFullCi = codeImpactingFile === undefined;
 
-            core.setOutput("code_impacting", String(!docsOnly));
-            core.setOutput("docs_only", String(docsOnly));
+            core.setOutput("code_impacting", String(!skipFullCi));
+            core.setOutput("docs_only", String(skipFullCi));
             await core.summary
               .addHeading("Changed-file classification")
               .addTable([
                 [{data: "Classification", header: true}, {data: "Files", header: true}],
-                [docsOnly ? "Documentation only" : "Code impacting", String(files.length)],
+                [skipFullCi ? "Documentation or agent skills only" : "Code impacting", String(files.length)],
               ])
               .addRaw(
-                docsOnly
-                  ? "Only `docs/**` and Markdown files changed; expensive CI jobs are skipped."
-                  : `Full CI runs because \`${codeImpactingFile.filename}\` is not documentation-only.`,
+                skipFullCi
+                  ? "Only `docs/**`, Markdown, or `.agents/skills/**` changed; expensive CI jobs are skipped."
+                  : `Full CI runs because \`${codeImpactingFile.filename}\` requires product CI.`,
               )
               .write();
 

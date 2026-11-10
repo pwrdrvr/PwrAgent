@@ -1,0 +1,3 @@
+interface:
+  display_name: "PwrAgent Worktree Cache Cleanup"
+  short_description: "Clean Vitest caches and private Electron runtimes"
