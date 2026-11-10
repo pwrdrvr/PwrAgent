@@ -1,0 +1,9 @@
+{
+  "completed-pause-cleanup": {
+    "commits": 1,
+    "note": "Two concurrent Pause/Resume pairs for a sent wake-up behind an active turn; setup/admission and restart excluded. One existing durable-row delete, then no further writes.",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  }
+}

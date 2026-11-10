@@ -393,6 +393,9 @@ make no SQLite commits and cannot change accepted input or its fingerprint.
 Desktop pause publication rereads the shared FIFO after the mutation settles.
 A cancelled row emits no later pause update; a replaced row publishes its current
 hold and pause revision. The response still acknowledges the original mutation.
+Cleanup of a sent project wake-up's durable hold follows the completed pause,
+even if a concurrent Resume is already live. Once paused, that ordinary waiting
+message cannot return as a project hold after restart.
 Outpost also serves the existing queued-input read through the shared
 `thread_detail` capability. It returns a detached input/origin snapshot and its
 content hash, including for editing. The existing viewer Edit flow cancels that

@@ -23152,10 +23152,11 @@ export class DesktopBackendRegistry {
     // settles. Publish only its live state, including newer holds/revisions.
     const current = entry && this.threadTurnQueue.getQueuedEntries(entry)
       .find((candidate) => candidate.id === entry.id);
-    if (result.disposition === "updated" && current?.paused && !current.projectHold) {
+    if (result.disposition === "updated" && entry?.paused && !entry.projectHold) {
       // A sent wake-up the operator pauses again is an ordinary queued
       // message now; a restart must not bring it back as a project hold.
-      this.forgetDurableProjectHeldWakeup(current.id);
+      // This completed Pause owns cleanup even if a later control resumed it.
+      this.forgetDurableProjectHeldWakeup(entry.id);
     }
     if (result.disposition === "updated" && current) {
       this.refreshRestartQueuedEntries();
