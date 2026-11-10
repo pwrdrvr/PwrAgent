@@ -56,7 +56,7 @@ import { canonicalDurableSteerRequest, canonicalDurableTurnRequest, type SubmitD
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
-import { threadLockRefusalMessage } from "@pwragent/shared";
+import { parseThreadCorrespondenceMessage, threadLockRefusalMessage } from "@pwragent/shared";
 
 // Desktop serves peers from process singletons; point them at this owner.
 const desktopOwner = vi.hoisted(() => ({ registry: undefined as unknown }));
@@ -325,6 +325,59 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it.each(["failure", "title"] as const)("desktop unlock preserves review and sender lifecycle during overlapping %s publication", async overlap => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    const queue = registry["threadTurnQueue"];
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const source = { backend: "codex" as const, threadId: "invented-sender" };
+      const text = "Invented immutable report from a child thread, long enough to receive a generated queue title.";
+      const input = [{ type: "text" as const, text }];
+      await host.client.setThreadLock({ ...identity, locked: true, note: "old lock" });
+      for (let index = 0; index < 2; index++) {
+        registry["correspondenceStore"].record({ id: `message-${index}`, source, destination: identity, input, createdAt: index, state: "sending" });
+        await queue.submitHeld({ ...identity, id: `waiting-${index}`, origin: "manual", input, paused: overlap === "title" || index === 0,
+          messageOrigin: { kind: "agent", sourceThread: { ...source, messageId: `message-${index}` } } }, "prior review");
+      }
+      const senderState = () => [0, 1].map(index => parseThreadCorrespondenceMessage(registry["correspondenceStore"].message(source, `message-${index}`)?.text ?? "")?.state);
+      await queue.releaseThread({ ...identity, turnId: "prior-native", status: "turn/failed", errorMessage: threadLockRefusalMessage({ note: "old lock" }) });
+      expect(senderState()).toEqual(["held", "held"]);
+      let armed = true, yieldingFailure = false;
+      stop = registry.onEvent(async event => {
+        if (event.notification.method !== "thread/turnQueue/updated") return;
+        const params = event.notification.params;
+        if (armed && params.queueEntryId === "waiting-0" && params.status === "queued" && !params.manualReleaseRequired) {
+          armed = false;
+          if (overlap === "failure") {
+            yieldingFailure = true;
+            await queue.releaseThread({ ...identity, turnId: "new-native", status: "turn/failed", errorMessage: "new review" });
+          } else {
+            expect(registry["applyQueuedMessageTitle"]({ entryId: "waiting-1", ...identity, source: text }, "Generated report title")).toBe(true);
+          }
+        } else if (yieldingFailure && params.status === "held") {
+          yieldingFailure = false;
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+      });
+      queue.scheduleThreadDrain(identity);
+      const { writes } = await measureSqliteWrites(async () => {
+        await host.client.setThreadLock({ ...identity, locked: false });
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+      expect(senderState()).toEqual(overlap === "failure" ? ["held", "held"] : ["queued", "queued"]);
+      expect(queue.getQueuedEntries(identity).map(entry => entry.manualReleaseRequired === true)).toEqual([overlap === "failure", overlap === "failure"]);
+      expect(queue.getQueuedEntries(identity).map(entry => entry.input)).toEqual([input, input]);
+      if (overlap === "title") expect(queue.getQueuedEntries(identity)[1]?.title).toBe("Generated report title");
+      expectSqliteWriteBudget({ budgetFile: "queue-unlock-hold-publication-write-budgets.json", scenario: `overlapping ${overlap}`,
+        note: "Actual registered unlock and queue lifecycle, including real drain and sender correspondence; setup excluded", writes });
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
+  });
+
   it.each(["registered unlock", "mutate_thread unlock"] as const)("%s preserves actionable independent review during queue publication", async caller => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();

@@ -10,6 +10,95 @@ const THREAD = { backend: "codex" as const, threadId: "model-thread" };
 const REASONS = ["locked", "awaiting-review", "target-ended"] as const;
 const FAILURE = "The previous turn failed. Review the error before retrying queued messages.";
 
+async function unlockDuringFailure(paused: number, runnable: number, publication: number): Promise<void> {
+  const starts: string[] = [];
+  let armed = false, yieldingFailure = false;
+  const queue = new ThreadTurnQueue({
+    startTurn: async entry => { starts.push(entry.id); return { ...THREAD, turnId: entry.id }; },
+    onLifecycle: async event => {
+      if (armed && event.type === "queued" && event.entry.id === `waiting-${publication}` && !event.entry.manualReleaseRequired) {
+        armed = false;
+        yieldingFailure = true;
+        await queue.releaseThread({ ...THREAD, turnId: "prior-native", status: "turn/failed", errorMessage: "new failure" });
+      } else if (yieldingFailure && event.type === "held") {
+        yieldingFailure = false;
+        // Let an already scheduled real drain run while the failure has
+        // published only its first held row, ahead of runnable input.
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+    },
+  });
+  try {
+    for (let index = 0; index < paused + runnable; index++) {
+      await queue.submitHeld({ ...THREAD, id: `waiting-${index}`, origin: "manual", input: [], paused: index < paused }, "old lock");
+    }
+    queue.scheduleThreadDrain(THREAD);
+    armed = true;
+    await queue.releaseHold(THREAD, reason => reason === "old lock");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(starts).toEqual([]);
+    expect(queue.getQueuedEntries(THREAD)).toHaveLength(paused + runnable);
+    expect(queue.getQueuedEntries(THREAD).every(entry => entry.manualReleaseRequired && entry.holdReason === "new failure")).toBe(true);
+    await queue.releaseHold(THREAD, reason => reason === "new failure");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(starts).toEqual([`waiting-${paused}`]);
+  } finally { queue.close(); }
+}
+
+it("unlock publication gates real drains until an overlapping failure holds every waiting row", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 1, max: 4 }), fc.nat(),
+    async (paused, runnable, offset) => await unlockDuringFailure(paused, runnable, offset % paused)),
+  { examples: [[1, 1, 0]] });
+});
+
+it("a paused row cannot let unlock dispatch a later input past a newer failure review", async () => {
+  await unlockDuringFailure(1, 1, 0);
+});
+
+async function unlockDuringTitle(count: number, edited: number, title: string): Promise<void> {
+  const senderState = new Map<string, string>();
+  const released: ThreadTurnQueueLifecycleEvent[] = [];
+  let armed = false;
+  const queue = new ThreadTurnQueue({
+    isThreadActive: () => true,
+    startTurn: async () => { throw new Error("An occupied owner cannot start another turn"); },
+    onLifecycle: async event => {
+      if (event.type === "queued" || event.type === "held") senderState.set(event.entry.id, event.type);
+      if (armed && event.type === "queued" && event.entry.id === "waiting-0") {
+        armed = false;
+        queue.setQueuedEntryTitle(`waiting-${edited}`, title);
+      }
+      if (event.type === "queued" && !event.entry.manualReleaseRequired) released.push(event);
+    },
+  });
+  try {
+    for (let index = 0; index < count; index++) {
+      await queue.submit({ ...THREAD, id: `waiting-${index}`, origin: "manual", input: [{ type: "text", text: `Immutable input ${index}` }] });
+    }
+    await queue.releaseThread({ ...THREAD, turnId: "prior-native", status: "turn/failed", errorMessage: "old lock" });
+    expect([...senderState.values()]).toEqual(Array.from({ length: count }, () => "held"));
+    released.length = 0;
+    armed = true;
+    await queue.releaseHold(THREAD, reason => reason === "old lock");
+    const waiting = queue.getQueuedEntries(THREAD);
+    // Titles notify recipients independently. Only the release lifecycle
+    // transitions the sender from held to queued.
+    expect([...senderState.values()]).toEqual(waiting.map(() => "queued"));
+    expect(released.map(event => event.entry)).toEqual(waiting);
+    expect(waiting[edited]).toMatchObject({ title, input: [{ type: "text", text: `Immutable input ${edited}` }] });
+  } finally { queue.close(); }
+}
+
+it("unlock publishes current lifecycle state after unrelated generated-title updates", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.nat(), fc.string(),
+    async (count, offset, title) => await unlockDuringTitle(count, 1 + offset % (count - 1), title)),
+  { examples: [[2, 0, "Updated title"]] });
+});
+
+it("a title completing during unlock cannot leave the later sender held", async () => {
+  await unlockDuringTitle(2, 1, "Updated title");
+});
+
 async function unlockWithNewHold(count: number, publication: number): Promise<void> {
   const started: string[] = [];
   const observed = new Map<string, boolean>();
