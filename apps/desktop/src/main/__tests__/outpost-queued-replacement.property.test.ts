@@ -193,6 +193,48 @@ it.skipIf(process.platform === "win32")("serialized replacements, cancellation a
   }), { numRuns: 10 });
 });
 
+it.skipIf(process.platform === "win32")("replacement preserves the parent's reserved same-FIFO release before cancelling fresh input", async () => {
+  await fc.assert(fc.asyncProperty(fc.nat({ max: 2 }), fc.nat({ max: 2 }), async (target, observation) => {
+    await fixture(async (runtime, backend, store, _profile, _events, sent) => {
+      const waiting: Array<{ queueEntryId: string }> = [];
+      for (let n = 0; n < 3; n++) waiting.push(await backend.handle("backend.startTurn", {
+        ...ref, input: [{ type: "text", text: `waiting${n}` }], messageOrigin: origin,
+      }, envelope(`waiting${n}`)));
+      terminal(runtime, "failed"); await settle();
+      const accepted = waiting.map(entry => store.get(entry.queueEntryId));
+      const observe = runtime.onEvent;
+      let control: Promise<any> | undefined;
+      runtime.onEvent = (event: any) => {
+        observe(event);
+        if (!control && event.method === "headless/queueChanged" && event.params.type === "queued"
+          && event.params.entry.id === waiting[observation]!.queueEntryId) {
+          control = replace(backend, waiting[target]!.queueEntryId, "changed").then(
+            value => ({ value }), error => ({ error }),
+          );
+        }
+      };
+      expect(await runtime.releaseQueuedTurn({ queueEntryId: waiting[0]!.queueEntryId }))
+        .toMatchObject({ disposition: "started", turnId: "turn-2" });
+      expect(control).toBeDefined();
+      const result = await control;
+      const model = waiting.slice(1).map(entry => entry.queueEntryId);
+      if (target === 0) expect(result.error?.message).toContain("not found or already started");
+      else {
+        expect(result.value.queueEntryId).not.toBe(waiting[target]!.queueEntryId);
+        model[target - 1] = result.value.queueEntryId;
+        expect(store.get(waiting[target]!.queueEntryId)).toMatchObject({ status: "interrupted", fingerprint: accepted[target].fingerprint });
+      }
+      expect(backend.queuedTurns(ref.threadId).map((entry: any) => entry.queueEntryId)).toEqual(model);
+      expect(store.get(waiting[0]!.queueEntryId)).toMatchObject({ status: "running", fingerprint: accepted[0].fingerprint, turnId: "turn-2" });
+      expect(runtime.dispatches.size).toBe(0);
+      expect(runtime.queueRelease).toBeNull();
+      expect(sent).toEqual(["active", "waiting0"]);
+      for (let n = 1; n < 3; n++) { terminal(runtime); await settle(); }
+      expect(sent).toEqual(["active", "waiting0", target === 1 ? "changed" : "waiting1", target === 2 ? "changed" : "waiting2"]);
+    });
+  }), { numRuns: 12, examples: [[0, 0], [1, 0], [2, 2]] });
+});
+
 it.skipIf(process.platform === "win32")("shutdown during replacement acceptance preserves both outcomes without restoring prompts or replaying jobs", async () => {
   await fixture(async (runtime, backend, store, profile, _events, sent) => {
     const response = await queued(backend), original = store.get(response.queueEntryId);
