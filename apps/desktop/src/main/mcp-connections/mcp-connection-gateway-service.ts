@@ -4202,7 +4202,7 @@ function readGrantThread(
   return undefined;
 }
 
-export function getMcpConnectionGatewayService(): McpConnectionGatewayService {
+export function initializeMcpConnectionGatewayService(): McpConnectionGatewayService {
   mcpConnectionGatewayService ??= new McpConnectionGatewayService();
   return mcpConnectionGatewayService;
 }
@@ -4210,4 +4210,13 @@ export function getMcpConnectionGatewayService(): McpConnectionGatewayService {
 export async function resetMcpConnectionGatewayServiceForTests(): Promise<void> {
   await mcpConnectionGatewayService?.close();
   mcpConnectionGatewayService = undefined;
+}
+
+export function getMcpConnectionGatewayService(): McpConnectionGatewayService {
+  if (!mcpConnectionGatewayService) throw new Error("getMcpConnectionGatewayService is unavailable before startOwnerServices().");
+  return mcpConnectionGatewayService;
+}
+
+export function getExistingMcpConnectionGatewayService(): McpConnectionGatewayService | undefined {
+  return mcpConnectionGatewayService;
 }

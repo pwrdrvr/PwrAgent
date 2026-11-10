@@ -1,8 +1,10 @@
+import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
+import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type { StorageMaintenanceHost } from "./storage-maintenance-host";
 import type { BootstrapAppearance } from "./settings/appearance-bootstrap";
 import type { SettingsSecretEncryption } from "@pwragent/owner-core/settings-secret-storage";
 import type { MessagingApprovalDecision, MessagingApprovalIntent } from "@pwragent/messaging-interface";
-import type { OperatorFocusSnapshot, StarMapCommandInput, StarMapCommandResponse, StarMapViewSnapshot } from "@pwragent/shared";
+import type { AgentEvent, InboundPreviewMessage, CodexEnvironmentSetupProgressEvent, OpenThreadToolArgs, PwrAgentStarMapResponse, OperatorFocusSnapshot, StarMapCommandInput, StarMapCommandResponse, StarMapViewSnapshot } from "@pwragent/shared";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
 import type { AppUpdateCheckResult, AppUpdateInstallResult, AppUpdateStatus } from "../shared/app-metadata";
 import type { ClaudeSessionReaderChild } from "./claude/claude-session-reader-contracts";
@@ -17,6 +19,11 @@ export interface RendererEventTarget {
 export interface RendererEventSink {
   /** Preserve subscriber order and synchronous delivery, including thrown errors. */
   subscribers(channel: string): RendererEventTarget[];
+  agentEvent(event: AgentEvent): void;
+  environmentSetupProgress(event: CodexEnvironmentSetupProgressEvent): void;
+  inboundPreview(message: InboundPreviewMessage): void;
+  managedRuntimeProgress(event: ManagedRuntimeProgress): void;
+  managedGrokSignatureRejected(event: ManagedGrokSignatureRejectedEvent): void;
 }
 
 export interface HostImage {
@@ -30,7 +37,8 @@ export interface HostImage {
 
 export interface ThreadPresenter {
   showThread(request: WindowShowThreadRequest): void;
-  openMaintenance(): unknown;
+  openMaintenance(request?: { projectKey?: string }): boolean;
+  openThread(args: OpenThreadToolArgs): Promise<PwrAgentStarMapResponse<"open_thread">>;
 }
 
 type NotificationText = { enabled: boolean; title: string; body: string; onShow?: () => void };

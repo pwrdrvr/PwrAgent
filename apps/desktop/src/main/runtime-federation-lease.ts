@@ -186,7 +186,7 @@ function hasCustomLeaseManagerOptions(
 
 let coordinator: RuntimeFederationLeaseCoordinator | null = null;
 
-export function getRuntimeFederationLeaseCoordinator(): RuntimeFederationLeaseCoordinator {
+export function initializeRuntimeFederationLeaseCoordinator(): RuntimeFederationLeaseCoordinator {
   if (!coordinator) {
     coordinator = new RuntimeFederationLeaseCoordinator();
   }
@@ -218,4 +218,10 @@ function federationDisabledReasonMessage(
     case "startup_error":
       return "Federation failed during startup for this app instance.";
   }
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getRuntimeFederationLeaseCoordinator(): RuntimeFederationLeaseCoordinator {
+  if (!coordinator) throw new Error("getRuntimeFederationLeaseCoordinator is unavailable before startOwnerServices().");
+  return coordinator;
 }

@@ -39,7 +39,7 @@ export async function closeDesktopSettingsCommandDiscovery(): Promise<void> {
   ]);
 }
 
-export function getDesktopSettingsService(): DesktopSettingsService {
+export function initializeDesktopSettingsService(): DesktopSettingsService {
   if (!desktopSettingsService) {
     // In bootstrap mode the settings service reads/writes the
     // bootstrap profile's `config.toml`. On graduation the wizard
@@ -141,7 +141,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
   return desktopSettingsService;
 }
 
-export function resetDesktopSettingsServiceForTests(): void {
+export function disposeDesktopSettingsService(): void {
   unsubscribeAuth?.();
   unsubscribeAuth = undefined;
   unsubscribeManagedGitFailure?.();
@@ -151,4 +151,14 @@ export function resetDesktopSettingsServiceForTests(): void {
   setGitCommandResolver(undefined);
   setManagedGitSelectionResolver(undefined);
   disposeDesktopConfigStore();
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getDesktopSettingsService(): DesktopSettingsService {
+  if (!desktopSettingsService) throw new Error("getDesktopSettingsService is unavailable before startOwnerServices().");
+  return desktopSettingsService;
+}
+
+export function resetDesktopSettingsServiceForTests(): void {
+  disposeDesktopSettingsService();
 }

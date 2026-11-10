@@ -1,3 +1,4 @@
+import { installTestOwnerHost } from "../shell/testing/owner-host-fixture";
 import fc from "fast-check";
 import type { AgentEvent, ThreadSubAgentStatus } from "@pwragent/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -53,7 +54,8 @@ describe("Claude sub-agent cards", () => {
   let store: SqliteOverlayStore;
   const events: AgentEvent[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    await installTestOwnerHost();
     store = new SqliteOverlayStore(openInMemoryStateDb());
     registry = new DesktopBackendRegistry({
       codexClient: {

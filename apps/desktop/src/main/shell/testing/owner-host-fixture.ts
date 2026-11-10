@@ -4,8 +4,8 @@ import type { OwnerHostServices } from "../../owner-host";
 export async function installTestOwnerHost(): Promise<void> {
   const { installOwnerHostServices } = await import("../../owner-host");
   const electron = await import("electron");
-  const windowChannels = await import("../../shell/window-channels");
-  const { requestShowThread } = await import("../../shell/window-show-thread");
+  const windowChannels = await import("../window-channels");
+  const { requestShowThread } = await import("../window-show-thread");
   const exported = <K extends keyof typeof electron>(key: K): (typeof electron)[K] | undefined =>
     Object.hasOwn(electron, key) ? electron[key] : undefined;
   const app = exported("app");
@@ -36,9 +36,9 @@ export async function installTestOwnerHost(): Promise<void> {
       showItemInFolder: (path) => links?.showItemInFolder(path),
     },
     images: { createFromBuffer: (buffer) => image?.createFromBuffer(buffer) ?? unavailable() },
-    renderer: { subscribers: (channel) => windowChannels.subscribersForChannel(channel) },
+    renderer: { subscribers: (channel) => windowChannels.subscribersForChannel(channel), agentEvent: () => {}, environmentSetupProgress: () => {}, inboundPreview: () => {}, managedRuntimeProgress: () => {}, managedGrokSignatureRejected: () => {} },
     appearance: { broadcast: () => {}, syncDock: () => {} },
-    threads: { showThread: requestShowThread, openMaintenance: unavailable },
+    threads: { showThread: requestShowThread, openMaintenance: unavailable, openThread: unavailable },
     notifications: {
       notifyAttention: () => {},
       notifyTerminal: () => {},

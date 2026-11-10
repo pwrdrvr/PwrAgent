@@ -40,7 +40,6 @@ function stripFederationTarget<T extends {
 }
 
 export function registerScheduledActionIpcHandlers(): void {
-  getScheduledThreadActionService();
   const consumersBySender = new Map<number, { tokens: Set<string>; release: () => void }>();
   const cachedRemoteLists = new Map<
     string,

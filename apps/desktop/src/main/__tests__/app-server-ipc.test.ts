@@ -1388,10 +1388,22 @@ vi.mock("../pr-status/pr-status-token-bucket", async () => {
 // hook's 10 s timer failed the suite on a loaded macOS runner. File loading
 // has no timer, as for every test file that imports its subject statically.
 const {
-  disposeAppServerIpcHandlers,
-  registerAppServerIpcHandlers,
+  disposeAppServerIpcHandlers: disposeAppServerShellIpcHandlers,
+  registerAppServerIpcHandlers: registerAppServerShellIpcHandlers,
   resetAppServerServiceForTests,
 } = await import("../shell/ipc/app-server");
+
+const { wireAppServerOwnerServices, disposeAppServerOwnerServices } = await import("../owner-services");
+
+// The harness composes the owner before exposing its IPC transport.
+function registerAppServerIpcHandlers(): void {
+  wireAppServerOwnerServices();
+  registerAppServerShellIpcHandlers();
+}
+async function disposeAppServerIpcHandlers(): Promise<void> {
+  await disposeAppServerShellIpcHandlers();
+  await disposeAppServerOwnerServices();
+}
 
 describe("app server ipc", () => {
   it("routes remote directory pins and moves to the selected owner", async () => {
@@ -4279,7 +4291,6 @@ describe("app server ipc", () => {
     });
 
     it("answers a peer's requests for this instance's project here, where polling and dispatch read it", async () => {
-      const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
       onTestFinished(() => resetProjectForgeAutomationIndexForTests());
       registerAppServerIpcHandlers();
       const handler = setProjectForgeAutomationHandler.mock.calls.at(-1)?.[0] as {
@@ -4318,7 +4329,6 @@ describe("app server ipc", () => {
     });
 
     it("sends a remote window's requests to the peer it fronts, whatever target the renderer stamped", async () => {
-      const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
       const {
         NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
         NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,

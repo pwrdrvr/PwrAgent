@@ -56088,7 +56088,7 @@ export function getExistingDesktopBackendRegistry(): DesktopBackendRegistry | nu
   return registry;
 }
 
-export function getDesktopBackendRegistry(): DesktopBackendRegistry {
+export function initializeDesktopBackendRegistry(): DesktopBackendRegistry {
   if (!registry) {
     // The one construction that wants the operator's real machine. Every other
     // `new DesktopBackendRegistry(...)` in the tree is a test, and defaults to
@@ -56221,4 +56221,10 @@ function messagingDynamicToolCategoryForCatalog(
     default:
       return undefined;
   }
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getDesktopBackendRegistry(): DesktopBackendRegistry {
+  if (!registry) throw new Error("getDesktopBackendRegistry is unavailable before startOwnerServices().");
+  return registry;
 }

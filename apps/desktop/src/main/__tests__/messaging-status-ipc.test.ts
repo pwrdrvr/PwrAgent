@@ -149,8 +149,13 @@ describe("messaging status ipc", () => {
     // Import after the hoisted mocks exist, but before an individual test can
     // pay the cold module-graph evaluation cost.
     const messagingStatusIpc = await import("../shell/ipc/messaging-status");
-    registerMessagingStatusIpcHandlers =
-      messagingStatusIpc.registerMessagingStatusIpcHandlers;
+    const { wireOwnerMessagingServices } = await import("../owner-services");
+    const { getOwnerHostServices } = await import("../owner-host");
+    registerMessagingStatusIpcHandlers = () => {
+      getOwnerHostServices().renderer.inboundPreview = messagingStatusIpc.broadcastInboundPreview;
+      wireOwnerMessagingServices(runtimeMock);
+      messagingStatusIpc.registerMessagingStatusIpcHandlers();
+    };
   });
 
   beforeEach(() => {

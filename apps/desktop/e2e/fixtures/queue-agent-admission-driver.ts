@@ -1,3 +1,4 @@
+import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { AgentEvent } from "@pwragent/shared";
@@ -13,6 +14,7 @@ import { OwnerConformanceCodexTransport } from "../../src/main/__tests__/fixture
 // This separate owner uses actual desktop construction, native protocol fixture
 // responses and real SQLite in Electron. It cannot reach an installed agent.
 export async function exerciseDesktopAgentAdmission(root: string, grouped: boolean) {
+  await installTestOwnerHost();
   await mkdir(root, { recursive: true });
   const configPath = path.join(root, "config.toml");
   await writeFile(configPath, "");

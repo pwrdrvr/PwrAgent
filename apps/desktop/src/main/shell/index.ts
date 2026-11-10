@@ -1,8 +1,9 @@
-import { installOwnerHostServices } from "../owner-host";
+import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, prepareOwnerShutdown, releaseOwnerFederationLeaseSync } from "../owner-services";
+
 import { createDesktopOwnerHostServices } from "./owner-host-services";
 import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
 import { installPermissionPolicy } from "./permission-policy";
-import { markAgentProjectRead } from "../app-server/agent-project-read";
+
 import { configureBundledGit } from "../bundled-git";
 import {
   applyRememberedLinuxPasswordStore,
@@ -10,30 +11,21 @@ import {
 } from "./linux-password-store";
 import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, session, shell } from "electron";
 import { performance } from "node:perf_hooks";
-import {
-  getDesktopBackendRegistry,
-  getExistingDesktopBackendRegistry,
-} from "../app-server/backend-registry";
-import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "../storage-maintenance";
-import { removeRetiredCiArtifactStore } from "../pr-status/forge-artifact-download";
-import { hadExistingAppStateDatabase } from "../storage/desktop-state-lifecycle";
-import { getDesktopStorageMaintenanceStorage } from "../storage/desktop-storage-maintenance";
-import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { createPwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-management-service";
-import type {
-  CreateInstanceThreadResult,
-  PwrAgentFederationContext,
-} from "@pwragent/shared";
-import { createStarMapAgentToolsHandler } from "../star-map/star-map-agent-tools-service";
-import { createOpenThreadInUi } from "./native-voice/open-thread-in-ui";
-import { isVoiceManagerThread } from "../native-voice/voice-manager-thread";
-import { createFederationAgentToolsHandler } from "../federation/federation-agent-tools-service";
-import { createFederatedThreadInspectionHandler } from "../federation/federated-thread-inspection-service";
-import { createFederatedThreadMutationHandler } from "../federation/federated-thread-mutation-service";
-import {
-  createFederatedThreadControlHandler,
-  createFederatedThreadMessageHandler,
-} from "../federation/federated-thread-message-service";
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
   disposeScheduledActionIpcHandlers,
@@ -42,9 +34,7 @@ import {
 import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
 import { registerCodexEnvironmentEditorIpcHandlers } from "./ipc/codex-environment-editor-ipc";
 import { registerOperatorRequestIpcHandlers } from "./ipc/operator-requests-ipc";
-import {
-  disposeScheduledThreadActionService,
-} from "../scheduled-actions/scheduled-thread-action-service";
+
 import {
   disposeAppMetadataIpcHandlers,
   registerAppMetadataIpcHandlers,
@@ -81,7 +71,7 @@ import {
   disposeAutomationIpcHandlers,
   registerAutomationIpcHandlers,
 } from "./ipc/automation-ipc";
-import { appServerService, disposeAppServerIpcHandlers, registerAppServerIpcHandlers, startAppServerOwnerNavigation } from "./ipc/app-server";
+import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
 import {
   disposeImageNormalizationIpcHandlers,
   registerImageNormalizationIpcHandlers,
@@ -94,20 +84,17 @@ import {
   disposeStarMapIpcHandlers,
   registerStarMapIpcHandlers,
 } from "./ipc/star-map";
-import {
-  disposeDesktopFederationRuntime,
-  getDesktopFederationRuntime,
-} from "../federation/federation-runtime";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   createFederationWindow,
   refreshFederationWindowTitles,
 } from "./federation/federation-window";
-import { applyFederationConfigPatch, subscribeFederationConfig } from "../federation/federation-config-subscription";
+
 import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
 } from "./ipc/integrated-terminal";
-import { stopAllCodexEnvironmentDetachedCommands } from "../app-server/codex-environment-runtime";
+
 import {
   disposeDiagnosticsIpcHandlers,
   registerDiagnosticsIpcHandlers,
@@ -125,7 +112,7 @@ import {
   disposeMcpConnectionIpcHandlers,
   registerMcpConnectionIpcHandlers,
 } from "./ipc/mcp-connections";
-import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+
 import {
   disposePreloadLogIpcHandlers,
   registerPreloadLogIpcHandlers,
@@ -185,38 +172,15 @@ import {
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import { isRenderingDiagnosticsWindow, stopRenderingDiagnostics } from "./diagnostics/rendering-capture";
 import { recordStartupProfileEvent } from "../diagnostics/startup-profile-events";
-import {
-  disposeDesktopMessagingRuntime,
-  getDesktopMessagingRuntime,
-} from "../messaging/messaging-runtime";
-import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
-import { resolveRuntimeMessagingOverride } from "../runtime-flags";
-import {
-  getExistingRuntimeMessagingLeaseCoordinator,
-  getRuntimeMessagingLeaseCoordinator,
-} from "../runtime-messaging-lease";
-import { getExistingRuntimeLeaseManager } from "../runtime-lease-manager";
-import {
-  getExistingRuntimeFederationLeaseCoordinator,
-  getRuntimeFederationLeaseCoordinator,
-} from "../runtime-federation-lease";
-import {
-  closeDesktopSettingsCommandDiscovery,
-  disposeDesktopConfigStore,
-  getDesktopConfigStore,
-  getDesktopSettingsService,
-} from "../settings/desktop-settings-singleton";
-import {
-  issueProviderDiscoveryPermit,
-  type ProviderDiscoveryPermit,
-} from "../settings/provider-discovery-permit";
-import {
-  disposeAppState,
-  initializeDesktopState,
-  isAppStateInitialized,
-  recordBootDecision,
-  stopProfileRuntimeHeartbeatRefresh,
-} from "../storage/desktop-state-lifecycle";
+
+
+
+
+
+
+import { getDesktopConfigStore } from "../settings/desktop-settings-singleton";
+import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import { disposeAppState, recordBootDecision } from "../storage/desktop-state-lifecycle";
 import type { AutoVacuumConversion } from "../storage/desktop-state-lifecycle";
 import {
   createMainWindow,
@@ -224,8 +188,6 @@ import {
   isFederationWindowWebContents,
   stopWindowDiagnostics,
 } from "./window";
-import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
-import { registerManagedRuntimeProgressBroadcast } from "./managed-runtime-progress-broadcast";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenMainView } from "./window-open-main-view";
 import { requestOpenNewThread } from "./window-open-new-thread";
@@ -297,8 +259,6 @@ import {
   installE2eChildProcessDiagnostics,
 } from "../e2e-child-process-diagnostics";
 
-installOwnerHostServices(createDesktopOwnerHostServices());
-
 configureBundledGit(app.isPackaged ? process.resourcesPath : undefined);
 
 const APP_NAME = "PwrAgent";
@@ -313,15 +273,6 @@ const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
 const RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
-// The registry holds one 2s deadline for every turn it stops; the phase adds
-// room for it to log and hand the rest to the shutdown stamp.
-const RUNNING_TURNS_STOP_TIMEOUT_MS = 2_000;
-const RUNNING_TURNS_SHUTDOWN_TIMEOUT_MS = RUNNING_TURNS_STOP_TIMEOUT_MS + 500;
-const INTEGRATED_TERMINAL_SHUTDOWN_TIMEOUT_MS = 2_000;
-const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
-const FEDERATION_SHUTDOWN_TIMEOUT_MS = 4_000;
-const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
-const MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS = 2_000;
 const e2eShutdownDiagnostics = createE2eShutdownDiagnosticsRecorder({
   enabled: process.env.PWRAGENT_E2E === "1" && !app.isPackaged,
   filePath: process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV],
@@ -351,7 +302,6 @@ let mainProcessResourcesDisposed = false;
 // dispose already ran (with the release skipped) by the time will-quit /
 // process-exit fire, and this flag is what keeps their lease-release
 // fallback reachable instead of stranding the lease for its full TTL.
-let federationLeaseReleasedSync = false;
 let mainProcessShutdownComplete = false;
 let mainProcessShutdownPromise: Promise<void> | undefined;
 let integratedTerminalShutdownPromise: Promise<void> | undefined;
@@ -498,184 +448,6 @@ function logBootDecision(decision: ProfileBootDecision): void {
   }
 }
 
-function startStartupSettingsDiscovery(permit: ProviderDiscoveryPermit): void {
-  void getDesktopSettingsService()
-    .refreshStartupDiscovery(permit)
-    .catch((error) => {
-      mainLog.warn("startup settings discovery failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-}
-
-function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
-  if (!getDesktopConfigStore().read("onboarding").completed) {
-    mainLog.info("startup thread list prewarm deferred until onboarding completes");
-    // Nothing re-enters this function when the wizard completes in the same
-    // process, so no startup Codex discovery is coming. Say so, or every
-    // surface that waits on `isCodexDiscoveryPending()` waits for the life of
-    // the process — the startup landing included.
-    getDesktopSettingsService().markStartupCodexDiscoverySkipped();
-    recordStartupProfileEvent({
-      type: "startup-thread-list-prewarm:deferred",
-    });
-    return;
-  }
-  const startedAt = Date.now();
-  startStartupSettingsDiscovery(permit);
-  // The durable thread snapshot painted below is allowed to appear
-  // immediately. A cold profile has no executable selection yet, though, so
-  // this live provider refresh waits only until Codex has a usable selection.
-  // A warm profile uses its pinned last-known-good executable immediately;
-  // discovery updates the next launch in the background.
-  //
-  // It must NOT hang off the prewarm `listThreads` result. This chain owns the
-  // only `navigation/providerThreads/refreshed` emit, which is the renderer's
-  // sole automatic trigger to re-read backend summaries; a rejected prewarm —
-  // a broken Codex being exactly when that happens — would otherwise leave the
-  // renderer holding a stale `discoveryPending` summary with nothing left to
-  // clear it.
-  const startupProviderRefresh = getDesktopSettingsService().resolveCodexCommand()
-    // A missing executable must still publish the provider's degraded state.
-    .catch(() => undefined)
-    .then(async () => {
-      // A pending quit confirmation can be canceled. Resource shutdown owns
-      // permanent startup admission, just as it owns the boot guards below.
-      if (mainProcessShutdownPromise) return;
-      await getDesktopBackendRegistry().refreshProvidersAtStartup(permit);
-    })
-    .catch((error) => {
-      mainLog.warn("startup provider refresh failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  // Token Miser preparation carries the same dependency — reading its server
-  // capabilities opens the app-server, which cannot resolve an executable
-  // until startup discovery has published a selection. Running it from the
-  // registry constructor raced that and left Token Miser recorded as
-  // unavailable for the whole session.
-  //
-  // It queues behind the provider refresh rather than beside it: preparation
-  // spawns `codex plugin marketplace` subprocesses and a full retention prune,
-  // and the refresh above owns the event that releases the renderer's startup
-  // hold. Contending with it would delay first paint to no purpose.
-  // Its own chain, so an archive sweeper failure cannot leave idle Codex
-  // threads (and their MCP servers) loaded for the whole session.
-  void startupProviderRefresh.then(() => {
-    if (mainProcessShutdownPromise) return;
-    getExistingDesktopBackendRegistry()?.startCodexIdleThreadUnsubscriber();
-  }).catch((error) => {
-    mainLog.warn("startup idle Codex thread unsubscriber initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  // The idle app-server recycle is the leak backstop; it gets its own chain
-  // for the same reason.
-  void startupProviderRefresh.then(() => {
-    if (mainProcessShutdownPromise) return;
-    getExistingDesktopBackendRegistry()?.startCodexAppServerRecycler();
-  }).catch((error) => {
-    mainLog.warn("startup Codex app server recycler initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  // And for idle ACP sessions.
-  void startupProviderRefresh.then(() => {
-    if (mainProcessShutdownPromise) return;
-    getExistingDesktopBackendRegistry()?.startAcpIdleSessionCloser();
-  }).catch((error) => {
-    mainLog.warn("startup idle ACP session closer initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  // Continuations a quiet restart left start once providers can take a
-  // turn, a few threads at a time.
-  void startupProviderRefresh.then(() => {
-    if (mainProcessShutdownPromise) return;
-    getExistingDesktopBackendRegistry()?.beginRestartContinuationDispatch();
-  }).catch((error) => {
-    mainLog.warn("restart continuation dispatch failed to start", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  void startupProviderRefresh.then(() => {
-    if (mainProcessShutdownPromise) return;
-    getExistingDesktopBackendRegistry()?.startThreadArchiveSweeper();
-  }).catch((error) => {
-    mainLog.warn("startup thread archive sweeper initialization failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  void startupProviderRefresh.then(async () => {
-    if (mainProcessShutdownPromise) return;
-    const registry = getExistingDesktopBackendRegistry();
-    if (!registry) return;
-    await registry.resumeArchiveCleanupsAtStartup();
-  }).catch((error) => {
-    mainLog.warn("archived worktree repair interrupted", { error: error instanceof Error ? error.message : String(error) });
-  });
-  void startupProviderRefresh
-    .then(async () => {
-      if (mainProcessShutdownPromise) return;
-      await getDesktopBackendRegistry().prepareTokenMiserRuntimeAtStartup();
-    })
-    .catch((error) => {
-      mainLog.warn("startup Token Miser preparation failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  void getDesktopBackendRegistry()
-    .listThreads({
-      callerReason: "startup-prewarm",
-      limit: 50,
-      maxPages: 1,
-      skipArchivedMetadataRefresh: true,
-    })
-    .then((threads) => {
-      recordStartupProfileEvent({
-        type: "startup-thread-list-prewarm:completed",
-        detail: {
-          count: threads.length,
-          durationMs: Date.now() - startedAt,
-        },
-      });
-      if (!isDevelopment) {
-        return;
-      }
-      mainLog.info("startup thread list prewarm completed", {
-        count: threads.length,
-        durationMs: Date.now() - startedAt,
-      });
-    })
-    .catch((error) => {
-      recordStartupProfileEvent({
-        type: "startup-thread-list-prewarm:failed",
-        detail: {
-          durationMs: Date.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-      if (!isDevelopment) {
-        return;
-      }
-      mainLog.warn("startup thread list prewarm failed", {
-        durationMs: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-}
-
-function releaseFederationLeaseSync(): void {
-  if (federationLeaseReleasedSync) {
-    return;
-  }
-  federationLeaseReleasedSync = true;
-  const runtimeFederationLeaseCoordinator =
-    getExistingRuntimeFederationLeaseCoordinator()
-    ?? (isAppStateInitialized() ? getRuntimeFederationLeaseCoordinator() : null);
-  runtimeFederationLeaseCoordinator?.shutdownSync();
-}
-
 function disposeMainProcessResourcesSync(options?: {
   releaseFederationLease?: boolean;
 }): void {
@@ -689,11 +461,11 @@ function disposeMainProcessResourcesSync(options?: {
   // federation phase rejected or timed out before its own release.
   const releaseFederationLease = options?.releaseFederationLease ?? true;
   if (releaseFederationLease) {
-    releaseFederationLeaseSync();
+    releaseOwnerFederationLeaseSync();
   }
   if (mainProcessResourcesDisposed) {
     if (releaseFederationLease) {
-      getExistingRuntimeLeaseManager()?.markExited();
+      disposeOwnerServicesSync({ releaseFederationLease: true });
     }
     return;
   }
@@ -718,16 +490,6 @@ function disposeMainProcessResourcesSync(options?: {
     disposeIntegratedTerminalIpcHandlers(),
   );
   disposeMcpConnectionIpcHandlers();
-  // Detached env-action trees (`pnpm dev` and friends) were previously just
-  // abandoned here. They keep their stdio pipes, so they *usually* died of
-  // SIGPIPE once we went away — but a quiet one could outlive the app and hold
-  // its port. The quit dialog promises they get stopped, so stop them.
-  const stoppedDetachedCommands = stopAllCodexEnvironmentDetachedCommands();
-  if (stoppedDetachedCommands > 0) {
-    mainLog.info("stopped detached environment actions on shutdown", {
-      count: stoppedDetachedCommands,
-    });
-  }
   disposePreloadLogIpcHandlers();
   disposeBootInfoIpcHandlers();
   disposeQuitBlockerIpcHandlers();
@@ -736,19 +498,12 @@ function disposeMainProcessResourcesSync(options?: {
   disposeSettingsIpcHandlers();
   disposeKeybindingsIpcHandlers();
   disposeAppIconDragIpcHandlers();
-  disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
   disposeLaunchpadAccessNoticeIpcHandlers();
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
   }
-  const runtimeMessagingLeaseCoordinator =
-    getExistingRuntimeMessagingLeaseCoordinator() ??
-    (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
-  runtimeMessagingLeaseCoordinator?.shutdownSync();
-  if (releaseFederationLease) {
-    getExistingRuntimeLeaseManager()?.markExited();
-  }
+  disposeOwnerServicesSync({ releaseFederationLease });
 }
 
 async function closeRendererWindowsBeforeResourceShutdown(
@@ -852,90 +607,6 @@ async function closeRendererWindowsBeforeResourceShutdown(
   await rendererWindowShutdownPromise;
 }
 
-const runMainProcessShutdownBarrier = createShutdownBarrier({
-  globalTimeoutMs: MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS,
-  logger: mainLog,
-  observer: {
-    phaseStarted: (phase) => {
-      const diagnosticPhase = toE2eShutdownPhase(phase);
-      if (diagnosticPhase) {
-        e2eShutdownDiagnostics.beginPhase(diagnosticPhase);
-      }
-    },
-    phaseFinished: (outcome) => {
-      const diagnosticPhase = toE2eShutdownPhase(outcome.name);
-      if (diagnosticPhase) {
-        e2eShutdownDiagnostics.finishPhase(
-          diagnosticPhase,
-          outcome.outcome,
-          outcome.durationMs,
-        );
-      }
-    },
-  },
-  phases: [
-    {
-      // Ask each backend to stop its running turns while messaging and
-      // federation still listen, so chats and peers see those turns end as
-      // interrupted instead of never hearing that they ended.
-      name: "running-turns",
-      timeoutMs: RUNNING_TURNS_SHUTDOWN_TIMEOUT_MS,
-      run: async () => {
-        await getExistingDesktopBackendRegistry()?.stopRunningTurnsForShutdown({
-          timeoutMs: RUNNING_TURNS_STOP_TIMEOUT_MS,
-        });
-      },
-    },
-    {
-      name: "integrated-terminal",
-      timeoutMs: INTEGRATED_TERMINAL_SHUTDOWN_TIMEOUT_MS,
-      run: async () => {
-        await (integratedTerminalShutdownPromise ??= Promise.resolve(
-          disposeIntegratedTerminalIpcHandlers(),
-        ));
-      },
-    },
-    {
-      name: "messaging",
-      timeoutMs: MESSAGING_SHUTDOWN_TIMEOUT_MS,
-      run: async () => {
-        await disposeMessagingStatusIpcHandlers();
-        await disposeDesktopMessagingRuntime();
-      },
-    },
-    {
-      name: "federation",
-      timeoutMs: FEDERATION_SHUTDOWN_TIMEOUT_MS,
-      run: async () => {
-        await disposeDesktopFederationRuntime();
-        // Release the profile lease only after the listener is down: a
-        // replacement that acquired while the old socket was still bound
-        // would hit EADDRINUSE, keep the lease, and stay degraded even
-        // after this process exits. If this phase rejects or times out,
-        // the will-quit/process-exit sync dispose releases instead.
-        releaseFederationLeaseSync();
-      },
-    },
-    {
-      name: "settings-discovery",
-      timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
-      run: closeDesktopSettingsCommandDiscovery,
-    },
-    {
-      name: "app-server",
-      timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
-      run: disposeAppServerIpcHandlers,
-    },
-    {
-      name: "mcp-connections",
-      timeoutMs: MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS,
-      run: async () => {
-        await getMcpConnectionGatewayService().close();
-      },
-    },
-  ],
-});
-
 const flushDiagnostics = createShutdownBarrier({
   globalTimeoutMs: 10_000,
   logger: mainLog,
@@ -957,26 +628,13 @@ const flushDiagnostics = createShutdownBarrier({
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
-    // Persist before any bounded shutdown wait can expire. A later registry
-    // close updates the checkpoint after safe in-flight bookkeeping drains.
-    try {
-      getExistingDesktopBackendRegistry()?.checkpointArchiveCleanupsForQuit();
-    } catch (error) {
-      mainLog.error("archive cleanup quit checkpoint failed", { error: error instanceof Error ? error.message : String(error) });
-    }
+    prepareOwnerShutdown();
     // Diagnostics consumes the existing 2s window + 12s resource allowance;
     // it must not add another serial 10s wait to application shutdown.
     const deadline = performance.now()
       + RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS + MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS;
-    // Includes immediate paths (signals and update installation). Send while
-    // the tunnel and sockets are still alive; never wait on peer acknowledgments.
-    getDesktopFederationRuntime().shutdown.exiting();
-    getExistingRuntimeMessagingLeaseCoordinator()?.stopRecovery();
-    getExistingRuntimeFederationLeaseCoordinator()?.stopRecovery();
     e2eShutdownDiagnostics.beginOverall();
     childProcessDiagnostics.snapshot("shutdown-started");
-    // Close probe admission before renderer shutdown or any other async wait.
-    void closeDesktopSettingsCommandDiscovery();
     try {
       await flushDiagnostics(source);
       // Electron emits before-quit while renderer windows are still live. Close
@@ -984,16 +642,10 @@ async function disposeMainProcessResources(source: string): Promise<void> {
       // IPC handlers and their backing stores are disposed.
       await closeRendererWindowsBeforeResourceShutdown(source);
       disposeMainProcessResourcesSync({ releaseFederationLease: false });
-      await runMainProcessShutdownBarrier(source, deadline - performance.now());
-      // Keep the scheduler subscribed until the app-server registry is closed.
-      // A queued registry entry can otherwise start after its durable lease was
-      // released, leaving the next process free to dispatch the same action.
-      disposeScheduledThreadActionService();
-      getExistingRuntimeLeaseManager()?.markExited();
-      // The runtime no longer claims the profile, so stop advertising it.
-      // A refresh is a synchronous main-thread write, and Electron's native
-      // quit still has to run on this thread after the barrier.
-      stopProfileRuntimeHeartbeatRefresh();
+      await disposeOwnerServices(source, deadline - performance.now(), async () => {
+        await disposeMessagingStatusIpcHandlers();
+        await disposeAppServerIpcHandlers();
+      });
       // The barrier bounds waiting; it does not cancel timed-out work. Keep
       // SQLite alive for late socket callbacks and the final lease release.
       // Only the process exit hook closes it, after synchronous cleanup.
@@ -1598,8 +1250,6 @@ export function bootstrapApp(): void {
       media: nativeVoiceMediaRules,
     });
     installDevelopmentDockIcon();
-    registerManagedGrokSignatureRejectionBroadcast();
-    registerManagedRuntimeProgressBroadcast();
     // Boot decision — resolves which profile (if any) this Electron
     // instance should open into. When the decision is `open` we run
     // the today-style flow into an existing profile dir. Anything
@@ -1655,38 +1305,34 @@ export function bootstrapApp(): void {
         bootMode,
       },
     });
-    reportAutoVacuumConversion(initializeDesktopState(bootMode).autoVacuum);
-    getDesktopConfigStore();
-    if (bootMode === "active-profile") {
-      const registry = getDesktopBackendRegistry();
-      void removeRetiredCiArtifactStore();
-      registry.onEvent(async (event) => {
-        const method = event.notification.method;
-        if (method === "thread/archived" || method === "thread/unarchived") {
-          await interruptStartupStorageMaintenance();
-          getDesktopStorageMaintenanceStorage().observeArchive(event.backend, event.notification.params.threadId, method === "thread/archived");
-        }
-      });
-      await runStartupStorageMaintenance({
-        storage: getDesktopStorageMaintenanceStorage(),
-        existingDatabase: hadExistingAppStateDatabase(),
-        onboardingCompleted: getDesktopConfigStore().read("onboarding").completed === true,
-        discover: async () => {
-          // Discovery is normally started after the main window appears. This
-          // earlier consumer must start it and await only Codex readiness.
-          startStartupSettingsDiscovery(issueProviderDiscoveryPermit("startup"));
-          await getDesktopSettingsService().resolveCodexCommand();
-          const [archived, active] = await Promise.all([
-            registry.listThreads({ callerReason: "archive-cleanup", archived: true, forceRefresh: true, enrichDirectories: false, skipArchivedMetadataRefresh: true }),
-            registry.listThreads({ callerReason: "archive-cleanup", archived: false, forceRefresh: true, enrichDirectories: false }),
-          ]);
-          return {
-            archived: archived.map((thread) => ({ backend: thread.source, threadId: thread.id, archivedAt: thread.archivedAt })),
-            active: active.map((thread) => ({ backend: thread.source, threadId: thread.id })),
-          };
-        },
-      });
-    }
+    const ownerServices = await startOwnerServices(createDesktopOwnerHostServices(), {
+      bootMode,
+      startedAt: mainProcessStartedAt,
+      onStateInitialized: (state) => reportAutoVacuumConversion(state.autoVacuum),
+      shutdown: {
+        closeTerminal: async () => { await (integratedTerminalShutdownPromise ??= Promise.resolve(disposeIntegratedTerminalIpcHandlers())); },
+        closeMessagingStatus: disposeMessagingStatusIpcHandlers,
+        closeAppServerIpc: disposeAppServerIpcHandlers,
+          observer: {
+    phaseStarted: (phase) => {
+      const diagnosticPhase = toE2eShutdownPhase(phase);
+      if (diagnosticPhase) {
+        e2eShutdownDiagnostics.beginPhase(diagnosticPhase);
+      }
+    },
+    phaseFinished: (outcome) => {
+      const diagnosticPhase = toE2eShutdownPhase(outcome.name);
+      if (diagnosticPhase) {
+        e2eShutdownDiagnostics.finishPhase(
+          diagnosticPhase,
+          outcome.outcome,
+          outcome.durationMs,
+        );
+      }
+    },
+  },
+      },
+    });
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
     // catch "focus existing window" requests from sibling PwrAgent
@@ -1698,120 +1344,6 @@ export function bootstrapApp(): void {
       installProfileFocusRequestWatcher();
     }
     refreshProfileMenus();
-    getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
-      createPwrAgentAppManagementHandler({
-        startedAt: mainProcessStartedAt,
-        version: () => app.getVersion(),
-        readCodexAppServerDiagnostics: async () =>
-          await getExistingDesktopBackendRegistry()?.readCodexAppServerDiagnostics(),
-      }),
-    );
-    // Reads the view the Star Map renderer publishes, so an Agent turn can
-    // resolve "that thread" and "its cloud" against what is on screen.
-    getDesktopBackendRegistry().setPwrAgentStarMapHandler(
-      createStarMapAgentToolsHandler({
-        openThread: createOpenThreadInUi({
-          localInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
-        }),
-        // It raises the window and replaces the operator's selection; only
-        // the Voice manager acts on the operator's spoken request to open one.
-        mayOpenThread: (caller) => caller.backend === "codex" && isVoiceManagerThread(caller.threadId),
-      }),
-    );
-    // Injected rather than owned by the registry: the federation runtime
-    // already imports the registry, so the reverse import would be a cycle.
-    const federationAgentToolOptions = {
-      targetStore: getDesktopOverlayStore(),
-      resolveSourceTurnAttachments: (context: PwrAgentFederationContext) => {
-        const turnId = context.turnId?.trim();
-        return turnId
-          ? getDesktopBackendRegistry().getTurnInputAttachments({
-              backend: context.backend,
-              threadId: context.threadId,
-              turnId,
-            })
-          : [];
-      },
-      onRemoteChildMounted: async ({
-        backend,
-        instanceId,
-        threadId,
-      }: {
-        backend: CreateInstanceThreadResult["backend"];
-        instanceId: string;
-        threadId: string;
-      }) => {
-        await getDesktopBackendRegistry().publishLocalEvent({
-          backend,
-          notification: {
-            method: "navigation/remoteThreadPins/changed",
-            params: { instanceId, threadId, pinned: true },
-          },
-        });
-      },
-    };
-    const federationAgentToolsHandler =
-      createFederationAgentToolsHandler(federationAgentToolOptions);
-    getDesktopBackendRegistry().setPwrAgentFederationHandler(
-      federationAgentToolsHandler,
-    );
-    // The same tools, for the Star Map [+] intake agent — built per intake
-    // rather than once, because two of its options are properties of the one
-    // request rather than of the machine:
-    //
-    // - `resolveMessageOrigin`: the intake's calling thread is an ephemeral
-    //   turn that dissolves the moment it finishes, so crediting it as the
-    //   created thread's `sourceThread` would leave a ThreadChip linking to
-    //   nothing. An intake thread was asked for by the operator through
-    //   PwrAgent, which is what the dialog recorded before there was an agent
-    //   in the loop.
-    // - `resolveSourceTurnAttachments`: the shared resolver looks the calling
-    //   thread's turn up in the registry, and an ephemeral helper turn is not
-    //   in it — so it returns nothing and the operator's pasted screenshots
-    //   never reach the thread they described. The intake's staged
-    //   attachments are handed in directly instead.
-    getDesktopBackendRegistry().setStarMapIntakeFederationHandlerFactory(
-      (attachments) =>
-        createFederationAgentToolsHandler({
-          ...federationAgentToolOptions,
-          resolveMessageOrigin: () => ({ kind: "pwragent" }),
-          resolveSourceTurnAttachments: () => attachments,
-        }),
-    );
-    getDesktopBackendRegistry().setFederatedThreadMessageHandler(
-      createFederatedThreadMessageHandler({
-        targetStore: getDesktopOverlayStore(),
-      }),
-    );
-    getDesktopBackendRegistry().setFederatedThreadInspectionHandler(
-      createFederatedThreadInspectionHandler({
-        targetStore: getDesktopOverlayStore(),
-      }),
-    );
-    getDesktopBackendRegistry().setFederatedThreadMutationHandler(
-      createFederatedThreadMutationHandler({
-        targetStore: getDesktopOverlayStore(),
-      }),
-    );
-    getDesktopBackendRegistry().setFederatedThreadControlHandler(
-      createFederatedThreadControlHandler({
-        targetStore: getDesktopOverlayStore(),
-      }),
-    );
-    // The app's own paths, so an Agent's archive also ungroups the thread's
-    // children on other instances, and its pins and read marks reach every
-    // window the way a click does.
-    getDesktopBackendRegistry().setAgentThreadActions({
-      markProjectRead: async (args) => await markAgentProjectRead(getDesktopFederationRuntime(), args),
-      archiveThread: async (request) =>
-        await appServerService.archiveThread(request),
-      setThreadPin: async (request) =>
-        await appServerService.setThreadPin(request),
-      markThreadSeen: async (request) =>
-        await appServerService.markThreadSeen(request),
-      setThreadParent: async (request) =>
-        await appServerService.setThreadParent(request),
-    });
     // Windows and Linux: serve the painted title-bar menu bar from the live
     // application menu (idempotent; the renderer mounts the bar only where the
     // native title bar — and with it the native menu bar — is hidden).
@@ -1829,21 +1361,11 @@ export function bootstrapApp(): void {
     installWindowFrameSync(app);
     registerAppServerIpcHandlers();
     registerNativeVoiceIpcHandlers();
-    void startAppServerOwnerNavigation().catch((error) => {
-      mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
-    });
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
     // A to-do's "Start thread on" runs through the same federation tools,
     // with the card's origin on the started thread's prompt.
-    registerThreadTodoIpcHandlers({
-      federation: federationAgentToolsHandler,
-      federationWithOrigin: (messageOrigin) =>
-        createFederationAgentToolsHandler({
-          ...federationAgentToolOptions,
-          resolveMessageOrigin: () => messageOrigin,
-        }),
-    });
+    registerThreadTodoIpcHandlers(ownerServices.todoFederation);
     registerCodexEnvironmentEditorIpcHandlers();
     registerOperatorRequestIpcHandlers();
     registerApplicationIpcHandlers();
@@ -1861,19 +1383,6 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     registerMcpConnectionIpcHandlers();
-    // Only pre-start the bridge for a profile that actually uses it. Settings
-    // still reaches the gateway on demand, so turning the switch back on does
-    // not require a restart.
-    if (
-      bootMode === "active-profile"
-      && getDesktopSettingsService().resolveMcpGatewayEnabled()
-    ) {
-      void getMcpConnectionGatewayService().start().catch((error) => {
-        mainLog.error("MCP connection gateway failed during startup", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
     installTranscriptImageProtocol({
       resolveFederatedImage: async ({ instanceId, url }) =>
         await getDesktopFederationRuntime()
@@ -1893,34 +1402,7 @@ export function bootstrapApp(): void {
     registerAppIconDragIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch, previousProviderDefaults) => {
-        if (previousProviderDefaults) {
-          getDesktopOverlayStore().applyProviderModelDefaults(
-            previousProviderDefaults,
-            getDesktopSettingsService().resolveProviderModelDefaults(),
-          );
-        }
-        // The registry observes the normalized provider domain, including
-        // external file replacements. Await the same deduplicated invalidation
-        // here so a direct Settings write cannot return ahead of its runtime
-        // ownership boundary.
-        await getDesktopBackendRegistry().synchronizeProviderRuntimeSelections();
-        if (patch.federation !== undefined) {
-          // Store subscriptions also cover external config-file edits. Keep
-          // direct settings writes awaiting the runtime change, while the
-          // Cloudflare ingress switch leaves other peer sessions intact.
-          await applyFederationConfigPatch(getDesktopFederationRuntime(), patch.federation);
-        }
-        if (patch.general?.mcpGatewayEnabled === false) {
-          // The switch forbids new bridges on its own, but a session opened
-          // while it was on stays authorized until something ends it.
-          await getMcpConnectionGatewayService()
-            .closeAllUpstreamSessions()
-            .catch((error) => {
-              mainLog.error("MCP connection gateway failed to close sessions", {
-                error: error instanceof Error ? error.message : String(error),
-              });
-            });
-        }
+        await ownerServices.onConfigPatchWritten(patch, previousProviderDefaults);
         if (
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||
@@ -1934,111 +1416,10 @@ export function bootstrapApp(): void {
         }
       },
     });
-    subscribeFederationConfig(
-      getDesktopConfigStore(),
-      getDesktopFederationRuntime(),
-      (error) => {
-        mainLog.error("federation runtime config refresh failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      },
-    );
     registerWindowPointerIpcHandlers();
     registerLaunchpadAccessNoticeIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
-    }
-    void getDesktopFederationRuntime().restart().catch((error) => {
-      mainLog.error("federation runtime failed during startup", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    const messagingRuntime = getDesktopMessagingRuntime((options) =>
-      loadDesktopMessagingConfigFromSettings(
-        getDesktopSettingsService(),
-        process.env,
-        options,
-      ),
-    );
-    let messagingConfigFingerprint = JSON.stringify({
-      messaging: getDesktopConfigStore().read("messaging"),
-      pdfAnalysisEnabled:
-        getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
-        ?? true,
-    });
-    getDesktopConfigStore().subscribe(
-      ["general", "messaging"],
-      () => {
-        const nextFingerprint = JSON.stringify({
-          messaging: getDesktopConfigStore().read("messaging"),
-          pdfAnalysisEnabled:
-            getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
-            ?? true,
-        });
-        if (nextFingerprint === messagingConfigFingerprint) {
-          return;
-        }
-        messagingConfigFingerprint = nextFingerprint;
-        const runtimeOverride = resolveRuntimeMessagingOverride();
-        void getRuntimeMessagingLeaseCoordinator()
-          .applyLatestConfig(
-            messagingRuntime,
-            (options) =>
-              loadDesktopMessagingConfigFromSettings(
-                getDesktopSettingsService(),
-                process.env,
-                options,
-              ),
-            {
-              allowStart:
-                !runtimeOverride.disabled || messagingRuntime.isEnabled(),
-              logStartupEligibility: true,
-            },
-          )
-          .catch((error) => {
-            mainLog.error("messaging runtime config refresh failed", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-      },
-    );
-    getDesktopBackendRegistry().setMessagingArchiveCleaner({
-      requestBindingRevokeAllForThread: (request) =>
-        messagingRuntime.requestBindingRevokeAllForThread(request),
-    });
-    getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
-    const messagingOverride = resolveRuntimeMessagingOverride();
-    if (messagingOverride.disabled) {
-      mainLog.info("messaging runtime disabled for this app instance", {
-        reason: messagingOverride.reason,
-      });
-      void getRuntimeMessagingLeaseCoordinator()
-        .start(messagingRuntime, (options) =>
-          loadDesktopMessagingConfigFromSettings(
-            getDesktopSettingsService(),
-            process.env,
-            options,
-          ),
-        )
-        .catch((error) => {
-          mainLog.error("messaging runtime lease recording failed during startup", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    } else {
-      void getRuntimeMessagingLeaseCoordinator()
-        .start(messagingRuntime, (options) =>
-          loadDesktopMessagingConfigFromSettings(
-            getDesktopSettingsService(),
-            process.env,
-            options,
-          ),
-        )
-        .catch((error) => {
-          mainLog.error("messaging runtime failed during background startup", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
     }
     // Register status IPC after the runtime is constructed so the
     // initial subscriber attaches before the renderer asks for the
@@ -2055,7 +1436,7 @@ export function bootstrapApp(): void {
     startupWindowCreated = true;
     recordStartupProfileEvent({ type: "main-window-create:end" });
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
-    prewarmInitialThreadList(issueProviderDiscoveryPermit("startup"));
+    ownerServices.prewarm(issueProviderDiscoveryPermit("startup"));
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:scheduled" });
 
     // Wire up auto-update *after* the window is created so a slow update

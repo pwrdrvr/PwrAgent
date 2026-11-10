@@ -3172,7 +3172,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
 let runtime: DesktopMessagingRuntime | null = null;
 
-export function getDesktopMessagingRuntime(
+export function initializeDesktopMessagingRuntime(
   config?: DesktopMessagingConfig | DesktopMessagingConfigLoader,
 ): DesktopMessagingRuntime {
   if (!runtime) {
@@ -3617,4 +3617,10 @@ function formatDurationForStatus(durationMs: number): string {
   }
   const minutes = Math.ceil(seconds / 60);
   return `${minutes}m`;
+}
+
+/** Reading an owner cannot construct an unwired messaging runtime. */
+export function getDesktopMessagingRuntime(): DesktopMessagingRuntime {
+  if (!runtime) throw new Error("getDesktopMessagingRuntime is unavailable before startOwnerServices().");
+  return runtime;
 }

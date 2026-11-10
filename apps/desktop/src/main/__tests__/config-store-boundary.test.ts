@@ -253,9 +253,10 @@ describe("desktop config/discovery source boundaries", () => {
 
   it("allows discovery permits to be issued only at startup or user-action IPC", () => {
     const allowed = new Set([
-      "main/index.ts",
-      "main/ipc/agent-ipc.ts",
-      "main/ipc/settings.ts",
+      "main/owner-services.ts",
+      "main/shell/index.ts",
+      "main/shell/ipc/agent-ipc.ts",
+      "main/shell/ipc/settings.ts",
     ]);
     const violations: string[] = [];
     for (const filePath of sourcesMentioning(
@@ -275,7 +276,7 @@ describe("desktop config/discovery source boundaries", () => {
   it("keeps direct provider probes behind the permitted discovery owners", () => {
     const allowedLocalAcpProbeOwners = new Set([
       "main/app-server/acp-backend-adapter.ts",
-      "main/ipc/settings.ts",
+      "main/shell/ipc/settings.ts",
     ]);
     const violations: string[] = [];
     for (const filePath of sourcesMentioning(
@@ -327,7 +328,7 @@ describe("desktop config/discovery source boundaries", () => {
 
   it("keeps the full Settings projection inside Settings IPC", () => {
     const allowed = new Set([
-      "main/ipc/settings.ts",
+      "main/shell/ipc/settings.ts",
       "main/settings/desktop-settings-service.ts",
     ]);
     const violations = sourcesMentioning(MAIN_SRC, "readSettingsProjection")
@@ -340,7 +341,7 @@ describe("desktop config/discovery source boundaries", () => {
     const violations = sourcesMentioning(MAIN_SRC, "refreshProvidersAtStartup")
       .map(relative)
       .filter((filePath) =>
-        filePath !== "main/index.ts"
+        filePath !== "main/owner-services.ts"
         && filePath !== "main/app-server/backend-registry.ts",
       );
     expect(violations).toEqual([]);

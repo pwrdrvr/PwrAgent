@@ -174,7 +174,6 @@ import {
 } from "../../../shared/ipc";
 import { getMainLogger } from "../../log";
 
-let unsubscribeRegistryEvents: (() => void) | undefined;
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const appServerLog = getMainLogger("pwragent:app-server");
@@ -455,7 +454,7 @@ export function broadcastAgentEvent(event: AgentEvent): void {
   }
 }
 
-function broadcastCodexEnvironmentSetupProgress(
+export function broadcastCodexEnvironmentSetupProgress(
   event: CodexEnvironmentSetupProgressEvent,
 ): void {
   const rendererEvent = event;
@@ -469,15 +468,6 @@ function broadcastCodexEnvironmentSetupProgress(
 
 export function registerAgentIpcHandlers(): void {
   const registry = getDesktopBackendRegistry();
-
-  unsubscribeRegistryEvents?.();
-  getDesktopFederationRuntime().setAgentEventPublisher(broadcastAgentEvent);
-  getDesktopFederationRuntime().setEnvironmentSetupProgressPublisher(
-    broadcastCodexEnvironmentSetupProgress,
-  );
-  unsubscribeRegistryEvents = registry.onEvent((event) => {
-    broadcastAgentEvent(event);
-  });
 
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
   ipcMain.handle(
@@ -1102,7 +1092,7 @@ export function registerAgentIpcHandlers(): void {
         );
         return await admitSteerTurn(
           registry,
-          getScheduledThreadActionService(registry),
+          getScheduledThreadActionService(),
           request,
         );
       } catch (error) {
@@ -1594,8 +1584,6 @@ export function registerAgentIpcHandlers(): void {
 }
 
 export function disposeAgentIpcHandlers(): void {
-  unsubscribeRegistryEvents?.();
-  unsubscribeRegistryEvents = undefined;
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_FORK_THREAD_CHANNEL);

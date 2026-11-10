@@ -40,7 +40,6 @@ import {
   AUTOMATIONS_UPDATE_CHANNEL,
 } from "../../../shared/ipc";
 import {
-  disposeDesktopAutomationService,
   getDesktopAutomationService,
 } from "../../automations/desktop-automation-service";
 import { generateAutomationPromptDraft } from "../../app-server/automation-prompt-draft-service";
@@ -50,8 +49,6 @@ import { showAutomationRunWindow } from "../automation-run-window";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 
 export function registerAutomationIpcHandlers(): void {
-  getDesktopAutomationService();
-
   ipcMain.removeHandler(AUTOMATIONS_LIST_CHANNEL);
   ipcMain.handle(
     AUTOMATIONS_LIST_CHANNEL,
@@ -238,5 +235,4 @@ export function disposeAutomationIpcHandlers(): void {
   ipcMain.removeHandler(AUTOMATIONS_LIST_RUNS_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_DRAFT_PROMPT_CHANNEL);
-  disposeDesktopAutomationService();
 }

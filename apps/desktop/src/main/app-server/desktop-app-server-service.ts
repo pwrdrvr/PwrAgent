@@ -10545,7 +10545,16 @@ const GIT_MUTATION_COMMAND =
   /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
 
 /** Internal owner service; legacy materialization is retained only for unit regression coverage. */
-export let appServerService = new DesktopAppServerService();
+export let appServerService: DesktopAppServerService;
+
+export function initializeDesktopAppServerService(): DesktopAppServerService {
+  return appServerService ??= new DesktopAppServerService();
+}
+
+export function getDesktopAppServerService(): DesktopAppServerService {
+  if (!appServerService) throw new Error("getDesktopAppServerService is unavailable before startOwnerServices().");
+  return appServerService;
+}
 
 /**
  * Test seam: swap in a fresh owner service so no test sees PR registries,

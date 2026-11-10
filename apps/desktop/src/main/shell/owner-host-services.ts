@@ -1,3 +1,9 @@
+import { broadcastInboundPreview } from "./ipc/messaging-status";
+import { broadcastManagedRuntimeProgress } from "./managed-runtime-progress-broadcast";
+import { broadcastManagedGrokSignatureRejection } from "./managed-grok-signature-broadcast";
+import { broadcastAgentEvent, broadcastCodexEnvironmentSetupProgress } from "./ipc/agent-ipc";
+import { createOpenThreadInUi } from "./native-voice/open-thread-in-ui";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { createStorageMaintenanceView } from "./storage-maintenance-window";
 import { app, BrowserWindow, dialog, nativeImage, safeStorage, shell, utilityProcess } from "electron";
 import type { OwnerHostServices } from "../owner-host";
@@ -32,9 +38,9 @@ export function createDesktopOwnerHostServices(): OwnerHostServices {
       trashItem: (path) => shell.trashItem(path),
     },
     images: { createFromBuffer: (buffer) => nativeImage.createFromBuffer(buffer) },
-    renderer: { subscribers: subscribersForChannel },
+    renderer: { subscribers: subscribersForChannel, agentEvent: (event) => broadcastAgentEvent(event), environmentSetupProgress: (event) => broadcastCodexEnvironmentSetupProgress(event), inboundPreview: (message) => broadcastInboundPreview(message), managedRuntimeProgress: (event) => broadcastManagedRuntimeProgress(event), managedGrokSignatureRejected: (event) => broadcastManagedGrokSignatureRejection(event) },
     appearance: { broadcast: broadcastAppearanceChange, syncDock: syncThemedDockIcon },
-    threads: { showThread: requestShowThread, openMaintenance: requestOpenThreadMaintenance },
+    threads: { showThread: requestShowThread, openMaintenance: requestOpenThreadMaintenance, openThread: createOpenThreadInUi({ localInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId }) },
     notifications: {
       notifyAttention: (params) => getDesktopNotificationService().notifyAttention(params),
       notifyTerminal: (params) => getDesktopNotificationService().notifyTerminal(params),

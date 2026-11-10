@@ -137,7 +137,7 @@ export function setDesktopAutomationStoreForTests(store: AutomationStorage | nul
   storeOverride = store;
 }
 
-export function getDesktopAutomationService(
+export function initializeDesktopAutomationService(
   registry = getDesktopBackendRegistry(),
 ): DesktopAutomationService {
   if (!service) {
@@ -150,7 +150,6 @@ export function getDesktopAutomationService(
       },
       store: getDesktopAutomationStore(),
     });
-    service.start();
   }
   return service;
 }
@@ -1885,4 +1884,9 @@ function automationRunUsageEquals(
     && a.totalCostMicros === b.totalCostMicros
     && a.currency === b.currency
   );
+}
+
+export function getDesktopAutomationService(): DesktopAutomationService {
+  if (!service) throw new Error("getDesktopAutomationService is unavailable before startOwnerServices().");
+  return service;
 }

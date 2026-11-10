@@ -1,4 +1,7 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
+import legacyOwnerBoot from "./fixtures/legacy-owner-boot.json";
+import { recordOwnerCalls, recordCall, assertOwnerHooksBeforeWork } from "./helpers/owner-startup-recording";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import { resolve } from "node:path";
 import { EventEmitter } from "node:events";
@@ -34,6 +37,8 @@ const disposeAgentIpcHandlersMock = vi.fn();
 const registerScheduledActionIpcHandlersMock = vi.fn();
 const disposeScheduledActionIpcHandlersMock = vi.fn();
 const disposeScheduledThreadActionServiceMock = vi.fn();
+const startScheduledThreadActionServiceMock = vi.fn();
+const startDesktopAutomationServiceMock = vi.fn();
 const registerApplicationIpcHandlersMock = vi.fn();
 const disposeApplicationIpcHandlersMock = vi.fn();
 const registerAutomationIpcHandlersMock = vi.fn();
@@ -436,6 +441,7 @@ vi.mock("../shell/ipc/scheduled-actions-ipc", () => ({
 }));
 
 vi.mock("../scheduled-actions/scheduled-thread-action-service", () => ({
+  initializeScheduledThreadActionService: () => ({ start: startScheduledThreadActionServiceMock }),
   disposeScheduledThreadActionService: disposeScheduledThreadActionServiceMock,
 }));
 
@@ -599,7 +605,7 @@ vi.mock("../log", () => ({
   })),
 }));
 
-vi.mock("../messaging/messaging-runtime", () => ({
+vi.mock("../messaging/messaging-runtime", () => { const mocked = {
   getDesktopMessagingRuntime: vi.fn(() => ({
     start: messagingRuntimeStartMock,
     requestBindingRevokeAllForThread: requestBindingRevokeAllForThreadMock,
@@ -607,11 +613,15 @@ vi.mock("../messaging/messaging-runtime", () => ({
     getPlatformStatuses: vi.fn(() => []),
   })),
   disposeDesktopMessagingRuntime: disposeDesktopMessagingRuntimeMock,
-}));
+}; return { ...mocked, initializeDesktopMessagingRuntime: mocked.getDesktopMessagingRuntime }; });
 
-vi.mock("../federation/federation-runtime", () => ({
+vi.mock("../federation/federation-runtime", () => { const mocked = {
   federationEventClassForMethod: vi.fn(() => "transcript"),
+  setFederationMessagingPlatformStatusReader: vi.fn(),
   getDesktopFederationRuntime: vi.fn(() => ({
+    onRemoteBackendEvent: vi.fn(() => () => {}),
+    setAgentEventPublisher: vi.fn(),
+    setEnvironmentSetupProgressPublisher: vi.fn(),
     shutdown: { exiting: federationShutdownExitingMock },
     hydrateLiveThreadMessageOrigin: (event: AgentEvent) => event,
     restart: federationRuntimeRestartMock,
@@ -623,19 +633,19 @@ vi.mock("../federation/federation-runtime", () => ({
     rendererWantsRemoteEvent: rendererWantsRemoteEventMock,
   })),
   disposeDesktopFederationRuntime: disposeDesktopFederationRuntimeMock,
-}));
+}; return { ...mocked, initializeDesktopFederationRuntime: mocked.getDesktopFederationRuntime, getExistingDesktopFederationRuntime: mocked.getDesktopFederationRuntime }; });
 
-vi.mock("../runtime-messaging-lease", () => ({
+vi.mock("../runtime-messaging-lease", () => { const mocked = {
   getRuntimeMessagingLeaseCoordinator: getRuntimeMessagingLeaseCoordinatorMock,
   getExistingRuntimeMessagingLeaseCoordinator:
     getExistingRuntimeMessagingLeaseCoordinatorMock,
-}));
+}; return { ...mocked, initializeRuntimeMessagingLeaseCoordinator: mocked.getRuntimeMessagingLeaseCoordinator }; });
 
-vi.mock("../runtime-federation-lease", () => ({
+vi.mock("../runtime-federation-lease", () => { const mocked = {
   getRuntimeFederationLeaseCoordinator: getRuntimeFederationLeaseCoordinatorMock,
   getExistingRuntimeFederationLeaseCoordinator:
     getExistingRuntimeFederationLeaseCoordinatorMock,
-}));
+}; return { ...mocked, initializeRuntimeFederationLeaseCoordinator: mocked.getRuntimeFederationLeaseCoordinator }; });
 
 vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
@@ -656,9 +666,10 @@ vi.mock("../storage-maintenance", () => ({
   interruptStartupStorageMaintenance: vi.fn(async () => {}),
 }));
 
-vi.mock("../settings/desktop-settings-singleton", () => ({
+vi.mock("../settings/desktop-settings-singleton", () => { const mocked = {
   closeDesktopSettingsCommandDiscovery: closeDesktopSettingsCommandDiscoveryMock,
   disposeDesktopConfigStore: vi.fn(),
+  disposeDesktopSettingsService: vi.fn(),
   getDesktopConfigStore: vi.fn(() => ({
     read: vi.fn((domain: string) =>
       domain === "onboarding"
@@ -668,7 +679,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
     subscribe: vi.fn(() => () => undefined),
   })),
   getDesktopSettingsService: getDesktopSettingsServiceMock,
-}));
+}; return { ...mocked, initializeDesktopSettingsService: mocked.getDesktopSettingsService }; });
 
 vi.mock("../profile", () => ({
   resolvePwragentRoot: vi.fn(() => resolve(process.env.PWRAGENT_HOME ?? "test-pwragent-root")),
@@ -692,13 +703,37 @@ const runtimeFederationLeaseCoordinatorMock = {
   stopRecovery: vi.fn(),
 };
 
-vi.mock("../app-server/backend-registry", () => ({
+vi.mock("../app-server/backend-registry", () => { const mocked = {
   getExistingDesktopBackendRegistry: vi.fn(() => ({
     ...startupBackgroundMocks,
     startThreadArchiveSweeper: startThreadArchiveSweeperMock,
     stopRunningTurnsForShutdown: vi.fn(async () => undefined),
   })),
   getDesktopBackendRegistry: vi.fn(() => ({
+    setForgeReadHandlers: vi.fn(),
+    setForgePrToolHandler: vi.fn(),
+    setForgeToolPolicyResolver: vi.fn(),
+    setForgeToolRuleWriter: vi.fn(),
+    setForgeProjectLabelResolver: vi.fn(),
+    setThreadPullRequestStatusToolHandler: vi.fn(),
+    setThreadPullRequestCanonicalizer: vi.fn(),
+    setPullRequestReferenceResolver: vi.fn(),
+    setThreadPrimaryGitRepositoryReader: vi.fn(),
+    setThreadProjectRepositoryResolver: vi.fn(),
+    setLocalPullRequestAuthorityResolver: vi.fn(),
+    setThreadMaintenanceToolHandler: vi.fn(),
+    setThreadDependencyToolHandler: vi.fn(),
+    setThreadDependenciesPeerHandler: vi.fn(),
+    setThreadPrWatchesPeerHandler: vi.fn(),
+    setThreadPullRequestWatchToolHandler: vi.fn(),
+    setDirectoryGitStatusWriter: vi.fn(),
+    setThreadPullRequestDetachHandler: vi.fn(),
+    setThreadPullRequestRefreshHandler: vi.fn(),
+    setProjectForgeAutomationHandler: vi.fn(),
+    setThreadGitWorkingStateRefreshHandler: vi.fn(),
+    setThreadPrAutoDispatchHandler: vi.fn(),
+    onCodexAppServerRestartStatusChanged: vi.fn(() => () => {}),
+    onThreadArchiveSweepStatusChanged: vi.fn(() => () => {}),
     ...startupBackgroundMocks,
     onEvent: vi.fn(() => () => {}),
     synchronizeProviderRuntimeSelections: synchronizeProviderRuntimeSelectionsMock,
@@ -718,7 +753,7 @@ vi.mock("../app-server/backend-registry", () => ({
     setAgentThreadActions: setAgentThreadActionsMock,
     setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
   })),
-}));
+}; return { ...mocked, initializeDesktopBackendRegistry: mocked.getDesktopBackendRegistry }; });
 
 vi.mock("../shell/ipc/messaging-status", () => ({
   registerMessagingStatusIpcHandlers: registerMessagingStatusIpcHandlersMock,
@@ -730,12 +765,12 @@ vi.mock("../shell/ipc/mcp-connections", () => ({
   disposeMcpConnectionIpcHandlers: disposeMcpConnectionIpcHandlersMock,
 }));
 
-vi.mock("../mcp-connections/mcp-connection-gateway-service", () => ({
+vi.mock("../mcp-connections/mcp-connection-gateway-service", () => { const mocked = {
   getMcpConnectionGatewayService: vi.fn(() => ({
     start: startMcpConnectionGatewayServiceMock,
     close: closeMcpConnectionGatewayServiceMock,
   })),
-}));
+}; return { ...mocked, initializeMcpConnectionGatewayService: mocked.getMcpConnectionGatewayService, getExistingMcpConnectionGatewayService: mocked.getMcpConnectionGatewayService }; });
 
 vi.mock("../shell/ipc/messaging-rbac", () => ({
   registerMessagingRbacIpcHandlers: registerMessagingRbacIpcHandlersMock,
@@ -752,6 +787,158 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("bootstrapApp", () => {
+  it.each(["active-profile", "bootstrap"] as const)("the production main entry installs its host before owner access (%s)", async (mode) => {
+    if (mode === "bootstrap") resolveProfileBootDecisionMock.mockReturnValue({ kind: "no-profile-configured" });
+    const host = await import("../owner-host");
+    expect(() => host.getOwnerHostServices()).toThrow(/before startOwnerServices/);
+    const events: string[] = [];
+    const install = host.installOwnerHostServices;
+    vi.spyOn(host, "installOwnerHostServices").mockImplementation((services) => {
+      install(services);
+      expect(host.getOwnerHostServices()).toBe(services);
+      events.push("host-installed");
+    });
+    const modules = await Promise.all([
+      import("../app-server/backend-registry"),
+      import("../app-server/desktop-app-server-service"),
+      import("../settings/desktop-settings-singleton"),
+      import("../settings/config-store/desktop-config-store-singleton"),
+      import("../federation/federation-runtime"),
+      import("../messaging/messaging-runtime"),
+      import("../runtime-lease-manager"),
+      import("../runtime-federation-lease"),
+      import("../runtime-messaging-lease"),
+      import("../mcp-connections/mcp-connection-gateway-service"),
+      import("../scheduled-actions/scheduled-thread-action-service"),
+      import("../automations/desktop-automation-service"),
+    ]);
+    for (const namespace of modules) {
+      const getters = namespace as unknown as Record<string, () => unknown>;
+      for (const [name, getter] of Object.entries(getters)) {
+        if (!/^get(?:Desktop|Runtime|McpConnection|ScheduledThreadAction)/.test(name) || typeof getter !== "function") continue;
+        const original = vi.isMockFunction(getter) ? getter.getMockImplementation() : getter;
+        const observer = vi.spyOn(getters, name);
+        observer.mockImplementation(() => {
+          host.getOwnerHostServices();
+          events.push(name);
+          return original?.();
+        });
+        if (original) onTestFinished(() => { observer.mockImplementation(original); });
+      }
+    }
+    // Calibrate the observer against the exact early-access failure before
+    // loading the real thin entry, shell bootstrap and composition root.
+    const registry = await import("../app-server/backend-registry");
+    expect(() => registry.getDesktopBackendRegistry()).toThrow(/before startOwnerServices/);
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+    expect(events[0]).toBe("host-installed");
+    expect(events).toContain("getDesktopBackendRegistry");
+    expect(events).toContain("getDesktopSettingsService");
+    expect(events).toContain("getDesktopFederationRuntime");
+    expect(createMainWindowMock).toHaveBeenCalled();
+  });
+
+  it("preserves the recorded owner hooks and starts intake only after all bindings", async () => {
+    const advisory = await import("../bundled-git-lfs-advisory");
+    const pendingWakes = await import("../app-server/navigation-detail-service");
+    const advisorySpy = vi.spyOn(advisory, "setBundledGitLfsAdvisory");
+    const projectorSpy = vi.spyOn(pendingWakes, "setNavigationDetailPendingWakesProjector");
+    const signature = await import("../acp/grok-managed-runtime");
+    const progress = await import("../managed-runtime-progress");
+    const preview = await import("../messaging/inbound-preview-bus");
+    const federation = await import("../federation/federation-runtime");
+    const signatureSpy = vi.spyOn(signature, "setManagedGrokSignatureRejectionReporter");
+    const progressSpy = vi.spyOn(progress, "subscribeManagedRuntimeProgress");
+    const previewSpy = vi.spyOn(preview, "setInboundPreviewSink");
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../shell/index");
+    await flushMicrotasks();
+    const { getDesktopBackendRegistry } = await import("../app-server/backend-registry");
+    const { getDesktopFederationRuntime } = await import("../federation/federation-runtime");
+    const { getDesktopConfigStore } = await import("../settings/desktop-settings-singleton");
+    const records = [
+      ...recordOwnerCalls(getDesktopBackendRegistry, "registry", /^(set|on)/),
+      ...recordOwnerCalls(getDesktopFederationRuntime, "federation", /^(set|onRemoteBackendEvent)/),
+      ...recordOwnerCalls(getDesktopConfigStore, "config", /^subscribe$/),
+      ...recordCall("setBundledGitLfsAdvisory", advisorySpy),
+      ...recordCall("setNavigationDetailPendingWakesProjector", projectorSpy),
+      ...recordCall("setManagedGrokSignatureRejectionReporter", signatureSpy),
+      ...recordCall("subscribeManagedRuntimeProgress", progressSpy),
+      ...recordCall("setFederationMessagingPlatformStatusReader", federation.setFederationMessagingPlatformStatusReader),
+      ...recordCall("setInboundPreviewSink", previewSpy),
+      ...recordCall("state.initialize", initializeAppStateMock),
+      ...recordCall("maintenance.start", runStartupStorageMaintenanceMock),
+      ...recordCall("navigation.start", startAppServerOwnerNavigationMock),
+      ...recordCall("scheduled.start", startScheduledThreadActionServiceMock),
+      ...recordCall("automations.start", startDesktopAutomationServiceMock),
+      ...recordCall("gateway.start", startMcpConnectionGatewayServiceMock),
+      ...recordCall("federation.start", federationRuntimeRestartMock),
+      ...recordCall("messaging.start", messagingLeaseStartMock),
+      ...recordCall("threads.prewarm", listThreadsMock),
+      ...recordCall("providers.refresh", refreshProvidersAtStartupMock),
+    ];
+    const events = records.sort((a, b) => a.order - b.order).map((record) => record.name);
+    const legacy = legacyOwnerBoot.events.map((name) => name.replace(/getDesktopBackendRegistry\(\)/g, "registry")
+      .replace(/getDesktopFederationRuntime\(\)/g, "federation"));
+    const isHandler = (name: string) => /^(registry|federation)\.set/.test(name)
+      || ["setBundledGitLfsAdvisory", "setNavigationDetailPendingWakesProjector", "setManagedGrokSignatureRejectionReporter",
+        "setFederationMessagingPlatformStatusReader", "setInboundPreviewSink"].includes(name);
+    const handlers = legacy.filter(isHandler);
+    expect(events.filter(isHandler)).toEqual(handlers);
+    // Subscriber order is unchanged; the maintenance job waits for all bindings.
+    const coreSubscriber = /^(maintenance|working|renderer)\.subscribe$/;
+    expect(events.filter((name) => coreSubscriber.test(name)))
+      .toEqual(legacy.filter((name) => coreSubscriber.test(name)));
+    const starts: Record<string, string> = {
+      runStartupStorageMaintenance: "maintenance.start",
+      startAppServerOwnerNavigation: "navigation.start",
+      getScheduledThreadActionService: "scheduled.start",
+      getDesktopAutomationService: "automations.start",
+      "getMcpConnectionGatewayService().start": "gateway.start",
+      "getDesktopFederationRuntime().restart": "federation.start",
+      "getRuntimeMessagingLeaseCoordinator().start": "messaging.start",
+    };
+    const originalStarts = legacyOwnerBoot.events.flatMap((name) => starts[name.replace(/\s+/g, "")] ?? []);
+    expect(events.filter((name) => name.endsWith(".start"))).toEqual(originalStarts);
+    expect(events.filter((name) => name.startsWith("config."))).toEqual(["config.subscribe", "config.subscribe"]);
+    expect(events.filter((name) => name.startsWith("federation.on"))).toEqual(["federation.onRemoteBackendEvent"]);
+    expect(events.filter((name) => name.startsWith("registry.on"))).toEqual([
+      "registry.onCodexAppServerRestartStatusChanged", "registry.onThreadArchiveSweepStatusChanged",
+    ]);
+    assertOwnerHooksBeforeWork(events, handlers, ["maintenance.start", "navigation.start", "scheduled.start", "automations.start", "gateway.start", "federation.start", "messaging.start"]);
+    // The unmodified boot recording exposes the ordering defect this extraction fixes.
+    expect(() => assertOwnerHooksBeforeWork(legacy, handlers, ["federation.restart"]))
+      .toThrow(/setMessagingArchiveCleaner/);
+    advisorySpy.mockRestore();
+    projectorSpy.mockRestore();
+    signatureSpy.mockRestore();
+    progressSpy.mockRestore();
+    previewSpy.mockRestore();
+  });
+
+  it("never starts intake after shutdown wins an unfinished owner boot", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("SIGTERM", "SIGINT"), fc.integer({ min: 0, max: 4 }), async (signal, microtasks) => {
+      resetBootstrapHarness();
+      startupProfilerInstance.start.mockResolvedValue();
+      let finishMaintenance!: () => void;
+      runStartupStorageMaintenanceMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishMaintenance = resolve; }));
+      await import("../shell/index");
+      await flushMicrotasks();
+      expect(finishMaintenance).toBeTypeOf("function");
+      for (let index = 0; index < microtasks; index++) await Promise.resolve();
+      processEventHandlers.get(signal)?.(signal);
+      await vi.waitFor(() => expect(quitMock).toHaveBeenCalled());
+      finishMaintenance();
+      await flushMicrotasks();
+      expect(startMcpConnectionGatewayServiceMock).not.toHaveBeenCalled();
+      expect(federationRuntimeRestartMock).not.toHaveBeenCalled();
+      expect(messagingLeaseStartMock).not.toHaveBeenCalled();
+      expect(createMainWindowMock).not.toHaveBeenCalled();
+    }), { numRuns: 4 });
+  });
+
   function resetBootstrapHarness(): void {
     appEventHandlers.clear();
     powerMonitorEventHandlers.clear();
@@ -799,6 +986,8 @@ describe("bootstrapApp", () => {
     registerScheduledActionIpcHandlersMock.mockReset();
     disposeScheduledActionIpcHandlersMock.mockReset();
     disposeScheduledThreadActionServiceMock.mockReset();
+    startScheduledThreadActionServiceMock.mockReset();
+    startDesktopAutomationServiceMock.mockReset();
     registerApplicationIpcHandlersMock.mockReset();
     disposeApplicationIpcHandlersMock.mockReset();
     registerAppUpdateIpcHandlersMock.mockReset();
@@ -3239,3 +3428,33 @@ describe("bootstrapApp", () => {
     });
   });
 });
+
+vi.mock("../settings/config-store/desktop-config-store-singleton", async () => {
+  const settings = await import("../settings/desktop-settings-singleton");
+  return {
+    initializeDesktopConfigStore: () => settings.getDesktopConfigStore(),
+    getDesktopConfigStore: () => settings.getDesktopConfigStore(),
+    disposeDesktopConfigStore: () => settings.disposeDesktopConfigStore(),
+  };
+});
+
+vi.mock("../runtime-lease-manager", () => {
+  const manager = { markExited: vi.fn() };
+  return { initializeRuntimeLeaseManager: () => manager, getRuntimeLeaseManager: () => manager, getExistingRuntimeLeaseManager: () => manager };
+});
+
+vi.mock("../app-server/desktop-app-server-service", () => {
+  const service = {
+    archiveThread: appServerArchiveThreadMock,
+    setThreadPin: appServerSetThreadPinMock,
+    markThreadSeen: appServerMarkThreadSeenMock,
+    setThreadParent: vi.fn(),
+    close: vi.fn(async () => {}),
+  };
+  return { appServerService: service, initializeDesktopAppServerService: () => service, startAppServerOwnerNavigation: startAppServerOwnerNavigationMock };
+});
+
+vi.mock("../automations/desktop-automation-service", () => ({
+  initializeDesktopAutomationService: () => ({ start: startDesktopAutomationServiceMock }),
+  disposeDesktopAutomationService: vi.fn(),
+}));

@@ -46,7 +46,6 @@ import {
 import { getDesktopMessagingRuntime } from "../../messaging/messaging-runtime";
 import {
   getDesktopFederationRuntime,
-  setFederationMessagingPlatformStatusReader,
 } from "../../federation/federation-runtime";
 import {
   isFederationPeerUnavailableError,
@@ -87,7 +86,6 @@ import {
   MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../../shared/ipc";
 import {
-  setInboundPreviewSink,
   startInboundPreview,
   stopInboundPreview,
 } from "../../messaging/inbound-preview-bus";
@@ -563,13 +561,6 @@ export function registerMessagingStatusIpcHandlers(): void {
     return await operation;
   };
 
-  // Let remote federation viewers read this instance's messaging health
-  // for their MSG chip. Registered here (not in the federation runtime)
-  // because messaging-runtime already imports the federation runtime.
-  setFederationMessagingPlatformStatusReader(() =>
-    runtime.getPlatformStatuses(),
-  );
-
   unsubscribePlatformStatus?.();
   unsubscribePlatformStatus = runtime.onPlatformStatus(
     broadcastPlatformStatusEvent,
@@ -600,10 +591,6 @@ export function registerMessagingStatusIpcHandlers(): void {
       });
     },
   );
-
-  setInboundPreviewSink((message: InboundPreviewMessage) => {
-    fanOut(MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL, message);
-  });
 
   ipcMain.removeHandler(MESSAGING_START_INBOUND_PREVIEW_CHANNEL);
   ipcMain.handle(
@@ -998,7 +985,6 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   unsubscribeBindingsChanged = undefined;
   unsubscribePairingChanged?.();
   unsubscribePairingChanged = undefined;
-  setInboundPreviewSink(undefined);
   ipcMain.removeHandler(MESSAGING_START_INBOUND_PREVIEW_CHANNEL);
   ipcMain.removeHandler(MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_INBOUND_TOPICS_CHANNEL);
@@ -1017,4 +1003,8 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_SET_ENABLED_CHANNEL);
   ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
   ipcMain.removeHandler(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL);
+}
+
+export function broadcastInboundPreview(message: InboundPreviewMessage): void {
+  fanOut(MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL, message);
 }

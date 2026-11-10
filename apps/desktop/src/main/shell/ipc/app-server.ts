@@ -1,8 +1,8 @@
 import type { OwnerNavigationRequest } from "../../../shared/owner-request";
 import { LocalOwnerNavigationTransport } from "../../federation/local-owner-navigation-transport";
-import { type ForgeReadArgs, type ForgeReadOperation } from "../../pr-status/forge-tool-contract";
-import type { AgentToolCallContext } from "../../agent-tools/agent-tool-definition";
-import { createOwnerRoutedForgeReadHandler } from "../../federation/federated-forge-read-service";
+
+
+
 import { THREAD_PR_WATCHES_CHANNEL, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse } from "@pwragent/shared";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest } from "@pwragent/shared";
 import { THREAD_PENDING_WAKES_CHANNEL, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
@@ -20,327 +20,38 @@ import { requestShowThread } from "../window-show-thread";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, OpenUsageActivityRequest } from "@pwragent/shared";
 import { parseUsageLimitProvider } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
-import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../../../shared/navigation-diagnostic-cause";
+
 import { listingDiagnostics, listingRequestFields } from "../../diagnostics/listing-diagnostics";
-import { setBundledGitLfsAdvisory } from "../../bundled-git-lfs-advisory";
+
 import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
-import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
+
 import type { MarkNavigationDirectorySeenRequest } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest } from "@pwragent/shared";
 import { BrowserWindow, ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
-import {
-  type AgentEvent,
-  type ArchiveWorktreeRequest,
-  type ArchiveWorktreeResponse,
-  type ArchiveThreadRequest,
-  type ArchiveThreadResponse,
-  type AppServerListSkillsRequest,
-  type AppServerListSkillsResponse,
-  type AppServerListThreadsRequest,
-  type AppServerListThreadsResponse,
-  type AttachDirectoryToThreadRequest,
-  type AttachDirectoryToThreadResponse,
-  type DetachDirectoryFromThreadRequest,
-  type DetachDirectoryFromThreadResponse,
-  type SetEligibleThreadsPrAutoDispatchRequest,
-  type SetEligibleThreadsPrAutoDispatchResponse,
-  type ThreadSearchRequest,
-  type PersistThreadUsageActivityRequest,
-  type PersistThreadUsageActivityResponse,
-  type AppServerReadThreadRequest,
-  type AppServerReadThreadResponse,
-  type InspectTokenMiserOutputRequest,
-  type InspectTokenMiserOutputResponse,
-  type AnalyzeThreadToolHistoryRequest,
-  type AnalyzeThreadToolHistoryResponse,
-  type GetThreadFileDiffRequest,
-  type GetThreadFileDiffResponse,
-  type EnsureDirectoryLaunchpadRequest,
-  type EnsureDirectoryLaunchpadResponse,
-  type FocusedDiffAnalysisRequest,
-  type FocusedDiffAnalysisResponse,
-  type HandoffThreadWorkspaceRequest,
-  type HandoffThreadWorkspaceResponse,
-  type MoveThreadToMainCheckoutRequest,
-  type MoveThreadToMainCheckoutResponse,
-  type RecreateThreadWorktreeRequest,
-  type RecreateThreadWorktreeResponse,
-  type GetGhStatusRequest,
-  type GetGlabStatusRequest,
-  type GlabStatus,
-  type GhStatus,
-  type ListModelSettingsRecentsRequest,
-  type ListModelSettingsRecentsResponse,
-  type ListRecentFileReferencesRequest,
-  type ListRecentFileReferencesResponse,
-  type RecordModelSettingsRecentRequest,
-  type PickDirectoryFromDiskResponse,
-  type PickFileFromDiskResponse,
-  type PickReferenceFromDiskResponse,
-  type InspectPdfReferencePathsRequest,
-  type InspectPdfReferencePathsResponse,
-  type RenderComposerPdfPreviewRequest,
-  type RenderComposerPdfPreviewResponse,
-  type RecordRecentFileReferencesRequest,
-  type DetachThreadPullRequestRequest,
-  type DetachThreadPullRequestResponse,
-  type RefreshDirectoryGitStatusesRequest,
-  type RefreshDirectoryGitStatusesResponse,
-  type RefreshThreadGitWorkingStateRequest,
-  type RefreshThreadGitWorkingStateResponse,
-  type RefreshThreadPullRequestsRequest,
-  type SetPullRequestPollingFocusRequest,
-  type SetTranscriptPullRequestsRequest,
-  type TranscriptPullRequestStatuses,
-  type RefreshThreadPullRequestsResponse,
-  type RegisterDirectoryFromDiskRequest,
-  type RegisterDirectoryFromDiskResponse,
-  type MarkThreadSeenRequest,
-  type MarkThreadSeenResponse,
-  type PrAutoDispatchBudgetStatus,
-  type CodexAppServerRestartResult,
-  type CodexAppServerRestartStatus,
-  type DesktopThreadArchiveSweepStatus,
-  type DesktopAutomaticArchiveRetiredNotice,
-  type AddRemoteThreadPinRequest,
-  type AddRemoteThreadPinResponse,
-  type FederationJumpSearchRequest,
-  type FederationJumpSearchResponse,
-  type RemoveRemoteThreadPinRequest,
-  type HasRemoteThreadPinRequest,
-  type RemoveRemoteThreadPinResponse,
-  type SetRemoteThreadLocalPinRequest,
-  type SetRemoteThreadLocalPinResponse,
-  type ReorderDirectoryPinsRequest,
-  type ReorderDirectoryPinsResponse,
-  type ReorderThreadPinsRequest,
-  type ReorderThreadPinsResponse,
-  type SetSubthreadsCollapsedRequest,
-  type SetSubthreadsCollapsedResponse,
-  type SetDirectoryPinRequest,
-  type SetDirectoryPinResponse,
-  type SetDirectoryThreadsCollapsedRequest,
-  type SetDirectoryThreadsCollapsedResponse,
-  type SetProjectForgeAutomationRequest,
-  type SetProjectForgeAutomationResponse,
-  type ListProjectHeldWakeupsRequest,
-  type ListProjectHeldWakeupsResponse,
-  type ResolveProjectHeldWakeupsRequest,
-  type ResolveProjectHeldWakeupsResponse,
-  type SetThreadParentRequest,
-  type SetThreadParentResponse,
-  type SetThreadAgentRequest,
-  type SetThreadTokenMiserRequest,
-  type SetThreadMonitorJobSuggestionsRequest,
-  type SetThreadMonitorJobSuggestionsResponse,
-  type SetThreadTokenMiserResponse,
-  type SetThreadAgentResponse,
-  type SetThreadPinRequest,
-  type SetThreadPinResponse,
-  type SetThreadReactionRequest,
-  type SetThreadReactionResponse,
-  type SetThreadLockRequest,
-  type SetThreadCheckoutHibernationRequest,
-  type SetThreadCheckoutHibernationResponse,
-  type SetThreadLockResponse,
-  type SetThreadToolIncidentNoticeRequest,
-  type SetThreadToolIncidentNoticeResponse,
-  type ContinueThreadEnvironmentStartupRequest,
-  type ContinueThreadEnvironmentStartupResponse,
-  type AcknowledgeThreadEnvironmentFailureRequest,
-  type AcknowledgeThreadEnvironmentFailureResponse,
-  type ListPendingThreadSpendAlertsRequest,
-  type AcknowledgeThreadSpendAlertRequest,
-  type AcknowledgeThreadSpendAlertResponse,
-  type SetNavigationBrowseModeRequest,
-  type NavigationResumeState,
-  type SetNavigationBrowseModeResponse,
-  type SetPinnedGroupCollapsedRequest,
-  type SetPinnedGroupCollapsedResponse,
-  type RecentThreadLockNotesResponse,
-  type ThreadLockNoteRequest,
-  type ListThreadMigrationSourceThreadsRequest,
-  type ListThreadMigrationSourceThreadsResponse,
-  type ListThreadMigrationSourcesResponse,
-  type RetryThreadMigrationRequest,
-  type StartThreadMigrationRequest,
-  type StartThreadMigrationResponse,
-  type ResetDirectoryLaunchpadRequest,
-  type ResetDirectoryLaunchpadResponse,
-  type RenameThreadRequest,
-  type RenameThreadResponse,
-  type RestoreWorktreeRequest,
-  type RestoreWorktreeResponse,
-  type ResolveEditCommitStatesRequest,
-  type ResolveEditCommitStatesResponse,
-  type ListWorktreeOtherChangesRequest,
-  type ListWorktreeOtherChangesResponse,
-  type GetWorktreeOtherChangeDiffRequest,
-  type GetWorktreeOtherChangeDiffResponse,
-  type ListWorktreeUnpublishedCommitsRequest,
-  type ListWorktreeUnpublishedCommitsResponse,
-  type GetWorktreeUnpublishedCommitDiffRequest,
-  type GetWorktreeUnpublishedCommitDiffResponse,
-  type ReadWorktreeImageRequest,
-  type ReadWorktreeImageResponse,
-  type ResolveMissingCodexThreadsRequest,
-  type ResolveMissingCodexThreadsResponse,
-  type RestoreThreadRequest,
-  type RestoreThreadResponse,
-  type UpdateDirectoryLaunchpadRequest,
-  type UpdateDirectoryLaunchpadResponse,
-  type UpdateSubthreadOrderRequest,
-  type UpdateSubthreadOrderResponse,
-} from "@pwragent/shared";
-import {
-  forgeRuleProjectLabel,
-  isRemoteFederationTarget,
-  type FederationTarget,
-} from "@pwragent/shared";
-import {
-  getExistingDesktopBackendRegistry,
-  getDesktopBackendRegistry,
-} from "../../app-server/backend-registry";
-import { getDesktopOverlayStore } from "../../storage/desktop-overlay-store";
-import {
-  APP_SERVER_LIST_SKILLS_CHANNEL,
-  APP_SERVER_GET_PR_ACTIVITY_CHANNEL,
-  APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
-  APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
-  APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
-  APP_SERVER_RESTART_CODEX_CHANNEL,
-  CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
-  APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL,
-  APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL,
-  APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
-  APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL,
-  THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
-  BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL,
-  BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
-  GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
-  GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
-  APP_SERVER_LIST_THREADS_CHANNEL,
-  THREAD_SEARCH_CHANNEL,
-  THREAD_SEARCH_PROGRESS_CHANNEL,
-  THREAD_SEARCH_CANCEL_CHANNEL,
-  APP_SERVER_ARCHIVE_THREAD_CHANNEL,
-  APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
-  APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
-  APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL,
-  APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL,
-  APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
-  APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
-  APP_SERVER_RESTORE_THREAD_CHANNEL,
-  APP_SERVER_RESTORE_WORKTREE_CHANNEL,
-  APP_SERVER_RENAME_THREAD_CHANNEL,
-  APP_SERVER_READ_THREAD_CHANNEL,
-  APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
-  APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
-  APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
-  THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
-  THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
-  THREAD_MIGRATION_RETRY_CHANNEL,
-  THREAD_MIGRATION_START_CHANNEL,
-  FOCUSED_DIFF_ANALYZE_CHANNEL,
-  NAVIGATION_GET_GH_STATUS_CHANNEL,
-  NAVIGATION_GET_GLAB_STATUS_CHANNEL,
-  NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
-  NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
-  NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
-  NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
-  NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
-  NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
-  NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
-  NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
-  FEDERATION_JUMP_SEARCH_CHANNEL,
-  FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
-  NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
-  NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
-  NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
-  NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
-  NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
-  NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
-  NAVIGATION_DETACH_THREAD_PR_CHANNEL,
-  NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
-  NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
-  NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
-  TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL,
-  TRANSCRIPT_PULL_REQUEST_STATUSES_CHANNEL,
-  NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
-  NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
-  NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
-  NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
-  NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
-  NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
-  NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL,
-  NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL,
-  NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL,
-  NAVIGATION_SET_THREAD_PARENT_CHANNEL,
-  NAVIGATION_SET_THREAD_AGENT_CHANNEL,
-  NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
-  NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
-  NAVIGATION_SET_THREAD_PIN_CHANNEL,
-  NAVIGATION_SET_THREAD_REACTION_CHANNEL,
-  NAVIGATION_SET_THREAD_LOCK_CHANNEL,
-  NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL,
-  NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL,
-  NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL,
-  NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL,
-  NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
-  NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
-  NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
-  NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL,
-  NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
-  NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
-  NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
-  NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
-  NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
-  NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
-  NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
-  NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
-  NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
-  NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
-  NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL,
-  NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
-  NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
-  NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
-  NAVIGATION_SET_BROWSE_MODE_CHANNEL,
-  NAVIGATION_SET_RESUME_STATE_CHANNEL,
-  NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
-  OWNER_REQUEST_CHANNEL,
-  NAVIGATION_QUERY_RELEASE_CHANNEL,
-  NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
-  NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
-  NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
-  NAVIGATION_SNAPSHOT_CHANNEL,
-  NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
-  NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
-} from "../../../shared/ipc";
+import { type ArchiveWorktreeRequest, type ArchiveWorktreeResponse, type ArchiveThreadRequest, type ArchiveThreadResponse, type AppServerListSkillsRequest, type AppServerListSkillsResponse, type AppServerListThreadsRequest, type AppServerListThreadsResponse, type AttachDirectoryToThreadRequest, type AttachDirectoryToThreadResponse, type DetachDirectoryFromThreadRequest, type DetachDirectoryFromThreadResponse, type SetEligibleThreadsPrAutoDispatchRequest, type SetEligibleThreadsPrAutoDispatchResponse, type ThreadSearchRequest, type PersistThreadUsageActivityRequest, type PersistThreadUsageActivityResponse, type AppServerReadThreadRequest, type AppServerReadThreadResponse, type InspectTokenMiserOutputRequest, type InspectTokenMiserOutputResponse, type AnalyzeThreadToolHistoryRequest, type AnalyzeThreadToolHistoryResponse, type GetThreadFileDiffRequest, type GetThreadFileDiffResponse, type EnsureDirectoryLaunchpadRequest, type EnsureDirectoryLaunchpadResponse, type FocusedDiffAnalysisRequest, type FocusedDiffAnalysisResponse, type HandoffThreadWorkspaceRequest, type HandoffThreadWorkspaceResponse, type MoveThreadToMainCheckoutRequest, type MoveThreadToMainCheckoutResponse, type RecreateThreadWorktreeRequest, type RecreateThreadWorktreeResponse, type GetGhStatusRequest, type GetGlabStatusRequest, type GlabStatus, type GhStatus, type ListModelSettingsRecentsRequest, type ListModelSettingsRecentsResponse, type ListRecentFileReferencesRequest, type ListRecentFileReferencesResponse, type RecordModelSettingsRecentRequest, type PickDirectoryFromDiskResponse, type PickFileFromDiskResponse, type PickReferenceFromDiskResponse, type InspectPdfReferencePathsRequest, type InspectPdfReferencePathsResponse, type RenderComposerPdfPreviewRequest, type RenderComposerPdfPreviewResponse, type RecordRecentFileReferencesRequest, type DetachThreadPullRequestRequest, type DetachThreadPullRequestResponse, type RefreshDirectoryGitStatusesRequest, type RefreshDirectoryGitStatusesResponse, type RefreshThreadGitWorkingStateRequest, type RefreshThreadGitWorkingStateResponse, type RefreshThreadPullRequestsRequest, type SetPullRequestPollingFocusRequest, type SetTranscriptPullRequestsRequest, type TranscriptPullRequestStatuses, type RefreshThreadPullRequestsResponse, type RegisterDirectoryFromDiskRequest, type RegisterDirectoryFromDiskResponse, type MarkThreadSeenRequest, type MarkThreadSeenResponse, type PrAutoDispatchBudgetStatus, type CodexAppServerRestartResult, type CodexAppServerRestartStatus, type DesktopThreadArchiveSweepStatus, type DesktopAutomaticArchiveRetiredNotice, type AddRemoteThreadPinRequest, type AddRemoteThreadPinResponse, type FederationJumpSearchRequest, type FederationJumpSearchResponse, type RemoveRemoteThreadPinRequest, type HasRemoteThreadPinRequest, type RemoveRemoteThreadPinResponse, type SetRemoteThreadLocalPinRequest, type SetRemoteThreadLocalPinResponse, type ReorderDirectoryPinsRequest, type ReorderDirectoryPinsResponse, type ReorderThreadPinsRequest, type ReorderThreadPinsResponse, type SetSubthreadsCollapsedRequest, type SetSubthreadsCollapsedResponse, type SetDirectoryPinRequest, type SetDirectoryPinResponse, type SetDirectoryThreadsCollapsedRequest, type SetDirectoryThreadsCollapsedResponse, type SetProjectForgeAutomationRequest, type SetProjectForgeAutomationResponse, type ListProjectHeldWakeupsRequest, type ListProjectHeldWakeupsResponse, type ResolveProjectHeldWakeupsRequest, type ResolveProjectHeldWakeupsResponse, type SetThreadParentRequest, type SetThreadParentResponse, type SetThreadAgentRequest, type SetThreadTokenMiserRequest, type SetThreadMonitorJobSuggestionsRequest, type SetThreadMonitorJobSuggestionsResponse, type SetThreadTokenMiserResponse, type SetThreadAgentResponse, type SetThreadPinRequest, type SetThreadPinResponse, type SetThreadReactionRequest, type SetThreadReactionResponse, type SetThreadLockRequest, type SetThreadCheckoutHibernationRequest, type SetThreadCheckoutHibernationResponse, type SetThreadLockResponse, type SetThreadToolIncidentNoticeRequest, type SetThreadToolIncidentNoticeResponse, type ContinueThreadEnvironmentStartupRequest, type ContinueThreadEnvironmentStartupResponse, type AcknowledgeThreadEnvironmentFailureRequest, type AcknowledgeThreadEnvironmentFailureResponse, type ListPendingThreadSpendAlertsRequest, type AcknowledgeThreadSpendAlertRequest, type AcknowledgeThreadSpendAlertResponse, type SetNavigationBrowseModeRequest, type NavigationResumeState, type SetNavigationBrowseModeResponse, type SetPinnedGroupCollapsedRequest, type SetPinnedGroupCollapsedResponse, type RecentThreadLockNotesResponse, type ThreadLockNoteRequest, type ListThreadMigrationSourceThreadsRequest, type ListThreadMigrationSourceThreadsResponse, type ListThreadMigrationSourcesResponse, type RetryThreadMigrationRequest, type StartThreadMigrationRequest, type StartThreadMigrationResponse, type ResetDirectoryLaunchpadRequest, type ResetDirectoryLaunchpadResponse, type RenameThreadRequest, type RenameThreadResponse, type RestoreWorktreeRequest, type RestoreWorktreeResponse, type ResolveEditCommitStatesRequest, type ResolveEditCommitStatesResponse, type ListWorktreeOtherChangesRequest, type ListWorktreeOtherChangesResponse, type GetWorktreeOtherChangeDiffRequest, type GetWorktreeOtherChangeDiffResponse, type ListWorktreeUnpublishedCommitsRequest, type ListWorktreeUnpublishedCommitsResponse, type GetWorktreeUnpublishedCommitDiffRequest, type GetWorktreeUnpublishedCommitDiffResponse, type ReadWorktreeImageRequest, type ReadWorktreeImageResponse, type ResolveMissingCodexThreadsRequest, type ResolveMissingCodexThreadsResponse, type RestoreThreadRequest, type RestoreThreadResponse, type UpdateDirectoryLaunchpadRequest, type UpdateDirectoryLaunchpadResponse, type UpdateSubthreadOrderRequest, type UpdateSubthreadOrderResponse } from "@pwragent/shared";
+import { isRemoteFederationTarget, type FederationTarget } from "@pwragent/shared";
+import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
+
+import { APP_SERVER_LIST_SKILLS_CHANNEL, APP_SERVER_GET_PR_ACTIVITY_CHANNEL, APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL, APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL, APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL, APP_SERVER_RESTART_CODEX_CHANNEL, APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL, APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL, APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL, APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL, BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL, BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL, GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL, GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL, APP_SERVER_LIST_THREADS_CHANNEL, THREAD_SEARCH_CHANNEL, THREAD_SEARCH_PROGRESS_CHANNEL, THREAD_SEARCH_CANCEL_CHANNEL, APP_SERVER_ARCHIVE_THREAD_CHANNEL, APP_SERVER_ARCHIVE_WORKTREE_CHANNEL, APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL, APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL, APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL, APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL, APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL, APP_SERVER_RESTORE_THREAD_CHANNEL, APP_SERVER_RESTORE_WORKTREE_CHANNEL, APP_SERVER_RENAME_THREAD_CHANNEL, APP_SERVER_READ_THREAD_CHANNEL, APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL, APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL, APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL, THREAD_MIGRATION_LIST_SOURCES_CHANNEL, THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL, THREAD_MIGRATION_RETRY_CHANNEL, THREAD_MIGRATION_START_CHANNEL, FOCUSED_DIFF_ANALYZE_CHANNEL, NAVIGATION_GET_GH_STATUS_CHANNEL, NAVIGATION_GET_GLAB_STATUS_CHANNEL, NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL, NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL, NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL, NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL, NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL, NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL, NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL, NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL, FEDERATION_JUMP_SEARCH_CHANNEL, FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL, NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL, NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL, NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL, NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL, NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL, NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL, NAVIGATION_DETACH_THREAD_PR_CHANNEL, NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL, NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL, TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL, TRANSCRIPT_PULL_REQUEST_STATUSES_CHANNEL, NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL, NAVIGATION_REORDER_THREAD_PINS_CHANNEL, NAVIGATION_MARK_THREAD_SEEN_CHANNEL, NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL, NAVIGATION_SET_DIRECTORY_PIN_CHANNEL, NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL, NAVIGATION_SET_PROJECT_FORGE_AUTOMATION_CHANNEL, NAVIGATION_LIST_PROJECT_HELD_WAKEUPS_CHANNEL, NAVIGATION_RESOLVE_PROJECT_HELD_WAKEUPS_CHANNEL, NAVIGATION_SET_THREAD_PARENT_CHANNEL, NAVIGATION_SET_THREAD_AGENT_CHANNEL, NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL, NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL, NAVIGATION_SET_THREAD_PIN_CHANNEL, NAVIGATION_SET_THREAD_REACTION_CHANNEL, NAVIGATION_SET_THREAD_LOCK_CHANNEL, NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL, NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL, NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL, NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL, NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL, NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL, NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL, NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL, NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL, NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL, NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL, NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL, NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL, NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL, NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL, NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL, NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL, NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL, NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL, NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL, NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL, NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL, NAVIGATION_SET_BROWSE_MODE_CHANNEL, NAVIGATION_SET_RESUME_STATE_CHANNEL, NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL, OWNER_REQUEST_CHANNEL, NAVIGATION_QUERY_RELEASE_CHANNEL, NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL, NAVIGATION_REMOVE_DIRECTORY_CHANNEL, NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, NAVIGATION_SNAPSHOT_CHANNEL, NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL, NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL } from "../../../shared/ipc";
 import { subscribersForChannel } from "../window-channels";
 import { registerThreadMaintenanceIpc, unregisterThreadMaintenanceIpc } from "./thread-maintenance-ipc";
-import { disposeThreadMaintenanceService, getThreadMaintenanceService } from "../../thread-maintenance-runtime";
-import { requestOpenThreadMaintenance } from "../window-open-thread-maintenance";
+
+
 import {
   federationWindowTargetForWebContents,
   isFederationWindowWebContents,
 } from "../window";
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
-import {
-  manageRemoteThreadPrWatches,
-  readFederationThreadPrWatchesRequest,
-  readThreadPrWatchesRemoteTarget,
-} from "../../pr-status/thread-pr-watches-federation";
-import { getDesktopNavigationQueryStore } from "../../app-server/navigation-query-store";
-import { getDesktopNavigationQueryPool } from "../../app-server/navigation-query-pool";
-import { readLocalNavigationDirectoryIndex } from "../../app-server/navigation-directory-index";
-import { setNavigationDetailPendingWakesProjector } from "../../app-server/navigation-detail-service";
+import { manageRemoteThreadPrWatches, readThreadPrWatchesRemoteTarget } from "../../pr-status/thread-pr-watches-federation";
 
-import {
-  getDesktopSettingsService,
-} from "../../settings/desktop-settings-singleton";
+import { getDesktopNavigationQueryPool } from "../../app-server/navigation-query-pool";
+
+
+
+
 import { timeStartupProfileOperation } from "../../diagnostics/startup-profile-events";
 import { getLiveThreadFileDiff } from "../../app-server/live-diff-activity";
 import {
@@ -433,26 +144,8 @@ const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request
 const prPollingFocusCleanupSenderIds = new Set<number>();
 const transcriptPrCleanupSenderIds = new Set<number>();
 
-let unsubscribeWorkingStateEvents: (() => void) | undefined;
-let unsubscribeCodexRestartStatus: (() => void) | undefined;
-let unsubscribeThreadArchiveSweepStatus: (() => void) | undefined;
-let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
-
-function invalidateNavigationEvent(event: AgentEvent): void {
-  appServerService.invalidateThreadPendingWakes(event);
-  getDesktopNavigationQueryStore().observeAttentionEvent(event);
-  if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
-  const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
-  const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;
-  navigationQueryPool.invalidateQueryOwner(event.federationTarget, navigationDiagnosticCause(event), navigationDiagnosticTrigger(event));
-  navigationQueryPool.invalidateExactOwner(event.federationTarget,
-    typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
-}
 
 export function registerAppServerIpcHandlers(): void {
-  setBundledGitLfsAdvisory((repositoryPath) => {
-    appServerService.publishBundledGitLfsAdvisory(repositoryPath);
-  });
   ipcMain.removeHandler(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL);
   ipcMain.handle(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL, (event) => {
     if (subscribersForChannel(BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL).includes(event.sender)) {
@@ -465,74 +158,6 @@ export function registerAppServerIpcHandlers(): void {
       appServerService.acknowledgeGithubPrAuthenticationNotice();
     }
   });
-  // Refresh a thread's working-state chips when the agent finishes a turn
-  // or a git-mutating command in its worktree. Re-registering tears the
-  // previous subscription down first so repeated calls don't stack listeners.
-  unsubscribeWorkingStateEvents?.();
-  unsubscribeNavigationRemoteEvents?.();
-  unsubscribeNavigationRemoteEvents = getDesktopFederationRuntime().onRemoteBackendEvent(invalidateNavigationEvent);
-  unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
-    invalidateNavigationEvent(event);
-    appServerService.handleAgentEventForWorkingState(event);
-    appServerService.handleAgentEventForPrAttachments(event);
-    appServerService.handleAgentEventForDependencies(event);
-    appServerService.handleAgentEventForPrWatches(event);
-  });
-  const localForgeRead = (operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext) => appServerService.readForgeForTool(operation, args, context);
-  getDesktopBackendRegistry().setForgeReadHandlers(localForgeRead, createOwnerRoutedForgeReadHandler({
-    local: localForgeRead,
-    runtime: getDesktopFederationRuntime,
-    targetStore: getDesktopOverlayStore(),
-  }));
-  getDesktopBackendRegistry().setForgePrToolHandler(
-    async (operation, args, context) => await appServerService.runForgePrToolForAgent(operation, args, context),
-    async (operation, args, context) => await appServerService.prepareForgePrToolForAgent(operation, args, context),
-  );
-  getDesktopBackendRegistry().setForgeToolPolicyResolver(
-    () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),
-  );
-  getDesktopBackendRegistry().setForgeToolRuleWriter(
-    async (update) => await getDesktopSettingsService().upsertForgeAgentToolRule(update),
-  );
-  getDesktopBackendRegistry().setForgeProjectLabelResolver(
-    async (repository) => forgeRuleProjectLabel(await readLocalNavigationDirectoryIndex(), repository),
-  );
-  getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
-    async (args, context) =>
-      await appServerService.checkThreadPullRequestStatusForTool(args, context),
-  );
-  getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(
-    async (prs) =>
-      await appServerService.canonicalizeStoredPullRequests(prs),
-  );
-  getDesktopBackendRegistry().setPullRequestReferenceResolver(
-    async (params) => await appServerService.resolvePullRequestReference(params),
-  );
-  getDesktopBackendRegistry().setThreadPrimaryGitRepositoryReader((backend, threadId) =>
-    appServerService.readPrimaryGitRepository(backend, threadId)
-  );
-  getDesktopBackendRegistry().setThreadProjectRepositoryResolver(async (backend, threadId) =>
-    await appServerService.resolvePrimaryGitRepository(backend, threadId)
-  );
-  getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
-    appServerService.isPullRequestLocallyMonitored(prKey)
-  );
-  getDesktopBackendRegistry().setThreadMaintenanceToolHandler({
-    scan: async (request) => await getThreadMaintenanceService().scan(request),
-    getScan: (scanId) => getThreadMaintenanceService().getScan(scanId),
-    getRun: () => getThreadMaintenanceService().getRun(),
-    start: (request) => getThreadMaintenanceService().start(request),
-    open: (request) => requestOpenThreadMaintenance(request),
-  });
-  getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance, actor) => {
-    try {
-      const threadDependencies = await appServerService.manageThreadDependencies(request, provenance, actor);
-      const projectNotice = appServerService.dependencyProjectNotice(request);
-      return { ok: true, data: { threadDependencies, ...(projectNotice ? { projectNotice } : {}) } };
-    } catch (error) {
-      return { ok: false, error: { code: "invalid_arguments", message: error instanceof Error ? error.message : String(error) } };
-    }
-  });
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.handle(THREAD_DEPENDENCIES_CHANNEL, async (event, request: ManageThreadDependenciesRequest) => {
     // A federation window manages its instance's threads on that instance.
@@ -541,8 +166,6 @@ export function registerAppServerIpcHandlers(): void {
     if (routed?.action === "active" && !routed.federationTarget) return await appServerService.listActiveThreadDependencies();
     return await appServerService.manageThreadDependencies(routed);
   });
-  getDesktopBackendRegistry().setThreadDependenciesPeerHandler(async (request, requesterInstanceId) =>
-    await appServerService.manageThreadDependenciesForPeer(request, requesterInstanceId));
   ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
   ipcMain.handle(THREAD_PR_WATCHES_CHANNEL, async (event, request: ThreadPrWatchesRequest): Promise<ThreadPrWatchesResponse> => {
     // A peer's thread is managed on its owner, from any window.
@@ -561,8 +184,6 @@ export function registerAppServerIpcHandlers(): void {
     }
     return await appServerService.manageThreadPrWatches(request);
   });
-  setNavigationDetailPendingWakesProjector(async (thread, activePrWatches) =>
-    await appServerService.listThreadPendingWakes(thread, 0, activePrWatches));
   ipcMain.removeHandler(THREAD_PENDING_WAKES_CHANNEL);
   ipcMain.handle(THREAD_PENDING_WAKES_CHANNEL, async (event, request: ThreadPendingWakesRequest): Promise<ThreadPendingWakesResponse> => {
     const target = request?.federationTarget;
@@ -606,65 +227,6 @@ export function registerAppServerIpcHandlers(): void {
     }
     return await appServerService.manageThreadPendingWakes(request);
   });
-  getDesktopBackendRegistry().setThreadPrWatchesPeerHandler(async (request) => {
-    // Envelope params are the viewer's; only the named fields reach the store.
-    const owned = readFederationThreadPrWatchesRequest(request);
-    if (!owned) {
-      return {
-        ok: false,
-        error: { code: "invalid_arguments", message: "backend, threadId and the action's argument are required." },
-      };
-    }
-    return await appServerService.manageThreadPrWatches(owned);
-  });
-  getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
-    async (args) => await appServerService.watchThreadPullRequestForTool(args),
-  );
-  getDesktopBackendRegistry().setDirectoryGitStatusWriter(
-    async (params) => await appServerService.writeDirectoryGitStatusEntry(params),
-  );
-  getDesktopBackendRegistry().setThreadPullRequestDetachHandler(
-    async (request) => await appServerService.detachThreadPullRequest(request),
-  );
-  getDesktopBackendRegistry().setThreadPullRequestRefreshHandler(
-    async (request) =>
-      await appServerService.refreshOwnedThreadPullRequests(request),
-  );
-  // A peer's requests name no target, so the service answers them here.
-  getDesktopBackendRegistry().setProjectForgeAutomationHandler({
-    set: async (request) => await appServerService.setProjectForgeAutomation({
-      directoryKey: request.directoryKey,
-      automation: request.automation,
-    }),
-    listHeldWakeups: async (request) => await appServerService.listProjectHeldWakeups({
-      directoryKey: request.directoryKey,
-    }),
-    resolveHeldWakeups: async (request) => await appServerService.resolveProjectHeldWakeups({
-      directoryKey: request.directoryKey,
-      resolutions: request.resolutions,
-    }),
-  });
-  getDesktopBackendRegistry().setThreadGitWorkingStateRefreshHandler(
-    async (request) =>
-      await appServerService.refreshThreadGitWorkingState(request),
-  );
-  getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
-    preferenceChanged: async (request) =>
-      await appServerService.handleThreadPrAutoDispatchPreference(request),
-    preferencesChanged: async (requests) =>
-      await appServerService.handleThreadPrAutoDispatchPreferences(requests),
-    cancelPending: async (request) =>
-      await appServerService.cancelThreadPrAutoDispatch(request),
-    lockChanged: async (request) =>
-      await appServerService.handleThreadLockChanged(request),
-    sendPendingNow: async (request) =>
-      await appServerService.sendThreadPrAutoDispatchNow(request),
-    inspect: async (request, context) =>
-      await appServerService.getThreadPullRequestAutomationStatus(
-        request,
-        context,
-      ),
-  });
 
   ipcMain.removeHandler(APP_SERVER_GET_PR_ACTIVITY_CHANNEL);
   ipcMain.handle(APP_SERVER_GET_PR_ACTIVITY_CHANNEL, () => appServerService.getPrActivity());
@@ -680,19 +242,6 @@ export function registerAppServerIpcHandlers(): void {
     async (): Promise<PrAutoDispatchBudgetStatus> =>
       await appServerService.resumePrAutoDispatchBudget(),
   );
-
-  // Only local windows see or restart this machine's Codex process.
-  unsubscribeCodexRestartStatus?.();
-  unsubscribeCodexRestartStatus =
-    getDesktopBackendRegistry().onCodexAppServerRestartStatusChanged((status) => {
-      for (const webContents of subscribersForChannel(
-        CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
-      )) {
-        if (!webContents.isDestroyed()) {
-          webContents.send(CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, status);
-        }
-      }
-    });
   ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
   ipcMain.handle(
     APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL,
@@ -701,18 +250,6 @@ export function registerAppServerIpcHandlers(): void {
         ? { stopped: false }
         : getDesktopBackendRegistry().getCodexAppServerRestartStatus(),
   );
-  // The sweeper archives and deletes this machine's threads only.
-  unsubscribeThreadArchiveSweepStatus?.();
-  unsubscribeThreadArchiveSweepStatus =
-    getDesktopBackendRegistry().onThreadArchiveSweepStatusChanged((status) => {
-      for (const webContents of subscribersForChannel(
-        THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
-      )) {
-        if (!webContents.isDestroyed()) {
-          webContents.send(THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, status);
-        }
-      }
-    });
   registerThreadMaintenanceIpc();
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.handle(
@@ -1937,7 +1474,6 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.removeHandler(THREAD_PR_WATCHES_CHANNEL);
   ipcMain.removeHandler(THREAD_PENDING_WAKES_CHANNEL);
-  setNavigationDetailPendingWakesProjector(undefined);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
   await navigationAttentionViewLeases.dispose();
@@ -1947,7 +1483,6 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   }
   navigationQueryConsumersBySender.clear();
   ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
-  setBundledGitLfsAdvisory(undefined);
   ipcMain.removeHandler(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
@@ -2011,39 +1546,13 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
-  unsubscribeWorkingStateEvents?.();
-  unsubscribeWorkingStateEvents = undefined;
-  unsubscribeNavigationRemoteEvents?.();
-  unsubscribeNavigationRemoteEvents = undefined;
-  unsubscribeCodexRestartStatus?.();
-  unsubscribeCodexRestartStatus = undefined;
-  unsubscribeThreadArchiveSweepStatus?.();
-  unsubscribeThreadArchiveSweepStatus = undefined;
   unregisterThreadMaintenanceIpc();
-  disposeThreadMaintenanceService();
   ipcMain.removeHandler(APP_SERVER_GET_CODEX_RESTART_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTART_CODEX_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_DISMISS_AUTOMATIC_ARCHIVE_RETIRED_NOTICE_CHANNEL);
-  const registry = getExistingDesktopBackendRegistry();
-  registry?.setThreadDependencyToolHandler(undefined);
-  registry?.setThreadDependenciesPeerHandler(undefined);
-  registry?.setThreadMaintenanceToolHandler(undefined);
-  registry?.setThreadPullRequestStatusToolHandler(undefined);
-  registry?.setThreadPullRequestCanonicalizer(undefined);
-  registry?.setPullRequestReferenceResolver(undefined);
-  registry?.setThreadPrimaryGitRepositoryReader(undefined);
-  registry?.setLocalPullRequestAuthorityResolver(undefined);
-  registry?.setThreadPullRequestWatchToolHandler(undefined);
-  registry?.setDirectoryGitStatusWriter(undefined);
-  registry?.setThreadPrAutoDispatchHandler(undefined);
-  registry?.setThreadPullRequestDetachHandler(undefined);
-  registry?.setThreadPrWatchesPeerHandler(undefined);
-  registry?.setThreadPullRequestRefreshHandler(undefined);
-  registry?.setProjectForgeAutomationHandler(undefined);
-  await appServerService.close();
 }
 
 export { APP_SERVER_LIST_THREADS_CHANNEL };
