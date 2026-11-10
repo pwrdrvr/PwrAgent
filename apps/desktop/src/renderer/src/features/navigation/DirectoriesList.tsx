@@ -1,6 +1,6 @@
 import { threadRowInstanceKey } from "./thread-row-instance";
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryChildren, buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -67,7 +67,7 @@ import { isFederationViewerWindow, readRendererFederationTarget } from "../../li
 import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
-import { SubthreadPagination } from "./SubthreadPagination";
+import { renderSubthreadPages } from "./SubthreadPagination";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
   SignalCount,
@@ -90,7 +90,7 @@ import {
   useNavigationDirectoryDisclosure,
   type NavigationDirectoryDisclosure,
 } from "../../lib/useNavigationDirectoryDisclosure";
-import { createSubthreadTrays } from "./subthread-trays";
+import { canFoldSubthreads, createSubthreadTrays, ordinaryChildCountOf } from "./subthread-trays";
 import {
   interleaveStartingSubthreads,
   isSubthreadLaunchpadDraft,
@@ -1070,6 +1070,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       pinOrdering.movePinnedThreadByKeyboard(thread, direction);
     },
   );
+  const canSetSubthreadsCollapsed = Boolean(props.onSetSubthreadsCollapsed);
+  const subthreadDraftParentKeys = useMemo(() => new Set((props.startingThreads ?? [])
+    .filter(isSubthreadLaunchpadDraft).map((draft) => draft.parentThreadKey)), [props.startingThreads]);
   const toggleSubthreads = useEventCallback((thread: NavigationThreadSummary) => {
     void props.onSetSubthreadsCollapsed?.(
       thread,
@@ -1180,7 +1183,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ...expandedThreadModel.selectedUnpinnedThreads,
       ...expandedThreadModel.unpinnedThreads,
     ];
-    const trays = createSubthreadTrays(childThreadsByParentKey, roots, ownerChildOrder);
+    // A tray row folds its own sub-threads only where it draws a chevron:
+    // folding behind a missing control would strand the rows it hides.
+    const subthreadCountOf = (thread: NavigationThreadSummary): number =>
+      ordinaryChildCounts.get(threadSummaryIdentityKey(thread)) ?? ordinaryChildCountOf(thread);
+    const trays = createSubthreadTrays(childThreadsByParentKey, roots, ownerChildOrder, {
+      draftParentKeys: subthreadDraftParentKeys,
+      isCollapsed: (thread) =>
+        isSubthreadSectionCollapsed(thread)
+        && subthreadCountOf(thread) > 0
+        && canFoldSubthreads(thread, canSetSubthreadsCollapsed),
+    });
     const selectedRoot = roots.find((thread) => threadSummaryIdentityKey(thread) === props.selectedItemKey);
     const selectedTrayRoot = selectedRoot ? undefined : roots.find((thread) =>
       trays.subtree(threadSummaryIdentityKey(thread)).some((child) =>
@@ -1201,13 +1214,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
       const children = trays.subtree(parentKey);
       const directChildKeys = trays.directChildKeys(parentKey);
       const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
-      const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
-        ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
-      const childResources = [childResourceId, `${childResourceId}:viewer`]
-        .flatMap((id) => {
-          const resource = props.pagedNavigation?.resources.get(id);
-          return resource ? [resource] : [];
-        });
       const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
       const trayEntries = interleaveStartingSubthreads({
         trayKey: parentKey,
@@ -1267,6 +1273,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
               }
               const child = entry.thread;
               const childKey = threadSummaryIdentityKey(child);
+              // A sub-thread with its own sub-threads folds them, as a
+              // top-level row does. Native workers keep their own disclosure.
+              const childSubthreadCount = subthreadCountOf(child);
               // A row plus its own worker group, as siblings of this list. A
               // wrapping element would break the tray's flat list semantics.
               return [
@@ -1294,6 +1303,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selected={props.selectedThreadKeys?.has(childKey)}
+                subthreadCount={childSubthreadCount}
+                subthreadsCollapsed={isSubthreadSectionCollapsed(child) && !trays.heldOpen(childKey)}
+                onToggleSubthreads={
+                  childSubthreadCount > 0 && canFoldSubthreads(child, canSetSubthreadsCollapsed)
+                    ? toggleSubthreads
+                    : undefined
+                }
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
@@ -1324,15 +1340,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   thread={child}
                 />
               ) : null,
+              // A sub-thread pages its own children. Its control closes its
+              // subtree, so it never reads as the tray owner's.
+              ...trays.pagesAfter(childKey).flatMap((pageParent) =>
+                renderSubthreadPages(pageParent, props.pagedNavigation)),
               ];
             })}
-            {childResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((childResource) => (
-              <SubthreadPagination
-                key={childResource.id}
-                resource={childResource}
-                pagedNavigation={props.pagedNavigation}
-              />
-            ))}
+            {renderSubthreadPages(parent, props.pagedNavigation)}
           </div>
         </div>
       );
@@ -1356,11 +1370,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
       renderedThreadKeys.add(threadKey);
       for (const child of trays.subtree(threadKey)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
     }
-    const directoryStartingThreads = selectUnlandedStartingThreads(props.startingThreads, renderedThreadKeys);
+    // A row folded away under a sub-thread has landed too; it is just closed.
+    const directoryStartingThreads = selectUnlandedStartingThreads(props.startingThreads,
+      { has: (threadKey) => renderedThreadKeys.has(threadKey) || trays.folded(threadKey) });
     const startingSubthreads = directoryStartingThreads.filter((creation) =>
       creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
     const startingRootThreads = directoryStartingThreads.filter((creation) =>
-      startingThreadHomeKey(creation) === directory.key && !startingSubthreads.includes(creation));
+      startingThreadHomeKey(creation) === directory.key && !startingSubthreads.includes(creation)
+      // A sub-thread of a folded row belongs inside the fold, not at the top.
+      && !(creation.parentThreadKey && trays.folded(creation.parentThreadKey)));
     // A sub-thread being written opens its parent's tray and gives the
     // parent its chevron, as the thread will once it lands.
     const draftParentKeys = new Set(
@@ -1459,8 +1477,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             retainedForSelection={selectedUnpinnedThreads.includes(thread)}
             onToggleSubthreads={
               subthreadCount > 0
-                && threadSupportsFederationCapability(thread, "thread_grouping")
-                && props.onSetSubthreadsCollapsed
+                && canFoldSubthreads(thread, canSetSubthreadsCollapsed)
                 ? toggleSubthreads
                 : undefined
             }
@@ -1791,11 +1808,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           threadPinState="pinned"
                               onToggleSubthreads={
                                 subthreadCount > 0
-                                  && threadSupportsFederationCapability(
-                                    thread,
-                                    "thread_grouping",
-                                  )
-                                  && props.onSetSubthreadsCollapsed
+                                  && canFoldSubthreads(thread, canSetSubthreadsCollapsed)
                                   ? toggleSubthreads
                                   : undefined
                               }
