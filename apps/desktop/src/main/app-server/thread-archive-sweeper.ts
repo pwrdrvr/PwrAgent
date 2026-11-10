@@ -12,6 +12,7 @@ import {
   type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
+import { CheckoutPathOwners, eventLoopPacer } from "./checkout-path-owners";
 import path from "node:path";
 
 export const THREAD_ARCHIVE_SWEEP_INTERVAL_MS = 60 * 60_000;
@@ -64,7 +65,7 @@ export type CheckoutHibernationSweepDeps = {
    * undefined. Undefined target: the thread has no checkout to hibernate,
    * and is not counted. */
   keepReason: (candidate: ThreadArchiveCandidate, candidates: readonly ThreadArchiveCandidate[],
-    policy: DesktopCheckoutHibernationPolicy, now: number) => { target?: string; keep?: string };
+    policy: DesktopCheckoutHibernationPolicy, now: number, owners: CheckoutPathOwners) => { target?: string; keep?: string };
   /** Why the checkout itself must stay, from Git, or undefined. */
   inspectWorkspace: (worktreePath: string, policy: DesktopCheckoutHibernationPolicy, signal: AbortSignal) => Promise<string | undefined>;
   /** True when hibernated, false when cancelled, or the reason it was kept. */
@@ -397,12 +398,19 @@ export class ThreadArchiveSweeper {
       hibernation.skipped = "Threads could not be listed";
       return;
     }
+    // One owner index for this pass's list. The removal re-checks sharing
+    // against a fresh list of its own.
+    const owners = new CheckoutPathOwners(candidates);
+    // Most candidates are kept on thread state alone, with nothing awaited.
+    const pace = eventLoopPacer();
     for (const candidate of candidates) {
+      if (this.abort.signal.aborted) return;
+      await pace();
       if (this.abort.signal.aborted) return;
       // Native children may own an independent checkout. Shared-path rules
       // protect inherited checkouts, regardless of where the parent lives.
       try {
-        const listed = deps.keepReason(candidate, candidates, policy, Date.now());
+        const listed = deps.keepReason(candidate, candidates, policy, Date.now(), owners);
         if (!listed.target) continue;
         hibernation.checked += 1;
         if (listed.keep) {

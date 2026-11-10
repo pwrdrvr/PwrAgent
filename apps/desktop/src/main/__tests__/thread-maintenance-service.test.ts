@@ -188,6 +188,32 @@ describe("ThreadMaintenanceService.scan", () => {
       }), { numRuns: 40 });
   });
 
+  it("lets the event loop run while the hibernate step skips a long run of threads", async () => {
+    const candidates = Array.from({ length: 1000 }, (_, index) => candidate(`t${index}`));
+    let ticks = 0;
+    let running = true;
+    const tick = () => { ticks += 1; if (running) setImmediate(tick); };
+    setImmediate(tick);
+    const seen: number[] = [];
+    const { service } = harness(candidates, {
+      hibernation: {
+        getPolicy: () => ({ enabled: true, idleDays: 7, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+        // Kept on thread state with no checkout: nothing else is awaited.
+        keepReason: () => { seen.push(ticks); return { keep: "No worktree checkout" }; },
+        inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true,
+      },
+    });
+    try {
+      const scan = await service.scan({ steps: ["hibernate"] });
+      expect(scan.hibernate!.items).toEqual([]);
+    } finally {
+      running = false;
+    }
+    expect(seen).toHaveLength(1000);
+    // Without a yield the whole step runs in one macrotask.
+    expect(new Set(seen).size).toBeGreaterThanOrEqual(Math.floor(1000 / 64));
+  });
+
   it("classifies a kept owned checkout during ordinary hibernation review without making it eligible", async () => {
     const checkout = path.resolve("/fixture/recent");
     const owner = candidate("recent", { cwd: checkout });
