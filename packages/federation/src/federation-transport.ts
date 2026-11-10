@@ -342,6 +342,8 @@ export type FederationGatewayConnection = {
   peerId: FederationInstanceId;
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
+  /** Local session metadata, never part of the signed acceptance message. */
+  relaySupported?: boolean;
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
   sendEnvelopeWithBackpressure?: (
     envelope: FederationProtocolEnvelope,
@@ -824,6 +826,8 @@ export class FederationGatewayWebSocketServer {
       peerId: decision.peer.id,
       sessionId,
       capabilities: decision.capabilities,
+      relaySupported: message.capabilities.includes("gateway_relay")
+        && (!this.options.supportedCapabilities || this.options.supportedCapabilities.includes("gateway_relay")),
       sendEnvelope: (envelope) => {
         const byteCount = sendFrame(
           socket,

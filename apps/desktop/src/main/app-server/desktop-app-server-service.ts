@@ -2329,7 +2329,8 @@ class DesktopAppServerService {
           // Drafts name threads on any instance. Peer rows come from the cache
           // that keeps pins current, so this read never waits on a peer.
           const watched = request.query.kind === "exact" && request.query.resolveFromOwners
-            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, pins) : [];
+            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, pins,
+                { cacheOnly: request.consumer === "exact-link" }) : [];
           if (!pins.length && !watched.length) return index;
           const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
           rpcOptions?.signal.throwIfAborted();

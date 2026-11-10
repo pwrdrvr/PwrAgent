@@ -14,7 +14,7 @@ import type {
   FederationPeerSummary,
   FederationSessionId,
 } from "@pwragent/shared";
-import { isFederationInstanceId } from "@pwragent/shared";
+import { isFederationInstanceId, normalizeFederationPeerRole } from "@pwragent/shared";
 import type { StateDb } from "./state-db";
 
 const FEDERATION_ENROLLMENT_SECRET_META_KEY =
@@ -32,6 +32,7 @@ export type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationS
 const FEDERATION_AUDIT_REPEAT_COLLAPSE_WINDOW_MS = 10 * 60 * 1000;
 
 type FederationPeerPayload = {
+  permissionRole?: import("@pwragent/shared").FederationPeerRole;
   capabilities?: FederationCapability[];
   protocolVersion?: number;
   endpoint?: string;
@@ -47,6 +48,7 @@ type FederationPeerPayload = {
 };
 
 type FederationEnrollmentPayload = {
+  permissionRole?: import("@pwragent/shared").FederationPeerRole;
   label?: string;
   role?: FederationInstanceRole;
   endpoint?: string;
@@ -96,6 +98,7 @@ export class FederationStore implements FederationStorage {
 
   upsertPeer(params: {
     peer: FederationPeerSummary & { pinnedPublicKeyPem?: string };
+    assignedRole?: import("@pwragent/shared").FederationPeerRole;
     createdAt?: number;
     updatedAt: number;
     /**
@@ -113,6 +116,7 @@ export class FederationStore implements FederationStorage {
       : params.peer.revokedAt ?? existing?.revokedAt;
     const status = revokedAt === undefined ? params.peer.status : "revoked";
     const payload: FederationPeerPayload = {
+      permissionRole: existing?.permissionRole ?? params.assignedRole ?? "full",
       capabilities: params.peer.capabilities,
       protocolVersion: params.peer.protocolVersion,
       endpoint: params.peer.endpoint,
@@ -193,6 +197,16 @@ export class FederationStore implements FederationStorage {
     return rows.map(rowToPeer);
   }
 
+  setPeerRole(peerId: FederationPeerId, role: import("@pwragent/shared").FederationPeerRole, updatedAt: number): void {
+    if (role !== "full" && role !== "contained") throw new Error("Invalid federation permission role.");
+    const peer = this.getPeer(peerId);
+    if (!peer || !peer.pinnedPublicKeyPem) throw new Error("Peer is not locally enrolled.");
+    if (peer.permissionRole === role) return;
+    this.stateDb.raw.prepare(
+      `UPDATE federation_peers SET payload = json_set(payload, '$.permissionRole', ?), updated_at = ? WHERE peer_id = ?`,
+    ).run(role, updatedAt, peerId);
+  }
+
   revokePeer(peerId: FederationPeerId, revokedAt: number): void {
     assertPeerId(peerId);
     this.stateDb.raw
@@ -208,6 +222,7 @@ export class FederationStore implements FederationStorage {
     token: string;
     generatedAt: number;
     expiresAt: number;
+    permissionRole?: import("@pwragent/shared").FederationPeerRole;
     label?: string;
     role?: FederationInstanceRole;
     endpoint?: string;
@@ -218,6 +233,7 @@ export class FederationStore implements FederationStorage {
       status: "pending",
       generatedAt: params.generatedAt,
       expiresAt: params.expiresAt,
+      permissionRole: params.permissionRole,
       label: params.label,
       role: params.role,
       endpoint: params.endpoint,
@@ -239,6 +255,7 @@ export class FederationStore implements FederationStorage {
         null,
         null,
         JSON.stringify({
+          permissionRole: params.permissionRole,
           label: params.label,
           role: params.role,
           endpoint: params.endpoint,
@@ -497,6 +514,7 @@ function rowToPeer(row: FederationPeerRow): FederationPeerSummary & {
     label: row.label,
     role: normalizeFederationInstanceRole(row.role) ?? "client",
     status: row.status as FederationConnectionState,
+    permissionRole: normalizeFederationPeerRole(payload.permissionRole),
     capabilities: payload.capabilities ?? [],
     protocolVersion: payload.protocolVersion,
     endpoint: payload.endpoint,
@@ -524,6 +542,7 @@ function rowToEnrollment(row: FederationEnrollmentRow): FederationEnrollmentEntr
     expiresAt: row.expires_at,
     usedAt: row.used_at ?? undefined,
     peerId: row.peer_id ?? undefined,
+    permissionRole: payload.permissionRole,
     label: payload.label,
     role: normalizeFederationInstanceRole(payload.role),
     endpoint: payload.endpoint,

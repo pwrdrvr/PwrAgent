@@ -511,6 +511,50 @@ moves the destination to another peer. Tool-call outcomes are recorded at call
 boundaries. Lost acknowledgements, reconnect and restart do not replay an
 uncertain send. No messaging queue or automatic retry runs on the outpost.
 
+## Contained peers
+
+The receiver assigns each enrolled peer `full` or `contained`, separately from
+its gateway/client topology. Settings → Federation → Peer access changes the
+local receiver's decision. Reconnects and advertised metadata cannot change it.
+Existing peers retain `full` on upgrade, preserving their previous authority;
+desktop invites select `contained` by default and let the operator choose
+`full` before the peer connects. That choice stays in the receiver's one-use
+invitation record, outside the signed wire messages. Existing API callers
+that omit a role retain the previous `full` behavior. A re-enrollment preserves
+an existing peer's role; widening requires an explicit local role change. No existing peer gains authority
+as part of this upgrade.
+
+A contained peer cannot originate owner requests, general file transfers,
+remote shells, service forwarding, cross-instance thread work, or gateway
+relay. Unknown methods fail closed. Viewer-requested replies and subscribed
+thread events continue. Messaging operations require a live conversation
+binding to that exact Outpost/backend/thread and the original actor's current
+authorization. General destination selection and thread attachment tools are
+absent from the Outpost's model catalog. Contained file replies use versioned,
+scoped messaging uploads through the existing chunk receiver and receipts;
+ordinary `file.push.*` remains refused. Operator pushes into the Outpost still
+follow its own `FederationReceiverPermissions.filePush` setting.
+
+An enrolled Outpost starts its egress guard as contained on every connection,
+then reads `federation.peerRole.v1` from its pinned gateway. An older or
+unavailable role service cannot widen egress. Authenticated role-change notices
+apply to the existing connection. Both transport send entry points enforce the
+guard, independently of the receiver. A standalone listener queries each directly connected receiver and starts
+its transport contained until that receiver reports its role. Role information
+from an old connection cannot widen its replacement.
+
+Receiver refusals and local guard refusals go to private
+`federation-refusals.jsonl` files (desktop: profile `state/`; Outpost: its
+`state/headless/` directory). Each line contains only peer ID, method, role and
+time. The journal rotates at 8 MiB and keeps one previous file; export evidence
+before it ages out. Refusals make no SQLite commits. One changed operator role
+uses one commit (measured 8,240 WAL bytes, approximately 0.00824 MB/day at one
+change per day). Repeating the same selection makes no write.
+
+The signed enrollment, reconnect, challenge and acceptance messages are
+unchanged. `peer_roles_v1` and `contained_messaging_upload_v1` advertise new
+versioned RPC methods instead.
+
 ## Architecture
 
 The desktop evaluator still starts Electron under Xvfb. Its backend registry

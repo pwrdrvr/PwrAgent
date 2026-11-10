@@ -119,6 +119,34 @@ afterEach(async () => {
 });
 
 describe("federation transport", () => {
+  it.each([true, false].flatMap((peerRelay) => [true, false].flatMap((receiverRelay) =>
+    (["full", "contained"] as const).map((role) => ({ peerRelay, receiverRelay, role })))))(
+    "retains authenticated relay support independently of authority ($peerRelay, $receiverRelay, $role)",
+    async ({ peerRelay, receiverRelay, role }) => {
+      const peer = generateFederationIdentityKeyPair();
+      const connected = Promise.withResolvers<FederationGatewayConnection>();
+      createFederationEnrollmentInvite({ store, token: "relay-support-token", gatewayInstanceId: "gateway_one",
+        generatedAt: Date.now(), expiresAt: Date.now() + 60_000, permissionRole: role });
+      server = new FederationGatewayWebSocketServer({ gatewayInstanceId: "gateway_one",
+        gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem, gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        host: "127.0.0.1", port: 0, store, supportedCapabilities: receiverRelay ? ["remote_window", "gateway_relay"] : ["remote_window"],
+        onConnection: connected.resolve,
+      });
+      const { url } = await server.start();
+      const client = await connectFederationClient({ url, mode: "enroll", gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem, peerInstanceId: "outpost", publicKeyPem: peer.publicKeyPem,
+        privateKeyPem: peer.privateKeyPem, capabilities: peerRelay ? ["remote_window", "gateway_relay"] : ["remote_window"],
+        role: "client", inviteToken: "relay-support-token", onEnvelope: () => {},
+      });
+      try {
+        const connection = await connected.promise;
+        expect(connection).toHaveProperty("relaySupported", peerRelay && receiverRelay);
+        expect(connection.capabilities.includes("gateway_relay")).toBe(peerRelay && receiverRelay && role === "full");
+        expect(client.capabilities.includes("gateway_relay")).toBe(peerRelay && receiverRelay && role === "full");
+      } finally { client.close(); }
+    },
+  );
+
   it("disables Cloudflare HTTP and upgrades while leaving direct ingress available", async () => {
     let enabled = false;
     server = new FederationGatewayWebSocketServer({

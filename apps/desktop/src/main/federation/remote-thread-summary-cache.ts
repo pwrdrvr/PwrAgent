@@ -774,9 +774,11 @@ export class RemoteThreadSummaryCache {
    * ancestry can place a draft under its parent.
    *
    * A watch lapses `watchTtlMs` after the last read that named it.
+   * `cacheOnly` serves retained rows without adding or extending demand.
    */
   resolveWatchedThreads(
     refs: readonly FederatedThreadRef[],
+    options: { cacheOnly?: boolean } = {},
   ): NavigationThreadSummary[] {
     const now = this.options.now?.() ?? Date.now();
     const expiresAt = now + (this.options.watchTtlMs ?? WATCHED_THREAD_TTL_MS);
@@ -807,7 +809,7 @@ export class RemoteThreadSummaryCache {
       for (let index = 0; index < queue.length; index += 1) {
         const key = queue[index]!;
         const ref = parseThreadIdentityKey(key);
-        if (ref) {
+        if (ref && !options.cacheOnly) {
           watches.set(key, {
             ref: { backend: ref.backend, target: { scope: "remote", instanceId }, threadId: ref.threadId },
             expiresAt,
@@ -822,13 +824,13 @@ export class RemoteThreadSummaryCache {
         keys.add(parentKey);
         queue.push(parentKey);
       }
-      if (watches.size) this.watchedByInstanceId.set(instanceId, watches);
-      if (previous !== this.mountedSelectionKey(instanceId)) {
+      if (!options.cacheOnly && watches.size) this.watchedByInstanceId.set(instanceId, watches);
+      if (!options.cacheOnly && previous !== this.mountedSelectionKey(instanceId)) {
         // Wider demand fences the narrower read and starts one for all of it.
         this.invalidate(instanceId);
       }
       const peer = connectedByInstanceId.get(instanceId);
-      if (peer) {
+      if (peer && !options.cacheOnly) {
         this.revalidateMountedSnapshot(peer.target, this.mountedRefs(instanceId));
       }
       const failed = this.refreshFailures.has(instanceId);
@@ -839,7 +841,7 @@ export class RemoteThreadSummaryCache {
           : failed ? this.dimDegraded(row) : row);
       }
     }
-    this.scheduleWatchedExpiry();
+    if (!options.cacheOnly) this.scheduleWatchedExpiry();
     return threads;
   }
 

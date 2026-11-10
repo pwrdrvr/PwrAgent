@@ -1,6 +1,8 @@
+import { containedFederationMethodAllowed, containedFederationNotificationAllowed } from "./federation-backend-methods";
 import type {
   FederationBlobChunkEnvelope,
   FederationCapability,
+  FederationPeerRole,
   FederationErrorEnvelope,
   FederationInstanceId,
   FederationNotificationEnvelope,
@@ -17,6 +19,8 @@ export type FederationRouterConnection = {
   navigationQueryProtocol?: 2;
   peerId: FederationInstanceId;
   capabilities: readonly FederationCapability[];
+  /** Authenticated protocol support before the receiver's role restriction. */
+  relaySupported?: boolean;
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
   sendEnvelopeWithBackpressure?: (
     envelope: FederationProtocolEnvelope,
@@ -83,6 +87,9 @@ export class FederationRouter {
         | (() => FederationInstanceId | undefined);
       maxHopCount?: number;
       now?: () => number;
+      /** Local receiver authority; never read this from an envelope or directory. */
+      peerRole?: (peerId: FederationInstanceId) => FederationPeerRole;
+      auditRefusal?: (event: FederationRefusalAudit) => void;
     },
   ) {}
 
@@ -143,6 +150,34 @@ export class FederationRouter {
   }
 
   async routeEnvelope(params: {
+    envelope: FederationProtocolEnvelope;
+    sourcePeerId?: FederationInstanceId;
+  }): Promise<FederationRouteResult> {
+    const roleFailure = this.checkPeerRole(params.envelope, params.sourcePeerId);
+    const result = roleFailure ?? await this.routeAuthorizedEnvelope(params);
+    if (result.status === "rejected" && params.sourcePeerId) {
+      this.options.auditRefusal?.({ peerId: params.sourcePeerId,
+        method: "method" in params.envelope ? params.envelope.method : params.envelope.kind,
+        role: this.options.peerRole?.(params.sourcePeerId) ?? "full", createdAt: this.now() });
+    }
+    return result;
+  }
+
+  /** Hosts call before their fast notification paths; requests still use routeEnvelope. */
+  checkPeerRole(envelope: FederationProtocolEnvelope, sourcePeerId?: FederationInstanceId): FederationRouteResult | undefined {
+    if (!sourcePeerId || this.options.peerRole?.(sourcePeerId) !== "contained") return;
+    const denied = envelope.kind === "request"
+      ? !containedFederationMethodAllowed(envelope.method)
+        || Boolean(envelope.targetInstanceId && envelope.targetInstanceId !== this.options.localInstanceId)
+      : envelope.kind === "notification" ? !containedFederationNotificationAllowed(envelope.method)
+      : envelope.kind === "blob_chunk";
+    if (!denied) return;
+    const failure = this.errorEnvelope(envelope, { code: "capability_denied", message: "Contained peer request is not allowed." });
+    this.replyToSource(sourcePeerId, failure);
+    return { status: "rejected", code: failure.error.code, message: failure.error.message };
+  }
+
+  private async routeAuthorizedEnvelope(params: {
     envelope: FederationProtocolEnvelope;
     sourcePeerId?: FederationInstanceId;
   }): Promise<FederationRouteResult> {
@@ -309,7 +344,8 @@ export class FederationRouter {
       return { status: "handled", response };
     } catch (error) {
       const failure = this.errorEnvelope(params.envelope, {
-        code: error instanceof DurableTurnRequestError ? error.code : "handler_failed",
+        code: error instanceof FederationRoleDeniedError ? "capability_denied"
+          : error instanceof DurableTurnRequestError ? error.code : "handler_failed",
         message: error instanceof Error ? error.message : String(error),
       });
       this.replyToSource(params.sourcePeerId, failure);
@@ -369,7 +405,9 @@ export class FederationRouter {
 
     if (params.sourcePeerId) {
       const source = this.connections.get(params.sourcePeerId);
-      if (!source?.capabilities.includes("gateway_relay")) {
+      const containedReply = this.options.peerRole?.(params.sourcePeerId) === "contained"
+        && ["response", "error", "notification"].includes(params.envelope.kind);
+      if (!containedReply && !source?.capabilities.includes("gateway_relay")) {
         const failure = this.errorEnvelope(params.envelope, {
           code: "relay_not_authorized",
           message: "Source peer is not authorized to relay through this gateway.",
@@ -425,6 +463,11 @@ export class FederationRouter {
     sourcePeerId: FederationInstanceId | undefined,
   ): FederationErrorEnvelope | undefined {
     if (!sourcePeerId) return undefined;
+    if (this.options.peerRole?.(sourcePeerId) === "contained"
+      && (!containedFederationMethodAllowed(envelope.method)
+        || (envelope.targetInstanceId && envelope.targetInstanceId !== this.options.localInstanceId))) {
+      return this.errorEnvelope(envelope, { code: "capability_denied", message: "Contained peers cannot originate this request." });
+    }
     const requiredCapability = this.options.methodCapabilities?.[envelope.method];
     if (!requiredCapability) return undefined;
     const source = this.connections.get(sourcePeerId);
@@ -440,6 +483,9 @@ export class FederationRouter {
     sourcePeerId: FederationInstanceId | undefined,
   ): FederationErrorEnvelope | undefined {
     if (!sourcePeerId) return undefined;
+    if (this.options.peerRole?.(sourcePeerId) === "contained") {
+      return this.errorEnvelope(envelope, { code: "capability_denied", message: "Contained peers cannot originate binary transfers." });
+    }
     const required: FederationCapability =
       envelope.kind === "blob_chunk" ? (envelope.purpose === "file_push" ? "resumable_blobs" : "turn_input_blobs") : "service_forward_v2";
     const source = this.connections.get(sourcePeerId);
@@ -516,3 +562,12 @@ export class FederationRouter {
     return typeof configured === "function" ? configured() : configured;
   }
 }
+
+export type FederationRefusalAudit = {
+  peerId: FederationInstanceId;
+  method: string;
+  role: FederationPeerRole;
+  createdAt: number;
+};
+
+export class FederationRoleDeniedError extends Error {}

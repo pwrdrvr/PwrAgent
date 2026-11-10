@@ -470,29 +470,39 @@ describe("idle checkout hibernation and restore", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
   });
 
-  it("keeps a queued send behind its own checkout restore (lifecycle model)", async () => {
+  it.each([false, true])("keeps a queued send behind its own checkout restore (delayed acknowledgement: %s)", async (delayAcknowledgement) => {
     // Each provider inventory has one registry owner. The preceding direct
     // sends must settle and close before a queued-send fixture replaces it.
     expect(registries).toHaveLength(0);
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "queued edit\n");
     const { registry } = fixture.open();
-    await sweep(registry);
+    expect(await sweep(registry)).toMatchObject({ hibernated: 1 });
     let restoring!: () => void;
     const restoreEntered = new Promise<void>((resolve) => { restoring = resolve; });
     let resume!: () => void;
     const barrier = new Promise<void>((resolve) => { resume = resolve; });
     releases.push(resume);
+    let admitted!: () => void;
+    const admission = new Promise<void>((resolve) => { admitted = resolve; });
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "thread/turnQueue/updated" || event.notification.params.status !== "queued") return;
+      admitted();
+      if (delayAcknowledgement) await barrier;
+    });
     const recreate = recreateSpy(registry, async () => { restoring(); await barrier; });
     let didStart!: () => void;
     const queuedStart = new Promise<void>((resolve) => { didStart = resolve; });
     const started = stubProviderTurnStart(registry, didStart);
-    const submitted = await registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] });
-    expect(submitted.status).toBe("queued");
+    const submission = ownFixtureWork(registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] }));
     try {
-      await restoreEntered;
+      // Queue admission, not its publication acknowledgement, proves the
+      // send is waiting. Publication may itself await restore progress.
+      await Promise.all([restoreEntered, admission]);
+      expect(registry.getQueuedTurnsForThread(identity).map((entry) => entry.displayText)).toEqual(["queued"]);
       expect(started).not.toHaveBeenCalled();
     } finally { resume(); }
+    expect((await submission).status).toBe("queued");
     await queuedStart;
     expect(recreate).toHaveBeenCalledTimes(1);
     expect(started).toHaveBeenCalledTimes(1);
@@ -698,6 +708,67 @@ describe("Restore now and Keep it awake", () => {
 });
 
 describe("Thread maintenance's hibernate step", () => {
+  it("uses fleet membership rather than a missing archive timestamp to ignore an archived co-owner", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads.push({ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true });
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const candidate = (await registry.listAutoArchiveCandidates()).find((item) => item.thread.id === THREAD_ID)!;
+    expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true })).toBe(true);
+    expect(await exists(fixture.worktree)).toBe(false);
+  });
+
+  it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const targets = [{ ...identity, worktreePath: fixture.worktree }];
+    for (let index = 1; index < 6; index++) {
+      const worktreePath = path.join(fixture.root, ".pwragent", "worktrees", `id-${index}`, "repo");
+      await mkdir(path.dirname(worktreePath), { recursive: true });
+      await git(fixture.repo, ["worktree", "add", "-b", `owned-${index}`, worktreePath]);
+      const threadId = `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`;
+      targets.push({ backend: "codex", threadId, worktreePath });
+      ArchiveWorktreeTransport.threads.push({ id: threadId, cwd: worktreePath, source: "cli", updatedAt: 2, status: { type: "notLoaded" } });
+      await store.addLinkedDirectory({ backend: "codex", threadId,
+        directory: { ...fixture.directory, id: threadId, worktreePath } });
+    }
+    // Unrelated owners share the primary repository, never a target checkout.
+    ArchiveWorktreeTransport.threads.unshift(...Array.from({ length: 220 }, (_, index) => ({
+      id: `unrelated-${index}`, cwd: fixture.repo, source: "cli", updatedAt: 1000 - index, status: { type: "notLoaded" as const },
+    })));
+    const service = maintenance(registry);
+    const scan = await service.scan({ steps: ["hibernate"] });
+    expect(scan.hibernate?.items).toHaveLength(targets.length);
+    ArchiveWorktreeTransport.requests = [];
+    const run = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      hibernate: targets.map(({ backend, threadId }) => ({ backend, threadId })) });
+    expect(run.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: targets.length, kept: 0, failed: 0 });
+    // Archived membership has no per-checkout delta to read. One complete
+    // membership pass per batch is the boundary budget, not one per removal.
+    const membershipReads = ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/list"
+      && request.params.archived === true && !request.params.cursor);
+    expect(membershipReads).toHaveLength(1);
+    for (const target of targets) expect(await exists(target.worktreePath)).toBe(false);
+  });
+
+  it("uses shared fleet admission and reports real snapshot-to-deletion stages", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open({ ...ON, enabled: false });
+    const candidate = (await registry.listAutoArchiveCandidates())[0]!;
+    const fullDiscovery = vi.spyOn(registry, "listAutoArchiveCandidates");
+    const stages: string[] = [];
+    expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true }, (stage) => stages.push(stage))).toBe(true);
+    expect(fullDiscovery).not.toHaveBeenCalled();
+    // Windows starts removal before unlinking ignored junctions, then
+    // confirms that stage again at Git's process-tree-owned spawn boundary.
+    // Both callbacks describe one transition into removal.
+    const transitions = stages.filter((stage, index) => stage !== stages[index - 1]);
+    expect(transitions).toEqual(["waitingForWorker", "waiting", "checking", "snapshotting", "checking", "verifying", "waiting", "removing", "recording"]);
+    expect(await exists(fixture.worktree)).toBe(false);
+    const snapshot = (await snapshotOf(store))!;
+    expect(snapshot.state).toBe("hibernated");
+    expect(await git(fixture.repo, ["show", `${snapshot.snapshotRef}:file.txt`])).toBe("original\n");
+  });
+
   it.each(["merged", "closed"] as const)("uses the latest saved PR lifecycle for a locked thread's stale %s watch", async (lifecycleState) => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });

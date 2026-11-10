@@ -345,9 +345,9 @@ export class FederationFilePushReceipts {
 
   clear(): void { this.receipts.clear(); }
 
-  async consume(peerId: string, input: FilePushResult, maxBytes: number): Promise<Uint8Array> {
+  async consume(peerId: string | readonly string[], input: FilePushResult, maxBytes: number): Promise<Uint8Array> {
     const receipt = input && this.receipts.get(input.path);
-    if (!receipt || receipt.peerId !== peerId || receipt.expires < Date.now()
+    if (!receipt || (typeof peerId === "string" ? receipt.peerId !== peerId : !peerId.includes(receipt.peerId)) || receipt.expires < Date.now()
       || receipt.file.sizeBytes !== input.sizeBytes || receipt.file.sha256 !== input.sha256) {
       throw new Error("No acknowledged file receipt belongs to this authenticated source.");
     }

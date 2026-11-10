@@ -8,7 +8,7 @@ import type {
   ReadThreadFamilyPricingResponse,
   ThreadFamilyPricingMember,
 } from "@pwragent/shared";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
@@ -71,7 +71,7 @@ beforeEach(() => {
       member({ threadId: "child-2", totalCostMicros: 1_870_000 }),
     ])),
     getNavigationQueryPage: vi.fn<QueryPage>(async (_request: NavigationQueryRequest): Promise<NavigationQueryPage> => ({
-      entries: [],
+      entries: [], complete: true, coverage: { state: "complete" },
     }) as unknown as NavigationQueryPage),
   };
   (window as Window & { pwragent?: unknown }).pwragent = api;
@@ -155,6 +155,81 @@ describe("thread info helpers", () => {
 });
 
 describe("thread chip hover card", () => {
+  it("resolves and caches an unmounted transcript link before hover or click", async () => {
+    const ownerRow = { ...summary({ title: "Owner's actual title" }),
+      ref: { backend: "codex", threadId: THREAD_ID } } as NavigationRow;
+    api.getNavigationQueryPage.mockResolvedValue({ entries: [{ row: ownerRow }] } as unknown as NavigationQueryPage);
+    const show = vi.fn();
+    const chip = (messageId?: string) => <ThreadChip fallbackLabel="Old transcript label" onOpen={show}
+      link={{ backend: "codex", threadId: THREAD_ID, title: "", instanceId: "lab", messageId }} />;
+    const view = render(<ThreadLinkProvider onShowThread={show} threads={[]}>{chip("message-1")}{chip()}</ThreadLinkProvider>);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Open thread Owner's actual title" })).toHaveLength(2));
+    expect(api.getNavigationQueryPage).toHaveBeenCalledTimes(1);
+    expect(api.readThreadFamilyPricing).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Open thread Owner's actual title" })[1]!);
+    expect(show.mock.lastCall?.[0].messageId).toBeUndefined();
+    view.rerender(<ThreadLinkProvider onShowThread={show} threads={[]}><span>Another transcript</span></ThreadLinkProvider>);
+    view.rerender(<ThreadLinkProvider onShowThread={show} threads={[]}>{chip()}</ThreadLinkProvider>);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open thread Owner's actual title" })).toBeInTheDocument());
+    const card = await openCard();
+    expect(card).toHaveTextContent("gpt-6.1-sol");
+    expect(card).not.toHaveTextContent("not found");
+    expect(api.getNavigationQueryPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a loaded navigation title when an older encounter read settles later", async () => {
+    let finish!: (page: NavigationQueryPage) => void;
+    api.getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const chip = <ThreadChip link={{ backend: "codex", threadId: THREAD_ID, title: "" }} onOpen={vi.fn()} />;
+    const view = render(<ThreadLinkProvider onShowThread={vi.fn()} threads={[]}>{chip}</ThreadLinkProvider>);
+    view.rerender(<ThreadLinkProvider onShowThread={vi.fn()} threads={[summary({ title: "New navigation title" })]}>
+      {chip}
+    </ThreadLinkProvider>);
+    await act(async () => finish({ entries: [{ row: {
+      ...summary({ title: "Old encounter title" }), ref: { backend: "codex", threadId: THREAD_ID },
+    } }] } as NavigationQueryPage));
+    expect(screen.getByRole("button", { name: "Open thread New navigation title" })).toBeInTheDocument();
+    expect(api.getNavigationQueryPage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("retains newer navigation facts after paging out (encounter pending=%s)", async (pending) => {
+    const oldRow = { ...summary({ title: "Old encounter title", threadStatus: "active" }),
+      ref: { backend: "codex", threadId: THREAD_ID } } as NavigationRow;
+    let finish!: (page: NavigationQueryPage) => void;
+    if (pending) api.getNavigationQueryPage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    else api.getNavigationQueryPage.mockResolvedValue({ entries: [{ row: oldRow }] } as NavigationQueryPage);
+    const chip = <ThreadChip link={{ backend: "codex", threadId: THREAD_ID, title: "" }} onOpen={vi.fn()} />;
+    const provider = (threads: NavigationThreadSummary[]) => <ThreadLinkProvider onShowThread={vi.fn()} threads={threads}>
+      {chip}
+    </ThreadLinkProvider>;
+    const view = render(provider([]));
+    await act(async () => {});
+    view.rerender(provider([summary({ title: "New navigation title", threadStatus: "idle", model: "new-model" })]));
+    view.rerender(provider([]));
+    await act(async () => { if (pending) finish({ entries: [{ row: oldRow }] } as NavigationQueryPage); });
+    expect(screen.getByRole("button", { name: "Open thread New navigation title" })).toBeInTheDocument();
+    const card = await openCard();
+    expect(card).toHaveTextContent("Idle");
+    expect(card).toHaveTextContent("new-model");
+    expect(card).not.toHaveTextContent("Running");
+  });
+
+  it("shows last-known offline facts from the viewer cache when the owner read fails", async () => {
+    const row = { ...summary(), ref: { backend: "codex", threadId: THREAD_ID, ownerInstanceId: "lab" },
+      federation: { ref: { backend: "codex", threadId: THREAD_ID, target: { scope: "remote", instanceId: "lab" } },
+        instanceLabel: "Lab", peerStatus: "disconnected" } } as NavigationRow;
+    api.getNavigationQueryPage.mockImplementation(async (request) => {
+      if (request.federationTarget) throw new Error("Peer unavailable");
+      return { entries: [{ row }] } as NavigationQueryPage;
+    });
+    renderChip({ instanceId: "lab", instanceLabel: "Lab" }, []);
+    const card = await openCard();
+    expect(card).toHaveTextContent("offline · last known");
+    expect(card).toHaveTextContent("gpt-6.1-sol");
+    expect(card).toHaveTextContent("Full Access");
+    expect(card).not.toHaveTextContent("not found");
+  });
+
   it("shows a loaded thread's settings, family cost and timeline", async () => {
     renderChip({}, [summary()]);
     const card = await openCard();
@@ -180,7 +255,7 @@ describe("thread chip hover card", () => {
     expect(api.readThreadFamilyPricing).toHaveBeenCalledWith({ backend: "codex", threadId: THREAD_ID });
   });
 
-  it("reads a peer thread the window has not loaded from this machine's copy", async () => {
+  it("reads a peer thread the window has not loaded from its owner", async () => {
     api.getNavigationQueryPage.mockResolvedValueOnce({ entries: [{ row: {
       ref: { backend: "codex", threadId: THREAD_ID, ownerInstanceId: "lab" },
       id: THREAD_ID, source: "codex", title: "Archived worktree cleanup flake", titleSource: "generated",
@@ -192,9 +267,8 @@ describe("thread chip hover card", () => {
     const card = await openCard();
 
     expect(api.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
-      inventory: "viewer",
-      query: { kind: "exact", resolveFromOwners: true,
-        identities: [{ backend: "codex", threadId: THREAD_ID, ownerInstanceId: "lab" }] },
+      inventory: "owner", federationTarget: { scope: "remote", instanceId: "lab" },
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: THREAD_ID }] },
     }));
     expect(api.readThreadFamilyPricing).toHaveBeenCalledWith({
       backend: "codex", threadId: THREAD_ID, federationTarget: { scope: "remote", instanceId: "lab" },

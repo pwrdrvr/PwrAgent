@@ -181,7 +181,7 @@ describe("DesktopMessagingRuntime", () => {
     const file = { path: "/receiver/acknowledged.bin", sizeBytes: bytes.length, sha256: "fixture-digest" };
     expect(await handle({ kind: "request", request, file }, "pwr_outpost")).toMatchObject({ ok: true });
     expect(consume).toHaveBeenCalledWith("pwr_outpost", file);
-    expect(dispatch).toHaveBeenCalledWith({ ...request, context: { ...context, requestingInstanceId: "pwr_outpost" }, args: { ...request.args, path: "" } }, bytes);
+    expect(dispatch).toHaveBeenCalledWith({ ...request, context: { ...context, requestingInstanceId: "pwr_outpost", containedPeer: false }, args: { ...request.args, path: "" } }, bytes);
     authorize.mockResolvedValue({ allowed: false });
     expect(await handle({ kind: "request", request, file }, "pwr_outpost")).toMatchObject({ ok: false, error: { code: "forbidden" } });
     expect(consume).toHaveBeenCalledTimes(1);

@@ -1,3 +1,4 @@
+import { CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 import { validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
 import { matchesAutomationConversation } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -528,9 +529,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapterStartTimeoutMs?: number;
     },
   ) {
-    setFederationMessagingDestinationHandler(async (operation, callerInstanceId) => {
+    setFederationMessagingDestinationHandler(async (operation, callerInstanceId, contained) => {
+      const tool = operation?.kind === "authorize" ? operation.check?.tool : operation?.kind === "request" ? operation.request?.operation : undefined;
+      if (contained && !(CONTAINED_OUTPOST_MESSAGING_OPERATIONS as readonly string[]).includes(tool ?? "")) {
+        return { allowed: false, permission: "federation.remote_control" };
+      }
       if (operation?.kind === "authorize") {
-        const context = { ...operation.context, requestingInstanceId: callerInstanceId };
+        const context = { ...operation.context, requestingInstanceId: callerInstanceId, containedPeer: contained };
         if (!context.causalMessagingSource || context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()
           || operation.check.threadId !== context.threadId || operation.check.backend !== context.backend
           || (operation.check.tool === "send_messaging_file" && !getDesktopFederationRuntime().receiverPermissions().filePush)) {
@@ -543,7 +548,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         || operation.request.context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
         return { ok: false, error: { code: "forbidden", message: "The destination must be resolved by its original messaging owner." } };
       }
-      const request = { ...operation.request, context: { ...operation.request.context, requestingInstanceId: callerInstanceId } };
+      const request = { ...operation.request, context: { ...operation.request.context, requestingInstanceId: callerInstanceId, containedPeer: contained } };
       const permission = await this.authorizeRetainedTool(request.context, {
         ...request.context, category: "messaging_context", tool: request.operation, arguments: request.args,
       });

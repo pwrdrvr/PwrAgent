@@ -1,7 +1,7 @@
 import { OutpostProjects } from "./projects.js";
 import path from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
-import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMessagingDynamicToolCall, resolveMessagingOutboundFile, validateMessagingFileMetadata, FILE_PUSH_MAX_BYTES } from "../dist/federation-core.js";
+import { CONTAINED_OUTPOST_MESSAGING_OPERATIONS, AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMessagingDynamicToolCall, resolveMessagingOutboundFile, validateMessagingFileMetadata, FILE_PUSH_MAX_BYTES } from "../dist/federation-core.js";
 import { Codex } from "./codex.js";
 import { installedVersion } from "./version.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
@@ -15,7 +15,7 @@ export class Runtime {
     // code this process is running.
     this.running = installedVersion();
     this.projects = new OutpostProjects(path.dirname(store.directory), workspace);
-    this.messagingTools = new AgentToolRouter(buildPwrAgentMessagingToolDefinitions((request) => this.messagingRequest(request), { nativeDynamicPdfImages: true }));
+    this.messagingTools = new AgentToolRouter(buildPwrAgentMessagingToolDefinitions((request) => this.messagingRequest(request), { nativeDynamicPdfImages: true }).filter((tool) => CONTAINED_OUTPOST_MESSAGING_OPERATIONS.includes(tool.name)));
     this.fileAccess = { privateStorageRoots: [home, process.env.PWRAGENT_HOME].filter(Boolean),
       deniedRoots: [home, path.dirname(store.directory)], denyHardLinks: true };
     this.toolLedgerDirectory = path.join(path.dirname(store.directory), "tool-calls");

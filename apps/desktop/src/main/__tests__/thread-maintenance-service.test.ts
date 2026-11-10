@@ -387,7 +387,8 @@ describe("ThreadMaintenanceService.scan", () => {
       const step = run.steps.find((item) => item.step === "checkouts")!;
       expect(step).toMatchObject({ done: count("done"), kept: count("busy"), failed: count("error") + selected.filter((index) => index >= states.length).length });
       expect(step.allocatedBytesRemoved ?? 0).toBe(selected.filter((index) => states[index] === "done").reduce((total, index) => total + rows[index]!.space.allocatedBytes, 0));
-      expect(called).toEqual(selected.filter((index) => index < states.length).map((index) => rows[index]!.outputPath));
+      expect([...called].sort()).toEqual(selected.filter((index) => index < states.length).map((index) => rows[index]!.outputPath).sort());
+      expect(run.items?.map((item) => item.path)).toEqual(selected.map((index) => `/fixture/${index}/target/debug`));
     }), { numRuns: 20 });
   });
 
@@ -789,18 +790,23 @@ describe("ThreadMaintenanceService.apply", () => {
     const selected = await makeOrphan("one");
     const unselected = await makeOrphan("two");
     const { service, deps } = harness([], {
+      measureAllocation: async () => ({ allocatedBytes: 1234 }),
       auditArchivedCheckouts: vi.fn(async () => ({
         candidates: [selected, unselected].map((worktreePath, index) => ({ backend: "codex", threadId: `t${index}`, worktreePath })),
         kept: {}, emptyFolders: 0,
       })),
     });
     const scan = await service.scan();
+    expect(scan.checkouts.items.find((item) => item.worktreePath === selected)?.space?.allocatedBytes).toBe(1234);
     const run = await service.apply({
       scanId: scan.scanId, archive: [], removeCheckouts: [],
       trashCheckouts: [{ worktreePath: selected }], removeEmptyFolders: false,
     });
     expect(deps.trashItem).toHaveBeenCalledWith(selected);
     expect(run.steps.find((step) => step.step === "checkouts")).toEqual(expect.objectContaining({ step: "checkouts", done: 1 }));
+    expect(run.steps.find((step) => step.step === "checkouts")?.allocatedBytesRemoved).toBeUndefined();
+    expect(run.items).toEqual([expect.objectContaining({ action: "trashCheckout", status: "done", path: selected })]);
+    expect(run.items![0]!.allocatedBytesRemoved).toBeUndefined();
     expect(run.problems).toEqual([expect.objectContaining({ kind: "kept", path: unselected, reason: "Repository no longer exists" })]);
   });
 
@@ -874,6 +880,141 @@ describe("hibernate idle checkouts", () => {
       ...overrides,
     };
   }
+
+  it("runs four hibernations, retains out-of-order history, and drains active work on Stop", async () => {
+    const items = Array.from({ length: 9 }, (_, index) => candidate(String(index), { cwd: `/w/${index}` }));
+    const gates = new Map<string, () => void>();
+    const started: string[] = [];
+    let holding = true;
+    const { service } = harness(items, { hibernation: hibernation({ hibernate: async (item, _policy, stage) => {
+      const id = item.thread.id;
+      started.push(id);
+      stage?.("removing");
+      if (holding) await new Promise<void>((resolve) => gates.set(id, resolve));
+      return true;
+    } }) });
+    const scan = await service.scan({ steps: ["hibernate"] });
+    const run = service.start({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+      hibernate: items.map(({ thread }) => ({ backend: thread.source, threadId: thread.id })) });
+    try {
+      for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+      expect(started).toEqual(["0", "1", "2", "3"]);
+      const before = service.getRun()!;
+      expect(before.items?.filter((item) => item.status === "running")).toHaveLength(4);
+      gates.get("1")!();
+      for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+      expect(service.getRun()?.items?.find((item) => item.threadId === "1")).toMatchObject({ status: "done", path: "/w/1" });
+      expect(before.items?.find((item) => item.threadId === "1")?.status).toBe("running");
+      expect(started).toEqual(["0", "1", "2", "3", "4"]);
+      service.stop();
+    } finally {
+      holding = false;
+      for (const release of gates.values()) release();
+      await run.done;
+    }
+    expect(started).toHaveLength(5);
+    expect(service.getRun()?.items?.map((item) => item.status)).toEqual(["done", "done", "done", "done", "done", "kept", "kept", "kept", "kept"]);
+    expect(service.getRun()?.items?.find((item) => item.threadId === "1")?.finishedOrder).toBe(1);
+    expect(service.getRun()?.items?.map((item) => item.finishedOrder).sort((a, b) => a! - b!)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(service.getRun()?.steps.find((step) => step.step === "hibernate")).toMatchObject({ done: 5, kept: 4, failed: 0 });
+  });
+
+  it("coalesces live IPC snapshots while keeping reads current and publishing the final outcome immediately", async () => {
+    vi.useFakeTimers();
+    const published: ThreadMaintenanceRun[] = [];
+    let report!: NonNullable<Parameters<CheckoutHibernationReviewDeps["hibernate"]>[2]>;
+    let release!: () => void;
+    const { service } = harness([candidate("a", { cwd: "/w/a" })], { onRun: (run) => published.push(run),
+      hibernation: hibernation({ hibernate: async (_item, _policy, stage) => {
+        report = stage!;
+        await new Promise<void>((resolve) => { release = resolve; });
+        return true;
+      } }) });
+    try {
+      const scan = await service.scan({ steps: ["hibernate"] });
+      const run = service.start({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+        hibernate: [{ backend: "codex", threadId: "a" }] });
+      for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+      for (let index = 0; index < 30; index++) report(index % 2 ? "removing" : "checking");
+      expect(service.getRun()?.items?.[0]?.stage).toBe("removing");
+      expect(published).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(published).toHaveLength(2);
+      expect(published[1]?.items?.[0]?.stage).toBe("removing");
+      release();
+      await run.done;
+      expect(published.at(-1)?.running).toBe(false);
+      expect(published.at(-1)?.items?.[0]?.status).toBe("done");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      release?.();
+      service.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("partitions every requested hibernation into its actual outcome, with a retained directory and stage", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("done", "kept", "failed"), { minLength: 1, maxLength: 15 }), async (outcomes) => {
+      const items = outcomes.map((_outcome, index) => candidate(String(index), { cwd: `/w/${index}` }));
+      const { service } = harness(items, { hibernation: hibernation({ hibernate: async (item, _policy, stage) => {
+        stage?.("snapshotting");
+        stage?.("removing");
+        const outcome = outcomes[Number(item.thread.id)];
+        if (outcome === "failed") throw new Error("Fixture failure");
+        return outcome === "done" ? true : "Fixture kept";
+      } }) });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      const result = await service.apply({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+        hibernate: items.map(({ thread }) => ({ backend: thread.source, threadId: thread.id })) });
+      expect(result.items?.map((item) => ({ status: item.status, path: item.path })))
+        .toEqual(outcomes.map((status, index) => ({ status, path: `/w/${index}` })));
+      const counts = result.steps.find((step) => step.step === "hibernate")!;
+      for (const status of ["done", "kept", "failed"] as const) expect(counts[status]).toBe(outcomes.filter((outcome) => outcome === status).length);
+    }), { numRuns: 50 });
+  });
+
+  it("attributes each duplicate selection's outcome to its operation while another is active", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 4 }), fc.constantFrom("done", "kept", "failed"), async (count, outcome) => {
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      let observeFailures!: () => void;
+      const failuresObserved = new Promise<void>((resolve) => { observeFailures = resolve; });
+      let failed = 0;
+      const { service, deps } = harness([candidate("same", { cwd: "/w/same" })], {
+        onError: () => { if (++failed === count - 1) observeFailures(); },
+        hibernation: hibernation({ hibernate: async () => {
+          await pending;
+          if (outcome === "failed") throw new Error("Removal failed");
+          return outcome === "done" ? true : "Fixture kept";
+        } }),
+      });
+      const scan = await service.scan({ steps: ["hibernate"] });
+      let refreshes = 0;
+      vi.mocked(deps.refreshCandidate).mockImplementation(async (item) => {
+        const operation = refreshes++;
+        if (operation) throw new Error(`Metadata refresh ${operation} failed`);
+        return item;
+      });
+      const run = service.start({ scanId: scan.scanId, archive: [], removeCheckouts: [], trashCheckouts: [], removeEmptyFolders: false,
+        hibernate: Array.from({ length: count }, () => ({ backend: "codex", threadId: "same" })) });
+      try {
+        await failuresObserved;
+        expect(service.getRun()?.items?.map((item) => item.status)).toEqual(["running", ...Array(count - 1).fill("failed")]);
+        release();
+        const result = await run.done;
+        expect(result.items?.map((item) => ({ id: item.itemId, status: item.status, detail: item.detail })))
+          .toEqual(Array.from({ length: count }, (_, index) => ({ id: `hibernate:${index}`, status: index ? "failed" : outcome,
+            detail: index ? `Metadata refresh ${index} failed` : outcome === "failed" ? "Removal failed" : undefined })));
+        expect(result.steps.find((step) => step.step === "hibernate")).toMatchObject({
+          done: outcome === "done" ? 1 : 0, kept: outcome === "kept" ? 1 : 0, failed: count - 1 + (outcome === "failed" ? 1 : 0),
+        });
+      } finally {
+        release();
+        await run.done;
+        service.dispose();
+      }
+    }), { numRuns: 30 });
+  });
 
   it("marks threads the archive step offers, and uses hibernation's own rules even while it is off", async () => {
     const items = [

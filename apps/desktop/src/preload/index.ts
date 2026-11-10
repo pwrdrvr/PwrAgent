@@ -566,6 +566,8 @@ import type {
   ReadFederationTailscaleStatusResponse,
   ResetFederationEnrollmentRequest,
   ResetFederationEnrollmentResponse,
+  SetFederationPeerRoleRequest,
+  SetFederationPeerRoleResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
   HandoffInstanceThreadRequest,
@@ -919,6 +921,7 @@ import {
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_PIN_IMPACT_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
+  FEDERATION_SET_PEER_ROLE_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_HANDOFF_THREAD_CHANNEL,
   FEDERATION_PUSH_COMPOSER_FILE_CHANNEL,
@@ -1703,6 +1706,8 @@ const desktopApi = Object.freeze({
     request: ImportFederationInviteRequest,
   ): Promise<ImportFederationInviteResponse> =>
     await ipcRenderer.invoke(FEDERATION_IMPORT_INVITE_CHANNEL, request),
+  setFederationPeerRole: async (request: SetFederationPeerRoleRequest): Promise<SetFederationPeerRoleResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SET_PEER_ROLE_CHANNEL, request),
   revokeFederationPeer: async (
     request: RevokeFederationPeerRequest,
   ): Promise<RevokeFederationPeerResponse> =>

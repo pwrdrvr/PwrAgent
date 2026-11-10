@@ -8,6 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { chooseSelectOption } from "../../../test/select";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -32,6 +33,39 @@ describe("FederationSettings", () => {
     privacySettingsSupported: true,
     privacyPermission: "unknown",
   };
+
+  it("shows receiver-owned peer access and saves a role change through the local API", async () => {
+    let role: "full" | "contained" = "contained";
+    const peer = () => ({ id: "fixture_outpost", label: "Assembly Outpost", role: "client" as const,
+      permissionRole: role, status: "connected" as const, capabilities: [], canRevoke: true });
+    const setFederationPeerRole = vi.fn(async (request: { peerId: string; role: "full" | "contained" }) => {
+      role = request.role;
+      return { peer: peer() };
+    });
+    render(<FederationSettings desktopApi={{ setFederationPeerRole,
+      readFederationHealth: async () => ({ health: { enabled: true, role: "gateway", status: "listening", peers: [peer()] } }),
+    }} snapshot={settingsSnapshot()} saving={false} onSettingsChanged={vi.fn(async () => {})}
+      onClearSecret={vi.fn(async () => true)} onReplaceSecret={vi.fn(async () => true)} onWriteConfig={vi.fn(async () => true)} />);
+    const field = await screen.findByRole("combobox", { name: "Peer access for Assembly Outpost" });
+    expect(field).toHaveAttribute("data-value", "contained");
+    chooseSelectOption(field, "Full");
+    await waitFor(() => expect(setFederationPeerRole).toHaveBeenCalledExactlyOnceWith({ peerId: "fixture_outpost", role: "full" }));
+    await waitFor(() => expect(field).toHaveAttribute("data-value", "full"));
+  });
+
+  it("defaults invitations to contained and sends the operator's selected role before enrollment", async () => {
+    const generateFederationInvite = vi.fn(async () => ({ invite: "fixture-invite", expiresAt: 1_000 }));
+    render(<FederationSettings desktopApi={{ ...federationHealthApi(), generateFederationInvite }}
+      snapshot={settingsSnapshot()} saving={false} onSettingsChanged={vi.fn(async () => {})}
+      onClearSecret={vi.fn(async () => true)} onReplaceSecret={vi.fn(async () => true)} onWriteConfig={vi.fn(async () => true)} />);
+    const access = await screen.findByRole("combobox", { name: "Invite access" });
+    expect(access).toHaveAttribute("data-value", "contained");
+    fireEvent.click(screen.getByRole("button", { name: "Generate invite" }));
+    await waitFor(() => expect(generateFederationInvite).toHaveBeenCalledExactlyOnceWith({ permissionRole: "contained" }));
+    chooseSelectOption(access, "Full");
+    fireEvent.click(screen.getByRole("button", { name: "Generate invite" }));
+    await waitFor(() => expect(generateFederationInvite).toHaveBeenLastCalledWith({ permissionRole: "full" }));
+  });
 
   it("inspects disabled receiving without writing, and routes Check, Reveal, and privacy actions", async () => {
     const receivingFolder = vi.fn(async (_request: ReceivingFolderRequest) => folderResponse);

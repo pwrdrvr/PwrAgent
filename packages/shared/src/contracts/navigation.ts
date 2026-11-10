@@ -2333,6 +2333,7 @@ export type NavigationQuery =
        * identity's row as held by this machine's peer summary cache, which
        * reads owners in the background and keeps an offline owner's last
        * rows. The read never waits on a peer.
+       * Exact-link consumers only read retained rows; they add no watch.
        */
       resolveFromOwners?: true;
     }

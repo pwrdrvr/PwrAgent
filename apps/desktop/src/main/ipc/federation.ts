@@ -32,6 +32,8 @@ import type {
   ReadFederationPinImpactResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
+  SetFederationPeerRoleRequest,
+  SetFederationPeerRoleResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
@@ -64,6 +66,7 @@ import {
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_PIN_IMPACT_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
+  FEDERATION_SET_PEER_ROLE_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_SHORT_NAME_CHANNEL,
@@ -386,7 +389,11 @@ export function registerFederationIpcHandlers(): void {
       _event,
       request: GenerateFederationInviteRequest = {},
     ): Promise<GenerateFederationInviteResponse> => {
+      if (request?.permissionRole !== undefined && request.permissionRole !== "full" && request.permissionRole !== "contained") {
+        throw new Error("Invalid enrollment permission role.");
+      }
       const { invite, expiresAt } = await getDesktopFederationRuntime().generateInvite({
+        permissionRole: request?.permissionRole,
         ...request,
         readTailscaleAdvertisement: readInviteTailscaleAdvertisement,
       });
@@ -410,6 +417,14 @@ export function registerFederationIpcHandlers(): void {
       await getDesktopFederationRuntime().resetEnrollment({
         pinDisposition: readPinDisposition(request?.pinDisposition),
       }),
+  );
+  ipcMain.handle(
+    FEDERATION_SET_PEER_ROLE_CHANNEL,
+    async (_event, request: SetFederationPeerRoleRequest): Promise<SetFederationPeerRoleResponse> => {
+      if (!request || !isFederationInstanceId(request.peerId)
+        || (request.role !== "full" && request.role !== "contained")) throw new Error("Invalid peer role.");
+      return { peer: await getDesktopFederationRuntime().setPeerRole(request.peerId, request.role) };
+    },
   );
   ipcMain.handle(
     FEDERATION_REVOKE_PEER_CHANNEL,

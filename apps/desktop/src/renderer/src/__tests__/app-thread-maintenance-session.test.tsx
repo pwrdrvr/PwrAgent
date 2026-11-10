@@ -223,6 +223,33 @@ describe("thread maintenance session in App", () => {
     expect(await screen.findByRole("dialog", { name: "Thread maintenance" })).toHaveTextContent("1 checkout hibernated");
   });
 
+  it("keeps a parallel run's live rows and results through minimize and reopen", async () => {
+    const api = installDesktopApi();
+    const shown = await openAndPick(api);
+    fireEvent.click(within(shown).getByRole("button", { name: "Scan" }));
+    await api.finishScan();
+    fireEvent.click(await within(shown).findByRole("button", { name: "Hibernate 1 checkout" }));
+    await within(shown).findByRole("button", { name: /^Stop after/ });
+    fireEvent.click(within(shown).getByRole("button", { name: "Minimise thread maintenance" }));
+
+    const item = (index: number, status: "done" | "running" | "queued") => ({
+      itemId: `hibernate:${index}`, step: "hibernate" as const, action: "hibernate" as const, object: `Thread ${index}`,
+      path: `/w/${index}/kiln`, backend: "codex", threadId: `t-${index}`, status,
+      ...(status === "queued" ? {} : { startedAt: NOW + index }),
+      ...(status === "done" ? { finishedAt: NOW + 100 + index, allocatedBytesRemoved: GB } : { stage: "removing" as const }),
+    });
+    const items = [item(0, "done"), item(1, "done"), item(2, "running"), item(3, "running"), item(4, "queued")];
+    api.emitRun({ runId: "run-1", revision: 2, scanId: "scan-1", running: true, startedAt: NOW, steps: [], problems: [],
+      current: { step: "hibernate", processed: 2, total: 5, object: "Thread 3" }, items });
+    // The notice counts results, not the one title main named last.
+    await waitFor(() => expect(notice()).toHaveTextContent("Running · 2 / 5 · 2 in progress"));
+
+    fireEvent.click(within(notice()!).getByRole("button", { name: "Reopen" }));
+    const back = await screen.findByRole("dialog", { name: "Thread maintenance" });
+    expect(within(back).getByRole("region", { name: "Done · 2" })).toHaveTextContent("Thread 0");
+    expect(within(back).getByRole("region", { name: "In progress · 2" })).toHaveTextContent("Removing worktree");
+  });
+
   it("starts over only after an explicit discard", async () => {
     const api = installDesktopApi();
     const shown = await openAndPick(api);

@@ -1,5 +1,4 @@
 import {
-  NAVIGATION_QUERY_PROTOCOL_VERSION,
   type AppServerBackendKind,
   type FederationRemoteTarget,
   type NavigationRow,
@@ -8,6 +7,7 @@ import {
   type ThreadExecutionMode,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+export { readThreadLinkRow as readThreadInfoRow } from "../../lib/thread-link-rows";
 
 /** What a thread's hover card shows, from a loaded row or an owner's row. */
 export type ThreadInfoFacts = {
@@ -87,33 +87,6 @@ export function threadInfoOwner(
   windowTarget: FederationRemoteTarget | undefined,
 ): FederationRemoteTarget | undefined {
   return target.instanceId ? { scope: "remote", instanceId: target.instanceId } : windowTarget;
-}
-
-/**
- * One row for a thread the window has not loaded. A local window reads this
- * machine's copy of the owner's rows, which never waits on a peer; a remote
- * window asks its own owner.
- */
-export async function readThreadInfoRow(
-  api: Pick<DesktopApi, "getNavigationQueryPage">,
-  target: ThreadInfoTarget,
-  windowTarget: FederationRemoteTarget | undefined,
-): Promise<NavigationRow | undefined> {
-  if (!api.getNavigationQueryPage) return undefined;
-  const page = await api.getNavigationQueryPage(windowTarget
-    ? {
-        protocol: NAVIGATION_QUERY_PROTOCOL_VERSION, inventory: "owner", consumer: "mentions",
-        federationTarget: windowTarget, pageSize: 1,
-        query: { kind: "exact", identities: [{ backend: target.backend, threadId: target.threadId,
-          ...(target.instanceId && target.instanceId !== windowTarget.instanceId
-            ? { ownerInstanceId: target.instanceId } : {}) }] },
-      }
-    : {
-        protocol: NAVIGATION_QUERY_PROTOCOL_VERSION, inventory: "viewer", consumer: "mentions", pageSize: 1,
-        query: { kind: "exact", resolveFromOwners: true, identities: [{ backend: target.backend, threadId: target.threadId,
-          ...(target.instanceId ? { ownerInstanceId: target.instanceId } : {}) }] },
-      });
-  return page.entries.find((entry) => entry.row.id === target.threadId && entry.row.source === target.backend)?.row;
 }
 
 const COST_TTL_MS = 30_000;

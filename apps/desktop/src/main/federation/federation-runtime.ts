@@ -1,3 +1,7 @@
+import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
+import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
+import { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
+import type { FederationPeerRole } from "@pwragent/shared";
 import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
@@ -636,6 +640,8 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "messaging_files",
   "pwrsnap_connection",
   "gateway_relay",
+  "peer_roles_v1",
+  "contained_messaging_upload_v1",
   // Federation is a same-operator trust domain and turn_control already
   // permits code execution via agent turns, so the direct shell defaults to
   // granted — but stays a dedicated capability so it is revocable on its own.
@@ -1132,7 +1138,12 @@ export class DesktopFederationRuntime {
 
   async consumeMessagingFile(sourceInstanceId: string, file: FilePushResult): Promise<Uint8Array> {
     if (!this.receiverPermissions().filePush) throw new Error("Incoming files are disabled on the messaging owner.");
-    const bytes = await this.messagingFileReceipts.consume(sourceInstanceId, file, FILE_PUSH_MAX_BYTES);
+    // Receipt scope belongs to the acknowledged upload, so promotion must not
+    // invalidate a scoped receipt. A contained peer still cannot claim a
+    // general upload; both accepted scopes remain bound to the same source.
+    const sources = [`contained-messaging:${sourceInstanceId}`];
+    if (this.peerRole(sourceInstanceId) === "full") sources.push(sourceInstanceId);
+    const bytes = await this.messagingFileReceipts.consume(sources, file, FILE_PUSH_MAX_BYTES);
     if (!this.receiverPermissions().filePush) throw new Error("Incoming files were disabled during the transfer.");
     return bytes;
   }
@@ -2178,6 +2189,25 @@ export class DesktopFederationRuntime {
     };
   }
 
+  peerRole(peerId: string): FederationPeerRole {
+    return this.store().getPeer(peerId)?.permissionRole ?? "full";
+  }
+
+  async setPeerRole(peerId: string, role: FederationPeerRole): Promise<FederationPeerSummary> {
+    this.store().setPeerRole(peerId, role, Date.now());
+    const connection = this.router?.getConnection(peerId);
+    if (connection && role === "contained") {
+      connection.capabilities = connection.capabilities.filter((capability) => capability !== "gateway_relay");
+    } else if (connection?.relaySupported && !connection.capabilities.includes("gateway_relay")) {
+      connection.capabilities = [...connection.capabilities, "gateway_relay"];
+    }
+    if (this.router?.getConnection(peerId)) this.sendEnvelopeToTarget(peerId, { id: randomUUID(), kind: "notification",
+      method: FEDERATION_PEER_ROLE_CHANGED_METHOD, params: { role }, protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.ensureLocalInstanceId(), targetInstanceId: peerId, createdAt: Date.now() });
+    this.broadcastPeerDirectory();
+    return publicPeerSummary(this.store().getPeer(peerId)!);
+  }
+
   async revokePeer(
     peerId: FederationInstanceId,
     request?: { pinDisposition?: FederationPinDisposition },
@@ -2352,6 +2382,7 @@ export class DesktopFederationRuntime {
   }
 
   async generateInvite(request: {
+    permissionRole?: FederationPeerRole;
     label?: string;
     ttlMs?: number;
     /**
@@ -2397,6 +2428,7 @@ export class DesktopFederationRuntime {
       generatedAt: now,
       expiresAt,
       label: request.label,
+      permissionRole: request.permissionRole ?? "full",
       role: "client",
       endpoint: gatewayUrl,
     });
@@ -3981,14 +4013,18 @@ export class DesktopFederationRuntime {
     const router = new FederationRouter({
       localInstanceId,
       isDraining: () => this.shutdown.draining,
+      peerRole: (peerId) => this.peerRole(peerId),
+      auditRefusal: (event) => appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), event),
       trustedRelayPeerId: () =>
         this.gatewayInstanceId
         ?? (isAppStateInitialized()
           ? desktopFederationState.read("gatewayInstanceId") || undefined
           : undefined),
       methodCapabilities: {
+        [FEDERATION_PEER_ROLE_METHOD]: "peer_roles_v1",
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         [FEDERATION_MESSAGING_DESTINATION_METHOD]: "messaging_route",
+        "messaging.destination.v2": "messaging_files",
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
@@ -4014,6 +4050,7 @@ export class DesktopFederationRuntime {
               ? ["environment_actions"]
               : additionalFederationBackendCapabilities(envelope),
     });
+    router.registerHandler(FEDERATION_PEER_ROLE_METHOD, (envelope) => ({ role: this.peerRole(envelope.sourceInstanceId) }));
     router.registerBlobChunkHandler(async (envelope) => {
       if (envelope.purpose === "file_push") {
         if (!this.filePushReceiver) throw new Error("File receiver is unavailable.");
@@ -4026,7 +4063,25 @@ export class DesktopFederationRuntime {
       );
     });
     router.registerHandler(FEDERATION_MESSAGING_DESTINATION_METHOD, async (envelope) =>
-      await handleFederationMessagingDestination(envelope.params as FederationMessagingDestinationOperation, envelope.sourceInstanceId));
+      await handleFederationMessagingDestination(envelope.params as FederationMessagingDestinationOperation, envelope.sourceInstanceId,
+        this.peerRole(envelope.sourceInstanceId) === "contained"));
+    router.registerHandler("messaging.destination.v2", async (envelope) => {
+      const operation = envelope.params as { kind?: string; authorization?: FederationMessagingDestinationOperation;
+        method?: string; input?: Record<string, unknown> };
+      if (operation?.kind !== "upload" || operation.authorization?.kind !== "authorize"
+        || operation.authorization.check.tool !== "send_messaging_file"
+        || !Object.values(FILE_PUSH_METHODS).includes(operation.method as typeof FILE_PUSH_METHODS[keyof typeof FILE_PUSH_METHODS])
+        || operation.input?.binary === true) throw new FederationRoleDeniedError("Invalid scoped messaging upload.");
+      const permission = await handleFederationMessagingDestination(operation.authorization, envelope.sourceInstanceId,
+        this.peerRole(envelope.sourceInstanceId) === "contained");
+      if (!("allowed" in permission) || !permission.allowed || !this.filePushReceiver) {
+        throw new FederationRoleDeniedError("Messaging upload is not authorized for this thread.");
+      }
+      if (operation.method === FILE_PUSH_METHODS.begin && operation.input?.name !== "messaging-upload.bin") {
+        throw new FederationRoleDeniedError("Scoped uploads use the messaging attachment name.");
+      }
+      return await this.filePushReceiver.handle(`contained-messaging:${envelope.sourceInstanceId}`, operation.method!, operation.input);
+    });
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationOperatorQuestionHandlers(router);
     registerFederationBackendHandlers({
@@ -4964,6 +5019,7 @@ export class DesktopFederationRuntime {
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,
+      relaySupported: connection.relaySupported ?? connection.capabilities.includes("gateway_relay"),
       peerDirectoryPaging: connection.peerDirectoryPaging,
       navigationQueryProtocol: connection.navigationQueryProtocol,
       sendEnvelope: connection.sendEnvelope,
@@ -5057,6 +5113,12 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
+    if (envelope.kind !== "request" && this.router?.checkPeerRole(envelope, sourcePeerId)) {
+      appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), { peerId: sourcePeerId,
+        method: "method" in envelope ? envelope.method : envelope.kind,
+        role: "contained", createdAt: Date.now() });
+      return;
+    }
     // Subscription relays authenticate their delegated subscriber and route
     // explicitly inside applyEventSubscription. Other envelopes retain the
     // router's stricter direct-or-configured-upstream origin check.
@@ -5371,6 +5433,7 @@ export class DesktopFederationRuntime {
         id: connection.peerId,
         label: existing?.label ?? this.defaultPeerLabel(connection.peerId),
         role: existing?.role ?? this.defaultPeerRole(connection.peerId),
+        permissionRole: existing?.permissionRole,
         status: "connected",
         capabilities: [...connection.capabilities],
         navigationQueryProtocol: connection.navigationQueryProtocol,

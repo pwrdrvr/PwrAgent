@@ -76,6 +76,8 @@ export type PwrAgentMessagingContext = {
   causalMessagingAmbiguous?: boolean;
   /** Set from an authenticated federation envelope, never from tool arguments. */
   requestingInstanceId?: FederationInstanceId;
+  /** Receiver-derived metadata; never accepted from a remote context. */
+  containedPeer?: boolean;
 };
 
 export type PwrAgentMessagingConversationSummary = {

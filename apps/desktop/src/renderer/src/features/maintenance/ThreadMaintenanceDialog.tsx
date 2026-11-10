@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import {
   defaultThreadMaintenanceRules,
   normalizeCheckoutHibernationPolicy,
@@ -16,6 +16,7 @@ import {
   type ThreadMaintenanceProject,
   type ThreadMaintenanceRules,
   type ThreadMaintenanceRun,
+  type ThreadMaintenanceRunItem,
   type ThreadMaintenanceScan,
   type ThreadMaintenanceScanProgress,
   type ThreadMaintenanceScanStep,
@@ -63,6 +64,14 @@ import {
   type ThreadMaintenancePhase,
   type ThreadMaintenanceStoredPhase,
 } from "./thread-maintenance-run-state";
+import {
+  hasRunItems,
+  outcomeText,
+  problemsWithoutItems,
+  runItemCounts,
+  runItemView,
+  stageText,
+} from "./thread-maintenance-run-items";
 import type { ThreadMaintenanceSessionStatus } from "./thread-maintenance-session";
 import { groupKeptCheckouts, keptGuidance, pullRequestHref, spaceOf, type KeptGroup } from "./thread-maintenance-kept";
 
@@ -260,9 +269,11 @@ export function ThreadMaintenanceDialog(props: {
         ? `${hibernateItems(scan, selection, steps).length} found`
         : phase === "checkouts" && scan
           ? `${scan.checkouts.items.length} found`
-          : phase === "running" && run?.current
-            ? `${run.current.processed} / ${run.current.total}`
-            : undefined;
+          : phase === "running" && run && hasRunItems(run.items)
+            ? runChip(run.items)
+            : phase === "running" && run?.current
+              ? `${run.current.processed} / ${run.current.total}`
+              : undefined;
 
   const statusDetail = phase === "finished" && run ? ` · ${receiptLine(run, scan)}` : headChip ? ` · ${headChip}` : "";
   const onStatus = props.onStatus;
@@ -331,7 +342,9 @@ export function ThreadMaintenanceDialog(props: {
             </>
           ) : null}
           {(phase === "running" || phase === "finished") && run ? (
-            <RunView run={run} scan={scan} mode={mode} steps={steps} onOpenThread={busy ? undefined : props.onOpenThread} />
+            <RunView run={run} scan={scan} mode={mode} steps={steps}
+              // Open thread minimizes a hosted session, so a live run keeps going.
+              onOpenThread={busy && !canMinimize ? undefined : props.onOpenThread} />
           ) : null}
           {error ? <p className="thread-maintenance__error" role="alert">{error}</p> : null}
         </div>
@@ -583,13 +596,13 @@ function ScanStatus(props: { steps: readonly ReviewStep[]; progress?: ThreadMain
 
 /** Time since `since`, counting up once a second, so a long step reads as
  * working rather than stuck. Outside the live region: it is not announced. */
-function Elapsed(props: { since: number }) {
+function Elapsed(props: { since: number; prefix?: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-  return <span className="thread-maintenance__elapsed">{` · ${formatElapsed(now - props.since)}`}</span>;
+  return <span className="thread-maintenance__elapsed">{`${props.prefix ?? " · "}${formatElapsed(now - props.since)}`}</span>;
 }
 
 /** Roots listed before "N more roots". */
@@ -1468,16 +1481,27 @@ function RunView(props: {
   // A run an agent started may include steps this dialog's plan does not.
   const railSteps = THREAD_MAINTENANCE_SCAN_STEPS.filter((step) => props.steps.includes(step) || run.current?.step === step
     || run.steps.some((result) => result.step === step && result.ran));
-  const failed = run.problems.filter((problem) => problem.kind === "failed");
+  const items = hasRunItems(run.items) ? run.items : undefined;
+  // An item row already says what happened to it; only the rest are cards.
+  const problems = problemsWithoutItems(run.problems, items);
+  // Empty-folder progress is one batch row; its path-specific problems
+  // below count the actual failures, rather than the batch a second time.
+  const failedItems = items ? runItemView(items).failed
+    .filter((item) => item.action !== "removeEmptyFolders" || item.path !== undefined).length : 0;
+  const failed = failedItems + problems.filter((problem) => problem.kind === "failed").length;
   const done = run.steps.reduce((sum, step) => sum + step.done, 0);
+  const problemCards = THREAD_MAINTENANCE_SCAN_STEPS.map((step) => (
+    <ProblemCards key={step} step={step} problems={problems.filter((problem) => problem.step === step)} run={run}
+      onOpenThread={props.onOpenThread} />
+  ));
   return (
     <>
       {run.running ? null : (
-        <div className={`thread-maintenance__summary${failed.length ? " is-failed" : ""}`}>
+        <div className={`thread-maintenance__summary${failed ? " is-failed" : ""}`}>
           <div>
             <p className="thread-maintenance__summary-title">
-              {failed.length
-                ? `Maintenance finished with ${failed.length} ${failed.length === 1 ? "problem" : "problems"}`
+              {failed
+                ? `Maintenance finished with ${failed} ${failed === 1 ? "problem" : "problems"}`
                 : "Maintenance finished"}
             </p>
             <p className="thread-maintenance__summary-sub">{receiptLine(run, props.scan)}{done === 0 ? " · nothing changed" : ""}</p>
@@ -1485,11 +1509,10 @@ function RunView(props: {
         </div>
       )}
       {run.running ? <Rail steps={railSteps} phase="running" run={run} /> : null}
-      {THREAD_MAINTENANCE_SCAN_STEPS.map((step) => (
-        <ProblemCards key={step} step={step} problems={run.problems.filter((problem) => problem.step === step)} run={run}
-          onOpenThread={props.onOpenThread} />
-      ))}
-      {run.running && run.current ? (
+      {items ? (
+        <RunItems run={run} items={items} onOpenThread={props.onOpenThread}>{problemCards}</RunItems>
+      ) : problemCards}
+      {run.running && run.current && !items ? (
         <div className="thread-maintenance__progress-card" role="status">
           <div className="thread-maintenance__progress-top">
             <span>{STEP_PROGRESS[run.current.step]}</span>
@@ -1525,6 +1548,179 @@ function RunView(props: {
         </ul>
       )}
     </>
+  );
+}
+
+/** "12 / 89 · 4 in progress": finished of all, then what is live. */
+function runChip(items: ThreadMaintenanceRunItem[]): string {
+  const counts = runItemCounts(runItemView(items));
+  return `${counts.finished} / ${counts.total}${counts.active ? ` · ${counts.active} in progress` : ""}`;
+}
+
+/** Bar segments, in the legend's order: results first, then live work. */
+const RUN_SEGMENTS = ["done", "kept", "failed", "active", "waiting"] as const;
+const RUN_LEGEND: Record<(typeof RUN_SEGMENTS)[number], string> = {
+  done: "done", kept: "kept", failed: "failed", active: "in progress", waiting: "waiting",
+};
+
+/**
+ * Every item main reports, as stable rows. Work in progress shows each item
+ * with its directory, stage and time; finished items stay listed by outcome
+ * in the order they ended, so a success is still there after later items
+ * start. Waiting items fold behind one line, after the results.
+ *
+ * The items in progress stay pinned at the top of the body while the results
+ * scroll under them. `children` (the problem cards) render last, inside the
+ * same section, so the pin holds through them too.
+ */
+function RunItems(props: {
+  run: ThreadMaintenanceRun;
+  items: ThreadMaintenanceRunItem[];
+  onOpenThread?: OpenThread;
+  children?: ReactNode;
+}) {
+  const { run } = props;
+  const view = runItemView(props.items);
+  const pinnedRef = usePinnedScrollPadding(view.active.length > 0);
+  const counts = runItemCounts(view);
+  const [showWaiting, setShowWaiting] = useState(false);
+  const waitingId = useId();
+  const took = run.finishedAt !== undefined ? formatElapsed(run.finishedAt - run.startedAt) : undefined;
+  return (
+    <section className="thread-maintenance__run" aria-label="Run progress">
+      <div className="thread-maintenance__progress-card">
+        <div className="thread-maintenance__progress-top">
+          <span role="status" aria-live="polite" aria-atomic="true">
+            {run.running
+              ? `${counts.finished} of ${counts.total} finished`
+              : `${counts.finished} of ${counts.total} finished${counts.waiting ? ` · ${counts.waiting} not started` : ""}`}
+          </span>
+          <span className="thread-maintenance__mono">
+            {run.running ? <Elapsed since={run.startedAt} prefix="" /> : took ? `took ${took}` : null}
+          </span>
+        </div>
+        <div aria-hidden="true" className="thread-maintenance__run-bar">
+          {RUN_SEGMENTS.map((segment) => (
+            <i key={segment} className={`is-${segment}`} style={{ flexGrow: counts[segment] }} />
+          ))}
+        </div>
+        <p className="thread-maintenance__run-legend">
+          {RUN_SEGMENTS.map((segment) => (
+            <span key={segment} className={`is-${segment}`}><strong>{counts[segment]}</strong> {RUN_LEGEND[segment]}</span>
+          ))}
+        </p>
+        {run.running && run.stopRequested ? (
+          <p className="thread-maintenance__hint">
+            {`Stopping. ${counts.active} in progress ${counts.active === 1 ? "finishes" : "finish"}; `
+              + `${counts.waiting} waiting won't start.`}
+          </p>
+        ) : null}
+      </div>
+      {view.active.length ? (
+        <RunItemGroup ref={pinnedRef} tone="active" title={`In progress · ${view.active.length}`} items={view.active}
+          onOpenThread={props.onOpenThread} />
+      ) : null}
+      {view.failed.length ? (
+        <RunItemGroup tone="failed" title={`Failed · ${view.failed.length}`} items={view.failed} onOpenThread={props.onOpenThread} />
+      ) : null}
+      {view.kept.length ? (
+        <RunItemGroup tone="kept" title={`Kept · ${view.kept.length}`} items={view.kept} onOpenThread={props.onOpenThread} />
+      ) : null}
+      {view.done.length ? (
+        <RunItemGroup tone="done" title={`Done · ${view.done.length}`} items={view.done} onOpenThread={props.onOpenThread} />
+      ) : null}
+      {view.waiting.length ? (
+        <section className="thread-maintenance__run-group" aria-label={`${run.running ? "Waiting" : "Not started"} · ${view.waiting.length}`}>
+          <div className="thread-maintenance__run-head">
+            <p className="thread-maintenance__eyebrow">{`${run.running ? "Waiting" : "Not started"} · ${view.waiting.length}`}</p>
+            <button aria-controls={waitingId} aria-expanded={showWaiting} className="thread-maintenance__kept-toggle" type="button"
+              onClick={() => setShowWaiting(!showWaiting)}>
+              {showWaiting ? "Hide" : "Show"}
+            </button>
+          </div>
+          <ul id={waitingId} className="thread-maintenance__run-rows" hidden={!showWaiting}>
+            {showWaiting ? view.waiting.map((item) => <RunItemRow key={item.itemId} item={item} />) : null}
+          </ul>
+        </section>
+      ) : null}
+      {props.children}
+    </section>
+  );
+}
+
+/**
+ * Tells the body scroller how tall the pinned rows are, as
+ * `--thread-maintenance-pinned`, so focus moving to a result scrolls it
+ * clear of them instead of under them.
+ */
+function usePinnedScrollPadding(pinned: boolean) {
+  const ref = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const scroller = element?.closest<HTMLElement>(".thread-maintenance__body");
+    if (!pinned || !element || !scroller || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      // The gap between the pin and the first result below it.
+      scroller.style.setProperty("--thread-maintenance-pinned", `${Math.ceil(element.getBoundingClientRect().height) + 12}px`);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      scroller.style.removeProperty("--thread-maintenance-pinned");
+    };
+  }, [pinned]);
+  return ref;
+}
+
+function RunItemGroup(props: {
+  ref?: Ref<HTMLElement>;
+  tone: "active" | "failed" | "kept" | "done";
+  title: string;
+  items: ThreadMaintenanceRunItem[];
+  onOpenThread?: OpenThread;
+}) {
+  return (
+    <section ref={props.ref} className={`thread-maintenance__run-group is-${props.tone}`} aria-label={props.title}>
+      <div className="thread-maintenance__run-head">
+        <p className="thread-maintenance__eyebrow">{props.title}</p>
+      </div>
+      <ul className="thread-maintenance__run-rows">
+        {props.items.map((item) => <RunItemRow key={item.itemId} item={item} onOpenThread={props.onOpenThread} />)}
+      </ul>
+    </section>
+  );
+}
+
+function RunItemRow(props: { item: ThreadMaintenanceRunItem; onOpenThread?: OpenThread }) {
+  const { item } = props;
+  const finished = item.status === "done" || item.status === "kept" || item.status === "failed";
+  return (
+    <li className={`is-${item.status}`}>
+      <div className="thread-maintenance__run-text">
+        <p className="thread-maintenance__run-title">{item.object}</p>
+        {finished ? (
+          <p className="thread-maintenance__run-meta">
+            <b>{outcomeText(item)}</b>{item.detail ? ` · ${item.detail}` : ""}
+            {item.startedAt !== undefined && item.finishedAt !== undefined ? ` · ${formatElapsed(item.finishedAt - item.startedAt)}` : ""}
+          </p>
+        ) : null}
+        {item.path && item.path !== item.object ? <p className="thread-maintenance__path">{item.path}</p> : null}
+      </div>
+      {item.status === "running" ? (
+        <span className="thread-maintenance__run-stage">
+          {stageText(item)}{item.startedAt !== undefined ? <Elapsed since={item.startedAt} /> : null}
+        </span>
+      ) : null}
+      {props.onOpenThread && item.backend && item.threadId ? (
+        <button className="thread-maintenance__open-thread" type="button"
+          aria-label={`Open thread ${item.object}`}
+          onClick={() => props.onOpenThread!({ backend: item.backend!, threadId: item.threadId! })}>
+          Open thread
+        </button>
+      ) : null}
+    </li>
   );
 }
 
@@ -1788,7 +1984,7 @@ function Footer(props: {
           <button className="button button--ghost thread-maintenance__button" type="button"
             aria-disabled={props.run?.stopRequested || undefined}
             onClick={() => { if (!props.run?.stopRequested) props.onStop(); }}>
-            Stop after this item
+            {hasRunItems(props.run?.items) ? "Stop after current items" : "Stop after this item"}
           </button>
         </span>
       </>
