@@ -1,5 +1,5 @@
 import path from "node:path";
-import { analyzeProtocolCaptureTraffic } from "../src/main/testing/protocol-capture-analysis";
+import { analyzeProtocolCaptureTraffic } from "../src/main/shell/testing/protocol-capture-analysis";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));

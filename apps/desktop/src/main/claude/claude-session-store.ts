@@ -9,7 +9,7 @@ import type {
 } from "@pwragent/shared";
 import type { ClaudeSessionMetadataStorage } from "@pwragent/owner-core/claude-profile-storage";
 import { createClaudeSessionMetadataStorage } from "../storage/desktop-claude-profile-storage";
-import { persistTranscriptEntryImages } from "../transcript-image-protocol";
+import { persistTranscriptEntryImages } from "../transcript-images";
 
 /** Not a thread id, so list() never reads it as session metadata. */
 const RATE_LIMITS_FILE = "rate-limits.json";

@@ -13,7 +13,7 @@ import {
   type ExecutableAcpProviderFixture,
 } from "../acp/testing/executable-acp-agent-fixture";
 import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
-import { installedAcpAgentSettingsEntry } from "../ipc/settings";
+import { installedAcpAgentSettingsEntry } from "../shell/ipc/settings";
 import { isPathWithin } from "../../shared/path-within";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { openInMemoryStateDb } from "./sqlite-test-utils";

@@ -1,5 +1,5 @@
+import { imageCodec as nativeImage, type HostImage } from "../owner-host";
 import { readFile } from "node:fs/promises";
-import { nativeImage } from "electron";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { stageTurnInputAttachment, type StagedTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 
@@ -25,7 +25,7 @@ export function federationImageDimensions(width: number, height: number, maxPatc
 
 export function normalizeFederationImage(bytes: Buffer, options: {
   sending: boolean;
-  createImage?: (bytes: Buffer) => Electron.NativeImage;
+  createImage?: (bytes: Buffer) => HostImage;
 }): Buffer {
   const source = (options.createImage ?? ((data) => nativeImage.createFromBuffer(data)))(bytes);
   if (source.isEmpty()) throw new Error("Federation image could not be decoded.");

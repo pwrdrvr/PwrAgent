@@ -3,8 +3,8 @@ import { rmSync } from "node:fs";
 import type { WebContents } from "electron";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createOpenThreadInUi } from "../native-voice/open-thread-in-ui";
-import { publishOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
+import { createOpenThreadInUi } from "../shell/native-voice/open-thread-in-ui";
+import { publishOperatorFocus, resetOperatorFocusRegistry } from "../shell/native-voice/operator-focus-registry";
 import { ensureWindowThreadMounted } from "../../renderer/src/lib/ensure-window-thread-mounted";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
@@ -14,8 +14,8 @@ import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../storage/thread-search-store";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
-vi.mock("../primary-main-window", () => ({ primaryMainWindowWebContents: () => undefined }));
-vi.mock("../window-show-thread", () => ({ requestShowThread: vi.fn() }));
+vi.mock("../shell/primary-main-window", () => ({ primaryMainWindowWebContents: () => undefined }));
+vi.mock("../shell/window-show-thread", () => ({ requestShowThread: vi.fn() }));
 
 let root: string;
 let db: StateDb;

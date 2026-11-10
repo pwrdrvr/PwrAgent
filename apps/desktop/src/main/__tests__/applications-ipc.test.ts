@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { registerApplicationIpcHandlers } from "../ipc/applications";
+import { registerApplicationIpcHandlers } from "../shell/ipc/applications";
 import { MARKDOWN_FILE_READ_CHANNEL, TRANSCRIPT_FILES_RESOLVE_CHANNEL } from "../../shared/ipc";
 import type {
   DesktopApplicationsSnapshot,
@@ -95,16 +95,16 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({ resolveThread: mocks.resolveThread }),
 }));
 
-vi.mock("../markdown-files-window", () => ({
+vi.mock("../shell/markdown-files-window", () => ({
   readMarkdownFileViewerSnapshot: vi.fn(),
   showMarkdownFileViewerWindow: vi.fn(),
 }));
 
-vi.mock("../subagent-transcript-window", () => ({
+vi.mock("../shell/subagent-transcript-window", () => ({
   showSubAgentTranscriptWindow: vi.fn(),
 }));
 
-vi.mock("../tool-output-incident-explorer-window", () => ({
+vi.mock("../shell/tool-output-incident-explorer-window", () => ({
   showThreadFromToolOutputIncidentExplorer:
     mocks.showThreadFromToolOutputIncidentExplorer,
   showToolOutputIncidentExplorerWindow:

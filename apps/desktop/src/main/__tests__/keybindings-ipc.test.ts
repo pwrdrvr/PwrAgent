@@ -21,7 +21,7 @@ vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() })),
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(() => [
     {
       send: (channel: string, payload: unknown) => {
@@ -42,7 +42,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  const { _resetKeybindingsIpcForTests } = await import("../ipc/keybindings");
+  const { _resetKeybindingsIpcForTests } = await import("../shell/ipc/keybindings");
   _resetKeybindingsIpcForTests();
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -240,7 +240,7 @@ describe("keybindings store", () => {
 describe("keybindings ipc", () => {
   it("serves the snapshot and broadcasts a write to every window", async () => {
     const { registerKeybindingsIpcHandlers, onKeybindingsChanged } = await import(
-      "../ipc/keybindings"
+      "../shell/ipc/keybindings"
     );
     const { KEYBINDINGS_CHANGED_CHANNEL, KEYBINDINGS_READ_CHANNEL, KEYBINDINGS_WRITE_CHANNEL } =
       await import("../../shared/ipc");
@@ -271,7 +271,7 @@ describe("keybindings ipc", () => {
 
   it("reloads and broadcasts an immediate external atomic save after caching a snapshot", async () => {
     const { registerKeybindingsIpcHandlers, onKeybindingsChanged } = await import(
-      "../ipc/keybindings"
+      "../shell/ipc/keybindings"
     );
     const { KEYBINDINGS_CHANGED_CHANNEL, KEYBINDINGS_READ_CHANNEL } = await import(
       "../../shared/ipc"
@@ -296,7 +296,7 @@ describe("keybindings ipc", () => {
   });
 
   it("refuses a malformed write request", async () => {
-    const { registerKeybindingsIpcHandlers } = await import("../ipc/keybindings");
+    const { registerKeybindingsIpcHandlers } = await import("../shell/ipc/keybindings");
     const { KEYBINDINGS_WRITE_CHANNEL } = await import("../../shared/ipc");
     registerKeybindingsIpcHandlers({ filePath });
     const write = handlers.get(KEYBINDINGS_WRITE_CHANNEL)!;

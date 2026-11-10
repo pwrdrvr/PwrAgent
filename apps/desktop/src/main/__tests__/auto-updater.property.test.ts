@@ -171,7 +171,7 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("electron-updater", () => ({ default: { autoUpdater: fake.autoUpdater } }));
-vi.mock("../linux-package-updater", () => ({
+vi.mock("../shell/linux-package-updater", () => ({
   createLinuxPackageUpdater: (updater: unknown) => updater,
   authorizeLinuxPackageUpdate: () => true,
 }));
@@ -207,14 +207,14 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   }),
 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ info: () => {}, warn: () => {} }) }));
-vi.mock("../update-install-state", () => ({
+vi.mock("../shell/update-install-state", () => ({
   markUpdateInstallInProgress: () => {},
   markUpdateInstallUpdaterQuitReady: () => {},
   prepareForUpdateInstall: async () => {},
 }));
 
-type GitHubRelease = Parameters<typeof import("../auto-updater").selectChannelReleases>[0][number];
-const { selectChannelReleases, compareSemver } = await import("../auto-updater");
+type GitHubRelease = Parameters<typeof import("../shell/auto-updater").selectChannelReleases>[0][number];
+const { selectChannelReleases, compareSemver } = await import("../shell/auto-updater");
 
 const originalPlatform = process.platform;
 afterEach(() => {
@@ -463,7 +463,7 @@ describe("compareSemver", () => {
 });
 
 type Train = "stable" | "beta";
-type Updater = typeof import("../auto-updater");
+type Updater = typeof import("../shell/auto-updater");
 const BASELINE = "v1.0.0";
 const TAG_POOL = [
   "v1.0.1",
@@ -613,7 +613,7 @@ async function runSession(
   fake.state.feed = new Set(feed);
   fake.state.train = start.train;
   vi.resetModules();
-  const world = { updater: await import("../auto-updater") };
+  const world = { updater: await import("../shell/auto-updater") };
   world.updater.initAutoUpdater();
   const model: Model = { feed, train: start.train, downloading: false };
   try {
@@ -671,7 +671,7 @@ async function runMacStagingSession(patch: number, beta: number, startTrain: Tra
   fake.state.feed = new Set([BASELINE, `v${stableVersion}`, `v${betaVersion}`]);
   fake.state.train = startTrain;
   vi.resetModules();
-  const updater = await import("../auto-updater");
+  const updater = await import("../shell/auto-updater");
   updater.initAutoUpdater();
   await settle();
   fake.succeed();

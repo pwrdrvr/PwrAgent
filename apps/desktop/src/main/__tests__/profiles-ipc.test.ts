@@ -130,7 +130,7 @@ describe("profile IPC helpers", () => {
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "personal");
 
-    const { listDesktopPwrAgentProfiles } = await import("../ipc/profiles");
+    const { listDesktopPwrAgentProfiles } = await import("../shell/ipc/profiles");
     const result = listDesktopPwrAgentProfiles();
 
     expect(result.profiles.map((profile) => profile.name)).toEqual([
@@ -163,7 +163,7 @@ describe("profile IPC helpers", () => {
     const {
       listDesktopPwrAgentProfiles,
       setDefaultDesktopPwrAgentProfile,
-    } = await import("../ipc/profiles");
+    } = await import("../shell/ipc/profiles");
 
     expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
       "dev",
@@ -200,7 +200,7 @@ describe("profile IPC helpers", () => {
 
     it("lists profiles in creation order, not active-first or alphabetical", async () => {
       seedProfiles("dev", ["work", "dev", "alpha"]);
-      const { listDesktopPwrAgentProfiles } = await import("../ipc/profiles");
+      const { listDesktopPwrAgentProfiles } = await import("../shell/ipc/profiles");
 
       const profiles = listDesktopPwrAgentProfiles().profiles;
 
@@ -221,7 +221,7 @@ describe("profile IPC helpers", () => {
       const {
         listDesktopPwrAgentProfiles,
         reorderDesktopPwrAgentProfiles,
-      } = await import("../ipc/profiles");
+      } = await import("../shell/ipc/profiles");
 
       expect(
         reorderDesktopPwrAgentProfiles({ order: ["alpha", "dev", "work"] }),
@@ -242,7 +242,7 @@ describe("profile IPC helpers", () => {
       const {
         listDesktopPwrAgentProfiles,
         reorderDesktopPwrAgentProfiles,
-      } = await import("../ipc/profiles");
+      } = await import("../shell/ipc/profiles");
 
       expect(() => reorderDesktopPwrAgentProfiles({ order })).toThrow(
         "The profile list changed while you were reordering it.",
@@ -257,7 +257,7 @@ describe("profile IPC helpers", () => {
       const {
         listDesktopPwrAgentProfiles,
         setDesktopPwrAgentProfileMenuVisibility,
-      } = await import("../ipc/profiles");
+      } = await import("../shell/ipc/profiles");
 
       expect(
         setDesktopPwrAgentProfileMenuVisibility({
@@ -302,7 +302,7 @@ describe("profile IPC helpers", () => {
     it("refuses to change the visibility of a profile that does not exist", async () => {
       seedProfiles("dev", ["dev"]);
       const { setDesktopPwrAgentProfileMenuVisibility } = await import(
-        "../ipc/profiles"
+        "../shell/ipc/profiles"
       );
 
       expect(() =>
@@ -315,7 +315,7 @@ describe("profile IPC helpers", () => {
 
     it("rebuilds the menus after a reorder or a visibility change, and only on success", async () => {
       seedProfiles("dev", ["dev", "work"]);
-      const { registerProfilesIpcHandlers } = await import("../ipc/profiles");
+      const { registerProfilesIpcHandlers } = await import("../shell/ipc/profiles");
       const onProfilesChanged = vi.fn();
       registerProfilesIpcHandlers({ onProfilesChanged });
       const handler = (channel: string) => {
@@ -355,7 +355,7 @@ describe("profile IPC helpers", () => {
     ensureNamedProfileExists("work", { env });
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
-    const { registerProfilesIpcHandlers } = await import("../ipc/profiles");
+    const { registerProfilesIpcHandlers } = await import("../shell/ipc/profiles");
     const onProfilesChanged = vi.fn();
 
     registerProfilesIpcHandlers({ onProfilesChanged });
@@ -375,7 +375,7 @@ describe("profile IPC helpers", () => {
   });
 
   it("replaces inherited profile launch arguments when opening another profile", async () => {
-    const { replaceProfileLaunchArgs } = await import("../ipc/profiles");
+    const { replaceProfileLaunchArgs } = await import("../shell/ipc/profiles");
 
     expect(
       replaceProfileLaunchArgs(
@@ -403,7 +403,7 @@ describe("profile IPC helpers", () => {
     });
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
-    const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
+    const { openDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
     try {
       expect(openDesktopPwrAgentProfile({ profile: "scratch" })).toEqual({
@@ -429,7 +429,7 @@ describe("profile IPC helpers", () => {
     ensureNamedProfileExists("dev", { env });
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
-    const { createDesktopPwrAgentProfile } = await import("../ipc/profiles");
+    const { createDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
     const response = createDesktopPwrAgentProfile({ profile: "work" });
     expect(response.created).toBe(true);
@@ -453,7 +453,7 @@ describe("profile IPC helpers", () => {
     ensureNamedProfileExists("dev", { env });
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
-    const { createDesktopPwrAgentProfile } = await import("../ipc/profiles");
+    const { createDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
     const response = createDesktopPwrAgentProfile({ profile: "My Work Profile" });
 
@@ -477,7 +477,7 @@ describe("profile IPC helpers", () => {
     vi.stubEnv(SECRET_STORAGE_DISABLED_ENV, "1");
     vi.stubEnv("PWRAGENT_E2E", "1");
     vi.stubEnv("NODE_OPTIONS", '--require "/fixture/github-release-stubs.cjs"');
-    const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
+    const { openDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
     const previousArgv = process.argv;
     const previousDefaultApp = Object.getOwnPropertyDescriptor(process, "defaultApp");
@@ -518,7 +518,7 @@ describe("profile IPC helpers", () => {
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "test2");
     getAppStateModeMock.mockReturnValue("bootstrap");
-    const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
+    const { openDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
     const response = openDesktopPwrAgentProfile({ profile: "test2" });
 
@@ -544,7 +544,7 @@ describe("profile IPC helpers", () => {
     ensureNamedProfileExists("dev", { env });
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
-    const { createDesktopPwrAgentProfile } = await import("../ipc/profiles");
+    const { createDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
     createDesktopPwrAgentProfile({
       profile: "pwragent",
@@ -568,7 +568,7 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       getAppStateModeMock.mockReturnValue("active-profile");
 
-      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../shell/ipc/profiles");
 
       const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
 
@@ -586,7 +586,7 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       getAppStateModeMock.mockReturnValue("bootstrap");
 
-      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../shell/ipc/profiles");
 
       const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
 
@@ -620,7 +620,7 @@ describe("profile IPC helpers", () => {
         "utf8",
       );
 
-      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../shell/ipc/profiles");
 
       const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
 
@@ -662,7 +662,7 @@ describe("profile IPC helpers", () => {
       ensureNamedProfileExists("personal", { env });
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
 
-      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
 
       const result = writeDesktopSecretsToProfile({
         profile: "personal",
@@ -700,7 +700,7 @@ describe("profile IPC helpers", () => {
       ensureNamedProfileExists("personal", { env });
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
 
-      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
       writeDesktopSecretsToProfile({
         profile: "personal",
         secrets: { discordBotToken: "first-value" },
@@ -726,7 +726,7 @@ describe("profile IPC helpers", () => {
       const root = createRoot();
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
 
-      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
     expect(() =>
       writeDesktopSecretsToProfile({
         profile: "!!!",
@@ -739,7 +739,7 @@ describe("profile IPC helpers", () => {
     it("rejects when the target profile dir doesn't exist", async () => {
       const root = createRoot();
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
-      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
       expect(() =>
         writeDesktopSecretsToProfile({
           profile: "ghost",
@@ -755,7 +755,7 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       safeStorageIsAvailableMock.mockReturnValue(false);
 
-      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
       expect(() =>
         writeDesktopSecretsToProfile({
           profile: "personal",
@@ -775,7 +775,7 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", "1");
 
-      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      const { writeDesktopSecretsToProfile } = await import("../shell/ipc/profiles");
       const result = writeDesktopSecretsToProfile({
         profile: "personal",
         secrets: { discordBotToken: "would-have-been-encrypted" },
@@ -816,7 +816,7 @@ describe("profile IPC helpers", () => {
     );
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
-    const { listDesktopPwrAgentProfiles } = await import("../ipc/profiles");
+    const { listDesktopPwrAgentProfiles } = await import("../shell/ipc/profiles");
 
     // Pre-#524: this assertion included "default" because the
     // listing unconditionally synthesized it. Post-#524 fix: only

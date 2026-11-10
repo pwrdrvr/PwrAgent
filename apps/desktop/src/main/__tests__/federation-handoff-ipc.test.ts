@@ -34,7 +34,7 @@ vi.mock("../federation/federation-runtime", () => ({
 vi.mock("../federation/federation-tailscale", () => ({
   getFederationTailscaleService: () => ({}),
 }));
-vi.mock("../federation/federation-window", () => ({
+vi.mock("../shell/federation/federation-window", () => ({
   createFederationWindow: vi.fn(),
 }));
 
@@ -70,7 +70,7 @@ function windowSender(id = 1) {
 }
 
 async function register(): Promise<void> {
-  const { registerFederationIpcHandlers } = await import("../ipc/federation");
+  const { registerFederationIpcHandlers } = await import("../shell/ipc/federation");
   registerFederationIpcHandlers();
 }
 

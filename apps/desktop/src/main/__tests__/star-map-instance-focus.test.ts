@@ -1,15 +1,15 @@
 import type { WebContents } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StarMapCommandResponse } from "@pwragent/shared";
-import { sendStarMapCommand } from "../star-map/star-map-command-bus";
+import { sendStarMapCommand } from "../shell/star-map/star-map-command-bus";
 import {
   STAR_MAP_INSTANCE_FOCUS_TIMEOUT_MS,
   attemptStarMapInstanceFocus,
   requestStarMapInstanceFocus,
   resetStarMapInstanceFocus,
-} from "../star-map/star-map-instance-focus";
+} from "../shell/star-map/star-map-instance-focus";
 
-vi.mock("../star-map/star-map-command-bus", () => ({
+vi.mock("../shell/star-map/star-map-command-bus", () => ({
   sendStarMapCommand: vi.fn(),
 }));
 

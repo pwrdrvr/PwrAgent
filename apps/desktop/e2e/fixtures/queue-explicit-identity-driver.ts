@@ -1,3 +1,4 @@
+import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { DesktopBackendRegistry } from "../../src/main/app-server/backend-registry";
@@ -9,6 +10,7 @@ import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from
 import { OwnerConformanceCodexTransport } from "../../src/main/__tests__/fixtures/owner-conformance-codex-transport";
 
 export async function exerciseExplicitQueueIdentity(root: string) {
+  await installTestOwnerHost();
   await mkdir(root, { recursive: true });
   const configPath = path.join(root, "config.toml");
   await writeFile(configPath, "");

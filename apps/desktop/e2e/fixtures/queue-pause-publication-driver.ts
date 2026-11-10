@@ -1,3 +1,4 @@
+import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { AgentEvent } from "@pwragent/shared";
@@ -16,6 +17,7 @@ import { getProjectForgeAutomationIndex, resetProjectForgeAutomationIndexForTest
 // This separate owner uses actual desktop construction, native protocol fixture
 // responses and real SQLite in Electron. It cannot reach an installed agent.
 export async function exerciseDesktopPausePublication(root: string, initiallyPaused: boolean) {
+  await installTestOwnerHost();
   await mkdir(root, { recursive: true });
   const configPath = path.join(root, "config.toml");
   await writeFile(configPath, "");
@@ -62,6 +64,7 @@ export async function exerciseDesktopPausePublication(root: string, initiallyPau
 }
 
 export async function exerciseDesktopWakeupPauseDurability(root: string) {
+  await installTestOwnerHost();
   await mkdir(root, { recursive: true });
   const configPath = path.join(root, "config.toml");
   await writeFile(configPath, "");

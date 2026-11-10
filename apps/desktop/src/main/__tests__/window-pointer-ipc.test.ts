@@ -34,7 +34,7 @@ describe("window pointer ipc", () => {
 
   it("returns cursor position and sender content bounds", async () => {
     const { registerWindowPointerIpcHandlers, disposeWindowPointerIpcHandlers } =
-      await import("../ipc/window-pointer");
+      await import("../shell/ipc/window-pointer");
     const { WINDOW_POINTER_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     getContentBoundsMock.mockReturnValue({

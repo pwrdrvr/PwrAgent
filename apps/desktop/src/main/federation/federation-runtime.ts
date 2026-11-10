@@ -2,6 +2,7 @@ import { FederationRoleDeniedError } from "@pwragent/federation/federation-route
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
 import { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
 import type { FederationPeerRole } from "@pwragent/shared";
+import { applicationHost as app } from "../owner-host";
 import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
@@ -31,7 +32,6 @@ import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANS
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest, type ThreadHandoffSendOptions } from "./thread-instance-handoff-service";
-import { app } from "electron";
 import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDestination,
   type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
 import {
@@ -329,7 +329,7 @@ import {
   rewriteFederatedTranscriptImageUrlForRenderer,
   rewriteFederatedTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
-} from "../transcript-image-protocol";
+} from "../transcript-images";
 import {
   readThreadForPeer,
   readTurnAssistantReplyForPeer,
@@ -7131,7 +7131,7 @@ let messagingPlatformStatusReader:
 /**
  * Wire the local messaging runtime's platform statuses into the federation
  * backend so remote viewers can render this instance's MSG chip. Registered
- * by the messaging IPC layer (which owns the runtime singleton) to keep the
+ * by the owner composition root to keep the
  * federation runtime free of a messaging-runtime import cycle.
  */
 export function setFederationMessagingPlatformStatusReader(
@@ -7658,7 +7658,7 @@ function localBackendOperations(): FederationBackendOperations {
       };
     },
     async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {
-      // Registered by the messaging IPC layer — messaging-runtime imports
+      // Registered by the owner composition root — messaging-runtime imports
       // this module for event fan-out, so importing it back would be a
       // cycle. An unregistered reader (messaging not wired yet) reads as
       // "no platforms configured", which renders as no MSG chip.
@@ -8101,7 +8101,7 @@ function localBackendOperations(): FederationBackendOperations {
       );
       return await admitSteerTurn(
         registry,
-        getScheduledThreadActionService(registry),
+        getScheduledThreadActionService(),
         request,
       );
     },
@@ -8415,7 +8415,7 @@ function localBackendOperations(): FederationBackendOperations {
 
 let runtime: DesktopFederationRuntime | undefined;
 
-export function getDesktopFederationRuntime(): DesktopFederationRuntime {
+export function initializeDesktopFederationRuntime(): DesktopFederationRuntime {
   runtime ??= new DesktopFederationRuntime();
   return runtime;
 }
@@ -8423,4 +8423,14 @@ export function getDesktopFederationRuntime(): DesktopFederationRuntime {
 export async function disposeDesktopFederationRuntime(): Promise<void> {
   await runtime?.stop();
   runtime = undefined;
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getDesktopFederationRuntime(): DesktopFederationRuntime {
+  if (!runtime) throw new Error("getDesktopFederationRuntime is unavailable before startOwnerServices().");
+  return runtime;
+}
+
+export function getExistingDesktopFederationRuntime(): DesktopFederationRuntime | undefined {
+  return runtime;
 }

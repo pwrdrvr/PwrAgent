@@ -42,12 +42,12 @@ vi.mock("electron", () => ({ BrowserWindow: mocks.BrowserWindow }));
 vi.mock("../log", () => ({
   getMainLogger: () => ({ debug: vi.fn() }),
 }));
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   applyWindowSecurityHardening: mocks.applyWindowSecurityHardening,
   rendererPreloadWebPreferences: () => ({ preload: "/preload.js", nodeIntegrationInSubFrames: true }),
   getRendererEntry: () => ({ kind: "file", value: "/renderer.html" }),
 }));
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   WINDOW_KIND_TOOL_OUTPUT_INCIDENT_EXPLORER: "tool-output-incident-explorer",
   registerWindowChannels: mocks.registerWindowChannels,
 }));
@@ -60,18 +60,18 @@ vi.mock("../settings/appearance-bootstrap", () => ({
   themedWindowAdditionalArguments: () => ["--appearance=dark"],
   themedWindowBackgroundColor: () => "#000000",
 }));
-vi.mock("../auxiliary-window-chrome", () => ({
+vi.mock("../shell/auxiliary-window-chrome", () => ({
   auxiliaryWindowChromeOptions: () => ({ frame: true }),
   hideAuxiliaryWindowMenuBar: vi.fn(),
   registerAuxiliaryWindowTitle: vi.fn(),
   showAndFocusAuxiliaryWindow: mocks.showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady: vi.fn(),
 }));
-vi.mock("../window-placement", () => ({
+vi.mock("../shell/window-placement", () => ({
   placementForSourceDisplay: () => ({ x: 10, y: 20 }),
   positionWindowForSourceDisplay: vi.fn(),
 }));
-vi.mock("../window-show-thread", () => ({
+vi.mock("../shell/window-show-thread", () => ({
   requestShowThread: mocks.requestShowThread,
 }));
 
@@ -92,7 +92,7 @@ describe("tool-output incident explorer window", () => {
 
   it("creates one hardened inspection-only window per thread", async () => {
     const { showToolOutputIncidentExplorerWindow } = await import(
-      "../tool-output-incident-explorer-window"
+      "../shell/tool-output-incident-explorer-window"
     );
     const request = {
       backend: "codex" as const,
@@ -134,7 +134,7 @@ describe("tool-output incident explorer window", () => {
     /* The lens segment sits between them and is always emitted, so the owner
        keeps a fixed position whether or not a lens was asked for. */
     const { showToolOutputIncidentExplorerWindow } = await import(
-      "../tool-output-incident-explorer-window"
+      "../shell/tool-output-incident-explorer-window"
     );
     showToolOutputIncidentExplorerWindow({
       backend: "codex" as const,
@@ -159,7 +159,7 @@ describe("tool-output incident explorer window", () => {
        own opening choice reads accounting that has a lookback the durable
        gate records outlive. */
     const { showToolOutputIncidentExplorerWindow } = await import(
-      "../tool-output-incident-explorer-window"
+      "../shell/tool-output-incident-explorer-window"
     );
     showToolOutputIncidentExplorerWindow({
       backend: "codex" as const,
@@ -182,7 +182,7 @@ describe("tool-output incident explorer window", () => {
     const {
       showThreadFromToolOutputIncidentExplorer,
       showToolOutputIncidentExplorerWindow,
-    } = await import("../tool-output-incident-explorer-window");
+    } = await import("../shell/tool-output-incident-explorer-window");
     const ownerWebContents = {
       isDestroyed: vi.fn(() => false),
       send: vi.fn(),
@@ -216,7 +216,7 @@ describe("tool-output incident explorer window", () => {
     const {
       showThreadFromToolOutputIncidentExplorer,
       showToolOutputIncidentExplorerWindow,
-    } = await import("../tool-output-incident-explorer-window");
+    } = await import("../shell/tool-output-incident-explorer-window");
     const sourceWindow = {
       isDestroyed: vi.fn(() => false),
       webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
@@ -257,7 +257,7 @@ describe("tool-output incident explorer window", () => {
     const {
       showThreadFromToolOutputIncidentExplorer,
       showToolOutputIncidentExplorerWindow,
-    } = await import("../tool-output-incident-explorer-window");
+    } = await import("../shell/tool-output-incident-explorer-window");
     const sourceWindow = {
       isDestroyed: vi.fn(() => false),
       webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },

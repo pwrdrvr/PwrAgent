@@ -39,10 +39,10 @@ import {
   DEFAULT_CAPABILITIES,
   DesktopFederationRuntime,
   disposeDesktopFederationRuntime,
-  getDesktopFederationRuntime,
+  initializeDesktopFederationRuntime,
   navigationWireResponseThreadCount,
 } from "../federation/federation-runtime";
-import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { initializeDesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import * as desktopSettingsSingleton from "../settings/desktop-settings-singleton";
 import {
@@ -72,7 +72,7 @@ import * as navigationQuerySource from "../app-server/navigation-query-source";
 import * as directoryRegistration from "../app-server/directory-registration-service";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 
-// `getDesktopBackendRegistry()` is the one construction that opts into real
+// `initializeDesktopBackendRegistry()` is the one construction that opts into real
 // machine ACP discovery, so a test that reaches the singleton inherits it — the
 // config read, the GitHub release fetch, the managed-Grok install under the
 // PwrAgent root, and the 5-16s probe. Nothing here needs an installed agent, so
@@ -826,7 +826,7 @@ describe("DesktopFederationRuntime", () => {
       .mockReturnValue({
         read: () => ({ settings: {} }), subscribe: () => () => undefined,
       } as never);
-    const registry = getDesktopBackendRegistry();
+    const registry = initializeDesktopBackendRegistry();
     const candidates = vi.spyOn(registry, "listThreadSearchCandidates").mockResolvedValue([{
       id: "project-thread", source: "codex", title: "Project thread",
       titleSource: "explicit",
@@ -933,7 +933,7 @@ describe("DesktopFederationRuntime", () => {
     const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
-    const runtime = getDesktopFederationRuntime();
+    const runtime = initializeDesktopFederationRuntime();
     const parentRow = {
       ref: { backend: "codex" as const, threadId: "root", ownerInstanceId: "viewer" },
       rowRevision: "root-revision",
@@ -954,7 +954,7 @@ describe("DesktopFederationRuntime", () => {
       counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
       entries: [{ row: parentRow, orderKey: "0", placement: { kind: "root" } }],
     });
-    const publish = vi.spyOn(getDesktopBackendRegistry(), "publishLocalEvent").mockResolvedValue(undefined);
+    const publish = vi.spyOn(initializeDesktopBackendRegistry(), "publishLocalEvent").mockResolvedValue(undefined);
     try {
       const response = await runtime.localBackend().setThreadParent({
         backend: "codex",
@@ -993,7 +993,7 @@ describe("DesktopFederationRuntime", () => {
     const stateDb = StateDb.open(path.join(tempDir, "state.db"));
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
-    const runtime = getDesktopFederationRuntime();
+    const runtime = initializeDesktopFederationRuntime();
     const settings = vi.spyOn(
       desktopSettingsSingleton,
       "getDesktopSettingsService",
@@ -1011,7 +1011,7 @@ describe("DesktopFederationRuntime", () => {
       read: () => ({ settings: {} }),
       subscribe: () => () => undefined,
     } as never);
-    const registry = getDesktopBackendRegistry();
+    const registry = initializeDesktopBackendRegistry();
     const parentSummary = {
       ref: { backend: "codex" as const, threadId: "parent", ownerInstanceId: "parent-peer" },
       rowRevision: "parent-revision",

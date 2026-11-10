@@ -1,4 +1,4 @@
-import { shell } from "electron";
+import { externalLinks as shell } from "../owner-host";
 import { CloudflareAccessOAuth } from "./cloudflare-access-oauth";
 import { loadCloudflareAccessSession, saveCloudflareAccessSession } from "./cloudflare-setup-storage";
 import { getMainLogger } from "../log";

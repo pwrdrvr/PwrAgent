@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   linuxPasswordStorePath,
   probeSecretServices,
-} from "../linux-password-store";
+} from "../shell/linux-password-store";
 
 const require = createRequire(import.meta.url);
 const fixture = join(import.meta.dirname, "fixtures", "linux-password-store-electron.cjs");

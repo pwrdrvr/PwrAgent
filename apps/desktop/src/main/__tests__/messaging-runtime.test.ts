@@ -97,7 +97,9 @@ function trackRuntime(runtime: DesktopMessagingRuntime): DesktopMessagingRuntime
   return runtime;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  const { initializeDesktopFederationRuntime } = await import("../federation/federation-runtime");
+  initializeDesktopFederationRuntime();
   messagingLog.debug.mockReset();
   messagingLog.error.mockReset();
   messagingLog.info.mockReset();

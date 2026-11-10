@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTemporaryTestDirectory } from "../testing/test-harness";
+import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
 import { acquireDebuggerLease } from "../diagnostics/debugger-lease";
-import { HotCpuProfiler } from "../diagnostics/hot-cpu-profiler";
+import { HotCpuProfiler } from "../shell/diagnostics/hot-cpu-profiler";
 import { createMainProcessHotCpuTarget } from "../diagnostics/main-process-hot-cpu-target";
 
 function createEnabledConfig(

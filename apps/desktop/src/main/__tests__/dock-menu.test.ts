@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
-import { buildDockProfileMenuTemplate } from "../dock-menu";
+import { buildDockProfileMenuTemplate } from "../shell/dock-menu";
 
 function summary(
   name: string,

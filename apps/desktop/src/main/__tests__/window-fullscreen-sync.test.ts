@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserWindow } from "electron";
 import { WINDOW_FULLSCREEN_SYNC_CHANNEL } from "../../shared/ipc";
-import { attachWindowFullscreenSync } from "../window-fullscreen-sync";
+import { attachWindowFullscreenSync } from "../shell/window-fullscreen-sync";
 
 type FakeWindow = BrowserWindow & {
   emitWindowEvent: (event: string) => void;

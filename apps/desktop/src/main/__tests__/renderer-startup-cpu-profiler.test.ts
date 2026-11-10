@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTemporaryTestDirectory } from "../testing/test-harness";
+import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 import { createStartupCpuProfileSession } from "../diagnostics/startup-cpu-profile-session";
 import { RendererStartupCpuProfiler } from "../diagnostics/renderer-startup-cpu-profiler";
 import { resolveStartupCpuProfileConfig } from "../diagnostics/startup-cpu-profile-config";

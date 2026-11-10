@@ -5,14 +5,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   MACOS_TRAFFIC_LIGHT_POSITION,
   macosTitleBarChrome,
-} from "../macos-window-chrome";
+} from "../shell/macos-window-chrome";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(
   path.resolve(testDir, "../../renderer/src/styles/app.css"),
   "utf8",
 );
-const windowSource = readFileSync(path.resolve(testDir, "../window.ts"), "utf8");
+const windowSource = readFileSync(path.resolve(testDir, "../shell/window.ts"), "utf8");
 
 /**
  * Every top-level declaration block for a selector, in source order. Several
@@ -292,7 +292,7 @@ describe("macOS window chrome", () => {
   it("gives auxiliary windows the same chrome as the main window", async () => {
     setPlatform("darwin");
     const { auxiliaryWindowChromeOptions } = await import(
-      "../auxiliary-window-chrome"
+      "../shell/auxiliary-window-chrome"
     );
 
     expect(auxiliaryWindowChromeOptions()).toMatchObject(macosTitleBarChrome());

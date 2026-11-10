@@ -42,7 +42,7 @@ import {
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
-} from "../transcript-image-protocol";
+} from "../shell/transcript-image-protocol";
 import * as appState from "../state/app-state";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";

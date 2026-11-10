@@ -1,7 +1,7 @@
 import type { WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { requestOpenNewThread } from "../window-open-new-thread";
-import { subscribersForChannel } from "../window-channels";
+import { requestOpenNewThread } from "../shell/window-open-new-thread";
+import { subscribersForChannel } from "../shell/window-channels";
 import { WINDOW_OPEN_NEW_THREAD_CHANNEL } from "../../shared/ipc";
 
 const { getFocusedWindowMock, fromWebContentsMock } = vi.hoisted(() => ({
@@ -16,7 +16,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(),
 }));
 

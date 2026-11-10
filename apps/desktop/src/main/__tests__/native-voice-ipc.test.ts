@@ -49,11 +49,11 @@ vi.mock("../native-voice/voice-manager-thread", () => ({
   isVoiceManagerThread: (threadId: string) => threadId === "sample-voice-manager",
   openVoiceManagerThread: mocks.openManager,
 }));
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   isLocalMainWindowWebContents: (contents?: { id: number }) => Boolean(contents && mocks.mainWindowIds.has(contents.id)),
 }));
-import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "../ipc/native-voice";
-import { readOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
+import { nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "../shell/ipc/native-voice";
+import { readOperatorFocus, resetOperatorFocusRegistry } from "../shell/native-voice/operator-focus-registry";
 type MediaRuleArgs = Parameters<typeof nativeVoiceMediaRules.check>;
 // The session handlers live in permission-policy.ts and call these rules for
 // "media" from the app's main frame; drive the rules in the handlers' shape.

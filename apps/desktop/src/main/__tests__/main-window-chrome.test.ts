@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { macosTitleBarChrome } from "../macos-window-chrome";
-import { mainWindowChromeOptions } from "../main-window-chrome";
+import { macosTitleBarChrome } from "../shell/macos-window-chrome";
+import { mainWindowChromeOptions } from "../shell/main-window-chrome";
 import type { BootstrapAppearance } from "../settings/appearance-bootstrap";
 
 const appearance = {

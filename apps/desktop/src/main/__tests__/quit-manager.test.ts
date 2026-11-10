@@ -1,4 +1,4 @@
-import { createQuitManager, type QuitManagerDependencies } from "../quit-manager";
+import { createQuitManager, type QuitManagerDependencies } from "../shell/quit-manager";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const backendRegistryMock = vi.hoisted(() => ({
@@ -21,7 +21,7 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => backendRegistryMock),
 }));
 
-vi.mock("../ipc/integrated-terminal", () => ({
+vi.mock("../shell/ipc/integrated-terminal", () => ({
   getIntegratedTerminalQuitSnapshot: vi.fn(() => ({
     count: 0,
     sessionIds: [],
@@ -30,7 +30,7 @@ vi.mock("../ipc/integrated-terminal", () => ({
   revealIntegratedTerminal: vi.fn(() => ({ revealed: false })),
 }));
 
-vi.mock("../window-show-thread", () => ({ requestShowThread: vi.fn() }));
+vi.mock("../shell/window-show-thread", () => ({ requestShowThread: vi.fn() }));
 
 vi.mock("../settings/appearance-bootstrap", () => ({
   readBootstrapAppearance: () => ({ theme: "dark" }),
@@ -88,7 +88,7 @@ describe("createQuitManager", () => {
   });
 
   it("prompts for cleanup-only work and refreshes its pending count", async () => {
-    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+    const { buildQuitBlockerSnapshot } = await import("../shell/quit-manager");
     let count = 130;
     const confirm = vi.fn(async (options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) => {
       expect(options.archiveCleanupCount).toBe(130);
@@ -141,7 +141,7 @@ describe("createQuitManager", () => {
   });
 
   it("keeps production quit state usable when the native DEB updater denies authorization", async () => {
-    const { ManagedDebUpdater } = await import("../linux-package-updater");
+    const { ManagedDebUpdater } = await import("../shell/linux-package-updater");
     const relaunch = vi.fn();
     const nativeQuit = vi.fn();
     const updater = new ManagedDebUpdater(null, {
@@ -233,7 +233,7 @@ describe("createQuitManager", () => {
   });
 
   it("quits immediately when no threads are in progress", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const performQuit = vi.fn();
     const confirm = vi.fn();
     const manager = createQuitManager({
@@ -258,7 +258,7 @@ describe("createQuitManager", () => {
   });
 
   it("shows confirmation when threads are in progress", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const performQuit = vi.fn();
     const warn = vi.fn();
     const confirm = vi.fn(async () => "manual-confirm" as const);
@@ -296,7 +296,7 @@ describe("createQuitManager", () => {
   });
 
   it("shows confirmation when integrated terminals are running", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const performQuit = vi.fn();
     const warn = vi.fn();
     const confirm = vi.fn(async () => "manual-confirm" as const);
@@ -338,7 +338,7 @@ describe("createQuitManager", () => {
   });
 
   it("cancels quit when the operator stays open", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const performQuit = vi.fn();
     const confirm = vi.fn(async () => "manual-cancel" as const);
     const manager = createQuitManager({
@@ -362,7 +362,7 @@ describe("createQuitManager", () => {
   });
 
   it("runs a later custom quit action after an already-open prompt confirms", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     let resolveConfirm!: (value: "manual-confirm") => void;
     const performQuit = vi.fn();
     const installUpdateAndQuit = vi.fn();
@@ -407,7 +407,7 @@ describe("createQuitManager", () => {
   // then on nothing but the dialog settles the quit — and a dialog sitting
   // behind the main window reads as an app that refuses to quit.
   it("raises the open confirmation when a quit is requested again", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const performQuit = vi.fn();
     const info = vi.fn();
     const focusPendingConfirmation = vi.fn(() => true);
@@ -451,7 +451,7 @@ describe("createQuitManager", () => {
   });
 
   it("records a repeat request with nothing to raise", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const info = vi.fn();
     let resolveConfirm!: (value: "manual-cancel") => void;
     const confirm = vi.fn(
@@ -489,7 +489,7 @@ describe("createQuitManager", () => {
   });
 
   it("quits without prompting when confirmation is disabled", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const performQuit = vi.fn();
     const confirm = vi.fn();
     const manager = createQuitManager({
@@ -515,7 +515,7 @@ describe("createQuitManager", () => {
 
   it("resolves thread titles for the dialog's links", async () => {
     const { buildQuitBlockerSnapshot, createQuitManager } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
     const confirm = vi.fn(async () => "manual-cancel" as const);
     const manager = createQuitManager({
@@ -552,7 +552,7 @@ describe("createQuitManager", () => {
 
   it("titles a remote terminal row from its owning peer, not the local list", async () => {
     const { buildQuitBlockerSnapshot, createQuitManager, quitBlockerTitleKey } =
-      await import("../quit-manager");
+      await import("../shell/quit-manager");
     const confirm = vi.fn(async () => "manual-cancel" as const);
     const target = { scope: "remote" as const, instanceId: "peer-a" };
     const manager = createQuitManager({
@@ -602,7 +602,7 @@ describe("createQuitManager", () => {
 
   it("still shows the dialog when thread-title resolution fails", async () => {
     const { buildQuitBlockerSnapshot, createQuitManager } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
     const confirm = vi.fn(async () => "manual-cancel" as const);
     const warn = vi.fn();
@@ -647,7 +647,7 @@ describe("createQuitManager", () => {
   });
 
   it("resumes automation dispatch when the operator stays open", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     const resumeDispatch = vi.fn(async () => undefined);
     const quiesceAutomationDispatch = vi.fn(() => resumeDispatch);
     const manager = createQuitManager({
@@ -674,7 +674,7 @@ describe("createQuitManager", () => {
   });
 
   it("allows a new quit prompt while queued automation dispatch is still resuming", async () => {
-    const { createQuitManager } = await import("../quit-manager");
+    const { createQuitManager } = await import("../shell/quit-manager");
     let finishResume!: () => void;
     const resumePending = new Promise<void>((resolve) => {
       finishResume = resolve;
@@ -795,7 +795,7 @@ describe("createQuitManager", () => {
 
 describe("buildQuitBlockerSnapshot", () => {
   it("collapses an ephemeral automation execution onto its named Agent run", async () => {
-    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+    const { buildQuitBlockerSnapshot } = await import("../shell/quit-manager");
 
     const snapshot = buildQuitBlockerSnapshot({
       inProgressThreads: {
@@ -830,7 +830,7 @@ describe("buildQuitBlockerSnapshot", () => {
   });
 
   it("turns every kind of running work into a linkable item", async () => {
-    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+    const { buildQuitBlockerSnapshot } = await import("../shell/quit-manager");
 
     const snapshot = buildQuitBlockerSnapshot({
       inProgressThreads: { count: 1, threadIds: ["codex:thread-turn"] },
@@ -883,7 +883,7 @@ describe("buildQuitBlockerSnapshot", () => {
   });
 
   it("projects a sub-agent blocker onto its named owning thread", async () => {
-    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+    const { buildQuitBlockerSnapshot } = await import("../shell/quit-manager");
 
     const snapshot = buildQuitBlockerSnapshot({
       inProgressThreads: {
@@ -910,7 +910,7 @@ describe("buildQuitBlockerSnapshot", () => {
   });
 
   it("carries a remote terminal's owning peer onto its row", async () => {
-    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+    const { buildQuitBlockerSnapshot } = await import("../shell/quit-manager");
 
     const snapshot = buildQuitBlockerSnapshot({
       inProgressThreads: { count: 0, threadIds: [] },
@@ -974,7 +974,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
   it("names a remote thread from the peer's cached navigation summary", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
     const cachedLocalThreadName = vi.fn(() => ({
       title: "Local Work",
@@ -1011,7 +1011,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
   it("falls back to the pinned row's cached title when nothing is cached in memory", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
@@ -1049,7 +1049,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
   // on a machine that may be asleep.
   it("never waits on a peer", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
     let settled = false;
 
@@ -1074,7 +1074,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
   });
 
   it("ignores a fallback title, which is just the thread id again", async () => {
-    const { resolveQuitBlockerThreadTitles } = await import("../quit-manager");
+    const { resolveQuitBlockerThreadTitles } = await import("../shell/quit-manager");
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
       cachedLocalThreadName: () => undefined,
@@ -1090,7 +1090,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
   it("keeps a remote thread's title off a local thread that shares its key", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
     const collidingLocal = {
       kind: "turn" as const,
@@ -1119,7 +1119,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
   it("keeps same-keyed remote titles qualified by owning instance", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
     const peerBItem = {
       ...remoteItem,
@@ -1149,7 +1149,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
   it("still names local rows when the remote lookups throw", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
-      "../quit-manager"
+      "../shell/quit-manager"
     );
 
     const titles = await resolveQuitBlockerThreadTitles([localItem, remoteItem], {
@@ -1188,7 +1188,7 @@ describe("readQuitBlockerQueueSnapshot", () => {
         titleSource: "explicit",
       },
     ]);
-    const { readQuitBlockerQueueSnapshot } = await import("../quit-manager");
+    const { readQuitBlockerQueueSnapshot } = await import("../shell/quit-manager");
 
     const snapshots = [];
     for (let poll = 0; poll < 4; poll += 1) {
@@ -1234,7 +1234,7 @@ describe("readQuitBlockerQueueSnapshot", () => {
         titleSource: "explicit",
       });
       backendRegistryMock.listThreads.mockImplementation(providerList);
-      const { readQuitBlockerQueueSnapshot } = await import("../quit-manager");
+      const { readQuitBlockerQueueSnapshot } = await import("../shell/quit-manager");
 
       await expect(readQuitBlockerQueueSnapshot()).resolves.toMatchObject({
         items: [
@@ -1252,7 +1252,7 @@ describe("readQuitBlockerQueueSnapshot", () => {
 describe("resolveQuitCountdownSeconds", () => {
   it("leaves the countdown alone when there is nothing to read", async () => {
     const { resolveQuitCountdownSeconds } = await import(
-      "../quit-confirmation-dialog"
+      "../shell/quit-confirmation-dialog"
     );
 
     expect(resolveQuitCountdownSeconds(10, 0)).toBe(10);
@@ -1260,7 +1260,7 @@ describe("resolveQuitCountdownSeconds", () => {
 
   it("buys time to read the list instead of quitting out from under you", async () => {
     const { resolveQuitCountdownSeconds } = await import(
-      "../quit-confirmation-dialog"
+      "../shell/quit-confirmation-dialog"
     );
 
     // Ten terminals is not a ten-second read.

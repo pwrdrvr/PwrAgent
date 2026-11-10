@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { app, BrowserWindow, contentTracing } from "electron";
-import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../../../src/main/diagnostics/rendering-capture";
+import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../../../src/main/shell/diagnostics/rendering-capture";
 
 // A standalone Electron process: no PwrAgent startup, profiles, backends or IPC.
 const root = process.env.PWRAGENT_RENDERING_FIXTURE_ROOT!;

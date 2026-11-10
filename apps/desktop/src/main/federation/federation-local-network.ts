@@ -1,4 +1,4 @@
-import { dialog, shell } from "electron";
+import { getOwnerHostServices } from "../owner-host";
 import { lookup } from "node:dns/promises";
 import fs from "node:fs/promises";
 import { BlockList, isIP } from "node:net";
@@ -101,24 +101,7 @@ export const federationLocalNetworkNotice = new FederationLocalNetworkNotice({
     await fs.writeFile(file, "Explained local network access for Federation.\n", { mode: 0o600 });
   },
   resolve: resolveAddresses,
-  explain: async (hostname) => {
-    const { response } = await dialog.showMessageBox({
-      type: "info",
-      title: "Federation local network access",
-      message: "Federation may need local network access",
-      detail: `Your configured gateway (${hostname}) resolves to an internal network address. `
-        + "When PwrAgent connects, macOS may ask to allow local network access. Choose Allow so Federation can reach your gateway.\n\n"
-        + "If access was denied previously, macOS will not ask again. Enable PwrAgent in System Settings → Privacy & Security → Local Network. "
-        + "Private addresses reached through a router or VPN may not need this permission.",
-      buttons: ["Continue", "Open System Settings"],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
-    });
-    if (response === 1) {
-      await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork");
-    }
-  },
+  explain: async (hostname) => await getOwnerHostServices().ui.explainLocalNetwork(hostname),
   warn: (error) => getMainLogger("pwragent:federation-runtime").warn(
     "could not show or save Federation local network explanation", { error: String(error) },
   ),

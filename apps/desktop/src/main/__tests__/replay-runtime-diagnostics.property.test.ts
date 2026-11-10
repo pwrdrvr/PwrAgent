@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createReplayClientsFromEnv } from "../testing/replay-runtime";
+import { createReplayClientsFromEnv } from "../shell/testing/replay-runtime";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 

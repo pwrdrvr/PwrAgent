@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ReplayController } from "../testing/replay-controller";
+import { ReplayController } from "../shell/testing/replay-controller";
 import {
   validateReplayFixture,
   type ReplayFixture,

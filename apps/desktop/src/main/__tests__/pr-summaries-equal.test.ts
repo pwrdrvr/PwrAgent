@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
-import { prSummariesEqual } from "../ipc/app-server";
+import { prSummariesEqual } from "../shell/ipc/app-server";
 
 /**
  * `prSummariesEqual` gates snapshot republication. A field the hover card

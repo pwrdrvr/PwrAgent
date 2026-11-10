@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTemporaryTestDirectory } from "../testing/test-harness";
+import { createTemporaryTestDirectory } from "../shell/testing/test-harness";
 import { createStartupCpuProfileSession } from "../diagnostics/startup-cpu-profile-session";
 import { resolveStartupCpuProfileConfig } from "../diagnostics/startup-cpu-profile-config";
 

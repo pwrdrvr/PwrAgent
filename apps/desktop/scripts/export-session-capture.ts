@@ -2,7 +2,7 @@ import path from "node:path";
 import {
   exportSessionCapture,
   type ExportSessionCaptureOptions,
-} from "../src/main/testing/fixture-derivation";
+} from "../src/main/shell/testing/fixture-derivation";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));

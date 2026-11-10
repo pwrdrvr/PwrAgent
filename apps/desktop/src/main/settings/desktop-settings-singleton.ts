@@ -1,10 +1,8 @@
+import { applicationHost as app, secretEncryption as safeStorage, getOwnerHostServices, rendererSubscribers as subscribersForChannel } from "../owner-host";
 import { setGitCommandResolver, setManagedGitSelectionResolver } from "../git-command";
 import { codexAuthState } from "../codex-auth-state";
-import { app, safeStorage } from "electron";
 import { DesktopSettingsService } from "./desktop-settings-service";
 import { createDesktopSecretStorage, getAppStateMode } from "../storage/desktop-settings-storage";
-import { broadcastAppearanceChange } from "../appearance-broadcast";
-import { syncThemedDockIcon } from "../themed-dock-icon";
 import { resolveBootstrapProfilePath } from "../profile";
 import {
   isE2eMemorySecretStorageEnabled,
@@ -13,7 +11,6 @@ import {
 import { ensureManagedCodexRuntime, retainManagedCodexCommand } from "../codex-managed-runtime";
 import { resolveActiveManagedGrokCommand } from "../acp/grok-managed-runtime";
 import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
-import { subscribersForChannel } from "../window-channels";
 import {
   disposeDesktopConfigStore,
   getDesktopConfigStore,
@@ -42,7 +39,7 @@ export async function closeDesktopSettingsCommandDiscovery(): Promise<void> {
   ]);
 }
 
-export function getDesktopSettingsService(): DesktopSettingsService {
+export function initializeDesktopSettingsService(): DesktopSettingsService {
   if (!desktopSettingsService) {
     // In bootstrap mode the settings service reads/writes the
     // bootstrap profile's `config.toml`. On graduation the wizard
@@ -122,10 +119,10 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       void service.refreshGitDiscovery().catch(() => undefined).finally(announceRuntimeChange);
     });
     configStore.subscribe(["general"], ({ values }) => {
-      broadcastAppearanceChange(values.general.appearance);
-      syncThemedDockIcon(values.general.appearance);
+      getOwnerHostServices().appearance.broadcast(values.general.appearance);
+      getOwnerHostServices().appearance.syncDock(values.general.appearance);
     });
-    syncThemedDockIcon(configStore.read("general").appearance);
+    getOwnerHostServices().appearance.syncDock(configStore.read("general").appearance);
     configStore.subscribeUpdates(
       ({ version, configRevision, changedDomains }) => {
         const payload = {
@@ -144,7 +141,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
   return desktopSettingsService;
 }
 
-export function resetDesktopSettingsServiceForTests(): void {
+export function disposeDesktopSettingsService(): void {
   unsubscribeAuth?.();
   unsubscribeAuth = undefined;
   unsubscribeManagedGitFailure?.();
@@ -154,4 +151,14 @@ export function resetDesktopSettingsServiceForTests(): void {
   setGitCommandResolver(undefined);
   setManagedGitSelectionResolver(undefined);
   disposeDesktopConfigStore();
+}
+
+/** Only startOwnerServices constructs the process owner. */
+export function getDesktopSettingsService(): DesktopSettingsService {
+  if (!desktopSettingsService) throw new Error("getDesktopSettingsService is unavailable before startOwnerServices().");
+  return desktopSettingsService;
+}
+
+export function resetDesktopSettingsServiceForTests(): void {
+  disposeDesktopSettingsService();
 }

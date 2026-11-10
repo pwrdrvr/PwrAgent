@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagingApprovalIntent } from "@pwragent/messaging-interface";
-import { DesktopNotificationService } from "../notifications/desktop-notification-service";
+import { DesktopNotificationService } from "../shell/notifications/desktop-notification-service";
 
 const {
   shownNotifications,

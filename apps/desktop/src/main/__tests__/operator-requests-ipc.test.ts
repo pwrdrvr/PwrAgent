@@ -46,9 +46,9 @@ vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime
 }) }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
-import { registerOperatorRequestIpcHandlers } from "../ipc/operator-requests-ipc";
-import { mainWindowEventChannels } from "../main-window-channels";
-import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../window-channels";
+import { registerOperatorRequestIpcHandlers } from "../shell/ipc/operator-requests-ipc";
+import { mainWindowEventChannels } from "../shell/main-window-channels";
+import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../shell/window-channels";
 
 // The real registry, fed the channels createMainWindow registers, so a
 // window missing a channel misses its broadcasts here as it does in the app.

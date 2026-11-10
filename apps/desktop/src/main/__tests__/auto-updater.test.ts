@@ -53,7 +53,7 @@ const appQuitMock = vi.fn();
 const appRelaunchMock = vi.fn();
 const authorizeInstallMock = vi.fn<(...args: unknown[]) => boolean>(() => true);
 
-vi.mock("../linux-package-updater", () => ({
+vi.mock("../shell/linux-package-updater", () => ({
   createLinuxPackageUpdater: (updater: unknown) => updater,
   authorizeLinuxPackageUpdate: (...args: unknown[]) => authorizeInstallMock(...args),
 }));
@@ -143,7 +143,7 @@ const markUpdateInstallUpdaterQuitReadyMock = vi.fn();
 const prepareForUpdateInstallMock = vi.fn<() => Promise<void>>(
   async () => undefined,
 );
-vi.mock("../update-install-state", () => ({
+vi.mock("../shell/update-install-state", () => ({
   markUpdateInstallInProgress: () => markUpdateInstallInProgressMock(),
   markUpdateInstallUpdaterQuitReady: () =>
     markUpdateInstallUpdaterQuitReadyMock(),
@@ -151,7 +151,7 @@ vi.mock("../update-install-state", () => ({
 }));
 
 async function importAutoUpdater() {
-  return await import("../auto-updater");
+  return await import("../shell/auto-updater");
 }
 
 function macUpdateAssets(version: string) {
@@ -2082,26 +2082,26 @@ describe("auto updater", () => {
 
 describe("compareSemver", () => {
   it("orders by major/minor/patch", async () => {
-    const { compareSemver } = await import("../auto-updater");
+    const { compareSemver } = await import("../shell/auto-updater");
     expect(compareSemver("v2.0.0", "v1.9.9")).toBeGreaterThan(0);
     expect(compareSemver("v1.2.0", "v1.10.0")).toBeLessThan(0);
     expect(compareSemver("v1.2.3", "v1.2.3")).toBe(0);
   });
 
   it("treats stable as higher precedence than prerelease at the same core", async () => {
-    const { compareSemver } = await import("../auto-updater");
+    const { compareSemver } = await import("../shell/auto-updater");
     expect(compareSemver("v1.0.0", "v1.0.0-beta.8")).toBeGreaterThan(0);
     expect(compareSemver("v1.0.0-beta.8", "v1.0.0")).toBeLessThan(0);
   });
 
   it("orders numeric prerelease identifiers numerically, not lexically", async () => {
-    const { compareSemver } = await import("../auto-updater");
+    const { compareSemver } = await import("../shell/auto-updater");
     expect(compareSemver("v1.0.0-beta.9", "v1.0.0-beta.10")).toBeLessThan(0);
     expect(compareSemver("v1.0.0-beta.2", "v1.0.0-beta.1")).toBeGreaterThan(0);
   });
 
   it("sorts unparseable tags below valid versions", async () => {
-    const { compareSemver } = await import("../auto-updater");
+    const { compareSemver } = await import("../shell/auto-updater");
     expect(compareSemver("not-a-version", "v1.0.0-beta.1")).toBeLessThan(0);
     expect(compareSemver("v0.0.1", "garbage")).toBeGreaterThan(0);
   });
@@ -2109,7 +2109,7 @@ describe("compareSemver", () => {
 
 describe("selectChannelReleases", () => {
   it("picks the highest-precedence stable for latest and never lets prerelease go backwards", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     // GitHub returns releases newest-first by publish date. Here a newer
     // stable (beta.8) was promoted after older beta-tagged prereleases were
     // published — exactly the production scenario behind this bug.
@@ -2127,7 +2127,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("prefers a higher prerelease over latest stable when one exists", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.0.0-beta.9", prerelease: true, draft: false },
       { tag_name: "v1.0.0-beta.8", prerelease: false, draft: false },
@@ -2139,7 +2139,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("classifies main-train alpha and beta without stealing stable latest", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.0-beta.2", prerelease: true, draft: false },
       { tag_name: "v1.1.0-alpha.7", prerelease: true, draft: false },
@@ -2157,7 +2157,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("keeps legacy 1.0 beta prereleases on the stable prerelease track", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.0.0-beta.41", prerelease: true, draft: false },
       { tag_name: "v1.0.0-beta.8", prerelease: false, draft: false },
@@ -2170,7 +2170,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("promotes a same-core alpha to beta latest once the beta tag exists", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.0-beta.1", prerelease: true, draft: false },
       { tag_name: "v1.1.0-alpha.7", prerelease: true, draft: false },
@@ -2182,7 +2182,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("does not put shipped 1.0.0-beta tags on the Beta train after 1.0.1", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.0.1", prerelease: false, draft: false },
       { tag_name: "v1.0.1-prerelease.5", prerelease: true, draft: false },
@@ -2198,7 +2198,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("does not advertise leftover same-core betas after that train becomes Latest", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.0", prerelease: false, draft: false },
       { tag_name: "v1.1.0-beta.3", prerelease: true, draft: false },
@@ -2212,7 +2212,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("keeps a newer main-train alpha on Beta after Stable is promoted", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.0", prerelease: false, draft: false },
       { tag_name: "v1.1.0-beta.3", prerelease: true, draft: false },
@@ -2225,7 +2225,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("shows an alpha as beta prerelease before a beta exists", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.0-alpha.7", prerelease: true, draft: false },
       { tag_name: "v1.0.0", prerelease: false, draft: false },
@@ -2236,7 +2236,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("keeps beta prerelease from trailing a newer Stable RC", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     // The 2026-10-06 release set: Settings showed v1.2.0-prerelease.1 under
     // Stable · Prerelease while Beta · Prerelease still read v1.1.6.
     const releases = [
@@ -2255,7 +2255,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("prefers a newer main-train alpha over a maintenance Stable RC", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.2.0-alpha.1", prerelease: true, draft: false },
       { tag_name: "v1.1.7-prerelease.1", prerelease: true, draft: false },
@@ -2267,7 +2267,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("does not offer a Stable RC that Stable Latest already outranks", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.6", prerelease: false, draft: false },
       { tag_name: "v1.1.6-prerelease.2", prerelease: true, draft: false },
@@ -2277,7 +2277,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("does not let a mistagged main-train alpha take stable latest", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     // The GitHub Pre-release flag is set by hand at tag time. If a `main` tag
     // ships without it, it must still not become the feed every Stable
     // operator is pushed onto.
@@ -2294,7 +2294,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("does not let a mistagged main-train beta take stable latest", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.0-beta.3", prerelease: false, draft: false },
       { tag_name: "v1.0.2", prerelease: false, draft: false },
@@ -2305,7 +2305,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("still promotes a real suffix-free stable over the current one", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v1.1.0", prerelease: false, draft: false },
       { tag_name: "v1.0.2", prerelease: false, draft: false },
@@ -2315,7 +2315,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("falls back to a suffixed stable when no suffix-free tag exists", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     // The pre-v1.0.0 world: every stable was a `-beta.N` tag published as
     // GitHub Latest. Those trains must keep resolving.
     const releases = [
@@ -2327,7 +2327,7 @@ describe("selectChannelReleases", () => {
   });
 
   it("ignores drafts in both channels", async () => {
-    const { selectChannelReleases } = await import("../auto-updater");
+    const { selectChannelReleases } = await import("../shell/auto-updater");
     const releases = [
       { tag_name: "v2.0.0", prerelease: false, draft: true },
       { tag_name: "v1.5.0", prerelease: false, draft: false },
@@ -2356,7 +2356,7 @@ describe("selectAppUpdateReleases", () => {
   it.each(["v1.2.0-alpha.1", "v1.2.0-beta.1"])(
     "prefers newer %s over a staged final",
     async (tag) => {
-      const { selectAppUpdateReleases } = await import("../auto-updater");
+      const { selectAppUpdateReleases } = await import("../shell/auto-updater");
       const selected = selectAppUpdateReleases([
         githubRelease("v1.1.0", { prerelease: true }),
         githubRelease(tag, { prerelease: true }),
@@ -2372,7 +2372,7 @@ describe("selectAppUpdateReleases", () => {
     { assets: [{ name: "latest-mac.yml" }] },
     { assets: [{ name: "PwrAgent.zip" }] },
   ])("ignores an ineligible staged final (%j)", async (options) => {
-    const { selectAppUpdateReleases } = await import("../auto-updater");
+    const { selectAppUpdateReleases } = await import("../shell/auto-updater");
     const selected = selectAppUpdateReleases([
       githubRelease("v1.1.0", { prerelease: true, ...options }),
       githubRelease("v1.1.0-beta.5", { prerelease: true }),
@@ -2382,7 +2382,7 @@ describe("selectAppUpdateReleases", () => {
   });
 
   it("prefers newer eligible alpha and beta releases over the stable fallback", async () => {
-    const { selectAppUpdateReleases } = await import("../auto-updater");
+    const { selectAppUpdateReleases } = await import("../shell/auto-updater");
     const selected = selectAppUpdateReleases([
       githubRelease("v1.2.0-beta.1", { prerelease: true }),
       githubRelease("v1.3.0-alpha.1", { prerelease: true }),
@@ -2399,7 +2399,7 @@ describe("selectAppUpdateReleases", () => {
     [{ name: "latest-mac.yml", state: "deleted" }, { name: "PwrAgent.zip" }],
     [{ name: "latest.yml" }, { name: "PwrAgent.exe" }],
   ].map((assets) => ({ assets })))("requires eligible macOS assets for the stable fallback (%j)", async ({ assets }) => {
-    const { selectAppUpdateReleases } = await import("../auto-updater");
+    const { selectAppUpdateReleases } = await import("../shell/auto-updater");
     const selected = selectAppUpdateReleases([
       githubRelease("v1.1.0", { assets }),
       githubRelease("v1.0.0"),
@@ -2414,7 +2414,7 @@ describe("selectAppUpdateReleases", () => {
   });
 
   it("requires macOS updater metadata and zip assets", async () => {
-    const { selectAppUpdateReleases } = await import("../auto-updater");
+    const { selectAppUpdateReleases } = await import("../shell/auto-updater");
     const releases = [
       githubRelease("v1.0.0-beta.37", { assets: [] }),
       githubRelease("v1.0.0-beta.36", {

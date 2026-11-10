@@ -19,7 +19,7 @@ const electron = vi.hoisted(() => {
   };
 });
 vi.mock("electron", () => electron);
-import { captureRenderingDiagnostics, stopRenderingDiagnostics, summarizeRenderingTrace } from "../diagnostics/rendering-capture";
+import { captureRenderingDiagnostics, stopRenderingDiagnostics, summarizeRenderingTrace } from "../shell/diagnostics/rendering-capture";
 import { acquireChromiumTrace } from "../diagnostics/chromium-trace-lease";
 
 let root: string;

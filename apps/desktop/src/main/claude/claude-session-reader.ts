@@ -1,38 +1,13 @@
+import { getOwnerHostServices } from "../owner-host";
 import type { SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-
-/**
- * The SDK session reads a rewind needs. `dir` is the only option they pass,
- * because the reads may cross a process boundary.
- */
-export type ClaudeSessionReads = {
-  getSessionMessages(sessionId: string, options?: { dir?: string }): Promise<SessionMessage[]>;
-  getSessionInfo(sessionId: string, options?: { dir?: string }): Promise<SDKSessionInfo | undefined>;
-};
-
-export type ClaudeSessionReader = ClaudeSessionReads & { close(): void };
-
-export type ClaudeSessionReadRequest = {
-  id: number;
-  method: keyof ClaudeSessionReads;
-  sessionId: string;
-  options?: { dir?: string };
-};
-
-export type ClaudeSessionReadReply = { id: number; result?: unknown; error?: string };
+import type { ClaudeSessionReads, ClaudeSessionReader, ClaudeSessionReadRequest, ClaudeSessionReadReply, ClaudeSessionReaderChild } from "./claude-session-reader-contracts";
+export type { ClaudeSessionReads, ClaudeSessionReader, ClaudeSessionReadRequest, ClaudeSessionReadReply, ClaudeSessionReaderChild } from "./claude-session-reader-contracts";
 
 /**
  * The reader itself failed: it did not start, stopped, timed out or was
  * closed. Unlike an SDK error for one read, it says nothing about the session.
  */
 export class ClaudeSessionReaderError extends Error {}
-
-/** The utility process, as far as the reader uses it. */
-export type ClaudeSessionReaderChild = {
-  postMessage(message: ClaudeSessionReadRequest): void;
-  on(event: "message", listener: (reply: ClaudeSessionReadReply) => void): unknown;
-  once(event: "exit", listener: (code: number) => void): unknown;
-  kill(): boolean;
-};
 
 /** Reading a long session file can take seconds; a stuck reader cannot hold a rewind. */
 const CLAUDE_SESSION_READ_TIMEOUT_MS = 30_000;
@@ -126,16 +101,5 @@ export async function answerClaudeSessionRead(
 }
 
 async function forkClaudeSessionReader(workerPath: string, env: NodeJS.ProcessEnv): Promise<ClaudeSessionReaderChild> {
-  const { utilityProcess } = await import("electron");
-  const child = utilityProcess.fork(workerPath, [], {
-    env,
-    stdio: "ignore",
-    serviceName: "PwrAgent Claude session reader",
-  });
-  return {
-    postMessage: (message) => child.postMessage(message),
-    on: (_event, listener) => child.on("message", listener),
-    once: (_event, listener) => child.once("exit", listener),
-    kill: () => child.kill(),
-  };
+  return await getOwnerHostServices().workers.forkClaudeSessionReader(workerPath, env);
 }

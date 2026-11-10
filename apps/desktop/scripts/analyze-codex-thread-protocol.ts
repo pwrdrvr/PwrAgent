@@ -1,5 +1,5 @@
 import path from "node:path";
-import { analyzeCodexThreadProtocolCapture } from "../src/main/testing/codex-thread-protocol-analysis";
+import { analyzeCodexThreadProtocolCapture } from "../src/main/shell/testing/codex-thread-protocol-analysis";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));

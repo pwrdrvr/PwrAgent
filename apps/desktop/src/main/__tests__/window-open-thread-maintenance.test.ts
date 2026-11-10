@@ -1,8 +1,8 @@
 import type { WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { requestOpenThreadMaintenance } from "../window-open-thread-maintenance";
-import { subscribersForChannel } from "../window-channels";
-import { isFederationWindowWebContents } from "../window";
+import { requestOpenThreadMaintenance } from "../shell/window-open-thread-maintenance";
+import { subscribersForChannel } from "../shell/window-channels";
+import { isFederationWindowWebContents } from "../shell/window";
 import { WINDOW_OPEN_THREAD_MAINTENANCE_CHANNEL } from "../../shared/ipc";
 
 const { getFocusedWindowMock, fromWebContentsMock } = vi.hoisted(() => ({
@@ -17,11 +17,11 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../window-channels", () => ({
+vi.mock("../shell/window-channels", () => ({
   subscribersForChannel: vi.fn(),
 }));
 
-vi.mock("../window", () => ({
+vi.mock("../shell/window", () => ({
   isFederationWindowWebContents: vi.fn(),
 }));
 

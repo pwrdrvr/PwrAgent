@@ -48,7 +48,7 @@ describe("scheduled action IPC", () => {
     const {
       disposeScheduledActionIpcHandlers,
       registerScheduledActionIpcHandlers,
-    } = await import("../ipc/scheduled-actions-ipc");
+    } = await import("../shell/ipc/scheduled-actions-ipc");
     const {
       SCHEDULED_ACTIONS_CANCEL_CHANNEL,
       SCHEDULED_ACTIONS_CREATE_CHANNEL,
@@ -79,7 +79,7 @@ describe("scheduled action IPC", () => {
 
   it("routes remote operations to the owning federation peer", async () => {
     const { registerScheduledActionIpcHandlers } = await import(
-      "../ipc/scheduled-actions-ipc"
+      "../shell/ipc/scheduled-actions-ipc"
     );
     const {
       SCHEDULED_ACTIONS_CANCEL_CHANNEL,
@@ -131,7 +131,7 @@ describe("scheduled action IPC", () => {
       "../federation/federation-peer-unavailable-error"
     );
     const { registerScheduledActionIpcHandlers } = await import(
-      "../ipc/scheduled-actions-ipc"
+      "../shell/ipc/scheduled-actions-ipc"
     );
     const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
@@ -163,7 +163,7 @@ describe("scheduled action IPC", () => {
 
   it("shares scheduled reads across windows and aborts only after their final release", async () => {
     const { EventEmitter } = await import("node:events");
-    const { registerScheduledActionIpcHandlers } = await import("../ipc/scheduled-actions-ipc");
+    const { registerScheduledActionIpcHandlers } = await import("../shell/ipc/scheduled-actions-ipc");
     const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
     let signal: AbortSignal | undefined;
     remoteBackendMock.listScheduledThreadActions.mockImplementationOnce((...args: unknown[]) => {
@@ -193,7 +193,7 @@ describe("scheduled action IPC", () => {
 
   it("never substitutes a cached final page for a disconnected V2 baseline", async () => {
     const { FederationPeerUnavailableError } = await import("../federation/federation-peer-unavailable-error");
-    const { registerScheduledActionIpcHandlers } = await import("../ipc/scheduled-actions-ipc");
+    const { registerScheduledActionIpcHandlers } = await import("../shell/ipc/scheduled-actions-ipc");
     const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = { scope: "remote" as const, instanceId: "client_projection" };
     const finalPage = { actions: [], projectionProtocol: 2, complete: true, revision: "old-generation" };
@@ -213,7 +213,7 @@ describe("scheduled action IPC", () => {
 
   it("keeps unexpected remote list failures actionable", async () => {
     const { registerScheduledActionIpcHandlers } = await import(
-      "../ipc/scheduled-actions-ipc"
+      "../shell/ipc/scheduled-actions-ipc"
     );
     const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
     remoteBackendMock.listScheduledThreadActions.mockRejectedValueOnce(

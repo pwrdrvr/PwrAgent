@@ -49,7 +49,7 @@ export type ScheduledThreadActionServiceOptions = {
 let service: ScheduledThreadActionService | null = null;
 let serviceRegistry: DesktopBackendRegistry | null = null;
 
-export function getScheduledThreadActionService(
+export function initializeScheduledThreadActionService(
   registry = getDesktopBackendRegistry(),
 ): ScheduledThreadActionService {
   if (!service) {
@@ -62,7 +62,6 @@ export function getScheduledThreadActionService(
     );
     service = nextService;
     serviceRegistry = registry;
-    nextService.start();
   }
   return service;
 }
@@ -819,4 +818,9 @@ function actionIdFromQueueEntryId(queueEntryId: string): string | undefined {
   return queueEntryId.startsWith(prefix)
     ? queueEntryId.slice(prefix.length)
     : undefined;
+}
+
+export function getScheduledThreadActionService(): ScheduledThreadActionService {
+  if (!service) throw new Error("getScheduledThreadActionService is unavailable before startOwnerServices().");
+  return service;
 }

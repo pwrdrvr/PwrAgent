@@ -1,7 +1,7 @@
+import { externalLinks as shell } from "../owner-host";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { shell } from "electron";
 import type { ConnectPwrGitResponse, OpenPwrGitResponse, PwrGitConnectionStatus } from "@pwragent/shared";
 import { getMcpConnectionGatewayService, type McpConnectionGatewayService } from "./mcp-connection-gateway-service";
 

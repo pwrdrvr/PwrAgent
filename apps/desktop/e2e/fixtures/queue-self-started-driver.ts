@@ -1,3 +1,4 @@
+import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { existsSync, readFileSync, watch } from "node:fs";
@@ -15,6 +16,7 @@ import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from
 
 /** Real Electron registry, SQLite and installed SDK; only the CLI is a wire fixture. */
 export async function exerciseDesktopSelfStartedAdmission(root: string, cliFixture: string) {
+  await installTestOwnerHost();
   await mkdir(root, { recursive: true });
   const configPath = path.join(root, "config.toml");
   await writeFile(configPath, "");

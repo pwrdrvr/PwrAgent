@@ -1,3 +1,4 @@
+import { applicationHost as app } from "../owner-host";
 import { ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR, acpSessionHasConversationHistory, projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
 import {
   createAcpAgentStorage,
@@ -6,7 +7,6 @@ import {
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { app } from "electron";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   findAcpPermissionModeConfigOption,
@@ -54,7 +54,7 @@ import {
   stageLocalTurnInputAttachment,
 } from "./turn-input-attachment-files";
 import type { ThreadAssetOwner } from "./thread-assets";
-import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import {
   acpRuntimeSupportsHttpMcp,
   buildAutomationInspectionAcpMcpServers,
