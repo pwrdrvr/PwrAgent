@@ -105,6 +105,8 @@ describe("refusal audit ordering", () => {
     fc.constant<Case>({ role: "full", envelope: request("backend.startThread"),
       arrange: (router) => router.registerHandler("backend.startThread", () => { throw new Error("fixture failure"); }) }),
     fc.constant<Case>({ role: "full", envelope: request("backend.startThread", "absent-peer") }),
+    fc.constant<Case>({ role: "full", envelope: { ...request("backend.startThread"), sourceInstanceId: "impostor" } }),
+    fc.constant<Case>({ role: "full", envelope: { ...request("backend.startThread"), deadlineAt: 1 } }),
   );
 
   it("writes the audit line before the refusal reaches the peer", async () => {
@@ -122,5 +124,26 @@ describe("refusal audit ordering", () => {
       expect(audit).toHaveLength(1);
       expect(auditedAtReply).toEqual([1]);
     }));
+  });
+
+  it("runs a host's audit before a notification refusal leaves", () => {
+    const order: string[] = [];
+    const router = new FederationRouter({ localInstanceId: "desktop", peerRole: () => "contained" });
+    router.registerConnection({ peerId: "outpost", capabilities: [...FEDERATION_CAPABILITIES],
+      sendEnvelope: (reply) => order.push(reply.kind) });
+    const notification: FederationProtocolEnvelope = { id: "note", kind: "notification", protocolVersion: 1,
+      sourceInstanceId: "outpost", targetInstanceId: "desktop", method: "new.unmapped.notification", params: {}, createdAt: 1 };
+    expect(router.checkPeerRole(notification, "outpost", () => order.push("audit"))?.status).toBe("rejected");
+    expect(order).toEqual(["audit", "error"]);
+  });
+
+  it("still sends the refusal when the audit write fails", async () => {
+    const sent: string[] = [];
+    const router = new FederationRouter({ localInstanceId: "desktop", peerRole: () => "contained",
+      auditRefusal: () => { throw new Error("disk full"); } });
+    router.registerConnection({ peerId: "outpost", capabilities: [...FEDERATION_CAPABILITIES],
+      sendEnvelope: (reply) => sent.push(reply.kind) });
+    await expect(router.routeEnvelope({ envelope: request("backend.startThread"), sourcePeerId: "outpost" })).rejects.toThrow("disk full");
+    expect(sent).toEqual(["error"]);
   });
 });

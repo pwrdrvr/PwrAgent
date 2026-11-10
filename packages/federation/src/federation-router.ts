@@ -190,11 +190,7 @@ export class FederationRouter {
     return { status: "rejected", code: failure.error.code, message: failure.error.message };
   }
 
-  private async routeAuthorizedEnvelope(params: {
-    envelope: FederationProtocolEnvelope;
-    sourcePeerId?: FederationInstanceId;
-    beforeRefusalReply?: () => void;
-  }): Promise<FederationRouteResult> {
+  private async routeAuthorizedEnvelope(params: FederationRouteParams): Promise<FederationRouteResult> {
     if (!this.authenticatesOrigin(params.envelope, params.sourcePeerId)) {
       const failure = this.errorEnvelope(params.envelope, {
         code: "relay_origin_mismatch",
@@ -391,11 +387,7 @@ export class FederationRouter {
     );
   }
 
-  private async relayEnvelope(params: {
-    envelope: FederationProtocolEnvelope;
-    sourcePeerId?: FederationInstanceId;
-    beforeRefusalReply?: () => void;
-  }): Promise<FederationRouteResult> {
+  private async relayEnvelope(params: FederationRouteParams): Promise<FederationRouteResult> {
     const targetInstanceId = params.envelope.targetInstanceId;
     if (!targetInstanceId) {
       return {
@@ -545,12 +537,21 @@ export class FederationRouter {
   }
 
   private replyToSource(
-    route: { sourcePeerId?: FederationInstanceId; beforeRefusalReply?: () => void },
+    route: Omit<FederationRouteParams, "envelope">,
     envelope: FederationProtocolEnvelope,
   ): void {
     if (!route.sourcePeerId) return;
-    if (envelope.kind === "error") route.beforeRefusalReply?.();
-    this.connections.get(route.sourcePeerId)?.sendEnvelope(envelope);
+    const connection = this.connections.get(route.sourcePeerId);
+    if (envelope.kind !== "error") {
+      connection?.sendEnvelope(envelope);
+      return;
+    }
+    // A failed audit write must not withhold the refusal; it still throws after.
+    try {
+      route.beforeRefusalReply?.();
+    } finally {
+      connection?.sendEnvelope(envelope);
+    }
   }
 
   private errorEnvelope(
@@ -578,6 +579,13 @@ export class FederationRouter {
     return typeof configured === "function" ? configured() : configured;
   }
 }
+
+type FederationRouteParams = {
+  envelope: FederationProtocolEnvelope;
+  sourcePeerId?: FederationInstanceId;
+  /** Runs before an error reply is sent, so the refusal is audited first. */
+  beforeRefusalReply?: () => void;
+};
 
 export type FederationRefusalAudit = {
   peerId: FederationInstanceId;
