@@ -3,6 +3,17 @@ import fc from "fast-check";
 import type { ArchiveThreadCleanupResult } from "@pwragent/shared";
 import { BackgroundArchiveCleanupReport } from "../background-archive-cleanup-report";
 
+it("keeps the thread identity beside each failed checkout in background reports", () => {
+  fc.assert(fc.property(fc.uuid(), fc.uuid(), (threadId, path) => {
+    const report = new BackgroundArchiveCleanupReport();
+    report.record("codex", { threadId, archivedAt: 1,
+      cleanup: [{ worktreePath: `/contrived/${path}`, removedWorktree: false, deletedBranch: false, error: "Snapshot failed" }] },
+    { threadLink: { backend: "codex", threadId, title: "Repair build caching", instanceId: "fixture-peer" } });
+    const diagnostics = report.notice()?.facts?.map((fact) => fact.value).join("\n");
+    for (const value of [threadId, "Repair build caching", "fixture-peer", `/contrived/${path}`]) expect(diagnostics).toContain(value);
+  }));
+});
+
 it("agrees with an outcome tally, ignores redelivery and bounds kept/failure details", () => {
   fc.assert(fc.property(fc.array(fc.constantFrom("removed", "kept", "failed", "absent", "provider-failed"), {
     minLength: 1, maxLength: 150,

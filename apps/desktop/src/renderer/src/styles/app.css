@@ -11438,6 +11438,7 @@ a.button {
 .app-notice-toast__fact dd {
   margin: 0;
   color: var(--text-secondary);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

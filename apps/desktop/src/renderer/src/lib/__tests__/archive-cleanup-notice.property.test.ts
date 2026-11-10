@@ -4,6 +4,21 @@ import type { ArchiveThreadCleanupResult } from "@pwragent/shared";
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress } from "../archive-cleanup-notice";
 
 describe("archive cleanup notices", () => {
+  it("keeps the thread reference and every failed checkout in copied cleanup diagnostics", () => {
+    fc.assert(fc.property(fc.uuid(), fc.array(fc.uuid(), { minLength: 1, maxLength: 4 }), (threadId, paths) => {
+      const cleanup = paths.map((path) => ({ worktreePath: `/contrived/worktrees/${path}`,
+        removedWorktree: false, deletedBranch: false, error: `Snapshot failed for ${path}` }));
+      const notice = formatArchiveCleanupNotice(cleanup, {
+        threadLink: { backend: "codex", threadId, title: "Repair build caching", instanceId: "fixture-peer" },
+      });
+      expect(notice?.threadLink?.threadId).toBe(threadId);
+      for (const value of [threadId, "Repair build caching", ...cleanup.flatMap((item) => [item.worktreePath, item.error])]) {
+        expect(notice?.copyText).toContain(value);
+      }
+      for (const item of cleanup) expect(notice?.facts?.some((fact) => fact.value.includes(item.worktreePath) && fact.value.includes(item.error))).toBe(true);
+    }));
+  });
+
   it("shows live work until the queue drains, including work that has not completed yet", () => {
     fc.assert(fc.property(fc.integer({ min: 0, max: 4 }), fc.nat({ max: 256 }), fc.nat({ max: 1000 }), (active, queued, completed) => {
       const jobs = Array.from({ length: active }, (_, i) => ({ backend: "codex" as const, threadId: `thread-${i}`, worktreePath: `/contrived/worktree-${i}` }));
@@ -39,7 +54,7 @@ describe("archive cleanup notices", () => {
       const expected = outcomes.find((item) => item.needsAttention)?.result;
       const notice = formatArchiveCleanupNotice(outcomes.map((item) => item.result));
       expect(Boolean(notice)).toBe(Boolean(expected));
-      if (expected) expect(notice?.detail).toBe(`${expected.worktreePath}: ${expected.error ?? expected.skippedReason ?? "cleanup was skipped"}`);
+      if (expected) expect(notice?.facts?.[0]?.value).toBe(`${expected.worktreePath}\n${expected.error ?? expected.skippedReason ?? "cleanup was skipped"}`);
     }), { numRuns: 200 });
   });
 });

@@ -9,7 +9,7 @@ function thread(id: string, parent?: string): NavigationThreadSummary {
 }
 
 describe("owner-revalidated archive group planning", () => {
-  it("pages every unloaded child and retains only identities and expected parent relationships", async () => {
+  it("pages unloaded children and retains identity, relationships and diagnostic metadata", async () => {
     const root = thread("root");
     const threads = [root, ...Array.from({ length: 121 }, (_, index) => ({ ...thread(`child-${index}`, "root"), summary: "private provider text" }))];
     const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, { threads }));

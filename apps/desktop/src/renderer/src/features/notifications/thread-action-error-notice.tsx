@@ -1,5 +1,6 @@
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import { InstanceChip } from "../federation/InstanceGlyph";
+import { withThreadActionErrorContext, type ThreadActionErrorContext } from "../../lib/thread-action-error-context";
 
 /**
  * Thread lifecycle actions that can fail *after* the control that started
@@ -44,10 +45,12 @@ export type ThreadActionErrorKind =
   | "unlink-thread"
   | "update-pin";
 
-export type ThreadActionErrorSignal = {
+export type ThreadActionErrorSignal = ThreadActionErrorContext & {
   kind: ThreadActionErrorKind;
   message: string;
 };
+
+export type ThreadActionErrorEvent = Omit<ThreadActionErrorSignal, "message"> & { message?: string };
 
 const THREAD_ACTION_ERROR_TITLES: Record<ThreadActionErrorKind, string> = {
   "mark-directory-read": "Could not mark directory read",
@@ -81,7 +84,7 @@ export function resolveThreadActionErrorNotice(
   // transport prefix. Recognize the complete known offline error, not text an
   // unrelated failure happens to quote. The chip resolves live directory names.
   const offlinePeer = /^(?:Error invoking remote method '[^'\r\n]+': )?(?:FederationPeerUnavailableError: )?Federation peer (\S+) (?:is not connected|disconnected)\.$/.exec(signal.message);
-  return {
+  return withThreadActionErrorContext({
     // Sticky: a backend failure the operator never saw is worse than a
     // toast they have to dismiss. The producer clears it on the next
     // attempt, so a successful retry takes it down on its own. Pin changes
@@ -101,5 +104,5 @@ export function resolveThreadActionErrorNotice(
     } : {}),
     title: THREAD_ACTION_ERROR_TITLES[signal.kind],
     tone: "error",
-  };
+  }, signal);
 }

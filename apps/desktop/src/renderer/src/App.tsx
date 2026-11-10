@@ -246,7 +246,7 @@ import {
 import {
   resolveThreadActionErrorNotice,
   threadActionErrorNoticeId,
-  type ThreadActionErrorKind,
+  type ThreadActionErrorEvent,
 } from "./features/notifications/thread-action-error-notice";
 import { useNavigationReadErrorNotices } from "./features/notifications/navigation-read-error-notice";
 import {
@@ -747,10 +747,7 @@ function DesktopAppShell(props: {
      submit, the context menu closes on click, and a failed create has no
      thread to point at — so they land in the durable stack rather than a
      static slot. An empty message means the producer cleared it. */
-  const handleThreadActionError = useCallback((event: {
-    kind: ThreadActionErrorKind;
-    message?: string;
-  }): void => {
+  const handleThreadActionError = useCallback((event: ThreadActionErrorEvent): void => {
     if (!event.message) {
       dispatchAppNotice({
         type: "dismiss",
@@ -761,6 +758,7 @@ function DesktopAppShell(props: {
     dispatchAppNotice({
       type: "show",
       notice: resolveThreadActionErrorNotice({
+        ...event,
         kind: event.kind,
         message: event.message,
       }),

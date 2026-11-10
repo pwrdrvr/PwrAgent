@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { federatedThreadIdentityKey, type AgentEvent, type NavigationRow } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
+import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 
 function fixture() {
   const listeners = new Set<(event: AgentEvent) => void>();
@@ -68,6 +69,61 @@ it("lifts the archive exclusion when the request fails", async () => {
   await act(async () => { await result.current.archiveThread(result.current.selectedThread!); });
   expect(result.current.archivedThreadKeys.has("codex:b")).toBe(false);
   await waitFor(() => expect(result.current.selectedThread?.id).toBe("b"));
+});
+
+it("retains the archive target's thread reference and worktree when selection moves", async () => {
+  const f = fixture();
+  f.archive.mockRejectedValue(new Error("Federation peer fixture-peer is not connected."));
+  const onThreadActionError = vi.fn();
+  const { result } = renderHook(() => useThreadNavigation(f.api, { onThreadActionError }));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  const target = { ...result.current.threads.find((thread) => thread.id === "b")!, title: "Repair build caching",
+    linkedDirectories: [{ id: "checkout", label: "Project", kind: "worktree" as const,
+      path: "/contrived/repository", worktreePath: "/contrived/worktrees/build-cache" }],
+    federation: { instanceLabel: "Studio", ref: { backend: "codex" as const, threadId: "b",
+      target: { scope: "remote" as const, instanceId: "fixture-peer" } } } };
+  await act(async () => { await result.current.archiveThread(target); });
+  const failure = onThreadActionError.mock.calls.filter(([event]) => event.kind === "archive-thread" && event.message).at(-1)?.[0];
+  expect(failure?.threadLink).toMatchObject({ backend: "codex", instanceId: "fixture-peer", threadId: "b", title: target.title });
+  expect(failure?.worktreePaths).toEqual(["/contrived/worktrees/build-cache"]);
+});
+
+it("identifies the child whose archive failed instead of the requested group root", async () => {
+  const f = fixture();
+  const root = { id: "a", source: "codex" as const, title: "Group root", titleSource: "explicit" as const,
+    inbox: { inInbox: true }, linkedDirectories: [] };
+  const child = { ...root, id: "b", title: "Failed child", parentThreadId: "a",
+    linkedDirectories: [{ id: "checkout", label: "Project", kind: "worktree" as const,
+      path: "/contrived/repository", worktreePath: "/contrived/worktrees/child" }] };
+  const read = f.api.getNavigationQueryPage!;
+  f.api.getNavigationQueryPage = async (request, token) => request.query.kind === "group-members"
+    ? navigationQueryFixture(request, { threads: [root, child] }) : read(request, token);
+  f.archive.mockRejectedValue(new Error("Snapshot failed"));
+  const onThreadActionError = vi.fn();
+  const { result } = renderHook(() => useThreadNavigation(f.api, { onThreadActionError }));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  await act(async () => { await result.current.archiveThread(root, { includeSubthreads: true }); });
+  const failure = onThreadActionError.mock.calls.filter(([event]) => event.kind === "archive-thread" && event.message).at(-1)?.[0];
+  expect(failure?.threadLink).toMatchObject({ threadId: "b", title: "Failed child" });
+  expect(failure?.worktreePaths).toEqual(["/contrived/worktrees/child"]);
+});
+
+it.each(["before response", "after response"])("retains the thread name when cleanup completes %s", async (timing) => {
+  const f = fixture();
+  const completion: AgentEvent = { backend: "codex", notification: { method: "thread/archiveCleanup/completed", params: {
+    threadId: "b", archivedAt: 1, cleanup: [{ worktreePath: "/contrived/worktrees/build-cache", removedWorktree: false,
+      deletedBranch: false, error: "Snapshot failed" }],
+  } } };
+  f.archive.mockImplementation(async ({ threadId }) => {
+    if (timing === "before response") f.emit(completion);
+    return { backend: "codex", threadId, archivedAt: 1, cleanup: [], cleanupPending: true };
+  });
+  const { result } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  await act(async () => { await result.current.archiveThread({ ...result.current.threads.find((thread) => thread.id === "b")!, title: "Repair build caching" }); });
+  if (timing === "after response") act(() => f.emit(completion));
+  expect(result.current.archiveThreadNotice?.threadLink).toMatchObject({ threadId: "b", title: "Repair build caching" });
+  expect(result.current.archiveThreadNotice?.copyText).toContain("/contrived/worktrees/build-cache");
 });
 
 it("shows active cleanup before completion, respects dismissal for the batch, and clears on drain", async () => {
