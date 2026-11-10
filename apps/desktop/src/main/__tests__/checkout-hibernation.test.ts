@@ -470,29 +470,39 @@ describe("idle checkout hibernation and restore", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
   });
 
-  it("keeps a queued send behind its own checkout restore (lifecycle model)", async () => {
+  it.each([false, true])("keeps a queued send behind its own checkout restore (delayed acknowledgement: %s)", async (delayAcknowledgement) => {
     // Each provider inventory has one registry owner. The preceding direct
     // sends must settle and close before a queued-send fixture replaces it.
     expect(registries).toHaveLength(0);
     const fixture = await createFixture();
     await writeFile(path.join(fixture.worktree, "file.txt"), "queued edit\n");
     const { registry } = fixture.open();
-    await sweep(registry);
+    expect(await sweep(registry)).toMatchObject({ hibernated: 1 });
     let restoring!: () => void;
     const restoreEntered = new Promise<void>((resolve) => { restoring = resolve; });
     let resume!: () => void;
     const barrier = new Promise<void>((resolve) => { resume = resolve; });
     releases.push(resume);
+    let admitted!: () => void;
+    const admission = new Promise<void>((resolve) => { admitted = resolve; });
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "thread/turnQueue/updated" || event.notification.params.status !== "queued") return;
+      admitted();
+      if (delayAcknowledgement) await barrier;
+    });
     const recreate = recreateSpy(registry, async () => { restoring(); await barrier; });
     let didStart!: () => void;
     const queuedStart = new Promise<void>((resolve) => { didStart = resolve; });
     const started = stubProviderTurnStart(registry, didStart);
-    const submitted = await registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] });
-    expect(submitted.status).toBe("queued");
+    const submission = ownFixtureWork(registry.submitTurn({ ...identity, input: [{ type: "text", text: "queued" }] }));
     try {
-      await restoreEntered;
+      // Queue admission, not its publication acknowledgement, proves the
+      // send is waiting. Publication may itself await restore progress.
+      await Promise.all([restoreEntered, admission]);
+      expect(registry.getQueuedTurnsForThread(identity).map((entry) => entry.displayText)).toEqual(["queued"]);
       expect(started).not.toHaveBeenCalled();
     } finally { resume(); }
+    expect((await submission).status).toBe("queued");
     await queuedStart;
     expect(recreate).toHaveBeenCalledTimes(1);
     expect(started).toHaveBeenCalledTimes(1);
