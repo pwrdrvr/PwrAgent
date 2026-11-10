@@ -296,6 +296,18 @@ thread preparation, rechecking a handoff lock before inference. Its durable job
 acceptance, fingerprint and confirmed thread/turn outcomes remain host effects;
 the lifecycle adds no retry identity or replay after restart.
 
+Both Outpost native creation paths now use `ThreadCreationLifecycle`. The
+federation host records positive native membership before attempting canonical
+metadata, so a failed host finalizer retains the provider identity and cannot
+hide acceptance. Actual job turns use `ThreadTurnStartLifecycle.submitCodex`
+and `finalizeCodex`; durable job confirmation precedes independent title/event
+finalization. Observer and diagnostic failures cannot undo a committed job or
+replace a provider outcome. A refused confirmed-turn write records the known
+thread/turn identity as unknown through the existing terminal boundary, without
+resending provider input. A terminal arriving during finalization retires the
+job once. Hosts omit unsupported effect ports; desktop retains its complete
+typed host contracts and existing construction. No extra tools or reach result.
+
 Steer-request admission lives in `owner-core/thread-steering-lifecycle.ts`.
 It qualifies request ids by backend, thread and expected turn, fences changed
 input/origin/delivery, and shares completion across concurrent retries. Provider

@@ -33,6 +33,7 @@ export { ThreadNamingLifecycle } from "@pwragent/owner-core/thread-naming-lifecy
 export { ThreadTitleLifecycle } from "@pwragent/owner-core/thread-title-lifecycle";
 export { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
 export { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
+export { ThreadCreationLifecycle } from "@pwragent/owner-core/thread-creation-lifecycle";
 export { projectOwnerThreadTitle } from "@pwragent/owner-core/thread-title-projection";
 export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 export { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";

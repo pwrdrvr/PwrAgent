@@ -110,6 +110,11 @@ export interface ThreadCreationOptions {
   parent: boolean;
 }
 
+/** A host supplies only its supported effects; desktop retains the full contract above. */
+export type ThreadCreationPorts = Partial<Omit<ThreadCreationHost, "providers">> & {
+  providers: Partial<ThreadCreationHost["providers"]>;
+};
+
 /** Coordinates creation outcomes; providers own identities and hosts own effects. */
 export class ThreadCreationLifecycle {
   async prepare<Metadata>(
@@ -135,69 +140,69 @@ export class ThreadCreationLifecycle {
     return { ...prepared.metadata, ...result };
   }
 
-  async start(options: ThreadCreationOptions, host: ThreadCreationHost): Promise<CreatedThreadIdentity & Visibility> {
+  async start(options: Pick<ThreadCreationOptions, "backend"> & Partial<ThreadCreationOptions>, host: ThreadCreationPorts): Promise<CreatedThreadIdentity & Visibility> {
     const { backend } = options;
     let identity: CreatedThreadIdentity | undefined;
     const report = (stage: ThreadCreationStage, error: unknown): void => {
-      try { host.failed(stage, error, identity); } catch { /* Diagnostics cannot replace the provider outcome. */ }
+      try { host.failed?.(stage, error, identity); } catch { /* Diagnostics cannot replace the provider outcome. */ }
     };
     const attemptSync = (stage: ThreadCreationStage, effect: () => void): void => {
       try { effect(); } catch (error) { report(stage, error); }
     };
-    const attempt = async <T>(stage: ThreadCreationStage, effect: () => Promise<T>): Promise<T | undefined> => {
+    const attempt = async <T>(stage: ThreadCreationStage, effect: () => T | Promise<T>): Promise<T | undefined> => {
       try { return await effect(); } catch (error) { report(stage, error); return undefined; }
     };
     try {
-      await host.withWorkspaceWrite(async () => {
-        const result = backend === "claude"
-          ? await host.providers.claude()
-          : isAcpBackendId(backend)
-          ? await host.providers.acp()
-          : await host.providers.codex();
+      const create = async () => {
+        const provider = host.providers[backend === "claude" ? "claude" : isAcpBackendId(backend) ? "acp" : "codex"];
+        if (!provider) throw new Error(`Thread creation is unavailable for ${backend}`);
+        const result = await provider.call(host.providers);
         // Capture acceptance inside admission: its release can also fail.
         identity = { backend, threadId: result.threadId };
         return result;
-      });
+      };
+      if (host.withWorkspaceWrite) await host.withWorkspaceWrite(create);
+      else await create();
     } catch (error) {
       if (identity) {
         report("workspace", error);
       } else {
         // Rejected creation owns cleanup. Accepted threads retain their workspace
         // and registrations even if a later host finalizer fails.
-        for (const connection of host.connections) attemptSync("revoke-connections", () => connection.revoke());
-        await attempt("rollback-workspace", () => host.rollbackWorkspace());
-        throw host.rejection(error);
+        for (const connection of host.connections ?? []) attemptSync("revoke-connections", () => connection.revoke());
+        await attempt("rollback-workspace", () => host.rollbackWorkspace?.());
+        throw host.rejection ? host.rejection(error) : error;
       }
     }
     const created = identity!;
-    attemptSync("pdf", () => host.bindPdf(created));
-    for (const connection of host.connections) attemptSync("connections", () => connection.bindThread(created.threadId));
-    await attempt("pending", () => host.rememberPending(created));
-    if (options.systemPlaceholder) attemptSync("placeholder", () => host.markPlaceholder(created));
-    if (options.worktree) await attempt("worktree", () => host.recordWorktreeOwner(created));
-    attemptSync("invalidate", () => host.invalidate(created));
-    if (backend === "claude" || backend === "codex") await attempt("execution", () => host.persistExecutionMode(created));
+    attemptSync("pdf", () => host.bindPdf?.(created));
+    for (const connection of host.connections ?? []) attemptSync("connections", () => connection.bindThread(created.threadId));
+    await attempt("pending", () => host.rememberPending?.(created));
+    if (options.systemPlaceholder) attemptSync("placeholder", () => host.markPlaceholder?.(created));
+    if (options.worktree) await attempt("worktree", () => host.recordWorktreeOwner?.(created));
+    attemptSync("invalidate", () => host.invalidate?.(created));
+    if (backend === "claude" || backend === "codex") await attempt("execution", () => host.persistExecutionMode?.(created));
     if (backend === "codex") {
-      if (options.tokenMiserOverride !== undefined) await attempt("token-miser", () => host.persistTokenMiser(created));
-      if (options.pdfCatalog) await attempt("pdf-catalog", () => host.persistPdfCatalog(created));
-      await attempt("git", () => host.persistGitBranch(created));
+      if (options.tokenMiserOverride !== undefined) await attempt("token-miser", () => host.persistTokenMiser?.(created));
+      if (options.pdfCatalog) await attempt("pdf-catalog", () => host.persistPdfCatalog?.(created));
+      await attempt("git", () => host.persistGitBranch?.(created));
     }
-    await attempt("pr", () => host.persistPrAutoDispatch(created));
-    if (options.mcpSelection) await attempt("mcp", () => host.persistMcpSelection(created));
-    if (options.agent) await attempt("agent", () => host.persistAgent(created));
-    if (options.environment) await attempt("environment", () => host.persistEnvironment(created));
+    await attempt("pr", () => host.persistPrAutoDispatch?.(created));
+    if (options.mcpSelection) await attempt("mcp", () => host.persistMcpSelection?.(created));
+    if (options.agent) await attempt("agent", () => host.persistAgent?.(created));
+    if (options.environment) await attempt("environment", () => host.persistEnvironment?.(created));
     let modelMigration = false;
-    attemptSync("model", () => { modelMigration = host.readModelMigration(); });
-    if (modelMigration || Object.values(options.modelSettings).some((value) => value !== undefined)) {
-      await attempt("model", () => host.persistModel(created));
+    attemptSync("model", () => { modelMigration = host.readModelMigration?.() ?? false; });
+    if (modelMigration || Object.values(options.modelSettings ?? {}).some((value) => value !== undefined)) {
+      await attempt("model", () => host.persistModel?.(created));
     }
     // Storage owns the relationship. Announcement failure cannot undo a saved
     // parent, and a rejected write leaves visibility to handle a root.
-    const parent = options.parent ? await attempt("parent", () => host.persistParent(created)) : undefined;
-    if (parent) await attempt("parent-event", () => host.announceParent(created));
-    const visibility = await attempt("visibility", () => host.finalizeVisibility(created, parent));
+    const parent = options.parent ? await attempt("parent", () => host.persistParent?.(created)) : undefined;
+    if (parent) await attempt("parent-event", () => host.announceParent?.(created));
+    const visibility = await attempt("visibility", () => host.finalizeVisibility?.(created, parent));
     // Codex owns its thread/started notification. Other providers need the host.
-    if (backend !== "codex") await attempt("started", () => host.announceStarted(created));
+    if (backend !== "codex") await attempt("started", () => host.announceStarted?.(created));
     return { ...created, ...visibility };
   }
 }

@@ -1,0 +1,7 @@
+{
+  "accepted-duplicate-reads": {"commits": 0, "note": "1000 durable duplicate submissions and owner reads; zero SQL writes, zero provider replay", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "accepted-existing-thread": {"commits": 5, "note": "Durable acceptance/thread/turn/terminal plus prompt fallback; observer refusals add no writes or replay", "observedWalBytes": 28840, "rowsChanged": 4, "statements": 5},
+  "accepted-new-thread": {"commits": 6, "note": "Actual job-created native thread/turn via both shared coordinators; inherited six boundary commits, no timer", "observedWalBytes": 49440, "rowsChanged": 6, "statements": 6},
+  "confirmed-write-refusal": {"commits": 4, "note": "One refused turn confirmation; existing unknown terminal boundary preserves provider IDs without another provider submission", "observedWalBytes": 32960, "rowsChanged": 4, "statements": 4},
+  "native-creation": {"commits": 1, "note": "Actual federation creation through the shared coordinator; existing metadata confirmation commit, setup excluded", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1}
+}

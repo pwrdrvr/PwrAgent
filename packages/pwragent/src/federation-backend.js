@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { buildThreadIdentityKey, isAppServerBackendKind, NavigationQueryStore, ThreadNamingLifecycle, projectProviderThreadSummary, FEDERATION_BACKEND_METHOD_CAPABILITIES, FEDERATION_MAX_FRAME_BYTES, fitThreadReplayWithinByteBudget, mergeCausalMessagingContext, pageThreadReplay, shortenDerivedThreadTitle } from "../dist/federation-core.js";
 import { ACTIVE, digest } from "./store.js";
 import { OutpostThreadRegistry } from "./owner-thread-registry.js";
-import { ThreadTitleGenerationService, ThreadTitleLifecycle } from "../dist/federation-core.js";
+import { ThreadCreationLifecycle, ThreadTitleGenerationService, ThreadTitleLifecycle } from "../dist/federation-core.js";
 
 // The owner methods this outpost serves. Each one's capability comes from the
 // shared owner contract, so a grant means the same here as on desktop.
@@ -62,6 +62,7 @@ export class HeadlessBackend {
     this.threads = new OutpostThreadRegistry(runtime.store.threadRegistry, runtime.store.inventory, runtime.store.acpSessions, runtime.store.claudeSessions, runtime.store.retainedOwners);
     this.threadRegistry = this.threads;
     this.providerMutationVersion = 0;
+    this.threadCreations = new ThreadCreationLifecycle();
     this.naming = new ThreadNamingLifecycle({
       readName: async ({ threadId }) => this.threads.get(threadId)?.title,
       readTitle: async ({ threadId }) => this.summary(this.owned(threadId)),
@@ -162,9 +163,9 @@ export class HeadlessBackend {
   }
 
   persistCreatedNativeThread(thread) {
-    this.persist({ ...thread, nativeMembershipRetired: false });
     this.providerMutationVersion++;
     this.threads.observeCreatedNativeThread(this.summary(thread));
+    this.persist({ ...thread, nativeMembershipRetired: false });
   }
 
   syncJobs(jobs = this.runtime.store.jobs.values()) {
@@ -474,14 +475,20 @@ export class HeadlessBackend {
     const cwd = this.runtime.projects.resolve(params.cwd || params.directoryPath || params.projectKey);
     this.creating = true;
     try {
-      const result = await this.runtime.codex.startThread({ cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
-      if (!result?.threadId || typeof result.threadId !== "string" || result.threadId.length > 256) throw new Error("Invalid thread/start response");
-      this.runtime.loadedThreads.add(result.threadId);
-      const thread = { id: result.threadId, messagingFileTools: true, nativeMembershipRetired: false, title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
-        model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
-      this.persistCreatedNativeThread(thread);
-      this.invalidate(thread.id, "thread/started");
-      return { backend: "codex", threadId: thread.id, executionMode: mode(sandbox) };
+      const created = await this.threadCreations.start({ backend: "codex" }, {
+        providers: { codex: async () => {
+          const result = await this.runtime.codex.startThread({ cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
+          if (!result?.threadId || typeof result.threadId !== "string" || result.threadId.length > 256) throw new Error("Invalid thread/start response");
+          this.runtime.loadedThreads.add(result.threadId);
+          return result;
+        } },
+        rememberPending: async ({ threadId }) => this.persistCreatedNativeThread({ id: threadId, messagingFileTools: true,
+          title: PLACEHOLDER_THREAD_TITLE, titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
+          model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier }),
+        invalidate: ({ threadId }) => this.invalidate(threadId, "thread/started"),
+        failed: (_stage, error) => this.runtime.reportFailure(error),
+      });
+      return { ...created, executionMode: mode(sandbox) };
     } finally { this.creating = false; }
   }
 
