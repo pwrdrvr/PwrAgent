@@ -464,8 +464,11 @@ The receiver assigns each enrolled peer `full` or `contained`, separately from
 its gateway/client topology. Settings → Federation → Peer access changes the
 local receiver's decision. Reconnects and advertised metadata cannot change it.
 Existing peers retain `full` on upgrade, preserving their previous authority;
-new enrollments also record the receiver's `full` default. Select `contained`
-for an Outpost running a less-trusted model. No existing peer gains authority
+desktop invites select `contained` by default and let the operator choose
+`full` before the peer connects. That choice stays in the receiver's one-use
+invitation record, outside the signed wire messages. Existing API callers
+that omit a role retain the previous `full` behavior. A re-enrollment preserves
+an existing peer's role; widening requires an explicit local role change. No existing peer gains authority
 as part of this upgrade.
 
 A contained peer cannot originate owner requests, general file transfers,
@@ -483,8 +486,9 @@ An enrolled Outpost starts its egress guard as contained on every connection,
 then reads `federation.peerRole.v1` from its pinned gateway. An older or
 unavailable role service cannot widen egress. Authenticated role-change notices
 apply to the existing connection. Both transport send entry points enforce the
-guard, independently of the receiver. A standalone listener with no upstream
-enrollment retains its existing local administrative behavior.
+guard, independently of the receiver. A standalone listener queries each directly connected receiver and starts
+its transport contained until that receiver reports its role. Role information
+from an old connection cannot widen its replacement.
 
 Receiver refusals and local guard refusals go to private
 `federation-refusals.jsonl` files (desktop: profile `state/`; Outpost: its

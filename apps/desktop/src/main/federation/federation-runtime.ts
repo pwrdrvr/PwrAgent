@@ -2375,6 +2375,7 @@ export class DesktopFederationRuntime {
   }
 
   async generateInvite(request: {
+    permissionRole?: FederationPeerRole;
     label?: string;
     ttlMs?: number;
     /**
@@ -2420,6 +2421,7 @@ export class DesktopFederationRuntime {
       generatedAt: now,
       expiresAt,
       label: request.label,
+      permissionRole: request.permissionRole ?? "full",
       role: "client",
       endpoint: gatewayUrl,
     });

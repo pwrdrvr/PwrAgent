@@ -77,6 +77,7 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [tailscaleConfiguring, setTailscaleConfiguring] =
     useState<FederationTailscaleMode>();
   const [funnelAcknowledged, setFunnelAcknowledged] = useState(false);
+  const [inviteRole, setInviteRole] = useState<"full" | "contained">("contained");
   const [generatedInvite, setGeneratedInvite] = useState("");
   const [inviteCopied, setInviteCopied] = useState(false);
   const inviteCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -918,6 +919,11 @@ export function FederationSettings(props: FederationSettingsProps) {
         chipKind={generatedInvite ? "ok" : "muted"}
       >
         <div className="settings-fields">
+          <SettingsField label="Invite access"
+            help="Choose the peer's access before it connects. Contained peers can communicate with their users but cannot reach other instances."
+            control={<Select aria-label="Invite access" value={inviteRole}
+              options={[{ value: "contained", label: "Contained" }, { value: "full", label: "Full" }]}
+              onChange={(role) => { if (role === "full" || role === "contained") setInviteRole(role); }} />} />
           <SettingsField
             label="Generate invite"
             sub={
@@ -936,7 +942,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                   }
                   onClick={() => {
                     setActionError(undefined);
-                    props.desktopApi?.generateFederationInvite?.({})
+                    props.desktopApi?.generateFederationInvite?.({ permissionRole: inviteRole })
                       .then(async (response) => {
                         setGeneratedInvite(response.invite);
                         // Auto-copy so the operator can paste straight into
@@ -1257,7 +1263,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                   </span>
                   {peer.canRevoke && props.desktopApi?.setFederationPeerRole ? (
                     <SettingsField label="Peer access" pending={settingRoleFor === peer.id}
-                      help="Contained peers can reply to their users, but cannot start work or transfer files to other instances."
+                      help="Contained peers can reply to their users. Requests to operate other instances are blocked."
                       control={<Select value={peer.permissionRole ?? "full"}
                         aria-label={`Peer access for ${peer.label}`}
                         disabled={settingRoleFor === peer.id}

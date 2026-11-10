@@ -78,3 +78,13 @@ it("applies receiver role changes immediately on the existing connection", async
     }
   }));
 });
+
+it("malformed receiver roles cannot grant gateway relay", () => {
+  fc.assert(fc.property(fc.string().filter((role) => role !== "full"), (role) => {
+    const decision = evaluateFederationSessionPolicy({ peer: { id: "outpost", label: "Fixture", role: "client", status: "connected",
+      capabilities: [...FEDERATION_CAPABILITIES], permissionRole: role as "contained" }, protocolVersion: 1,
+    requestedCapabilities: [...FEDERATION_CAPABILITIES] });
+    expect(decision.accepted).toBe(true);
+    if (decision.accepted) expect(decision.capabilities).not.toContain("gateway_relay");
+  }));
+});

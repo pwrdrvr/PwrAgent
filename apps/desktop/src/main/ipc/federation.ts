@@ -389,7 +389,11 @@ export function registerFederationIpcHandlers(): void {
       _event,
       request: GenerateFederationInviteRequest = {},
     ): Promise<GenerateFederationInviteResponse> => {
+      if (request?.permissionRole !== undefined && request.permissionRole !== "full" && request.permissionRole !== "contained") {
+        throw new Error("Invalid enrollment permission role.");
+      }
       const { invite, expiresAt } = await getDesktopFederationRuntime().generateInvite({
+        permissionRole: request?.permissionRole,
         ...request,
         readTailscaleAdvertisement: readInviteTailscaleAdvertisement,
       });

@@ -7,7 +7,7 @@ export * from "@pwragent/federation/federation-egress";
 export * from "@pwragent/federation/federation-refusal-audit";
 export { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD, CONTAINED_OUTPOST_MESSAGING_OPERATIONS } from "@pwragent/federation/federation-backend-methods";
 export * from "@pwragent/federation/federation-rpc";
-export { FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION } from "@pwragent/shared";
+export { FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION, normalizeFederationPeerRole } from "@pwragent/shared";
 
 export * from "@pwragent/federation/federation-pty-service";
 export * from "@pwragent/federation/terminal-history-store";

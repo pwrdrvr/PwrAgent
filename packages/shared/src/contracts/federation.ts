@@ -392,6 +392,11 @@ export type FederationTransferStats = {
 /** Receiver-owned permission role, independent of the peer's topology role. */
 export type FederationPeerRole = "full" | "contained";
 
+/** Preserve missing legacy trust; a malformed new role never widens it. */
+export function normalizeFederationPeerRole(value: unknown): FederationPeerRole {
+  return value === undefined || value === "full" ? "full" : "contained";
+}
+
 export type FederationPeerSummary = {
   /** Missing legacy values retain full access; only local operator actions change this. */
   permissionRole?: FederationPeerRole;
@@ -792,6 +797,7 @@ export type ReadFederationPinImpactResponse = {
 };
 
 export type GenerateFederationInviteRequest = {
+  permissionRole?: FederationPeerRole;
   label?: string;
   ttlMs?: number;
 };

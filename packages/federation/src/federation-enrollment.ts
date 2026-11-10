@@ -63,6 +63,7 @@ export function createFederationEnrollmentInvite(params: {
   gatewayInstanceId: FederationInstanceId;
   generatedAt: number;
   expiresAt: number;
+  permissionRole?: import("@pwragent/shared").FederationPeerRole;
   label?: string;
   role?: FederationInstanceRole;
   endpoint?: string;
@@ -71,6 +72,7 @@ export function createFederationEnrollmentInvite(params: {
     token: params.token,
     generatedAt: params.generatedAt,
     expiresAt: params.expiresAt,
+    permissionRole: params.permissionRole,
     label: params.label,
     role: params.role,
     endpoint: params.endpoint,
@@ -222,6 +224,7 @@ export function completeFederationEnrollment(params: {
     id: params.peer.instanceId,
     label: params.peer.label,
     role: params.peer.role,
+    permissionRole: enrollment.permissionRole ?? "full",
     status: "connected",
     // The proof above signed the raw advertised list; store and grant
     // only the capabilities this build understands.
@@ -239,6 +242,7 @@ export function completeFederationEnrollment(params: {
   };
   params.store.upsertPeer({
     peer,
+    assignedRole: enrollment.permissionRole ?? "full",
     updatedAt: params.now,
     clearRevocation: true,
   });

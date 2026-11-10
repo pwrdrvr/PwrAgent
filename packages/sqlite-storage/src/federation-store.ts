@@ -14,7 +14,7 @@ import type {
   FederationPeerSummary,
   FederationSessionId,
 } from "@pwragent/shared";
-import { isFederationInstanceId } from "@pwragent/shared";
+import { isFederationInstanceId, normalizeFederationPeerRole } from "@pwragent/shared";
 import type { StateDb } from "./state-db";
 
 const FEDERATION_ENROLLMENT_SECRET_META_KEY =
@@ -48,6 +48,7 @@ type FederationPeerPayload = {
 };
 
 type FederationEnrollmentPayload = {
+  permissionRole?: import("@pwragent/shared").FederationPeerRole;
   label?: string;
   role?: FederationInstanceRole;
   endpoint?: string;
@@ -97,6 +98,7 @@ export class FederationStore implements FederationStorage {
 
   upsertPeer(params: {
     peer: FederationPeerSummary & { pinnedPublicKeyPem?: string };
+    assignedRole?: import("@pwragent/shared").FederationPeerRole;
     createdAt?: number;
     updatedAt: number;
     /**
@@ -114,7 +116,7 @@ export class FederationStore implements FederationStorage {
       : params.peer.revokedAt ?? existing?.revokedAt;
     const status = revokedAt === undefined ? params.peer.status : "revoked";
     const payload: FederationPeerPayload = {
-      permissionRole: existing?.permissionRole ?? "full",
+      permissionRole: existing?.permissionRole ?? params.assignedRole ?? "full",
       capabilities: params.peer.capabilities,
       protocolVersion: params.peer.protocolVersion,
       endpoint: params.peer.endpoint,
@@ -220,6 +222,7 @@ export class FederationStore implements FederationStorage {
     token: string;
     generatedAt: number;
     expiresAt: number;
+    permissionRole?: import("@pwragent/shared").FederationPeerRole;
     label?: string;
     role?: FederationInstanceRole;
     endpoint?: string;
@@ -230,6 +233,7 @@ export class FederationStore implements FederationStorage {
       status: "pending",
       generatedAt: params.generatedAt,
       expiresAt: params.expiresAt,
+      permissionRole: params.permissionRole,
       label: params.label,
       role: params.role,
       endpoint: params.endpoint,
@@ -251,6 +255,7 @@ export class FederationStore implements FederationStorage {
         null,
         null,
         JSON.stringify({
+          permissionRole: params.permissionRole,
           label: params.label,
           role: params.role,
           endpoint: params.endpoint,
@@ -509,7 +514,7 @@ function rowToPeer(row: FederationPeerRow): FederationPeerSummary & {
     label: row.label,
     role: normalizeFederationInstanceRole(row.role) ?? "client",
     status: row.status as FederationConnectionState,
-    permissionRole: payload.permissionRole === undefined || payload.permissionRole === "full" ? "full" : "contained",
+    permissionRole: normalizeFederationPeerRole(payload.permissionRole),
     capabilities: payload.capabilities ?? [],
     protocolVersion: payload.protocolVersion,
     endpoint: payload.endpoint,
@@ -537,6 +542,7 @@ function rowToEnrollment(row: FederationEnrollmentRow): FederationEnrollmentEntr
     expiresAt: row.expires_at,
     usedAt: row.used_at ?? undefined,
     peerId: row.peer_id ?? undefined,
+    permissionRole: payload.permissionRole,
     label: payload.label,
     role: normalizeFederationInstanceRole(payload.role),
     endpoint: payload.endpoint,

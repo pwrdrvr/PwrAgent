@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import Database from "better-sqlite3";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -22,7 +23,14 @@ async function viewer(invite, identity = { id: randomUUID(), ...generateFederati
     peerInstanceId: identity.id, privateKeyPem: identity.privateKeyPem, publicKeyPem: identity.publicKeyPem,
     noiseStatic: identity.noiseStatic, capabilities, role: "client", inviteToken: mode === "enroll" ? invite.token : undefined,
     connectTimeoutMs: 1000, deferReceiving: true,
-    onEnvelope: (envelope) => { if (!rpc.receiveEnvelope(envelope)) events.push(envelope); },
+    onEnvelope: (envelope) => {
+      if (envelope.kind === "request" && envelope.method === "federation.peerRole.v1") {
+        connection.sendEnvelope({ kind: "response", id: randomUUID(), requestId: envelope.id, protocolVersion: 1,
+          sourceInstanceId: identity.id, targetInstanceId: envelope.sourceInstanceId, createdAt: Date.now(), result: { role: "full" } });
+        return;
+      }
+      if (!rpc.receiveEnvelope(envelope)) events.push(envelope);
+    },
     onClose: () => rpc?.rejectAll(new Error("Fixture viewer disconnected")),
   });
   rpc = new FederationRpcEndpoint({ localInstanceId: identity.id, remoteInstanceId: invite.gatewayInstanceId,
@@ -511,4 +519,89 @@ test("the Outpost transport guard blocks direct callers and preserves requested 
   connection.sendEnvelope({ id: "reply", kind: "response", requestId: "viewer-request", sourceInstanceId: "outpost", targetInstanceId: "receiver", protocolVersion: 1, createdAt: 1, result: {} });
   connection.sendEnvelope({ id: "messaging", kind: "request", method: "messaging.destination", sourceInstanceId: "outpost", targetInstanceId: "receiver", protocolVersion: 1, createdAt: 1, params: {} });
   assert.equal(sent.length, 2);
+});
+
+
+test("a viewer runs a contained Outpost through the gateway and operator file pushes stay allowed", async (t) => {
+  const gateway = await setup(t);
+  const outpost = await setup(t);
+  const first = decodeFederationInvite((await gateway.rpc("federation-invite", { port: 0 })).invite);
+  const joined = await outpost.rpc("federation-join", { invite: `pwragent-federation:${Buffer.from(JSON.stringify(first)).toString("base64url")}` });
+  const outpostId = joined.instanceId;
+  await gateway.stop(gateway.daemon);
+  const file = path.join(gateway.directory, "federation.json");
+  const state = JSON.parse(readFileSync(file, "utf8"));
+  state.peers[outpostId].permissionRole = "contained";
+  writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
+  await gateway.start();
+  await eventually(async () => (await outpost.rpc("federation-status")).gateway.status === "connected"
+    && (await outpost.rpc("federation-status")).permissionRole === "contained");
+  const invite = decodeFederationInvite((await gateway.rpc("federation-invite", { port: Number(new URL(first.gatewayUrl).port) })).invite);
+  const v = await viewer(invite);
+  t.after(() => v.connection.close());
+  const remote = new FederationRpcEndpoint({ localInstanceId: v.identity.id, remoteInstanceId: outpostId,
+    sendEnvelope: (envelope) => v.connection.sendEnvelope(envelope), defaultTimeoutMs: 3000 });
+  const receive = v.rpc.receiveEnvelope.bind(v.rpc);
+  v.rpc.receiveEnvelope = (envelope) => remote.receiveEnvelope(envelope) || receive(envelope);
+  const thread = await remote.request({ method: "backend.startThread", params: { backend: "codex", cwd: outpost.workspace } });
+  v.connection.sendEnvelope({ id: randomUUID(), kind: "notification", method: "federation.eventSubscription", protocolVersion: 1,
+    sourceInstanceId: v.identity.id, targetInstanceId: outpostId, createdAt: Date.now(),
+    params: { eventClasses: ["transcript"], threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: thread.threadId }] } } });
+  const turn = await remote.request({ method: "backend.startTurn", params: { backend: "codex", threadId: thread.threadId, input: [{ type: "text", text: "hello" }] } });
+  await eventually(() => v.events.some((event) => event.sourceInstanceId === outpostId && event.method === "backend.event"
+    && event.params.notification.method === "turn/completed" && event.params.notification.params.turn.id === turn.turnId));
+  assert.equal(readFileSync(path.join(outpost.workspace, "fixture-result.txt"), "utf8"), "hello");
+  const history = await remote.request({ method: "backend.readThread", params: { backend: "codex", threadId: thread.threadId } });
+  assert.equal(history.replay.lastAssistantMessage, "Fixture result");
+  const pushed = await pushFederationFile(remote, Buffer.from("operator communication"), "operator-message.txt");
+  assert.equal(readFileSync(pushed.path, "utf8"), "operator communication");
+});
+
+
+test("standalone Outpost egress follows receiver authority across late replies, notices and replacement", async (t) => {
+  const h = await setup(t);
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("full", "contained", "replace", "answer-full", "answer-contained", "spoof"), { maxLength: 25 }), async (commands) => {
+    let generation = 0;
+    let sequence = 0;
+    let lastNotice = -1;
+    let expected = "contained";
+    const pending = [];
+    const federation = Object.assign(Object.create(HeadlessFederation.prototype), {
+      state: { instanceId: "outpost", peers: {} }, file: path.join(h.directory, "federation.json"),
+      permissionRole: "contained", egressRoles: new Map(), roleRevisions: new Map(), connections: new Map(),
+      pty: { notifyPeerConnected() {} }, router: { registerConnection() {} },
+      endpoint: () => ({ request: () => new Promise((resolve) => pending.push({ resolve, generation, sequence })) }),
+    });
+    let connection;
+    const replace = () => {
+      generation++;
+      expected = "contained";
+      connection = { sendEnvelope() {} };
+      federation.register("receiver", ["peer_roles_v1"], connection);
+    };
+    replace();
+    const check = () => {
+      const send = () => connection.sendEnvelope({ id: "attempt", kind: "request", method: "backend.startThread", params: {},
+        protocolVersion: 1, sourceInstanceId: "outpost", targetInstanceId: "receiver", createdAt: 1 });
+      if (expected === "full") assert.doesNotThrow(send); else assert.throws(send, /capability_denied/);
+    };
+    check();
+    for (const command of commands) {
+      sequence++;
+      if (command === "replace") replace();
+      else if (command === "full" || command === "contained" || command === "spoof") {
+        federation.receive({ kind: "notification", id: "role", method: "federation.peerRole.changed.v1", protocolVersion: 1,
+          sourceInstanceId: command === "spoof" ? "another-peer" : "receiver", targetInstanceId: "outpost",
+          createdAt: 1, params: { role: command === "spoof" ? "full" : command } }, "receiver");
+        if (command !== "spoof") { expected = command; lastNotice = sequence; }
+      } else if (pending.length) {
+        const response = pending.shift();
+        const role = command === "answer-full" ? "full" : "contained";
+        response.resolve({ role });
+        if (response.generation === generation && response.sequence >= lastNotice) expected = role;
+      }
+      await Promise.resolve();
+      check();
+    }
+  }));
 });

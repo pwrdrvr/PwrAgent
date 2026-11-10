@@ -2,7 +2,7 @@ import type {
   FederationCapability,
   FederationPeerSummary,
 } from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import { FEDERATION_PROTOCOL_VERSION, normalizeFederationPeerRole } from "@pwragent/shared";
 import {
   federationFailure,
   type FederationRedactedFailure,
@@ -54,6 +54,6 @@ export function evaluateFederationSessionPolicy(params: {
   return {
     accepted: true,
     capabilities: params.requestedCapabilities.filter((capability) =>
-      params.peer?.permissionRole !== "contained" || capability !== "gateway_relay"),
+      normalizeFederationPeerRole(params.peer?.permissionRole) !== "contained" || capability !== "gateway_relay"),
   };
 }

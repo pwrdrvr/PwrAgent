@@ -22,6 +22,11 @@ async function peer(h, prior, onRequest, capabilities = HEADLESS_CAPABILITIES) {
     gatewayNoisePublicKey: Buffer.from(invite.gatewayNoisePublicKey, "base64"), peerInstanceId: identity.id,
     ...identity, capabilities, role: "client", inviteToken: prior ? undefined : invite.token,
     onEnvelope: (envelope) => {
+      if (envelope.kind === "request" && envelope.method === "federation.peerRole.v1") {
+        connection.sendEnvelope({ kind: "response", id: randomUUID(), requestId: envelope.id, protocolVersion: 1,
+          sourceInstanceId: identity.id, targetInstanceId: envelope.sourceInstanceId, createdAt: Date.now(), result: { role: "full" } });
+        return;
+      }
       if (rpc.receiveEnvelope(envelope) || endpoints.some((endpoint) => endpoint.receiveEnvelope(envelope))) return;
       events.push(envelope);
       if (envelope.kind === "request" && onRequest) void Promise.resolve(onRequest(envelope)).then((result) => connection.sendEnvelope({
