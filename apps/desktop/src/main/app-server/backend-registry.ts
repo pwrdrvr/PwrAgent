@@ -17480,10 +17480,17 @@ export class DesktopBackendRegistry {
             backend: "codex",
             threadId: reviewThreadId,
           });
-          if (startedTurn && startedTurn.turnId !== result.turnId) {
+          // A started notification owns its key before its mode read returns.
+          // Retain that inner turn too, so an early outer terminal retires it.
+          const startedTurnId = startedTurn?.turnId ?? Array.from(this.activeTurnKeys)
+            .map(parseActiveTurnKey)
+            .find((turn) => turn?.backend === "codex"
+              && turn.threadId === reviewThreadId
+              && !turn.turnId.startsWith("pending:"))?.turnId;
+          if (startedTurnId && startedTurnId !== result.turnId) {
             this.activeCodexReviewInterruptTurnIds.set(
               buildActiveTurnModeKey(reviewThreadId, result.turnId),
-              startedTurn.turnId,
+              startedTurnId,
             );
           }
         }
@@ -46621,12 +46628,15 @@ export class DesktopBackendRegistry {
           this.activeCodexReviewInterruptTurnIds.set(activeReviewTurnKey, turnId);
         }
         if (!this.activeCodexTurnModes.has(key)) {
-          this.activeCodexTurnModes.set(
-            key,
-            pendingMode ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
-              notification.params.threadId,
-            ),
+          const mode = pendingMode ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
+            notification.params.threadId,
           );
+          // Terminal delivery can remove this turn while the overlay read is
+          // pending. A finished turn must never regain execution-mode ownership.
+          if (this.activeTurnKeys.has(buildActiveTurnKey("codex", notification.params.threadId, turnId))
+            && !this.activeCodexTurnModes.has(key)) {
+            this.activeCodexTurnModes.set(key, mode);
+          }
         }
         if (collaborationMode && turnId !== pendingTurnId) {
           // Transfer ownership before removing the placeholder and its guard.
