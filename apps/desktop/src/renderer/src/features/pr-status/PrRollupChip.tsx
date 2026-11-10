@@ -29,7 +29,13 @@ import {
   resolvePrChipPresentation,
 } from "./pr-chip-state";
 import { prBranchBehindLabel, type PrBranchDrift } from "./pr-branch-drift";
-import { prNumberLabel, prRollupLabel, resolvePrRollup } from "./pr-rollup";
+import {
+  prNumberLabel,
+  prOverflowLabel,
+  prRollupLabel,
+  resolvePrOverflow,
+  resolvePrRollup,
+} from "./pr-rollup";
 
 type PrRollupChipProps = {
   prs: PrSummary[];
@@ -64,6 +70,12 @@ type PrRollupChipProps = {
    */
   onHoverStart?: () => void;
   onHoverEnd?: () => void;
+  /**
+   * `overflow` is Mission Control's `+N PRs` chip, drawn after the lead PR's
+   * own chip (`resolvePrOverflow`). It counts and wears the state of the PRs
+   * the lead leaves out, and opens the same list of every PR.
+   */
+  variant?: "rollup" | "overflow";
 };
 
 /** Hover opens a peek; a click or the keyboard keeps it open. */
@@ -81,6 +93,9 @@ type OpenMode = "hover" | "pinned";
  * click, or a choice.
  */
 export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps) {
+  if (props.variant === "overflow") {
+    return props.prs.length > 1 ? <MultiPrRollupChip {...props} /> : null;
+  }
   if (props.prs.length === 1) {
     const pr = props.prs[0]!;
     return (
@@ -107,9 +122,13 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
 
 function MultiPrRollupChip(props: PrRollupChipProps) {
   const rollup = resolvePrRollup(props.prs)!;
+  const overflow = props.variant === "overflow" ? resolvePrOverflow(props.prs) : undefined;
+  // The PRs the chip itself speaks for: all of them, or the ones the lead
+  // chip beside it leaves out. The list always holds every PR.
+  const chipRollup = overflow ? resolvePrRollup(overflow.rest)! : rollup;
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
-  const presentation = resolvePrChipPresentation(rollup.representative);
-  const leadLabel = rollup.lead
+  const presentation = resolvePrChipPresentation(chipRollup.representative);
+  const leadLabel = rollup.lead && !overflow
     ? prNumberLabel(rollup.lead, repoPrefixed.has(rollup.lead.url))
     : undefined;
   const triggerRef = useRef<HTMLSpanElement>(null);
@@ -140,10 +159,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       popoverRef.current?.getBoundingClientRect() ?? target.getBoundingClientRect(),
   });
   const [cardUrl, setCardUrl] = useState<string>();
+  // The row a PR menu opened from, outlined until focus comes back.
+  const [menuTargetUrl, setMenuTargetUrl] = useState<string>();
+  const openingMenuRef = useRef(false);
   const watchFor = (pr: PrSummary) =>
     resolvePrChipWatch(props.prWatches, pr, props.autoFixRepository);
   const watchStopHint = Boolean(props.onOpenContextMenu);
-  const waitingForCi = rollup.ordered.some((pr) => watchFor(pr)?.ci);
+  const waitingForCi = chipRollup.ordered.some((pr) => watchFor(pr)?.ci);
   // Read from the live list, so a status update reaches an open card.
   const cardPr = rollup.ordered.find((pr) => pr.url === cardUrl);
   const cardDrift = props.branchDrift?.url === cardUrl ? props.branchDrift : undefined;
@@ -190,6 +212,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const close = useCallback((): void => {
     setOpenMode(null);
     setPosition(undefined);
+    setMenuTargetUrl(undefined);
     hideRowCard();
   }, [hideRowCard]);
   const { cancelHoverDismiss, dismissAfterGrace, dismissImmediately } =
@@ -247,9 +270,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   // auto-scrolling transcript) cannot move that anchor.
   useEffect(() => {
     if (!open) return;
+    // A PR menu opened from a row sits outside the list: choosing from it
+    // keeps the list, so the next PR is one right-click away.
     const inside = (target: EventTarget | null): boolean =>
       target instanceof Node
-      && Boolean(popoverRef.current?.contains(target) || triggerRef.current?.contains(target));
+      && Boolean(
+        popoverRef.current?.contains(target)
+        || triggerRef.current?.contains(target)
+        || (target instanceof Element && target.closest(".thread-context-menu")),
+      );
     const onPointerDown = (event: PointerEvent): void => {
       if (!inside(event.target)) close();
     };
@@ -368,16 +397,44 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     dismissImmediately();
   };
 
+  // A right-click on a row opens that PR's menu over the list. The list is a
+  // portal, but React bubbles its events to the thread row, whose own menu
+  // would replace this one: claim the event. The row button takes focus
+  // first, so the menu hands focus back to it when it closes, which clears
+  // the outline.
+  const openRowContextMenu = (event: MouseEvent<HTMLLIElement>, pr: PrSummary): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const onOpenContextMenu = props.onOpenContextMenu;
+    if (!onOpenContextMenu) return;
+    clearHoverTimer();
+    cancelHoverDismiss();
+    hideRowCard();
+    setOpenMode("pinned");
+    setMenuTargetUrl(pr.url);
+    const row = event.currentTarget;
+    openingMenuRef.current = true;
+    row.querySelector<HTMLButtonElement>(".pr-rollup-popover__row")?.focus();
+    openingMenuRef.current = false;
+    const rect = row.getBoundingClientRect();
+    onOpenContextMenu(pr, {
+      x: event.clientX,
+      y: event.clientY,
+      anchorTop: rect.top,
+    });
+  };
+
   const className = [
     "pr-chip",
     "pr-chip--rollup",
+    ...(overflow ? ["pr-chip--overflow"] : []),
     ...prChipModifierClasses(presentation),
   ].join(" ");
   const dotRef = presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined;
 
   return (
     <span
-      className="thread-row__pr-rollup"
+      className={overflow ? "thread-row__pr-overflow" : "thread-row__pr-rollup"}
       onMouseEnter={props.onHoverStart}
       onMouseLeave={props.onHoverEnd}
     >
@@ -387,9 +444,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         tabIndex={0}
         aria-controls={open ? popoverId : undefined}
         aria-expanded={open}
-        aria-label={`${props.prs.length} pull requests, ${
-          leadLabel ? `${leadLabel} open, ` : ""
-        }${rollup.summary}${waitingForCi ? ", waiting for CI" : ""}`}
+        aria-label={overflow
+          ? `${overflow.rest.length} more ${
+            overflow.rest.length === 1 ? "pull request" : "pull requests"
+          }, ${chipRollup.summary}${waitingForCi ? ", waiting for CI" : ""}`
+          : `${props.prs.length} pull requests, ${
+            leadLabel ? `${leadLabel} open, ` : ""
+          }${rollup.summary}${waitingForCi ? ", waiting for CI" : ""}`}
         className={className}
         data-pr-rollup=""
         draggable={false}
@@ -435,7 +496,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         ) : (
           <>
             <span className="pr-chip__dot" aria-hidden="true" ref={dotRef} />
-            <span className="pr-chip__label">{prRollupLabel(props.prs)}</span>
+            <span className="pr-chip__label">
+              {overflow ? prOverflowLabel(overflow.rest.length) : prRollupLabel(props.prs)}
+            </span>
             {waitingForCi ? (
               <span className="pr-chip__watch" aria-hidden="true">
                 <EyeIcon size={12} />
@@ -465,6 +528,18 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
               hideRowCard();
               if (openMode === "hover") dismissAfterGrace();
             }}
+            // The heading and footer have no menu, and the thread row's
+            // must not open from inside the list.
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onFocus={() => {
+              if (!openingMenuRef.current) setMenuTargetUrl(undefined);
+            }}
+            onPointerDown={(event) => {
+              if (event.button === 0) setMenuTargetUrl(undefined);
+            }}
           >
             <div className="pr-rollup-popover__head">
               <span className="pr-rollup-popover__eyebrow">
@@ -492,18 +567,11 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                   // The card and the PR menu cover the row's chip too.
                   <li
                     key={pr.url}
-                    onMouseEnter={(event) => showRowCard(pr, event.currentTarget, false)}
-                    onContextMenu={(event) => {
-                      if (!props.onOpenContextMenu) return;
-                      event.preventDefault();
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      dismissImmediately();
-                      props.onOpenContextMenu(pr, {
-                        x: event.clientX,
-                        y: event.clientY,
-                        anchorTop: rect.top,
-                      });
+                    className={menuTargetUrl === pr.url ? "is-menu-target" : undefined}
+                    onMouseEnter={(event) => {
+                      if (!menuTargetUrl) showRowCard(pr, event.currentTarget, false);
                     }}
+                    onContextMenu={(event) => openRowContextMenu(event, pr)}
                   >
                     <button
                       type="button"
@@ -514,7 +582,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       aria-describedby={
                         cardUrl === pr.url && cardVisible ? cardId : undefined
                       }
-                      onFocus={(event) => showRowCard(pr, event.currentTarget, true)}
+                      onFocus={(event) => {
+                        if (!openingMenuRef.current) showRowCard(pr, event.currentTarget, true);
+                      }}
                       onBlur={hideRowCard}
                       onClick={openRow}
                       aria-keyshortcuts={props.onDetach ? "Delete Backspace" : undefined}

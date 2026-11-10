@@ -66,8 +66,11 @@ describe("ThreadRow density", () => {
     const rollup = container.querySelector(".thread-row__header .thread-row__pr-rollup");
     expect(rollup).toHaveTextContent("2 PRs");
     expect(rollup?.querySelector("[data-pr-rollup]")).toHaveClass("pr-chip--conflicting");
-    // The flow keeps its PR chips for X-ray; CSS hides them at rest.
-    expect(container.querySelectorAll(".thread-row__chips [data-pr-chip]")).toHaveLength(2);
+    // The flow keeps its lead chip and `+1 PR` chip for X-ray; CSS hides
+    // them at rest.
+    expect(container.querySelectorAll(".thread-row__chips [data-pr-chip]")).toHaveLength(1);
+    expect(container.querySelector(".thread-row__chips .thread-row__pr-overflow"))
+      .toHaveTextContent("+1 PR");
   });
 
   it("puts reactions on the title line only in Minimal, before the pin", () => {

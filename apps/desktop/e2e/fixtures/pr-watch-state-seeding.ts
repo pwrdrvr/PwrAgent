@@ -184,7 +184,10 @@ export async function seedPrWatchAuditState(
     const thread = { backend: "codex" as const, threadId: PR_WATCH_AUDIT_THREAD_ID };
     await overlay.setThreadPullRequests({
       ...thread,
-      prs: [PR_WATCH_AUDIT_WATCHED_PR, PR_WATCH_AUDIT_UNWATCHED_PR],
+      // Neither PR has an opened time, so the later attachment is the newest
+      // and leads Mission Control's chips line. The watched PR must be that
+      // chip; the other sits behind `+1 PR`.
+      prs: [PR_WATCH_AUDIT_UNWATCHED_PR, PR_WATCH_AUDIT_WATCHED_PR],
       fetchedAt: now,
     });
     await overlay.setThreadPrAutoDispatchEnabled({ ...thread, enabled: true });

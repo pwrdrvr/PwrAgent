@@ -89,6 +89,7 @@ import {
   SubthreadMachineCascade,
   type SubthreadMachineChoice,
 } from "./SubthreadMachineCascade";
+import { PullRequestCopyMenuItems } from "./PullRequestCopyMenuItems";
 import {
   useFederationProjectChecks,
   useFederationProjectStates,
@@ -3720,7 +3721,7 @@ export function Sidebar(props: SidebarProps) {
           ref={contextMenuRef}
           className={`thread-context-menu${
             contextMenuHasCheckSection ? " thread-context-menu--check-column" : ""
-          }`}
+          }${contextMenu.pullRequest ? " thread-context-menu--pull-request" : ""}`}
           role="menu"
           aria-label={
             contextMenuIsBulk
@@ -4264,6 +4265,13 @@ export function Sidebar(props: SidebarProps) {
                       </button>
                     ) : null}
                   </>
+                ) : null}
+                {contextMenuRowPullRequests.length > 0 ? (
+                  <PullRequestCopyMenuItems
+                    thread={contextMenu.thread}
+                    prs={contextMenuRowPullRequests}
+                    onCopy={copyFromContextMenu}
+                  />
                 ) : null}
                 {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
                   <button

@@ -151,6 +151,42 @@ function rollupSummary(
   return mergedCount > 0 ? "all merged or closed" : "all closed";
 }
 
+/**
+ * Mission Control's two PR chips: the lead PR's own chip and a `+N PRs` chip
+ * for the rest. The lead is the one open PR when exactly one is open, else
+ * the top of the list (`ordered[0]`: the newest open PR, else the newest
+ * finished one), so it does not move when a check changes. The overflow chip
+ * wears the least ready of the PRs it hides, so a failure behind it still
+ * shows.
+ */
+export type PrOverflow = {
+  lead: PrSummary;
+  /** Every other PR, in list order. */
+  rest: PrSummary[];
+  /** The PR whose state the overflow chip wears. */
+  restRepresentative: PrSummary;
+};
+
+export function resolvePrOverflow(prs: readonly PrSummary[]): PrOverflow | undefined {
+  if (prs.length < 2) {
+    return undefined;
+  }
+  const rollup = resolvePrRollup(prs)!;
+  const lead = rollup.lead ?? rollup.ordered[0]!;
+  const rest = [...rollup.ordered];
+  rest.splice(rest.indexOf(lead), 1);
+  return {
+    lead,
+    rest,
+    restRepresentative: resolvePrRollup(rest)!.representative,
+  };
+}
+
+/** The overflow chip's label: `+1 PR`, `+3 PRs`. */
+export function prOverflowLabel(hiddenCount: number): string {
+  return `+${hiddenCount} ${hiddenCount === 1 ? "PR" : "PRs"}`;
+}
+
 /** The rollup chip's visible label: the PR number alone, or the count. */
 export function prRollupLabel(prs: readonly PrSummary[]): string {
   return prs.length === 1 ? `#${prs[0]!.number}` : `${prs.length} PRs`;

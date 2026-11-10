@@ -799,6 +799,10 @@ account identity, local paths, prompts, and model output. Keep captures under
 Density is `<html data-density>`: absent for Mission Control, `compact`, or
 `minimal`. It lives in CSS only, so a density change re-renders no row.
 
+- **Mission Control and Compact** draw at most two PR chips in the flow: the
+  lead PR's own chip and a `+N PRs` chip (`PrRollupChip` with
+  `variant="overflow"`, rule in `resolvePrOverflow`) whose list holds every
+  PR and Detach all.
 - **Compact** hides every `.thread-row__chip` without the
   `thread-row__chip--persistent` marker. PR chips and reactions stay.
 - **Minimal** hides every flow chip without the `thread-row__chip--essential`

@@ -810,14 +810,15 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
 
         await test.step("sidebar PR chip with a CI watch", async () => {
           await expect(sidebarChip).toBeVisible();
-          // The unwatched PR's chip draws no eye. Without both, a seed that
-          // armed nothing would leave this scan green on a plain row.
+          // The unwatched PR, behind the `+1 PR` chip, draws no eye. Without
+          // both, a seed that armed nothing would leave this scan green on a
+          // plain row.
           await expect(sidebarChip.locator(".pr-chip__watch")).toBeVisible();
-          await expect(
-            sidebarRow.getByRole("button", {
-              name: new RegExp(`^Open ${repository}#${unwatched.number} \\([^)]*\\) in browser$`),
-            }),
-          ).toBeVisible();
+          const overflowChip = sidebarRow.getByRole("button", {
+            name: /^1 more pull request, [^,]*$/,
+          });
+          await expect(overflowChip).toBeVisible();
+          await expect(overflowChip.locator(".pr-chip__watch")).toHaveCount(0);
           if (runsFunctionalChecks) {
             // The eye is drawn inside the 20px chip, not beside or below it.
             const chipBox = await sidebarChip.boundingBox();
