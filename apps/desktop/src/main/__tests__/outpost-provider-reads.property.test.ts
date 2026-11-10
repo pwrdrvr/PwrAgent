@@ -9,6 +9,7 @@ import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
@@ -16,7 +17,7 @@ const backends = ["codex", "claude", "acp:fixture"] as const;
 const word = fc.stringMatching(/^[A-Za-z][A-Za-z0-9]{0,15}$/);
 
 function native(backend: AppServerBackendKind, name: string, archived = false): AppServerThreadSummary {
-  return { id: "same-id", source: backend, title: `${backend} ${name}`, titleSource: "explicit",
+  return { id: "00000000-0000-4000-8000-000000000001", source: backend, title: `${backend} ${name}`, titleSource: "explicit",
     createdAt: 10, updatedAt: 20, executionMode: "full-access", model: `${backend}-model`, fastMode: false,
     projectKey: "/fixture", linkedDirectories: [{ id: "fixture", kind: "local", path: "/fixture", label: "Fixture" }],
     ...(archived ? { archivedAt: 15 } : {}) };
@@ -47,7 +48,7 @@ it("discovers actual ACP session metadata without an installed agent or a retain
     mkdirSync(path.join(root, "headless"), { mode: 0o700 });
     const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
     const sessions = new AcpSessionStore(db);
-    sessions.upsertSession({ backendId: "acp:removed", sessionId: "same-id", title: name, titleSource: "derived", cwd: root,
+    sessions.upsertSession({ backendId: "acp:removed", sessionId: "00000000-0000-4000-8000-000000000001", title: name, titleSource: "derived", cwd: root,
       createdAt: 1, updatedAt: 2, executionMode, status: "idle", ...(archived ? { archivedAt: 3 } : {}) });
     sessions.upsertSession({ backendId: "acp:removed", sessionId: "hidden", title: "Hidden helper", hidden: true,
       createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
@@ -56,13 +57,13 @@ it("discovers actual ACP session metadata without an installed agent or a retain
     try {
       const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
       const owner = new HeadlessBackend({ workspace: root, store, projects: { list: () => [] }, onFailure(error: unknown) { throw error; } }, () => {});
-      const ref = { backend: "acp:removed", threadId: "same-id" };
+      const ref = { backend: "acp:removed", threadId: "00000000-0000-4000-8000-000000000001" };
       const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
       expect(detail.identity).toBe(archived ? "archived" : "present");
-      expect(detail.thread).toMatchObject({ id: "same-id", source: "acp:removed", title: name, titleSource: "derived", executionMode });
+      expect(detail.thread).toMatchObject({ id: "00000000-0000-4000-8000-000000000001", source: "acp:removed", title: name, titleSource: "derived", executionMode });
       expect((await owner.handle("resolveThread", { backend: "acp:removed", threadId: "hidden" })).thread).toBeUndefined();
       expect((await owner.handle("listThreads", { backend: "all" })).threads.some((thread: AppServerThreadSummary) => thread.id === "hidden")).toBe(false);
-      sessions.upsertSession({ ...sessions.getSession("acp:removed", "same-id")!, title: `Changed ${name}`, archivedAt: undefined });
+      sessions.upsertSession({ ...sessions.getSession("acp:removed", "00000000-0000-4000-8000-000000000001")!, title: `Changed ${name}`, archivedAt: undefined });
       expect((await owner.handle("resolveThread", ref)).thread.title).toBe(`Changed ${name}`);
     } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
   }), { numRuns: 25 });
@@ -79,6 +80,8 @@ it("retained owner reads preserve provider identity, native authority and canoni
     const overlay = new SqliteOverlayStore(db);
     const inventory = new ProviderThreadSnapshotStore(db);
     for (const backend of backends) inventory.replace({ backend, observedAt: 1, threads: [native(backend, "Native")] });
+    const claude = new ClaudeSessionStore(path.join(root, "claude"));
+    await claude.save({ cwd: "/fixture", thread: native("claude", "Native") });
     const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
     try {
       const store = new JobStore(path.join(root, "headless"), { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
@@ -87,14 +90,16 @@ it("retained owner reads preserve provider identity, native authority and canoni
       let owner = new HeadlessBackend(runtime, () => {});
       for (const [index, command] of commands.entries()) {
         const backend = command.backend as AppServerBackendKind;
-        const ref = { backend, threadId: "same-id" };
+        const ref = { backend, threadId: "00000000-0000-4000-8000-000000000001" };
+        if (backend === "claude") await claude.save({ cwd: "/fixture", thread: { ...native(backend, "Native"),
+          title: command.name, titleSource: "derived", ...(command.archived ? { archivedAt: 100 + index * 2 } : {}) } });
         await overlay.updateThreadMetadata(ref, { title: { text: command.name, source: "derived", nativeName: `${backend} Native` },
           pinnedRank: `${index}`, seenUpdatedAt: command.seen ? 20 : 19, seenAt: 1000,
           executionMode: "full-access", parent: { backend: "codex", threadId: "parent" },
           ...(command.archived ? { archivedAt: 100 + index * 2 } : { restoredAt: 101 + index * 2 }) });
         if (index % 2) owner = new HeadlessBackend(runtime, () => {});
         const resolved = (await owner.handle("resolveThread", ref)).thread;
-        expect(resolved).toMatchObject({ id: "same-id", source: backend, title: command.name, titleSource: "derived",
+        expect(resolved).toMatchObject({ id: "00000000-0000-4000-8000-000000000001", source: backend, title: command.name, titleSource: "derived",
           pinnedRank: `${index}`, parentThreadId: "parent", parentThreadBackend: "codex", executionMode: "full-access",
           linkedDirectories: native(backend, "Native").linkedDirectories, inbox: { inInbox: !command.seen } });
         const detail = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref });
@@ -102,10 +107,10 @@ it("retained owner reads preserve provider identity, native authority and canoni
         expect(detail.thread).toEqual(resolved);
         const active = (await owner.handle("listThreads", { backend })).threads;
         expect(active.map((row: AppServerThreadSummary) => row.source)).toEqual(command.archived ? [] : [backend]);
-        const archived = await owner.handle("lookupArchivedThreads", { ...ref, threadIds: ["same-id"], includeParent: true });
+        const archived = await owner.handle("lookupArchivedThreads", { ...ref, threadIds: ["00000000-0000-4000-8000-000000000001"], includeParent: true });
         expect(archived.threads.map((row: AppServerThreadSummary) => row.source)).toEqual(command.archived ? [backend] : []);
         expect(archived.parentLinks).toEqual([{ ...ref, parentThreadId: "parent", parentThreadBackend: "codex", parentThreadInstanceId: undefined }]);
-        expect((await owner.handle("resolveThread", { backend: "codex", threadId: "same-id" })).thread.title).toBe("codex Native");
+        expect((await owner.handle("resolveThread", { backend: "codex", threadId: "00000000-0000-4000-8000-000000000001" })).thread.title).toBe("codex Native");
         const page = await owner.handle("getNavigationQueryPage", { protocol: 2, consumer: "remote-window", backend,
           query: { kind: "exact", identities: [ref] } });
         expect(page.entries.map((entry: { row: { ref: { backend: string } } }) => entry.row.ref.backend)).toEqual(command.archived ? [] : [backend]);
@@ -117,7 +122,7 @@ it("retained owner reads preserve provider identity, native authority and canoni
         expect(advertised.backends.find((entry: { kind: string }) => entry.kind === backend))
           .toMatchObject({ available: false, capabilities: { listThreads: true, createThread: false, readThread: false, startTurn: false } });
         for (const method of ["startThread", "startTurn", "steerTurn", "interruptTurn", "controlActiveTurn", "renameThread", "markThreadSeen", "setThreadExecutionMode", "setThreadModelSettings", "readThread", "getNavigationQueueProjection"]) {
-          await expect(owner.handle(method, { backend, threadId: "same-id", ref: { backend, threadId: "same-id" } })).rejects.toThrow("executes Codex only");
+          await expect(owner.handle(method, { backend, threadId: "00000000-0000-4000-8000-000000000001", ref: { backend, threadId: "00000000-0000-4000-8000-000000000001" } })).rejects.toThrow("executes Codex only");
         }
       }
     } finally { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); }

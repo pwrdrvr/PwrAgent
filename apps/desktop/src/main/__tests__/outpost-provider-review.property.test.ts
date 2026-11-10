@@ -11,12 +11,14 @@ import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-t
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 
 const backends = ["codex", "claude", "acp:removed"] as const;
+const threadId = (index = 0) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
 afterEach(() => vi.unstubAllEnvs());
 
-function native(source: AppServerBackendKind, id = "same-id"): AppServerThreadSummary {
+function native(source: AppServerBackendKind, id = threadId()): AppServerThreadSummary {
   return { id, source, title: `${source} ${id}`, titleSource: "explicit", createdAt: 10, updatedAt: 20,
     threadStatus: "idle", linkedDirectories: [], executionMode: "default" };
 }
@@ -30,7 +32,9 @@ async function fixture() {
   const profile = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
   const store = new JobStore(directory, { version: 1, workspace: root, codexHome: path.join(root, "codex") }, profile);
   const runtime = { workspace: root, store, projects: { list: () => [] }, onFailure(error: unknown) { throw error; } };
-  return { desktop: new SqliteOverlayStore(db), inventory: new ProviderThreadSnapshotStore(db), sessions: new AcpSessionStore(db),
+  const claudeRoot = path.join(root, "claude");
+  return { root, claudeRoot, claude: new ClaudeSessionStore(claudeRoot),
+    desktop: new SqliteOverlayStore(db), inventory: new ProviderThreadSnapshotStore(db), sessions: new AcpSessionStore(db),
     reopen: () => new HeadlessBackend(runtime, () => {}),
     close() { profile.close(); db.close(); rmSync(root, { recursive: true, force: true }); } };
 }
@@ -40,11 +44,14 @@ it("provider-scoped lens pages and counts match an independent identity inventor
   try {
     await fc.assert(fc.asyncProperty(fc.tuple(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 1, max: 4 }),
       fc.integer({ min: 1, max: 4 })), async sizes => {
+      rmSync(f.claudeRoot, { recursive: true, force: true });
       const expected = backends.flatMap((backend, index) => {
-        const threads = Array.from({ length: sizes[index]! }, (_, id) => native(backend, `thread-${id}`));
+        const threads = Array.from({ length: sizes[index]! }, (_, id) => native(backend, threadId(id)));
         f.inventory.replace({ backend, observedAt: 1, threads });
         return threads.map(thread => ({ backend, threadId: thread.id }));
       });
+      await Promise.all(expected.filter(ref => ref.backend === "claude")
+        .map(ref => f.claude.save({ cwd: f.root, thread: native("claude", ref.threadId) })));
       const owner = f.reopen();
       for (const backend of [...backends, "all", undefined]) {
         const selected = expected.filter(ref => backend === undefined || backend === "all" || ref.backend === backend);
@@ -69,13 +76,15 @@ it("restored provider summaries omit historical archive stamps and remain in act
   try {
     await fc.assert(fc.asyncProperty(fc.nat(10000), fc.integer({ min: 1, max: 10000 }), async (archivedAt, elapsed) => {
       for (const source of ["claude", "acp:removed"] as const) {
-        const ref = { backend: source, threadId: "same-id" };
+        const ref = { backend: source, threadId: threadId() };
         f.inventory.replace({ backend: source, observedAt: 1, threads: [{ ...native(source), archivedAt }] });
+        if (source === "claude") await f.claude.save({ cwd: f.root, thread: { ...native(source), archivedAt } });
         if (source === "acp:removed") f.sessions.upsertSession({ backendId: source, sessionId: ref.threadId,
           title: "ACP archive", titleSource: "explicit", createdAt: 10, updatedAt: 20, status: "idle", executionMode: "default", archivedAt });
         await f.desktop.updateThreadMetadata(ref, { archivedAt, restoredAt: null, archiveRetentionStartedAt: null });
         expect((await f.reopen().handle("getNavigationSelectedDetail", { protocol: 2, ref })).thread.archivedAt).toBe(archivedAt);
         await f.desktop.setThreadArchiveTombstone({ ...ref, restoredAt: archivedAt + elapsed });
+        if (source === "claude") await f.claude.save({ cwd: f.root, thread: native(source) });
         const before = await f.desktop.getThreadMetadata(ref);
         const { writes } = await measureSqliteWrites(async () => {
           const owner = f.reopen();
@@ -90,9 +99,11 @@ it("restored provider summaries omit historical archive stamps and remain in act
         expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
         expect(await f.desktop.getThreadMetadata(ref)).toEqual(before);
         await f.desktop.setThreadArchiveTombstone({ ...ref, archivedAt: archivedAt + elapsed + 1 });
+        if (source === "claude") await f.claude.save({ cwd: f.root,
+          thread: { ...native(source), archivedAt: archivedAt + elapsed + 1 } });
         expect((await f.reopen().handle("getNavigationSelectedDetail", { protocol: 2, ref })).identity).toBe("archived");
         expect((await f.reopen().handle("lookupArchivedThreads", { backend: source, threadIds: [ref.threadId] })).threads[0].archivedAt)
-          .toBe(archivedAt);
+          .toBe(source === "claude" ? archivedAt + elapsed + 1 : archivedAt);
       }
     }), { numRuns: 20, examples: [[0, 1]] });
   } finally { f.close(); }
@@ -106,21 +117,29 @@ it("retained provider status controls seen Attention membership while Codex keep
       const projected = status === "active" ? "active" : status === "unknown" ? "unknown" : "idle";
       f.inventory.replace({ backend: "codex", observedAt: 1, threads: [{ ...native("codex"), threadStatus: "active" }] });
       f.inventory.replace({ backend: "claude", observedAt: 1, threads: [{ ...native("claude"), threadStatus: projected }] });
-      f.sessions.upsertSession({ backendId: "acp:removed", sessionId: "same-id", title: "ACP status", titleSource: "explicit",
+      await f.claude.save({ cwd: f.root, thread: { ...native("claude"), threadStatus: projected } });
+      f.sessions.upsertSession({ backendId: "acp:removed", sessionId: threadId(), title: "ACP status", titleSource: "explicit",
         createdAt: 10, updatedAt: 20, executionMode: "default", status });
-      await f.desktop.updateThreadMetadata({ backend: "claude", threadId: "metadata-only" }, { executionMode: "default" });
-      for (const backend of backends) await f.desktop.updateThreadMetadata({ backend, threadId: "same-id" }, { seenUpdatedAt: 20 });
+      await f.desktop.updateThreadMetadata({ backend: "claude", threadId: threadId(9) }, { executionMode: "default" });
+      for (const backend of backends) await f.desktop.updateThreadMetadata({ backend, threadId: threadId() }, { seenUpdatedAt: 20 });
       const { writes } = await measureSqliteWrites(async () => {
         const owner = f.reopen();
-        expect((await owner.handle("resolveThread", { backend: "claude", threadId: "metadata-only" })).thread.threadStatus).toBe("idle");
-        expect((await owner.handle("resolveThread", { backend: "codex", threadId: "same-id" })).thread.threadStatus).toBe("idle");
+        // Retained status is available before a fresh native discovery. A
+        // handed-over Claude sidecar does not carry a live turn into this host.
+        const retained = owner.threads.get(threadId(), "claude");
+        expect(owner.summary(retained).threadStatus).toBe(projected);
+        expect(owner.summary({ ...retained, threadStatus: undefined }).threadStatus).toBe("idle");
+        expect((await owner.handle("resolveThread", { backend: "claude", threadId: threadId(9) })).thread).toBeUndefined();
+        expect((await owner.handle("resolveThread", { backend: "codex", threadId: threadId() })).thread.threadStatus).toBe("idle");
         for (const backend of ["claude", "acp:removed"] as const) {
-          const ref = { backend, threadId: "same-id" };
-          expect((await owner.handle("resolveThread", ref)).thread).toMatchObject({ threadStatus: projected, inbox: { inInbox: false } });
-          expect((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).thread.threadStatus).toBe(projected);
+          const ref = { backend, threadId: threadId() };
+          const expectedStatus = backend === "claude" ? "idle" : projected;
+          expect((await owner.handle("resolveThread", ref)).thread).toMatchObject({ threadStatus: expectedStatus, inbox: { inInbox: false } });
+          expect((await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref })).thread.threadStatus).toBe(expectedStatus);
           const attention = await owner.handle("getNavigationQueryPage", { protocol: 2, backend, query: { kind: "lens", lens: "attention" } });
-          expect(attention.counts.active).toBe(status === "active" ? 1 : 0);
-          expect(attention.entries.length).toBe(status === "active" ? 1 : 0);
+          expect(attention.counts.total).toBe(1);
+          expect(attention.counts.active).toBe(expectedStatus === "active" ? 1 : 0);
+          expect(attention.entries.length).toBe(expectedStatus === "active" ? 1 : 0);
         }
       });
       expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });

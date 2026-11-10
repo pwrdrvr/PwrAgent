@@ -35,6 +35,9 @@ export { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thre
 export { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
 import type { AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
+import { projectClaudeSessionThread, type ClaudeProfileThreadStorage } from "@pwragent/owner-core/claude-profile-storage";
+import { projectProviderThreadSummary } from "@pwragent/owner-core/provider-thread-snapshot-storage";
+import { ClaudeSessionMetadataStore } from "@pwragent/sqlite-storage/claude-session-metadata-store";
 
 import path from "node:path";
 import os from "node:os";
@@ -54,7 +57,7 @@ import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-t
 export { outpostThreadMetadata, outpostThreadProjection } from "@pwragent/sqlite-storage/legacy-outpost-owner-data";
 
 type OutpostOwnerStorage = { threads: ImmediateOwnerThreadRegistry; jobs: OwnerJobStorage; inventory: ProviderThreadSnapshotStorage;
-  acpSessions: Pick<AcpSessionStorage, "getSession" | "listAllSessions"> };
+  acpSessions: Pick<AcpSessionStorage, "getSession" | "listAllSessions">; claudeSessions: ClaudeProfileThreadStorage };
 
 /** Outpost's private host binding. Application code receives only storage ports. */
 export function openOutpostProfileRuntime(params: {
@@ -107,6 +110,7 @@ export function openOutpostProfileRuntime(params: {
       const storage = adoptOutpostOwnerData(db, directory, ownerIdentity);
       const inventory = new ProviderThreadSnapshotStore(db);
       const acpSessions = new AcpSessionStore(db);
+      const claudeSessions = new ClaudeSessionMetadataStore(path.join(params.stateDirectory, "claude"));
       // Do not expose concrete stores, constructors or the database indirectly.
       return {
         threads: {
@@ -121,6 +125,10 @@ export function openOutpostProfileRuntime(params: {
         },
         inventory: { list: () => inventory.list(), replace: snapshot => inventory.replace(snapshot) },
         acpSessions: { getSession: (backend, id) => acpSessions.getSession(backend, id), listAllSessions: params => acpSessions.listAllSessions(params) },
+        claudeSessions: { listThreads: async () => {
+          return (await claudeSessions.list({ requireComplete: true })).filter(session => !session.ephemeral)
+            .map(session => projectProviderThreadSummary(projectClaudeSessionThread(session)));
+        } },
       };
     } };
   } catch (error) {

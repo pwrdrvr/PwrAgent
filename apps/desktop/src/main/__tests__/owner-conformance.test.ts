@@ -379,6 +379,65 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }), { numRuns: 3 });
   }, 60_000);
 
+  it("hands actual Claude active/archive metadata across desktop and daemon without retained inventory", async () => {
+    await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, name) => {
+      // The production Unix socket has a 100-byte path limit; macOS tmpdir is longer.
+      const root = await realpath(await mkdtemp(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-claude-owner-")));
+      const state = path.join(root, "profiles/t/state");
+      const archivedId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+      const sessions = new ClaudeSessionStore(path.join(state, "claude"));
+      let seeded = false;
+      const prepare = async (_db: StateDb, workspace: string) => {
+        if (seeded) return;
+        seeded = true;
+        for (const id of [threadId, archivedId]) await sessions.save({ cwd: workspace, sdkSessionId: `private-${id}`, thread: {
+          id, source: "claude", title: name, titleSource: "derived", createdAt: 1, updatedAt: 2,
+          linkedDirectories: [{ id: workspace, kind: "local", path: workspace, label: "w" }], executionMode: "auto",
+          ...(id === archivedId ? { archivedAt: 3 } : {}) } });
+      };
+      const claude = () => ({ store: sessions, inspectInstallation: async () => ({ authStatus: "unknown" as const }),
+        discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [],
+        getSessionInfo: async () => { throw new Error("Metadata discovery must not inspect SDK sessions"); } });
+      let desktop: OwnerHost | undefined;
+      let outpost: Awaited<ReturnType<typeof startOutpostDaemon>> | undefined;
+      const ref = { backend: "claude" as const, threadId };
+      const clearRetained = () => {
+        const db = StateDb.open(path.join(state, "state.db"), { profileName: "t" });
+        try { new ProviderThreadSnapshotStore(db).replace({ backend: "claude", observedAt: Date.now(), threads: [] }); }
+        finally { db.close(); }
+      };
+      try {
+        desktop = await startDesktopOwner(null, prepare, claude, root);
+        await desktop.client.renameThread({ ...ref, name: `Explicit ${name}` });
+        await desktop.client.setThreadPin({ ...ref, pinnedRank: "1024" });
+        await desktop.client.markThreadSeen({ ...ref, seenAt: 10000, seenUpdatedAt: 2 });
+        const expected = (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread!;
+        await desktop.close(); desktop = undefined;
+        clearRetained();
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        const actual = (await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread!;
+        for (const key of ["id", "source", "title", "titleSource", "pinnedRank", "executionMode", "model", "parentThreadId"] as const) {
+          expect(actual[key]).toEqual(expected[key]);
+        }
+        expect(actual.inbox.inInbox).toBe(expected.inbox.inInbox);
+        expect(JSON.stringify(actual)).not.toContain("private-");
+        expect((await outpost.client.lookupArchivedThreads({ backend: "claude", threadIds: [archivedId] })).threads)
+          .toMatchObject([{ id: archivedId, title: name, titleSource: "derived" }]);
+        await expect(outpost.client.readThread(ref)).rejects.toThrow("executes Codex only");
+        await outpost.close(); outpost = undefined;
+        desktop = await startDesktopOwner(null, prepare, claude, root);
+        await desktop.client.renameThread({ ...ref, name: `Next ${name}` });
+        await desktop.client.setThreadExecutionMode({ ...ref, executionMode: "default" });
+        const next = (await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref })).thread!;
+        await desktop.close(); desktop = undefined;
+        clearRetained();
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        expect((await outpost.client.resolveThread(ref)).thread).toMatchObject({ title: next.title, titleSource: next.titleSource,
+          pinnedRank: next.pinnedRank, executionMode: next.executionMode, inbox: { inInbox: next.inbox.inInbox } });
+      } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
+    }), { numRuns: 3 });
+  }, 60_000);
+
   it("hands colliding Claude and ACP identities through actual desktop → daemon → desktop profile owners", async () => {
     await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, suffix) => {
       const root = await realpath(await mkdtemp("/tmp/pa-provider-owner-"));
@@ -396,14 +455,14 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
             command: process.execPath, args: ["-e", "throw new Error('Retained inventory must not start ACP')"], env: {} } });
         new AcpSessionStore(db).upsertSession({ backendId: acp, sessionId: threadId, title: `ACP ${suffix}`, titleSource: "explicit",
           cwd: workspace, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
-        await new ClaudeSessionStore(path.join(workspace, "sessions")).save({ cwd: workspace, thread: {
+        await new ClaudeSessionStore(path.join(root, "profiles/t/state/claude")).save({ cwd: workspace, thread: {
           id: threadId, source: "claude", title: `Claude ${suffix}`, titleSource: "explicit", createdAt: 1, updatedAt: 2,
           linkedDirectories: [{ id: workspace, kind: "local", path: workspace, label: "w" }], executionMode: "default" } });
         writeFileSync(path.join(root, "f/fixture-threads.json"), JSON.stringify({ [threadId]: {
           id: threadId, name: `Codex ${suffix}`, cwd: workspace, createdAt: 1, updatedAt: 2, turns: [],
         } }));
       };
-      const claude = (workspace: string) => ({ store: new ClaudeSessionStore(path.join(workspace, "sessions")),
+      const claude = () => ({ store: new ClaudeSessionStore(path.join(root, "profiles/t/state/claude")),
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
         discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [], getSessionInfo: async () => undefined });
       try {

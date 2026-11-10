@@ -243,7 +243,7 @@ module.exports = {
         path: "^apps/desktop/src/main/(?!__tests__/|state/|storage/)",
       },
       to: {
-        path: "^(?:apps/desktop/src/main/(?:state/|storage/(?:state-db|app-runtime-instance-store|thread-todo-store|thread-review-storage-sqlite|model-settings-recents-store|overlay-store-sqlite|thread-search-store|provider-thread-snapshot-store|automation-store|scheduled-thread-action-store|scheduled-thread-action-payload-store|durable-turn-request-store|acp-session-store|acp-available-commands-store|messaging-pairing-store|messaging-activity-log|operator-request-store|token-miser-storage-sqlite|acp-agent-store|messaging-request-store|messaging-store-sqlite|federation-store|thread-sandbox-store)\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
+        path: "^(?:apps/desktop/src/main/(?:state/|storage/(?:state-db|app-runtime-instance-store|thread-todo-store|thread-review-storage-sqlite|model-settings-recents-store|overlay-store-sqlite|thread-search-store|provider-thread-snapshot-store|automation-store|scheduled-thread-action-store|scheduled-thread-action-payload-store|durable-turn-request-store|acp-session-store|acp-available-commands-store|messaging-pairing-store|messaging-activity-log|operator-request-store|token-miser-storage-sqlite|acp-agent-store|messaging-request-store|messaging-store-sqlite|federation-store|thread-sandbox-store|claude-session-metadata-store)\\.)|packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))",
       },
     },
     {

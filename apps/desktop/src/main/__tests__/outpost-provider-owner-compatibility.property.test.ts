@@ -11,13 +11,17 @@ import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-t
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
 import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 
 const backends = ["codex", "claude", "acp:removed"] as const;
+const threadId = "00000000-0000-4000-8000-000000000001";
+const metadataOnlyId = "00000000-0000-4000-8000-000000000002";
+const absentId = "00000000-0000-4000-8000-000000000003";
 const load = (file: string) => import(/* @vite-ignore */ pathToFileURL(path.join(process.cwd(), "packages/pwragent/src", file)).href);
 afterEach(() => vi.unstubAllEnvs());
 
 function native(backend: AppServerBackendKind, updatedAt: number): AppServerThreadSummary {
-  return { id: "same-id", source: backend, title: `${backend} native`, titleSource: "explicit",
+  return { id: threadId, source: backend, title: `${backend} native`, titleSource: "explicit",
     createdAt: 0, updatedAt, linkedDirectories: [], executionMode: "default" };
 }
 
@@ -25,10 +29,16 @@ function fixture() {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "pa-provider-owner-compat-")));
   mkdirSync(path.join(root, "headless"), { mode: 0o700 });
   const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
-  return { root, db, desktop: new SqliteOverlayStore(db), inventory: new ProviderThreadSnapshotStore(db), sessions: new AcpSessionStore(db),
-    seed(backend: AppServerBackendKind, updatedAt: number, observedAt: number) {
+  const claude = new ClaudeSessionStore(path.join(root, "claude"));
+  return { root, db, claude, desktop: new SqliteOverlayStore(db), inventory: new ProviderThreadSnapshotStore(db), sessions: new AcpSessionStore(db),
+    async saveClaude(updatedAt: number, archivedAt?: number) {
+      await claude.save({ cwd: root, thread: { ...native("claude", updatedAt), source: "claude",
+        ...(archivedAt !== undefined ? { archivedAt } : {}) } });
+    },
+    async seed(backend: AppServerBackendKind, updatedAt: number, observedAt: number) {
       this.inventory.replace({ backend, observedAt, threads: [native(backend, updatedAt)] });
-      if (backend === "acp:removed") this.sessions.upsertSession({ backendId: backend, sessionId: "same-id",
+      if (backend === "claude") await this.saveClaude(updatedAt);
+      if (backend === "acp:removed") this.sessions.upsertSession({ backendId: backend, sessionId: threadId,
         title: `${backend} native`, titleSource: "explicit", createdAt: 0, updatedAt, executionMode: "default", status: "idle" });
     },
     close() { db.close(); rmSync(root, { recursive: true, force: true }); } };
@@ -52,9 +62,14 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
       }).threads);
       f.desktop.initializeNavigationUnreadBaseline(initial);
       for (const backend of backends) {
-        f.seed(backend, updatedAt, 10000);
-        await f.desktop.updateThreadMetadata({ backend, threadId: "same-id" }, { seenAt: 1000, seenUpdatedAt: explicit ?? null });
-        await f.desktop.updateThreadMetadata({ backend, threadId: "metadata-only" }, { executionMode: "default" });
+        await f.seed(backend, updatedAt, 10000);
+        await f.desktop.updateThreadMetadata({ backend, threadId }, { seenAt: 1000, seenUpdatedAt: explicit ?? null });
+        await f.desktop.updateThreadMetadata({ backend, threadId: metadataOnlyId }, { executionMode: "default" });
+        if (backend === "claude") {
+          await f.claude.save({ cwd: f.root, thread: { id: metadataOnlyId, source: "claude", title: "Untitled thread", titleSource: "fallback",
+            linkedDirectories: [], executionMode: "default" } });
+          await f.desktop.updateThreadMetadata({ backend, threadId: absentId }, { executionMode: "default" });
+        }
       }
       const owner = await open(f);
       try {
@@ -63,7 +78,7 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
           for (let round = 0; round < 5; round++) {
             const backend = owner.reopen();
             for (const [index, source] of backends.entries()) {
-              const ref = { backend: source, threadId: "same-id" };
+              const ref = { backend: source, threadId };
               const expected = updatedAt > (explicit ?? baselines[index]!);
               const desktop = f.desktop.readNavigationQueryIndex({ backend: source, threads: [native(source, updatedAt)] }).threads[0]!;
               expect(desktop.inbox.inInbox).toBe(expected);
@@ -71,29 +86,34 @@ it("keeps same-ID unread baselines backend-qualified against the actual desktop 
               expect(resolved.inbox.inInbox).toBe(desktop.inbox.inInbox);
               const detail = await backend.handle("getNavigationSelectedDetail", { protocol: 2, ref });
               expect(detail.thread.inbox.inInbox).toBe(desktop.inbox.inInbox);
-              expect((await backend.handle("resolveThread", { backend: source, threadId: "metadata-only" })).thread)
+              expect((await backend.handle("resolveThread", { backend: source, threadId: metadataOnlyId })).thread)
                 .toMatchObject({ title: "Untitled thread", titleSource: "fallback" });
+              if (source === "claude") expect((await backend.handle("resolveThread", { backend: source, threadId: absentId })).thread).toBeUndefined();
             }
           }
         });
         expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
         expect(await f.desktop.listThreadMetadata()).toEqual(before);
       } finally { owner.close(); f.close(); }
-    }), { numRuns: 25, examples: [[[0, 0, 1], 1, undefined], [[0, 1, 2], 1, undefined], [[2, 3, 1], 2, 0]] });
+    }), { numRuns: 25, examples: [[[0, 0, 0], 0, undefined], [[0, 0, 1], 1, undefined], [[0, 1, 2], 1, undefined], [[2, 3, 1], 2, 0]] });
 });
 
 it.each(backends)("keeps durable archive/restore authority over passive %s records without inventing fresh observations", async source => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.nat(10000), fc.nat(10000), async (archiveAt, retainedAt) => {
     const f = fixture();
-    f.seed(source, 1, retainedAt);
-    const ref = { backend: source, threadId: "same-id" };
+    await f.seed(source, 1, retainedAt);
+    const ref = { backend: source, threadId };
     await f.desktop.observeArchivedThreads([ref], archiveAt);
     const owner = await open(f);
     try {
       for (const [phase, archived] of [["observe", true], ["restore", false], ["rearchive", true]] as const) {
         if (phase === "restore") await f.desktop.setThreadArchiveTombstone({ ...ref, restoredAt: archiveAt });
         if (phase === "rearchive") await f.desktop.observeArchivedThreads([ref], archiveAt + 1);
+        // Claude's actual metadata owns membership; keep its desktop archive
+        // mutation while leaving the retained provider snapshot unchanged.
+        const archiveObservation = phase === "rearchive" ? archiveAt + 1 : archiveAt;
+        if (source === "claude") await f.saveClaude(Math.max(1, archiveObservation), archived ? archiveObservation : undefined);
         const before = await f.desktop.getThreadMetadata(ref);
         const { writes } = await measureSqliteWrites(async () => {
           for (let round = 0; round < 5; round++) {

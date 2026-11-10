@@ -1,3 +1,4 @@
+import { projectClaudeSessionThread } from "@pwragent/owner-core/claude-profile-storage";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -830,15 +831,8 @@ export class ClaudeBackend {
     await this.emit({ method: "thread/deleted", params: { threadId } });
   }
 
-  // Metadata from builds that could not move a Claude thread still carries
-  // their refusal; this build can, so drop it. The working directory is the
-  // thread's `projectKey`, as Codex reports it: it names which linked
-  // directory is the thread's home once `@`-referenced ones join it.
-  private threadSummary({ cwd, thread: { workspaceHandoff: _refusal, ...thread } }: ClaudeSession): AppServerThreadSummary {
-    return {
-      ...thread, projectKey: cwd,
-      threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
-    };
+  private threadSummary(session: ClaudeSession): AppServerThreadSummary {
+    return projectClaudeSessionThread(session, Boolean(this.sessions.get(session.thread.id)?.turn));
   }
 
   /**

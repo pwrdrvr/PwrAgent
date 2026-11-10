@@ -14012,7 +14012,7 @@ export class DesktopBackendRegistry {
       const projected = this.withObservedThreadName({
         ...thread,
         ...(thread.source === "codex" ? projectOverlayThreadTitle(thread, overlay) : {}),
-        executionMode: overlay?.executionMode ?? thread.executionMode,
+        executionMode: thread.source === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
         model: overlay?.model ?? thread.model,
         reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
         serviceTier: overlay?.serviceTier ?? thread.serviceTier,

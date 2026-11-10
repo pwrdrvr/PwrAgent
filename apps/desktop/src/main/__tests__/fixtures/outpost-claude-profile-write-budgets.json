@@ -1,0 +1,4 @@
+{
+  "claude-profile-metadata-boundaries": {"commits": 0, "note": "100 actual desktop metadata saves and Outpost discoveries use the existing sidecar without SQLite writes (0 MB/day)", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "claude-profile-passive-reads": {"commits": 0, "note": "1000 rounds of actual Claude metadata resolve/list/detail/archive reads add no SQLite commits (0 MB/day)", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

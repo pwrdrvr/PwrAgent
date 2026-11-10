@@ -1,6 +1,6 @@
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
@@ -25,7 +25,7 @@ test.beforeAll(() => {
 const backend = "acp:gemini" as const;
 const threadId = "portable-acp-session";
 const baselineId = "portable-baseline-acp";
-const restoredId = "portable-restored-active";
+const restoredId = "00000000-0000-4000-8000-000000000004";
 const providerCommands = [{ name: "portable-live", description: "Provider command", aliases: ["live"], input: { hint: "<fixture>" } }];
 const normalizedCommands = [{ name: "portable-live", description: "Provider command", aliases: ["live"],
   argumentHint: "<fixture>", backend, scope: "session", source: "provider" }];
@@ -140,10 +140,12 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
       await overlay.observeArchivedThreads([{ backend, threadId: baselineId }], 0);
       new AcpSessionStore(desktopDb).upsertSession({ backendId: backend, sessionId: restoredId,
         title: "Restored active ACP", titleSource: "explicit", createdAt: 1, updatedAt: 20, status: "active", executionMode: "default" });
-      new ProviderThreadSnapshotStore(desktopDb).replace({ backend: "claude", observedAt: 1, threads: [{
-        id: restoredId, source: "claude", title: "Restored active Claude", titleSource: "explicit", createdAt: 1,
-        updatedAt: 20, threadStatus: "active", linkedDirectories: [], executionMode: "default",
-      }] });
+      const claudeThread = { id: restoredId, source: "claude" as const, title: "Restored active Claude", titleSource: "explicit" as const,
+        createdAt: 1, updatedAt: 20, threadStatus: "active" as const, linkedDirectories: [], executionMode: "default" as const };
+      new ProviderThreadSnapshotStore(desktopDb).replace({ backend: "claude", observedAt: 1, threads: [claudeThread] });
+      const claudeRoot = path.join(path.dirname(stateDbPathForHomeRoot(app.homeRoot)), "claude");
+      await mkdir(claudeRoot, { recursive: true, mode: 0o700 });
+      await writeFile(path.join(claudeRoot, `${restoredId}.json`), JSON.stringify({ cwd: app.homeRoot, thread: claudeThread }), { mode: 0o600 });
       for (const source of [backend, "claude"] as const) {
         await overlay.updateThreadMetadata({ backend: source, threadId: restoredId }, { archivedAt: 2, restoredAt: 3, seenUpdatedAt: 20 });
       }
@@ -164,14 +166,15 @@ test("desktop reads portable ACP metadata and commands and hands provider and ow
       expect((await owner.handle("lookupArchivedThreads", { backend, threadIds: [threadId] })).threads)
         .toMatchObject([{ id: threadId, source: backend, title: "Desktop renamed portable ACP" }]);
       for (const source of [backend, "claude"] as const) {
+        const active = source === backend;
         const restored = await owner.handle("getNavigationSelectedDetail", { protocol: 2, ref: { backend: source, threadId: restoredId } });
         expect(restored.identity).toBe("present");
-        expect(restored.thread).toMatchObject({ source, threadStatus: "active", inbox: { inInbox: false } });
+        expect(restored.thread).toMatchObject({ source, threadStatus: active ? "active" : "idle", inbox: { inInbox: false } });
         expect(restored.thread.archivedAt).toBeUndefined();
         const attention = await owner.handle("getNavigationQueryPage", { protocol: 2, backend: source, query: { kind: "lens", lens: "attention" } });
-        expect(attention.counts).toMatchObject({ total: 1, active: 1, unread: 0 });
+        expect(attention.counts).toMatchObject({ total: 1, active: active ? 1 : 0, unread: 0 });
         expect(attention.entries.map((entry: { row: { source: string; id: string } }) => [entry.row.source, entry.row.id]))
-          .toEqual([[source, restoredId]]);
+          .toEqual(active ? [[source, restoredId]] : []);
         expect((await owner.handle("getNavigationQueryPage", { protocol: 2, backend: source, query: { kind: "model-inventory" } })).counts.total).toBe(1);
       }
       await expect(owner.handle("startTurn", { backend, threadId })).rejects.toThrow("executes Codex only");
