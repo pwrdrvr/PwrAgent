@@ -1,0 +1,9 @@
+{
+  "registered-self-started-admission-100": {
+    "commits": 0,
+    "note": "100 fresh held wakes with three concurrent matching hooks each, registered reads, pause and hash cancellation; setup/lock/review excluded; real timers and drains.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

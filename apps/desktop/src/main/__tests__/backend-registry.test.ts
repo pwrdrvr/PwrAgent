@@ -4342,7 +4342,7 @@ describe("DesktopBackendRegistry", () => {
     expect(JSON.stringify(startTurn.mock.calls[0])).not.toContain("Later result");
   });
 
-  it("holds the turns a backend starts on its own while locked, in one entry, and sends them on unlock", async () => {
+  it("holds distinct self-started prompts under fresh identities and sends them in order on unlock", async () => {
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
@@ -4356,26 +4356,28 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.setThreadLock({ ...identity, locked: true, note: "Parked" }, { source: "operator" });
     await expect(registry.holdBackendSelfStartedTurn(notification)).resolves.toBe(true);
+    const first = registry.listHeldThreadQueueEntries(identity)[0]!;
     expect(registry.listHeldThreadQueueEntries(identity)).toEqual([expect.objectContaining({
-      entryId: "self-started:parked", text: "Claude's answer to a finished background task",
+      entryId: expect.stringMatching(/^self-started:/), text: "Claude's answer to a finished background task",
       holdReason: "This thread is locked: Parked. Unlock it before starting a turn.",
     })]);
     await expect(registry.holdBackendSelfStartedTurn(cron)).resolves.toBe(true);
     // A recurring cron that fires again while locked is kept once.
     await expect(registry.holdBackendSelfStartedTurn(cron)).resolves.toBe(true);
-    expect(registry.listHeldThreadQueueEntries(identity)).toEqual([expect.objectContaining({
-      entryId: "self-started:parked", text: "2 turns Claude started on its own",
-    })]);
+    const held = registry.listHeldThreadQueueEntries(identity);
+    expect(held).toEqual([first, expect.objectContaining({ text: "Claude's scheduled task" })]);
+    expect(held[1]!.entryId).not.toBe(first.entryId);
     expect(codexClient.startTurnCallCount).toBe(0);
 
     const startTurn = vi.spyOn(codexClient, "startTurn");
     await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
     await vi.waitFor(() => expect(startTurn).toHaveBeenCalledOnce());
-    // One turn, its prompts in the order they were held.
-    expect(JSON.stringify(startTurn.mock.calls[0])).toContain(JSON.stringify([
-      { type: "text", text: notification.prompt },
-      { type: "text", text: cron.prompt },
-    ]));
+    expect(startTurn.mock.calls[0]![0].input).toEqual([{ type: "text", text: notification.prompt }]);
+    const turnId = registry.getActiveTurnForThread(identity)!.turnId;
+    await codexClient.emit({ method: "turn/completed", params: { threadId: identity.threadId, turnId,
+      turn: { id: turnId, status: "completed", output: [] } } });
+    await vi.waitFor(() => expect(startTurn).toHaveBeenCalledTimes(2));
+    expect(startTurn.mock.calls[1]![0].input).toEqual([{ type: "text", text: cron.prompt }]);
     expect(registry.listHeldThreadQueueEntries(identity)).toEqual([]);
   });
 
