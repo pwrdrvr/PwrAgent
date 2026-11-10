@@ -460,6 +460,8 @@ from the committed import manifest and byte-verified PwrAgent backup, and accept
 identities from durable jobs; arbitrary overlays provide neither proof. Both
 hosts read live canonical titles, pins, parents, seen watermarks and settings.
 These projections never enter provider inventories or start provider work.
+Retained-only identities follow the same durable archive/restore observations,
+including a zero archive-retention timestamp, as the current owning registry.
 Desktop confirms a pending import on positive native evidence, even for an
 unnamed fallback, through one atomic metadata boundary. A later retirement cannot
 be overwritten by a late confirmation. Repeated observations and passive reads

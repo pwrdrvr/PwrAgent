@@ -453,6 +453,9 @@ their identity even after native retirement, without changing fingerprints,
 confirmed thread/turn IDs or terminal outcomes. The projection stores no prompts or transcripts,
 does not enter native inventories and starts no provider work. Unnamed imports
 retain the same fallback title on both hosts.
+Without a current native row, retained active/archive reads honor the same
+durable `archivedAt`, `archiveRetentionStartedAt` and `restoredAt` observations,
+including timestamp zero, as the owning registry.
 
 Positive desktop native evidence confirms previously pending imports in one
 transaction, checking the current metadata within that transaction so late
