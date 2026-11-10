@@ -101,4 +101,3 @@ export function queuedTurnDisplayText(input: AppServerTurnInputItem[]): string {
     .trim();
   return text.length > 200 ? `${text.slice(0, 200)}\u2026` : text;
 }
-
