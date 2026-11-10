@@ -1137,6 +1137,38 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await outpost?.close(); await desktop.close(); }
   }, 120_000);
 
+  it("desktop pause publication never recreates a concurrently cancelled immutable waiting entry", async () => {
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      let serial = 0;
+      // The live owner FIFO is the oracle for the viewer's notification map.
+      // Both pause and resume can yield after mutating a row that cancel retires.
+      await fc.assert(fc.asyncProperty(fc.boolean(), fc.string({ maxLength: 80 }), async (initiallyPaused, text) => {
+        const queueEntryId = `pause-cancel-${serial++}`;
+        const input = [{ type: "text" as const, text: `Immutable waiting input ${text}` }];
+        await host.client.startTurn({ ...identity, queueEntryId, delivery: "new_turn", input });
+        if (initiallyPaused) await host.client.setQueuedTurnPaused({ queueEntryId, paused: true });
+        const accepted = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+        const offset = host.events.length;
+        const pause = registry.setQueuedTurnPaused({ queueEntryId, paused: !initiallyPaused });
+        await Promise.resolve();
+        expect(registry.cancelQueuedTurnWithDisposition(queueEntryId)).toMatchObject({ cancelled: true });
+        await pause;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        const statuses = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.queueEntryId === queueEntryId ? [event.notification.params.status] : []);
+        const waiting = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
+        expect(accepted.input).toEqual(input);
+        expect(waiting).toEqual([]);
+        expect(statuses.at(-1)).toBe("cancelled");
+      }), { numRuns: 25 });
+      await host.client.interruptTurn(active);
+    } finally { await host.close(); }
+  });
+
   it("both actual owners pause, reorder and resume the same waiting FIFO with typed events", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
