@@ -96,19 +96,20 @@ export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
 export function describeMcpConnectionAuth(
   connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "kind" | "sandboxerCliState" | "detail">>,
 ): McpAuthStatusPresentation {
-  if (connection.kind === "pwrsnap") {
-    // PwrAgent starts PwrSnap's bundled relay, and PwrSnap asks the operator
+  if (connection.kind === "pwrsnap" || connection.kind === "pwrgit") {
+    // PwrAgent starts the app's bundled relay, and the app asks the operator
     // to approve each session in its own window.
+    const app = connection.kind === "pwrsnap" ? "PwrSnap" : "PwrGit";
     return connection.configured
       ? {
-          label: "Approved in PwrSnap",
-          description: "PwrAgent starts PwrSnap's local relay for each thread. PwrSnap asks you to approve each session.",
+          label: `Approved in ${app}`,
+          description: `PwrAgent starts ${app}'s local relay for each thread. ${app} asks you to approve each session.`,
           tone: "ok",
           canSignIn: false,
         }
       : {
           label: "Update needed",
-          description: connection.detail ?? "Update PwrSnap to 1.3.0 or later, then turn on Local Agent Access.",
+          description: connection.detail ?? `Update ${app}, then turn on Local Agent Access.`,
           tone: "warn",
           canSignIn: false,
         };

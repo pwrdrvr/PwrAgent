@@ -325,8 +325,10 @@ export class McpConnectionRegistry {
     return {
       id: PWRGIT_MCP_CONNECTION_ID,
       displayName: "PwrGit",
-      serverUrl: "http://127.0.0.1:51731/mcp",
-      authMode: "oauth",
+      // No URL: PwrAgent starts the `pwrgit-mcp` relay inside the PwrGit
+      // install, as it does PwrSnap's.
+      serverUrl: "stdio:pwrgit",
+      authMode: "none",
       kind: "pwrgit",
       enabled: table?.pwrgit_enabled !== false,
       selectForNewThreads: table?.pwrgit_select_for_new_threads === true,

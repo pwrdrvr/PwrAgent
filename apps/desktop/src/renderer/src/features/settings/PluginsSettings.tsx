@@ -2617,7 +2617,6 @@ function ManagedMcpConnectionRow(props: {
                   desktopApi={props.desktopApi}
                   disabled={props.disabled}
                   status={localStatus}
-                  onAuthorize={props.onAuthorize}
                   onChanged={refreshStatus}
                   onNotice={props.onNotice}
                 />
@@ -2722,7 +2721,9 @@ function ManagedMcpConnectionRow(props: {
                 label={`${connection.displayName} command`}
                 value={formatMcpCommandLine(connection.stdio)}
               />
-            ) : (
+            ) : connection.kind === "pwrsnap" || connection.kind === "pwrgit" ? null : (
+              // PwrSnap and PwrGit have no URL: PwrAgent starts the relay
+              // inside the app's own install.
               <SettingsCopyValue
                 compact
                 desktopApi={props.desktopApi}
@@ -2960,7 +2961,6 @@ function LocalConnectionActions(props: {
   desktopApi?: DesktopApi;
   disabled: boolean;
   status: PwrSnapConnectionStatus | PwrGitConnectionStatus | undefined;
-  onAuthorize: () => void;
   onChanged: () => void;
   onNotice: (notice: ActionNotice) => void;
 }) {
@@ -2998,18 +2998,8 @@ function LocalConnectionActions(props: {
   const running = status?.availability === "running";
   const installed = status?.availability === "installed" || running;
 
-  if (!status) {
-    return (
-      <button
-        className="button button--secondary"
-        disabled={props.disabled}
-        type="button"
-        onClick={props.onAuthorize}
-      >
-        {busy ? "Working..." : props.configured ? "Reauthorize" : "Authorize"}
-      </button>
-    );
-  }
+  // Still checking: an action now would guess at the app's state.
+  if (!status) return null;
 
   if (!installed) {
     return (
@@ -3031,6 +3021,31 @@ function LocalConnectionActions(props: {
         })}
       >
         Get {props.app}
+      </button>
+    );
+  }
+
+  // Installed, but too old to ship the relay PwrAgent starts.
+  if (!props.configured) {
+    return (
+      <button
+        className="button button--secondary"
+        disabled={busy}
+        type="button"
+        onClick={() => void run(async () => {
+          const response = await download?.();
+          if (response && !response.opened) {
+            return {
+              kind: "error",
+              text:
+                response.error
+                ?? `PwrAgent could not open the ${props.app} download page.`,
+            };
+          }
+          return undefined;
+        })}
+      >
+        Update {props.app}
       </button>
     );
   }
@@ -3057,33 +3072,9 @@ function LocalConnectionActions(props: {
     );
   }
 
-  // Connecting ends in the same browser sign-in as Reauthorize, so it goes
-  // through the row's authorization too. On a latch of its own it waited
-  // behind a disabled "Connecting..." with no way to call it off, and a
-  // missing Local Agent Access landed in the card notice, not on this row.
-  if (!props.configured) {
-    return (
-      <button
-        className="button button--secondary"
-        disabled={props.disabled || busy}
-        type="button"
-        onClick={props.onAuthorize}
-      >
-        {busy ? "Working..." : "Connect"}
-      </button>
-    );
-  }
-
-  return (
-    <button
-      className="button button--secondary"
-      disabled={props.disabled}
-      type="button"
-      onClick={props.onAuthorize}
-    >
-      {busy ? "Working..." : "Reauthorize"}
-    </button>
-  );
+  // Running with the relay: there is nothing to sign in to. The app asks
+  // the operator to approve each thread's session in its own window.
+  return null;
 }
 
 /**

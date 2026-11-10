@@ -288,16 +288,16 @@ describe("PwrGitConnectionPrompt", () => {
     expect(await screen.findByText(/Local agent access/i)).toBeTruthy();
   });
 
-  it("surfaces a declined pairing instead of failing silently", async () => {
+  it("says once that an older PwrGit needs an update when Connect finds no relay", async () => {
+    const detail = "Update PwrGit to 0.56.0 or later, then turn on Local Agent Access.";
     render(
       <PwrGitConnectionPrompt
         backend="codex"
         desktopApi={{
-          readPwrGitConnectionStatus: async () => status(),
+          readPwrGitConnectionStatus: async () => status({ detail }),
           connectPwrGit: async () => ({
-            status: status(),
-            outcome: "declined" as const,
-            detail: "The operator declined this request.",
+            status: status({ detail }),
+            outcome: "needs_update" as const,
           }),
         }}
         enabled={false}
@@ -306,9 +306,11 @@ describe("PwrGitConnectionPrompt", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Connect to PwrGit" }));
-    expect(
-      await screen.findByText("The operator declined this request."),
-    ).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Connect to PwrGit" })).toBeTruthy(),
+    );
+    expect(screen.getAllByText(detail)).toHaveLength(1);
+    expect(screen.queryByRole("switch")).toBeNull();
   });
 
   it("offers a per-thread switch once connected", async () => {

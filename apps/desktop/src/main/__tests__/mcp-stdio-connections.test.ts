@@ -12,7 +12,7 @@ import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-servi
 import { buildCodexConnectionMcpServerName } from "../app-server/backend-registry";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
-import { pwrSnapRelayPath } from "../mcp-connections/pwrsnap-relay";
+import { pwrSuiteRelayPath } from "../mcp-connections/pwrsuite-relay";
 
 /*
  * A local command (stdio) MCP server, driven end to end through the gateway
@@ -151,6 +151,7 @@ function createService(fixture: Fixture, overrides: {
   gatewayEnabled?: () => boolean;
   readGatewaySelection?: () => Promise<string[]>;
   resolveInstallPaths?: () => string[];
+  resolvePwrGitInstallPaths?: () => string[];
   fetchFn?: typeof fetch;
   openExternal?: (url: string) => Promise<void>;
 } = {}) {
@@ -163,6 +164,7 @@ function createService(fixture: Fixture, overrides: {
     leaseManager: null,
     readGatewaySelection: overrides.readGatewaySelection,
     ...(overrides.resolveInstallPaths ? { resolveInstallPaths: overrides.resolveInstallPaths } : {}),
+    ...(overrides.resolvePwrGitInstallPaths ? { resolvePwrGitInstallPaths: overrides.resolvePwrGitInstallPaths } : {}),
     ...(overrides.fetchFn ? { fetchFn: overrides.fetchFn } : {}),
     ...(overrides.openExternal ? { openExternal: overrides.openExternal } : {}),
     registry,
@@ -498,62 +500,68 @@ describe.skipIf(process.platform === "win32")("local command MCP connections", (
 
 
 describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle through an unchanged relay", () => {
-  it("starts PwrSnap's bundled relay per thread, with no OAuth, and never restarts a finished session", async () => {
+  it.each([
+    { id: "pwrsnap" as const, name: "PwrSnap", installs: "resolveInstallPaths" as const },
+    { id: "pwrgit" as const, name: "PwrGit", installs: "resolvePwrGitInstallPaths" as const },
+  ])("starts $name's bundled relay per thread, with no OAuth, and never restarts a finished session", async ({ id, name, installs }) => {
     const fixture = makeFixture();
-    // A PwrSnap install whose relay is the fake server: PwrAgent must start
-    // exactly the file inside the install, not anything on PATH.
-    const app = path.join(fixture.root, process.platform === "darwin" ? "PwrSnap.app" : "pwrsnap");
-    const relay = pwrSnapRelayPath(app)!;
+    // An install whose relay is the fake server: PwrAgent must start exactly
+    // the file inside the install, not anything on PATH.
+    const app = path.join(fixture.root, process.platform === "darwin" ? `${name}.app` : id);
+    const relay = pwrSuiteRelayPath(id, app)!;
     fs.mkdirSync(path.dirname(relay), { recursive: true });
     if (process.platform !== "darwin") fs.writeFileSync(app, "");
     fs.mkdirSync(app, { recursive: true });
     fs.copyFileSync(fixture.command, relay);
     fs.chmodSync(relay, 0o755);
     fs.rmSync(fixture.command);
-    const fetchFn = vi.fn(async () => { throw new Error("PwrSnap has no network endpoint."); });
+    const fetchFn = vi.fn(async () => { throw new Error(`${name} has no network endpoint.`); });
     const openExternal = vi.fn(async () => undefined);
     const { service } = createService(fixture, {
-      resolveInstallPaths: () => [app],
+      [installs]: () => [app],
       fetchFn: fetchFn as unknown as typeof fetch,
       openExternal,
     });
 
-    const status = (await service.listConnections()).find((entry) => entry.id === "pwrsnap");
-    expect(status).toMatchObject({ kind: "pwrsnap", authMode: "none", configured: true, state: "ready" });
-    await expect(service.authorizeConnection("pwrsnap")).resolves.toMatchObject({ configured: true });
+    const status = (await service.listConnections()).find((entry) => entry.id === id);
+    expect(status).toMatchObject({ kind: id, authMode: "none", configured: true, state: "ready" });
+    await expect(service.authorizeConnection(id)).resolves.toMatchObject({ configured: true });
 
-    const thread = await bridgeFor(service, "pwrsnap", "pwrsnap-thread");
+    const thread = await bridgeFor(service, id, `${id}-thread`);
     const lease = await attach(thread.socketPath, thread.token);
     const first = await whoami(thread.rpc);
     expect(first.calls).toBe(1);
     expect(alive(first.pid)).toBe(true);
-    expect((await service.listConnections()).find((entry) => entry.id === "pwrsnap")?.localProcesses).toBe(1);
+    expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBe(1);
 
     // A relay that ends (PwrSnap quit or revoked the session) is not
     // restarted for the thread: a new session needs a fresh approval.
     process.kill(first.pid, "SIGTERM");
-    await waitFor(() => !alive(first.pid), "the PwrSnap relay to exit");
+    await waitFor(() => !alive(first.pid), `the ${name} relay to exit`);
     await vi.waitFor(async () => await expect(whoami(thread.rpc)).rejects.toThrow("connection ended"));
 
     // The thread letting go stops a live relay too.
-    const other = await bridgeFor(service, "pwrsnap", "pwrsnap-other-thread");
+    const other = await bridgeFor(service, id, `${id}-other-thread`);
     const otherLease = await attach(other.socketPath, other.token);
     const second = await whoami(other.rpc);
     otherLease.destroy();
-    await waitFor(() => !alive(second.pid), "the second PwrSnap relay to stop");
+    await waitFor(() => !alive(second.pid), `the second ${name} relay to stop`);
     lease.destroy();
     expect(fetchFn).not.toHaveBeenCalled();
     expect(openExternal).not.toHaveBeenCalled();
   });
 
-  it("reports PwrSnap without a relay as needing an update and starts nothing", async () => {
+  it.each([
+    { id: "pwrsnap" as const, name: "PwrSnap", installs: "resolveInstallPaths" as const, version: "1.3.0" },
+    { id: "pwrgit" as const, name: "PwrGit", installs: "resolvePwrGitInstallPaths" as const, version: "0.56.0" },
+  ])("reports $name without a relay as needing $version and starts nothing", async ({ id, name, installs, version }) => {
     const fixture = makeFixture();
-    const app = path.join(fixture.root, "PwrSnap.app");
+    const app = path.join(fixture.root, `${name}.app`);
     fs.mkdirSync(app);
-    const { service } = createService(fixture, { resolveInstallPaths: () => [app] });
-    const status = (await service.listConnections()).find((entry) => entry.id === "pwrsnap");
-    expect(status).toMatchObject({ configured: false, detail: expect.stringContaining("1.3.0") });
-    await expect(service.registerBridge("pwrsnap", "old-pwrsnap-thread")).rejects.toThrow("1.3.0");
+    const { service } = createService(fixture, { [installs]: () => [app] });
+    const status = (await service.listConnections()).find((entry) => entry.id === id);
+    expect(status).toMatchObject({ configured: false, detail: expect.stringContaining(version) });
+    await expect(service.registerBridge(id, `old-${id}-thread`)).rejects.toThrow(version);
   });
 
   it("keeps a healthy thread's revisions and pending approval when another session exits", async () => {

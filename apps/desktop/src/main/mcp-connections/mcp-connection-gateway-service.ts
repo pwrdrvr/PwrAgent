@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   connect,
@@ -125,7 +125,13 @@ import {
   McpCredentialVault,
 } from "./mcp-credential-vault";
 import { McpOAuthSessionCoordinator } from "./mcp-oauth-session-coordinator";
-import { isPwrSnapEndpointListening, pwrSnapRelayPath } from "./pwrsnap-relay";
+import {
+  PWRSUITE_RELAY_MIN_VERSION,
+  defaultPwrSuiteInstallPaths,
+  findPwrSuiteRelay,
+  isPwrSuiteEndpointListening,
+  type PwrSuiteRelayApp,
+} from "./pwrsuite-relay";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
 import { createMcpIpcTransport, normalizeMcpIpcBearerToken } from "./mcp-ipc-http";
 import { probeMcpConnectionUrl } from "./mcp-connection-probe";
@@ -139,8 +145,12 @@ import {
 const connectionLog = getMainLogger("pwragent:mcp-connections");
 const PWRSNAP_DOWNLOAD_URL =
   "https://github.com/pwrdrvr/PwrSnap/releases/latest";
-const PWRSNAP_UPDATE_DETAIL =
-  "Update PwrSnap to 1.3.0 or later, then turn on Local Agent Access.";
+
+/** Why a PwrSuite app with no relay cannot be used: it predates local IPC. */
+export function pwrSuiteUpdateDetail(app: PwrSuiteRelayApp): string {
+  const name = app === "pwrsnap" ? "PwrSnap" : "PwrGit";
+  return `Update ${name} to ${PWRSUITE_RELAY_MIN_VERSION[app]} or later, then turn on Local Agent Access.`;
+}
 const PWRSNAP_NOT_LISTENING_DETAIL =
   "Open PwrSnap and turn on Local Agent Access to connect agents.";
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
@@ -305,6 +315,8 @@ export type McpConnectionGatewayServiceOptions = {
   resolveInstallPaths?: () => string[];
   /** Whether PwrSnap's local MCP socket or pipe accepts a connection. */
   isPwrSnapListening?: () => Promise<boolean>;
+  /** Where PwrGit may be installed; its relay is found inside. */
+  resolvePwrGitInstallPaths?: () => string[];
   settings?: GatewaySettings;
   registry?: McpConnectionRegistry;
   credentialVault?: McpCredentialVault;
@@ -343,38 +355,16 @@ export type McpConnectionGatewayServiceOptions = {
 
 /**
  * A connection whose sessions are processes PwrAgent starts on this machine:
- * an operator's local command, or PwrSnap's bundled relay. Each session's
- * process stops with the thread that used it and is never restarted for it.
+ * an operator's local command, or the relay PwrSnap or PwrGit ships. Each
+ * session's process stops with the thread that used it and is never
+ * restarted for it.
  */
 function runsLocalProcess(connection: Pick<McpConnectionRecord, "kind">): boolean {
-  return connection.kind === "stdio" || connection.kind === "pwrsnap";
+  return connection.kind === "stdio" || isPwrSuiteRelayKind(connection.kind);
 }
 
-function resolveDefaultPwrSnapInstallPaths(): string[] {
-  if (process.platform === "darwin") {
-    return [
-      "/Applications/PwrSnap.app",
-      join(homedir(), "Applications", "PwrSnap.app"),
-    ];
-  }
-  if (process.platform === "win32") {
-    return [
-      process.env.LOCALAPPDATA
-        ? join(process.env.LOCALAPPDATA, "Programs", "PwrSnap", "PwrSnap.exe")
-        : "",
-      process.env.ProgramFiles
-        ? join(process.env.ProgramFiles, "PwrSnap", "PwrSnap.exe")
-        : "",
-      process.env["ProgramFiles(x86)"]
-        ? join(process.env["ProgramFiles(x86)"]!, "PwrSnap", "PwrSnap.exe")
-        : "",
-    ].filter(Boolean);
-  }
-  return [
-    "/usr/bin/pwrsnap",
-    "/opt/PwrSnap/pwrsnap",
-    join(homedir(), "Applications", "PwrSnap.AppImage"),
-  ];
+function isPwrSuiteRelayKind(kind: McpConnectionRecord["kind"]): kind is PwrSuiteRelayApp {
+  return kind === "pwrsnap" || kind === "pwrgit";
 }
 
 
@@ -592,6 +582,7 @@ export class McpConnectionGatewayService {
   private readonly openPath: (path: string) => Promise<string>;
   private readonly resolveInstallPaths: () => string[];
   private readonly isPwrSnapListening: () => Promise<boolean>;
+  private readonly resolvePwrGitInstallPaths: () => string[];
   private readonly settings: GatewaySettings;
   private readonly gatewayEnabled: () => boolean;
   private readonly registry: McpConnectionRegistry;
@@ -733,9 +724,11 @@ export class McpConnectionGatewayService {
     this.sandboxer.onStatusChanged(() => this.announceChanged([SANDBOXER_MCP_CONNECTION_ID]));
     this.openPath = options.openPath ?? ((path) => shell.openPath(path));
     this.resolveInstallPaths =
-      options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
+      options.resolveInstallPaths ?? (() => defaultPwrSuiteInstallPaths("pwrsnap"));
     this.isPwrSnapListening =
-      options.isPwrSnapListening ?? (async () => await isPwrSnapEndpointListening());
+      options.isPwrSnapListening ?? (async () => await isPwrSuiteEndpointListening("pwrsnap"));
+    this.resolvePwrGitInstallPaths =
+      options.resolvePwrGitInstallPaths ?? (() => defaultPwrSuiteInstallPaths("pwrgit"));
     this.settings = options.settings ?? getDesktopSettingsService();
     this.gatewayEnabled =
       options.gatewayEnabled
@@ -775,7 +768,7 @@ export class McpConnectionGatewayService {
       );
     }
     const [relay, listening] = await Promise.all([
-      Promise.resolve(this.findPwrSnapRelay()),
+      Promise.resolve(this.findRelay("pwrsnap")),
       this.isPwrSnapListening(),
     ]);
     const installed = listening || Boolean(this.findInstalledPath());
@@ -784,7 +777,7 @@ export class McpConnectionGatewayService {
     const detail = !installed
       ? undefined
       : !relay
-        ? PWRSNAP_UPDATE_DETAIL
+        ? pwrSuiteUpdateDetail("pwrsnap")
         : !listening
           ? PWRSNAP_NOT_LISTENING_DETAIL
           : undefined;
@@ -1161,9 +1154,12 @@ export class McpConnectionGatewayService {
     if (connection.kind === "stdio") {
       throw new Error(`${connection.displayName} is a local command. It has nothing to sign in to.`);
     }
-    if (connection.kind === "pwrsnap") {
-      // PwrSnap approves each session in its own window, so there is nothing
-      // to sign in to. A new PwrSnap install can offer different tools.
+    if (isPwrSuiteRelayKind(connection.kind)) {
+      // The app approves each session in its own window, so there is nothing
+      // to sign in to. An OAuth credential from before local IPC opens
+      // nothing now, so it is dropped. A new install can offer other tools.
+      await this.credentialVault.delete(connection.id);
+      if (connection.kind === "pwrsnap") await this.settings.clearPwrSnapMcpCredential();
       this.invalidateConnectionTools(connectionId);
       return this.announced(await this.connectionStatus(connection));
     }
@@ -2241,8 +2237,6 @@ export class McpConnectionGatewayService {
     if (status.availability !== "running") {
       return { outcome: "needs_local_agent_access", status };
     }
-    // An OAuth credential from PwrSnap 1.2 and earlier opens nothing now.
-    await this.settings.clearPwrSnapMcpCredential();
     await this.authorizeConnection(PWRSNAP_MCP_CONNECTION_ID);
     return { outcome: "connected", status };
   }
@@ -2416,22 +2410,21 @@ export class McpConnectionGatewayService {
     return this.resolveInstallPaths().find((candidate) => existsSync(candidate));
   }
 
-  /** The `pwrsnap-mcp` relay inside the first PwrSnap install that has one. */
-  private findPwrSnapRelay(): string | undefined {
-    for (const installedPath of this.resolveInstallPaths()) {
-      const relay = pwrSnapRelayPath(installedPath);
-      if (relay && existsSync(relay)) return relay;
-    }
-    return undefined;
+  /** The relay inside the first install of the app that has one. */
+  private findRelay(app: PwrSuiteRelayApp): string | undefined {
+    return findPwrSuiteRelay(
+      app,
+      app === "pwrsnap" ? this.resolveInstallPaths() : this.resolvePwrGitInstallPaths(),
+    );
   }
 
   /**
-   * What PwrAgent starts for a PwrSnap session: the relay PwrSnap ships, with
-   * no arguments. The relay finds PwrSnap's socket or pipe itself.
+   * What PwrAgent starts for a PwrSnap or PwrGit session: the relay the app
+   * ships, with no arguments. The relay finds the app's socket or pipe itself.
    */
-  private pwrSnapLaunch(): McpStdioLaunch {
-    const relay = this.findPwrSnapRelay();
-    if (!relay) throw new McpStdioLaunchError("not_found", PWRSNAP_UPDATE_DETAIL);
+  private relayLaunch(app: PwrSuiteRelayApp): McpStdioLaunch {
+    const relay = this.findRelay(app);
+    if (!relay) throw new McpStdioLaunchError("not_found", pwrSuiteUpdateDetail(app));
     return { command: relay, args: [], env: [] };
   }
 
@@ -2502,11 +2495,6 @@ export class McpConnectionGatewayService {
         connectionId: connection.id,
         serverUrl,
         ...(connection.kind === "sandboxer" ? { scope: "sandboxer" } : {}),
-        ...(connection.kind === "pwrgit" ? {
-          scope: "repository.roots.read repository.checkout.locate repository.metadata.read forge.status.read status.subscribe",
-          discardRejectedCredentials: true,
-          onCredentialRejected: async () => await this.settings.clearPwrGitMcpCredential(),
-        } : {}),
         vault: this.credentialVault,
         fetchFn: createMcpSafeFetch({
           fetchFn: this.fetchFn,
@@ -2572,16 +2560,16 @@ export class McpConnectionGatewayService {
       };
     }
     if (connection.kind === "stdio") return await this.stdioConnectionStatus(connection);
-    if (connection.kind === "pwrsnap") {
-      // Configured means this machine has a PwrSnap with the relay. Whether
-      // PwrSnap is open is the New thread card's question, asked live.
-      const relay = this.findPwrSnapRelay();
+    if (isPwrSuiteRelayKind(connection.kind)) {
+      // Configured means this machine has an install with the relay. Whether
+      // the app is open is the New thread card's question, asked live.
+      const relay = this.findRelay(connection.kind);
       const running = this.stdioProcessCounts.get(connection.id) ?? 0;
       return {
         ...connection,
         configured: relay !== undefined,
         state: "ready",
-        ...(relay ? {} : { detail: PWRSNAP_UPDATE_DETAIL }),
+        ...(relay ? {} : { detail: pwrSuiteUpdateDetail(connection.kind) }),
         ...(running > 0 ? { localProcesses: running } : {}),
         discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
       };
@@ -2762,8 +2750,8 @@ export class McpConnectionGatewayService {
     if (connection.kind === "stdio") {
       return await this.connectStdioClient(connection, connection.stdio, options);
     }
-    if (connection.kind === "pwrsnap") {
-      return await this.connectStdioClient(connection, this.pwrSnapLaunch(), options);
+    if (isPwrSuiteRelayKind(connection.kind)) {
+      return await this.connectStdioClient(connection, this.relayLaunch(connection.kind), options);
     }
     if (isMcpIpcUrl(connection.serverUrl)) {
       const credential = await this.credentialVault.read(connection.id, connection.serverUrl);

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
-import { pwrSnapRelayPath } from "../mcp-connections/pwrsnap-relay";
+import { pwrSuiteInstall, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import * as appState from "../state/app-state";
 import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
@@ -70,23 +70,13 @@ function temporaryRegistry(): McpConnectionRegistry {
   return registry;
 }
 
-/** A PwrSnap install in a temp folder, with or without its `pwrsnap-mcp` relay. */
 function pwrSnapInstall(options: { relay?: boolean } = {}): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-pwrsnap-install-"));
-  temporaryDirectories.push(directory);
-  const app = path.join(directory, process.platform === "darwin" ? "PwrSnap.app" : process.platform === "win32" ? "PwrSnap.exe" : "pwrsnap");
-  if (process.platform === "darwin") fs.mkdirSync(app);
-  else fs.writeFileSync(app, "");
-  if (options.relay !== false) {
-    const relay = pwrSnapRelayPath(app)!;
-    fs.mkdirSync(path.dirname(relay), { recursive: true });
-    fs.writeFileSync(relay, "", { mode: 0o755 });
-  }
-  return app;
+  return pwrSuiteInstall("pwrsnap", options);
 }
 
 afterEach(async () => {
   await Promise.all(services.splice(0).map(async (service) => await service.close()));
+  removePwrSuiteInstalls();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { force: true, recursive: true });
   }
@@ -267,7 +257,7 @@ describe("McpConnectionGatewayService", () => {
     services.push(service);
     const git = new PwrGitConnectionService({
       gateway: service,
-      fetchFn: async () => new Response(null, { status: 404 }),
+      isListening: async () => false,
       resolveInstallPaths: () => [],
     });
     try {
@@ -720,13 +710,13 @@ describe("McpConnectionGatewayService", () => {
    * list beneath it showed every tool of every server.
    */
   describe("listConnectionTools", () => {
-    it("keeps PwrGit ready when closing the inventory session aborts its notification GET", async () => {
+    it("keeps a remote connection ready when closing the inventory session aborts its notification GET", async () => {
+      const registry = temporaryRegistry();
+      const remote = registry.create({ displayName: "Fixture remote", serverUrl: "http://127.0.0.1:41731/mcp" });
       const settings = createSettings();
-      Object.assign(settings, {
-        resolvePwrGitMcpCredential: vi.fn(async () => JSON.stringify({
-          tokens: { access_token: "fixture-pwrgit-access", token_type: "bearer" },
-        })),
-      });
+      await settings.saveMcpConnectionCredentials(JSON.stringify({ version: 1, credentials: {
+        [remote.id]: { resourceUrl: remote.serverUrl, tokens: { access_token: "fixture-remote-access", token_type: "bearer" } },
+      } }));
       let notificationSignal: AbortSignal | undefined;
       let notificationAborted = false;
       const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
@@ -751,7 +741,7 @@ describe("McpConnectionGatewayService", () => {
           ? {
               protocolVersion: "2025-06-18",
               capabilities: { tools: {} },
-              serverInfo: { name: "PwrGit fixture", version: "1.0.0" },
+              serverInfo: { name: "Remote fixture", version: "1.0.0" },
             }
           : { tools: [{ name: "repository_roots", inputSchema: { type: "object" } }] };
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }), {
@@ -760,14 +750,14 @@ describe("McpConnectionGatewayService", () => {
       });
       const service = new McpConnectionGatewayService({
         sandboxer: sandboxerStub(),
-        registry: temporaryRegistry(),
+        registry,
         settings,
         fetchFn,
         leaseManager: null,
       });
       services.push(service);
 
-      await expect(service.listConnectionTools({ connectionId: "pwrgit" })).resolves.toMatchObject({
+      await expect(service.listConnectionTools({ connectionId: remote.id })).resolves.toMatchObject({
         tools: ["repository_roots"],
       });
       // Let the aborted background fetch's rejection pass through the
@@ -775,7 +765,7 @@ describe("McpConnectionGatewayService", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(notificationSignal?.aborted).toBe(true);
       expect(notificationAborted).toBe(true);
-      const status = (await service.listConnections()).find((connection) => connection.id === "pwrgit");
+      const status = (await service.listConnections()).find((connection) => connection.id === remote.id);
       expect(status).toMatchObject({ configured: true, state: "ready" });
       expect(status?.detail).toBeUndefined();
     });
