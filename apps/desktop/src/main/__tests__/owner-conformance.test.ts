@@ -325,6 +325,48 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("desktop correspondence learns a failure hold after a generated queued title lands", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const source = { backend: "codex" as const, threadId: "invented-title-sender" };
+      const input = [{ type: "text" as const, text: "Accepted report with enough detail for the existing queued message title helper to name it." }];
+      const correspondence = registry["correspondenceStore"];
+      correspondence.record({ id: "title-correspondence", source, destination: identity, input, createdAt: 1, state: "sending" });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "fail" }] });
+      await registry.submitTurn({ ...identity, queueEntryId: "title-older", delivery: "new_turn", input });
+      await registry.submitTurn({ ...identity, queueEntryId: "title-next", delivery: "new_turn", input,
+        messageOrigin: { kind: "agent", sourceThread: { ...source, messageId: "title-correspondence" } } });
+      expect(correspondence.message(source, "title-correspondence")?.text).toContain("Queued");
+      let published!: () => void;
+      const publication = new Promise<void>(resolve => { published = resolve; });
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (!armed || event.notification.method !== "thread/turnQueue/updated"
+          || event.notification.params.queueEntryId !== "title-older" || event.notification.params.status !== "held") return;
+        armed = false;
+        expect(registry["applyQueuedMessageTitle"]({ ...identity, entryId: "title-next", source: input[0]!.text }, "Generated queued title")).toBe(true);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        published();
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await publication;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expect(correspondence.message(source, "title-correspondence")?.text).toContain("Held");
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+        .toMatchObject([{ queueEntryId: "title-older", manualReleaseRequired: true },
+          { queueEntryId: "title-next", manualReleaseRequired: true, title: "Generated queued title" }]);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      expectSqliteWriteBudget({ budgetFile: "queue-failure-title-publication-write-budgets.json", scenario: "desktop-failure-and-title",
+        note: "Actual failure publication plus display-only title and real drain; setup excluded; existing terminal persistence only", writes });
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
+  });
+
   it("actual desktop failure publication cannot dispatch the successor of a cancelled held row", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();

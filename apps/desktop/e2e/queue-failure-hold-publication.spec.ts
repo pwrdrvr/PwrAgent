@@ -35,6 +35,7 @@ test("Electron keeps every failed-turn successor held when publication cancels i
           if (event.type === "cancelled") latest.delete(event.entry.id);
           if (armed && event.type === "held") {
             armed = false;
+            queue.setQueuedEntryTitle("next", "Generated queued title");
             queue.cancelEntryWithDisposition(event.entry.id);
             // Let Electron's real event loop run the cancellation drain while
             // the first failure-hold publication is still outstanding.
@@ -50,7 +51,7 @@ test("Electron keeps every failed-turn successor held when publication cancels i
         await failure;
         await drain();
         const beforeRetry = [...sends];
-        const held = queue.getQueuedEntries(identity).map(entry => ({ id: entry.id, held: entry.manualReleaseRequired, input: entry.input }));
+        const held = queue.getQueuedEntries(identity).map(entry => ({ id: entry.id, held: entry.manualReleaseRequired, input: entry.input, title: entry.title }));
         const eventsHeld = [...latest.values()];
         const retry = await queue.releaseEntryWithDisposition("next");
         queue.close();
@@ -60,7 +61,8 @@ test("Electron keeps every failed-turn successor held when publication cancels i
       } finally { queue.close(); }
     }, queueModule);
     expect(result.beforeRetry).toEqual([]);
-    expect(result.held).toEqual(["next", "last"].map(id => ({ id, held: true, input: [{ type: "text", text: `Accepted ${id}` }] })));
+    expect(result.held).toEqual(["next", "last"].map(id => ({ id, held: true, input: [{ type: "text", text: `Accepted ${id}` }],
+      title: id === "next" ? "Generated queued title" : undefined })));
     expect(result.eventsHeld).toEqual([true, true]);
     expect(result.retry).toBe("started");
     expect(result.sends).toEqual(["next"]);

@@ -51,6 +51,56 @@ it("cancelling the first published failure hold leaves the next accepted input w
   await cancelDuringFailure(2, 0);
 });
 
+async function titleDuringFailure(count: number, publication: number, titles: string[]): Promise<void> {
+  const sends: string[] = [];
+  const observed = new Map<string, { held: boolean; title?: string }>();
+  let active = true, armed = false, published = 0;
+  const queue = new ThreadTurnQueue({
+    isThreadActive: () => active,
+    startTurn: async entry => { sends.push(entry.id); return { ...THREAD, turnId: entry.id }; },
+    onLifecycle: async event => {
+      if (event.type === "queued" || event.type === "held") observed.set(event.entry.id,
+        { held: event.entry.manualReleaseRequired === true, title: event.entry.title });
+      if (!armed || event.type !== "held" || published++ !== publication) return;
+      armed = false;
+      for (let index = publication + 1; index < count; index++) {
+        for (const title of titles) expect(queue.setQueuedEntryTitle(`waiting-${index}`, title)).toBeDefined();
+      }
+      await drain();
+    },
+  });
+  try {
+    for (let index = 0; index < count; index++) await queue.submit({ ...THREAD, id: `waiting-${index}`, origin: "manual",
+      input: [{ type: "text", text: `Accepted input ${index}` }] });
+    armed = true;
+    await queue.releaseThread({ ...THREAD, turnId: "prior-native", status: "turn/failed", errorMessage: "review required" });
+    active = false;
+    await drain();
+    const waiting = queue.getQueuedEntries(THREAD);
+    // A display title is not a new admission or hold decision. Lifecycle
+    // consumers must still learn that every accepted input requires Retry.
+    expect([...observed.entries()]).toEqual(waiting.map(entry => [entry.id,
+      { held: true, title: entry.title }]));
+    expect(waiting.map(entry => entry.input)).toEqual(Array.from({ length: count }, (_, index) =>
+      [{ type: "text", text: `Accepted input ${index}` }]));
+    expect(waiting.slice(publication + 1).every(entry => entry.title === titles.at(-1))).toBe(true);
+    expect(sends).toEqual([]);
+    expect((await queue.releaseEntryWithDisposition("waiting-0")).disposition).toBe("started");
+    expect(sends).toEqual(["waiting-0"]);
+  } finally { queue.close(); }
+}
+
+it("failure lifecycle publication survives display titles arriving for later entries", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.nat(),
+    fc.array(fc.integer(), { minLength: 1, maxLength: 4 }), async (count, offset, titles) => {
+      await titleDuringFailure(count, offset % (count - 1), titles.map(value => `Generated title ${value}`));
+    }));
+});
+
+it("publishes the second entry's hold after its generated title lands during the first hold", async () => {
+  await titleDuringFailure(2, 0, ["Generated queued title"]);
+});
+
 it("failure holds cover simultaneous controls, independent causes and shutdown before any publication awaits", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), fc.nat(),
     fc.constantFrom("controls", "new review", "close"), async (count, offset, operation) => {
@@ -115,7 +165,9 @@ it("failure publication cannot overwrite a simultaneous explicit release or resu
         if (event.type === "cancelled" || event.type === "started") observed.delete(event.entry.id);
         if (!armed || event.type !== "held" || published++ !== offset % (count - 1)) return;
         armed = false;
+        queue.setQueuedEntryTitle(`waiting-${count - 1}`, "Cancelled title");
         queue.cancelEntryWithDisposition(`waiting-${count - 1}`);
+        for (const entry of queue.getQueuedEntries(THREAD)) queue.setQueuedEntryTitle(entry.id, "Released title");
         if (retry) {
           active = false;
           expect((await queue.releaseEntryWithDisposition("waiting-0")).disposition).toBe("started");
