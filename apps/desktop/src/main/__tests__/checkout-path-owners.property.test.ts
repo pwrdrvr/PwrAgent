@@ -158,6 +158,16 @@ describe("eventLoopPacer", () => {
       }));
       // One macrotask per 16 calls across all workers, not per worker.
       expect(new Set(seen).size).toBeGreaterThanOrEqual(800 / 16 - 8);
+      // No stretch between turns runs past 16 calls plus the workers that
+      // were already waiting on the yield.
+      let longest = 0;
+      for (let start = 0; start < seen.length;) {
+        let end = start;
+        while (end < seen.length && seen[end] === seen[start]) end += 1;
+        longest = Math.max(longest, end - start);
+        start = end;
+      }
+      expect(longest).toBeLessThanOrEqual(16 + 8);
     } finally {
       running = false;
     }

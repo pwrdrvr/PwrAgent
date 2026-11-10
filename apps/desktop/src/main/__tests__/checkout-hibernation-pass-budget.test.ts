@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary, DesktopCheckoutHibernationPolicy } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { CheckoutPathOwners } from "../app-server/checkout-path-owners";
 import { ThreadArchiveSweeper, type ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -121,12 +122,15 @@ describe("hibernation pass budgets", () => {
     const owner = registry();
     const busy = vi.spyOn(owner as unknown as { autoArchiveCandidateIsBusy: (candidate: ThreadArchiveCandidate) => boolean },
       "autoArchiveCandidateIsBusy");
-    const counter = countResolve();
+    const internals = CheckoutPathOwners.prototype as unknown as { index: () => unknown };
+    const indexed = vi.spyOn(internals, "index");
+    const asked = vi.spyOn(CheckoutPathOwners.prototype, "sharedWithAnotherThread");
     const result = await sweepPass(owner, candidates(200, 1));
     expect(result).toEqual({ checked: 200, kept: { "Recently active": 200 }, failed: 0 });
     expect(busy).not.toHaveBeenCalled();
     // No owner index is built when no candidate needs the sharing answer.
-    expect(counter.calls()).toBeLessThanOrEqual(4 * 200);
+    expect(asked).not.toHaveBeenCalled();
+    expect(indexed).not.toHaveBeenCalled();
   });
 
   it("still keeps a checkout another live thread lists, and frees it once that thread is archived", async () => {

@@ -40092,8 +40092,8 @@ export class DesktopBackendRegistry {
     return this.readCheckoutHibernationPolicy();
   }
 
-  /** The sweep's thread-level rules for one candidate, as the review shows them. */
-  /** A pass over many candidates passes one `owners` built from
+  /** The sweep's thread-level rules for one candidate, as the review shows
+   * them. A pass over many candidates passes one `owners` built from
    * `candidates`; without it, this call indexes `candidates` itself. */
   checkoutHibernationKeepReason(
     candidate: ThreadArchiveCandidate,
