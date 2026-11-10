@@ -121,11 +121,11 @@ export class HeadlessFederation {
 
   host() {
     return { hostname: hostname(), platform: platform(), osVersion: release(), arch: arch(),
-      machineId: this.state.instanceId, outpost: this.state.lifecycle };
+      machineId: this.state?.instanceId, outpost: this.state?.lifecycle, codexSandbox: this.runtime.codexSandbox };
   }
 
   status() {
-    return { enabled: Boolean(this.state), supportedCapabilities: HEADLESS_CAPABILITIES, messagingService: "consumer-only", instanceId: this.state?.instanceId,
+    return { enabled: Boolean(this.state), host: this.host(), supportedCapabilities: HEADLESS_CAPABILITIES, messagingService: "consumer-only", instanceId: this.state?.instanceId,
       label: this.state?.label, lifecycle: this.state?.lifecycle, listener: this.listenerAddress,
       gateway: this.state?.gateway ? { instanceId: this.state.gateway.gatewayInstanceId,
         endpoint: this.state.gateway.endpoint, status: this.client ? "connected" : "unreachable", error: this.connectionError } : undefined,

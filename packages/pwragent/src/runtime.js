@@ -78,7 +78,9 @@ export class Runtime {
   async handle(method, params = {}) {
     if (this.stopping) throw new Error("Daemon is stopping");
     switch (method) {
-      case "status": return { version: 1, ready: true, pid: process.pid, running: this.running, activeJob: this.active || null, workspace: this.workspace };
+      case "status": return { version: 1, ready: this.codexSandbox?.status !== "failed",
+        health: this.codexSandbox?.status === "failed" ? "degraded" : "ready", codexSandbox: this.codexSandbox,
+        pid: process.pid, running: this.running, activeJob: this.active || null, workspace: this.workspace };
       case "project-list": return this.projects.list();
       case "project-create": case "project-clone": return this.projects.create(params);
       case "project-add": return this.projects.add(params);
@@ -128,6 +130,7 @@ export class Runtime {
 
   submit(params, queuedControls) {
     if (this.stopping) throw new Error("Daemon is stopping");
+    if (this.codexSandbox?.status === "failed") throw new Error(this.codexSandbox.error);
     const { id, prompt, threadId = null, model = null, sandbox = "read-only", reasoningEffort = null, serviceTier = null } = params;
     if (!validId(id)) throw new Error("Job ID must be 1–80 letters, digits, underscores or hyphens, beginning with a letter or digit");
     if (typeof prompt !== "string" || !prompt.trim() || Buffer.byteLength(prompt) > 256 * 1024) {

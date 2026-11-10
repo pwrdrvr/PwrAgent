@@ -70,7 +70,7 @@ export async function setup(t, options = {}) {
     const child = launch(serveArgs);
     await eventually(() => {
       if (child.exitCode !== null) throw new Error(`Daemon failed: ${child.errors}`);
-      return child.output.includes('"ready":true');
+      return child.output.includes('"ready":true') || child.output.includes('"listening":true');
     });
     return child;
   }
@@ -81,7 +81,7 @@ export async function setup(t, options = {}) {
     }
     rmSync(root, { recursive: true, force: true });
   });
-  await options.beforeStart?.({ directory, workspace, home });
+  await options.beforeStart?.({ directory, workspace, home, data });
   const daemon = await start();
   const rpc = (method, params) => call(directory, method, params);
   const submit = (id, prompt, extra = {}) => rpc("submit", { id, prompt, ...extra });
