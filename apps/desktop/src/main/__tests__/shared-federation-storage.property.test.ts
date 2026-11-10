@@ -44,10 +44,14 @@ it("binds the original desktop factory to shared persistence and the currently s
 
 // Revocation is authoritative until explicit reauthorization. Ordinary refresh
 // can replace advertised facts, but cannot restore trust or change creation time.
+// The receiver assigns authority on first enrollment; advertised roles and later
+// enrollment assignments cannot change that authority.
 it("models trust, explicit reauthorization and detached peer facts across WAL connections and reopen", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.record({ host, slot: fc.nat({ max: 2 }),
     kind: fc.constantFrom("refresh", "revoke", "reauthorize"), label: fc.string({ maxLength: 12 }),
+    advertisedRole: fc.constantFrom("full" as const, "contained" as const),
+    assignedRole: fc.option(fc.constantFrom("full" as const, "contained" as const), { nil: undefined }),
     activity: fc.option(fc.nat({ max: 100 }), { nil: undefined }), reopen: fc.boolean(),
   }), { minLength: 1, maxLength: 30 }), async commands => {
     const fixture = createTempStateDb("shared-federation-peers-");
@@ -63,11 +67,13 @@ it("models trust, explicit reauthorization and detached peer facts across WAL co
             if (previous) model.set(id, { ...previous, status: "revoked", revokedAt: at, updatedAt: at });
           } else {
             const peer = { id, label: op.label, role: "client" as const, status: "connected" as const,
+              permissionRole: op.advertisedRole,
               capabilities: ["remote_window" as const], pinnedPublicKeyPem: `Invented key ${index}`,
               notes: op.label, lastActivityAt: op.activity, receiverPermissions: { remoteShells: false, portForwarding: false, filePush: false, filePull: false } };
-            stores[op.host]!.upsertPeer({ peer, createdAt: at - 10, updatedAt: at, clearRevocation: op.kind === "reauthorize" });
+            stores[op.host]!.upsertPeer({ peer, assignedRole: op.assignedRole, createdAt: at - 10, updatedAt: at, clearRevocation: op.kind === "reauthorize" });
             const revokedAt = op.kind === "reauthorize" ? undefined : previous?.revokedAt;
             model.set(id, clone({ ...peer, createdAt: previous?.createdAt ?? at - 10, updatedAt: at,
+              permissionRole: previous?.permissionRole ?? op.assignedRole ?? "full",
               lastSeenAt: op.activity, revokedAt, status: revokedAt === undefined ? "connected" : "revoked" }));
           }
         });
