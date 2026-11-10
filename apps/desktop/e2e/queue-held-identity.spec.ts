@@ -46,5 +46,7 @@ test("Electron held identities preserve owner and review intent across retries",
     expect(result.ids).toEqual(["held-identity", "held-identity", "held-identity"]);
     expect(result.unchanged).toBe(true);
     expect(result.nativeStarts).toBe(1);
+    expect(result.retryStatuses).toEqual(["held", "started", "started"]);
+    expect(result.retryRequests).toBe(4);
   } finally { await app.close(); }
 });

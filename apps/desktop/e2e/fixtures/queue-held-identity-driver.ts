@@ -66,8 +66,43 @@ export async function exerciseHeldQueueIdentity(root: string) {
     registry.cancelQueuedTurnWithDisposition("ordinary-identity");
     registry.cancelQueuedTurnWithDisposition(scheduledEntry.queueEntryId);
     await registry.interruptTurn(active);
+    const nativeStarts = OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start").length;
+    const retryStatuses: string[] = [];
+    for (const locked of [true, false]) {
+      const thread = await registry.startThread({ backend: "codex", cwd: root });
+      const ref = { backend: "codex" as const, threadId: thread.threadId };
+      const id = `electron-scheduled-retry:${locked}`, queueEntryId = `scheduled-turn:${id}`;
+      const occupied = locked ? undefined : await registry.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
+      if (locked) await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
+      await scheduler.create({ ...ref, kind: "turn", scheduledFor: Date.now() + 60_000,
+        displayText: "Invented scheduled retry", turn: { input: [{ type: "text", text: "slow" }] } }, { id });
+      await scheduler.sendNow({ id });
+      const accepted = await registry.readQueuedTurn({ ...ref, queueEntryId });
+      if (occupied) {
+        OwnerConformanceCodexTransport.refusedStarts = 1;
+        const held = new Promise<void>(resolve => {
+          const stop = registry.onEvent(event => {
+            if (event.notification.method !== "thread/scheduledAction/updated") return;
+            const action = (event.notification.params as { action: { id: string; status: string } }).action;
+            if (action.id === id && action.status === "held") { stop(); resolve(); }
+          });
+        });
+        await registry.interruptTurn(occupied);
+        await held;
+      }
+      let retried = await scheduler.sendNow({ id });
+      if (locked) {
+        retryStatuses.push(retried.action.status);
+        if (JSON.stringify(await registry.readQueuedTurn({ ...ref, queueEntryId })) !== JSON.stringify(accepted)) throw new Error("Locked retry changed accepted input");
+        await registry.setThreadLock({ ...ref, locked: false }, { source: "operator" }, { resumeQueue: false });
+        retried = await scheduler.sendNow({ id });
+      }
+      retryStatuses.push(retried.action.status);
+      if (retried.action.status !== "started" || !retried.action.turnId) throw new Error("Scheduled acceptance was not retried");
+      await registry.interruptTurn({ ...ref, turnId: retried.action.turnId });
+    }
     return { ordinaryRefused, ownerRefused, causeRefused, scheduledRefused, ids: admissions.map(result => result.entry.id), unchanged,
-      nativeStarts: OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start").length };
+      nativeStarts, retryStatuses, retryRequests: OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start").length - nativeStarts };
   } finally {
     scheduler.dispose();
     await registry.close();

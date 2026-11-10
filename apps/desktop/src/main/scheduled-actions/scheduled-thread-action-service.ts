@@ -376,25 +376,30 @@ export class ScheduledThreadActionService {
       }
       const queueEntryId =
         action.queueEntryId ?? queueEntryIdForAction(action.id);
+      const turn = {
+        ...action.turn,
+        backend: action.backend,
+        threadId: action.threadId,
+        origin: "scheduled" as const,
+        queueEntryId,
+      };
       if (action.manualReleaseRequired) {
-        const held = await this.options.registry.submitHeldTurn({
-          ...action.turn,
-          backend: action.backend,
-          threadId: action.threadId,
-          queueEntryId,
+        // Once admitted, the queue owns the input and its changing hold
+        // causes. Retry validates that acceptance instead of admitting it again.
+        if (!action.queueEntryId) await this.options.registry.submitHeldTurn({
+          ...turn,
           holdReason:
             "This steering message was held after its target turn ended. Retry it when the provider is ready.",
-          origin: "scheduled",
         });
         const queued = this.options.store.markQueued(
           action.id,
-          held.entry.id,
+          queueEntryId,
           this.now(),
           this.ownerId,
         );
         if (queued) await this.publish(queued);
         const released = await this.options.registry
-          .releaseQueuedTurnWithDisposition(held.entry.id);
+          .releaseQueuedTurnWithDisposition(queueEntryId, turn);
         if (released.disposition === "started") {
           const started = this.options.store.markStarted(
             action.id,
@@ -415,7 +420,7 @@ export class ScheduledThreadActionService {
                 : "This steering message remains held for retry.");
           const stillHeld = this.options.store.markHeld(
             action.id,
-            held.entry.id,
+            queueEntryId,
             reason,
             this.now(),
             this.ownerId,
@@ -424,13 +429,6 @@ export class ScheduledThreadActionService {
         }
         return;
       }
-      const turn = {
-        ...action.turn,
-        backend: action.backend,
-        threadId: action.threadId,
-        origin: "scheduled" as const,
-        queueEntryId,
-      };
       const response = await this.options.registry.submitTurn(turn)
         .catch(async (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);

@@ -1074,10 +1074,18 @@ export class ThreadTurnQueue {
 
   async releaseEntryWithDisposition(
     entryId: string,
+    expected?: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "delivery">,
   ): Promise<ThreadTurnQueueReleaseResult> {
     const found = this.findQueuedEntry(entryId);
     if (!found) {
       return { disposition: "not_found", entryId };
+    }
+    // A retry releases the original delivery; it does not choose a new one
+    // or re-admit the row under its current (possibly changed) hold cause.
+    if (expected && !sameAcceptance(found.entry, {
+      ...expected, id: entryId, createdAt: 0, delivery: found.entry.delivery,
+    })) {
+      throw new Error(`Queued turn id ${entryId} was reused with different input or ownership`);
     }
     // Retry answers the entry dispatch would start, which can sit behind
     // paused ones.

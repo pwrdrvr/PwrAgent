@@ -347,11 +347,12 @@ describe("ScheduledThreadActionService", () => {
       status: "started",
       turnId: "turn-retried",
     });
-    expect(harness.submitHeldTurn).toHaveBeenCalledWith(expect.objectContaining({
-      queueEntryId: "scheduled-turn:scheduled-1",
-    }));
+    expect(harness.submitHeldTurn).not.toHaveBeenCalled();
     expect(harness.releaseQueuedTurnWithDisposition)
-      .toHaveBeenCalledWith("scheduled-turn:scheduled-1");
+      .toHaveBeenCalledWith("scheduled-turn:scheduled-1", expect.objectContaining({
+        backend: "codex", threadId: "thread-1", origin: "scheduled",
+        input: [{ type: "text", text: "Follow up" }],
+      }));
     harness.service.dispose();
   });
 
@@ -558,7 +559,10 @@ describe("ScheduledThreadActionService", () => {
       queueEntryId: `scheduled-turn:${created.action.id}`,
     }));
     expect(harness.releaseQueuedTurnWithDisposition)
-      .toHaveBeenCalledWith(`scheduled-turn:${created.action.id}`);
+      .toHaveBeenCalledWith(`scheduled-turn:${created.action.id}`, expect.objectContaining({
+        backend: "codex", threadId: "thread-1", origin: "scheduled",
+        input: [{ type: "text", text: "Follow up" }],
+      }));
   });
 
   it("keeps a stale steer retryable when provider admission is still blocked", async () => {
@@ -601,6 +605,20 @@ describe("ScheduledThreadActionService", () => {
       turnId: "turn-retried",
     });
     expect(harness.releaseQueuedTurnWithDisposition).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reconstruct an existing acceptance that is no longer waiting", async () => {
+    const harness = createHarness(5_000);
+    harness.releaseQueuedTurnWithDisposition
+      .mockResolvedValueOnce({ disposition: "blocked", queueEntryId: "scheduled-turn:missing", errorMessage: "Offline" })
+      .mockResolvedValueOnce({ disposition: "not_found", queueEntryId: "scheduled-turn:missing" });
+    await harness.service.create({ backend: "codex", threadId: "thread-1", kind: "turn", scheduledFor: 5_000,
+      manualReleaseRequired: true, displayText: "Retry", turn: { input: [{ type: "text", text: "Retry" }] } }, { id: "missing" });
+    await harness.service.sendNow({ id: "missing" });
+    expect(harness.submitHeldTurn).toHaveBeenCalledOnce();
+    expect((await harness.service.sendNow({ id: "missing" })).action.status).toBe("held");
+    expect(harness.submitHeldTurn).toHaveBeenCalledOnce();
+    expect(harness.submitTurn).not.toHaveBeenCalled();
   });
 
   it("rejects send-now when backend admission fails without losing the error", async () => {

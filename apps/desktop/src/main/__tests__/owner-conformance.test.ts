@@ -357,14 +357,17 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         if (locked) {
           expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
           expect(registry.getQueuedTurnsForThread(identity)).toEqual(before);
-          await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
-          await vi.waitFor(() => expect(host.scheduler!.get(id)?.status).toBe("started"));
+          await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" }, { resumeQueue: false });
+          expect((await host.scheduler!.sendNow({ id })).action.status).toBe("started");
         }
         const requests = OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start"
           && request.params.threadId === identity.threadId
-          && JSON.stringify(request.params.input) === JSON.stringify(input));
+          && (request.params.input as Array<{ type: string; text?: string }>).some(item => item.type === "text" && item.text === input[0]!.text));
         expect(requests).toHaveLength(locked ? 1 : 2);
         expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+        const turnId = host.scheduler!.get(id)!.turnId;
+        await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/completed"
+          && (event.notification.params as { turn?: { id?: string } }).turn?.id === turnId)).toBe(true));
       }), { numRuns: 4, examples: [[""]] });
     } finally { await host.close(); }
   });
@@ -393,6 +396,40 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
       }), { numRuns: 6, examples: [[""]] });
     } finally { await host.close(); }
+  });
+
+  it("scheduler retry controls have measured SQLite write budgets", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      for (const locked of [true, false]) {
+        const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const identity = { backend: "codex" as const, threadId: created.threadId };
+        const id = `measured-scheduled-retry:${locked}`;
+        const active = locked ? undefined : await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        if (locked) await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
+        await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
+          displayText: "Measured scheduled retry", turn: { input: [{ type: "text", text: "Measured retry" }] } }, { id });
+        await host.scheduler!.sendNow({ id });
+        if (active) {
+          OwnerConformanceCodexTransport.refusedStarts = 1;
+          await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+          await vi.waitFor(() => expect(host.scheduler!.get(id)?.status).toBe("held"));
+        }
+        const measured = await measureSqliteWrites(async () => {
+          const retried = await host.scheduler!.sendNow({ id });
+          expect(retried.action.status).toBe(locked ? "held" : "started");
+          if (!locked) await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/completed"
+            && (event.notification.params as { turn?: { id?: string } }).turn?.id === retried.action.turnId)).toBe(true));
+        });
+        expectSqliteWriteBudget({ budgetFile: "desktop-scheduler-held-retry-write-budgets.json",
+          scenario: locked ? "locked-existing-retry" : "refused-existing-retry-through-terminal",
+          note: locked ? "One scheduler-owned retry while locked, excluding creation and original admission"
+            : "One scheduler-owned provider-refusal retry through its real terminal, excluding creation, original admission and refusal",
+          writes: measured.writes });
+      }
+    } finally { await host.close(); vi.unstubAllEnvs(); }
   });
 
   it("registered held retries preserve sender, independent holds, native controls and durable neighbors through restart", async () => {

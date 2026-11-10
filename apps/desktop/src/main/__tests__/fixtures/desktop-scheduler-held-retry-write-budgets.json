@@ -1,0 +1,16 @@
+{
+  "locked-existing-retry": {
+    "commits": 3,
+    "note": "One scheduler-owned retry while locked, excluding creation and original admission",
+    "observedWalBytes": 49440,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "refused-existing-retry-through-terminal": {
+    "commits": 3,
+    "note": "One scheduler-owned provider-refusal retry through its real terminal, excluding creation, original admission and refusal",
+    "observedWalBytes": 49440,
+    "rowsChanged": 3,
+    "statements": 3
+  }
+}
