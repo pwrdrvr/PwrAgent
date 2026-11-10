@@ -25,7 +25,13 @@ export const ThreadRowPrChip = memo(function ThreadRowPrChip(
   const { thread, ...chip } = props;
   const watches = useThreadPrWatches(thread);
   const autoFixRepository = useThreadAutoFixRepository(thread);
-  return <PrChip {...chip} watch={resolvePrChipWatch(watches, chip.pr, autoFixRepository)} />;
+  return (
+    <PrChip
+      {...chip}
+      watch={resolvePrChipWatch(watches, chip.pr, autoFixRepository)}
+      cardActions
+    />
+  );
 });
 
 /** Minimal density's one PR chip, reading the watch context the same way. */

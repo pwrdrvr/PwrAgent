@@ -113,6 +113,7 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
           onOpenContextMenu={props.onOpenContextMenu}
           onDetach={props.onDetach}
           hideDetachButton
+          cardActions
         />
       </span>
     );

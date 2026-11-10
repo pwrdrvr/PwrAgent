@@ -374,6 +374,16 @@ export function useViewportTooltip(options: {
   getHorizontalBounds?: (
     target: HTMLElement,
   ) => { left: number; right: number } | undefined;
+  /**
+   * A card the pointer can enter, with pointer shortcuts in it: it takes
+   * pointer events, a press inside it does not dismiss it, and it reports
+   * the pointer entering and leaving it. Its controls stay out of the Tab
+   * order; the trigger keeps the keyboard's way to each action.
+   */
+  interactive?: {
+    onPointerEnter: () => void;
+    onPointerLeave: () => void;
+  };
 }): {
   /**
    * DOM id stamped on the rendered tooltip. Point the trigger at it with
@@ -414,11 +424,15 @@ export function useViewportTooltip(options: {
    */
   update: (content: ReactNode) => void;
   hide: () => void;
+  /** Whether `node` is inside the shown tooltip. */
+  contains: (node: Node | null) => boolean;
   /** Whether the tooltip is currently shown. */
   visible: boolean;
   tooltipNode: ReactNode;
 } {
-  const { className, getHorizontalBounds, placement, getAnchorRect } = options;
+  const { className, getHorizontalBounds, placement, getAnchorRect, interactive } = options;
+  const interactiveRef = useRef(interactive);
+  interactiveRef.current = interactive;
   const tooltipRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLElement | null>(null);
   const targetRectRef = useRef<TooltipTargetRect | null>(null);
@@ -801,11 +815,22 @@ export function useViewportTooltip(options: {
         hide();
       }
     };
+    // A press inside an enterable card is on one of its controls.
+    const onPointerDown = (event: PointerEvent): void => {
+      if (
+        interactiveRef.current
+        && event.target instanceof Node
+        && tooltipRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      hide();
+    };
     window.addEventListener("blur", hide);
     window.addEventListener("resize", hide);
     window.addEventListener("scroll", onScroll, { capture: true });
     document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("pointerdown", hide, { capture: true });
+    document.addEventListener("pointerdown", onPointerDown, { capture: true });
     return () => {
       unsubscribeNativeDrag();
       stopObserving();
@@ -813,7 +838,7 @@ export function useViewportTooltip(options: {
       window.removeEventListener("resize", hide);
       window.removeEventListener("scroll", onScroll, { capture: true });
       document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("pointerdown", hide, { capture: true });
+      document.removeEventListener("pointerdown", onPointerDown, { capture: true });
     };
   }, [active, hide, observedTarget, scheduleAnchorSettle, state?.targetTop, state?.targetBottom, state?.targetLeft, state?.targetRight]);
 
@@ -825,8 +850,11 @@ export function useViewportTooltip(options: {
             role="tooltip"
             id={tooltipId}
             className={className}
+            onMouseEnter={interactive ? () => interactiveRef.current?.onPointerEnter() : undefined}
+            onMouseLeave={interactive ? () => interactiveRef.current?.onPointerLeave() : undefined}
             style={{
               position: "fixed",
+              pointerEvents: interactive ? "auto" : undefined,
               left: state.left,
               maxWidth: state.horizontalBounds
                 ? Math.max(
@@ -844,8 +872,14 @@ export function useViewportTooltip(options: {
         )
       : null;
 
+  const contains = useCallback(
+    (node: Node | null): boolean => Boolean(node && tooltipRef.current?.contains(node)),
+    [],
+  );
+
   return {
     tooltipId,
+    contains,
     show,
     showAtPointer,
     movePointer,
