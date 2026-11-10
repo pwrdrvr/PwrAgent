@@ -1,7 +1,7 @@
 import { assertFederationEgress } from "@pwragent/federation/federation-egress";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { FEDERATION_CAPABILITIES, type FederationRequestEnvelope } from "@pwragent/shared";
+import { FEDERATION_CAPABILITIES, type FederationProtocolEnvelope, type FederationRequestEnvelope } from "@pwragent/shared";
 import { FederationRouter } from "../federation/federation-router";
 import * as owner from "@pwragent/federation/federation-backend-methods";
 import { evaluateFederationSessionPolicy } from "../federation/federation-policy";
@@ -87,4 +87,63 @@ it("malformed receiver roles cannot grant gateway relay", () => {
     expect(decision.accepted).toBe(true);
     if (decision.accepted) expect(decision.capabilities).not.toContain("gateway_relay");
   }));
+});
+
+// A peer that has seen a refusal must be able to read its audit line. The
+// Outpost audits in-process and replies over a socket, so an audit written
+// after the reply raced the peer's read (289 of 290 lines on CI).
+describe("refusal audit ordering", () => {
+  type Case = { role: "full" | "contained"; envelope: FederationProtocolEnvelope; arrange?: (router: FederationRouter) => void };
+  const request = (method: string, targetInstanceId = "desktop"): FederationRequestEnvelope => ({ id: "request", kind: "request",
+    protocolVersion: 1, sourceInstanceId: "outpost", targetInstanceId, method, params: {}, createdAt: 1 });
+  const cases = fc.oneof(
+    fc.constantFrom(...blocked).chain((method) => fc.constantFrom("desktop", "other-peer").map((target): Case =>
+      ({ role: "contained", envelope: request(method, target) }))),
+    fc.constant<Case>({ role: "contained", envelope: { id: "note", kind: "notification", protocolVersion: 1,
+      sourceInstanceId: "outpost", targetInstanceId: "desktop", method: "new.unmapped.notification", params: {}, createdAt: 1 } }),
+    fc.constant<Case>({ role: "full", envelope: request("new.unmapped.method") }),
+    fc.constant<Case>({ role: "full", envelope: request("backend.startThread"),
+      arrange: (router) => router.registerHandler("backend.startThread", () => { throw new Error("fixture failure"); }) }),
+    fc.constant<Case>({ role: "full", envelope: request("backend.startThread", "absent-peer") }),
+    fc.constant<Case>({ role: "full", envelope: { ...request("backend.startThread"), sourceInstanceId: "impostor" } }),
+    fc.constant<Case>({ role: "full", envelope: { ...request("backend.startThread"), deadlineAt: 1 } }),
+  );
+
+  it("writes the audit line before the refusal reaches the peer", async () => {
+    await fc.assert(fc.asyncProperty(cases, async ({ role, envelope, arrange }) => {
+      const audit: unknown[] = [];
+      const auditedAtReply: number[] = [];
+      const router = new FederationRouter({ localInstanceId: "desktop", peerRole: () => role,
+        auditRefusal: (event) => audit.push(event), now: () => 42 });
+      router.registerConnection({ peerId: "outpost", capabilities: [...FEDERATION_CAPABILITIES],
+        sendEnvelope: (reply) => { if (reply.kind === "error") auditedAtReply.push(audit.length); } });
+      router.registerConnection({ peerId: "other-peer", capabilities: [...FEDERATION_CAPABILITIES], sendEnvelope: () => {} });
+      arrange?.(router);
+      const result = await router.routeEnvelope({ envelope, sourcePeerId: "outpost" });
+      expect(result.status).toBe("rejected");
+      expect(audit).toHaveLength(1);
+      expect(auditedAtReply).toEqual([1]);
+    }));
+  });
+
+  it("runs a host's audit before a notification refusal leaves", () => {
+    const order: string[] = [];
+    const router = new FederationRouter({ localInstanceId: "desktop", peerRole: () => "contained" });
+    router.registerConnection({ peerId: "outpost", capabilities: [...FEDERATION_CAPABILITIES],
+      sendEnvelope: (reply) => order.push(reply.kind) });
+    const notification: FederationProtocolEnvelope = { id: "note", kind: "notification", protocolVersion: 1,
+      sourceInstanceId: "outpost", targetInstanceId: "desktop", method: "new.unmapped.notification", params: {}, createdAt: 1 };
+    expect(router.checkPeerRole(notification, "outpost", () => order.push("audit"))?.status).toBe("rejected");
+    expect(order).toEqual(["audit", "error"]);
+  });
+
+  it("still sends the refusal when the audit write fails", async () => {
+    const sent: string[] = [];
+    const router = new FederationRouter({ localInstanceId: "desktop", peerRole: () => "contained",
+      auditRefusal: () => { throw new Error("disk full"); } });
+    router.registerConnection({ peerId: "outpost", capabilities: [...FEDERATION_CAPABILITIES],
+      sendEnvelope: (reply) => sent.push(reply.kind) });
+    await expect(router.routeEnvelope({ envelope: request("backend.startThread"), sourcePeerId: "outpost" })).rejects.toThrow("disk full");
+    expect(sent).toEqual(["error"]);
+  });
 });

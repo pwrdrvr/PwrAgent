@@ -5113,10 +5113,10 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
-    if (envelope.kind !== "request" && this.router?.checkPeerRole(envelope, sourcePeerId)) {
-      appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), { peerId: sourcePeerId,
+    if (envelope.kind !== "request" && this.router?.checkPeerRole(envelope, sourcePeerId, () => appendFederationRefusalAudit(
+      path.join(resolveActiveProfileDir(), "state"), { peerId: sourcePeerId,
         method: "method" in envelope ? envelope.method : envelope.kind,
-        role: "contained", createdAt: Date.now() });
+        role: "contained", createdAt: Date.now() }))) {
       return;
     }
     // Subscription relays authenticate their delegated subscriber and route

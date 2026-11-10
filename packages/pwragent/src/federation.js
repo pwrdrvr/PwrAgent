@@ -433,9 +433,8 @@ export class HeadlessFederation {
       }
       return;
     }
-    if (envelope.kind !== "request" && this.router.checkPeerRole(envelope, peerId)) {
-      appendFederationRefusalAudit(path.dirname(this.file), { peerId, method: envelope.method || envelope.kind,
-        role: "contained", createdAt: Date.now() });
+    if (envelope.kind !== "request" && this.router.checkPeerRole(envelope, peerId, () => appendFederationRefusalAudit(
+      path.dirname(this.file), { peerId, method: envelope.method || envelope.kind, role: "contained", createdAt: Date.now() }))) {
       return;
     }
     if (envelope.kind === "notification" && envelope.method === "federation.peerDirectoryPage") {
