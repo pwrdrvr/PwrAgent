@@ -11327,7 +11327,12 @@ function ownerThreadRecord(state: OwnerThreadOverlay): OwnerThreadRecord {
 
 /** Structural equality for JSON-shaped overlay values; `undefined` equals `undefined` only. */
 function sameJson(left: unknown, right: unknown): boolean {
-  return left === right || JSON.stringify(left) === JSON.stringify(right);
+  if (left === right) return true;
+  const serialize = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
+    return Object.fromEntries(Object.keys(item).sort().map(key => [key, Reflect.get(item, key)]));
+  });
+  return serialize(left) === serialize(right);
 }
 
 /** Arrays that moved out of `threads.payload` into their own tables. */
