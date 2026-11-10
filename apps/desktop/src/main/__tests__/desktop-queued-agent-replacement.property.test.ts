@@ -109,6 +109,33 @@ it("replacement preserves generated FIFO positions, grouped neighbors, independe
     }), { numRuns: 50 });
 });
 
+it("replacement event positions agree with the live FIFO after retirement observers cancel neighbors", async () => {
+  await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 5 }),
+    fc.integer({ min: 0, max: 3 }), async (cancelled, after) => {
+      const events: ThreadTurnQueueLifecycleEvent[] = [];
+      let retiredId: string | undefined;
+      const queue = new ThreadTurnQueue({ isThreadActive: () => true,
+        startTurn: async entry => ({ ...ref, turnId: entry.id }), onLifecycle: event => {
+          events.push(event);
+          if (event.type === "cancelled" && event.entry.id === retiredId) {
+            for (const [index, cancel] of cancelled.entries()) if (cancel) queue.cancelEntry(`before-${index}`);
+          }
+        } });
+      try {
+        for (const index of cancelled.keys()) await queue.submit({ ...ref, origin: "manual", id: `before-${index}`, input: input("neighbor") });
+        const original = await queue.submit({ ...ref, origin: "manual", input: input("original"), messageOrigin: origin("alice") });
+        for (let index = 0; index < after; index++) await queue.submit({ ...ref, origin: "manual", id: `after-${index}`, input: input("neighbor") });
+        retiredId = original.entry.id;
+        const replacement = await queue.replaceQueuedAgentInput(retiredId, input("replacement"), origin("alice").sourceThread);
+        expect(replacement).toBeDefined();
+        const waiting = queue.getQueuedEntries(ref);
+        expect(events.at(-1)).toMatchObject({ type: "queued", entry: replacement,
+          position: waiting.findIndex(entry => entry.id === replacement!.id) + 1 });
+        expect(waiting.some(entry => entry.id === retiredId)).toBe(false);
+      } finally { queue.close(); }
+    }), { numRuns: 50, examples: [[[true], 0], [[true, true], 1]] });
+});
+
 it("a fresh-admission observer refusal never restores the old accepted identity or resends its input", async () => {
   await fc.assert(fc.asyncProperty(fc.string({ minLength: 1, maxLength: 80 }), async text => {
     let refuse = false;
