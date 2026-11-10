@@ -815,7 +815,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           // plain row.
           await expect(sidebarChip.locator(".pr-chip__watch")).toBeVisible();
           const overflowChip = sidebarRow.getByRole("button", {
-            name: /^1 more pull request, [^,]*$/,
+            name: /^\+1 PR: 1 more pull request, [^,]*$/,
           });
           await expect(overflowChip).toBeVisible();
           await expect(overflowChip.locator(".pr-chip__watch")).toHaveCount(0);

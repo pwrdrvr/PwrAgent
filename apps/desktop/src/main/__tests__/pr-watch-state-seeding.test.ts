@@ -76,9 +76,10 @@ describe("seedPrWatchAuditState", () => {
 
     const overlay = await openStore(homeRoot).getThreadOverlayState(thread);
     expect(overlay?.prAutoDispatchEnabled).toBe(true);
+    // The watched PR is attached last, so it leads the sidebar's chips.
     expect(overlay?.prs?.map((pr) => pr.number)).toEqual([
-      PR_WATCH_AUDIT_WATCHED_PR.number,
       PR_WATCH_AUDIT_UNWATCHED_PR.number,
+      PR_WATCH_AUDIT_WATCHED_PR.number,
     ]);
   });
 });

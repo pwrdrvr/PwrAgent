@@ -444,8 +444,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         tabIndex={0}
         aria-controls={open ? popoverId : undefined}
         aria-expanded={open}
+        // The visible `+N PRs` leads the name (WCAG 2.5.3, label in name).
         aria-label={overflow
-          ? `${overflow.rest.length} more ${
+          ? `${prOverflowLabel(overflow.rest.length)}: ${overflow.rest.length} more ${
             overflow.rest.length === 1 ? "pull request" : "pull requests"
           }, ${chipRollup.summary}${waitingForCi ? ", waiting for CI" : ""}`
           : `${props.prs.length} pull requests, ${

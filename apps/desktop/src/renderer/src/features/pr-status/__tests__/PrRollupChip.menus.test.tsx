@@ -129,7 +129,7 @@ describe("PrRollupChip overflow variant", () => {
   it("counts and wears the state of the PRs the lead chip leaves out", () => {
     renderInRow({ prs: [newest, failing, merged], variant: "overflow" });
     // Two open PRs: the lead is the newest one, #10, drawn beside this chip.
-    const chip = screen.getByRole("button", { name: /^2 more pull requests/ });
+    const chip = screen.getByRole("button", { name: /^\+2 PRs: 2 more pull requests,/ });
     expect(chip).toHaveTextContent("+2 PRs");
     expect(chip).toHaveClass("pr-chip--overflow", "pr-chip--failing");
   });
@@ -145,7 +145,7 @@ describe("PrRollupChip overflow variant", () => {
 
   it("names one hidden PR in the singular", () => {
     renderInRow({ prs: [newest, merged], variant: "overflow" });
-    expect(screen.getByRole("button", { name: /^1 more pull request,/ }))
+    expect(screen.getByRole("button", { name: /^\+1 PR: 1 more pull request,/ }))
       .toHaveTextContent("+1 PR");
   });
 
