@@ -248,9 +248,9 @@ it.skipIf(process.platform === "win32")("cross-thread release contention either 
       const accepted = store.get("waiting0");
       const submit = () => runtime.submit({ id: "competitor", threadId: "other", prompt: "competitor" });
       const finishing = Promise.resolve();
-      runtime.dispatches.add(finishing);
+      runtime.dispatches.set("finishing", finishing);
       expect(runtime.turnQueue.canStartImmediately({ backend: "codex", threadId: "other" })).toBe(false);
-      runtime.dispatches.delete(finishing);
+      runtime.dispatches.delete("finishing");
       let submitted = false;
       const observe = runtime.onEvent;
       runtime.onEvent = (event: any) => {
@@ -335,4 +335,59 @@ it.skipIf(process.platform === "win32")("a same-FIFO cancellation cannot turn a 
       expect(sent).toEqual(["first", "waiting0"]);
     });
   }), { numRuns: 4, examples: [[false], [true]] });
+});
+
+it.skipIf(process.platform === "win32")("job-specific held releases remain pending through stable retries and shutdown", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 2 }), async (shutdown, extra) => {
+    await fixture(async (runtime, backend, store) => {
+      let sends = 0;
+      runtime.codex = { startTurn: async () => {
+        if (++sends === 2) throw new Error("Native refusal");
+        return { threadId: "native", turnId: `turn${sends}` };
+      }, stop: async () => {} };
+      runtime.submit({ id: "first", threadId: "native", prompt: "first" }); await runtime.work;
+      const request = { threadId: "native", input: [{ type: "text", text: "waiting" }], queueEntryId: "stable" };
+      const envelope = { id: "accepted", sourceInstanceId: "authenticated" };
+      const accepted = await backend.startTurn(request, envelope);
+      const id = accepted.queueEntryId;
+      const fingerprint = store.get(id).fingerprint;
+      terminal(runtime, "turn1"); await settle();
+      expect(backend.queuedTurns("native")[0]).toMatchObject({ queueEntryId: id, manualReleaseRequired: true });
+      const sharedRelease = runtime.turnQueue.releaseEntryWithDisposition.bind(runtime.turnQueue);
+      let completed = false, unlock!: () => void;
+      const gate = new Promise<void>(resolve => { unlock = resolve; });
+      runtime.turnQueue.releaseEntryWithDisposition = async (entryId: string) => {
+        const result = await sharedRelease(entryId);
+        completed = true;
+        await gate;
+        return result;
+      };
+      const release = backend.handle("backend.releaseQueuedTurn", { queueEntryId: id });
+      const reservation = runtime.queueRelease.done;
+      let retry: Promise<any> | undefined, stop: Promise<void> | undefined;
+      let retried = false, stopped = false;
+      try {
+        while (!completed) await tick();
+        // The owning release still needs its slot after provider confirmation.
+        // Neither an unrelated enqueue nor provider cleanup can replace it.
+        expect(runtime.dispatches.get(id)).toBe(reservation);
+        for (let i = 0; i < extra; i++) runtime.submit({ id: `extra${i}`, threadId: "native", prompt: "extra" });
+        retry = backend.startTurn(request, envelope).then((result: any) => { retried = true; return result; });
+        if (shutdown) stop = runtime.stop().then(() => { stopped = true; });
+        await settle();
+        expect(retried).toBe(false);
+        expect(stopped).toBe(false);
+        expect(runtime.dispatches.get(id)).toBe(reservation);
+      } finally {
+        unlock();
+        await Promise.all([release, retry, stop]);
+      }
+      expect(await release).toMatchObject({ disposition: "started", turnId: "turn3" });
+      expect(await retry).toMatchObject({ queueStatus: "started", queueEntryId: id, turnId: "turn3" });
+      expect(runtime.dispatches.size).toBe(0);
+      expect(runtime.queueRelease).toBeNull();
+      expect(store.get(id)).toMatchObject({ fingerprint, turnId: "turn3", status: shutdown ? "unknown" : "running" });
+      expect(sends).toBe(3);
+    });
+  }), { numRuns: 6, examples: [[true, 1], [false, 0]] });
 });
