@@ -1171,6 +1171,43 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await host.close(); vi.unstubAllEnvs(); }
   });
 
+  it("desktop federation admits every additional agent message under its own immutable queue identity", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.tuple(fc.boolean(), fc.string({ minLength: 1, maxLength: 40 })),
+      { minLength: 2, maxLength: 5 }), async messages => {
+      const host = await startDesktopOwner();
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      try {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        await registry.submitHeldTurn({ ...identity, queueEntryId: "admission-review",
+          input: [{ type: "text", text: "Explicit independent review" }], holdReason: "Review required" });
+        const peer = { target: { scope: "remote" as const, instanceId: host.ownerInstanceId },
+          label: "Invented owner", capabilities: ["thread_navigation", "turn_control"] };
+        const handler = createFederatedThreadMessageHandler({ runtime: () => ({ connectedPeerTargets: () => [peer],
+          remoteBackend: () => host.client }) as unknown as DesktopFederationRuntime });
+        const accepted = [];
+        for (const [bob, suffix] of messages) {
+          const input = [{ type: "text" as const, text: `Invented ${bob ? "Bob" : "Alice"} acceptance ${suffix}` }];
+          const response = (await handler({ backend: "codex", threadId: identity.threadId,
+            instanceId: host.ownerInstanceId, input, messageOrigin: { kind: "agent",
+              sourceThread: { backend: "codex", threadId: bob ? "bob" : "alice", instanceId: "sender" } } }))!;
+          expect(response.queueStatus).toBe("queued");
+          const snapshot = await host.client.readQueuedTurn({ ...identity, queueEntryId: response.queueEntryId! });
+          accepted.push({ id: response.queueEntryId!, input, snapshot });
+          expect(new Set(accepted.map(entry => entry.id)).size).toBe(accepted.length);
+          for (const entry of accepted) {
+            expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: entry.id })).toEqual(entry.snapshot);
+            expect(entry.snapshot.input).toEqual(entry.input);
+          }
+          expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries
+            .map(entry => entry.queueEntryId)).toEqual(["admission-review", ...accepted.map(entry => entry.id)]);
+        }
+        expect(host.providerSteerCount()).toBe(0);
+        await host.client.interruptTurn(active);
+      } finally { await host.close(); }
+    }), { numRuns: 12, examples: [[[[false, "!"], [true, "!"]]], [[[false, "!"], [false, "!"]]]] });
+  });
+
   it("the production federated message caller replaces only its sender's waiting input on both registered owners", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
