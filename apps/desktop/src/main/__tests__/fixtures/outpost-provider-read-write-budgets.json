@@ -1,0 +1,9 @@
+{
+  "acp:fixture-native-name-event": {"commits": 1, "note": "One acknowledged native title updates one retained provider row without changing inventory membership freshness", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "acp:fixture-unchanged-native-name-events": {"commits": 0, "note": "1000 identical native title events and one undiscovered identity do not write or manufacture inventory", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "claude-inventory-publication": {"commits": 1, "note": "One complete Claude provider list replaces one scrubbed inventory row", "observedWalBytes": 8272, "rowsChanged": 1, "statements": 1},
+  "claude-legacy-inventory-scrub": {"commits": 1, "note": "First read of one older Claude inventory removes transient text in one commit", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "claude-native-name-event": {"commits": 1, "note": "One acknowledged native title updates one retained provider row without changing inventory membership freshness", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "claude-unchanged-native-name-events": {"commits": 0, "note": "1000 identical native title events and one undiscovered identity do not write or manufacture inventory", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "retained-provider-passive-reads": {"commits": 0, "note": "1000 rounds of retained profile inventory, resolve, detail, archive and navigation reads", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+}

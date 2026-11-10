@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadSummary,
 } from "@pwragent/shared";
+import { isAppServerBackendKind } from "@pwragent/shared";
 import { projectProviderThreadSummary as toDurableThreadSummary, type ProviderThreadSnapshot, type ProviderThreadSnapshotStorage } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { StateDb } from "./state-db";
 
@@ -108,6 +109,5 @@ function parseThreadSummaries(payload: string): AppServerThreadSummary[] | undef
 }
 
 function isBackendKind(value: unknown): value is AppServerBackendKind {
-  return value === "codex"
-    || (typeof value === "string" && value.startsWith("acp:"));
+  return typeof value === "string" && isAppServerBackendKind(value);
 }

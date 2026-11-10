@@ -14560,7 +14560,7 @@ export class DesktopBackendRegistry {
     },
     displayMetadataObservationSequence: number,
   ): Promise<AppServerThreadSummary[]> {
-    const durableThreads = this.readDurableStartupThreads(
+    const durableThreads = await this.readDurableStartupThreads(
       params,
       displayMetadataObservationSequence,
     );
@@ -14732,7 +14732,7 @@ export class DesktopBackendRegistry {
     return threads;
   }
 
-  private readDurableStartupThreads(
+  private async readDurableStartupThreads(
     params: {
       archived?: boolean;
       backend?: AppServerBackendKind;
@@ -14744,7 +14744,7 @@ export class DesktopBackendRegistry {
       maxPages?: number;
     },
     displayMetadataObservationSequence: number,
-  ): AppServerThreadSummary[] | undefined {
+  ): Promise<AppServerThreadSummary[] | undefined> {
     if (
       this.durableStartupThreadHydrationAttempted
       || !this.providerThreadSnapshotStore
@@ -14761,11 +14761,21 @@ export class DesktopBackendRegistry {
     this.durableStartupThreadHydrationAttempted = true;
     const snapshots = this.providerThreadSnapshotStore.list();
     this.startupProviderRefreshStatus ??= { state: "checking" };
-    const threads = snapshots.flatMap((snapshot) =>
+    const nativeThreads = snapshots.flatMap((snapshot) =>
       snapshot.backend === "codex" && params.limit !== undefined
-        ? snapshot.threads.slice(0, params.limit)
-        : snapshot.threads,
-    ).sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+        ? snapshot.threads.filter(thread => thread.archivedAt === undefined).slice(0, params.limit)
+        : snapshot.threads.filter(thread => thread.archivedAt === undefined),
+    );
+    const codexIds = nativeThreads.filter(thread => thread.source === "codex").map(thread => thread.id);
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+    const overlays = codexIds.length ? await readOverlays.call(this.overlayStore, { backend: "codex", threadIds: codexIds }) : {};
+    // A retained inventory predates handover. It cannot contradict the latest
+    // canonical acknowledgement the way a fresh provider response can.
+    const threads = nativeThreads.map(thread => thread.source === "codex"
+      ? { ...thread, ...projectOverlayThreadTitle(thread, {
+          title: overlays[thread.id]?.title, titleSource: overlays[thread.id]?.titleSource,
+        }) } : thread)
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
     this.rememberThreadListContexts(
       threads,
       displayMetadataObservationSequence,
@@ -15026,7 +15036,15 @@ export class DesktopBackendRegistry {
     this.providerThreadSnapshotStore.replace({
       backend,
       observedAt: Date.now(),
-      threads,
+      threads: backend === "codex" ? threads : threads.map(thread => {
+        // rememberThreadListContexts has already merged this read's reserved
+        // observation sequence. A later native event wins over an older list.
+        const latest = this.threadInfoStore.get({ backend, threadId: thread.id });
+        return { ...thread,
+          ...(latest?.title ? { title: latest.title, titleSource: latest.titleSource ?? thread.titleSource } : {}),
+          ...(latest?.archived === true ? { archivedAt: thread.archivedAt ?? 0 } : {}),
+        };
+      }),
     });
   }
 
@@ -54315,6 +54333,21 @@ export class DesktopBackendRegistry {
             title: { text: threadName.trim(), source, nativeName: threadName.trim() },
           });
         }
+      }
+    }
+    if (event.backend !== "codex" && event.notification.method === "thread/name/updated") {
+      const { threadId, threadName, titleSource } = event.notification.params;
+      const snapshot = this.providerThreadSnapshotStore?.list().find(value => value.backend === event.backend);
+      const thread = snapshot?.threads.find(value => value.id === threadId);
+      const source = titleSource === undefined ? thread?.titleSource ?? "fallback" : normalizeRenamedTitleSource(titleSource);
+      // A name event updates an already discovered provider row. It cannot
+      // manufacture a complete inventory for an undiscovered provider.
+      if (snapshot && thread && typeof threadName === "string" && threadName.trim()
+        && (thread.title !== threadName.trim() || thread.titleSource !== source)) {
+        this.providerThreadSnapshotStore?.replace({ ...snapshot,
+          threads: snapshot.threads.map(value => value.id === threadId
+            ? { ...value, title: threadName.trim(), titleSource: source } : value),
+        });
       }
     }
     this.rememberThreadTitleFromEvent(event);

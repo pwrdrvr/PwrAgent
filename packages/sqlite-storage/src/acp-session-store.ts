@@ -15,6 +15,15 @@ export class AcpSessionStore implements AcpSessionStorage {
       .map((row) => row.backend_id).filter(isAcpBackendId);
   }
 
+  listAllSessions(params?: { includeHidden?: boolean }): AcpSessionMetadata[] {
+    const rows = this.stateDb.raw.prepare("SELECT payload FROM acp_sessions ORDER BY backend_id, updated_at DESC")
+      .all() as Array<{ payload: string }>;
+    return rows.flatMap(row => {
+      const value = parseJson(row.payload);
+      return isSessionMetadata(value) && (!value.hidden || params?.includeHidden === true) ? [stripAcpSessionHistory(value)] : [];
+    });
+  }
+
   upsertSession(metadata: AcpSessionMetadata): void {
     const persistableMetadata = stripAcpSessionHistory(metadata);
     this.stateDb.raw

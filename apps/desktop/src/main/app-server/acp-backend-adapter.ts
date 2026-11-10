@@ -1,3 +1,4 @@
+import { ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR, acpSessionHasConversationHistory, projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
 import {
   createAcpAgentStorage,
   createAcpSessionStorage,
@@ -144,8 +145,7 @@ import {
 
 export type { AcpSessionMetadata };
 
-export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
-  "This ACP agent cannot hand off a workspace after the first message in a thread. Start a new thread in the target workspace instead.";
+export { ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR, acpSessionHasConversationHistory };
 
 const acpBackendAdapterLog = getMainLogger("pwragent:acp-backend-adapter");
 const ACP_PROVIDER_STATUS_CACHE_TTL_MS = 60_000;
@@ -857,45 +857,7 @@ export function acpSessionToThreadSummary(
   session: AcpSessionMetadata,
   capabilities?: AcpAgentCapabilities,
 ): AppServerThreadSummary {
-  const workspaceHandoffAvailable =
-    !acpSessionHasConversationHistory(session) ||
-    capabilities?.liveWorkspaceHandoff === true;
-  return {
-    id: session.sessionId,
-    title: session.title,
-    titleSource:
-      session.titleSource ??
-      (session.title === "ACP session" ? "fallback" : "derived"),
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    archivedAt: session.archivedAt,
-    // A failed prompt has settled; an unknown persisted state is not evidence
-    // that the session is idle.
-    threadStatus: session.status === "active" ? "active"
-      : session.status === "unknown" ? "unknown" : "idle",
-    linkedDirectories: session.cwd
-      ? [
-          {
-            id: session.cwd,
-            label: path.basename(session.cwd) || session.cwd,
-            path: session.cwd,
-            kind: "local",
-          },
-        ]
-      : [],
-    // The working directory, as Codex reports it: it names which linked
-    // directory is the thread's home once `@`-referenced ones join it.
-    ...(session.cwd ? { projectKey: session.cwd } : {}),
-    source: session.backendId,
-    executionMode: session.executionMode,
-    acpRuntime: session.acpRuntime,
-    workspaceHandoff: workspaceHandoffAvailable
-      ? { available: true }
-      : {
-          available: false,
-          unavailableReason: ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
-        },
-  };
+  return projectAcpSessionThread(session, capabilities, session.cwd ? path.basename(session.cwd) : "");
 }
 
 export function acpSessionLoadFallbackReplay(
@@ -993,11 +955,6 @@ export function isAcpSessionMissingForProjectError(error: unknown): boolean {
   );
 }
 
-export function acpSessionHasConversationHistory(
-  session: AcpSessionMetadata,
-): boolean {
-  return session.hasConversationHistory === true;
-}
 
 export async function inputToAcpPrompt(
   input: AppServerTurnInputItem[],

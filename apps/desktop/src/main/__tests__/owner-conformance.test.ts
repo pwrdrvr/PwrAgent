@@ -8,7 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, FederationCapability } from "@pwragent/shared";
+import type { AgentEvent, AppServerBackendKind, AppServerThreadSummary, FederationCapability } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import {
@@ -31,6 +31,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
+import { ProviderThreadSnapshotStore } from "../storage/provider-thread-snapshot-store";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
@@ -119,6 +120,7 @@ async function startDesktopOwner(
   const configStore = new DesktopConfigStore({ configPath });
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
+    ...(profileRoot ? { providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db) } : {}),
     ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
     ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
     threadTitleGenerationService, pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
@@ -373,6 +375,83 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         expect(native["legacy-native"].name).toBe(`Imported ${suffix}`);
         expect(native[child.threadId].name).toBe(`Outpost ${suffix}`);
         expect(native[added.threadId].name).toBe(`New Outpost ${suffix}`);
+      } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
+    }), { numRuns: 3 });
+  }, 60_000);
+
+  it("hands colliding Claude and ACP identities through actual desktop → daemon → desktop profile owners", async () => {
+    await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, suffix) => {
+      const root = await realpath(await mkdtemp("/tmp/pa-provider-owner-"));
+      const acp = "acp:gemini" as const;
+      let desktop: OwnerHost | undefined;
+      let outpost: Awaited<ReturnType<typeof startOutpostDaemon>> | undefined;
+      let seeded = false;
+      const prepare = async (db: StateDb, workspace: string) => {
+        if (seeded) return;
+        seeded = true;
+        new AcpAgentStore(db).upsertInstalledAgent({ backendId: acp, registryId: "gemini", name: "ACP fixture",
+          distributionKind: "local", distributionSource: "fixture", installStatus: "installed", authStatus: "not-required",
+          verificationStatus: "not-applicable", allowlistRuleId: "fixture", installedAt: 1, updatedAt: 1,
+          launchDescriptor: { backendId: acp, registryId: "gemini", distributionKind: "local",
+            command: process.execPath, args: ["-e", "throw new Error('Retained inventory must not start ACP')"], env: {} } });
+        new AcpSessionStore(db).upsertSession({ backendId: acp, sessionId: threadId, title: `ACP ${suffix}`, titleSource: "explicit",
+          cwd: workspace, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" });
+        await new ClaudeSessionStore(path.join(workspace, "sessions")).save({ cwd: workspace, thread: {
+          id: threadId, source: "claude", title: `Claude ${suffix}`, titleSource: "explicit", createdAt: 1, updatedAt: 2,
+          linkedDirectories: [{ id: workspace, kind: "local", path: workspace, label: "w" }], executionMode: "default" } });
+        writeFileSync(path.join(root, "f/fixture-threads.json"), JSON.stringify({ [threadId]: {
+          id: threadId, name: `Codex ${suffix}`, cwd: workspace, createdAt: 1, updatedAt: 2, turns: [],
+        } }));
+      };
+      const claude = (workspace: string) => ({ store: new ClaudeSessionStore(path.join(workspace, "sessions")),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
+        discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [], getSessionInfo: async () => undefined });
+      try {
+        desktop = await startDesktopOwner(null, prepare, claude, root);
+        const expected = new Map<string, Record<string, unknown>>();
+        for (const backend of ["claude", acp] as const) {
+          const ref = { backend, threadId };
+          const registry = desktopOwner.registry as DesktopBackendRegistry;
+          await registry.listThreads({ backend, callerReason: "startup-provider-refresh", forceRefresh: true });
+          const provider = registry as unknown as { readProviderThreadList: (backend: AppServerBackendKind, params: unknown, diagnostics: unknown) => Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }> };
+          const read = provider.readProviderThreadList.bind(registry);
+          let release!: () => void;
+          let entered!: () => void;
+          const gate = new Promise<void>(resolve => { release = resolve; });
+          const started = new Promise<void>(resolve => { entered = resolve; });
+          const heldRead = vi.spyOn(provider, "readProviderThreadList").mockImplementation(async (...args) => {
+            const result = await read(...args);
+            entered();
+            await gate;
+            return result;
+          });
+          const stale = registry.listThreads({ backend, callerReason: "startup-provider-refresh", forceRefresh: true });
+          await started;
+          heldRead.mockRestore();
+          await desktop.client.renameThread({ ...ref, name: `${backend === "claude" ? "Claude" : "ACP"} New ${suffix}` });
+          release();
+          await stale;
+          await desktop.client.setThreadPin({ ...ref, pinnedRank: backend === "claude" ? "1024" : "2048" });
+          const before = (await registry.listThreads({ backend, forceRefresh: true })).find(thread => thread.id === threadId)!;
+          await desktop.client.markThreadSeen({ ...ref, seenAt: 10_000, seenUpdatedAt: before.updatedAt });
+          expected.set(backend, { id: threadId, source: backend, title: `${backend === "claude" ? "Claude" : "ACP"} New ${suffix}`,
+            titleSource: "explicit", pinnedRank: backend === "claude" ? "1024" : "2048", inbox: { inInbox: false } });
+        }
+        await desktop.close(); desktop = undefined;
+        outpost = await startOutpostDaemon({ profileRoot: root });
+        for (const backend of ["claude", acp] as const) {
+          expect((await outpost.client.resolveThread({ backend, threadId })).thread).toMatchObject(expected.get(backend)!);
+          expect((await outpost.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend, threadId } })).thread).toMatchObject(expected.get(backend)!);
+          expect((await outpost.client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", backend,
+            query: { kind: "exact", identities: [{ backend, threadId }] } })).entries).toHaveLength(1);
+          await expect(outpost.client.startTurn({ backend, threadId, input: [{ type: "text", text: "Must refuse" }] })).rejects.toThrow("executes Codex only");
+        }
+        expect((await outpost.client.resolveThread({ backend: "codex", threadId })).thread?.title).toBe(`Codex ${suffix}`);
+        await outpost.close(); outpost = undefined;
+        desktop = await startDesktopOwner(null, prepare, claude, root);
+        for (const backend of ["claude", acp] as const) {
+          expect((await desktop.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend, threadId } })).thread).toMatchObject(expected.get(backend)!);
+        }
       } finally { await outpost?.close(); await desktop?.close(); await rm(root, { recursive: true, force: true }); }
     }), { numRuns: 3 });
   }, 60_000);

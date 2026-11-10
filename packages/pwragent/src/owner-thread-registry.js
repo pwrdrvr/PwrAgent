@@ -1,34 +1,43 @@
-import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection, projectOwnerThreadTitle } from "../dist/federation-core.js";
+import path from "node:path";
+import { buildThreadIdentityKey, outpostThreadMetadata, outpostThreadProjection, projectOwnerThreadTitle, projectAcpSessionThread } from "../dist/federation-core.js";
 
-/** Codex host projection over the profile's canonical owner storage port. */
+/** Retained provider discovery and live canonical metadata, qualified by backend. */
 export class OutpostThreadRegistry {
-  constructor(storage, inventory) {
+  constructor(storage, inventory, acpSessions) {
     this.storage = storage;
     this.unreadBaseline = storage?.readUnreadBaseline?.() ?? {};
+    this.acpSessions = acpSessions;
     // Provider discovery is separate from owner metadata. Retain the last
     // complete provider inventory, with canonical owner facts read live.
-    this.inventory = new Map((inventory?.list() ?? []).filter(snapshot => snapshot.backend === "codex")
-      .flatMap(snapshot => snapshot.threads.map(thread => [thread.id, thread])));
+    this.inventory = new Map((inventory?.list() ?? [])
+      .flatMap(snapshot => snapshot.threads.map(thread => [buildThreadIdentityKey(snapshot.backend, thread.id), thread])));
   }
 
   identity(identity) {
     if (identity.backend !== "codex") throw new Error("This outpost stores Codex threads only");
   }
 
-  async getThreadMetadata(identity) { this.identity(identity); return this.storage.getThreadMetadata(identity); }
-  async listThreadMetadata() { return this.storage.listThreadMetadata().filter(record => record.backend === "codex"); }
+  async getThreadMetadata(identity) { return this.storage.getThreadMetadata(identity); }
+  async listThreadMetadata() { return this.storage.listThreadMetadata(); }
   async updateThreadMetadata(identity, patch) { this.identity(identity); return this.storage.updateThreadMetadata(identity, patch); }
 
   seenWatermark(thread) {
-    return thread.seenUpdatedAt ?? this.unreadBaseline[buildThreadIdentityKey("codex", thread.id)] ?? thread.seenAt ?? 0;
+    return thread.seenUpdatedAt ?? this.unreadBaseline[buildThreadIdentityKey(thread.source ?? "codex", thread.id)] ?? thread.seenAt ?? 0;
   }
 
-  get(id) {
-    const record = this.storage.getThreadMetadata({ backend: "codex", threadId: id });
-    return this.project(id, record, this.inventory.get(id));
+  get(id, backend = "codex") {
+    const record = this.storage.getThreadMetadata({ backend, threadId: id });
+    const session = backend.startsWith("acp:") ? this.acpSessions?.getSession(backend, id) : undefined;
+    if (session?.hidden) return undefined;
+    const native = session ? this.acpThread(session) : this.inventory.get(buildThreadIdentityKey(backend, id));
+    return this.project(id, record, native, backend);
   }
 
-  project(id, record, native) {
+  acpThread(session) {
+    return projectAcpSessionThread(session, undefined, session.cwd ? path.basename(session.cwd) : "");
+  }
+
+  project(id, record, native, backend) {
     if (!record && !native) return undefined;
     const thread = record ? outpostThreadProjection(record) : { id };
     if (native) {
@@ -41,12 +50,13 @@ export class OutpostThreadRegistry {
         thread.archivedAt = native.archivedAt;
       }
     }
-    const projected = { ...(native ? { id, title: native.title, titleSource: native.titleSource,
+    const projected = { ...(native ? { ...native, id, title: native.title, titleSource: native.titleSource,
       createdAt: native.createdAt, updatedAt: native.updatedAt, cwd: native.projectKey || native.linkedDirectories[0]?.path,
       archived: native.archivedAt !== undefined, archivedAt: native.archivedAt,
       sandbox: native.executionMode === "auto" ? "workspace-write" : "read-only", model: native.model,
       reasoningEffort: native.reasoningEffort, serviceTier: native.serviceTier, fastMode: native.fastMode } : {}),
-      ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)) };
+      ...Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)), source: backend,
+      executionMode: record?.executionMode ?? native?.executionMode ?? "default" };
     if (projected.title === undefined) {
       projected.title = "Untitled thread";
       projected.titleSource = "fallback";
@@ -54,22 +64,32 @@ export class OutpostThreadRegistry {
     return projected;
   }
 
-  replaceInventory(threads, observedAt) {
-    this.inventory = new Map(threads.map(thread => [thread.id, { ...thread, observedAt }]));
+  replaceInventory(threads, observedAt, backend = "codex") {
+    for (const [key, thread] of this.inventory) if (thread.source === backend) this.inventory.delete(key);
+    for (const thread of threads) this.inventory.set(buildThreadIdentityKey(backend, thread.id), { ...thread, observedAt });
   }
 
   observeNativeTitle(id, title, titleSource) {
-    const native = this.inventory.get(id);
-    if (native) this.inventory.set(id, { ...native, title, titleSource });
+    const key = buildThreadIdentityKey("codex", id);
+    const native = this.inventory.get(key);
+    if (native) this.inventory.set(key, { ...native, title, titleSource });
   }
 
   has(id) { return this.get(id) !== undefined; }
   get size() { return [...this.values()].length; }
-  values() {
-    const records = this.storage.listThreadMetadata().filter(record => record.backend === "codex");
-    const byId = new Map(records.map(record => [record.threadId, record]));
-    const ids = new Set([...this.inventory.keys(), ...byId.keys()]);
-    return [...ids].map(id => this.project(id, byId.get(id), this.inventory.get(id))).values();
+  values(backend = "codex") {
+    const records = this.storage.listThreadMetadata().filter(record => backend === "all" || record.backend === backend);
+    const byId = new Map(records.map(record => [buildThreadIdentityKey(record.backend, record.threadId), record]));
+    const natives = new Map([...this.inventory].filter(([, thread]) => backend === "all" || thread.source === backend));
+    const sessions = backend === "all" || backend.startsWith("acp:") ? this.acpSessions?.listAllSessions({ includeHidden: true }) ?? [] : [];
+    for (const session of sessions) {
+      const key = buildThreadIdentityKey(session.backendId, session.sessionId);
+      if (session.hidden) { natives.delete(key); byId.delete(key); }
+      else if (backend === "all" || session.backendId === backend) natives.set(key, this.acpThread(session));
+    }
+    const identities = new Map([...natives].map(([key, thread]) => [key, { backend: thread.source, threadId: thread.id }]));
+    for (const [key, record] of byId) identities.set(key, record);
+    return [...identities].map(([key, identity]) => this.project(identity.threadId, byId.get(key), natives.get(key), identity.backend)).values();
   }
   set(id, thread) {
     if (id !== thread.id) throw new Error("Thread registry identity changed");
