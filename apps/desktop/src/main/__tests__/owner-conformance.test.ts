@@ -58,6 +58,7 @@ import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-s
 import { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 import { parseThreadCorrespondenceMessage, threadLockRefusalMessage } from "@pwragent/shared";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
+import { publishSelfStartedWakes } from "../../../e2e/fixtures/self-started-wake-publication";
 import { withOwnerPauseState } from "../../renderer/src/features/composer/queued-turn-pause";
 
 // Desktop serves peers from process singletons; point them at this owner.
@@ -492,9 +493,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       ];
       const snapshots = new Map<string, Awaited<ReturnType<typeof desktop.client.readQueuedTurn>>>();
       for (const [index, wake] of wakes.entries()) {
-        const file = path.join(desktop.workspace, "wake-requests.json");
-        await writeFile(`${file}.tmp`, JSON.stringify(wakes.slice(0, index + 1)));
-        await rename(`${file}.tmp`, file);
+        await publishSelfStartedWakes(desktop.workspace, wakes.slice(0, index + 1));
         await vi.waitFor(() => expect(existsSync(path.join(desktop.workspace, "hook-results.jsonl"))
           && readFileSync(path.join(desktop.workspace, "hook-results.jsonl"), "utf8").trim().split("\n").length).toBe(index + 1));
         const rows = (await desktop.client.getNavigationQueueProjection({ protocol: 2, ref })).entries;

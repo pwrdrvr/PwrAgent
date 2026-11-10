@@ -44,13 +44,13 @@ if (process.argv.includes("--version")) {
       usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {}, ...(uuid ? { user_message_uuids: [uuid] } : {}) });
   };
   const drain = async () => {
-    const file = path.join(__dirname, "wake-requests.json");
-    if (draining || !started || !fs.existsSync(file)) return;
+    if (draining || !started) return;
     draining = true;
     try {
-      const wakes = JSON.parse(fs.readFileSync(file, "utf8"));
-      while (processed < wakes.length) {
-        const wake = wakes[processed];
+      while (true) {
+        const file = path.join(__dirname, `wake-request-${processed}.json`);
+        if (!fs.existsSync(file)) break;
+        const wake = JSON.parse(fs.readFileSync(file, "utf8"));
         if (wake.source === "system") send({ type: "system", subtype: "task_notification", task_id: "finished-task",
           status: "completed", output_file: "", summary: "Invented background task completed" });
         const outputs = await callback(wake);
