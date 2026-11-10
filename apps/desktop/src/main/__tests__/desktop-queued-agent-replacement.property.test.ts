@@ -8,6 +8,28 @@ const origin = (threadId: string) => ({ kind: "agent" as const, sourceThread: { 
 const input = (text: string) => [{ type: "text" as const, text }];
 const drain = async () => { for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve)); };
 
+it("a sender retires every receipt sharing the replaced remote batch without rewriting any accepted prompt", () => {
+  fc.assert(fc.property(fc.array(fc.string(), { minLength: 2, maxLength: 6 }), texts => {
+    // A remote owner cannot update this sender's local correspondence files.
+    // Its acceptance response must retire every contribution to the old batch.
+    const store = new ThreadCorrespondenceStore();
+    const source = { backend: "codex" as const, threadId: "alice" };
+    const destination = { ...ref, instanceId: "remote-owner" };
+    texts.forEach((text, index) => store.record({ id: `receipt-${index}`, source, destination, input: input(text),
+      createdAt: index, state: "queued", queueEntryId: "old-batch" }));
+    store.record({ id: "other-owner", source, destination: { ...ref, instanceId: "other-owner" }, input: input("other"),
+      createdAt: texts.length, state: "queued", queueEntryId: "old-batch" });
+    store.cancelQueuedInput(source, destination, "old-batch");
+    const replay = store.appendToReplay(source, { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } });
+    texts.forEach((text, index) => {
+      const receipt = replay.messages.find(message => message.id === `receipt-${index}`)!;
+      expect(receipt.text).toContain("Cancelled");
+      expect(receipt.text.endsWith(`\n\n${text}`)).toBe(true);
+    });
+    expect(replay.messages.find(message => message.id === "other-owner")!.text).toContain("Queued");
+  }));
+});
+
 it("sender receipts retain original accepted input while cancellation and fresh acceptance use separate records", () => {
   fc.assert(fc.property(fc.string(), fc.string(), (original, replacement) => {
     const store = new ThreadCorrespondenceStore();
