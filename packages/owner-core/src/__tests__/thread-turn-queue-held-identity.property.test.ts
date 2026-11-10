@@ -17,10 +17,10 @@ it("a held admission cannot claim an ordinary acceptance even when its FIFO is a
       const before = structuredClone(queue.getQueuedEntries(THREAD));
       const offset = events.length;
       await expect(queue.submitHeld({ ...entry, origin: "scheduled" }, "Scheduled review required")).rejects.toThrow(/reused|identity/);
-      expect(queue.getQueuedEntries(THREAD)).toEqual(before);
+      expect(structuredClone(queue.getQueuedEntries(THREAD))).toEqual(before);
       expect(events.slice(offset)).toEqual([]);
     } finally { queue.close(); }
-  }));
+  }), { examples: [["", false], ["", true]] });
 });
 
 it("a FIFO hold does not turn an ordinary acceptance into the held caller's acceptance", async () => {
@@ -37,13 +37,14 @@ it("held retries refuse changed acceptance facts or a different independent caus
   const changes: Partial<ThreadTurnQueueEntry> = {
     backend: "claude", threadId: "other", origin: "manual", input: input("Changed"), delivery: "queued-steer",
     messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } },
-    executionMode: "plan", approvalPolicy: "on-request", sandbox: "read-only", model: "other-model",
-    collaborationMode: { mode: "plan", settings: { model: "other-model", reasoning_effort: null, developer_instructions: null } },
+    executionMode: "auto", approvalPolicy: "on-request", sandbox: "read-only", model: "other-model",
+    collaborationMode: { mode: "plan", settings: { model: "other-model", reasoningEffort: "high" } },
     serviceTier: "fast", reasoningEffort: "high", fastMode: true, automationRunId: "other-run", automationName: "Other",
     agentMessages: [{ input: input("Other grouped input"), receivedAt: 1 }],
     agentMessageOrigins: [{ kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } }], restartContinuation: true,
   };
-  await fc.assert(fc.asyncProperty(fc.constantFrom(...Object.keys(changes) as (keyof typeof changes)[], "reason"), async field => {
+  const fields = [...Object.keys(changes) as (keyof typeof changes)[], "reason"] as const;
+  await fc.assert(fc.asyncProperty(fc.constantFrom(...fields), async field => {
     const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async entry => ({ ...entry, turnId: "unused" }) });
     const entry = { ...THREAD, id: "same", origin: "scheduled" as const, input: input("Accepted"),
       messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "alice" } } };
@@ -54,7 +55,7 @@ it("held retries refuse changed acceptance facts or a different independent caus
         field === "reason" ? "Bob review" : "Alice review")).rejects.toThrow(/reused|identity/);
       expect(queue.getQueuedEntries(THREAD)).toEqual(before);
     } finally { queue.close(); }
-  }));
+  }), { examples: fields.map(field => [field] as [typeof field]) });
 });
 
 it("matching held retries retain current controls and independent causes after the original cause is released", async () => {

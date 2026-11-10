@@ -343,14 +343,101 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         try {
           await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
             manualReleaseRequired: true, displayText: text, turn: { input: [{ type: "text", text }] } }, { id });
-          const response = await host.scheduler!.sendNow({ id });
-          expect(response.action.status).toBe("failed");
+          await expect(host.scheduler!.sendNow({ id })).rejects.toThrow(/reused|identity/);
+          expect(host.scheduler!.get(id)?.status).toBe("failed");
+          await host.scheduler!.cancel({ id });
           expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
-          expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
-            .toMatchObject([{ queueEntryId, manualReleaseRequired: undefined }]);
+          const rows = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
+          expect(rows.map(row => row.queueEntryId)).toEqual([queueEntryId]);
+          expect(Boolean(rows[0]!.manualReleaseRequired)).toBe(false);
         } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
-      }), { numRuns: 6 });
+      }), { numRuns: 6, examples: [[""]] });
     } finally { await host.close(); }
+  });
+
+  it("registered held retries preserve sender, independent holds, native controls and durable neighbors through restart", async () => {
+    const root = await realpath(await mkdtemp("/tmp/pa-held-id-"));
+    let host = await startDesktopOwner(null, undefined, undefined, root);
+    try {
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const active = await host.client.startTurn({ ...identity, queueEntryId: "active-held-owner", input: [{ type: "text", text: "slow" }] });
+      await host.client.startTurn({ ...identity, queueEntryId: "paused-neighbor", delivery: "new_turn", input: [{ type: "text", text: "Paused neighbor" }] });
+      await host.client.setQueuedTurnPaused({ queueEntryId: "paused-neighbor", paused: true });
+      const request = { ...identity, queueEntryId: "held-owner", origin: "scheduled" as const, holdReason: "Alice review",
+        input: [{ type: "text" as const, text: "Same independent acceptance" }],
+        messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "alice" } } };
+      await registry.submitHeldTurn(request);
+      const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
+      await queue.submitGroupedSteer({ ...identity, origin: "manual", input: [{ type: "text", text: "Legacy grouped neighbor" }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } });
+      const durable: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+        request: { ...identity, delivery: "new_turn", input: [{ type: "text", text: "Durable neighbor" }] } };
+      durable.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, durable)).digest("hex");
+      const receipt = await host.client.submitTurnRequest(durable);
+      const original = await host.client.readQueuedTurn(request);
+      await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
+      const before = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
+      const offset = host.events.length;
+      await Promise.all([registry.submitHeldTurn(request), registry.submitHeldTurn(request), registry.submitHeldTurn(request)]);
+      await expect(registry.submitHeldTurn({ ...request, origin: "manual",
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "bob" } } })).rejects.toThrow(/reused/);
+      await expect(registry.submitHeldTurn({ ...request, holdReason: "Bob review" })).rejects.toThrow(/reused/);
+      await expect(registry.submitHeldTurn({ ...request, queueEntryId: receipt.queueEntryId })).rejects.toThrow(/reused/);
+      await expect(registry.submitHeldTurn({ ...request, queueEntryId: "active-held-owner" })).rejects.toThrow(/already admitted/);
+      expect(await host.client.readQueuedTurn(request)).toEqual(original);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual(before);
+      expect(host.events.slice(offset).filter(event => event.notification.method === "thread/turnQueue/updated")).toEqual([]);
+      await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" });
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.every(entry => entry.manualReleaseRequired)).toBe(true);
+      expect(await host.client.submitTurnRequest(durable)).toEqual(receipt);
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+      expect(host.providerSteerCount()).toBe(0);
+      expect(await host.client.cancelQueuedTurn({ queueEntryId: request.queueEntryId, expectedContentHash: original.contentHash })).toMatchObject({ cancelled: true });
+      await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+      await host.close();
+      host = await startDesktopOwner(null, undefined, undefined, root);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      expect(await host.client.submitTurnRequest(durable)).toMatchObject({ queueEntryId: receipt.queueEntryId });
+      expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toEqual([]);
+    } finally { await host.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("held identity admissions and scheduled collision refusal have explicit SQLite budgets", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    try {
+      const registry = desktopOwner.registry as DesktopBackendRegistry;
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index++) {
+          const request = { ...identity, queueEntryId: `held-budget:${index}`, origin: "scheduled" as const,
+            input: [{ type: "text" as const, text: `Held acceptance ${index}` }], holdReason: "Original review" };
+          await Promise.all([registry.submitHeldTurn(request), registry.submitHeldTurn(request), registry.submitHeldTurn(request)]);
+          const original = await host.client.readQueuedTurn(request);
+          await expect(registry.submitHeldTurn({ ...request, holdReason: "Different review" })).rejects.toThrow(/reused/);
+          await expect(registry.submitHeldTurn({ ...request, origin: "manual" })).rejects.toThrow(/reused/);
+          await host.client.setQueuedTurnPaused({ queueEntryId: request.queueEntryId, paused: true });
+          expect(await host.client.readQueuedTurn(request)).toEqual(original);
+          expect(await host.client.cancelQueuedTurn({ queueEntryId: request.queueEntryId, expectedContentHash: original.contentHash })).toMatchObject({ cancelled: true });
+        }
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-held-queue-identity-write-budgets.json", scenario: "held-admissions-100",
+        note: "100 registered held admissions with three matching calls, refused owner/cause changes, immutable reads, pause attempts and hash cancellation; native setup excluded", writes });
+      const id = "budget-held-collision", queueEntryId = `scheduled-turn:${id}`;
+      const input = [{ type: "text" as const, text: "Independent ordinary acceptance" }];
+      await host.client.startTurn({ ...identity, queueEntryId, delivery: "new_turn", input });
+      await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000, manualReleaseRequired: true,
+        displayText: "Independent ordinary acceptance", turn: { input } }, { id });
+      const collision = await measureSqliteWrites(async () => {
+        await expect(host.scheduler!.sendNow({ id })).rejects.toThrow(/reused/);
+        expect(host.scheduler!.get(id)?.status).toBe("failed");
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-held-queue-identity-write-budgets.json", scenario: "scheduled-collision-refusal",
+        note: "Actual scheduled held identity collision: existing claim and failed outcome, excluding action creation and native/ordinary admission", writes: collision.writes });
+    } finally { await host.close(); vi.unstubAllEnvs(); }
   });
 
   it("explicit waiting identities name one immutable acceptance across registered caller retries", async () => {
