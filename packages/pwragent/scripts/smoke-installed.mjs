@@ -198,6 +198,13 @@ try {
     assert.deepEqual(next.agentMessages.map(message => message.input[0].text), ["Fresh Alice", "Unchanged Bob"]);
     assert.ok(JSON.stringify(original.input).includes("Original Alice"));
     assert.equal(await replacementQueue.replaceQueuedAgentInput(old.entry.id, [], replacementOrigin.sourceThread), undefined);
+    const bob = await replacementQueue.replaceQueuedAgentInput(old.entry.id, [{ type: "text", text: "Fresh Bob" }],
+      { backend: "codex", threadId: "bob" });
+    assert.ok(bob);
+    assert.notEqual(bob.id, next.id);
+    assert.deepEqual(bob.agentMessages.map(message => message.input[0].text), ["Fresh Alice", "Fresh Bob"]);
+    assert.deepEqual(replacementQueue.getQueuedEntries(replacementRef).map(entry => entry.id), [bob.id, "packed-neighbor"]);
+    assert.equal(replacementQueue.cancelEntry(old.entry.id), undefined);
   } finally { replacementQueue.close(); }
   const profile = openOutpostProfileRuntime({ stateDirectory: state, profileName: "t", cwd: workspace });
   try {

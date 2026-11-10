@@ -50084,6 +50084,7 @@ script = "printf setup"
   });
 
   it("replacement correspondence agrees with cancellation during its queued lifecycle publication", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     await fc.assert(fc.asyncProperty(fc.string({ minLength: 1, maxLength: 40 }), fc.boolean(), async (suffix, defer) => {
       const correspondenceStore = new ThreadCorrespondenceStore();
       const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] },
@@ -50107,13 +50108,18 @@ script = "printf setup"
         let cancelled = false;
         registry.onEvent(async event => {
           if (event.notification.method === "thread/turnQueue/updated" && event.notification.params.status === "queued"
-            && event.notification.params.queueEntryId !== first.queueEntryId) {
+            && typeof event.notification.params.queueEntryId === "string" && event.notification.params.queueEntryId !== first.queueEntryId) {
             if (defer) await Promise.resolve();
             cancelled = registry.cancelQueuedTurn(event.notification.params.queueEntryId);
           }
         });
-        const replacement = await send(`Fresh evidence ${suffix}`, first.queueEntryId);
-        await new Promise<void>(resolve => setImmediate(resolve));
+        const { result: replacement, writes } = await measureSqliteWrites(async () => {
+          const result = await send(`Fresh evidence ${suffix}`, first.queueEntryId);
+          await new Promise<void>(resolve => setImmediate(resolve));
+          return result;
+        });
+        expectSqliteWriteBudget({ budgetFile: "desktop-replacement-review-write-budgets.json", scenario: "local-receipt-publication",
+          note: "Actual local dynamic tool replacement and cancellation; correspondence uses the existing sidecar journal; setup excluded", writes });
         expect(cancelled).toBe(true);
         expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] ?? []).toEqual([]);
         const replay = correspondenceStore.appendToReplay({ backend: "codex", threadId: "sender" }, {

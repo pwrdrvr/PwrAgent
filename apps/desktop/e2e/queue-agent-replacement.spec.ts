@@ -48,7 +48,15 @@ for (const grouped of [false, true]) {
       expect(result.waiting).toEqual([...(grouped ? ["group-review"] : []), result.replacementId, "replacement-neighbor"]);
       expect(result.text).toContain("Fresh Alice input");
       expect(result.text).not.toContain("Original Alice input");
-      if (grouped) expect(result.text).toContain("Unchanged Bob input");
+      if (grouped) {
+        expect(result.text).toContain("Unchanged Bob input");
+        expect(result.untouchedSenderText).toContain("Fresh Bob input");
+        expect(result.untouchedSenderText).toContain("Fresh Alice input");
+      } else {
+        expect(result.cancelledReceipt).toContain("Fresh receipt input");
+        expect(result.cancelledReceipt).toContain("Cancelled");
+        expect(result.cancelledReceipt).not.toContain("Queued");
+      }
       expect(result.nativeStarts).toBe(1);
       if (grouped) expect(result.held).toBe(true);
       else { expect(result.paused).toBe(true); expect(result.pauseRevision).toBe(1); }

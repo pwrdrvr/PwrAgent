@@ -1,0 +1,16 @@
+{
+  "local-receipt-publication": {
+    "commits": 0,
+    "note": "Actual local dynamic tool replacement and cancellation; correspondence uses the existing sidecar journal; setup excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "untouched-sender-handles": {
+    "commits": 0,
+    "note": "Actual registered desktop and real SQLite; peer replacements and stale-handle reads/cancellation refusals; setup excluded",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  }
+}

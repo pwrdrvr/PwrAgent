@@ -2574,6 +2574,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 });
 
 it("the actual desktop federated caller retains untouched senders' original replacement handles", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("alice", "bob"), { minLength: 2, maxLength: 6 }), async edits => {
     const host = await startDesktopOwner();
     const registry = desktopOwner.registry as DesktopBackendRegistry;
@@ -2590,16 +2591,21 @@ it("the actual desktop federated caller retains untouched senders' original repl
       const handles = new Map<string, string>();
       for (const sender of ["alice", "bob"]) handles.set(sender, (await handler(request(sender, `Original ${sender}`)))!.queueEntryId!);
       expect(handles.get("alice")).toBe(handles.get("bob"));
-      for (const [index, sender] of edits.entries()) {
-        const oldId = handles.get(sender)!;
-        const replacement = (await handler(request(sender, `${sender} revised ${index}`, oldId)))!;
-        expect(replacement.queueEntryId).not.toBe(oldId);
-        handles.set(sender, replacement.queueEntryId!);
-        await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: oldId })).rejects.toThrow();
-        expect(await host.client.cancelQueuedTurn({ queueEntryId: oldId })).toMatchObject({ cancelled: false });
-        const queued = await host.client.readQueuedTurn({ ...identity, queueEntryId: replacement.queueEntryId! });
-        expect(queued.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n")).toContain(`${sender} revised ${index}`);
-      }
+      const { writes } = await measureSqliteWrites(async () => {
+        for (const [index, sender] of edits.entries()) {
+          const oldId = handles.get(sender)!;
+          const replacement = (await handler(request(sender, `${sender} revised ${index}`, oldId)))!;
+          expect(replacement.queueEntryId).not.toBe(oldId);
+          handles.set(sender, replacement.queueEntryId!);
+          await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: oldId })).rejects.toThrow();
+          expect(await host.client.cancelQueuedTurn({ queueEntryId: oldId })).toMatchObject({ cancelled: false });
+          const queued = await host.client.readQueuedTurn({ ...identity, queueEntryId: replacement.queueEntryId! });
+          expect(queued.input.flatMap(item => item.type === "text" ? [item.text] : []).join("\n")).toContain(`${sender} revised ${index}`);
+        }
+        for (let n = 0; n < 4; n++) await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expectSqliteWriteBudget({ budgetFile: "desktop-replacement-review-write-budgets.json", scenario: "untouched-sender-handles",
+        note: "Actual registered desktop and real SQLite; peer replacements and stale-handle reads/cancellation refusals; setup excluded", writes });
       expect(OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
     } finally { await host.close(); }
   }), { numRuns: 3, examples: [[["alice", "bob", "alice"]]] });

@@ -81,6 +81,8 @@ type QueuedAgentMessage = {
   input: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
   receivedAt: number;
+  /** The sender's handle survives peer edits only while this contribution waits. */
+  replacementHandle?: string;
 };
 
 export type ThreadTurnQueueStartResult = {
@@ -908,28 +910,30 @@ export class ThreadTurnQueue {
     sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
     origin?: AppServerThreadMessageOrigin,
   ): Promise<ThreadTurnQueueEntry | undefined> {
-    const found = this.findQueuedEntry(entryId);
+    const found = this.findQueuedEntry(entryId, sender);
     if (!found) return undefined;
     return await this.withDispatchSuspended(found.entry, async () => {
-      const current = this.findQueuedEntry(entryId);
+      const current = this.findQueuedEntry(entryId, sender);
       if (!current || this.closed || (current.entry.agentMessageOrigins && !current.entry.agentMessages)) return undefined;
       const owns = (source: AppServerThreadMessageOrigin["sourceThread"]) => source
         && source.backend === sender.backend && source.threadId === sender.threadId
         && source.instanceId === sender.instanceId;
       const entry = current.entry;
       if (entry.messageOrigin?.kind !== "agent") return undefined;
+      const replacementId = `thread-turn:${randomUUID()}`;
       let replaced = false;
       const messages = entry.agentMessages?.flatMap((message) => {
-        if (!owns(message.origin?.sourceThread)) return [message];
+        if (!owns(message.origin?.sourceThread)) return [{ ...message, replacementHandle: message.replacementHandle ?? entry.id }];
         if (replaced) return [];
         replaced = true;
-        return [{ ...message, input: structuredClone(input), receivedAt: this.now(), ...(origin ? { origin: structuredClone(origin) } : {}) }];
+        return [{ ...message, replacementHandle: replacementId, input: structuredClone(input), receivedAt: this.now(), ...(origin ? { origin: structuredClone(origin) } : {}) }];
       });
       if (messages ? !replaced : !owns(entry.messageOrigin.sourceThread)) return undefined;
       const { id: _oldId, createdAt: _oldCreatedAt, title: _staleTitle, ...rest } = entry;
       const messageOrigin = structuredClone(origin && owns(entry.messageOrigin.sourceThread) ? origin : entry.messageOrigin);
       const replacement = {
         ...rest,
+        id: replacementId,
         input: messages ? groupedAgentInput(messages) : structuredClone(input),
         messageOrigin: messages ? { ...messageOrigin, kind: "agent" as const,
           causalMessagingSource: undefined, causalMessagingAmbiguous: undefined,
@@ -1356,13 +1360,17 @@ export class ThreadTurnQueue {
     return nextQueue;
   }
 
-  private findQueuedEntry(entryId: string): {
+  private findQueuedEntry(entryId: string, sender?: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>): {
     entry: ThreadTurnQueueEntry;
     key: string;
     position: number;
   } | undefined {
     for (const [key, queue] of this.queuedEntries) {
-      const index = queue.findIndex((entry) => entry.id === entryId);
+      const index = queue.findIndex((entry) => entry.id === entryId || (sender && entry.agentMessages?.some(message => {
+        const source = message.origin?.sourceThread;
+        return message.replacementHandle === entryId && source?.backend === sender.backend
+          && source.threadId === sender.threadId && source.instanceId === sender.instanceId;
+      })));
       const entry = queue[index];
       if (index >= 0 && entry) {
         return { entry, key, position: index + 1 };

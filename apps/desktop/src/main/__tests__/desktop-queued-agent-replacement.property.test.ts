@@ -153,8 +153,12 @@ it("serialized replacement rereads earlier controls and cannot restore cancelled
 });
 
 it("untouched grouped senders retain their returned replacement handles through arbitrary peer replacements", async () => {
-  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("alice", "bob", "carol"), { minLength: 2, maxLength: 12 }), async senders => {
-    const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async entry => ({ ...ref, turnId: entry.id }) });
+  await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("alice", "bob", "carol"), { minLength: 2, maxLength: 12 }), fc.boolean(), async (senders, admit) => {
+    let busy = true;
+    const sends: ThreadTurnQueueEntry[] = [];
+    const queue = new ThreadTurnQueue({ isThreadActive: () => busy, startTurn: async entry => {
+      sends.push(entry); return { ...ref, turnId: entry.id };
+    } });
     const handles = new Map<string, string>(), expected = new Map<string, string>();
     try {
       for (const sender of ["alice", "bob", "carol"]) {
@@ -176,10 +180,12 @@ it("untouched grouped senders retain their returned replacement handles through 
         expect(await queue.replaceQueuedAgentInput(oldHandle, input("stale own retry"), origin(sender).sourceThread)).toBeUndefined();
         expect(await queue.replaceQueuedAgentInput(handles.get("bob")!, input("forged"), { ...origin("bob").sourceThread, instanceId: "wrong-instance" })).toBeUndefined();
       }
-      queue.cancelEntry(queue.getQueuedEntries(ref)[0]!.id);
+      if (admit) { busy = false; queue.drainAll(); await drain(); }
+      else queue.cancelEntry(queue.getQueuedEntries(ref)[0]!.id);
       for (const [sender, handle] of handles) expect(await queue.replaceQueuedAgentInput(handle, input("retired"), origin(sender).sourceThread)).toBeUndefined();
       await drain();
       expect(queue.getQueuedEntries(ref)).toEqual([]);
+      expect(sends).toHaveLength(admit ? 1 : 0);
     } finally { queue.close(); }
-  }), { numRuns: 30, examples: [[["alice", "bob", "alice", "carol", "bob"]]] });
+  }), { numRuns: 30, examples: [[["alice", "bob", "alice", "carol", "bob"], false], [["alice", "bob"], true]] });
 });

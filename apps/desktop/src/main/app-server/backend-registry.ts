@@ -23227,13 +23227,17 @@ export class DesktopBackendRegistry {
     const input = await ownThreadInputAttachments(request.input, request, this.localFilePrivateStorageRoots);
     // The shared replacement rechecks waiting identity and sender ownership
     // after earlier FIFO controls settle, then cancels before fresh admission.
+    const sender = request.messageOrigin?.sourceThread;
     const entry = this.threadTurnQueue.getQueuedEntries(request)
-      .find((candidate) => candidate.id === request.queueEntryId);
+      .find((candidate) => candidate.id === request.queueEntryId || (sender && candidate.agentMessages?.some(message => {
+        const source = message.origin?.sourceThread;
+        return message.replacementHandle === request.queueEntryId && source?.backend === sender.backend
+          && source.threadId === sender.threadId && source.instanceId === sender.instanceId;
+      })));
     if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
     if (entry.agentMessageOrigins && !entry.agentMessages) {
       throw new Error("The operator edited this batch; sender replacement would overwrite those edits.");
     }
-    const sender = request.messageOrigin?.sourceThread;
     const owners = entry.agentMessages?.map((message) => message.origin?.sourceThread)
       ?? [entry.messageOrigin?.sourceThread];
     if (
@@ -23248,7 +23252,7 @@ export class DesktopBackendRegistry {
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
-    const updated = await this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender, request.messageOrigin);
+    const updated = await this.threadTurnQueue.replaceQueuedAgentInput(request.queueEntryId, input, sender, request.messageOrigin);
     if (!updated) throw new Error("The sender's queued message is no longer waiting.");
     return {
       backend: updated.backend,
@@ -46986,7 +46990,7 @@ export class DesktopBackendRegistry {
       }
       // A peer's paused project lets a to-do card's send through.
       if (options?.operatorApproved) messageOrigin.operatorApproved = true;
-      if (!request.args.replaceQueueEntryId) this.correspondenceStore.record({
+      this.correspondenceStore.record({
         id: correspondenceId,
         source,
         destination: { backend, threadId, ...(instanceId ? { instanceId } : {}) },
@@ -47065,7 +47069,7 @@ export class DesktopBackendRegistry {
       } else {
         if (localThread) {
           // Publish lifecycle receipts with the resolved title from the outset.
-          if (!request.args.replaceQueueEntryId) this.correspondenceStore.update(source, correspondenceId, {
+          this.correspondenceStore.update(source, correspondenceId, {
             state: "sending", destination: { backend, threadId, title: localThread.title },
           });
           if (request.args.replaceQueueEntryId) {
@@ -47140,12 +47144,6 @@ export class DesktopBackendRegistry {
             backend, threadId, ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
           }, request.args.replaceQueueEntryId);
           for (const record of replaced) this.publishCorrespondenceMessage(source, record.id);
-          this.correspondenceStore.record({
-            id: correspondenceId, source, destination: { ...threadLinkRef, title: targetTitle },
-            input, createdAt: Date.now(), state: "sending",
-            sourceTurnId: request.context.turnId ?? this.getActiveTurnForThread(source)?.turnId,
-            sourceItemId: request.context.callId,
-          });
         } catch (error) {
           // The recipient already accepted the edit. A sender-side log failure
           // must not encourage another send of the same findings.
