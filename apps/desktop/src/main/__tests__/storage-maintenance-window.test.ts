@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import type { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { StorageMaintenanceStorage } from "@pwragent/owner-core/storage-maintenance-storage";
@@ -280,4 +281,19 @@ it("keeps a page that finished loading while the timer was due", async () => {
   await vi.waitFor(() => expect(fixture.workers).toHaveLength(1));
   await command({ action: "cancel" });
   await done;
+});
+
+it("a noninteractive host preserves an undecided manual cleanup without prompts or writes", async () => {
+  fixture.record = {};
+  const createView = vi.fn(() => { throw new Error("A manual cleanup needs operator consent"); });
+  getOwnerHostServices().storageMaintenance = { ...getOwnerHostServices().storageMaintenance, interactive: false, createView };
+  const bytes = vi.spyOn(storage, "readBytes");
+  await fc.assert(fc.asyncProperty(fc.integer({ min: storagePolicy.STORAGE_MIN_BYTES, max: storagePolicy.STORAGE_MIN_BYTES * 4 }), async (size) => {
+    bytes.mockReturnValue(size);
+    await expect(run()).resolves.toBeUndefined();
+    expect(createView).not.toHaveBeenCalled();
+    expect(fixture.workers).toHaveLength(0);
+    expect(write).not.toHaveBeenCalled();
+    expect(fixture.record).toEqual({});
+  }));
 });

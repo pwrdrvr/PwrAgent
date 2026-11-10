@@ -1,3 +1,5 @@
+import { forkOwnerWorker } from "../node-worker-process";
+import { tagSecretEncryption } from "../settings/secret-encryption-envelope";
 import { broadcastInboundPreview } from "./ipc/messaging-status";
 import { broadcastManagedRuntimeProgress } from "./managed-runtime-progress-broadcast";
 import { broadcastManagedGrokSignatureRejection } from "./managed-grok-signature-broadcast";
@@ -5,7 +7,7 @@ import { broadcastAgentEvent, broadcastCodexEnvironmentSetupProgress } from "./i
 import { createOpenThreadInUi } from "./native-voice/open-thread-in-ui";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { createStorageMaintenanceView } from "./storage-maintenance-window";
-import { app, BrowserWindow, dialog, nativeImage, safeStorage, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, nativeImage, safeStorage, shell } from "electron";
 import type { OwnerHostServices } from "../owner-host";
 import { broadcastAppearanceChange } from "./appearance-broadcast";
 import { syncThemedDockIcon } from "./themed-dock-icon";
@@ -30,7 +32,7 @@ export function createDesktopOwnerHostServices(): OwnerHostServices {
       relaunch: () => app.relaunch(),
       quit: () => app.quit(),
     },
-    secrets: safeStorage,
+    secrets: tagSecretEncryption(safeStorage, "desktop-safe-storage"),
     links: {
       openExternal: (url) => shell.openExternal(url),
       openPath: (path) => shell.openPath(path),
@@ -76,19 +78,11 @@ export function createDesktopOwnerHostServices(): OwnerHostServices {
     starMap: { sendCommand: sendStarMapCommand, readView: readStarMapView, readFocus: readOperatorFocus },
     updates: { check: (source) => checkForAppUpdatesNow(source), read: () => readAppUpdateStatus(), install: (options) => installDownloadedAppUpdate(options), requestQuit: (options) => requestQuit(options) },
     workers: {
-      forkClaudeSessionReader: async (path, env) => {
-        const child = utilityProcess.fork(path, [], { env, stdio: "ignore", serviceName: "PwrAgent Claude session reader" });
-        return {
-          postMessage: (message) => child.postMessage(message),
-          on: (_event, listener) => child.on("message", listener),
-          once: (_event, listener) => child.once("exit", listener),
-          kill: () => child.kill(),
-        };
-      },
+      forkClaudeSessionReader: async (path, env) => forkOwnerWorker(path, env),
     },
     storageMaintenance: {
       createView: createStorageMaintenanceView,
-      forkWorker: (path) => utilityProcess.fork(path, [], { stdio: "ignore", serviceName: "PwrAgent storage maintenance" }),
+      forkWorker: (path) => forkOwnerWorker(path),
     },
     replayClients: createReplayClientsFromEnv,
   };

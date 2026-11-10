@@ -1,3 +1,4 @@
+import { runtimeResourcesPath } from "../runtime-resources";
 import path from "node:path";
 import { resolvePwragentRoot } from "../profile.js";
 import { BUNDLED_GROK_RELATIVE_PATH } from "./acp-bundled-agent.js";
@@ -67,7 +68,7 @@ export function isPwrAgentSuppliedGrokCommand(
   if (managedGrokTagForCommand(command, options) !== undefined) {
     return true;
   }
-  const resourcesPath = options?.resourcesPath ?? process.resourcesPath;
+  const resourcesPath = options?.resourcesPath ?? runtimeResourcesPath();
   if (!resourcesPath) {
     return false;
   }

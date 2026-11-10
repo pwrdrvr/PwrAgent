@@ -15,6 +15,8 @@
     "analyze:protocol-capture": "tsx ./scripts/analyze-protocol-capture.ts",
     "analyze:startup-cpu-profile": "tsx ./scripts/analyze-startup-cpu-profile.ts",
     "build": "node ./scripts/build.mjs",
+    "build:headless": "node ./scripts/build-headless.mjs",
+    "start:headless": "node out/headless/index.js",
     "build:native:dock": "node ./scripts/build-dock-tile-plugin.mjs",
     "capture:codex-usage": "tsx ./scripts/capture-codex-usage-protocol.ts",
     "postbuild": "node ./scripts/check-main-bundle-boundary.mjs",

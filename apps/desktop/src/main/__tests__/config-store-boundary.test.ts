@@ -254,6 +254,7 @@ describe("desktop config/discovery source boundaries", () => {
   it("allows discovery permits to be issued only at startup or user-action IPC", () => {
     const allowed = new Set([
       "main/owner-services.ts",
+      "main/headless/index.ts",
       "main/shell/index.ts",
       "main/shell/ipc/agent-ipc.ts",
       "main/shell/ipc/settings.ts",

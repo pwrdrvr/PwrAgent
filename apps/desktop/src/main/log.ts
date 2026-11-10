@@ -1,4 +1,5 @@
-import electronLog from "electron-log/main.js";
+import path from "node:path";
+import electronLog from "electron-log/node.js";
 import { appendAppLogEntry } from "./app-logs";
 import type { ProfileBootDecision } from "./profile";
 
@@ -103,7 +104,7 @@ function configureFileTransport(): void {
   transport.maxSize = MAIN_LOG_MAX_SIZE_BYTES;
 }
 
-export function initializeMainLogger(options?: { profileName?: string }): void {
+export function initializeMainLogger(options?: { profileName?: string; logDirectory?: string }): void {
   if (initialized) {
     return;
   }
@@ -119,7 +120,10 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
   }
   configureFileTransport();
   electronLog.transports.file.level = debugCollectionEnabled ? "debug" : "info";
-  electronLog.initialize();
+  if (options?.logDirectory) {
+    const directory = options.logDirectory;
+    electronLog.transports.file.resolvePathFn = (variables) => path.join(directory, variables.fileName ?? "main.log");
+  }
   electronLog.scope.labelPadding = false;
   electronLog.hooks.push((
     message: ElectronLogMessage,

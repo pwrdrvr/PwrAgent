@@ -20,6 +20,9 @@ module.exports = {
       },
       to: { path: "(^|/)electron($|/)" },
     },
+    // desktop-owner-dependencies-do-not-require-electron follows npm runtime
+    // dependencies with esbuild in scripts/check-desktop-owner-electron.mjs.
+    // It runs in lint:boundaries because this graph stops at node_modules.
     // desktop-shell-does-not-wire-owners is a call-site rule, not an import
     // rule. scripts/check-desktop-owner-wiring.mjs enforces it in the same
     // lint:boundaries command, with AST negative samples in desktop-main.

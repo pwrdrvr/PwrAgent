@@ -1,3 +1,4 @@
+import { SecretCiphertextError } from "../settings/secret-encryption-envelope";
 import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -116,7 +117,11 @@ export class CloudflareAccessOAuth {
 
   async status(endpoint: string | undefined): Promise<CloudflareSignInStatus | undefined> {
     if (!endpoint) return undefined;
-    const session = await this.deps.load().catch(() => undefined);
+    let session: CloudflareAccessSession | undefined;
+    try { session = await this.deps.load(); }
+    catch (error) {
+      if (error instanceof SecretCiphertextError) return { endpoint, state: "sign-in-required", lastError: error.message };
+    }
     if (!session || !sameEndpoint(session.endpoint, endpoint)) return { endpoint, state: "signed-out" };
     const state = session.signInRequired || !session.refreshToken && !this.hasFreshAccessToken(session)
       ? session.signedInAt ? "sign-in-required" : "signed-out"

@@ -22,6 +22,8 @@ export interface StorageMaintenanceWorker {
 }
 
 export interface StorageMaintenanceHost {
+  /** A manual cleanup prompt requires an interactive desktop host. */
+  interactive?: boolean;
   createView(): StorageMaintenanceView;
   forkWorker(path: string): StorageMaintenanceWorker;
 }

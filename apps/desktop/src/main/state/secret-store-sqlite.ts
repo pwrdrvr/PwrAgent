@@ -1,3 +1,5 @@
+import type { SettingsSecretEncryption } from "@pwragent/owner-core/settings-secret-storage";
+import { SecretCiphertextError } from "../settings/secret-encryption-envelope";
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
@@ -8,12 +10,7 @@ import {
 } from "../settings/desktop-secret-store";
 import type { StateDb } from "./state-db.js";
 
-type SafeStorageLike = {
-  encryptString(value: string): Buffer;
-  decryptString(value: Buffer): string;
-  isEncryptionAvailable(): boolean;
-  getSelectedStorageBackend?: () => string;
-};
+type SafeStorageLike = SettingsSecretEncryption<Buffer>;
 
 const KEYCHAIN_ACCESS_ERROR =
   "PwrAgent could not unlock secret storage. Choose Allow in the macOS Keychain prompt to read or save secrets.";
@@ -67,7 +64,7 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
 
     return {
       available: true,
-      backend: "safeStorage",
+      backend: selectedBackend === "file-key" ? "file-key" : "safeStorage",
       encrypted: true,
     };
   }
@@ -77,10 +74,17 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
   }
 
   async hasSecret(name: DesktopSettingsSecretName): Promise<boolean> {
-    if (this.secretAccessErrors.has(name)) {
+    const ciphertext = this.stateDb.getSecret(name);
+    if (!ciphertext) {
+      this.secretAccessErrors.delete(name);
       return false;
     }
-    return Boolean(this.stateDb.getSecret(name));
+    const accessError = this.safeStorage.getCiphertextAccessError?.(ciphertext);
+    if (accessError) {
+      this.secretAccessErrors.set(name, accessError);
+      return false;
+    }
+    return !this.secretAccessErrors.has(name);
   }
 
   getSecretSync(name: DesktopSettingsSecretName): string | undefined {
@@ -93,11 +97,11 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
       const value = this.safeStorage.decryptString(ciphertext);
       this.secretAccessErrors.delete(name);
       return value;
-    } catch {
+    } catch (error) {
       // Decryption fails when the ciphertext was encrypted under a different
       // signing identity (e.g. dev build vs signed release). Return undefined
       // so callers treat it as "secret not set" and prompt re-entry.
-      this.secretAccessErrors.set(name, KEYCHAIN_ACCESS_ERROR);
+      this.secretAccessErrors.set(name, error instanceof SecretCiphertextError ? error.message : KEYCHAIN_ACCESS_ERROR);
       return undefined;
     }
   }

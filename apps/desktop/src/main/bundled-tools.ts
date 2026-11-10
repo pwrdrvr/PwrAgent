@@ -1,3 +1,4 @@
+import { runtimeResourcesPath, isDevelopmentRuntime } from "./runtime-resources";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import path from "node:path";
 
@@ -52,9 +53,9 @@ export function resolveBundledToolsDirectory(
   options: BundledToolsOptions = {},
 ): string | undefined {
   const platform = options.platform ?? process.platform;
-  const resourcesPath = options.resourcesPath ?? process.resourcesPath;
+  const resourcesPath = options.resourcesPath ?? runtimeResourcesPath();
   const developmentRoot = options.developmentRoot ?? process.cwd();
-  const developmentMode = options.developmentMode ?? process.defaultApp === true;
+  const developmentMode = options.developmentMode ?? isDevelopmentRuntime();
   const candidates = options.directory
     ? [options.directory]
     : [

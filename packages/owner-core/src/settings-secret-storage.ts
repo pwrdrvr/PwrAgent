@@ -6,6 +6,8 @@ export interface SettingsSecretEncryption<Ciphertext> {
   decryptString(value: Ciphertext): string;
   isEncryptionAvailable(): boolean;
   getSelectedStorageBackend?: () => string;
+  /** Inspect host compatibility without decrypting or prompting the OS keychain. */
+  getCiphertextAccessError?: (value: Ciphertext) => string | undefined;
 }
 
 /** Host-encrypted secrets; callers receive values and availability, never a database. */

@@ -4,7 +4,7 @@
 //   pnpm --filter @pwragent/desktop probe:claude-session-reader
 //
 // Checks what the unit tests of src/main/claude/claude-session-reader.ts
-// cannot: that the built utility-process entry, started by Electron with a
+// cannot: that the built Node worker entry, started by Electron with a
 // Claude config directory this process does not have, reads that
 // directory's sessions through the Agent SDK. Re-run it after an Agent SDK
 // or Electron upgrade. It exits non-zero on any mismatch.
@@ -13,16 +13,17 @@
 // directories, the account the reader must see and the one this process
 // sees. It shows no window and takes no focus.
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, utilityProcess } from "electron";
+import { fork } from "node:child_process";
+import { app } from "electron";
 
 const worker = fileURLToPath(new URL("../out/main/claude-session-reader-worker.js", import.meta.url));
-const root = mkdtempSync(join(tmpdir(), "pwragent-claude-reader-probe-"));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "pwragent-claude-reader-probe-")));
 const SESSION = "5a85c1ad-85c1-4930-ae19-50f721ad13dd";
-const PROJECT = "/tmp/pwragent-claude-reader-probe";
+const PROJECT = join(root, "project");
 app.setPath("userData", join(root, "user-data"));
 
 void app.whenReady().then(async () => {
@@ -43,23 +44,34 @@ async function probe() {
     console.error(`${worker} is missing. Run pnpm --filter @pwragent/desktop build first.`);
     return 2;
   }
+  mkdirSync(PROJECT, { recursive: true });
   const account = join(root, "account");
   const own = join(root, "own");
   writeSession(account, "Account prompt");
   mkdirSync(own, { recursive: true });
   // This process reads another directory, as PwrAgent launched from the Dock does.
   process.env.CLAUDE_CONFIG_DIR = own;
-  const child = utilityProcess.fork(worker, [], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: account },
-    stdio: "ignore",
-    serviceName: "PwrAgent Claude session reader probe",
+  const child = fork(worker, [], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: account, ELECTRON_RUN_AS_NODE: "1" },
+    execArgv: [], stdio: ["ignore", "ignore", "ignore", "ipc"], serialization: "advanced",
   });
+  const closed = new Promise((resolve) => child.once("close", resolve));
   const replies = new Map();
   child.on("message", (reply) => replies.get(reply.id)?.(reply));
   const read = (id, method, options) => new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${method} did not answer`)), 15_000);
-    replies.set(id, (reply) => { clearTimeout(timer); resolve(reply); });
-    child.postMessage({ id, method, sessionId: SESSION, ...(options ? { options } : {}) });
+    const cleanup = () => {
+      clearTimeout(timer);
+      replies.delete(id);
+      child.off("error", failed);
+      child.off("exit", exited);
+    };
+    const failed = (error) => { cleanup(); reject(error); };
+    const exited = () => failed(new Error(`${method}: the reader exited before answering`));
+    const timer = setTimeout(() => failed(new Error(`${method} did not answer`)), 15_000);
+    replies.set(id, (reply) => { cleanup(); resolve(reply); });
+    child.once("error", failed);
+    child.once("exit", exited);
+    child.send({ id, method, sessionId: SESSION, ...(options ? { options } : {}) }, (error) => { if (error) failed(error); });
   });
   try {
     const results = {
@@ -84,6 +96,7 @@ async function probe() {
     return failed === 0 ? 0 : 1;
   } finally {
     child.kill();
+    await closed;
   }
 }
 
