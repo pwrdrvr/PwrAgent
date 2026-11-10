@@ -304,7 +304,8 @@ try {
         return {};
       },
     };
-    const controller = new HeadlessBackend(controlled, () => {}, () => "packed-owner");
+    let observeControlledQueue = () => {};
+    const controller = new HeadlessBackend(controlled, event => observeControlledQueue(event.notification), () => "packed-owner");
     controlled.onEvent = message => controller.event(message);
     controller.authenticateOrigin = origin => origin;
     controlled.save({ version: 1, id: "packed-control", fingerprint: "accepted-control", threadId, turnId: "packed-control", status: "running", createdAt: new Date().toISOString() });
@@ -400,16 +401,16 @@ try {
     await controlled.work;
     let cancellation;
     let nextHeld = false;
-    controlled.onEvent = message => {
-      controller.event(message);
-      if (message.method === "headless/queueChanged" && message.params.type === "held" && message.params.entry.id === next.id) nextHeld = true;
-      if (message.method === "headless/queueChanged" && message.params.type === "held" && message.params.entry.id === older.id) {
+    observeControlledQueue = message => {
+      if (message.method === "thread/turnQueue/updated" && message.params.status === "held" && message.params.queueEntryId === next.id) nextHeld = true;
+      if (message.method === "thread/turnQueue/updated" && message.params.status === "held" && message.params.queueEntryId === older.id) {
         controlled.turnQueue.setQueuedEntryTitle(next.id, "Packed generated title");
         cancellation = controller.handle("backend.cancelQueuedTurn", { queueEntryId: older.id });
       }
     };
     controlled.notification({ method: "turn/failed", params: { threadId, turn: { id: failureOwner, status: "failed", error: { message: "Packed review required" } } } });
     await new Promise(resolve => setImmediate(resolve));
+    assert.ok(cancellation, "Installed owner must publish the held row to its cancellation subscriber");
     await cancellation;
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(failureSends, 0);
@@ -434,7 +435,8 @@ try {
     let trackedSends = 0;
     reopened.codex = { stop: async () => {}, startTurn: async () => ({ threadId, turnId: `packed-tracked-${++trackedSends}` }) };
     reopened.loadedThreads.add(threadId);
-    const reopenedOwner = new HeadlessBackend(reopened, () => {}, () => "packed-owner");
+    let observeReopenedQueue = () => {};
+    const reopenedOwner = new HeadlessBackend(reopened, event => observeReopenedQueue(event.notification), () => "packed-owner");
     assert.deepEqual(reopened.turnQueue.getAllQueuedEntries(), []);
     assert.equal(reopened.submit({ id: heldAtShutdown.id, threadId, prompt: "Packed held at shutdown" }).status, "unknown");
     assert.equal(failureSends, 1);
@@ -446,14 +448,14 @@ try {
     const trackedNext = reopened.submit({ id: "packed-tracked-next", threadId, prompt: "Packed tracked next" });
     await reopened.work;
     let terminalCancellation;
-    reopened.onEvent = message => {
-      reopenedOwner.event(message);
-      if (message.method === "headless/queueChanged" && message.params.type === "terminal" && message.params.entry.id === tracked.id) {
+    observeReopenedQueue = message => {
+      if (message.method === "thread/turnQueue/updated" && message.params.status === "terminal" && message.params.queueEntryId === tracked.id) {
         terminalCancellation = reopenedOwner.handle("backend.cancelQueuedTurn", { queueEntryId: trackedOlder.id });
       }
     };
     reopened.notification({ method: "turn/failed", params: { threadId, turn: { id: store.get(tracked.id).turnId, status: "failed", error: { message: "Review tracked failure" } } } });
     await new Promise(resolve => setImmediate(resolve));
+    assert.ok(terminalCancellation, "Installed owner must publish the terminal row to its cancellation subscriber");
     await terminalCancellation;
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(trackedSends, 1);
@@ -471,20 +473,21 @@ try {
       return { threadId, turnId: `packed-refusal-${refusalStarts}` };
     } };
     refusedRuntime.loadedThreads.add(threadId);
-    const refusedOwner = new HeadlessBackend(refusedRuntime, () => {}, () => "packed-owner");
+    let observeRefusedQueue = () => {};
+    const refusedOwner = new HeadlessBackend(refusedRuntime, event => observeRefusedQueue(event.notification), () => "packed-owner");
     refusedRuntime.submit({ id: "packed-refusal-original", threadId, prompt: "Packed original" }); await refusedRuntime.work;
     const refusedJob = refusedRuntime.submit({ id: "packed-refused", threadId, prompt: "Packed immutable refused input" });
     const refusalNext = refusedRuntime.submit({ id: "packed-refusal-next", threadId, prompt: "Packed immutable next input" });
     let refusalCancellation, refusalCovered = false;
-    refusedRuntime.onEvent = message => {
-      refusedOwner.event(message);
-      if (message.method === "headless/queueChanged" && message.params.type === "blocked") {
+    observeRefusedQueue = message => {
+      if (message.method === "thread/turnQueue/updated" && message.params.status === "blocked") {
         refusalCovered = refusedRuntime.turnQueue.getAllQueuedEntries().every(entry => entry.manualReleaseRequired);
         refusalCancellation = refusedOwner.handle("backend.cancelQueuedTurn", { queueEntryId: refusedJob.id });
       }
     };
     refusedRuntime.notification({ method: "turn/completed", params: { threadId, turn: { id: "packed-refusal-1", status: "completed" } } });
     for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve));
+    assert.ok(refusalCancellation, "Installed owner must publish the blocked row to its cancellation subscriber");
     await refusalCancellation;
     assert.equal(refusalCovered, true);
     assert.equal(refusalStarts, 2);
@@ -503,7 +506,8 @@ try {
       return { threadId, turnId: `packed-held-${heldSends.length}` };
     } };
     heldRuntime.loadedThreads.add(threadId);
-    const heldOwner = new HeadlessBackend(heldRuntime, () => {}, () => "packed-owner");
+    let observeHeldQueue = () => {};
+    const heldOwner = new HeadlessBackend(heldRuntime, event => observeHeldQueue(event.notification), () => "packed-owner");
     heldRuntime.submit({ id: "packed-held-active", threadId, prompt: "active" }); await heldRuntime.work;
     const pending = ["older", "next"].map(id => heldRuntime.submit({ id: `packed-held-${id}`, threadId, prompt: id }));
     await heldRuntime.work;
@@ -511,16 +515,17 @@ try {
     heldRuntime.notification({ method: "turn/completed", params: { threadId, turn: { id: "packed-held-1", status: "completed" } } });
     await new Promise(resolve => setImmediate(resolve));
     let heldCancellation;
-    heldRuntime.onEvent = message => {
-      heldOwner.event(message);
-      if (message.method === "headless/queueChanged" && message.params.type === "queued" && message.params.entry.id === "packed-review") {
+    observeHeldQueue = message => {
+      if (message.method === "thread/turnQueue/updated" && message.params.status === "queued" && message.params.queueEntryId === "packed-review") {
         heldCancellation = heldOwner.handle("backend.cancelQueuedTurn", { queueEntryId: "packed-review" });
       }
     };
     for (const job of pending) await heldOwner.handle("backend.setQueuedTurnPaused", { queueEntryId: job.id, paused: false });
     heldRuntime.submit({ id: "packed-review", threadId, prompt: "Target-ended guidance" },
       { manualReleaseRequired: true, holdReason: "Target turn ended; review required" });
-    await heldRuntime.work; await heldCancellation;
+    await heldRuntime.work;
+    assert.ok(heldCancellation, "Installed owner must publish the queued row to its cancellation subscriber");
+    await heldCancellation;
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(heldSends, ["active"]);
     assert.deepEqual(heldRuntime.turnQueue.getAllQueuedEntries().map(entry => [entry.id, entry.manualReleaseRequired]), pending.map(job => [job.id, true]));
@@ -536,7 +541,8 @@ try {
     await afterHeld.stop();
     for (const steer of [false, true]) {
       const acceptedRuntime = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
-      const acceptedOwner = new HeadlessBackend(acceptedRuntime, () => {}, () => "packed-owner");
+      let observeAcceptedQueue = () => {};
+      const acceptedOwner = new HeadlessBackend(acceptedRuntime, event => observeAcceptedQueue(event.notification), () => "packed-owner");
       const sends = [], originalId = `packed-publication-original-${steer}`, acceptedId = `packed-publication-accepted-${steer}`;
       let rejected = 0;
       acceptedRuntime.codex = {
@@ -545,9 +551,8 @@ try {
         steerTurn: async ({ input, expectedTurnId }) => { sends.push(input[0].text); return { threadId, turnId: expectedTurnId }; },
       };
       acceptedRuntime.loadedThreads.add(threadId);
-      acceptedRuntime.onEvent = message => {
-        acceptedOwner.event(message);
-        if (message.method === "headless/queueChanged" && message.params.type === "started" && message.params.entry.id === acceptedId) {
+      observeAcceptedQueue = message => {
+        if (message.method === "thread/turnQueue/updated" && message.params.status === "started" && message.params.queueEntryId === acceptedId) {
           rejected++; throw new Error("Packed started observer rejected");
         }
       };
