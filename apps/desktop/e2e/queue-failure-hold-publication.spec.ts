@@ -7,7 +7,9 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("Electron keeps every failed-turn successor held when publication cancels its preceding row", async () => {
+for (const tracked of [false, true]) test(tracked
+  ? "Electron retains the tracked owner through terminal publication before holding failed-turn successors"
+  : "Electron keeps every failed-turn successor held when publication cancels its preceding row", async () => {
   let queueModule = "";
   const app = await launchElectronApp({
     fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
@@ -20,12 +22,12 @@ test("Electron keeps every failed-turn successor held when publication cancels i
   try {
     await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
-    const result = await app.electronApp.evaluate(async (_electron, modulePath) => {
+    const result = await app.electronApp.evaluate(async (_electron, { modulePath, tracked }) => {
       const { ThreadTurnQueue: Queue } = process.getBuiltinModule("node:module").createRequire(modulePath)(modulePath) as { ThreadTurnQueue: typeof ThreadTurnQueue };
       const identity = { backend: "codex" as const, threadId: "invented-failed-electron-owner" };
       const sends: string[] = [];
       const latest = new Map<string, boolean>();
-      let active = true, armed = false;
+      let active = !tracked, armed = false;
       const drain = async () => await new Promise<void>(resolve => setImmediate(resolve));
       const queue = new Queue({
         isThreadActive: () => active,
@@ -33,10 +35,10 @@ test("Electron keeps every failed-turn successor held when publication cancels i
         onLifecycle: async event => {
           if (event.type === "held" || event.type === "queued") latest.set(event.entry.id, event.entry.manualReleaseRequired === true);
           if (event.type === "cancelled") latest.delete(event.entry.id);
-          if (armed && event.type === "held") {
+          if (armed && (tracked ? event.type === "terminal" && event.entry.id === "owner" : event.type === "held")) {
             armed = false;
             queue.setQueuedEntryTitle("next", "Generated queued title");
-            queue.cancelEntryWithDisposition(event.entry.id);
+            queue.cancelEntryWithDisposition(tracked ? "older" : event.entry.id);
             // Let Electron's real event loop run the cancellation drain while
             // the first failure-hold publication is still outstanding.
             await drain();
@@ -44,9 +46,11 @@ test("Electron keeps every failed-turn successor held when publication cancels i
         },
       });
       try {
+        if (tracked) await queue.submit({ ...identity, id: "owner", origin: "manual", input: [] });
+        active = true;
         for (const id of ["older", "next", "last"]) await queue.submit({ ...identity, id, origin: "manual", input: [{ type: "text", text: `Accepted ${id}` }] });
         armed = true;
-        const failure = queue.releaseThread({ ...identity, turnId: "prior-native", status: "turn/failed", errorMessage: "Review the failed turn" });
+        const failure = queue.releaseThread({ ...identity, turnId: tracked ? "owner" : "prior-native", status: "turn/failed", errorMessage: "Review the failed turn" });
         active = false;
         await failure;
         await drain();
@@ -59,12 +63,12 @@ test("Electron keeps every failed-turn successor held when publication cancels i
         await drain();
         return { beforeRetry, held, eventsHeld, retry: retry.disposition, sends };
       } finally { queue.close(); }
-    }, queueModule);
-    expect(result.beforeRetry).toEqual([]);
+    }, { modulePath: queueModule, tracked });
+    expect(result.beforeRetry).toEqual(tracked ? ["owner"] : []);
     expect(result.held).toEqual(["next", "last"].map(id => ({ id, held: true, input: [{ type: "text", text: `Accepted ${id}` }],
       title: id === "next" ? "Generated queued title" : undefined })));
     expect(result.eventsHeld).toEqual([true, true]);
     expect(result.retry).toBe("started");
-    expect(result.sends).toEqual(["next"]);
+    expect(result.sends).toEqual(tracked ? ["owner", "next"] : ["next"]);
   } finally { await app.close(); }
 });

@@ -1125,22 +1125,28 @@ export class ThreadTurnQueue {
       this.rememberTerminal(key, params.turnId);
     }
     const running = this.runningEntries.get(key);
-    if (
-      running &&
+    const released = running &&
       (params.turnId === undefined ||
         running.turnId === undefined ||
-        running.turnId === params.turnId)
-    ) {
-      this.runningEntries.delete(key);
-      await this.emit({
-        type: "terminal",
-        entry: running.entry,
-        turnId: params.turnId,
-        status: params.status,
-      });
-    }
-    if (params.status === "turn/failed") {
-      await this.holdAfterTurnFailure(key, params.errorMessage);
+        running.turnId === params.turnId);
+    try {
+      if (released) {
+        // Terminal publication can await controls that schedule a drain. Keep
+        // this turn's queue ownership until those observers have settled.
+        await this.emit({
+          type: "terminal",
+          entry: running.entry,
+          turnId: params.turnId,
+          status: params.status,
+        });
+      }
+    } finally {
+      if (released) this.runningEntries.delete(key);
+      // Install the failure hold synchronously after retiring ownership,
+      // including when terminal publication rejects, before any drain runs.
+      if (params.status === "turn/failed") {
+        await this.holdAfterTurnFailure(key, params.errorMessage);
+      }
     }
   }
 

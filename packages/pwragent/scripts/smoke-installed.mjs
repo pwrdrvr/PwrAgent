@@ -370,10 +370,38 @@ try {
     assert.equal(store.get(heldAtShutdown.id).status, "unknown");
     assert.equal(store.get(heldAtShutdown.id).fingerprint, heldAtShutdown.fingerprint);
     const reopened = new Runtime({ store, workspace, home: codexHome, command: fixture, onFailure() {} });
-    reopened.codex = { stop: async () => {} };
+    let trackedSends = 0;
+    reopened.codex = { stop: async () => {}, startTurn: async () => ({ threadId, turnId: `packed-tracked-${++trackedSends}` }) };
+    reopened.loadedThreads.add(threadId);
+    const reopenedOwner = new HeadlessBackend(reopened, () => {}, () => "packed-owner");
     assert.deepEqual(reopened.turnQueue.getAllQueuedEntries(), []);
     assert.equal(reopened.submit({ id: heldAtShutdown.id, threadId, prompt: "Packed held at shutdown" }).status, "unknown");
     assert.equal(failureSends, 1);
+    // Production Outpost publication is synchronous. Its registered terminal
+    // subscriber can still request cancellation while this tracked owner ends.
+    const tracked = reopened.submit({ id: "packed-tracked-owner", threadId, prompt: "Packed tracked input" });
+    await reopened.work;
+    const trackedOlder = reopened.submit({ id: "packed-tracked-older", threadId, prompt: "Packed tracked older" });
+    const trackedNext = reopened.submit({ id: "packed-tracked-next", threadId, prompt: "Packed tracked next" });
+    await reopened.work;
+    let terminalCancellation;
+    reopened.onEvent = message => {
+      reopenedOwner.event(message);
+      if (message.method === "headless/queueChanged" && message.params.type === "terminal" && message.params.entry.id === tracked.id) {
+        terminalCancellation = reopenedOwner.handle("backend.cancelQueuedTurn", { queueEntryId: trackedOlder.id });
+      }
+    };
+    reopened.notification({ method: "turn/failed", params: { threadId, turn: { id: store.get(tracked.id).turnId, status: "failed", error: { message: "Review tracked failure" } } } });
+    await new Promise(resolve => setImmediate(resolve));
+    await terminalCancellation;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(trackedSends, 1);
+    assert.equal(store.get(tracked.id).status, "failed");
+    assert.equal(store.get(trackedOlder.id).status, "interrupted");
+    assert.equal(store.get(trackedNext.id).fingerprint, trackedNext.fingerprint);
+    assert.deepEqual(reopened.turnQueue.getAllQueuedEntries().map(entry => [entry.id, entry.manualReleaseRequired]), [[trackedNext.id, true]]);
+    assert.equal((await reopenedOwner.handle("backend.releaseQueuedTurn", { queueEntryId: trackedNext.id })).disposition, "started");
+    assert.equal(trackedSends, 2);
     await reopened.stop();
   } finally { profile.close(); }
   console.log("Packed CLI smoke passed: native SQLite adoption/retirement, PTY, mocked turn/transcript, federation, restart/duplicate submission, actual Claude/ACP discovery, native Codex retirement, durable queue and steering receipts/caller isolation/cancellation, shared steering retention/retry and interruption");

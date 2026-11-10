@@ -1,0 +1,9 @@
+{
+  "desktop-tracked-terminal-and-cancel": {
+    "commits": 1,
+    "note": "Actual tracked provider failure, terminal-event cancellation and real drains; setup/admission excluded; existing terminal metadata only",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  }
+}

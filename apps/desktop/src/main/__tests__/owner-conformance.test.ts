@@ -325,6 +325,43 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("actual desktop tracked terminal publication cannot dispatch an unreviewed successor", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    let stop = () => {};
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      await host.client.startTurn({ ...identity, queueEntryId: "tracked-owner", delivery: "new_turn",
+        input: [{ type: "text", text: "fail" }] });
+      for (const id of ["older", "next"]) await host.client.startTurn({ ...identity, queueEntryId: id,
+        delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
+      let published!: () => void;
+      const publication = new Promise<void>(resolve => { published = resolve; });
+      let armed = true;
+      stop = registry.onEvent(async event => {
+        if (armed && event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.queueEntryId === "tracked-owner" && event.notification.params.status === "terminal") {
+          armed = false;
+          await host.client.cancelQueuedTurn({ queueEntryId: "older" });
+          await new Promise<void>(resolve => setImmediate(resolve));
+          published();
+        }
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await publication;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(OwnerConformanceCodexTransport.requests.filter(item => item.method === "turn/start")).toHaveLength(1);
+        await vi.waitFor(async () => expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries)
+          .toMatchObject([{ queueEntryId: "next", manualReleaseRequired: true }]));
+      });
+      expectSqliteWriteBudget({ budgetFile: "queue-terminal-publication-write-budgets.json", scenario: "desktop-tracked-terminal-and-cancel",
+        note: "Actual tracked provider failure, terminal-event cancellation and real drains; setup/admission excluded; existing terminal metadata only", writes });
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: "next" })).toMatchObject({ disposition: "started" });
+    } finally { stop(); await host.close(); vi.unstubAllEnvs(); }
+  });
+
   it("desktop correspondence learns a failure hold after a generated queued title lands", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const host = await startDesktopOwner();
@@ -407,7 +444,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     try {
       const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       const identity = { backend: "codex" as const, threadId: created.threadId };
-      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "fail" }] });
+      await host.client.startTurn({ ...identity, queueEntryId: "tracked-failure-owner", delivery: "new_turn", input: [{ type: "text", text: "fail" }] });
       const ids: string[] = [];
       for (const id of ["failure-older", "failure-next"]) {
         const accepted = await host.client.startTurn({ ...identity, queueEntryId: id,
@@ -432,7 +469,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await host.close(); }
   });
 
-  it("desktop shutdown and profile reopen never restore input held during failure publication", async () => {
+  it.each(["held", "terminal"] as const)("desktop shutdown and profile reopen never restore input held during %s publication", async publicationType => {
     const root = await realpath(await mkdtemp("/tmp/pwragent-qf-"));
     let host: OwnerHost | undefined;
     let stop = () => {};
@@ -441,7 +478,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const registry = desktopOwner.registry as DesktopBackendRegistry;
       const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       const identity = { backend: "codex" as const, threadId: created.threadId };
-      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "fail" }] });
+      await host.client.startTurn({ ...identity, ...(publicationType === "terminal" ? { queueEntryId: "tracked-owner", delivery: "new_turn" as const } : {}), input: [{ type: "text", text: "fail" }] });
       for (const id of ["older", "next"]) await host.client.startTurn({ ...identity, queueEntryId: id,
         delivery: "new_turn", input: [{ type: "text", text: "slow" }] });
       let cancelled!: () => void;
@@ -449,7 +486,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       let armed = true;
       stop = registry.onEvent(async event => {
         if (armed && event.notification.method === "thread/turnQueue/updated"
-          && event.notification.params.status === "held" && event.notification.params.queueEntryId === "older") {
+          && event.notification.params.status === publicationType
+          && event.notification.params.queueEntryId === (publicationType === "terminal" ? "tracked-owner" : "older")) {
           armed = false;
           await host!.client.cancelQueuedTurn({ queueEntryId: "older" });
           cancelled();
