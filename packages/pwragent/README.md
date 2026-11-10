@@ -173,6 +173,11 @@ select `workspace-write` explicitly when edits are wanted.
   while busy. New-thread jobs still require an idle daemon. Waiting input stays
   in memory; shutdown or crash recovery settles unfinished jobs as `unknown`
   without replay. `interrupt` cancels a waiting job before provider dispatch.
+  `pause --id JOB` keeps a waiting entry in place while dispatch skips it;
+  `resume --id JOB` puts it back in line. `move --id JOB --before OTHER_JOB`
+  moves it inside the same thread's FIFO; omit `--before` to move to the end.
+  Holds still require `release --id JOB` or `cancel --id JOB`. These controls
+  preserve accepted input and never restore a queue after restart.
 - Both thread and turn setup specify `approvalPolicy: never`. Full access is
   not offered. Turn sandbox policy disables tool network access; workspace-write
   grants the thread's registered project directory and excludes ambient temporary directories.

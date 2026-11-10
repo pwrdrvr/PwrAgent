@@ -24,7 +24,7 @@ test.beforeAll(() => {
   });
 });
 
-test("actual Outpost held queue controls hand durable outcomes to desktop without replay", async () => {
+test("actual Outpost held, paused and ordered queue controls hand durable outcomes to desktop without replay", async () => {
   test.skip(process.platform === "win32", "The executable Outpost Runtime supports Linux and macOS");
   const [{ JobStore }, { Runtime }, { HeadlessBackend }] = await Promise.all([load("store.js"), load("runtime.js"), load("federation-backend.js")]);
   const ref = { backend: "codex" as const, threadId: "thread-smoke" };
@@ -58,15 +58,20 @@ test("actual Outpost held queue controls hand durable outcomes to desktop withou
         expect((await backend.handle("getNavigationQueueProjection", { protocol: 2, ref })).entries).toMatchObject([{ queueEntryId: waiting.id, manualReleaseRequired: true }]);
         backend.persistCreatedNativeThread({ id: "queue-other", cwd: workspace, title: "Other invented thread", titleSource: "explicit" });
         let contended = false;
+        let pauseDuringRelease: Promise<unknown> | undefined, moveDuringRelease: Promise<unknown> | undefined;
         runtime.onEvent = (event: any) => {
           backend.event(event);
           if (!contended && event.method === "headless/queueChanged" && event.params.type === "queued" && event.params.entry.id === waiting.id) {
             contended = true;
             expect(runtime.submit({ id: "queue-competitor", threadId: "queue-other", prompt: "Invented competing input" }).status).toBe("queued");
+            pauseDuringRelease = backend.handle("backend.setQueuedTurnPaused", { queueEntryId: waiting.id, paused: true });
+            moveDuringRelease = backend.handle("backend.moveQueuedTurn", { queueEntryId: waiting.id });
           }
         };
         expect(await backend.handle("backend.releaseQueuedTurn", { queueEntryId: waiting.id })).toMatchObject({ disposition: "started", turnId: "queue-turn-3" });
         expect(contended).toBe(true);
+        expect(await pauseDuringRelease).toMatchObject({ disposition: "not_found" });
+        expect(await moveDuringRelease).toMatchObject({ disposition: "not_found" });
         expect(store.get("queue-competitor")).toMatchObject({ status: "queued" });
         expect(store.get(waiting.id)).toMatchObject({ status: "running", turnId: "queue-turn-3" });
         runtime.submit({ id: "queue-delete", threadId: ref.threadId, prompt: "Invented deleted input" });
@@ -74,10 +79,18 @@ test("actual Outpost held queue controls hand durable outcomes to desktop withou
         expect(await backend.handle("backend.cancelQueuedTurn", { queueEntryId: waiting.id })).toMatchObject({ disposition: "already_admitted", cancelled: false });
         const pending = runtime.submit({ id: "queue-unfinished", threadId: ref.threadId, prompt: "Invented never-replayed input" });
         fingerprint = pending.fingerprint;
+        runtime.submit({ id: "queue-ordered", threadId: ref.threadId, prompt: "Invented ordered input" });
+        expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: pending.id, paused: true })).toMatchObject({ disposition: "updated", pauseRevision: 1 });
+        expect(await backend.handle("backend.moveQueuedTurn", { queueEntryId: "queue-ordered", beforeQueueEntryId: pending.id })).toMatchObject({ disposition: "moved", queueEntryIds: ["queue-ordered", pending.id] });
+        runtime.notification({ method: "turn/completed", params: { threadId: ref.threadId, turn: { id: "queue-turn-3", status: "completed" } } });
+        for (let n = 0; n < 12; n++) await new Promise<void>(resolve => setImmediate(resolve));
+        expect(store.get("queue-ordered")).toMatchObject({ status: "running", turnId: "queue-turn-4" });
+        expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: pending.id, paused: false })).toMatchObject({ disposition: "updated", pauseRevision: 2 });
+        expect(await backend.handle("backend.setQueuedTurnPaused", { queueEntryId: pending.id, paused: true })).toMatchObject({ disposition: "updated", pauseRevision: 3 });
         await runtime.stop();
         expect(store.get("queue-unfinished")).toMatchObject({ status: "unknown", fingerprint });
         expect(store.get("queue-unfinished")).not.toHaveProperty("turnId");
-        expect(sends).toBe(3);
+        expect(sends).toBe(4);
       } finally { profile.close(); }
     },
   });
@@ -95,7 +108,8 @@ test("actual Outpost held queue controls hand durable outcomes to desktop withou
     try {
       const store = new JobStore(headless, { version: 1, workspace, codexHome: path.join(app.homeRoot, "codex") }, profile);
       expect(store.get("queue-first")).toMatchObject({ status: "completed", turnId: "queue-turn-1" });
-      expect(store.get("queue-second")).toMatchObject({ status: "unknown", turnId: "queue-turn-3" });
+      expect(store.get("queue-second")).toMatchObject({ status: "completed", turnId: "queue-turn-3" });
+      expect(store.get("queue-ordered")).toMatchObject({ status: "unknown", turnId: "queue-turn-4" });
       expect(store.get("queue-unfinished")).toMatchObject({ status: "unknown", fingerprint });
       expect(store.get("queue-delete")).toMatchObject({ status: "interrupted" });
       expect(store.get("queue-delete")).not.toHaveProperty("turnId");

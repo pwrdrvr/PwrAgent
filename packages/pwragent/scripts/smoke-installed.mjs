@@ -145,6 +145,22 @@ try {
   const controlCalls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(controlCalls.filter(call => call.method === "turn/start" && call.params.input[0].text === "installed-released-input").length, 1);
   assert.equal(controlCalls.filter(call => call.method === "turn/start" && call.params.input[0].text === "installed-deleted-input").length, 0);
+  writeFileSync(prompt, "slow");
+  await command(["submit", "--id", "order-active", "--thread", owned.threadId, "--prompt-file", prompt]);
+  writeFileSync(prompt, "installed-paused-input");
+  await command(["submit", "--id", "order-first", "--thread", owned.threadId, "--prompt-file", prompt]);
+  writeFileSync(prompt, "installed-ordered-input");
+  await command(["submit", "--id", "order-second", "--thread", owned.threadId, "--prompt-file", prompt]);
+  assert.equal(JSON.parse(await command(["pause", "--id", "order-first"])).pauseRevision, 1);
+  assert.deepEqual(JSON.parse(await command(["move", "--id", "order-second", "--before", "order-first"])).queueEntryIds, ["order-second", "order-first"]);
+  await command(["interrupt", "--id", "order-active"]);
+  await command(["wait", "--id", "order-second"]);
+  assert.equal(JSON.parse(await command(["show", "--id", "order-first"])).status, "queued");
+  assert.equal(JSON.parse(await command(["resume", "--id", "order-first"])).pauseRevision, 2);
+  await command(["wait", "--id", "order-first"]);
+  const orderedCalls = readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse)
+    .filter(call => call.method === "turn/start" && ["installed-ordered-input", "installed-paused-input"].includes(call.params.input[0].text));
+  assert.deepEqual(orderedCalls.map(call => call.params.input[0].text), ["installed-ordered-input", "installed-paused-input"]);
   await stop(daemon);
   // Actual profile discovery must work from the installed bundle with no
   // provider process or retained Claude inventory.

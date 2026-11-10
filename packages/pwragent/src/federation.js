@@ -13,7 +13,7 @@ import { setupHandoffs, HANDOFF_CAPABILITIES } from "./handoffs.js";
 import { atomicJson } from "./store.js";
 import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
-export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
+export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "turn_queue_pause", "turn_queue_reorder", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
 
 const RECEIVER_PERMISSIONS = Object.freeze({ remoteShells: true, portForwarding: false, filePush: true, filePull: false, filePullOutsideThreadDirectories: false });
 

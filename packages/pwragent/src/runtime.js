@@ -86,6 +86,8 @@ export class Runtime {
       case "submit": return this.submit(params);
       case "release": return this.releaseQueuedTurn({ queueEntryId: params.id });
       case "cancel": return this.cancelQueuedTurn({ queueEntryId: params.id });
+      case "pause": case "resume": return this.setQueuedTurnPaused({ queueEntryId: params.id, paused: method === "pause" });
+      case "move": return this.moveQueuedTurn({ queueEntryId: params.id, beforeQueueEntryId: params.before });
       case "read": {
         const job = this.store.get(params.id);
         if (!job.threadId) throw new Error("This job has no confirmed thread ID");
@@ -246,6 +248,48 @@ export class Runtime {
     };
     if (this.stopping) throw new Error("Daemon is stopping");
     return entry ? await this.turnQueue.withDispatchSuspended(entry, cancel) : cancel();
+  }
+
+  async setQueuedTurnPaused({ queueEntryId, paused }) {
+    if (this.stopping) throw new Error("Daemon is stopping");
+    const waiting = this.queuedEntry(queueEntryId);
+    if (typeof paused !== "boolean") throw new Error("Paused must be a boolean");
+    const release = this.queueRelease;
+    // Match cancellation: another suspension must not defeat the reserved
+    // head's admission after its manual holds have already been cleared.
+    if (waiting && release && waiting.threadId === release.threadId && this.queuedEntry(release.entryId)) await release.done;
+    if (this.stopping) throw new Error("Daemon is stopping");
+    const result = await this.turnQueue.setEntryPaused(queueEntryId, paused);
+    const entry = result.entry;
+    if (result.disposition === "updated") {
+      // A later serialized edit can finish before this awaiting caller resumes.
+      // Publish only the live entry, never a cancelled or superseded snapshot.
+      const current = this.queuedEntry(queueEntryId);
+      if (current) this.queueEvent({ type: current.manualReleaseRequired ? "held" : "queued", entry: current, reason: current.holdReason });
+    }
+    return { queueEntryId, disposition: result.disposition,
+      ...(entry ? { paused: entry.paused === true } : {}),
+      ...(entry?.pauseRevision ? { pauseRevision: entry.pauseRevision } : {}) };
+  }
+
+  async moveQueuedTurn({ queueEntryId, beforeQueueEntryId }) {
+    if (this.stopping) throw new Error("Daemon is stopping");
+    const waiting = this.queuedEntry(queueEntryId);
+    if (beforeQueueEntryId !== undefined && !validId(beforeQueueEntryId)) throw new Error("Invalid queue entry anchor ID");
+    const release = this.queueRelease;
+    // Preserve the same admission ordering as cancellation and pause edits.
+    if (waiting && release && waiting.threadId === release.threadId && this.queuedEntry(release.entryId)) await release.done;
+    if (this.stopping) throw new Error("Daemon is stopping");
+    const result = await this.turnQueue.moveEntry(queueEntryId, beforeQueueEntryId);
+    if (result.disposition === "moved") {
+      // A later serialized edit can finish before this awaiting caller resumes.
+      // Announce the live FIFO, rather than restore a since-cancelled identity.
+      const queueEntryIds = this.turnQueue.getQueuedEntries({ backend: result.backend, threadId: result.threadId }).map(entry => entry.id);
+      try { this.onEvent?.({ method: "headless/queueReordered", params: { threadId: result.threadId, queueEntryIds } }); }
+      catch (error) { this.reportFailure(error); }
+    }
+    return { queueEntryId, disposition: result.disposition,
+      ...(result.entryIds ? { queueEntryIds: result.entryIds } : {}) };
   }
 
   dispatchJob(job, prompt, entry) {

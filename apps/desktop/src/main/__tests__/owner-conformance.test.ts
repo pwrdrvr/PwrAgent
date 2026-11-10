@@ -302,6 +302,45 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  it("both actual owners pause, reorder and resume the same waiting FIFO with typed events", async () => {
+    const desktop = await startDesktopOwner();
+    let outpost: OwnerHost | undefined;
+    try {
+      outpost = await startOutpostOwner();
+      for (const host of [desktop, outpost]) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const entries = [];
+        for (let n = 0; n < 3; n++) entries.push(await host.client.startTurn({ ...identity, queueEntryId: `order-${n}`, input: [{ type: "text", text: "slow" }] }));
+        const ids = entries.map(entry => entry.queueEntryId!);
+        const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: identity.threadId } };
+        const nextTurn = async (previousTurnId: string) => {
+          await expect.poll(async () => {
+            const turnId = (await host.client.resolveThreadAdmissionState(request.ref)).activeTurn?.turnId;
+            return Boolean(turnId && turnId !== previousTurnId);
+          }).toBe(true);
+          return { ...identity, turnId: (await host.client.resolveThreadAdmissionState(request.ref)).activeTurn!.turnId };
+        };
+        expect(await host.client.setQueuedTurnPaused({ queueEntryId: ids[0]!, paused: true })).toMatchObject({ disposition: "updated", paused: true, pauseRevision: 1 });
+        expect(await host.client.moveQueuedTurn({ queueEntryId: ids[2]!, beforeQueueEntryId: ids[1]! })).toEqual({ queueEntryId: ids[2], disposition: "moved", queueEntryIds: [ids[0], ids[2], ids[1]] });
+        const queue = await host.client.getNavigationQueueProjection(request);
+        expect(queue.entries.map(entry => entry.queueEntryId)).toEqual([ids[0], ids[2], ids[1]]);
+        expect(queue.entries[0]).toMatchObject({ paused: true, pauseRevision: 1 });
+        await expect.poll(() => host.events.some(event => event.notification.method === "thread/turnQueue/reordered")).toBe(true);
+        await host.client.interruptTurn(active);
+        await expect.poll(async () => (await host.client.getNavigationQueueProjection(request)).entries.map(entry => entry.queueEntryId)).toEqual([ids[0], ids[1]]);
+        let turn = await nextTurn(active.turnId);
+        await host.client.interruptTurn(turn);
+        await expect.poll(async () => (await host.client.getNavigationQueueProjection(request)).entries.map(entry => entry.queueEntryId)).toEqual([ids[0]]);
+        turn = await nextTurn(turn.turnId);
+        expect(await host.client.setQueuedTurnPaused({ queueEntryId: ids[0]!, paused: false })).toMatchObject({ disposition: "updated", paused: false, pauseRevision: 2 });
+        await host.client.interruptTurn(turn);
+        await expect.poll(async () => (await host.client.getNavigationQueueProjection(request)).entries).toEqual([]);
+        turn = await nextTurn(turn.turnId);
+        await host.client.interruptTurn(turn);
+      }
+    } finally { await outpost?.close(); await desktop.close(); }
+  }, 120_000);
   it("queues generated continued turns through both actual owners and projects their provider-owned dispatch order", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
@@ -1430,7 +1469,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         "backend.startTurn [start its first turn] event thread/turnQueue/updated: desktop sends it, outpost does not",
       ]);
       expect(measured.differences.filter(difference => queueConvergence.has(difference))).toEqual([]);
-      const queueControls = ["backend.cancelQueuedTurn", "backend.releaseQueuedTurn"];
+      const queueControls = ["backend.cancelQueuedTurn", "backend.releaseQueuedTurn", "backend.setQueuedTurnPaused", "backend.moveQueuedTurn"];
       expect(queueControls.every(method => measured.sharedMethods.includes(method))).toBe(true);
       const change = describeBaselineChange({ ...baseline,
         sharedMethods: [...new Set([...baseline.sharedMethods, ...queueControls])].sort(),

@@ -83,6 +83,36 @@ test("real CLI queues continued jobs, cancels before dispatch and never replays 
   assert.equal(h.calls().filter(call => call.method === "turn/start").length, 4);
 });
 
+test("real CLI pauses and orders waiting input, resumes once and never replays after restart", { timeout }, async t => {
+  const h = await setup(t);
+  await h.submit("seed", "hello");
+  const { threadId } = await h.finished("seed");
+  await h.submit("active", "slow", { threadId });
+  await eventually(async () => (await h.rpc("show", { id: "active" })).turnId);
+  for (const id of ["first", "second"]) await h.submit(id, "slow", { threadId });
+  const control = async args => {
+    const process = h.launch(args);
+    assert.equal((await process.done).code, 0, process.errors);
+    return JSON.parse(process.output);
+  };
+  assert.deepEqual(await control(["pause", "--id", "first"]), { queueEntryId: "first", disposition: "updated", paused: true, pauseRevision: 1 });
+  assert.equal((await control(["move", "--id", "second", "--before", "first"])).disposition, "moved");
+  await h.rpc("interrupt", { id: "active" });
+  await eventually(async () => (await h.rpc("show", { id: "second" })).turnId);
+  assert.equal((await h.rpc("show", { id: "first" })).status, "queued");
+  assert.equal((await control(["resume", "--id", "first"])).pauseRevision, 2);
+  await h.rpc("interrupt", { id: "second" });
+  await eventually(async () => (await h.rpc("show", { id: "first" })).turnId);
+  const accepted = await h.submit("unfinished", "never-replay", { threadId });
+  await control(["pause", "--id", "unfinished"]);
+  assert.equal((await h.stop(h.daemon)).code, 0);
+  await h.start();
+  assert.equal((await control(["resume", "--id", "unfinished"])).disposition, "not_found");
+  assert.equal((await h.submit("unfinished", "never-replay", { threadId })).fingerprint, accepted.fingerprint);
+  assert.equal((await h.rpc("show", { id: "unfinished" })).status, "unknown");
+  assert.equal(h.calls().filter(call => call.method === "turn/start").length, 4);
+});
+
 test("concurrent submit has one owner; busy rejects without a queued record; duplicate daemon cannot disturb owner", { timeout }, async (t) => {
   const h = await setup(t);
   const outcomes = await Promise.allSettled([h.submit("one", "slow"), h.submit("two", "slow")]);
