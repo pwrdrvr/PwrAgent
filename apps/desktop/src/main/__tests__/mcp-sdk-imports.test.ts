@@ -18,7 +18,7 @@ function sourceFiles(directory: string): string[] {
 /** Static import or re-export statements that bring in an SDK value. */
 function sdkValueImports(source: string): string[] {
   const statements = source.matchAll(/^(?:import|export)\s+(type\s+)?([^;]*?)\s+from\s+"(@modelcontextprotocol\/sdk[^"]*)"/gm);
-  return [...statements].flatMap(([statement, typeOnly, clause]) => {
+  const valueImports = [...statements].flatMap(([statement, typeOnly, clause]) => {
     if (typeOnly) return [];
     const named = /^\{([\s\S]*)\}$/.exec(clause!.trim());
     const valueNames = named
@@ -26,6 +26,10 @@ function sdkValueImports(source: string): string[] {
       : [clause!.trim()];
     return valueNames.length > 0 ? [statement!.replace(/\s+/g, " ")] : [];
   });
+  // A side-effect import evaluates the SDK as well. A star re-export
+  // already matches above, with `*` as its clause.
+  const sideEffectImports = [...source.matchAll(/^import\s+"@modelcontextprotocol\/sdk[^"]*"/gm)].map(([statement]) => statement!);
+  return [...valueImports, ...sideEffectImports];
 }
 
 // `isMcpError` and `loadedMcpTypes` answer from the lazy loaders' state. They
@@ -47,4 +51,6 @@ it("recognizes a value import, and passes type-only ones", () => {
   expect(sdkValueImports(`import type { Tool } from "@modelcontextprotocol/sdk/types.js";`)).toEqual([]);
   expect(sdkValueImports(`import { type Tool, type Root } from "@modelcontextprotocol/sdk/types.js";`)).toEqual([]);
   expect(sdkValueImports(`export type { Tool } from "@modelcontextprotocol/sdk/types.js";`)).toEqual([]);
+  expect(sdkValueImports(`import "@modelcontextprotocol/sdk/types.js";`)).toHaveLength(1);
+  expect(sdkValueImports(`export * from "@modelcontextprotocol/sdk/types.js";`)).toHaveLength(1);
 });

@@ -10,13 +10,18 @@ it("loads the gateway validators through Node's native ESM loader", () => {
   }).outputText;
   // Electron's build leaves these dependencies external. Vitest's resolver
   // accepts extensionless subpaths that the production ESM loader rejects.
-  // The catalog loads them through mcp-sdk.ts, inlined here as one module.
-  const loaders = transpile("../mcp-connections/mcp-sdk.ts").replace(/^export /gm, "");
+  // The catalog loads them through lazy-module.ts and mcp-sdk.ts, inlined
+  // here into one module.
+  const lazyImport = /^import \{[^}]*\} from "\.\.\/lazy-module";$/m;
+  const sdk = transpile("../mcp-connections/mcp-sdk.ts");
+  expect(sdk).toMatch(lazyImport);
+  const loaders = `${transpile("../lazy-module.ts")}\n${sdk.replace(lazyImport, "")}`.replace(/^export /gm, "");
   const catalog = transpile("../mcp-connections/mcp-gateway-catalog.ts");
   const sdkImport = /^import \{[^}]*\} from "\.\/mcp-sdk";$/m;
   expect(catalog).toMatch(sdkImport);
+  expect(catalog).toMatch(lazyImport);
   const probe = `${loaders}
-    ${catalog.replace(sdkImport, "")}
+    ${catalog.replace(sdkImport, "").replace(lazyImport, "")}
     import assert from "node:assert/strict";
     for (const $schema of [
       "http://json-schema.org/draft-07/schema#",

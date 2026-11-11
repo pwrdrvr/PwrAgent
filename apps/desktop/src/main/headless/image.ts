@@ -1,22 +1,15 @@
 import type { Canvas } from "@napi-rs/canvas";
+import { lazyModule } from "../lazy-module";
 import type { HostImage } from "../owner-host";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 
-let loading: Promise<CanvasModule> | undefined;
-
 /**
- * Load the canvas binding on first image decode. A static import put its
+ * The canvas binding, loaded on first image decode. A static import put its
  * cold load (~70 ms) on every headless owner start, and most owners decode
- * no image for a long time, if ever. A failed load is not cached.
+ * no image for a long time, if ever.
  */
-function loadCanvas(): Promise<CanvasModule> {
-  loading ??= import("@napi-rs/canvas").catch((error: unknown) => {
-    loading = undefined;
-    throw error;
-  });
-  return loading;
-}
+const canvasBinding = lazyModule(() => import("@napi-rs/canvas"));
 
 function fromCanvas(canvasModule: CanvasModule, canvas: Canvas): HostImage {
   return {
@@ -37,7 +30,7 @@ function fromCanvas(canvasModule: CanvasModule, canvas: Canvas): HostImage {
 }
 
 export async function createHeadlessImage(buffer: Buffer): Promise<HostImage> {
-  const canvasModule = await loadCanvas();
+  const canvasModule = await canvasBinding.load();
   const image = new canvasModule.Image();
   try { image.src = buffer; } catch { /* The image contract reports decoding failures as empty. */ }
   const width = image.width;

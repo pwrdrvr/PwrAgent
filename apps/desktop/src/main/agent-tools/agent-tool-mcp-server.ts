@@ -17,7 +17,8 @@ import {
   type AppServerBackendKind,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
-import { lazyModule, loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
+import { lazyModule } from "../lazy-module.js";
+import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 import {

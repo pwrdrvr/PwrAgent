@@ -1,6 +1,7 @@
 import type { ElicitRequestParams, ElicitResult } from "@modelcontextprotocol/sdk/types.js";
 import { validateJsonSchemaValue } from "./mcp-gateway-catalog";
-import { lazyModule, mcpTypes } from "./mcp-sdk";
+import { lazyModule } from "../lazy-module";
+import { mcpTypes } from "./mcp-sdk";
 import {
   assertRelayableElicitation,
   elicitationUnavailable,
@@ -122,8 +123,8 @@ export class UpstreamElicitationRoutes {
     onOutcome?: (outcome: ElicitationOutcome) => void;
   }): Promise<ElicitResult> {
     const report = (outcome: ElicitationOutcome): void => params.onOutcome?.(outcome);
-    await mcpTypes.load();
     try {
+      await mcpTypes.load();
       assertRelayableElicitation(params.request, params.source);
     } catch (error) {
       report("refused");

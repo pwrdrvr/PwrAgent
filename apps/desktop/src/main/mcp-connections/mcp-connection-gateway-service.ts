@@ -2841,6 +2841,9 @@ export class McpConnectionGatewayService {
     if (isPwrSuiteRelayKind(connection.kind)) {
       return await this.connectStdioClient(connection, this.relayLaunch(connection.kind), options);
     }
+    // Build the client before the transport, so a failed SDK load cannot
+    // leave an opened transport behind.
+    const client = await this.createUpstreamClient(connection, options.clientName, options.handlers);
     if (isMcpIpcUrl(connection.serverUrl)) {
       const credential = await this.credentialVault.read(connection.id, connection.serverUrl);
       transport = await createMcpIpcTransport(connection.serverUrl, { bearerToken: credential?.ipcBearerToken });
@@ -2859,7 +2862,6 @@ export class McpConnectionGatewayService {
         { fetch: coordinator.authorizedFetch() },
       );
     }
-    const client = await this.createUpstreamClient(connection, options.clientName, options.handlers);
     const onClose = options.onClose;
     if (onClose) client.onclose = () => onClose(client);
     const abort = (): void => { void transport.close().catch(() => undefined); };

@@ -1,5 +1,6 @@
 import type { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { lazyModule, type LazyModule } from "../lazy-module";
 
 /**
  * The MCP SDK, loaded on first use. Every SDK entry point evaluates
@@ -11,28 +12,6 @@ import type { McpError } from "@modelcontextprotocol/sdk/types.js";
  * import anywhere in the owner graph would put the whole SDK back on every
  * start, and `mcp-sdk-imports.test.ts` fails when one appears.
  */
-export type LazyModule<T> = {
-  load(): Promise<T>;
-  /** The module when a `load()` has finished, else undefined. */
-  loaded(): T | undefined;
-};
-
-export function lazyModule<T>(importModule: () => Promise<T>): LazyModule<T> {
-  let value: T | undefined;
-  let loading: Promise<T> | undefined;
-  return {
-    load: () => loading ??= importModule().then(
-      (module) => value = module,
-      (error: unknown) => {
-        // A failed load is not cached, so the next call retries.
-        loading = undefined;
-        throw error;
-      },
-    ),
-    loaded: () => value,
-  };
-}
-
 export const mcpTypes = lazyModule(() => import("@modelcontextprotocol/sdk/types.js"));
 
 // Each loader finishes `mcpTypes` first, so no SDK code can construct an

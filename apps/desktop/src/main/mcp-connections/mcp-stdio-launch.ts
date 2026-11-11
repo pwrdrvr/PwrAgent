@@ -273,6 +273,8 @@ export class OwnedStdioClientTransport implements Transport {
   /** The group reap started when the server exited on its own. */
   private reaping?: Promise<void>;
   private closed = false;
+  /** Set while start() loads the SDK, so a second call cannot spawn too. */
+  private starting = false;
 
   constructor(
     private readonly launch: ResolvedStdioLaunch,
@@ -295,9 +297,16 @@ export class OwnedStdioClientTransport implements Transport {
   }
 
   async start(): Promise<void> {
+    if (this.child || this.starting || this.closed) throw new Error("This MCP server transport was already started.");
+    this.starting = true;
+    let stdio: Awaited<ReturnType<typeof mcpSharedStdio.load>>;
+    try {
+      stdio = await mcpSharedStdio.load();
+    } finally {
+      this.starting = false;
+    }
     if (this.child || this.closed) throw new Error("This MCP server transport was already started.");
-    const { ReadBuffer, serializeMessage } = await mcpSharedStdio.load();
-    if (this.child || this.closed) throw new Error("This MCP server transport was already started.");
+    const { ReadBuffer, serializeMessage } = stdio;
     const readBuffer = this.readBuffer = new ReadBuffer();
     this.serializeMessage = serializeMessage;
     const invocation = createCommandInvocation({

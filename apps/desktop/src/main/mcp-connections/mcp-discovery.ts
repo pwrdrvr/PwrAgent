@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { getMainLogger } from "../log";
-import { isMcpError, isStreamableHttpError, lazyModule, mcpTypes } from "./mcp-sdk";
+import { lazyModule } from "../lazy-module";
+import { isMcpError, isStreamableHttpError, mcpTypes } from "./mcp-sdk";
 
 const log = getMainLogger("pwragent:mcp-connections");
 export type McpDiscoveryPhase = "registration" | "initialize" | "tools/list" | "auth/refresh";
