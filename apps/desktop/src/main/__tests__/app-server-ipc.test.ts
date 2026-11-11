@@ -2595,6 +2595,71 @@ describe("app server ipc", () => {
       .resolves.toBeUndefined();
   });
 
+  it("treats only an actual Auto-fix change as the operator's request", async () => {
+    // Rule (oracle): a preference resets the thread's repair attempts and may
+    // re-arm a cancelled repair only when it changes the stored value. A
+    // stale viewer's toggle repeats the current value, and each repeat used
+    // to refill the incident's attempts. Every enabled x previouslyEnabled
+    // combination goes through the service's real handler.
+    const pr = githubPr({
+      number: 3618, org: "pwrdrvr", repo: "PwrAgent", title: "Repeated preference",
+      state: "failing", headSha: "c".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3618",
+    });
+    registerAppServerIpcHandlers();
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const service = appServerService as unknown as {
+      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+      handlePrAutoDispatchSnapshots: (prs: PrSummary[], observedAt: number, operatorInitiated?: boolean) => Promise<void>;
+      fetchForgePullRequests: (refs: unknown[]) => Promise<PrSummary[]>;
+      backgroundPrPollingEnabled: boolean;
+      prAutoDispatchAllowed: boolean;
+    };
+    const gates = { polling: service.backgroundPrPollingEnabled, allowed: service.prAutoDispatchAllowed };
+    service.backgroundPrPollingEnabled = true;
+    service.prAutoDispatchAllowed = true;
+    const snapshots = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+    const fetch = vi.spyOn(service, "fetchForgePullRequests").mockResolvedValue([pr]);
+    onTestFinished(() => {
+      service.backgroundPrPollingEnabled = gates.polling;
+      service.prAutoDispatchAllowed = gates.allowed;
+      snapshots.mockRestore();
+      fetch.mockRestore();
+    });
+    const handler = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    const attach = () => service.setThreadPrAttachment("codex:thread-1", {
+      backend: "codex", primaryRepoKey: "github.com/pwrdrvr/pwragent", prs: [pr],
+    });
+
+    for (const enabled of [true, false]) {
+      for (const previouslyEnabled of [true, false]) {
+        const label = `enabled ${enabled}, previously ${previouslyEnabled}`;
+        const changed = enabled !== previouslyEnabled;
+        attach();
+        getThreadOverlayState.mockResolvedValue({
+          backend: "codex", threadId: "thread-1", executionMode: "default",
+          extraLinkedDirectories: [], prAutoDispatchEnabled: enabled, prs: [pr],
+        } as never);
+        resetThreadPrAutoDispatchForOperator.mockClear();
+        snapshots.mockClear();
+
+        await handler.preferenceChanged({ backend: "codex", threadId: "thread-1", enabled, previouslyEnabled });
+
+        expect(resetThreadPrAutoDispatchForOperator.mock.calls.length, `${label}: reset`)
+          .toBe(enabled && changed ? 1 : 0);
+        const initiated = snapshots.mock.calls.map((call) => call[2] === true);
+        if (enabled) {
+          // The election always runs; only a change may re-arm a cancelled repair.
+          expect(initiated.length, `${label}: election`).toBeGreaterThan(0);
+          expect(initiated, `${label}: operator-initiated`).toEqual(initiated.map(() => changed));
+        } else {
+          // A thread that was off had no PRs to hand to another thread.
+          expect(initiated, `${label}: re-election`).toEqual(changed ? [true] : []);
+        }
+      }
+    }
+  });
+
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {
     listThreads.mockResolvedValueOnce([
       {
@@ -2762,6 +2827,7 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-1",
       enabled: true,
+      previouslyEnabled: false,
     });
     expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
   });
