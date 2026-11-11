@@ -679,6 +679,13 @@ export class DesktopSettingsService {
   };
   private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
   private applicationsDiscovery?: DesktopApplicationsSnapshot;
+  // Icons for the discovered snapshot, added on the first projection read.
+  // Every config write reads a projection, and resolving an icon reads the
+  // bundle's Info.plist synchronously, so each discovery resolves them once.
+  private applicationsWithIcons?: {
+    source: DesktopApplicationsSnapshot;
+    snapshot: Promise<DesktopApplicationsSnapshot>;
+  };
   private codexProfiles: DesktopCodexAuthProfileDiscoverySnapshot;
   private managedCodexError?: string;
   private readonly codexDiscoveryCoordinator: Pick<
@@ -923,7 +930,7 @@ export class DesktopSettingsService {
     // A projection is a surface read, so it carries icons; boot discovery
     // decodes none.
     const applications = this.applicationsDiscovery
-      ? await withApplicationIcons(this.applicationsDiscovery)
+      ? await this.readApplicationsWithIcons(this.applicationsDiscovery)
       : emptyApplicationsSnapshot();
     const preferredEditorId = this.resolveConfigString(
       config.applications?.editor?.preferredId,
@@ -2048,6 +2055,15 @@ export class DesktopSettingsService {
       this.gitDiscoveryCache = cache;
     }
     return this.gitDiscoveryCache.promise;
+  }
+
+  private readApplicationsWithIcons(
+    source: DesktopApplicationsSnapshot,
+  ): Promise<DesktopApplicationsSnapshot> {
+    if (this.applicationsWithIcons?.source !== source) {
+      this.applicationsWithIcons = { source, snapshot: withApplicationIcons(source) };
+    }
+    return this.applicationsWithIcons.snapshot;
   }
 
   private discoverDesktopApplicationsCached(): Promise<DesktopApplicationsSnapshot> {

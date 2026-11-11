@@ -502,7 +502,12 @@ async function readCachedApplicationIconDataUrl(
   try {
     const iconStat = await stat(iconPath);
     key = `${iconPath}\0${iconStat.mtimeMs}\0${iconStat.size}`;
-  } catch {
+  } catch (error) {
+    log.warn("application-icon-failed", {
+      appPath,
+      iconPath,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return undefined;
   }
   const cached = decodedApplicationIcons.get(appPath);
