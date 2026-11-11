@@ -13,6 +13,11 @@ import { ThreadMaintenanceService, type ThreadMaintenanceDeps } from "../app-ser
  *
  * `candidateCheckoutDirectories` normalizes each directory it reads, so the
  * count of `path.normalize` calls during the step counts directory reads.
+ *
+ * The step then lists each kept checkout's threads. Comparing every recorded
+ * directory per kept checkout was quadratic too; the count of
+ * `String.prototype.startsWith` calls during the step counts those
+ * comparisons.
  */
 
 const DAY = 86_400_000;
@@ -37,7 +42,7 @@ function candidates(count: number): ThreadArchiveCandidate[] {
   }));
 }
 
-async function hibernateStep(list: ThreadArchiveCandidate[]): Promise<{ normalized: number; kept: number }> {
+async function hibernateStep(list: ThreadArchiveCandidate[]): Promise<{ normalized: number; compared: number; kept: number }> {
   const deps: ThreadMaintenanceDeps = {
     getPolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "count", keepPerProject: 1 }),
     snapshotLimitBytes: 100,
@@ -65,9 +70,17 @@ async function hibernateStep(list: ThreadArchiveCandidate[]): Promise<{ normaliz
   let normalized = 0;
   const normalize = path.normalize;
   vi.spyOn(path, "normalize").mockImplementation((value: string) => { normalized += 1; return normalize(value); });
+  let compared = 0;
+  const startsWith = String.prototype.startsWith;
+  vi.spyOn(String.prototype, "startsWith").mockImplementation(function (this: string, ...args: Parameters<typeof startsWith>) {
+    compared += 1;
+    return startsWith.apply(this, args);
+  });
   const scan = await service.scan({ steps: ["hibernate"] });
   vi.restoreAllMocks();
-  return { normalized, kept: scan.hibernate!.kept["Busy"] ?? 0 };
+  // Each kept checkout lists its own thread.
+  expect(scan.hibernate!.coverage?.keptCheckouts?.every((row) => row.threads?.length === 1)).toBe(true);
+  return { normalized, compared, kept: scan.hibernate!.kept["Busy"] ?? 0 };
 }
 
 describe("Thread Maintenance hibernate step budget", () => {
@@ -82,5 +95,9 @@ describe("Thread Maintenance hibernate step budget", () => {
     expect(large.normalized).toBeLessThanOrEqual(2 * small.normalized + 16);
     // Two directories per thread, read once per scan.
     expect(large.normalized).toBeLessThanOrEqual(4 * 120);
+    // Listing each kept checkout's threads compares a bounded number of
+    // directories per checkout. Walking every recorded directory per
+    // checkout made it about four times.
+    expect(large.compared).toBeLessThanOrEqual(2 * small.compared + 16);
   });
 });

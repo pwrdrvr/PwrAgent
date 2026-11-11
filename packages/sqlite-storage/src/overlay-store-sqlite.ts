@@ -10423,6 +10423,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return rows.map((row) => JSON.parse(row.payload) as ThreadOverlayState);
   }
 
+  /**
+   * The rows of `listThreadArchiveStates` that belong to these threads or
+   * whose payload contains one of these snapshot refs as a JSON string: every
+   * archive state that could name the threads or share a ref, without parsing
+   * every row. Callers match fields themselves; extra rows are allowed.
+   */
+  async listThreadArchiveStatesFor(
+    records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>,
+    snapshotRefs: string[],
+  ): Promise<ThreadOverlayState[]> {
+    const unique = [...new Set(snapshotRefs)];
+    // A ref needing JSON escapes can be spelled more than one way once SQLite
+    // rewrites a payload, so its text is not a reliable search key.
+    if (unique.some((ref) => JSON.stringify(ref) !== `"${ref}"`)) return await this.listThreadArchiveStates();
+    const refs = unique.map((ref) => `"${ref}"`);
+    const keys = records.map((record) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+    const rows = this.stateDb.raw.prepare(`
+      SELECT payload FROM threads
+      WHERE (payload LIKE '%"archiveRetentionStartedAt"%' OR payload LIKE '%"worktreeSnapshots"%')
+        AND (thread_id IN (SELECT value FROM json_each(?))
+          OR EXISTS (SELECT 1 FROM json_each(?) AS ref WHERE instr(threads.payload, ref.value) > 0))
+    `).all(JSON.stringify(keys), JSON.stringify(refs)) as Array<{ payload: string }>;
+    // Fail closed, as the full listing does.
+    return rows.map((row) => JSON.parse(row.payload) as ThreadOverlayState);
+  }
+
   async observeArchivedThreads(
     records: Array<{ backend: ThreadOverlayState["backend"]; threadId: string }>,
     now: number,
@@ -12641,6 +12667,7 @@ export type OverlayStoreLike = Pick<
   flushThreadCodexEnvironmentActionLiveOutputs?: SqliteOverlayStore["flushThreadCodexEnvironmentActionLiveOutputs"];
   listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
   listThreadArchiveStates?: SqliteOverlayStore["listThreadArchiveStates"];
+  listThreadArchiveStatesFor?: SqliteOverlayStore["listThreadArchiveStatesFor"];
   observeArchivedThreads?: SqliteOverlayStore["observeArchivedThreads"];
   forgetThreadArchiveStates?: SqliteOverlayStore["forgetThreadArchiveStates"];
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];

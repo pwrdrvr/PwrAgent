@@ -9098,6 +9098,10 @@ export class DesktopBackendRegistry {
       getPolicy: () => this.readThreadArchivePolicy(),
       listThreads: async () => await this.listThreadsForArchiveRetention(),
       listStates: async () => await this.overlayStore.listThreadArchiveStates!(),
+      ...(this.overlayStore.listThreadArchiveStatesFor ? {
+        listStatesFor: async (threads: ThreadOverlayState[], snapshotRefs: string[]) =>
+          await this.overlayStore.listThreadArchiveStatesFor!(threads, snapshotRefs),
+      } : {}),
       shouldStop: () => this.closed || this.stoppingRunningTurnsForShutdown,
       observeArchives: async (threads, now) => await this.observeArchivedThreads(
         threads.map((thread) => ({ backend: thread.source, threadId: thread.id })), now),

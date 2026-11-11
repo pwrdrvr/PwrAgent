@@ -1263,8 +1263,9 @@ function allocationCoverage(
   }
   const largestKept = new Map<string, ThreadMaintenanceKeptCheckout>();
   for (const item of exclusions) for (const target of item.paths) {
+    if (largestKept.has(target)) continue;
     const threads = owners?.forPath(target);
-    if (!largestKept.has(target)) largestKept.set(target, { path: target, reason: item.reason,
+    largestKept.set(target, { path: target, reason: item.reason,
       ...(threads?.length ? { threads } : {}),
       ...(paths.get(target)?.rebuildableOutput ? { rebuildableOutput: paths.get(target)!.rebuildableOutput } : {}),
       ...(paths.get(target)?.allocatedBytes !== undefined ? { allocatedBytes: paths.get(target)!.allocatedBytes } : {}) });

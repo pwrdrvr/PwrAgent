@@ -1,4 +1,6 @@
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildThreadIdentityKey, type ThreadOverlayState } from "@pwragent/shared";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -60,5 +62,59 @@ describe("archive retention persistence", () => {
   it("fails closed when retained snapshot metadata is malformed", async () => {
     db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run("codex:bad", '{"worktreeSnapshots":invalid}');
     await expect(store.listThreadArchiveStates()).rejects.toThrow();
+  });
+
+  it("re-reads every archive state that names the threads or shares a ref, and reads nothing else", async () => {
+    // Oracle: the full listing, filtered by field. The narrowed read may
+    // return more, never less, and only rows of the full listing.
+    const ids = ["a", "b", "c", "d", "e"];
+    // SQL wildcards, a quote, a backslash and non-ASCII text must match
+    // literally, or fall back to the full listing.
+    const refs = ["refs/s/1", "refs/s/10", "refs/s/%", "refs/s/_x", "refs/s/\"q\"", "refs/s/back\\slash", "refs/s/é"];
+    const backends = ["codex", "claude"] as const;
+    const identity = (state: { backend: ThreadOverlayState["backend"]; threadId: string }) => buildThreadIdentityKey(state.backend, state.threadId);
+    const row = fc.record({
+      backend: fc.constantFrom(...backends), threadId: fc.constantFrom(...ids),
+      retained: fc.boolean(), pinned: fc.boolean(), rewritten: fc.boolean(),
+      snapshots: fc.array(fc.record({ repo: fc.constantFrom("/r1", "/r2"), ref: fc.constantFrom(...refs) }), { maxLength: 2 }),
+    });
+    await fc.assert(fc.asyncProperty(
+      fc.array(row, { maxLength: 8 }),
+      fc.array(fc.record({ backend: fc.constantFrom(...backends), threadId: fc.constantFrom(...ids, "missing") }), { maxLength: 3 }),
+      fc.array(fc.constantFrom(...refs), { maxLength: 3 }),
+      async (rows, victims, wanted) => {
+        db.raw.prepare("DELETE FROM threads").run();
+        for (const item of rows) {
+          const thread = { backend: item.backend, threadId: item.threadId };
+          if (item.retained) await store.observeArchivedThreads([thread], 1000);
+          if (item.pinned) await store.setThreadPin({ ...thread, pinned: true });
+          for (const [index, snapshot] of item.snapshots.entries()) await store.upsertWorktreeSnapshot({ ...thread, snapshot: {
+            id: `${index}`, backend: item.backend, threadId: item.threadId, worktreePath: `${snapshot.repo}/${index}`,
+            repositoryPath: snapshot.repo, snapshotRef: snapshot.ref, snapshotCommit: "abc", createdAt: 1, state: "archived",
+            ignoredFilesExcluded: true } });
+          // SQLite rewrites some payloads in place, in its own JSON spelling.
+          if (item.rewritten) db.raw.prepare("UPDATE threads SET payload = json_remove(payload, '$.absent')").run();
+        }
+        const all = await store.listThreadArchiveStates();
+        const keys = new Set(victims.map(identity));
+        const expected = all.filter((state: ThreadOverlayState) => keys.has(identity(state))
+          || (state.worktreeSnapshots ?? []).some((snapshot) => wanted.includes(snapshot.snapshotRef)));
+        const actual = await store.listThreadArchiveStatesFor(victims, wanted);
+        const byIdentity = new Map(actual.map((state) => [identity(state), state]));
+        for (const state of expected) expect(byIdentity.get(identity(state))).toEqual(state);
+        const listed = new Map(all.map((state) => [identity(state), state]));
+        for (const state of actual) expect(listed.get(identity(state))).toEqual(state);
+      },
+    ), { numRuns: 300 });
+  });
+
+  it("re-reads only the matching archive states and makes no writes", async () => {
+    for (let index = 0; index < 40; index++) await store.upsertWorktreeSnapshot({ backend: "codex", threadId: `t${index}`, snapshot: {
+      id: "s", backend: "codex", threadId: `t${index}`, worktreePath: `/w/${index}`, repositoryPath: "/repo",
+      snapshotRef: `refs/s/${index}`, snapshotCommit: "abc", createdAt: 1, state: "archived", ignoredFilesExcluded: true } });
+    const { writes, result } = await measureSqliteWrites(async () =>
+      await store.listThreadArchiveStatesFor([{ backend: "codex", threadId: "t3" }], ["refs/s/7"]));
+    expect(writes.commits).toBe(0);
+    expect(result.map((state) => state.threadId).sort()).toEqual(["t3", "t7"]);
   });
 });

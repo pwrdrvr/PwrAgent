@@ -64393,6 +64393,8 @@ script = "printf setup"
       });
       const overlayStore = Object.assign(createOverlayStoreMock({ overlays }), {
         listThreadArchiveStates: vi.fn(async () => states),
+        // A superset is allowed: the sweep matches fields itself.
+        listThreadArchiveStatesFor: vi.fn(async (_threads: ThreadOverlayState[], _refs: string[]) => states),
         observeArchivedThreads: vi.fn(async (records: Array<{ backend: AppServerBackendKind; threadId: string }>, now: number) => {
           for (const record of records) {
             const state = states.find((state) => state.backend === record.backend && state.threadId === record.threadId);
@@ -64425,6 +64427,9 @@ script = "printf setup"
         expect(codex.readThreadSummary).not.toHaveBeenCalled();
         expect(deleteSnapshot).toHaveBeenCalledTimes(removed && scenario !== "shared-ref" ? 1 : 0);
         expect(overlayStore.forgetThreadArchiveStates).toHaveBeenCalledTimes(removed ? 1 : 0);
+        // Cleanup re-reads only the victim and the states sharing its ref.
+        expect(overlayStore.listThreadArchiveStatesFor).toHaveBeenCalledTimes(removed ? 1 : 0);
+        if (removed) expect(overlayStore.listThreadArchiveStatesFor).toHaveBeenCalledWith([overlay], [snapshot.snapshotRef]);
         for (const file of [history, backup, image]) {
           if (removed) await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
           else await expect(stat(file)).resolves.toBeDefined();
