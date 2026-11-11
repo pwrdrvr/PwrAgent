@@ -2,12 +2,14 @@ import { sandboxerStub } from "./helpers/sandboxer-stub";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpDiscovery, mcpDiscoveryContext } from "../mcp-connections/mcp-discovery";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
+import { mcpClient, mcpClientStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk";
+import { verbatimElicitRequestSchema } from "../mcp-connections/mcp-upstream-elicitation";
 const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock("../log", () => ({ getMainLogger: () => logs }));
 
@@ -95,6 +97,13 @@ function fixture() {
     },
   };
 }
+
+// The gateway loads the SDK on first use, and a module import finishes on
+// real I/O that fake timers cannot advance. Load it first, so each case's
+// clock measures discovery rather than racing a cold import.
+beforeAll(async () => {
+  await Promise.all([mcpTypes.load(), mcpClient.load(), mcpClientStreamableHttp.load(), verbatimElicitRequestSchema.load()]);
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
