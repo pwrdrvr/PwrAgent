@@ -5,7 +5,7 @@ import { buildHeadless } from "../../../../scripts/build-headless.mjs";
 
 /** Fresh process and module graph, real composition root; only UI and provider
  * boundaries are fixtures. This never launches Electron or an installed agent. */
-export async function buildOwnerFixture(directory: string, kind: "desktop" | "headless" = "headless", extraExports = ""): Promise<string> {
+export async function buildOwnerFixture(directory: string, kind: "desktop" | "headless" = "headless", extraExports = "", transport: "in-process" | "stdio" = "in-process"): Promise<string> {
   const main = path.resolve(import.meta.dirname, "../..");
   const fixture = path.join(main, "__tests__/fixtures/owner-conformance-codex-transport.ts");
   const packageRoot = path.resolve(main, "../../../../packages/pwragent");
@@ -16,7 +16,7 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
   }
   fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(directory, "package.json"));
   const plugins: Plugin[] = [{ name: "owned-provider-and-ui", setup(builder) {
-    builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "codex", namespace: "owned-provider" }));
+    if (transport === "in-process") builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "codex", namespace: "owned-provider" }));
     builder.onLoad({ filter: /.*/, namespace: "owned-provider" }, () => ({ contents: `
       import { appendFileSync, readFileSync } from "node:fs"; import path from "node:path";
       import { OwnerConformanceCodexTransport } from ${JSON.stringify(fixture)};

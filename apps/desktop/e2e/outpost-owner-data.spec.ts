@@ -28,10 +28,12 @@ test("the mounted Node owner keeps one native turn and distinct immutable queued
     return JSON.parse((await promisify(execFile)(process.execPath, [outpost.cli, method, "--params-file", file], { env: outpost.env })).stdout);
   };
   try {
-    const identity = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    const created = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    const identity = { backend: created.backend, threadId: created.threadId };
     await outpost.client.renameThread({ ...identity, name: "Invented Node owner" });
     const active = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-    const request = { ...identity, delivery: "new_turn" as const, queueEntryId: randomUUID(), input: [{ type: "text" as const, text: "Invented queued input" }] };
+    const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "invented-sender" } };
+    const request = { ...identity, messageOrigin, delivery: "new_turn" as const, queueEntryId: randomUUID(), input: [{ type: "text" as const, text: "Invented queued input" }] };
     const queued = await outpost.client.startTurn(request);
     expect(queued).toMatchObject({ queueStatus: "queued", queueEntryId: request.queueEntryId });
     expect(await outpost.client.startTurn(request)).toMatchObject({ queueEntryId: queued.queueEntryId });
@@ -59,7 +61,7 @@ test("the mounted Node owner keeps one native turn and distinct immutable queued
     await command("pause", { queueEntryId: queued.queueEntryId });
     expect((await outpost.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries[0]).toMatchObject({ queueEntryId: queued.queueEntryId, paused: true });
     await command("resume", { queueEntryId: queued.queueEntryId });
-    const replacement = await outpost.client.replaceQueuedMessage({ ...identity, queueEntryId: queued.queueEntryId!, input: [{ type: "text", text: "Invented replacement input" }] });
+    const replacement = await outpost.client.replaceQueuedMessage({ ...identity, messageOrigin, queueEntryId: queued.queueEntryId!, input: [{ type: "text", text: "Invented replacement input" }] });
     expect(replacement.queueEntryId).not.toBe(queued.queueEntryId);
     await expect(row).toHaveCount(0);
     const changed = app.window.locator(".composer__queued").filter({ hasText: "Invented replacement input" });
@@ -77,7 +79,8 @@ async function mountOutpost(title: string) {
   const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent"), capabilities: [...OUTPOST_VIEWER_CAPABILITIES, "turn_queue_pause"] });
   let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
   try {
-    const identity = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    const created = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
+    const identity = { backend: created.backend, threadId: created.threadId };
     await outpost.client.renameThread({ ...identity, name: title });
     const file = path.join(outpost.env.PWRAGENT_TEST_DATA!, `invite-${randomUUID()}.json`);
     await writeFile(file, "{}");

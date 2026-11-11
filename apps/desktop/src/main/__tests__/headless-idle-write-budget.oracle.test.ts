@@ -9,10 +9,12 @@ import type { StateDb } from "../state/state-db";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
-it("the built Node owner's boot, one idle hour and shutdown stay within the lifecycle write budget", async () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-idle-budget-")));
+it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])("the built Node owner's boot, one idle hour and shutdown stay within the lifecycle write budget (%s path)", async spelling => {
+  const canonicalRoot = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-idle-budget-")));
+  const root = spelling === "symlink" ? `${canonicalRoot}-alias` : canonicalRoot;
+  if (root !== canonicalRoot) fs.symlinkSync(canonicalRoot, root, "dir");
   const directory = path.join(root, "bundle");
-  for (const name of ["workspace", "fixture", "profiles/t/state"]) fs.mkdirSync(path.join(root, name), { recursive: true });
+  for (const name of ["workspace", "fixture", "codex", "profiles/t/state"]) fs.mkdirSync(path.join(root, name), { recursive: true });
   await buildOwnerFixture(directory, "headless", `
     export { measureSqliteWrites, resetSqliteWriteMetrics } from "../state/sqlite-write-metrics";
     export { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
@@ -26,44 +28,61 @@ it("the built Node owner's boot, one idle hour and shutdown stay within the life
     measureSqliteWrites: typeof measureSqliteWrites;
     resetSqliteWriteMetrics(): void;
   };
-  const runtime = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
   vi.stubEnv("PWRAGENT_HOME", root);
   vi.stubEnv("PWRAGENT_PROFILE", "t");
+  vi.stubEnv("PWRAGENT_INSTANCE_ROOT", path.join(root, "workspace"));
   vi.stubEnv("PWRAGENT_CODEX_COMMAND", process.execPath);
+  vi.stubEnv("PWRAGENT_CODEX_HOME", path.join(root, "codex"));
+  vi.stubEnv("CODEX_HOME", path.join(root, "codex"));
   vi.stubEnv("PWRAGENT_TEST_DATA", path.join(root, "fixture"));
   vi.stubEnv("CLAUDE_CONFIG_DIR", path.join(root, "claude"));
   vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+  // Install the fixture environment and clock before evaluating the fresh
+  // module graph, so module-level consumers cannot capture the outer host.
+  vi.useFakeTimers({ now: Date.UTC(2026, 10, 10, 12) });
+  const runtime = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
   // Schema creation is fixture setup; every owner lifecycle write is measured.
   const db = runtime.StateDb.open(path.join(root, "profiles/t/state/state.db"));
   db.close();
   runtime.resetSqliteWriteMetrics();
-  vi.useFakeTimers({ now: Date.UTC(2026, 10, 10, 12) });
+  let boot: SqliteWriteDelta | undefined;
   let idle: SqliteWriteDelta | undefined;
+  let shutdown: SqliteWriteDelta | undefined;
   try {
     const { writes } = await runtime.measureSqliteWrites(async () => {
-      const services = await runtime.startHeadlessHost(undefined, { manageSignals: false });
-      const permit = runtime.issueProviderDiscoveryPermit("startup");
-      await services.settings.refreshStartupDiscovery(permit);
-      await services.registry.refreshProvidersAtStartup(permit);
-      await services.service.startOwnerNavigation();
-      await services.registry.listThreads({ backend: "codex", forceRefresh: true, enrichDirectories: false });
+      const started = await runtime.measureSqliteWrites(async () => {
+        const services = await runtime.startHeadlessHost(undefined, { manageSignals: false });
+        const permit = runtime.issueProviderDiscoveryPermit("startup");
+        await services.settings.refreshStartupDiscovery(permit);
+        await services.registry.refreshProvidersAtStartup(permit);
+        await services.service.startOwnerNavigation();
+        await services.registry.listThreads({ backend: "codex", forceRefresh: true, enrichDirectories: false });
+        return services;
+      });
+      boot = started.writes;
+      const services = started.result;
       ({ writes: idle } = await runtime.measureSqliteWrites(async () => {
         await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
         if (services.registry.getThreadArchiveSweepStatus().running) {
           await services.registry.sweepInactiveThreads({ manual: false });
         }
       }));
-      await runtime.shutdownHeadlessHost("idle-budget");
+      ({ writes: shutdown } = await runtime.measureSqliteWrites(() => runtime.shutdownHeadlessHost("idle-budget")));
     });
     // The first scheduled archive sweep claims and completes its one-time
     // repair. Its two metadata writes belong to this first idle hour.
     expect(idle!.tables.filter(table => table.rowsChanged > 0)).toMatchObject([{ table: "meta", rowsChanged: 2 }]);
-    expectSqliteWriteBudget({ scenario: "headless-owner-lifecycle-idle-hour", writes,
-      note: "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. Wait for provider/navigation startup and join the archive sweep before measuring its complete timer cost." });
+    try {
+      expectSqliteWriteBudget({ scenario: "headless-owner-lifecycle-idle-hour", writes,
+        note: "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. Wait for provider/navigation startup and join the archive sweep before measuring its complete timer cost." });
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ lifecycle: writes.tables, boot: boot!.tables, idle: idle!.tables, shutdown: shutdown!.tables }, null, 2)}`, { cause: error });
+    }
   } finally {
     await runtime.shutdownHeadlessHost("idle-budget-cleanup");
     vi.useRealTimers();
     vi.unstubAllEnvs();
-    fs.rmSync(root, { recursive: true, force: true });
+    if (root !== canonicalRoot) fs.unlinkSync(root);
+    fs.rmSync(canonicalRoot, { recursive: true, force: true });
   }
 });
