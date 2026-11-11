@@ -43,9 +43,13 @@ const messagingLog = {
   info: vi.fn(),
   warn: vi.fn(),
 };
+const evaluatedModuleLoggers = new Set<string>();
 
 vi.mock("../log", () => ({
-  getMainLogger: vi.fn(() => messagingLog),
+  getMainLogger: vi.fn((name: string) => {
+    evaluatedModuleLoggers.add(name);
+    return messagingLog;
+  }),
 }));
 
 // This file does not call `StateDb.open`; `initializeAppState` opens the
@@ -91,6 +95,9 @@ vi.mock("../profile", async (importOriginal) => {
 
 const tempDirs: string[] = [];
 const activeRuntimes: DesktopMessagingRuntime[] = [];
+// The real module's top-level logger records evaluation, independently of
+// how long a particular runner takes to load its dependency graph.
+const federationEvaluatedDuringCollection = evaluatedModuleLoggers.has("pwragent:federation-runtime");
 
 function trackRuntime(runtime: DesktopMessagingRuntime): DesktopMessagingRuntime {
   activeRuntimes.push(runtime);
@@ -128,6 +135,10 @@ afterEach(async () => {
 });
 
 describe("DesktopMessagingRuntime", () => {
+  it("evaluates the real federation graph during collection before per-test owner setup", () => {
+    expect(federationEvaluatedDuringCollection).toBe(true);
+  });
+
   it("starts configured adapters and routes inbound events through channel controllers", async () => {
     const { runtime, adapter, bridge } = await createRuntimeHarness();
 
