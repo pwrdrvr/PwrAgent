@@ -98,6 +98,12 @@ export type MessagingDeliveryScope = {
   kind: MessagingDeliveryScopeKind;
   label?: string;
   parentId?: string;
+  /**
+   * The provider rate-limit bucket this scope shares with other scopes, such
+   * as every conversation of one bot account. A rate limit reported with
+   * `appliesTo: "bucket"` cools off every scope with the same platform and
+   * `bucketId`.
+   */
   bucketId?: string;
   budget?: MessagingDeliveryScopeBudget;
 };

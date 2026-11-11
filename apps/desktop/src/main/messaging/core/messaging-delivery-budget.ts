@@ -38,6 +38,13 @@ type ScopeState = {
   timestamps: number[];
 };
 
+// A provider limit shared by several scopes, such as one bot account. It has
+// no capacity of its own: each scope keeps its own sliding window.
+type BucketState = {
+  coolOffUntil?: number;
+  slowModeUntil?: number;
+};
+
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_LIMIT = 60;
 const DEFAULT_RESERVED = 1;
@@ -60,6 +67,7 @@ const DEFERABLE_PRIORITIES = new Set<MessagingDeliveryPriority>([
 export class MessagingDeliveryBudget {
   private readonly now: () => number;
   private readonly scopes = new Map<string, ScopeState>();
+  private readonly buckets = new Map<string, BucketState>();
 
   constructor(options?: { now?: () => number }) {
     this.now = options?.now ?? Date.now;
@@ -77,14 +85,16 @@ export class MessagingDeliveryBudget {
     const now = this.now();
     const state = this.stateFor(request.scope);
     this.pruneState(state, request.scope, now);
-    let slowMode = this.isScopeInSlowMode(request.scope);
+    const bucket = this.bucketFor(request.scope, now);
+    let slowMode = isSlowMode(state, bucket, now);
+    const coolOffUntil = Math.max(state.coolOffUntil ?? 0, bucket?.coolOffUntil ?? 0);
 
-    if (state.coolOffUntil !== undefined && state.coolOffUntil > now) {
+    if (coolOffUntil > now) {
       if (DEFERABLE_PRIORITIES.has(request.priority)) {
         return {
           outcome: "deferred",
           reason: "cool-off",
-          retryAt: state.coolOffUntil,
+          retryAt: coolOffUntil,
           slowMode,
         };
       }
@@ -126,25 +136,58 @@ export class MessagingDeliveryBudget {
   recordRateLimit(info: MessagingRateLimitInfo): void {
     const now = info.observedAt ?? this.now();
     const retryAfterMs = Math.max(0, Math.floor(info.retryAfterMs ?? 0));
-    const state = this.stateFor(info.scope);
     const coolOffUntil = now + retryAfterMs + RATE_LIMIT_SAFETY_BUFFER_MS;
-    state.coolOffUntil = Math.max(state.coolOffUntil ?? 0, coolOffUntil);
-    state.slowModeUntil = Math.max(
-      state.slowModeUntil ?? 0,
-      state.coolOffUntil + SLOW_MODE_RECOVERY_MS,
-    );
+    const targets: Array<ScopeState | BucketState> = [this.stateFor(info.scope)];
+    const key = info.appliesTo === "bucket" ? bucketKey(info.scope) : undefined;
+    if (key !== undefined) {
+      let bucket = this.buckets.get(key);
+      if (!bucket) {
+        bucket = {};
+        this.buckets.set(key, bucket);
+      }
+      targets.push(bucket);
+    }
+    for (const target of targets) {
+      target.coolOffUntil = Math.max(target.coolOffUntil ?? 0, coolOffUntil);
+      target.slowModeUntil = Math.max(
+        target.slowModeUntil ?? 0,
+        target.coolOffUntil + SLOW_MODE_RECOVERY_MS,
+      );
+    }
   }
 
   isScopeInSlowMode(scope: MessagingDeliveryScope | undefined): boolean {
     if (!scope) {
       return false;
     }
+    const now = this.now();
     const state = this.scopes.get(scope.id);
-    if (!state) {
-      return false;
+    if (state) {
+      this.pruneState(state, scope, now);
     }
-    this.pruneState(state, scope, this.now());
-    return state.slowModeUntil !== undefined && state.slowModeUntil > this.now();
+    return isSlowMode(state, this.bucketFor(scope, now), now);
+  }
+
+  private bucketFor(
+    scope: MessagingDeliveryScope,
+    now: number,
+  ): BucketState | undefined {
+    const key = bucketKey(scope);
+    const bucket = key === undefined ? undefined : this.buckets.get(key);
+    if (!key || !bucket) {
+      return undefined;
+    }
+    if (bucket.coolOffUntil !== undefined && bucket.coolOffUntil <= now) {
+      bucket.coolOffUntil = undefined;
+    }
+    if (bucket.slowModeUntil !== undefined && bucket.slowModeUntil <= now) {
+      bucket.slowModeUntil = undefined;
+    }
+    if (bucket.coolOffUntil === undefined && bucket.slowModeUntil === undefined) {
+      this.buckets.delete(key);
+      return undefined;
+    }
+    return bucket;
   }
 
   private stateFor(scope: MessagingDeliveryScope): ScopeState {
@@ -186,6 +229,19 @@ export class MessagingDeliveryBudget {
     }
     return state.timestamps.length < Math.max(0, limit - budgetReserved(scope));
   }
+}
+
+function isSlowMode(
+  state: ScopeState | undefined,
+  bucket: BucketState | undefined,
+  now: number,
+): boolean {
+  return Math.max(state?.slowModeUntil ?? 0, bucket?.slowModeUntil ?? 0) > now;
+}
+
+// Platform-qualified, so two providers cannot share a bucket by id.
+function bucketKey(scope: MessagingDeliveryScope): string | undefined {
+  return scope.bucketId ? `${scope.platform}\u0000${scope.bucketId}` : undefined;
 }
 
 function nextWindowAt(

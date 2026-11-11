@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { MessagingDeliveryScope } from "@pwragent/messaging-interface";
+import fc from "fast-check";
+import type {
+  MessagingDeliveryScope,
+  MessagingRateLimitInfo,
+} from "@pwragent/messaging-interface";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 
 describe("MessagingDeliveryBudget", () => {
@@ -307,3 +311,92 @@ function testScope(options: {
     },
   };
 }
+
+// Model: a scope is in cool-off while any recorded limit covers it. A limit
+// covers its own scope, and with `appliesTo: "bucket"` every scope with the
+// same platform and bucketId. Nothing else is covered.
+describe("MessagingDeliveryBudget bucket cool-offs", () => {
+  const SAFETY_BUFFER_MS = 2_000;
+  const SCOPES: MessagingDeliveryScope[] = [
+    { platform: "mattermost", id: "mattermost:channel:a", kind: "channel", bucketId: "bot" },
+    { platform: "mattermost", id: "mattermost:channel:b", kind: "channel", bucketId: "bot" },
+    { platform: "mattermost", id: "mattermost:channel:c", kind: "channel" },
+    { platform: "line", id: "line:a", kind: "dm", bucketId: "bot" },
+    { platform: "line", id: "line:b", kind: "group", bucketId: "other-bot" },
+    { platform: "discord", id: "discord:channel:a", kind: "channel", bucketId: "bot" },
+  ];
+
+  type Limit = { at: number; appliesTo?: "scope" | "bucket"; retryAfterMs: number; scope: number };
+
+  function covers(limit: Limit, scope: MessagingDeliveryScope): boolean {
+    const limited = SCOPES[limit.scope]!;
+    if (limited.id === scope.id) return true;
+    return (
+      limit.appliesTo === "bucket"
+      && limited.bucketId !== undefined
+      && limited.platform === scope.platform
+      && limited.bucketId === scope.bucketId
+    );
+  }
+
+  it("admits a scope exactly when no covering limit is still cooling off", () => {
+    const limitArb = fc.record({
+      at: fc.integer({ min: 0, max: 600_000 }),
+      appliesTo: fc.constantFrom<Limit["appliesTo"]>(undefined, "scope", "bucket"),
+      retryAfterMs: fc.integer({ min: 0, max: 300_000 }),
+      scope: fc.integer({ min: 0, max: SCOPES.length - 1 }),
+    });
+    fc.assert(
+      fc.property(
+        fc.array(limitArb, { maxLength: 6 }),
+        fc.array(
+          fc.record({
+            at: fc.integer({ min: 0, max: 1_000_000 }),
+            scope: fc.integer({ min: 0, max: SCOPES.length - 1 }),
+          }),
+          { minLength: 1, maxLength: 12 },
+        ),
+        (limits, probes) => {
+          let now = 0;
+          const budget = new MessagingDeliveryBudget({ now: () => now });
+          for (const limit of limits) {
+            const info: MessagingRateLimitInfo = {
+              observedAt: limit.at,
+              retryAfterMs: limit.retryAfterMs,
+              scope: SCOPES[limit.scope]!,
+              ...(limit.appliesTo ? { appliesTo: limit.appliesTo } : {}),
+            };
+            budget.recordRateLimit(info);
+          }
+          for (const probe of [...probes].sort((a, b) => a.at - b.at)) {
+            now = probe.at;
+            const scope = SCOPES[probe.scope]!;
+            const coolOffUntil = Math.max(
+              0,
+              ...limits
+                .filter((limit) => covers(limit, scope))
+                .map((limit) => limit.at + limit.retryAfterMs + SAFETY_BUFFER_MS),
+            );
+            // A final answer that consumes no capacity is held back only by
+            // a cool-off, never by slow mode or the sliding window.
+            const admission = budget.admit({
+              consumeCapacity: false,
+              priority: "final_turn",
+              scope,
+            });
+            if (coolOffUntil > now) {
+              expect(admission).toMatchObject({
+                outcome: "deferred",
+                reason: "cool-off",
+                retryAt: coolOffUntil,
+              });
+            } else {
+              expect(admission.outcome).toBe("admitted");
+            }
+          }
+        },
+      ),
+      { numRuns: 300 },
+    );
+  });
+});

@@ -81,6 +81,9 @@ import {
 } from "./thread-permissions.ts";
 
 const DISCORD_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
+// Discord's global limit counts every request the bot makes, across all
+// channels and guilds. Every delivery scope shares this bucket.
+export const DISCORD_GLOBAL_RATE_LIMIT_BUCKET_ID = "discord:bot";
 const DISCORD_TYPING_SIGNAL_INTERVAL_MS = 4_000;
 const DISCORD_CHANNEL_TYPE_DM = 1;
 
@@ -1910,6 +1913,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       kind: "channel",
       parentId: target.guildId,
       label: "Discord channel",
+      bucketId: DISCORD_GLOBAL_RATE_LIMIT_BUCKET_ID,
       budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
     };
   }
@@ -1925,6 +1929,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
     const info: MessagingRateLimitInfo = {
       scope: this.rateLimitScopeForTarget(target),
+      // Route and per-resource limits stay with the channel. Only the global
+      // limit covers every channel.
+      ...(isDiscordGlobalRateLimit(error) ? { appliesTo: "bucket" as const } : {}),
       retryAfterMs,
       message: errorMessage(error),
       observedAt: this.now(),
@@ -3213,6 +3220,17 @@ function retryAfterMsFromError(error: unknown): number | undefined {
   }
   const status = readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
   return status === 429 ? 1_000 : undefined;
+}
+
+/**
+ * True for a 429 on Discord's global limit. `@discordjs/rest` sets `global`
+ * on its `RateLimitError`, and `scope` to `"global"` from the
+ * `X-RateLimit-Scope` header.
+ */
+export function isDiscordGlobalRateLimit(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { global?: unknown; scope?: unknown };
+  return candidate.global === true || candidate.scope === "global";
 }
 
 function readNumberProperty(value: unknown, key: string): number | undefined {

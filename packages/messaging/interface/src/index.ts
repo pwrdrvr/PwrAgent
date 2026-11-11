@@ -36,6 +36,12 @@ export {
   type MessagingRateLimitBucket,
 } from "./rate-limit-gate";
 export {
+  MESSAGING_RETRY_AFTER_MAX_MS,
+  parseRetryAfterMs,
+  retryAfterMsFromHttpHeaders,
+  type MessagingHttpHeaderReader,
+} from "./retry-after";
+export {
   MESSAGING_COMMAND_CATALOG,
   MESSAGING_HELP_ACTION_COMMANDS,
   matchMessagingCommandVerb,
@@ -245,6 +251,13 @@ function isAsciiWhitespace(charCode: number): boolean {
 export type MessagingRateLimitInfo = {
   retryAfterMs?: number;
   scope: MessagingDeliveryScope;
+  /**
+   * What the provider limit covers. `scope`, the default, cools off only
+   * `scope`. `bucket` also cools off every scope that shares
+   * `scope.bucketId`, for a limit on the whole bot or app rather than one
+   * conversation. Without a `scope.bucketId`, `bucket` acts as `scope`.
+   */
+  appliesTo?: "scope" | "bucket";
   message?: string;
   observedAt?: number;
   /**
