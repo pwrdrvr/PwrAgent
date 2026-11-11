@@ -20,7 +20,7 @@ type Host = {
   policyProbe(): Promise<unknown>;
   requests(): Promise<Array<{ method: string; params: Record<string, unknown> }>>;
   complete(threads: Thread[], ids: string[]): Promise<QueueEvent[]>;
-  stopDuringRequest(method: string, values: Record<string, unknown>): Promise<void>;
+  stopDuringRequest(method: string, values: Record<string, unknown>): Promise<string>;
   close(): Promise<void>;
 };
 
@@ -29,8 +29,10 @@ type Runtime = { root: string; outputDirectory: string; guard: string };
 // The bundle is shared fixture setup, not the behavior under test. Building it
 // once keeps each test's budget for the driver it forks.
 let runtime: Runtime;
+let runtimeRoot: string | undefined;
 beforeAll(async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "headless-concurrency-")));
+  runtimeRoot = root;
   const outputDirectory = path.join(root, "runtime");
   const fixture = path.join(import.meta.dirname, "fixtures/owner-conformance-codex-transport.ts");
   await buildHeadless({ outputDirectory, plugins: [{ name: "conformance-provider", setup(builder) {
@@ -56,7 +58,7 @@ beforeAll(async () => {
   runtime = { root, outputDirectory, guard };
 });
 afterAll(() => {
-  if (runtime) fs.rmSync(runtime.root, { recursive: true, force: true });
+  if (runtimeRoot) fs.rmSync(runtimeRoot, { recursive: true, force: true });
 });
 
 async function builtHost(): Promise<Host> {
@@ -73,7 +75,10 @@ async function builtHost(): Promise<Host> {
   fs.writeFileSync(driver, `const app = require(${JSON.stringify(path.join(outputDirectory, "index.js"))});
     // The parent owns the channel. A reply that finishes after it disconnected
     // has no reader, so it is dropped instead of crashing the driver.
-    const reply = message => { if (process.connected) process.send(message); };
+    const reply = message => {
+      if (process.connected) process.send(message);
+      else process.stderr.write("dropped reply after disconnect: " + message.id + "\\n");
+    };
     app.startHeadlessHost().then(async services => {
       await services.config.write({ onboarding: { completed: true } }, ["onboarding"]);
       services.config.recordProviderDiscovery("codex", { candidates: [], selectedCommand: process.execPath, selectedVersion: "0.159.2" });
@@ -107,7 +112,8 @@ async function builtHost(): Promise<Host> {
       reply({ ready: true });
     }).catch(error => { console.error(error.stack); process.exitCode = 1; if (process.connected) process.disconnect(); });`);
   const child = fork(driver, [], { env, execArgv: ["--require", guard], stdio: ["ignore", "pipe", "pipe", "ipc"] });
-  const exited = once(child, "exit");
+  // "close" waits for stdio to drain, so `output` is complete when it fires.
+  const exited = once(child, "close");
   let output = "";
   child.stdout?.on("data", chunk => { output += chunk.toString(); });
   child.stderr?.on("data", chunk => { output += chunk.toString(); });
@@ -131,7 +137,15 @@ async function builtHost(): Promise<Host> {
     if (message.error) waiter?.reject(new Error(message.error));
     else waiter?.resolve(message.result);
   });
+  void exited.then(([code]) => {
+    for (const waiter of pending.values()) waiter.reject(new Error(`Node owner exited (${code}) before replying: ${output}`));
+    pending.clear();
+  });
   const call = <T>(method: string, values: Record<string, unknown>): Promise<T> => new Promise((resolve, reject) => {
+    if (!child.connected) {
+      reject(new Error(`Node owner disconnected before ${method}: ${output}`));
+      return;
+    }
     const requestId = ++id;
     pending.set(requestId, { resolve: value => resolve(value as T), reject });
     child.send({ id: requestId, method, ...values });
@@ -147,9 +161,10 @@ async function builtHost(): Promise<Host> {
     readThread: thread => call("readThread", { params: thread }),
     policyProbe: () => call("policyProbe", {}), requests: () => call("requests", {}),
     complete: (threads, ids) => call("complete", { threads, ids }),
-    stopDuringRequest: (method, values) => {
+    stopDuringRequest: async (method, values) => {
       child.send({ id: ++id, method, ...values });
-      return close();
+      await close();
+      return output;
     },
     close,
   };
@@ -189,5 +204,7 @@ it("exits cleanly when the parent stops the driver before a reply is sent", asyn
   const thread = await host.startThread();
   // readThread awaits the registry, so stop is handled first and the channel
   // is closed by the time the reply is ready.
-  await host.stopDuringRequest("readThread", { params: thread });
+  const output = await host.stopDuringRequest("readThread", { params: thread });
+  // Without this, a driver that never replies would pass without the race.
+  expect(output).toContain("dropped reply after disconnect");
 });
