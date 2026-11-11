@@ -86,6 +86,13 @@ const BASELINE_PATH = path.join(process.cwd(), "apps/desktop/src/main/__tests__/
 /** The event classes the Outpost publishes. */
 const EVENT_CLASSES = ["navigation", "transcript"];
 const VIEWER_CAPABILITIES: FederationCapability[] = [...OUTPOST_VIEWER_CAPABILITIES, "event_subscriptions"];
+const fixturePackages = new Map<"desktop" | "headless", { directory: string; preload: string }>();
+
+async function startConformanceDaemon(options: Parameters<typeof startOutpostDaemon>[0] = {}) {
+  const fixture = fixturePackages.get(options.hostKind ?? "headless");
+  if (!fixture) throw new Error("The conformance suite must build its owner fixture before starting a daemon.");
+  return await startOutpostDaemon({ ...options, packageRoot: fixture.directory, fixturePreload: fixture.preload });
+}
 
 /** One owner, reached the way a remote viewer reaches it. */
 type OwnerHost = {
@@ -224,7 +231,7 @@ async function startDesktopOwner(
 
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
 async function startOutpostOwner(hostKind: "desktop" | "headless" = "headless"): Promise<OwnerHost> {
-  const outpost = await startOutpostDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind });
+  const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind });
   outpost.subscribe(EVENT_CLASSES);
   return { name: hostKind === "desktop" ? "desktop" : "outpost", ownerInstanceId: outpost.ownerInstanceId, client: outpost.client, methods: new Set(Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES)),
     providerSteerCount: () => readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")
@@ -336,6 +343,18 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  beforeAll(async () => {
+    await Promise.all((["desktop", "headless"] as const).map(async kind => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), `pa-conformance-${kind}-`));
+      const preload = await buildOwnerFixture(directory, kind);
+      fixturePackages.set(kind, { directory, preload });
+    }));
+  });
+  afterAll(async () => {
+    await Promise.all([...fixturePackages.values()].map(fixture => rm(fixture.directory, { recursive: true, force: true })));
+    fixturePackages.clear();
+  });
+
   it.each([false, true])("scheduler retries its original acceptance after provider refusal or a thread lock (locked=%s)", async locked => {
     const host = await startDesktopOwner();
     const registry = desktopOwner.registry as DesktopBackendRegistry;
@@ -1460,7 +1479,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
   it("the enrolled Outpost retries an unclaimed workspace refusal without replacing its native owner", async () => {
-    const host = await startOutpostDaemon({ capabilities: [...VIEWER_CAPABILITIES, "turn_queue_pause"] });
+    const host = await startConformanceDaemon({ capabilities: [...VIEWER_CAPABILITIES, "turn_queue_pause"] });
     const displaced = `${host.workspace}-unavailable`;
     try {
       const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
@@ -1537,17 +1556,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
   describe("steering grant admission", () => {
-    let fixturePackage: string;
-    let fixturePreload: string;
-    beforeAll(async () => {
-      fixturePackage = await mkdtemp(path.join(os.tmpdir(), "pa-grant-fixture-"));
-      fixturePreload = await buildOwnerFixture(fixturePackage);
-    });
-    afterAll(async () => { await rm(fixturePackage, { recursive: true, force: true }); });
-
     it("the enrolled Outpost requires both steering feature and turn-control grants before receipt admission", async () => {
       for (const capabilities of [["turn_control"], ["durable_steer_requests_v1"], ["durable_turn_requests_v1", "turn_control"]] as FederationCapability[][]) {
-        const outpost = await startOutpostDaemon({ capabilities, packageRoot: fixturePackage, fixturePreload });
+        const outpost = await startConformanceDaemon({ capabilities });
         try {
           const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
             request: { backend: "codex", threadId: "unadmitted", expectedTurnId: "unadmitted-turn", input: [{ type: "text", text: "Must not be admitted" }] } };
@@ -1607,7 +1618,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 
   it("the enrolled Outpost enforces durable feature and nested messaging grants before receipt admission", async () => {
     for (const feature of [false, true]) {
-      const outpost = await startOutpostDaemon({ capabilities: ["turn_control", "environment_actions", "thread_detail", ...(feature ? ["durable_turn_requests_v1" as const] : [])] });
+      const outpost = await startConformanceDaemon({ capabilities: ["turn_control", "environment_actions", "thread_detail", ...(feature ? ["durable_turn_requests_v1" as const] : [])] });
       try {
         const identity = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
         const value: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" }, request: { ...identity,
@@ -2157,7 +2168,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   it("both actual owners name first turns through the supported restricted Codex helper without exposing ephemeral threads", async () => {
     const title = "Repair login regression";
     const desktop = await startDesktopOwner(null, undefined, undefined, undefined, title);
-    const outpost = await startOutpostDaemon({ capabilities: VIEWER_CAPABILITIES });
+    const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES });
     await writeFile(path.join(outpost.env.PWRAGENT_TEST_DATA!, "helper-title.json"), JSON.stringify({ title }));
     try {
       for (const host of [desktop, outpost]) {
@@ -2848,7 +2859,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 
   it("headless attention ranks count each admitted turn once across provisional and native identity", async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), fc.nat(4), async (promoteOnTurnEnd, duplicates) => {
-      const host = await startOutpostDaemon({ capabilities: VIEWER_CAPABILITIES });
+      const host = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES });
       host.subscribe(EVENT_CLASSES);
       try {
         const attentionView = { id: `provisional-${randomUUID()}`, promoteOnTurnEnd };
