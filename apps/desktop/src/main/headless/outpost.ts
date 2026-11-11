@@ -2,6 +2,8 @@ import path from "node:path";
 import fs from "node:fs";
 import type { FederationPeerRole, SubmitDurableTurnRequest } from "@pwragent/shared";
 import { ensureNamedProfileExists } from "../profile";
+import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import type { startOwnerServices } from "../owner-services";
 
 type Services = Awaited<ReturnType<typeof startOwnerServices>>;
@@ -22,6 +24,12 @@ export async function handleOutpostCommand(services: Services, method: string, p
     case "list": return registry.listThreads({ backend: "codex", callerReason: "outpost-cli", enrichDirectories: false, ...params });
     case "show": return registry.readThread(params as Parameters<typeof registry.readThread>[0]);
     case "start-thread": return registry.startThread(params as Parameters<typeof registry.startThread>[0]);
+    case "register-directory": {
+      // The same registration the desktop's Add Project Directory performs; the project then lists for viewers.
+      const bridge = new DesktopMessagingBackendBridge();
+      return registerDirectoryFromDisk({ path: String(params.path ?? ""), preferredBackend: "codex" },
+        { ensureDirectoryLaunchpad: request => bridge.ensureDirectoryLaunchpad(request) });
+    }
     case "submit": return federation.submitDurableTurnRequest("local-cli", params as unknown as SubmitDurableTurnRequest);
     case "receipt": return federation.getDurableTurnRequest("local-cli", params as Parameters<typeof federation.getDurableTurnRequest>[1]);
     case "pause":

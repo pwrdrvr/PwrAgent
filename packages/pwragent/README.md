@@ -57,6 +57,7 @@ same parameter object as the desktop owner contracts:
 | Command | Parameters / existing owner operation |
 | --- | --- |
 | `start-thread` | `backend`, `cwd`, optional `executionMode` and model settings |
+| `register-directory` | `path`: adds an existing folder as a project, as the desktop's Add Project Directory does |
 | `show` | `backend`, `threadId` |
 | `submit` | `SubmitDurableTurnRequest`: immutable client request ID, creation time, payload hash and request |
 | `receipt` | Durable client request `id`, `backend`, `threadId` |
