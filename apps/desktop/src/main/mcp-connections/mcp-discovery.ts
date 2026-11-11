@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { getMainLogger } from "../log";
+import { lazyModule } from "../lazy-module";
+import { isMcpError, isStreamableHttpError, mcpTypes } from "./mcp-sdk";
 
 const log = getMainLogger("pwragent:mcp-connections");
 export type McpDiscoveryPhase = "registration" | "initialize" | "tools/list" | "auth/refresh";
@@ -20,11 +21,11 @@ export function discoveryFailure(error: unknown, signal?: AbortSignal) {
     if (!cause || typeof cause !== "object") break;
     causes.push(cause as Record<string, unknown>);
   }
-  const code = error instanceof McpError || error instanceof StreamableHTTPError ? error.code : undefined;
+  const code = isMcpError(error) || isStreamableHttpError(error) ? error.code : undefined;
   const networkCode = causes.map((entry) => entry.code).find((entry) =>
     typeof entry === "string" && /^(?:E[A-Z_]+|UND_ERR_[A-Z_]+)$/.test(entry));
   const status = typeof value.status === "number" ? value.status
-    : error instanceof StreamableHTTPError && code && code >= 400 && code <= 599 ? code : undefined;
+    : isStreamableHttpError(error) && code && code >= 400 && code <= 599 ? code : undefined;
   const kind = signal?.aborted
     ? signal.reason?.name === "TimeoutError" ? "deadline" : "cancelled"
     : code === -32001 ? "sdk_timeout"
@@ -36,13 +37,23 @@ export function discoveryFailure(error: unknown, signal?: AbortSignal) {
     ...(code === undefined ? {} : { code }),
     ...(status === undefined ? {} : { status }),
     ...(networkCode ? { networkCode } : {}),
-    errorName: error instanceof StreamableHTTPError ? "StreamableHTTPError" : error instanceof McpError ? "McpError"
+    errorName: isStreamableHttpError(error) ? "StreamableHTTPError" : isMcpError(error) ? "McpError"
       : value.name === "McpReauthorizationRequiredError" ? "McpReauthorizationRequiredError"
       : error instanceof TypeError ? "TypeError" : error instanceof Error ? "Error" : "Unknown",
   };
 }
 
-export class McpDiscoveryError extends McpError {}
+// An attributed discovery failure. The class extends the SDK's McpError, so
+// it is defined once the SDK has loaded.
+const discoveryErrorClass = lazyModule(async () => {
+  const { McpError } = await mcpTypes.load();
+  return class McpDiscoveryError extends McpError {};
+});
+
+export function isMcpDiscoveryError(error: unknown): error is McpError {
+  const McpDiscoveryError = discoveryErrorClass.loaded();
+  return McpDiscoveryError !== undefined && error instanceof McpDiscoveryError;
+}
 
 export class McpDiscovery {
   readonly id = randomUUID();
@@ -78,7 +89,7 @@ export class McpDiscovery {
       return result;
     } catch (error) {
       // A nested phase already has the useful attribution.
-      if (error instanceof McpDiscoveryError) throw error;
+      if (isMcpDiscoveryError(error)) throw error;
       const diagnostic = { ...fields, ...discoveryFailure(error, this.signal), elapsedMs: Date.now() - this.startedAt };
       log.warn("MCP discovery phase failed", diagnostic);
       if (preserveError && !this.signal.aborted) throw error;
@@ -95,7 +106,8 @@ export class McpDiscovery {
         : diagnostic.kind === "authorization" ? "reauthorization required in Settings → Plugins"
         : diagnostic.status ? `upstream HTTP ${diagnostic.status}`
         : diagnostic.networkCode ? `upstream connection failed (${diagnostic.networkCode})` : "upstream request failed";
-      throw new McpDiscoveryError(error instanceof McpError ? error.code : -32000, localMessage ?? `${this.connectionId}: ${phase}${page === undefined ? "" : ` page ${page}`} — ${detail} (discovery ${this.id}).`, diagnostic);
+      const McpDiscoveryError = await discoveryErrorClass.load();
+      throw new McpDiscoveryError(isMcpError(error) ? error.code : -32000, localMessage ?? `${this.connectionId}: ${phase}${page === undefined ? "" : ` page ${page}`} — ${detail} (discovery ${this.id}).`, diagnostic);
     }
   }
 

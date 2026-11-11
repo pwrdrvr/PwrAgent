@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { McpDiscovery, mcpDiscoveryContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
 import { MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS } from "./mcp-connection-timeouts";
-import {
+import { mcpClientAuth } from "./mcp-sdk";
+import type {
   auth,
-  discoverOAuthServerInfo,
-  type OAuthClientProvider,
-  type OAuthDiscoveryState,
+  OAuthClientProvider,
+  OAuthDiscoveryState,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
   OAuthClientInformationMixed,
@@ -97,7 +97,8 @@ export class McpOAuthSessionCoordinator {
     this.scope = options.scope;
     this.vault = options.vault ?? new McpCredentialVault();
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
-    this.authFn = options.authFn ?? auth;
+    this.authFn = options.authFn
+      ?? (async (...args: Parameters<typeof auth>) => await (await mcpClientAuth.load()).auth(...args));
     this.discardRejectedCredentials =
       options.discardRejectedCredentials ?? false;
     this.onCredentialRejected = options.onCredentialRejected;
@@ -183,6 +184,7 @@ export class McpOAuthSessionCoordinator {
     };
     if (!working.discoveryState) {
       try {
+        const { discoverOAuthServerInfo } = await mcpClientAuth.load();
         const discovered = await discoverOAuthServerInfo(this.serverUrl, {
           fetchFn: this.fetchFn,
         });

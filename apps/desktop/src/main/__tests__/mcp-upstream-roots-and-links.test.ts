@@ -543,7 +543,7 @@ describe("MCP links and roots on a connection that is not a local command", () =
     const sandboxer = new SandboxerConnection(async () => '{"signedIn":true,"apiReachable":true}');
     const declared: Array<ClientCapabilities | undefined> = [];
     const servers: Server[] = [];
-    vi.spyOn(sandboxer, "createTransport").mockImplementation(() => {
+    vi.spyOn(sandboxer, "createTransport").mockImplementation(async () => {
       const [client, remote] = InMemoryTransport.createLinkedPair();
       const server = new Server({ name: "fixture-remote", version: "1" }, { capabilities: { tools: {} } });
       server.oninitialized = () => declared.push(server.getClientCapabilities());

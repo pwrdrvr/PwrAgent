@@ -726,7 +726,7 @@ async function readApplicationIconDataUrl(appPath: string): Promise<string | und
       return undefined;
     }
 
-    const image = nativeImage.createFromBuffer(source);
+    const image = await nativeImage.createFromBuffer(source);
     if (image.isEmpty()) {
       log.warn("application-icon-empty", { appPath, iconPath });
       return undefined;

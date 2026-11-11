@@ -35,7 +35,7 @@ export async function installTestOwnerHost(): Promise<void> {
       trashItem: async (path) => { await links?.trashItem(path); },
       showItemInFolder: (path) => links?.showItemInFolder(path),
     },
-    images: { createFromBuffer: (buffer) => image?.createFromBuffer(buffer) ?? unavailable() },
+    images: { createFromBuffer: async (buffer) => image?.createFromBuffer(buffer) ?? unavailable() },
     renderer: { subscribers: (channel) => windowChannels.subscribersForChannel(channel), agentEvent: () => {}, environmentSetupProgress: () => {}, inboundPreview: () => {}, managedRuntimeProgress: () => {}, managedGrokSignatureRejected: () => {} },
     appearance: { broadcast: () => {}, syncDock: () => {} },
     threads: { showThread: requestShowThread, openMaintenance: unavailable, openThread: unavailable },

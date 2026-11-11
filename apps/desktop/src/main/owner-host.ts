@@ -62,7 +62,7 @@ export interface OwnerHostServices {
   application: { getVersion(): string; isPackaged: boolean; getPath(name: "downloads"): string; relaunch(): void; quit(): void };
   secrets: SettingsSecretEncryption<Buffer>;
   links: { openExternal(url: string): Promise<void>; openPath(path: string): Promise<string>; showItemInFolder(path: string): void; trashItem(path: string): Promise<void> };
-  images: { createFromBuffer(buffer: Buffer): HostImage };
+  images: { createFromBuffer(buffer: Buffer): Promise<HostImage> };
   renderer: RendererEventSink;
   appearance: { broadcast(value: BootstrapAppearance): void; syncDock(value: Pick<BootstrapAppearance, "theme" | "darkTheme" | "lightTheme"> & { themedDockIcon: boolean }): void };
   threads: ThreadPresenter;

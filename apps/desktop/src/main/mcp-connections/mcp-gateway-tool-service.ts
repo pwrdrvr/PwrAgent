@@ -171,7 +171,7 @@ export class McpGatewayToolService {
       const tool = tools.find((entry) => entry.toolName === args.toolName);
       if (!tool || tool.schemaRevision !== args.schemaRevision) throw new Error("The tool schema or authorization changed. Search again.");
       if (this.options.toolAllowed?.(tool, context) === false) throw new Error("This MCP tool is not permitted for the calling thread.");
-      validateGatewayArguments(tool.definition, args.arguments);
+      await validateGatewayArguments(tool.definition, args.arguments);
       await this.requireSelected(args.connectionId, context, signal);
       const source: McpGatewaySource = {
         connectionId: tool.connectionId, serverName: tool.serverName,

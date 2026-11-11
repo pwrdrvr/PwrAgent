@@ -176,11 +176,11 @@ describe("SandboxerConnection", () => {
     expect(changed).toHaveBeenCalledTimes(2);
   });
 
-  it("spawns only official MCP with finite small defaults and a limited environment", () => {
+  it("spawns only official MCP with finite small defaults and a limited environment", async () => {
     vi.stubEnv("SANDBOXER_API_KEY", "fixture-key");
     vi.stubEnv("SANDBOXER_ORG", "fixture-org");
     vi.stubEnv("UNRELATED_SECRET", "must-not-inherit");
-    new SandboxerConnection().createTransport();
+    await new SandboxerConnection().createTransport();
     expect(StdioClientTransport).toHaveBeenCalledWith({
       command: "/usr/local/bin/sbx",
       args: ["mcp", "--type", "small", "--ttl", "1800", "--no-update"],

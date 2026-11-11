@@ -271,16 +271,16 @@ describe("fixed MCP gateway tools", () => {
     expect(f.requestGatewayToolOperation.mock.calls.some(([call]) => call.operation === "gateway/tools/call")).toBe(false);
   });
 
-  it("keeps schema $id validation isolated across connections and revisions", () => {
+  it("keeps schema $id validation isolated across connections and revisions", async () => {
     const a = tool();
     a.definition.inputSchema.$id = "https://fixture.invalid/schema";
     const b = structuredClone(a);
     b.definition.inputSchema.properties = { id: { type: "number" } };
-    expect(() => validateGatewayArguments(a.definition, { id: "text" })).not.toThrow();
-    expect(() => validateGatewayArguments(b.definition, { id: "text" })).toThrow("validated");
-    expect(() => validateGatewayArguments(b.definition, { id: 4 })).not.toThrow();
+    await expect(validateGatewayArguments(a.definition, { id: "text" })).resolves.toBeUndefined();
+    await expect(validateGatewayArguments(b.definition, { id: "text" })).rejects.toThrow("validated");
+    await expect(validateGatewayArguments(b.definition, { id: 4 })).resolves.toBeUndefined();
     b.definition.inputSchema.$async = true;
-    expect(() => validateGatewayArguments(b.definition, { id: "invalid" })).toThrow("Asynchronous schemas");
+    await expect(validateGatewayArguments(b.definition, { id: "invalid" })).rejects.toThrow("Asynchronous schemas");
   });
 
   // Codex's requires_mcp_tool_approval_for_mode, case for case.

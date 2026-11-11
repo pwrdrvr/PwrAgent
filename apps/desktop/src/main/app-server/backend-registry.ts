@@ -684,6 +684,7 @@ import {
   hostApprovalFormRefused,
   isUrlElicitation,
 } from "../mcp-connections/mcp-elicitation-relay";
+import { mcpTypes } from "../mcp-connections/mcp-sdk";
 import type { ThreadRootDirectory } from "../mcp-connections/mcp-upstream-roots";
 import type { ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -36116,6 +36117,7 @@ export class DesktopBackendRegistry {
     signal: AbortSignal,
   ): Promise<unknown> {
     signal.throwIfAborted();
+    await mcpTypes.load();
     if (this.isTaskMonitorThread(context)) {
       throw elicitationUnavailable("A Job Monitor cannot answer an MCP server's form.");
     }

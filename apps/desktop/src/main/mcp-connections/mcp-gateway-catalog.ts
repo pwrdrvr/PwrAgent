@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import Ajv from "ajv";
-import Ajv2019 from "ajv/dist/2019.js";
-import Ajv2020 from "ajv/dist/2020.js";
-import { ErrorCode, McpError, type Tool, type Implementation, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool, Implementation, InitializeResult } from "@modelcontextprotocol/sdk/types.js";
+import { lazyModule } from "../lazy-module";
+import { mcpTypes } from "./mcp-sdk";
 import type { McpConnectionToolApproval } from "@pwragent/shared";
 
 export type McpGatewaySource = {
@@ -54,6 +53,15 @@ export function gatewayToolRequiresApproval(
   }
 }
 
+// AJV and its draft builds cost ~25 ms of cold loading. Only a tool call or
+// a form answer validates, so load them then.
+const ajv = lazyModule(async () => {
+  const [draft07, draft2019, draft2020] = await Promise.all([
+    import("ajv"), import("ajv/dist/2019.js"), import("ajv/dist/2020.js"),
+  ]);
+  return { Ajv: draft07.default, Ajv2019: draft2019.default, Ajv2020: draft2020.default };
+});
+
 export function gatewayToolRevision(identity: string, generation: number, tool: Tool): string {
   return createHash("sha256").update(JSON.stringify([identity, generation, tool])).digest("hex");
 }
@@ -65,10 +73,11 @@ export function gatewayCatalogRevision(tools: McpGatewayTool[]): string {
   return createHash("sha256").update(JSON.stringify(revisions)).digest("hex");
 }
 
-export function validateGatewayArguments(tool: Tool, args: Record<string, unknown>): void {
+export async function validateGatewayArguments(tool: Tool, args: Record<string, unknown>): Promise<void> {
   try {
-    validateJsonSchemaValue(tool.inputSchema, args);
+    await validateJsonSchemaValue(tool.inputSchema, args);
   } catch (error) {
+    const { ErrorCode, McpError } = await mcpTypes.load();
     throw new McpError(ErrorCode.InvalidParams,
       `Arguments could not be validated against ${tool.name}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -78,7 +87,8 @@ export function validateGatewayArguments(tool: Tool, args: Record<string, unknow
  * Validate a value against a server-supplied JSON Schema, or throw.
  * Shared by tool arguments and upstream form answers.
  */
-export function validateJsonSchemaValue(schema: Record<string, unknown>, value: unknown): void {
+export async function validateJsonSchemaValue(schema: Record<string, unknown>, value: unknown): Promise<void> {
+  const { Ajv, Ajv2019, Ajv2020 } = await ajv.load();
   // Never share an AJV $id cache across servers or schema revisions.
   // Compilation is local only; unresolved remote references fail closed.
   const draft = schema.$schema;
