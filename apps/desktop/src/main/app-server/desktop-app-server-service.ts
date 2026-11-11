@@ -7165,7 +7165,7 @@ class DesktopAppServerService {
         backgroundPollingEnabled = config.backgroundPollingEnabled;
         prAutoDispatchAllowed = config.prAutoDispatchAllowed;
         budgetConfig = config.budget;
-        budgetStatus = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
+        budgetStatus = await this.getOverlayStore().peekPrAutoDispatchBudgetStatus({
           config: budgetConfig,
           now: Date.now(),
         });
