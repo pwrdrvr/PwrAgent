@@ -1,55 +1,27 @@
-import { build } from "esbuild";
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { buildHeadless } from "../../../apps/desktop/scripts/build-headless.mjs";
+import { cp, rm, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 await mkdir(path.join(root, "dist"), { recursive: true });
-const result = await build({
-  entryPoints: [path.join(root, "src/federation-core.ts")],
-  outfile: path.join(root, "dist/federation-core.js"),
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  target: "node22",
-  metafile: true,
-  banner: { js: 'import { createRequire as __pwragentCreateRequire } from "node:module"; const require = __pwragentCreateRequire(import.meta.url);' },
-  external: ["better-sqlite3", "bufferutil", "utf-8-validate"],
-});
-const require = createRequire(import.meta.url);
-const federationPackage = require.resolve("@pwragent/federation/federation-transport");
-const federationRequire = createRequire(federationPackage);
-await copyFile(path.join(path.dirname(federationRequire.resolve("ws/package.json")), "LICENSE"), path.join(root, "dist/ws-LICENSE"));
+await rm(path.join(root, "dist"), { recursive: true, force: true });
+const result = await buildHeadless({ outputDirectory: path.join(root, "dist"), portable: true });
+await mkdir(path.join(root, "native/mcp-ipc-relay"), { recursive: true });
+await mkdir(path.join(root, "resources"), { recursive: true });
+for (const file of ["stage-runtime.mjs", "build-mcp-ipc-relay.mjs"]) {
+  await cp(new URL(`../../../apps/desktop/scripts/${file}`, import.meta.url), path.join(root, "scripts", file));
+}
+await cp(new URL("../../../apps/desktop/native/mcp-ipc-relay/", import.meta.url), path.join(root, "native/mcp-ipc-relay"), { recursive: true });
+await cp(new URL("../../../apps/desktop/custom-git-runtime.json", import.meta.url), path.join(root, "resources/custom-git-runtime.json"));
+await cp(new URL("../../../apps/desktop/resources/embedded-git/", import.meta.url), path.join(root, "resources/git-notices"), { recursive: true });
+// Development builds also stage the current host. npm's files list deliberately
+// omits these binaries; the same installer stages the destination's payload.
+if (["linux", "darwin"].includes(process.platform)) await import("./install.mjs");
 
-const packages = new Map();
+// This is the desktop owner dependency tree. Its checked-in notice and
+// allowlist already cover every library bundled into these Node outputs.
 for (const input of Object.keys(result.metafile.inputs)) {
-  if (/apps\/desktop\/|messaging\/providers\/|node_modules\/electron\//.test(input)) {
-    throw new Error(`Outpost bundle crossed its service boundary: ${input}`);
-  }
-  if (!input.includes("node_modules/")) continue;
-  let directory = path.dirname(path.resolve(input));
-  while (directory !== path.dirname(directory)) {
-    try {
-      const metadata = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
-      if (metadata.name && metadata.version) {
-        packages.set(`${metadata.name}@${metadata.version}`, { directory, metadata });
-        break;
-      }
-    } catch (error) { if (error.code !== "ENOENT") throw error; }
-    directory = path.dirname(directory);
-  }
+  if (/node_modules\/electron\//.test(input)) throw new Error(`Electron in Node host: ${input}`);
 }
-const notices = [];
-for (const [name, { directory, metadata }] of [...packages].sort(([left], [right]) => left.localeCompare(right))) {
-  const files = (await readdir(directory)).filter((file) => /^(?:licen[cs]e|notice)(?:[.-]|$)/i.test(file));
-  if (!files.length && ["@xterm/headless@6.0.0", "@xterm/addon-serialize@0.14.0"].includes(name)) {
-    notices.push(`${name} (${metadata.license})\n${"=".repeat(72)}\n`
-      + await readFile(path.join(root, "licenses/xterm-LICENSE"), "utf8"));
-    continue;
-  }
-  if (!files.length) throw new Error(`Bundled package has no license notice: ${name}`);
-  notices.push(`${name} (${metadata.license})\n${"=".repeat(72)}\n`
-    + (await Promise.all(files.map((file) => readFile(path.join(directory, file), "utf8")))).join("\n"));
-}
-await writeFile(path.join(root, "dist/THIRD_PARTY_LICENSES"), notices.join("\n\n"));
+await cp(new URL("../../../THIRD_PARTY_LICENSES", import.meta.url), path.join(root, "dist/THIRD_PARTY_LICENSES"));

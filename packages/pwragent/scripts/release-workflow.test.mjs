@@ -29,7 +29,7 @@ test("ordinary pushes and PR/fork checks have no npm publication path", () => {
 test("desktop packaging requires Outpost validation and final success requires npm submission and verification", () => {
   assert.match(job("install-deps"), /needs:\n      - outpost-validate/);
   assert.match(job("outpost-validate"), /needs:\n      - release-preflight/);
-  assert.match(job("outpost-validate"), /node: \["22", "24"\]/);
+  assert.match(job("outpost-validate"), /node: \["24"\]/);
   assert.match(job("outpost-validate"), /node packages\/pwragent\/scripts\/pack-check.mjs/);
   assert.match(job("outpost-publish"), /      - publish-release-notes/);
   assert.match(job("outpost-verify"), /      - outpost-validate/);

@@ -56,6 +56,11 @@ function oraclePlugin(): Plugin {
     name: "production-owner-getter-oracle",
     setup(builder) {
       builder.onResolve({ filter: /^@renderer\// }, (args) => ({ path: path.join(desktop, "src/renderer/src", args.path.slice("@renderer/".length)) }));
+      builder.onResolve({ filter: /^\.\/(?:stage-runtime|build-mcp-ipc-relay)\.mjs$/ }, args => {
+        if (args.importer === path.resolve(desktop, "../../packages/pwragent/scripts/install.mjs")) {
+          return { path: path.join(desktop, "scripts", path.basename(args.path)) };
+        }
+      });
       // Assets and third-party packages cannot import desktop owner modules.
       // Vite's worker wrapper is data here; the worker itself has its own case.
       builder.onResolve({ filter: /\.(?:css|svg|png|webp|jpg|woff2?|wasm)(?:\?.*)?$|\?(?:raw|url|worker)/ }, () => ({ external: true }));
@@ -129,6 +134,14 @@ for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts")
     expect(await bundle(input)).not.toContain(accessMarker);
   });
 }
+
+it("the packaged installer cannot reach an owner getter", async () => {
+  const packageRoot = path.resolve(desktop, "../../packages/pwragent");
+  const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+  expect(metadata.scripts.postinstall).toContain("dist/runtime.json");
+  expect(metadata.scripts.postinstall).toContain("./scripts/install.mjs");
+  expect(await bundle("", `import ${JSON.stringify(path.join(packageRoot, "scripts/install.mjs"))};`)).not.toContain(accessMarker);
+});
 
 it("desktop has no executable file-key encryptor", async () => {
   const keyFilename = "headless-secret.key";

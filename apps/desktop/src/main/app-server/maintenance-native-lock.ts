@@ -10,7 +10,7 @@ export type MaintenanceLock = { assertHeld: () => void; release: () => Promise<v
 export function maintenanceLockHelperPath(): string {
   const filename = `mcp-ipc-relay${process.platform === "win32" ? ".exe" : ""}`;
   const resources = runtimeResourcesPath();
-  return !isDevelopmentRuntime() && resources && !resources.includes("node_modules")
+  return !isDevelopmentRuntime() && resources
     ? path.join(resources, "mcp-ipc-relay", filename)
     : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../build/mcp-ipc-relay", `${process.platform}-${process.arch}`, filename);
 }

@@ -13673,6 +13673,29 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("startup inventory publication cannot overwrite a rename acknowledged after its provider read", async () => {
+    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), async suffix => {
+      const thread: AppServerThreadSummary = { id: "startup-title", source: "codex", title: `Before ${suffix}`,
+        titleSource: "explicit", linkedDirectories: [] };
+      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [thread] }),
+        overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
+        providerThreadSnapshotStore: { list: () => [], replace: () => {} } });
+      const owner = registry as unknown as {
+        reserveThreadInfoObservation(): number;
+        publishRefreshedProviderThreadsToCache(refreshes: Array<{ backends: AppServerBackendKind[]; threads: AppServerThreadSummary[] }>, sequence: number): Promise<void>;
+      };
+      try {
+        await registry.listThreads({ backend: "codex" });
+        const sequence = owner.reserveThreadInfoObservation();
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/name/updated",
+          params: { threadId: thread.id, threadName: `After ${suffix}`, titleSource: "explicit" } } });
+        await owner.publishRefreshedProviderThreadsToCache([{ backends: ["codex"], threads: [thread] }], sequence);
+        expect(registry.getCachedThreadSummary({ backend: "codex", threadId: thread.id })?.title).toBe(`After ${suffix}`);
+        expect((await registry.listThreads({ callerReason: "navigation-snapshot", enrichDirectories: false }))[0]?.title).toBe(`After ${suffix}`);
+      } finally { await registry.close(); }
+    }), { numRuns: 10 });
+  });
+
   it("reconciles a Codex name update that arrives during list enrichment", async () => {
     const enrichment = createDeferred<void>();
     const codexClient = new MockBackendClient({

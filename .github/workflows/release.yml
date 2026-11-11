@@ -70,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["22", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
@@ -85,9 +85,9 @@ jobs:
         run: |
           corepack enable
           pnpm --filter pwragent... install --frozen-lockfile --ignore-scripts
-      - name: Mocked CLI and release tests
+      - name: Outpost and release tests
         run: pnpm --filter pwragent test
-      - name: Pack, validate and smoke-test an offline installation
+      - name: Pack, validate and smoke-test a clean installation
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           TMPDIR: ${{ runner.temp }}/headless-package-long-temp-path-for-socket-regression

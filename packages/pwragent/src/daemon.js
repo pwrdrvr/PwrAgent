@@ -1,10 +1,8 @@
 import { closeSync, openSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { JobStore, privateDirectory } from "./store.js";
-import { Runtime } from "./runtime.js";
-import { openOutpostProfileRuntime } from "../dist/federation-core.js";
-import { HeadlessFederation } from "./federation.js";
+import { chmodSync, mkdirSync } from "node:fs";
+
 import { MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, readMessages } from "./wire.js";
 import { checkCodexSandbox } from "./sandbox-preflight.js";
 
@@ -16,7 +14,8 @@ export async function serve({ directory, workspace, home, command, profile }) {
   workspace = realpathSync(workspace);
   home = realpathSync(home);
   if (!statSync(workspace).isDirectory() || !statSync(home).isDirectory()) throw new Error("Workspace and Codex home must be directories");
-  privateDirectory(directory);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
   directory = realpathSync(directory);
   const roots = [directory, workspace, home];
   for (let i = 0; i < roots.length; i++) {
@@ -34,9 +33,8 @@ export async function serve({ directory, workspace, home, command, profile }) {
     if (error.code === "EEXIST") throw new Error(`Headless owner lock already exists: ${lockPath}. See README crash recovery; never remove a live owner's lock.`, { cause: error });
     throw error;
   }
-  let profileRuntime;
-  let runtime;
-  let federation;
+  let owner;
+  let services;
   let server;
   let listening = false;
   let shutdown;
@@ -52,10 +50,10 @@ export async function serve({ directory, workspace, home, command, profile }) {
     shutdown = (async () => {
       if (listening) server.close();
       for (const socket of sockets) socket.destroy();
-      try {
-        try { await federation?.stop(); } finally { await runtime?.stop(); }
-      } finally {
-        try { profileRuntime?.close(); } finally {
+      try { await owner?.shutdownHeadlessHost("outpost-stop"); }
+      finally {
+        try { if (listening) { try { unlinkSync(socketPath); } catch (error) { if (error.code !== "ENOENT") throw error; } } }
+        finally {
           closeSync(lock);
           unlinkSync(lockPath);
           process.off("SIGTERM", signalStop);
@@ -72,21 +70,20 @@ export async function serve({ directory, workspace, home, command, profile }) {
   const signalStop = () => { void stop(); };
   try {
     writeFileSync(lock, JSON.stringify({ pid: process.pid }) + "\n");
-    profileRuntime = openOutpostProfileRuntime({ stateDirectory: path.dirname(directory), profileName: profile, cwd: workspace });
-    const store = new JobStore(directory, { version: 1, workspace, codexHome: home }, profileRuntime);
-    runtime = new Runtime({ store, workspace, home, command,
-      onFailure: (error) => { console.error(`Headless runtime stopped: ${error.message}`); void stop(error); } });
+    process.chdir(workspace);
+    process.env.PWRAGENT_PROFILE = profile;
+    process.env.CODEX_HOME = home;
+    process.env.PWRAGENT_CODEX_HOME = home;
+    process.env.PWRAGENT_CODEX_COMMAND = command;
     process.on("SIGTERM", signalStop);
     process.on("SIGINT", signalStop);
-    await runtime.codex.initialize();
-    runtime.codexSandbox = await checkCodexSandbox({ command, home, workspace, signal: preflight.signal });
+    const sandbox = await checkCodexSandbox({ command, home, workspace, signal: preflight.signal });
     if (shutdown) return await done;
-    if (runtime.codexSandbox.status === "failed") console.error(runtime.codexSandbox.error);
-    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, codexPid: runtime.codex.child.pid }) + "\n");
-    federation = new HeadlessFederation({ directory, runtime, profile, onFailure: (error) => { void stop(error); } });
-    await federation.backend.initialize();
-    await federation.start();
-    if (shutdown) return done;
+    if (sandbox.status !== "ready") throw new Error(sandbox.error);
+    owner = await import("../dist/index.js");
+    await owner.prepareOutpostProfile(profile);
+    services = await owner.startHeadlessHost(undefined, { manageSignals: false });
+    if (shutdown) { await owner.shutdownHeadlessHost("outpost-startup-cancelled"); return await done; }
     server = net.createServer((socket) => {
       if (sockets.size >= 64) { socket.destroy(); return; }
       sockets.add(socket);
@@ -110,14 +107,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
         }
         Promise.resolve().then(() => {
           const params = message.params || {};
-          switch (message.method) {
-            case "federation-status": return federation.status();
-            case "federation-join": return federation.join(params);
-            case "federation-invite": return federation.invite(params);
-            case "federation-leave": return federation.leave();
-            case "federation-revoke": return federation.revoke(params.peer);
-            default: return runtime.handle(message.method, params);
-          }
+          return owner.handleOutpostCommand(services, message.method, params);
         })
           .then((result) => respond({ result }), (error) => respond({ error: error.message }));
       }, () => socket.destroy());
@@ -126,9 +116,10 @@ export async function serve({ directory, workspace, home, command, profile }) {
       server.once("error", reject);
       server.listen(socketPath, () => { listening = true; resolve(); });
     });
+    chmodSync(socketPath, 0o600);
     if (shutdown) { server.close(); return await done; }
     server.on("error", (error) => { void stop(error); });
-    console.log(JSON.stringify({ ...await runtime.handle("status"), listening: true, socket: socketPath }));
+    console.log(JSON.stringify({ ready: true, socket: socketPath }));
     return await done;
   } catch (error) {
     await stop(error);

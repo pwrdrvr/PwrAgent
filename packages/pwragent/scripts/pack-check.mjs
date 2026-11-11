@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkPublicRegistry, releaseMetadata } from "./release.mjs";
@@ -22,58 +21,37 @@ try {
   const metadata = releaseMetadata(pkg, { desktopVersion: desktop.version });
   const context = process.env.RELEASE_TAG ? currentReleaseSource() : undefined;
   const source = context ? { tag: context.tag, commit: context.commit } : undefined;
-  const require = createRequire(import.meta.url);
-  const ptyRequire = createRequire(require.resolve("node-pty/package.json"));
-  const nativePackages = [["node-pty", require], ["node-addon-api", ptyRequire], ["better-sqlite3", require]];
   run(process.execPath, [path.join(root, "scripts/build.mjs")], { cwd: root });
-  // npm pack follows pnpm's external symlinks and can emit ../../.pnpm paths.
-  // Stage a flat dependency tree without mutating the checkout's node_modules.
   const staging = path.join(temporary, "package");
   mkdirSync(staging);
-  for (const file of ["package.json", "bin", "src", "examples", "README.md", "LICENSE", "dist", "licenses"]) {
+  for (const file of ["package.json", "bin", "src", "examples", "README.md", "LICENSE", "dist", "licenses", "resources", "scripts", "native"]) {
     cpSync(path.join(root, file), path.join(staging, file), { recursive: true, dereference: true });
   }
   if (source) writeFileSync(path.join(staging, "package.json"), JSON.stringify({ ...pkg, pwragentRelease: source }, null, 2) + "\n");
-  for (const [name, resolver] of nativePackages) {
-    cpSync(path.dirname(resolver.resolve(`${name}/package.json`)), path.join(staging, "node_modules", name), { recursive: true, dereference: true });
-  }
   const [packed] = JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", temporary], { cwd: staging }));
   const tarball = path.join(temporary, packed.filename);
   const files = new Set(packed.files.map((file) => file.path));
-  for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js",
-    "dist/federation-core.js", "dist/ws-LICENSE", "dist/THIRD_PARTY_LICENSES", "licenses/xterm-LICENSE",
-    "LICENSE", "README.md", "examples/pwragent-headless.service"]) {
+  for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js", "dist/index.js", "dist/runtime.json",
+    "dist/storage-maintenance-worker.js", "dist/claude-session-reader-worker.js", "dist/mcp-connection-bridge.js", "dist/token-miser-hook.js",
+    "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c", "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }
-  for (const file of files) {
-    assert.ok(!file.split("/").includes(".."), `Packed paths must stay inside the package: ${file}`);
-    assert.match(file, /^(package\.json|LICENSE|README\.md|bin\/[^/]+\.js|src\/[^/]+\.(js|ts)|examples\/[^/]+\.service|dist\/(federation-core\.js|ws-LICENSE|THIRD_PARTY_LICENSES)|licenses\/xterm-LICENSE|node_modules\/(node-pty|node-addon-api|better-sqlite3)\/(?!.*(?:^|\/)node_modules\/).+)$/,
-      `Unexpected packed file: ${file}`);
+  for (const file of files) assert.ok(!file.split("/").includes(".."), `Packed path escapes package: ${file}`);
+  for (const file of ["runtime.js", "federation-backend.js", "federation.js", "federation-core.ts", "codex.js", "store.js", "projects.js", "handoffs.js", "owner-thread-registry.js"]) {
+    assert.ok(!files.has(`src/${file}`), `Retired runtime shipped: ${file}`);
   }
-  const unpacked = (file) => run("tar", ["-xOf", tarball, `package/${file}`]);
+  const extracted = path.join(temporary, "extracted");
+  mkdirSync(extracted);
+  run("tar", ["-xf", tarball, "-C", extracted]);
+  const unpacked = file => readFileSync(path.join(extracted, "package", file), "utf8");
   const packedPackage = JSON.parse(unpacked("package.json"));
   assert.deepEqual(releaseMetadata(packedPackage), releaseMetadata(pkg));
   assert.deepEqual(packedPackage.pwragentRelease, source);
   assert.equal(unpacked("LICENSE"), readFileSync(path.join(root, "LICENSE"), "utf8"));
-  const federationRequire = createRequire(require.resolve("@pwragent/federation/federation-transport"));
-  const wsPackage = federationRequire.resolve("ws/package.json");
-  assert.equal(JSON.parse(readFileSync(wsPackage, "utf8")).license, "MIT");
-  assert.equal(unpacked("dist/ws-LICENSE"), readFileSync(path.join(path.dirname(wsPackage), "LICENSE"), "utf8"));
-  assert.deepEqual([...packed.bundled].sort(), ["better-sqlite3", "node-addon-api", "node-pty"]);
-  for (const [name, resolver] of nativePackages) {
-    const sourcePackagePath = resolver.resolve(`${name}/package.json`);
-    const sourcePackage = JSON.parse(readFileSync(sourcePackagePath, "utf8"));
-    const bundledPackage = JSON.parse(unpacked(`node_modules/${name}/package.json`));
-    assert.equal(bundledPackage.name, name);
-    assert.equal(bundledPackage.version, sourcePackage.version);
-    assert.equal(bundledPackage.license, "MIT");
-    assert.deepEqual(bundledPackage.dependencies, sourcePackage.dependencies);
-    const licenseFiles = readdirSync(path.dirname(sourcePackagePath)).filter((file) => /^licen[cs]e(?:[.-]|$)/i.test(file));
-    assert.ok(licenseFiles.length > 0, `Missing native dependency license: ${name}`);
-    for (const file of licenseFiles) {
-      assert.equal(unpacked(`node_modules/${name}/${file}`), readFileSync(path.join(path.dirname(sourcePackagePath), file), "utf8"));
-    }
-  }
+  assert.ok(!/require\(["'](?:\/|[A-Za-z]:)/.test(unpacked("dist/index.js")), "Portable bundle must not require build-host absolute paths");
+  assert.deepEqual(packed.bundled, []);
+  assert.ok(![...files].some(file => file.startsWith("resources/git/") || file === "resources/mcp-ipc-relay/mcp-ipc-relay"), "Do not pack build-host binaries");
+  assert.equal(unpacked("scripts/stage-runtime.mjs"), readFileSync(new URL("../../../apps/desktop/scripts/stage-runtime.mjs", import.meta.url), "utf8"));
   assert.equal(unpacked("dist/THIRD_PARTY_LICENSES"), readFileSync(path.join(root, "dist/THIRD_PARTY_LICENSES"), "utf8"));
   assert.equal(unpacked("licenses/xterm-LICENSE"), readFileSync(path.join(root, "licenses/xterm-LICENSE"), "utf8"));
   assert.match(unpacked("bin/pwragent.js"), /^#!\/usr\/bin\/env node\n/);
@@ -85,8 +63,8 @@ try {
   const prefix = path.join(temporary, "install");
   const env = { ...process.env, HOME: home, NODE_PATH: "", NODE_OPTIONS: "",
     NPM_CONFIG_USERCONFIG: npmrc, NPM_CONFIG_CACHE: path.join(temporary, "cache") };
-  // No workspace links, registry downloads, install scripts or ambient npm cache.
-  run("npm", ["install", "--global", "--prefix", prefix, "--offline", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
+  // Install the tarball away from the checkout. npm selects target-native packages.
+  run("npm", ["install", "--global", "--prefix", prefix, "--no-audit", "--no-fund", tarball],
     { cwd: temporary, env });
   const fixture = path.join(temporary, "codex.mjs");
   copyFileSync(path.join(root, "test/fixtures/codex.js"), fixture);

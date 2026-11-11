@@ -104,12 +104,13 @@ function configureFileTransport(): void {
   transport.maxSize = MAIN_LOG_MAX_SIZE_BYTES;
 }
 
-export function initializeMainLogger(options?: { profileName?: string; logDirectory?: string }): void {
+export function initializeMainLogger(options?: { profileName?: string; logDirectory?: string; appName?: string }): void {
   if (initialized) {
     return;
   }
 
   initialized = true;
+  if (options?.appName) electronLog.transports.file.setAppName(options.appName);
   installStdioErrorHandlers();
   guardConsoleTransport();
   configureConsoleTransport();

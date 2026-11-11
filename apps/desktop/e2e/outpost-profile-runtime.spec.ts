@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
 import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
-import { openOutpostProfileRuntime } from "../../../packages/pwragent/src/federation-core";
+import { openProfileLeaseOwnerFixture } from "./fixtures/profile-lease-owner";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import { expect, test } from "./fixtures/electron-test";
@@ -15,12 +15,12 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
 test("excludes local thread owners with federation and messaging disabled while keeping passive viewers readable", async () => {
   const fixturePath = path.join(specDir, "fixtures/turn-lifecycle/replay.fixture.json");
   const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as ReplayFixture;
-  let outpost: ReturnType<typeof openOutpostProfileRuntime> | undefined;
+  let outpost: ReturnType<typeof openProfileLeaseOwnerFixture> | undefined;
   const app = await launchElectronApp({
     secretStorage: "memory", fixturePath,
     env: { PWRAGENT_DISABLE_MESSAGING: "1" },
     async preLaunchHook(homeRoot) {
-      outpost = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(homeRoot)), profileName: "default", cwd: homeRoot });
+      outpost = openProfileLeaseOwnerFixture({ stateDirectory: path.dirname(stateDbPathForHomeRoot(homeRoot)), profileName: "default", cwd: homeRoot });
       await writeFile(configTomlPathForHomeRoot(homeRoot), '[federation]\nmode = "disabled"\n');
     },
   });
@@ -49,22 +49,22 @@ test("excludes local thread owners with federation and messaging disabled while 
     // A service stop must not release a provider that is still alive.
     await app.window.evaluate(async () => await (window as unknown as { pwragent: DesktopApi }).pwragent.setFederationEnabled!(false));
     expect(store.getFederationLease()).toMatchObject({ ownerInstanceId: desktopOwner, status: "active" });
-    expect(() => openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot }))
+    expect(() => openProfileLeaseOwnerFixture({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot }))
       .toThrow(/Profile federation lease is held/);
     await app.closeApplication();
     expect(store.getFederationLease()).toMatchObject({ ownerInstanceId: desktopOwner, status: "released" });
-    outpost = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot });
+    outpost = openProfileLeaseOwnerFixture({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot });
     outpost.close();
   } finally { outpost?.close(); db.close(); await app.close(); }
 });
 
-test("Outpost and the supported desktop exchange the same profile's runtime leases across graceful shutdown", async () => {
-  let outpost: ReturnType<typeof openOutpostProfileRuntime> | undefined;
+test("a PID-owned lease actor and desktop exchange profile leases across graceful shutdown", async () => {
+  let outpost: ReturnType<typeof openProfileLeaseOwnerFixture> | undefined;
   const app = await launchElectronApp({
     secretStorage: "memory",
     fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
     async preLaunchHook(homeRoot) {
-      outpost = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(homeRoot)), profileName: "default", cwd: homeRoot });
+      outpost = openProfileLeaseOwnerFixture({ stateDirectory: path.dirname(stateDbPathForHomeRoot(homeRoot)), profileName: "default", cwd: homeRoot });
       await writeFile(configTomlPathForHomeRoot(homeRoot), '[federation]\nmode = "client"\n');
     },
   });
@@ -91,14 +91,14 @@ test("Outpost and the supported desktop exchange the same profile's runtime leas
     const desktopOwner = store.getFederationLease()!.ownerInstanceId;
     expect(desktopOwner).not.toBe(outpostOwner);
     expect(store.getInstance(desktopOwner)?.processId).toBe(app.electronApp.process().pid);
-    expect(() => openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot }))
+    expect(() => openProfileLeaseOwnerFixture({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot }))
       .toThrow(/Profile federation lease is held/);
     expect(store.getFederationLease()).toMatchObject({ ownerInstanceId: desktopOwner, status: "active" });
     await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
     await app.closeApplication();
     expect(store.getFederationLease()).toMatchObject({ ownerInstanceId: desktopOwner, status: "released" });
-    outpost = openOutpostProfileRuntime({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot });
+    outpost = openProfileLeaseOwnerFixture({ stateDirectory: path.dirname(stateDbPathForHomeRoot(app.homeRoot)), profileName: "default", cwd: app.homeRoot });
     expect(store.getFederationLease()).toMatchObject({ ownerInstanceId: outpostOwner, status: "active" });
     expect(store.getMessagingLease()).toMatchObject({ ownerInstanceId: outpostOwner, status: "active" });
     outpost.close();

@@ -2853,6 +2853,54 @@ describe("app server ipc", () => {
     }
   });
 
+  it("observing polling settings never rewrites the repair budget or its durable pause", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { appServerService } = await import("../shell/ipc/app-server");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pr-settings-observation-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore(): typeof store;
+      syncPrPollingSchedulerState(): void;
+      stopPrPollingScheduler(): void;
+    };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    const stopped = vi.spyOn(service, "stopPrPollingScheduler");
+    prAutomationSettings.state.backgroundPrPollingEnabled = false;
+    prAutomationSettings.state.prAutoDispatchAllowed = false;
+    try {
+      await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), fc.boolean(), async (observations, paused) => {
+        db.raw.prepare("INSERT OR REPLACE INTO pr_auto_dispatch_budget(scope, tokens, updated_at, paused_at) VALUES ('profile', 1, ?, ?)")
+          .run(1, paused ? 1 : null);
+        const before = db.raw.prepare("SELECT * FROM pr_auto_dispatch_budget").all();
+        const { writes } = await measureSqliteWrites(async () => {
+          for (let index = 0; index < observations; index++) {
+            await new Promise<void>(resolve => {
+              stopped.mockImplementationOnce(resolve);
+              service.syncPrPollingSchedulerState();
+            });
+          }
+        });
+        expect(db.raw.prepare("SELECT * FROM pr_auto_dispatch_budget").all()).toEqual(before);
+        expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
+        expectSqliteWriteBudget({ scenario: "owner-pr-polling-settings-observations", writes,
+          note: "Repair-budget settings observations use the existing read-only projection and preserve the durable pause/refill anchor: zero commits or WAL, 0 MB/day.",
+        });
+      }), { numRuns: 10 });
+    } finally {
+      stopped.mockRestore();
+      overlay.mockRestore();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("keeps paused lookup observations read-only, including empty and full-budget lookups", async () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { StateDb } = await import("../state/state-db");

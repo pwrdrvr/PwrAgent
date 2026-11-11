@@ -1,3 +1,5 @@
+import { getOwnerHostServices } from "../owner-host";
+import type { SandboxPolicy } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   CodexAppServerClient as OwnerCodexAppServerClient,
   type CodexClientOptions,
@@ -21,13 +23,20 @@ type DesktopCodexClientOptions = CodexClientOptions & Partial<Pick<StdioJsonRpcT
 /** Desktop owns process launch, profile state, diagnostics, and rollout repair. */
 export class CodexAppServerClient extends OwnerCodexAppServerClient {
   constructor(options: DesktopCodexClientOptions = {}) {
-    super(options, {
+    const runtimePolicy = getOwnerHostServices().runtimePolicy;
+    super({ ...options, ...(runtimePolicy ? { helperExecutionPolicy: { approvalPolicy: "never" as const, sandbox: "read-only" as const } } : {}) }, {
       createTransport: (callbacks) => new StdioJsonRpcTransport({
         ...options,
         command: options.command?.trim() || "codex",
         args: options.args ?? [],
         ...callbacks,
       }),
+      ...(runtimePolicy ? { buildSandboxPolicy: (sandbox?: string, cwd?: string): SandboxPolicy | undefined => {
+        if (sandbox === undefined) return undefined;
+        if (sandbox === "read-only") return { type: "readOnly", networkAccess: false };
+        if (sandbox !== "workspace-write") throw new Error("This Outpost requires a read-only or workspace-write sandbox.");
+        return { type: "workspaceWrite", writableRoots: [cwd ?? process.cwd()], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true };
+      } } : {}),
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
       logger: getMainLogger("pwragent:codex-client"),
       rpcLogger: getMainLogger("pwragent:json-rpc"),

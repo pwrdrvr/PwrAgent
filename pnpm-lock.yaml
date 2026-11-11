@@ -688,16 +688,28 @@ importers:
 
   packages/pwragent:
     dependencies:
+      '@napi-rs/canvas':
+        specifier: 1.1.0
+        version: 1.1.0
       better-sqlite3:
         specifier: 13.0.3
         version: 13.0.3
+      electron-log:
+        specifier: 5.4.3
+        version: 5.4.3
       node-pty:
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15
+      pdfjs-dist:
+        specifier: 6.5.438
+        version: 6.5.438
     devDependencies:
       '@pwragent/agent-tools':
         specifier: workspace:*
         version: link:../agent-tools
+      '@pwragent/desktop':
+        specifier: workspace:*
+        version: link:../../apps/desktop
       '@pwragent/federation':
         specifier: workspace:*
         version: link:../federation
@@ -3408,6 +3420,10 @@ packages:
     resolution: {integrity: sha512-ASgIuQnOq4RuD8jMhS9hI0LS3EMRT1I/M5R6utqifB/BHN80IcCjBdt+DED+NmNPvmBgEtrlExXZitNdA7kXOg==}
     engines: {node: '>=14.0.0'}
     hasBin: true
+
+  electron-log@5.4.3:
+    resolution: {integrity: sha512-sOUsM3LjZdugatazSQ/XTyNcw8dfvH1SYhXWiJyfYodAAKOZdHs0txPiLDXFzOZbhXgAgshQkshH2ccq0feyLQ==}
+    engines: {node: '>= 14'}
 
   electron-log@5.4.4:
     resolution: {integrity: sha512-istWgaXjBfURBSS8LWVW9C3jsc6+ac+tY1lXrQEOTp0lVj+a4OlO1Tmqb36GgnEUDv92DGC9VI1HNXwJinWpgA==}
@@ -8614,6 +8630,8 @@ snapshots:
     transitivePeerDependencies:
       - electron-builder-squirrel-windows
       - supports-color
+
+  electron-log@5.4.3: {}
 
   electron-log@5.4.4: {}
 

@@ -15,6 +15,8 @@ import type {
 } from "../shell/linux-password-store";
 import { ElectronQuitModel } from "./helpers/electron-quit-model";
 
+const leaseManagerState = vi.hoisted(() => ({ constructed: false }));
+
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const powerMonitorEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
@@ -958,6 +960,7 @@ describe("bootstrapApp", () => {
   });
 
   function resetBootstrapHarness(): void {
+    leaseManagerState.constructed = false;
     appEventHandlers.clear();
     powerMonitorEventHandlers.clear();
     processEventHandlers.clear();
@@ -3460,8 +3463,15 @@ vi.mock("../settings/config-store/desktop-config-store-singleton", async () => {
 });
 
 vi.mock("../runtime-lease-manager", () => {
-  const manager = { markExited: vi.fn() };
-  return { initializeRuntimeLeaseManager: () => manager, getRuntimeLeaseManager: () => manager, getExistingRuntimeLeaseManager: () => manager };
+  const manager = { markExited: vi.fn(), acquire: vi.fn(() => ({ acquired: true })), release: vi.fn() };
+  return {
+    initializeRuntimeLeaseManager: () => { leaseManagerState.constructed = true; return manager; },
+    getRuntimeLeaseManager: () => {
+      if (!leaseManagerState.constructed) throw new Error("Owner lease manager accessed before startOwnerServices().");
+      return manager;
+    },
+    getExistingRuntimeLeaseManager: () => leaseManagerState.constructed ? manager : undefined,
+  };
 });
 
 vi.mock("../app-server/desktop-app-server-service", () => {

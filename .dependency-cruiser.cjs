@@ -73,8 +73,8 @@ module.exports = {
       name: "workspace-packages-do-not-import-apps",
       severity: "error",
       comment:
-        "Workspace libraries and the Outpost must remain independent of host applications.",
-      from: { path: "^packages/" },
+        "Runtime libraries and CLI source must not import host applications. Packaging scripts may invoke a host build.",
+      from: { path: "^packages/[^/]+/(?:src|bin)/" },
       to: { path: "^(@pwragent/desktop(?:/|$)|apps/)" },
     },
     {
@@ -151,7 +151,7 @@ module.exports = {
       severity: "error",
       comment:
         "The Outpost can bundle reusable owner libraries, but cannot depend on messaging provider adapters.",
-      from: { path: "^packages/pwragent/" },
+      from: { path: "^packages/pwragent/src/" },
       to: {
         path: "^(@pwragent/(?!shared(?:/|$)|federation(?:/|$)|agent-tools(?:/|$)|messaging-interface(?:/|$)|owner-core(?:/|$)|sqlite-storage(?:/|$))|packages/(?!pwragent/|shared/|federation/|agent-tools/|messaging/interface/|owner-core/|sqlite-storage/))",
       },
@@ -160,17 +160,16 @@ module.exports = {
       name: "outpost-application-storage-is-private",
       severity: "error",
       comment: "Only the bundle's host binding opens profile storage; Outpost application modules receive handle-free services.",
-      from: { path: "^packages/pwragent/src/(?!federation-core\\.ts$)" },
+      from: { path: "^packages/pwragent/src/" },
       to: { path: "^(?:packages/sqlite-storage/|@pwragent/sqlite-storage(?:/|$))|(?:^|/)better-sqlite3(?:/|$)" },
     },
     {
       name: "outpost-workspace-imports-use-bundle-entry",
       severity: "error",
       comment:
-        "Only src/federation-core.ts may import workspace libraries; the published JavaScript consumes its bundle.",
+        "The CLI consumes the built owner entry rather than importing workspace libraries.",
       from: {
-        path: "^packages/pwragent/",
-        pathNot: "^packages/pwragent/src/federation-core\\.ts$",
+        path: "^packages/pwragent/src/",
       },
       to: { path: "^(@pwragent/|packages/(?!pwragent/))" },
     },
@@ -287,6 +286,9 @@ module.exports = {
     },
   ],
   options: {
+    // Build outputs and staged third-party resources are checked by their
+    // builders; this graph enforces boundaries between authored modules.
+    exclude: { path: "(?:^|/)(?:dist|out|resources)/" },
     doNotFollow: {
       path: "node_modules",
       dependencyTypes: [

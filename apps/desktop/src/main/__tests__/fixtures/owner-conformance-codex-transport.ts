@@ -1,5 +1,6 @@
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, watch } from "node:fs";
+import path from "node:path";
 
 type FixtureTurn = { id: string; status: string; items: unknown[]; error: { message: string } | null };
 type FixtureThread = {
@@ -35,10 +36,25 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static refusedSteers = 0;
   static recordsFile: string | undefined;
   static helperTitle: string | undefined;
+  private static heldCompletions = new Map<string, () => void>();
+
+  /** A protocol-fixture barrier: completion follows the oracle's overlap check. */
+  static completeHeldTurn(threadId: string): void {
+    const complete = this.heldCompletions.get(threadId);
+    if (!complete) throw new Error(`No held fixture turn for ${threadId}`);
+    complete();
+  }
   private static sequence = 0;
+  private static activeTurns = new Map<string, FixtureTurn>();
   private handler: (message: string) => void = () => {};
-  private readonly activeTurns = new Map<string, FixtureTurn>();
+  private readonly ownedActiveTurns = new Set<string>();
+  private get activeTurns() { return OwnerConformanceCodexTransport.activeTurns; }
   private readonly helpers = new Set<string>();
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private schedule(action: () => void, delay: number): void {
+    const timer = setTimeout(() => { this.timers.delete(timer); action(); }, delay);
+    this.timers.add(timer);
+  }
 
   static reset(): void {
     OwnerConformanceCodexTransport.threads = new Map();
@@ -48,10 +64,20 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.refusedSteers = 0;
     OwnerConformanceCodexTransport.recordsFile = undefined;
     OwnerConformanceCodexTransport.helperTitle = undefined;
+    OwnerConformanceCodexTransport.heldCompletions.clear();
+    OwnerConformanceCodexTransport.activeTurns.clear();
   }
 
   async connect(): Promise<void> {}
-  async close(): Promise<void> { this.activeTurns.clear(); }
+  async close(): Promise<void> {
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
+    for (const threadId of this.ownedActiveTurns) {
+      OwnerConformanceCodexTransport.heldCompletions.delete(threadId);
+      this.activeTurns.delete(threadId);
+    }
+    this.ownedActiveTurns.clear();
+  }
   setCloseHandler(_handler: (error?: Error) => void): void {}
   setMessageHandler(handler: (message: string) => void): void { this.handler = handler; }
 
@@ -71,6 +97,12 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
       OwnerConformanceCodexTransport.threads = new Map(Object.entries(records));
+      for (const thread of Object.values(records)) {
+        for (const id of [thread.id, ...thread.turns.map(turn => turn.id)]) {
+          const sequence = /^(?:thread|turn)-(\d+)$/.exec(id)?.[1];
+          if (sequence) OwnerConformanceCodexTransport.sequence = Math.max(OwnerConformanceCodexTransport.sequence, Number(sequence));
+        }
+      }
     }
     const threads = OwnerConformanceCodexTransport.threads;
     const wire = (thread: FixtureThread) => ({
@@ -90,7 +122,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       result = { data: [], nextCursor: null };
     } else if (request.method === "thread/unsubscribe" && this.helpers.has(String(params.threadId))) {
       this.helpers.delete(String(params.threadId));
-    } else if (request.method === "thread/start" && params.ephemeral === true && OwnerConformanceCodexTransport.helperTitle) {
+    } else if (request.method === "thread/start" && params.ephemeral === true) {
       const id = `helper-${++OwnerConformanceCodexTransport.sequence}`;
       this.helpers.add(id);
       result = { thread: { id, cwd: params.cwd, ephemeral: true, turns: [] }, instructionSources: [] };
@@ -147,18 +179,31 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
       if (thread && prompt === "slow") {
         // Match the Outpost fixture's held turn, released by turn/interrupt.
-        const turn = { id: turnId, status: "inProgress", items: [], error: null };
+        const turn: FixtureTurn = { id: turnId, status: "inProgress", items: [], error: null };
         this.activeTurns.set(thread.id, turn);
+        this.ownedActiveTurns.add(thread.id);
+        OwnerConformanceCodexTransport.heldCompletions.set(thread.id, () => {
+          this.activeTurns.delete(thread.id);
+          OwnerConformanceCodexTransport.heldCompletions.delete(thread.id);
+          turn.status = "completed";
+          turn.items = [{ type: "agentMessage", text: "Fixture result" }];
+          const current = OwnerConformanceCodexTransport.threads.get(thread.id)!;
+          current.turns = current.turns.map(value => value.id === turn.id ? turn : value);
+          if (recordsFile) writeFileSync(recordsFile, JSON.stringify(Object.fromEntries(OwnerConformanceCodexTransport.threads)));
+          this.notify("turn/completed", { threadId: thread.id, turn });
+        });
         thread.turns.push(turn);
         followUp = { method: "turn/started", params: { threadId: thread.id, turn } };
       } else if (thread) {
-        setTimeout(() => {
+        this.schedule(() => {
           // The same turn the Outpost fixture records: one agent message.
           const turn = { id: turnId, status: prompt === "fail" ? "failed" : "completed", items: [{ type: "agentMessage", text: "Fixture result" }], error: prompt === "fail" ? { message: "Fixture failure" } : null };
-          thread.turns.push(turn);
+          const current = OwnerConformanceCodexTransport.threads.get(thread.id)!;
+          current.turns.push(turn);
           // Codex reports seconds. A real turn outlasts one, so its end always
           // moves the thread's activity forward; this one takes 100 ms.
-          thread.updatedAt = Math.max(Math.floor(Date.now() / 1000), thread.updatedAt + 1);
+          current.updatedAt = Math.max(Math.floor(Date.now() / 1000), current.updatedAt + 1);
+          if (recordsFile) writeFileSync(recordsFile, JSON.stringify(Object.fromEntries(OwnerConformanceCodexTransport.threads)));
           this.notify("turn/completed", { threadId: thread.id, turn });
         }, 100);
       }
@@ -176,16 +221,32 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
           error: { code: -32600, message: "Active turn changed" } }));
         return;
       }
-      if (request.method === "turn/steer") result = { turnId: turn.id };
+      if (request.method === "turn/steer") {
+        result = { turnId: turn.id };
+        const prompt = (params.input as Array<{ text?: string }> | undefined)?.[0]?.text;
+        if (prompt === "hold-steer-ack" && recordsFile) {
+          const directory = path.dirname(recordsFile);
+          const watcher = watch(directory, (_event, file) => {
+            if (String(file) !== "steer.release") return;
+            watcher.close();
+            this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+          });
+          writeFileSync(path.join(directory, "steer.ready"), turn.id);
+          return;
+        }
+      }
       else {
         turn.status = "interrupted";
+        const current = threads.get(String(params.threadId))!;
+        current.turns = current.turns.map(value => value.id === turn.id ? turn : value);
         this.activeTurns.delete(String(params.threadId));
+        OwnerConformanceCodexTransport.heldCompletions.delete(String(params.threadId));
         followUp = { method: "turn/completed", params: { threadId: params.threadId, turn } };
       }
     }
     if (recordsFile) writeFileSync(recordsFile, JSON.stringify(Object.fromEntries(threads)));
     this.handler(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
     const next = followUp;
-    if (next) setTimeout(() => this.notify(next.method, next.params), 0);
+    if (next) this.schedule(() => this.notify(next.method, next.params), 0);
   }
 }

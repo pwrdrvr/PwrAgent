@@ -1,3 +1,4 @@
+import type { OwnerRuntimePolicy } from "./owner-runtime-policy";
 import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type { StorageMaintenanceHost } from "./storage-maintenance-host";
@@ -57,6 +58,7 @@ export interface FilePickerOptions {
 }
 
 export interface OwnerHostServices {
+  runtimePolicy?: OwnerRuntimePolicy;
   application: { getVersion(): string; isPackaged: boolean; getPath(name: "downloads"): string; relaunch(): void; quit(): void };
   secrets: SettingsSecretEncryption<Buffer>;
   links: { openExternal(url: string): Promise<void>; openPath(path: string): Promise<string>; showItemInFolder(path: string): void; trashItem(path: string): Promise<void> };

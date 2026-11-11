@@ -8,7 +8,6 @@ import { RuntimeLeaseManager } from "@pwragent/owner-core/runtime-lease-manager"
 import { ProfileThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
-import { openOutpostProfileRuntime } from "../../../../../packages/pwragent/src/federation-core";
 
 // A real stdio peer with test-owned records. No replay client or Codex files.
 const server = `
@@ -27,7 +26,11 @@ const server = `
 it("browses a real protocol peer while Outpost owns the profile, and admits mutations only after handover", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "codex-passive-profile-"));
   const db = StateDb.open(path.join(root, "state.db"), { profileName: "fixture" });
-  const outpost = openOutpostProfileRuntime({ stateDirectory: root, profileName: "fixture", cwd: root });
+  const outpostManager = new RuntimeLeaseManager({ instanceId: "outpost", processId: process.pid, startedAt: Date.now(),
+    systemBootedAt: 0, profileName: "fixture", cwd: root, store: new AppRuntimeInstanceStore(db), runtimeIdentityIsAlive: () => true });
+  outpostManager.acquire("federation");
+  outpostManager.acquire("messaging");
+  const outpost = { close() { outpostManager.release("federation"); outpostManager.release("messaging"); outpostManager.markExited(); } };
   const manager = new RuntimeLeaseManager({
     instanceId: "viewer", processId: process.pid, startedAt: Date.now(), systemBootedAt: 0,
     profileName: "fixture", cwd: root, store: new AppRuntimeInstanceStore(db),

@@ -8,6 +8,7 @@ import { expect, it, onTestFinished } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import { tagSecretEncryption } from "../settings/secret-encryption-envelope";
 
@@ -51,16 +52,16 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
   fs.writeFileSync(driver, `const app = require(${JSON.stringify(path.join(outputDirectory, "index.js"))});
     app.startHeadlessHost().then(async services => {
       process.once("message", () => { process.disconnect(); process.emit("SIGTERM", "SIGTERM"); });
-      process.send({ ready: true, errors: await services.settings.readFederationKeyAccessErrors() });
+      process.send({ ready: true, errors: await services.settings.readFederationKeyAccessErrors(), leaseHeld: services.leaseManager.snapshot("federation").leaseHeld, messagingHeld: services.leaseManager.snapshot("messaging").leaseHeld });
     }).catch(error => { console.error(error.stack); process.exitCode = 1; });`);
   const child = fork(driver, [], { env, execArgv: ["--require", guard], stdio: ["ignore", "pipe", "pipe", "ipc"] });
-  onTestFinished(() => { child.kill(); });
   let output = "";
   child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   const exited = once(child, "exit");
+  onTestFinished(async () => { if (child.connected) child.send({ stop: true }); await exited; });
   const ready = await Promise.race([once(child, "message").then(([value]) => value), exited.then(([code]) => { throw new Error(`Node owner exited before ready (${code}): ${output}`); })]);
-  expect(ready).toMatchObject({ ready: true, errors: [
+  expect(ready).toMatchObject({ ready: true, leaseHeld: true, messagingHeld: true, errors: [
     { name: "federationInstancePrivateKey", reason: expect.stringContaining("desktop OS keychain") },
     { name: "federationNoiseStaticPrivateKey", reason: expect.stringContaining("desktop OS keychain") },
   ] });
@@ -73,6 +74,9 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
   expect(startupLog).toContain("federationNoiseStaticPrivateKey");
   const reopened = StateDb.open(dbPath);
   try {
+    const leases = new AppRuntimeInstanceStore(reopened);
+    expect(leases.getFederationLease()?.status).toBe("released");
+    expect(leases.getMessagingLease()?.status).toBe("released");
     expect(reopened.getSecret("federationInstancePrivateKey")).toEqual(ciphertext);
     expect(reopened.getSecret("federationNoiseStaticPrivateKey")).toEqual(ciphertext);
   } finally { reopened.close(); }

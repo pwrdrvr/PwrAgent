@@ -1,8 +1,10 @@
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
+import { containedFederationNotificationAllowed } from "@pwragent/federation/federation-backend-methods";
 import { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
 import type { FederationPeerRole } from "@pwragent/shared";
-import { applicationHost as app } from "../owner-host";
+import { applicationHost as app, getOwnerHostServices } from "../owner-host";
+import { installOwnerEgressPolicy } from "./owner-egress-policy";
 import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
@@ -4705,6 +4707,7 @@ export class DesktopFederationRuntime {
       client.close();
       return;
     }
+    this.installEgressPolicy(client);
     this.client = client;
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
@@ -5009,7 +5012,15 @@ export class DesktopFederationRuntime {
     return delayMs;
   }
 
+  private installEgressPolicy(connection: FederationGatewayConnection | FederationClientWebSocketClient): void {
+    const role = getOwnerHostServices().runtimePolicy?.federationEgressRole;
+    if (!role) return;
+    installOwnerEgressPolicy(connection, role, this.ensureLocalInstanceId(),
+      event => appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), event));
+  }
+
   private registerGatewayConnection(connection: FederationGatewayConnection): void {
+    this.installEgressPolicy(connection);
     // A live socket can be replaced without a disconnected status transition.
     // Transport revisions are scoped to the remote process lifetime, so a
     // replacement must not reuse any selection state from the prior session.
@@ -5534,7 +5545,12 @@ export class DesktopFederationRuntime {
     return peers;
   }
 
+  private canOriginateNotification(method: string): boolean {
+    return getOwnerHostServices().runtimePolicy?.federationEgressRole !== "contained" || containedFederationNotificationAllowed(method);
+  }
+
   private broadcastPeerDirectory(): void {
+    if (!this.canOriginateNotification(FEDERATION_PEER_DIRECTORY_PAGE_METHOD)) return;
     const router = this.router;
     if (!router) return;
     if (!isAppStateInitialized()) return;
@@ -5746,6 +5762,7 @@ export class DesktopFederationRuntime {
    * non-federated instance coordinates itself.
    */
   private actsAsCelestialCoordinator(): boolean {
+    if (!this.canOriginateNotification(FEDERATION_CELESTIAL_ICONS_METHOD)) return false;
     if (!isAppStateInitialized()) return true;
     return !desktopFederationState.read("gatewayInstanceId");
   }
@@ -5931,6 +5948,7 @@ export class DesktopFederationRuntime {
   }
 
   private broadcastCelestialIcons(excludePeerId?: FederationInstanceId): void {
+    if (!this.canOriginateNotification(FEDERATION_CELESTIAL_ICONS_METHOD)) return;
     const router = this.router;
     if (!router) return;
     const localInstanceId = this.ensureLocalInstanceId();
@@ -6252,6 +6270,7 @@ export class DesktopFederationRuntime {
     peerId: FederationInstanceId,
     entries: FederationInstanceShortName[],
   ): void {
+    if (!this.canOriginateNotification(FEDERATION_SHORT_NAMES_METHOD)) return;
     this.router?.getConnection(peerId)?.sendEnvelope({
       id: `federation-short-names:${randomUUID()}`,
       kind: "notification",
@@ -6491,6 +6510,7 @@ export class DesktopFederationRuntime {
     sourceInstanceId: FederationInstanceId,
     subscription: DesiredEventSubscription,
   ): void {
+    if (!this.canOriginateNotification(FEDERATION_EVENT_SUBSCRIPTION_METHOD)) return;
     if (sourceInstanceId === this.ensureLocalInstanceId()) return;
     this.sentNavigationSubscriptions.delete(sourceInstanceId);
     this.unacknowledgeDirectorySetWatch(sourceInstanceId);

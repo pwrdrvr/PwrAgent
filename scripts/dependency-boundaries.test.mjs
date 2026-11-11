@@ -60,15 +60,18 @@ beforeAll(async () => {
     }
   }
 
-  const entry = "packages/pwragent/src/federation-core.ts";
+  const entry = "packages/pwragent/src/daemon.js";
   source(entry, targets.map((target) => `export * from ${JSON.stringify(target.name)};`).join("\n"));
   for (const target of targets) {
     cases.push({
       from: entry,
       to: target.file,
-      allowed: target.path === "pwragent" || [...reusable, "owner-core", "sqlite-storage"].includes(target.path),
+      allowed: target.path === "pwragent",
     });
   }
+  source("packages/pwragent/dist/index.js", "export const startHeadlessHost = () => {};\n");
+  source("packages/pwragent/src/built-entry.js", 'export const boot = () => import("../dist/index.js");\n');
+  cases.push({ from: "packages/pwragent/src/built-entry.js", to: "packages/pwragent/dist/index.js", allowed: true });
 
   for (const target of [
     "apps/desktop/src/main/state/overlay.js",

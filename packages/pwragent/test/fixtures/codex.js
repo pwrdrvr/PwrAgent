@@ -6,6 +6,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 
+if (process.argv.includes("--version")) { console.log("codex-cli 0.164.0"); process.exit(0); }
 const directory = process.env.PWRAGENT_TEST_DATA;
 assert.ok(directory);
 const log = (value) => appendFileSync(path.join(directory, "calls.jsonl"), JSON.stringify(value) + "\n");
@@ -19,7 +20,11 @@ if (process.argv[2] === "sandbox") {
   else process.exit(result.code);
   await new Promise(() => {});
 }
-assert.deepEqual(process.argv.slice(2), ["app-server", "--listen", "stdio://"]);
+log({ startup: process.argv.slice(2) });
+const launch = process.argv.slice(2);
+assert.equal(launch.shift(), "app-server");
+while (launch[0] === "-c") { launch.shift(); const override = launch.shift(); if (override.startsWith("approval_policy=")) assert.equal(override, 'approval_policy="never"'); }
+assert.ok(launch.length === 0 || JSON.stringify(launch) === JSON.stringify(["--listen", "stdio://"]));
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 let initialized = false;
 let acknowledged = false;

@@ -7,7 +7,7 @@ on:
       - "packages/federation/**"
       - "packages/shared/**"
       - "packages/agent-tools/**"
-      - "apps/desktop/package.json"
+      - "apps/desktop/**"
       - "scripts/prepare-release-version.mjs"
       - ".github/workflows/release.yml"
       - "pnpm-lock.yaml"
@@ -21,7 +21,7 @@ on:
       - "packages/federation/**"
       - "packages/shared/**"
       - "packages/agent-tools/**"
-      - "apps/desktop/package.json"
+      - "apps/desktop/**"
       - "scripts/prepare-release-version.mjs"
       - ".github/workflows/release.yml"
       - "pnpm-lock.yaml"
@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["22", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
@@ -57,11 +57,11 @@ jobs:
           package-manager-cache: false
       - name: Install pinned pnpm
         run: corepack enable
-      - name: Install CLI build dependencies
+      - name: Install Node owner build dependencies
         run: pnpm --filter pwragent... install --frozen-lockfile --ignore-scripts
-      - name: Mocked CLI and release guard tests
+      - name: Outpost and release guard tests
         run: pnpm --filter pwragent test
-      - name: Pack, validate and smoke-test a clean offline installation
+      - name: Pack, validate and smoke-test a clean installation
         env:
           TMPDIR: ${{ runner.temp }}/headless-package-long-temp-path-for-socket-regression
         run: |

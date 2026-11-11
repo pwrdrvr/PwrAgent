@@ -7,6 +7,6 @@ process.umask(0o077);
 try {
   process.exitCode = await main(process.argv.slice(2));
 } catch (error) {
-  console.error(error.message);
+  process.stderr.write(`${error.stack ?? error.message}\n`);
   process.exitCode = 1;
 }
