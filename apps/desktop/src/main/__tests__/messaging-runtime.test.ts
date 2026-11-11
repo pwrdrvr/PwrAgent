@@ -95,6 +95,11 @@ vi.mock("../profile", async (importOriginal) => {
 
 const tempDirs: string[] = [];
 const activeRuntimes: DesktopMessagingRuntime[] = [];
+// Collection owns the cold transform/evaluation of this integration graph.
+// Keep no exports here: afterEach resets the module cache, so each hook must
+// import its own generation before constructing that test's federation owner.
+await import("../federation/federation-runtime");
+
 // The real module's top-level logger records evaluation, independently of
 // how long a particular runner takes to load its dependency graph.
 const federationEvaluatedDuringCollection = evaluatedModuleLoggers.has("pwragent:federation-runtime");
