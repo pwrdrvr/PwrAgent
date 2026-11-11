@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/client";
+import {
+  Client4,
+  ClientError,
+  WebSocketClient,
+  type WebSocketMessage,
+} from "@mattermost/client";
 
 // Note on `window` access in `@mattermost/client`'s `WebSocketClient`: prior
 // to @mattermost/client@11.4.0 the WS code touched bare `window` references
@@ -35,6 +40,7 @@ import type {
   MessagingJsonValue,
   MessagingFilePart,
   MessagingImagePart,
+  MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingReconnectInfo,
   MessagingSurfaceAction,
@@ -46,7 +52,9 @@ import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
   messagingInlineImageBytes,
+  retryAfterMsFromHttpHeaders,
   splitTextForDelivery,
+  type MessagingHttpHeaderReader,
 } from "@pwragent/messaging-interface";
 import type { MattermostMessagingConfig } from "./mattermost-config.ts";
 import {
@@ -94,6 +102,108 @@ const DEFAULT_CALLBACK_PORT = 47821;
  * enough that bad-token / bad-URL setups surface quickly.
  */
 const MATTERMOST_WS_FAIL_THRESHOLD = 3;
+
+/**
+ * Cool-off when a Mattermost 429 names no wait. The server's limiter sends
+ * `Retry-After` with every 429, so this covers proxies that strip it.
+ */
+export const MATTERMOST_RATE_LIMIT_DEFAULT_RETRY_AFTER_MS = 5_000;
+
+/**
+ * Mattermost's limiter also sends `X-RateLimit-Reset`: seconds until the
+ * bucket refills. It is read only when `Retry-After` is absent.
+ */
+const MATTERMOST_RATE_LIMIT_RESET_HEADERS = ["x-ratelimit-reset"] as const;
+
+/** A Mattermost HTTP 429, with the wait the server asked for. */
+export class MattermostRateLimitError extends Error {
+  readonly status = 429;
+  readonly retryAfterMs: number;
+
+  constructor(message: string, retryAfterMs: number) {
+    super(message);
+    this.name = "MattermostRateLimitError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export function mattermostRateLimitErrorFromResponse(
+  response: { headers?: MessagingHttpHeaderReader; status: number },
+  nowMs: number,
+): MattermostRateLimitError | undefined {
+  if (response.status !== 429) return undefined;
+  const retryAfterMs = retryAfterMsFromHttpHeaders({
+    defaultMs: MATTERMOST_RATE_LIMIT_DEFAULT_RETRY_AFTER_MS,
+    fallbackSecondsHeaders: MATTERMOST_RATE_LIMIT_RESET_HEADERS,
+    headers: response.headers,
+    nowMs,
+  });
+  return new MattermostRateLimitError(
+    `Mattermost rate limit exceeded; retry after ${retryAfterMs} ms`,
+    retryAfterMs,
+  );
+}
+
+type MattermostFetchResult = {
+  data: unknown;
+  headers: unknown;
+  response: Response;
+};
+type MattermostDoFetchWithResponse = (
+  url: string,
+  options: { ignoreStatus?: boolean } & Record<string, unknown>,
+) => Promise<MattermostFetchResult>;
+
+/**
+ * Makes `Client4` surface HTTP 429 as `MattermostRateLimitError`.
+ *
+ * `Client4` builds its `ClientError` from the JSON body and drops the HTTP
+ * status and headers. The server's 429 body is plain text, so without this a
+ * rate limit arrives as an empty error with no status and no Retry-After.
+ * Every `Client4` call goes through `doFetchWithResponse`, so wrapping it
+ * covers posts, patches, uploads, and lookups. Other failures keep the
+ * library's own `ClientError` shape.
+ *
+ * Returns false, and changes nothing, when the client has no such method
+ * (an injected test double, or a future library that renames it).
+ */
+export function installMattermostRateLimitInterceptor(
+  client: Client4,
+  now: () => number = Date.now,
+): boolean {
+  const target = client as unknown as { doFetchWithResponse?: unknown };
+  if (typeof target.doFetchWithResponse !== "function") return false;
+  const original = target.doFetchWithResponse as MattermostDoFetchWithResponse;
+  const wrapped: MattermostDoFetchWithResponse = async (url, options) => {
+    const result = await original(url, { ...options, ignoreStatus: true });
+    if (result.response.ok || options.ignoreStatus === true) {
+      return result;
+    }
+    const rateLimited = mattermostRateLimitErrorFromResponse(result.response, now());
+    if (rateLimited) throw rateLimited;
+    const data = (typeof result.data === "object" && result.data !== null
+      ? result.data
+      : {}) as {
+      detailed_error?: string;
+      id?: string;
+      message?: string;
+      status_code?: number;
+    };
+    throw new ClientError(client.getUrl(), {
+      message: data.message || "",
+      server_error_id: data.id,
+      status_code: data.status_code,
+      detailed_error: data.detailed_error,
+      url,
+    });
+  };
+  target.doFetchWithResponse = wrapped;
+  return true;
+}
+
+function isMattermostRateLimitError(error: unknown): error is MattermostRateLimitError {
+  return error instanceof MattermostRateLimitError;
+}
 
 /**
  * Derive the local HTTP listener port from the public callback URL.
@@ -170,6 +280,7 @@ export type MattermostProviderAdapter = {
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle?(request: {
     actor?: MessagingActorIdentity;
@@ -329,6 +440,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private wsErroredLatched = false;
   private readonly runtimeErrorListeners = new Set<(reason: string) => void>();
+  private readonly rateLimitListeners = new Set<
+    (info: MessagingRateLimitInfo) => void
+  >();
   private readonly reconnectListeners = new Set<
     (info: MessagingReconnectInfo) => void
   >();
@@ -400,6 +514,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     this.client.setUrl(options.config.serverUrl);
     this.client.setToken(options.config.botToken);
     this.client.setUserAgent("PwrAgent");
+    installMattermostRateLimitInterceptor(this.client, () => this.now());
 
     // @mattermost/client@11.4.0+ defaults `newWebSocketFn` to
     // `(url) => new WebSocket(url)`, which resolves to Node's global
@@ -667,6 +782,52 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     };
   }
 
+  onRateLimit(listener: (info: MessagingRateLimitInfo) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => {
+      this.rateLimitListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Maps a Mattermost 429 to the controller's cool-off. The scope is the one
+   * `resolveDeliveryScope` returns for the intent, because the delivery
+   * budget keys cool-offs by scope id.
+   */
+  private rateLimitFromError(
+    error: unknown,
+    intent: MessagingSurfaceIntent,
+    options: { retryable: boolean },
+  ): MessagingRateLimitInfo | undefined {
+    if (!isMattermostRateLimitError(error)) return undefined;
+    const info: MessagingRateLimitInfo = {
+      scope: this.resolveDeliveryScope(intent) ?? {
+        platform: this.channel,
+        id: "mattermost:server",
+        kind: "server",
+        label: "Mattermost server",
+      },
+      retryAfterMs: error.retryAfterMs,
+      message: error.message,
+      observedAt: this.now(),
+      retryable: options.retryable,
+    };
+    this.logger.warn("mattermost API rate limited", {
+      intentId: intent.id,
+      intentKind: intent.kind,
+      retryAfterMs: info.retryAfterMs,
+      scopeId: info.scope.id,
+    });
+    for (const listener of this.rateLimitListeners) {
+      try {
+        listener(info);
+      } catch {
+        // Runtime listeners are observability. Delivery handling continues.
+      }
+    }
+    return info;
+  }
+
   private emitRuntimeError(reason: string): void {
     for (const listener of this.runtimeErrorListeners) {
       try {
@@ -726,16 +887,22 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         }
       }
     } catch (error) {
-      this.logger.error("mattermost deliver failed", {
-        error: error instanceof Error ? error.message : String(error),
-        intentKind: intent.kind,
-        intentId: intent.id,
-      });
+      // Paths that can fail after a visible post return their own result,
+      // so an error that reaches here left nothing in the channel.
+      const rateLimit = this.rateLimitFromError(error, intent, { retryable: true });
+      if (!rateLimit) {
+        this.logger.error("mattermost deliver failed", {
+          error: error instanceof Error ? error.message : String(error),
+          intentKind: intent.kind,
+          intentId: intent.id,
+        });
+      }
       return {
         channel: this.channel,
         deliveredAt: this.now(),
         outcome: "failed",
         errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -1897,15 +2064,30 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         let firstSurface: MessagingSurfaceRef | undefined;
         for (const [index, chunk] of chunks.entries()) {
           const isLastChunk = index === chunks.length - 1;
-          const created = await this.client.createPost({
-            channel_id: target.channelId,
-            message: chunk,
-            ...(target.rootId ? { root_id: target.rootId } : {}),
-            ...(isLastChunk && fileIds.length > 0 ? { file_ids: fileIds } : {}),
-            ...(isLastChunk && attachments.length > 0
-              ? { props: { attachments } }
-              : {}),
-          });
+          let created: { id: string };
+          try {
+            created = await this.client.createPost({
+              channel_id: target.channelId,
+              message: chunk,
+              ...(target.rootId ? { root_id: target.rootId } : {}),
+              ...(isLastChunk && fileIds.length > 0 ? { file_ids: fileIds } : {}),
+              ...(isLastChunk && attachments.length > 0
+                ? { props: { attachments } }
+                : {}),
+            });
+          } catch (error) {
+            if (index === 0) throw error;
+            // Earlier chunks are already visible, so a replay would repeat them.
+            const rateLimit = this.rateLimitFromError(error, intent, { retryable: false });
+            return {
+              channel: this.channel,
+              deliveredAt: this.now(),
+              outcome: "failed",
+              errorMessage: error instanceof Error ? error.message : String(error),
+              ...(firstSurface ? { surface: firstSurface } : {}),
+              ...(rateLimit ? { rateLimit } : {}),
+            };
+          }
           firstSurface ??= surfaceRefForPost(created.id, target.channelId, target.rootId);
         }
         return {
@@ -1981,6 +2163,18 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         responseUrl: target.responseUrl,
         invokerUserId: target.responseUrlInvokerUserId,
       });
+      if (recovered && "rateLimited" in recovered) {
+        const rateLimit = this.rateLimitFromError(recovered.rateLimited, intent, {
+          retryable: !recovered.posted,
+        });
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "failed",
+          errorMessage: recovered.rateLimited.message,
+          ...(rateLimit ? { rateLimit } : {}),
+        };
+      }
       if (!recovered) {
         // response_url POST or post_id recovery failed — fall through
         // to createPost so the picker still renders, just in the
@@ -2030,11 +2224,14 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     });
 
     let outcome: MessagingDeliveryResult["outcome"] = "presented";
+    let pinRateLimit: MessagingRateLimitInfo | undefined;
     if (intent.kind === "status" && intent.delivery?.pin === true) {
       try {
         await this.client.pinPost(created.id);
         outcome = "pinned";
       } catch (error) {
+        // The post is visible, so the cool-off applies without a replay.
+        pinRateLimit = this.rateLimitFromError(error, intent, { retryable: false });
         this.logger.warn("mattermost pinPost failed", {
           postId: created.id,
           error: error instanceof Error ? error.message : String(error),
@@ -2052,6 +2249,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       deliveredAt: this.now(),
       outcome,
       surface,
+      ...(pinRateLimit ? { rateLimit: pinRateLimit } : {}),
     };
   }
 
@@ -2088,7 +2286,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
      * call path; shouldn't fire in production).
      */
     invokerUserId?: string;
-  }): Promise<{ postId: string; channelId: string; rootId?: string } | undefined> {
+  }): Promise<
+    | { postId: string; channelId: string; rootId?: string }
+    | { posted: boolean; rateLimited: MattermostRateLimitError }
+    | undefined
+  > {
     const payload: Record<string, unknown> = {
       // `in_channel` makes the response visible to everyone (vs.
       // `ephemeral` = invoker only). Pickers and status surfaces
@@ -2111,6 +2313,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      const rateLimited = mattermostRateLimitErrorFromResponse(res, this.now());
+      if (rateLimited) {
+        // Falling back to createPost would send again while the server
+        // refuses us. Nothing was posted, so the attempt can be replayed.
+        return { posted: false, rateLimited };
+      }
       if (!res.ok) {
         this.logger.warn("mattermost response_url POST returned non-2xx", {
           status: res.status,
@@ -2166,6 +2374,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         rootId: ours.root_id && ours.root_id.length > 0 ? ours.root_id : undefined,
       };
     } catch (error) {
+      if (isMattermostRateLimitError(error)) {
+        // The post is visible but its id is unknown. Do not fall back to
+        // createPost, which would post twice into a rate-limited channel.
+        return { posted: true, rateLimited: error };
+      }
       this.logger.warn("mattermost response_url getPostsSince failed", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -2245,11 +2458,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         outcome: "dismissed",
       };
     } catch (error) {
+      const rateLimit = this.rateLimitFromError(error, intent, { retryable: true });
       return {
         channel: this.channel,
         deliveredAt: this.now(),
         outcome: "failed",
         errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -2353,10 +2568,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         streamKey,
         error: error instanceof Error ? error.message : String(error),
       });
+      // Stream updates are disposable; a later snapshot supersedes this one.
+      const rateLimit = this.rateLimitFromError(error, intent, { retryable: false });
       return {
         channel: this.channel,
         deliveredAt: this.now(),
         outcome: "discarded",
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }

@@ -21,6 +21,7 @@ import type {
   MessagingInboundEvent,
   MessagingInboundReceipt,
   MessagingInboundRejectedListener,
+  MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
@@ -29,7 +30,9 @@ import {
   captureMessagingInboundReceipt,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  retryAfterMsFromHttpHeaders,
   splitTextForDelivery,
+  type MessagingHttpHeaderReader,
 } from "@pwragent/messaging-interface";
 import type { LineMessagingConfig } from "./line-config.ts";
 import {
@@ -56,6 +59,14 @@ import {
 const DEFAULT_CALLBACK_PORT = 47822;
 const DEFAULT_CALLBACK_HOST = "127.0.0.1";
 const LINE_SIGNED_VALUE_VERSION = 1;
+// LINE documents per-second API limits and sends no Retry-After header with
+// its 429s, so a missing header means a short cool-off.
+export const LINE_RATE_LIMIT_DEFAULT_RETRY_AFTER_MS = 5_000;
+// A 429 that reports the monthly message quota does not clear in seconds.
+// Cool off long enough that deliveries stop hammering the API, and do not
+// replay the attempt: it would fail the same way.
+export const LINE_MONTHLY_QUOTA_RETRY_AFTER_MS = 15 * 60_000;
+const LINE_MONTHLY_QUOTA_MESSAGE = "monthly limit";
 const LINE_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
 
 export type LineProviderLogger = {
@@ -96,6 +107,7 @@ export type LineProviderAdapter = {
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop(): Promise<void>;
   updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
@@ -216,6 +228,7 @@ export class LineAdapter implements LineProviderAdapter {
   private started = false;
   private lifecycleGeneration = 0;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   // Groups and rooms an enabled automation or open editor preview watches,
   // pushed by the desktop runtime. There, a sender outside the actor
   // allowlist is forwarded observedOnly instead of dropped; without it a LINE
@@ -387,15 +400,17 @@ export class LineAdapter implements LineProviderAdapter {
     };
   }
 
+  onRateLimit(listener: (info: MessagingRateLimitInfo) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => {
+      this.rateLimitListeners.delete(listener);
+    };
+  }
+
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     const channel = intent.audit?.channel;
     if (!channel) return undefined;
-    return {
-      platform: "line",
-      id: channel.conversation.id,
-      kind: channel.conversation.kind === "dm" ? "dm" : "group",
-      label: channel.conversation.title,
-    };
+    return lineDeliveryScope(channel);
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
@@ -478,10 +493,25 @@ export class LineAdapter implements LineProviderAdapter {
       // rather than dropping the overflow.
       let firstMessageId: string | undefined;
       for (let index = 0; index < messages.length; index += 5) {
-        const result = await this.api.pushMessage({
-          to: target.conversationId,
-          messages: messages.slice(index, index + 5),
-        });
+        let result: LineSendResult;
+        try {
+          result = await this.api.pushMessage({
+            to: target.conversationId,
+            messages: messages.slice(index, index + 5),
+          });
+        } catch (error) {
+          // Replaying is safe only while no earlier push reached the chat.
+          const rateLimit = this.rateLimitFromError(error, target.channelRef, {
+            retryable: index === 0,
+          });
+          return {
+            channel: "line",
+            deliveredAt: this.now(),
+            outcome: "failed",
+            errorMessage: error instanceof Error ? error.message : String(error),
+            ...(rateLimit ? { rateLimit } : {}),
+          };
+        }
         firstMessageId ??= result.sentMessages?.find((message) => message.id)?.id;
       }
       const messageId = firstMessageId
@@ -566,13 +596,52 @@ export class LineAdapter implements LineProviderAdapter {
       });
       return { channel: "line", deliveredAt: this.now(), outcome: "signaled" };
     } catch (error) {
+      // A typing signal is disposable, so it is never replayed.
+      const rateLimit = this.rateLimitFromError(error, target.channelRef, {
+        retryable: false,
+      });
       return {
         channel: "line",
         deliveredAt: this.now(),
         outcome: "discarded",
         errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
+  }
+
+  /**
+   * Maps a LINE HTTP 429 to the controller's cool-off. The scope must match
+   * `resolveDeliveryScope`, because the delivery budget keys cool-offs by
+   * scope id.
+   */
+  private rateLimitFromError(
+    error: unknown,
+    channelRef: MessagingChannelRef,
+    options: { retryable: boolean },
+  ): MessagingRateLimitInfo | undefined {
+    const rateLimited = lineRateLimitFromError(error, this.now());
+    if (!rateLimited) return undefined;
+    const info: MessagingRateLimitInfo = {
+      scope: lineDeliveryScope(channelRef),
+      retryAfterMs: rateLimited.retryAfterMs,
+      message: error instanceof Error ? error.message : String(error),
+      observedAt: this.now(),
+      retryable: options.retryable && !rateLimited.quotaExhausted,
+    };
+    this.logger.warn?.("LINE API rate limited", {
+      quotaExhausted: rateLimited.quotaExhausted,
+      retryAfterMs: info.retryAfterMs,
+      scopeId: info.scope.id,
+    });
+    for (const listener of this.rateLimitListeners) {
+      try {
+        listener(info);
+      } catch {
+        // Runtime listeners are observability. Delivery handling continues.
+      }
+    }
+    return info;
   }
 
   private async handleWebhookRequest(
@@ -1226,6 +1295,50 @@ export function createLineAdapter(
   logger?: LineProviderLogger,
 ): LineAdapter {
   return new LineAdapter({ config, callbackHandleStore, logger });
+}
+
+function lineDeliveryScope(channel: MessagingChannelRef): MessagingDeliveryScope {
+  return {
+    platform: "line",
+    id: channel.conversation.id,
+    kind: channel.conversation.kind === "dm" ? "dm" : "group",
+    label: channel.conversation.title,
+  };
+}
+
+/**
+ * Reads a 429 from the LINE SDK's `HTTPFetchError` (`status`, `headers`,
+ * `body`). Any other error is not a rate limit.
+ */
+export function lineRateLimitFromError(
+  error: unknown,
+  nowMs: number,
+): { quotaExhausted: boolean; retryAfterMs: number } | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as { body?: unknown; headers?: unknown; status?: unknown };
+  if (candidate.status !== 429) return undefined;
+  const headers = isHeaderReader(candidate.headers) ? candidate.headers : undefined;
+  const quotaExhausted =
+    typeof candidate.body === "string"
+    && candidate.body.toLowerCase().includes(LINE_MONTHLY_QUOTA_MESSAGE);
+  return {
+    quotaExhausted,
+    retryAfterMs: retryAfterMsFromHttpHeaders({
+      defaultMs: quotaExhausted
+        ? LINE_MONTHLY_QUOTA_RETRY_AFTER_MS
+        : LINE_RATE_LIMIT_DEFAULT_RETRY_AFTER_MS,
+      headers,
+      nowMs,
+    }),
+  };
+}
+
+function isHeaderReader(value: unknown): value is MessagingHttpHeaderReader {
+  return (
+    typeof value === "object"
+    && value !== null
+    && typeof (value as { get?: unknown }).get === "function"
+  );
 }
 
 export function createLineApi(channelAccessToken: string): LineApi {

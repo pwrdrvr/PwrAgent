@@ -569,6 +569,19 @@ records the cooldown. It only re-runs admission for retryable attempts; partial
 successes are recorded as failed delivery attempts so they do not duplicate
 already visible messages or attachments.
 
+The `rateLimit.scope` must be the scope `resolveDeliveryScope(intent)` returns
+for the same intent. The budget keys each cool-off by scope id, so a 429
+reported on any other id leaves the original scope open.
+
+Read the wait with `retryAfterMsFromHttpHeaders` from
+`@pwragent/messaging-interface`. It accepts `Retry-After` as delta-seconds or
+an HTTP-date, then any provider-documented reset header, then the adapter's
+default, and caps the result at one hour. If the provider SDK hides the HTTP
+status or headers, recover them at the HTTP layer. Mattermost's `Client4`
+builds its error from the response body, and the server's 429 body is plain
+text. The Mattermost adapter therefore wraps `Client4`'s fetch helper to
+surface 429 as `MattermostRateLimitError`.
+
 The runtime reports a platform as `degraded` while a rate-limit or reconnect
 reason is active. `degraded` means connected but constrained. Fatal startup or
 runtime failures still report `errored`.

@@ -36,6 +36,12 @@ export {
   type MessagingRateLimitBucket,
 } from "./rate-limit-gate";
 export {
+  MESSAGING_RETRY_AFTER_MAX_MS,
+  parseRetryAfterMs,
+  retryAfterMsFromHttpHeaders,
+  type MessagingHttpHeaderReader,
+} from "./retry-after";
+export {
   MESSAGING_COMMAND_CATALOG,
   MESSAGING_HELP_ACTION_COMMANDS,
   matchMessagingCommandVerb,
