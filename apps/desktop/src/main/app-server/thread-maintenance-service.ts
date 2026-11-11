@@ -495,23 +495,24 @@ export class ThreadMaintenanceService {
     // out here is still offered there.
     progress.list("hibernate");
     let found = 0;
-    type OnDisk = { candidate: ThreadArchiveCandidate; listed: { target: string; keep?: string } };
+    type OnDisk = { candidate: ThreadArchiveCandidate; target: string; reason?: string };
     const listedRoots = await mapLimit(roots, INSPECT_CONCURRENCY, async (candidate): Promise<OnDisk | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       await pace();
       if (this.abort.signal.aborted) return undefined;
       try {
+        const { target, keep: reason } = deps.keepReason(candidate, candidates, policy, now, owners);
+        if (!target) return undefined;
+        if (hibernatedSnapshotFor(candidate) || reason === HIBERNATION_KEEP_REASONS.alreadyHibernated) return undefined;
+        if (this.deps.isCheckoutOnDisk && !await this.deps.isCheckoutOnDisk(target)) return undefined;
+        // The project read can reach Git, so only an eligible thread pays for it.
         if (projectFilter) {
           const key = buildThreadIdentityKey(candidate.thread.source, candidate.thread.id);
           const project = retained.projects.has(key) ? retained.projects.get(key) : await this.deps.resolveProject(candidate);
           if (!project || path.resolve(project) !== path.resolve(projectFilter)) return undefined;
         }
-        const listed = deps.keepReason(candidate, candidates, policy, now, owners);
-        if (!listed.target) return undefined;
-        if (hibernatedSnapshotFor(candidate) || listed.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated) return undefined;
-        if (this.deps.isCheckoutOnDisk && !await this.deps.isCheckoutOnDisk(listed.target)) return undefined;
         progress.discovery({ detail: "Finding idle checkouts on disk", found: ++found });
-        return { candidate, listed: { target: listed.target, ...(listed.keep ? { keep: listed.keep } : {}) } };
+        return { candidate, target, reason };
       } catch (error) {
         fail("hibernate", error, { threadId: candidate.thread.id });
         return undefined;
@@ -519,21 +520,21 @@ export class ThreadMaintenanceService {
     });
     const onDisk = listedRoots.filter((item) => item !== undefined);
     progress.check("hibernate", onDisk.length);
-    const evaluated = await mapLimit(onDisk, INSPECT_CONCURRENCY, progress.track(({ candidate }) => candidate.thread.title, async ({ candidate, listed }) => {
+    const evaluated = await mapLimit(onDisk, INSPECT_CONCURRENCY, progress.track(({ candidate }) => candidate.thread.title, async ({ candidate, target, reason }) => {
       if (this.abort.signal.aborted) return undefined;
       try {
-        const space = await this.ownedCheckoutSpace(listed.target, checkoutOwners.owners(listed.target), retained, progress);
-        measuredPaths.set(listed.target, space);
-        if (listed.keep) { exclude(listed.keep, listed.target); return { keep: listed.keep }; }
-        const inspection = await deps.inspect(listed.target, policy, this.abort.signal);
-        if (inspection.keep !== undefined) { exclude(inspection.keep, listed.target); return { keep: inspection.keep }; }
-        const directory = candidate.thread.linkedDirectories.find((item) => item.worktreePath === listed.target);
+        const space = await this.ownedCheckoutSpace(target, checkoutOwners.owners(target), retained, progress);
+        measuredPaths.set(target, space);
+        if (reason) { exclude(reason, target); return { keep: reason }; }
+        const inspection = await deps.inspect(target, policy, this.abort.signal);
+        if (inspection.keep !== undefined) { exclude(inspection.keep, target); return { keep: inspection.keep }; }
+        const directory = candidate.thread.linkedDirectories.find((item) => item.worktreePath === target);
         const row: ThreadMaintenanceHibernateCheckout = {
           backend: candidate.thread.source,
           threadId: candidate.thread.id,
           title: candidate.thread.title,
           ...(directory?.gitBranch ? { branch: directory.gitBranch } : {}),
-          worktreePath: listed.target,
+          worktreePath: target,
           lastActivityAt: checkoutHibernationLastActivity(candidate),
           files: inspection.files,
           bytes: inspection.bytes,
