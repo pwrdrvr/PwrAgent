@@ -32,6 +32,7 @@ async function probe(): Promise<void> {
   for (const file of configs) await writeFile(file, "");
   await symlink(state, path.join(workspace, "owner-link"));
   const env = { PATH: process.env.PATH, HOME: root, CODEX_HOME: home, PWRAGENT_HOME: state,
+    PWRAGENT_OUTPOST_WORKSPACE: workspace,
     PWRAGENT_CODEX_HOME: home, OPENAI_API_KEY: "oracle-canary", CUSTOM_PROVIDER_CREDENTIAL: "oracle-canary" };
   const policy = ownerPolicy.createOutpostRuntimePolicy(env);
   const child = spawn(process.argv[2] ?? "codex", [...buildCodexClientArgs(env, [], [], policy), "app-server"], {
@@ -85,6 +86,13 @@ async function probe(): Promise<void> {
         if (succeeded !== expected) failures.push(`${mode}: ${attempt} expected ${expected}, got ${succeeded}`);
       }
       console.log(JSON.stringify({ mode, observations }));
+      for (const cwd of [state, home, path.join(workspace, "owner-link")]) {
+        const attempt = ownerPolicy.applyOwnerCodexExecutionPolicy(policy, "command/exec", {
+          cwd, sandboxPolicy, command: [process.execPath, "-e", `try { require("node:fs").readFileSync(${JSON.stringify(secrets[0])}); process.exit(42); } catch { process.exit(0); }`],
+        });
+        const changedCwd = await request("command/exec", attempt).catch(() => null) as { exitCode: number } | null;
+        assert.notEqual(changedCwd?.exitCode, 42, "Changing cwd must not turn a private root into readable workspace access");
+      }
     }
     assert.deepEqual(failures, [], "Locked-down commands must not read owner/provider credentials or write owner/Codex configuration");
   } finally {

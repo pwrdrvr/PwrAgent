@@ -37,7 +37,11 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
       }));
     } }],
   });
-  const env = { ...process.env, PWRAGENT_HOME: path.join(root, "home"), PWRAGENT_PROFILE: "fixture", CLAUDE_CONFIG_DIR: path.join(root, "claude") };
+  const workspace = path.join(root, "workspace");
+  const codexHome = path.join(root, "codex");
+  for (const directory of [workspace, codexHome]) fs.mkdirSync(directory);
+  const env = { ...process.env, PWRAGENT_HOME: path.join(root, "home"), PWRAGENT_PROFILE: "fixture", CLAUDE_CONFIG_DIR: path.join(root, "claude"),
+    PWRAGENT_OUTPOST_WORKSPACE: workspace, PWRAGENT_CODEX_HOME: codexHome, CODEX_HOME: codexHome };
   const profile = ensureNamedProfileExists("fixture", { env });
   const config = new DesktopConfigStore({ configPath: path.join(profile.profileDir, "config.toml") });
   config.recordProviderDiscovery("codex", { candidates: [], selectedCommand: process.execPath, selectedVersion: "0.159.2" });

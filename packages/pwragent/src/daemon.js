@@ -70,7 +70,9 @@ export async function serve({ directory, workspace, home, command, profile }) {
   const signalStop = () => { void stop(); };
   try {
     writeFileSync(lock, JSON.stringify({ pid: process.pid }) + "\n");
+    if (process.env.PWRAGENT_HOME) process.env.PWRAGENT_HOME = realpathSync(process.env.PWRAGENT_HOME);
     process.chdir(workspace);
+    process.env.PWRAGENT_OUTPOST_WORKSPACE = workspace;
     process.env.PWRAGENT_PROFILE = profile;
     process.env.CODEX_HOME = home;
     process.env.PWRAGENT_CODEX_HOME = home;

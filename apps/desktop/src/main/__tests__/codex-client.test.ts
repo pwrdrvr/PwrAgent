@@ -1858,7 +1858,7 @@ describe("CodexAppServerClient", () => {
     const { getOwnerHostServices, installOwnerHostServices } = await import("../owner-host");
     const { createOutpostRuntimePolicy } = await import("../owner-runtime-policy");
     const originalHost = getOwnerHostServices();
-    installOwnerHostServices({ ...originalHost, runtimePolicy: createOutpostRuntimePolicy({ PWRAGENT_HOME: "/private/owner", CODEX_HOME: "/private/codex" }) });
+    installOwnerHostServices({ ...originalHost, runtimePolicy: createOutpostRuntimePolicy({ PWRAGENT_HOME: "/private/owner", CODEX_HOME: "/private/codex", PWRAGENT_OUTPOST_WORKSPACE: "/private/workspace" }) });
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {

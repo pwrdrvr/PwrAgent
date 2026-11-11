@@ -1,4 +1,5 @@
 import fc from "fast-check";
+import path from "node:path";
 import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import { expect, it } from "vitest";
 import { applyOwnerCodexExecutionPolicy, buildOwnerCodexIsolationConfig, assertOwnerExecutionPolicy, createOutpostRuntimePolicy, type OwnerRuntimePolicy } from "../owner-runtime-policy";
@@ -7,9 +8,14 @@ const policy: OwnerRuntimePolicy = {
   enabledBackends: ["codex"], approvalPolicy: "never", executionModes: ["default", "auto"],
   sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained",
 };
+const fixtureEnvironment = {
+  PWRAGENT_HOME: path.resolve("/oracle/state"),
+  PWRAGENT_CODEX_HOME: path.resolve("/oracle/codex"),
+  PWRAGENT_OUTPOST_WORKSPACE: path.resolve("/oracle/workspace"),
+};
 it("the Outpost host enables Codex only, independent of inherited provider environment", () => {
   fc.assert(fc.property(fc.constantFrom("claude", "acp:gemini", "codex,claude"), value => {
-    expect(createOutpostRuntimePolicy({ PWRAGENT_HEADLESS_BACKENDS: value }).enabledBackends).toEqual(["codex"]);
+    expect(createOutpostRuntimePolicy({ ...fixtureEnvironment, PWRAGENT_HEADLESS_BACKENDS: value }).enabledBackends).toEqual(["codex"]);
   }));
 });
 it("rejects every unsafe explicit provider, mode, approval or sandbox combination before admission", () => {
@@ -84,4 +90,17 @@ it("provider credentials with arbitrary names never enter the command environmen
 it("a metadata-only settings update preserves the selected execution profile", () => {
   const params = { threadId: "thread", model: "model", reasoningEffort: "high" };
   expect(applyOwnerCodexExecutionPolicy(policy, "thread/settings/update", params)).toEqual(params);
+});
+
+it("command cwd cannot redefine the host-owned readable workspace", () => {
+  const hostPolicy = createOutpostRuntimePolicy(fixtureEnvironment);
+  const config = buildOwnerCodexIsolationConfig(hostPolicy, {});
+  for (const name of ["read-only", "workspace-write"]) {
+    const filesystem = config[`permissions.pwragent-${name}.filesystem`] as Record<string, unknown>;
+    expect(filesystem[hostPolicy.workspaceRoot!]).toBe(name === "read-only" ? "read" : "write");
+    expect(filesystem[":project_roots"]).toBeUndefined();
+  }
+  for (const root of ["/oracle/state", "/oracle/state/subdir", "/oracle", "/oracle/codex"]) {
+    expect(() => createOutpostRuntimePolicy({ ...fixtureEnvironment, PWRAGENT_OUTPOST_WORKSPACE: root })).toThrow("must not overlap");
+  }
 });

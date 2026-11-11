@@ -13,6 +13,7 @@ export interface OwnerRuntimePolicy {
   sandboxByMode: Readonly<Partial<Record<ThreadExecutionMode, "read-only" | "workspace-write">>>;
   federationEgressRole: FederationPeerRole;
   privateRoots?: readonly string[];
+  workspaceRoot?: string;
 }
 export interface OwnerExecutionRequest {
   backend: AppServerBackendKind;
@@ -29,8 +30,16 @@ export function assertOwnerExecutionPolicy(policy: OwnerRuntimePolicy | undefine
 }
 
 export function createOutpostRuntimePolicy(env: NodeJS.ProcessEnv = process.env): OwnerRuntimePolicy {
+  const privateRoots = [path.resolve(env.PWRAGENT_HOME?.trim() || path.join(os.homedir(), ".pwragent")), path.resolve(env.PWRAGENT_CODEX_HOME?.trim() || env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex")),
+    ...(process.platform === "linux" ? ["/run/codex-auth"] : [])];
+  const workspaceRoot = path.resolve(env.PWRAGENT_OUTPOST_WORKSPACE?.trim() || process.cwd());
+  for (const root of privateRoots) {
+    if (root === workspaceRoot || root.startsWith(workspaceRoot + path.sep) || workspaceRoot.startsWith(root + path.sep) || workspaceRoot === path.parse(workspaceRoot).root || root === path.parse(root).root) {
+      throw new Error("The Outpost workspace and owner credential roots must not overlap.");
+    }
+  }
   return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, codexHome: env.PWRAGENT_CODEX_HOME, enabledBackends: ["codex"], approvalPolicy: "never",
-    privateRoots: [path.resolve(env.PWRAGENT_HOME?.trim() || path.join(os.homedir(), ".pwragent")), path.resolve(env.PWRAGENT_CODEX_HOME?.trim() || env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex"))],
+    privateRoots, workspaceRoot,
     executionModes: ["default", "auto"], sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained" };
 }
 
@@ -57,7 +66,9 @@ export function buildOwnerCodexIsolationConfig(policy: OwnerRuntimePolicy, env: 
       "/lib64": "read",
       "/opt": "read",
       "/System/Library/OpenSSL": "read",
-      ":project_roots": mode === "workspace-write" ? "write" : "read",
+      // A command's cwd is agent-controlled. It must never redefine the
+      // readable workspace, including when it points into a credential root.
+      [policy.workspaceRoot ?? process.cwd()]: mode === "workspace-write" ? "write" : "read",
       ...Object.fromEntries((policy.privateRoots ?? []).map(root => [root, "deny"])),
     };
     config[`${prefix}.network.enabled`] = false;

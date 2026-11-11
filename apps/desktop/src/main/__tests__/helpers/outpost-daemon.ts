@@ -64,8 +64,9 @@ export async function startOutpostDaemon(options: {
   // assertions continue to use the canonical project/directory identity.
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
-  writeOutpostGatewayConfig(root);
-  const env: NodeJS.ProcessEnv = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
+  const stateRoot = path.join(root, "s");
+  writeOutpostGatewayConfig(stateRoot);
+  const env: NodeJS.ProcessEnv = { ...process.env, PWRAGENT_HOME: stateRoot, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
   const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
   if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
