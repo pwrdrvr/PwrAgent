@@ -1,5 +1,4 @@
 import path from "node:path";
-import { createServer } from "node:net";
 import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { StateDb } from "@pwragent/sqlite-storage/state-db";
@@ -13,12 +12,6 @@ import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/re
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
 test("desktop consumes portable federation trust and audit facts and hands revocation and invite mutations back to Node", async () => {
-  const probe = createServer();
-  await new Promise<void>((resolve, reject) => { probe.once("error", reject); probe.listen(0, "127.0.0.1", resolve); });
-  const address = probe.address();
-  if (!address || typeof address === "string") throw new Error("Expected an isolated loopback port");
-  await new Promise<void>((resolve, reject) => { probe.close(error => error ? reject(error) : resolve()); });
-  const port = address.port;
   const at = Date.now();
   let portableEnrollmentId = "";
   const app = await launchElectronApp({
@@ -40,7 +33,7 @@ test("desktop consumes portable federation trust and audit facts and hands revoc
       } finally { db.close(); }
       // Only the isolated profile's loopback listener runs; no remote target
       // or messaging adapter is configured by this fixture.
-      await writeFile(configTomlPathForHomeRoot(homeRoot), `[federation]\nmode = "gateway"\nlisten_host = "127.0.0.1"\nlisten_port = ${port}\npublic_url = "ws://127.0.0.1:${port}"\n`);
+      await writeFile(configTomlPathForHomeRoot(homeRoot), `[federation]\nmode = "gateway"\nlisten_host = "127.0.0.1"\nlisten_port = 0\n`);
     },
   });
   try {
@@ -64,6 +57,11 @@ test("desktop consumes portable federation trust and audit facts and hands revoc
         detail: "Invented portable diagnostic" });
       store.upsertPeer({ peer: { ...store.getPeer("invented_portable")!, label: "Invented later WAL label" }, updatedAt: at + 2 });
     } finally { db.close(); }
+    // Port 0: the gateway holds an OS-assigned port, and the invite names it
+    // once the listener is up.
+    await expect.poll(async () => app.window.evaluate(async () =>
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status),
+    { timeout: 30_000 }).toBe("listening");
     const result = await app.window.evaluate(async () => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       const later = await api.readFederationDiagnostics!({ peerId: "invented_portable", limit: 1 });
