@@ -1169,8 +1169,11 @@ describe("MessagingController", () => {
             afterReview: autoFix ? "auto-fix" : "wait",
           }));
         } finally {
-          await settleHarnessWork();
-          db.close();
+          try {
+            await settleHarnessWork();
+          } finally {
+            db.close();
+          }
         }
       },
     ), { numRuns: 25 });
