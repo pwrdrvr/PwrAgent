@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
 import type { AppServerBackendKind } from "@pwragent/shared";
-import { expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
@@ -20,10 +20,16 @@ type Host = {
   policyProbe(): Promise<unknown>;
   requests(): Promise<Array<{ method: string; params: Record<string, unknown> }>>;
   complete(threads: Thread[], ids: string[]): Promise<QueueEvent[]>;
+  stopDuringRequest(method: string, values: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 };
 
-async function builtHost(): Promise<Host> {
+type Runtime = { root: string; outputDirectory: string; guard: string };
+
+// The bundle is shared fixture setup, not the behavior under test. Building it
+// once keeps each test's budget for the driver it forks.
+let runtime: Runtime;
+beforeAll(async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "headless-concurrency-")));
   const outputDirectory = path.join(root, "runtime");
   const fixture = path.join(import.meta.dirname, "fixtures/owner-conformance-codex-transport.ts");
@@ -47,6 +53,15 @@ async function builtHost(): Promise<Host> {
       }));
     } }],
   });
+  runtime = { root, outputDirectory, guard };
+});
+afterAll(() => {
+  if (runtime) fs.rmSync(runtime.root, { recursive: true, force: true });
+});
+
+async function builtHost(): Promise<Host> {
+  const { outputDirectory, guard } = runtime;
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(runtime.root, "host-")));
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(workspace);
   const env = { ...process.env, PWRAGENT_HOME: path.join(root, "home"), PWRAGENT_PROFILE: "fixture", CLAUDE_CONFIG_DIR: path.join(root, "claude") };
@@ -56,6 +71,9 @@ async function builtHost(): Promise<Host> {
   config.dispose();
   const driver = path.join(root, "driver.cjs");
   fs.writeFileSync(driver, `const app = require(${JSON.stringify(path.join(outputDirectory, "index.js"))});
+    // The parent owns the channel. A reply that finishes after it disconnected
+    // has no reader, so it is dropped instead of crashing the driver.
+    const reply = message => { if (process.connected) process.send(message); };
     app.startHeadlessHost().then(async services => {
       await services.config.write({ onboarding: { completed: true } }, ["onboarding"]);
       services.config.recordProviderDiscovery("codex", { candidates: [], selectedCommand: process.execPath, selectedVersion: "0.159.2" });
@@ -83,11 +101,11 @@ async function builtHost(): Promise<Host> {
             await Promise.all(done);
             result = events;
           } else result = await services.registry[request.method](request.params);
-          process.send({ id: request.id, result });
-        } catch (error) { process.send({ id: request.id, error: error.message }); }
+          reply({ id: request.id, result });
+        } catch (error) { reply({ id: request.id, error: error.message }); }
       });
-      process.send({ ready: true });
-    }).catch(error => { console.error(error.stack); process.exitCode = 1; process.disconnect(); });`);
+      reply({ ready: true });
+    }).catch(error => { console.error(error.stack); process.exitCode = 1; if (process.connected) process.disconnect(); });`);
   const child = fork(driver, [], { env, execArgv: ["--require", guard], stdio: ["ignore", "pipe", "pipe", "ipc"] });
   const exited = once(child, "exit");
   let output = "";
@@ -128,7 +146,12 @@ async function builtHost(): Promise<Host> {
     },
     readThread: thread => call("readThread", { params: thread }),
     policyProbe: () => call("policyProbe", {}), requests: () => call("requests", {}),
-    complete: (threads, ids) => call("complete", { threads, ids }), close,
+    complete: (threads, ids) => call("complete", { threads, ids }),
+    stopDuringRequest: (method, values) => {
+      child.send({ id: ++id, method, ...values });
+      return close();
+    },
+    close,
   };
 }
 
@@ -159,4 +182,12 @@ it("admits a new thread and two independently identified turns while both thread
   const completed = await Promise.all([host.readThread(a), host.readThread(b)]);
   expect(completed.map(value => value.threadStatus)).toEqual(["idle", "idle"]);
   expect(completed.map(value => value.replay?.lastAssistantMessage)).toEqual(["Fixture result", "Fixture result"]);
+});
+
+it("exits cleanly when the parent stops the driver before a reply is sent", async () => {
+  const host = await builtHost();
+  const thread = await host.startThread();
+  // readThread awaits the registry, so stop is handled first and the channel
+  // is closed by the time the reply is ready.
+  await host.stopDuringRequest("readThread", { params: thread });
 });
