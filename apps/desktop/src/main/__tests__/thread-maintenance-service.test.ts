@@ -1438,3 +1438,41 @@ describe("project-scoped checkout scan", () => {
     expect(scan.checkouts.items.map((item) => item.worktreePath)).toEqual([ours]);
   });
 });
+
+describe("archived checkouts over the snapshot limit", () => {
+  // Rule: an archived checkout over the snapshot limit is offered for a
+  // decision, and removed only when the operator approved snapshotting all
+  // of it. The approval is capped 10% above the size the review showed, the
+  // same cap an over-limit archive gets. The agent tool requires the choice.
+  it("removes an over-limit archived checkout only with snapshotAll, capped 10% above the reviewed size", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 101, max: 10_000_000 }), async (snapshotAll, bytes) => {
+      const root = await tempRoot();
+      const worktreePath = path.join(root, "worktrees", "big", "app");
+      await mkdir(worktreePath, { recursive: true });
+      const built = harness([], {
+        auditArchivedCheckouts: vi.fn(async () => ({
+          candidates: [{ backend: "codex", threadId: "old", title: "Old work", worktreePath }], kept: {}, emptyFolders: 0,
+        })),
+      });
+      built.workspaces.set(worktreePath, { kind: "overLimit", files: 1, bytes, limitBytes: 100, largest: [] });
+      const scan = await built.service.scan();
+
+      expect(scan.checkouts.items).toEqual([expect.objectContaining({ worktreePath, kind: "removable",
+        workspace: expect.objectContaining({ kind: "overLimit", bytes }) })]);
+      expect(planThreadMaintenanceApply({ scanId: scan.scanId, removeCheckouts: [{ backend: "codex", threadId: "old", worktreePath }] }, scan,
+        { backend: "codex", threadId: "agent" })).toEqual({ error: expect.stringContaining("over the snapshot limit") });
+
+      const run = await built.service.apply({ scanId: scan.scanId, archive: [], trashCheckouts: [], removeEmptyFolders: false,
+        removeCheckouts: [{ backend: "codex", threadId: "old", worktreePath, ...(snapshotAll ? { snapshotAll: true } : {}) }] });
+
+      if (snapshotAll) {
+        expect(built.deps.removeArchivedCheckouts).toHaveBeenCalledWith(expect.objectContaining({
+          worktreePaths: [worktreePath], snapshotLimits: [{ worktreePath, bytes: Math.ceil(bytes * 11 / 10) }],
+        }), expect.anything());
+      } else {
+        expect(built.deps.removeArchivedCheckouts).not.toHaveBeenCalled();
+        expect(run.problems).toEqual([expect.objectContaining({ path: worktreePath, kind: "kept", reason: "Changes are over the snapshot limit" })]);
+      }
+    }), { numRuns: 12 });
+  });
+});

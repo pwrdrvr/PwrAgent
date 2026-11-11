@@ -4747,6 +4747,7 @@ export function useThreadNavigation(
       if (method === "thread/archiveCleanup/completed") {
         const completion = event.notification.params as {
           threadId: string; archivedAt: number; cleanup: ArchiveThreadCleanupResult[]; error?: string; reporting?: "background";
+          threadTitle?: string;
         };
         const background = completion.reporting === "background";
         const completedKey = agentEventThreadIdentityKey(event, completion.threadId);

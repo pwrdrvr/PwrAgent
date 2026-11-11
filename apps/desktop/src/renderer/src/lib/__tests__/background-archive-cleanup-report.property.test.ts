@@ -337,3 +337,19 @@ it("reports only the outcomes that changed since the previous attempt", () => {
     },
   ), { examples: [[[[{ unchanged: true, failed: false }]]]] });
 });
+
+// Rule: the report names the archived thread. A window seldom has an archived
+// thread loaded, and its context then holds only the id, so the owner's
+// title for it is used. A loaded row's own title still wins.
+it("names the archived source thread from the owner's title unless a loaded title exists", () => {
+  fc.assert(fc.property(fc.option(fc.constantFrom("Loaded title"), { nil: undefined }), fc.option(fc.constantFrom("Owner title"), { nil: undefined }),
+    (loadedTitle, ownerTitle) => {
+      const report = new BackgroundArchiveCleanupReport();
+      report.record("codex", {
+        threadId: "archived-1", archivedAt: 1, ...(ownerTitle ? { threadTitle: ownerTitle } : {}),
+        cleanup: [{ worktreePath: "/contrived/worktrees/1", removedWorktree: false, deletedBranch: false, error: "Contrived failure" }],
+      }, { threadLink: { backend: "codex", threadId: "archived-1", title: loadedTitle ?? "archived-1" } });
+      const expected = loadedTitle ?? ownerTitle ?? "Unknown thread";
+      expect(report.notice()?.copyText).toContain(`Thread: ${expected}`);
+    }), { examples: [[undefined, "Owner title"]] });
+});

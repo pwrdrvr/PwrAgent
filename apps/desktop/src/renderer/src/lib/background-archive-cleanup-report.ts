@@ -13,7 +13,7 @@ const MAX_TEXT_CHARS = 2048;
 const MAX_BLOCKERS = 32;
 const MAX_VISIBLE_OUTCOMES = 5;
 
-type Completion = { threadId: string; archivedAt: number; cleanup: ArchiveThreadCleanupResult[]; error?: string };
+type Completion = { threadId: string; archivedAt: number; cleanup: ArchiveThreadCleanupResult[]; error?: string; threadTitle?: string };
 type ThreadResolver = (ref: ThreadLinkRef) => (ThreadLinkRef & { title?: string }) | undefined;
 const priority = (kind: BackgroundCleanupOutcome["kind"]): number => kind === "failed" ? 3 : kind === "kept" ? 2 : 1;
 
@@ -94,8 +94,12 @@ export class BackgroundArchiveCleanupReport {
         return { ref: { ...ref, ...(matching?.backend ? { backend: matching.backend } : {}) },
           title: clip(name?.trim() && name.trim() !== ref.threadId ? name.trim() : undefined) };
       };
+      // A loaded row's title wins. An archived thread is rarely loaded, and
+      // its context then holds only the id, so the owner's own read names it.
+      const contextTitle = context.threadLink?.threadId === completion.threadId && context.threadLink.backend === backend
+        ? context.threadLink.title?.trim() : undefined;
       const source = thread({ backend, threadId: completion.threadId, ...(instanceId ? { instanceId } : {}) },
-        context.threadLink?.threadId === completion.threadId && context.threadLink.backend === backend ? context.threadLink.title : undefined);
+        (contextTitle && contextTitle !== completion.threadId ? contextTitle : undefined) || completion.threadTitle);
       // Older peers report only ids in this exact sentence. Keep their backend
       // unknown unless the same owner's directory can resolve it unambiguously.
       const legacy = /^Worktree is still used by (?:another active thread|other active threads): (.+)\.$/.exec(item?.skippedReason ?? "");

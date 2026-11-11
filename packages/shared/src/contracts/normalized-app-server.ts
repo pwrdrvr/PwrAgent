@@ -1169,6 +1169,9 @@ export type ArchiveThreadResponse = {
   archivedAt: number;
   cleanup: ArchiveThreadCleanupResult[];
   cleanupPending?: boolean;
+  /** The archived thread's title, as cleanup read it. A viewer cannot look
+   * an archived thread up among its loaded rows. */
+  threadTitle?: string;
 };
 
 /**
@@ -2348,6 +2351,8 @@ export type AppServerNotification =
         reporting?: "background";
         cleanup: ArchiveThreadCleanupResult[];
         error?: string;
+        /** The archived thread's title. Older owners omit it. */
+        threadTitle?: string;
       };
     }
   | {

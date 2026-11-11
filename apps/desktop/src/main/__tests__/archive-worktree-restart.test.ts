@@ -1579,6 +1579,71 @@ describe("archive cleanup and finished helper threads", () => {
     ), { numRuns: 10, examples: [[[{ native: false, finished: true }]], [[{ native: false, finished: true }, { native: true, finished: true }]]] });
   }, 120_000);
 
+  // Rule: Thread maintenance decides sharing from the same candidate list.
+  // A finished monitor worker must be marked there, or it keeps its parent's
+  // checkout from hibernating.
+  it("marks a maintenance candidate a finished monitor worker only when all of its cards are finished monitor cards", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({ native: fc.boolean(), finished: fc.boolean() }), { maxLength: 3 }),
+      async (cards) => {
+        const fixture = await createFixture();
+        ArchiveWorktreeTransport.threads = [
+          { id: "parent", cwd: fixture.worktree, source: "cli" },
+          { id: "worker", cwd: fixture.worktree, source: "cli" },
+        ];
+        const instance = fixture.reopen();
+        await instance.store.upsertThreadSubAgents({ backend: "codex", threadId: "parent", subAgents: cards.map((card, index) => ({
+          monitorId: card.native ? `codex-native:call-${index}` : `monitor-${index}`, task: "Watch CI",
+          status: card.finished ? "success" : "running", createdAt: 1, updatedAt: 1, backend: "codex", monitorThreadId: "worker",
+          ...(card.finished ? { completedAt: 2 } : {}),
+        })) });
+
+        const candidates = await instance.registry.listAutoArchiveCandidates();
+
+        const finished = cards.length > 0 && cards.every((card) => !card.native && card.finished);
+        const flag = (id: string) => candidates.find((candidate) => candidate.thread.id === id)?.finishedMonitorWorker === true;
+        expect(flag("worker")).toBe(finished);
+        expect(flag("parent")).toBe(false);
+      },
+    ), { numRuns: 8, examples: [[[{ native: false, finished: true }]]] });
+  }, 120_000);
+
+  // Rule: Thread maintenance can remove an archived checkout over the
+  // snapshot limit only with the operator's reviewed approval for it.
+  it.each([true, false])("removes an oversized archived checkout only with a reviewed snapshot approval (approved: %s)", async (approved) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true }];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "changes larger than the tiny limit\n");
+    const instance = fixture.reopen(fixture.directory, false, undefined, [],
+      { worktreeArchiveService: new WorktreeArchiveService({ maxSnapshotBytes: 1 }) });
+
+    const result = await instance.registry.removeArchivedCheckouts({ worktreePaths: [fixture.worktree], emptyFolders: false,
+      ...(approved ? { snapshotLimits: [{ worktreePath: fixture.worktree, bytes: 1_000_000 }] } : {}) });
+
+    if (approved) {
+      expect(result.removed).toEqual([{ worktreePath: fixture.worktree }]);
+      await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(result.removed).toEqual([]);
+      expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("changes larger than the tiny limit\n");
+    }
+  }, 30_000);
+
+  // Rule: the background report names the archived thread. Its window rarely
+  // has it loaded, so the owner must say what it was called.
+  it("names the archived thread on its background cleanup completion", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "named", cwd: fixture.worktree, source: "cli", name: "Compare to the fixture" }];
+    const instance = fixture.reopen();
+    const completed = new Promise<Record<string, unknown>>((resolve) => instance.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed") resolve(event.notification.params);
+    }));
+
+    await instance.registry.archiveThread({ backend: "codex", threadId: "named", backgroundCleanup: true });
+
+    expect(await completed).toMatchObject({ threadId: "named", threadTitle: "Compare to the fixture" });
+  }, 30_000);
+
   // Rule: nothing changes an oversized checkout on its own, so the next
   // launch must not try it again (and report it again).
   it("does not retry an oversized checkout at the next launch", async () => {

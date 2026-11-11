@@ -110,7 +110,9 @@ export type ThreadMaintenanceDeps = {
     snapshotLimitBytes?: number;
   }) => Promise<boolean>;
   /** Remove only the listed archived checkouts, plus empty folders when asked. */
-  removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean }, options?: {
+  removeArchivedCheckouts: (selection: { worktreePaths: string[]; emptyFolders: boolean;
+    /** One-run approvals to snapshot past the normal limit, by checkout. */
+    snapshotLimits?: { worktreePath: string; bytes: number }[] }, options?: {
     onItem: (item: Pick<ThreadMaintenanceRunItem, "status" | "stage" | "reason" | "detail"> & { path: string }) => void;
     stopped: () => boolean;
   }) => Promise<ArchivedCheckoutRemoval>;
@@ -654,11 +656,8 @@ export class ThreadMaintenanceService {
           excludedReasons.set(candidate.worktreePath, inspection.keep);
           return undefined;
         }
-        if (inspection.workspace.kind === "overLimit") {
-          kept["Changes over the snapshot limit"] = (kept["Changes over the snapshot limit"] ?? 0) + 1;
-          excludedReasons.set(candidate.worktreePath, "Changes over the snapshot limit");
-          return undefined;
-        }
+        // An over-limit checkout is offered for a decision, never selected
+        // by default: removing it snapshots every change past the limit.
         return { ...candidate, kind: "removable" as const, workspace: inspection.workspace };
       } catch (error) {
         fail("checkouts", error, { path: candidate.worktreePath, threadId: candidate.threadId });
@@ -949,11 +948,25 @@ export class ThreadMaintenanceService {
         && (item.action === "removeCheckout" || item.action === "trashCheckout"));
       if (row) complete(row.itemId, bytes);
     };
-    const removable = request.removeCheckouts.filter((item) => retained.checkouts.get(item.worktreePath)?.kind === "removable");
+    // An over-limit checkout is removed only with the reviewed approval,
+    // capped 10% above the size the review showed, as an over-limit archive is.
+    const snapshotLimits: { worktreePath: string; bytes: number }[] = [];
+    const removable = request.removeCheckouts.filter((item) => {
+      const checkout = retained.checkouts.get(item.worktreePath);
+      if (checkout?.kind !== "removable") return false;
+      if (checkout.workspace?.kind !== "overLimit") return true;
+      if (!item.snapshotAll) return false;
+      snapshotLimits.push({ worktreePath: item.worktreePath, bytes: Math.ceil(checkout.workspace.bytes * 11 / 10) });
+      return true;
+    });
     for (const item of request.removeCheckouts) {
-      if (retained.checkouts.get(item.worktreePath)?.kind !== "removable") {
+      const checkout = retained.checkouts.get(item.worktreePath);
+      if (checkout?.kind !== "removable") {
         checkoutStep.failed += 1;
         addProblem({ step: "checkouts", kind: "failed", object: item.worktreePath, reason: "Not in this scan", path: item.worktreePath });
+      } else if (checkout.workspace?.kind === "overLimit" && !item.snapshotAll) {
+        checkoutStep.kept += 1;
+        addProblem({ step: "checkouts", kind: "kept", object: item.worktreePath, reason: "Changes are over the snapshot limit", path: item.worktreePath });
       }
     }
     const keepStopped = (worktreePath: string) => {
@@ -968,6 +981,7 @@ export class ThreadMaintenanceService {
       try {
         const removal = await this.deps.removeArchivedCheckouts({
           worktreePaths: removable.map((item) => item.worktreePath), emptyFolders: request.removeEmptyFolders,
+          ...(snapshotLimits.length ? { snapshotLimits } : {}),
         }, { stopped, onItem: (item) => {
           const row = rows.find((row) => row.action === "removeCheckout" && row.path === item.path);
           if (!row) return;

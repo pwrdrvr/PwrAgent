@@ -296,7 +296,14 @@ export type ThreadMaintenanceOverLimitChoice = "keepCheckout" | "snapshotAll";
 export type ThreadMaintenanceApplyRequest = {
   scanId: string;
   archive: { backend: string; threadId: string; overLimit?: ThreadMaintenanceOverLimitChoice }[];
-  removeCheckouts: { backend: string; threadId: string; worktreePath: string }[];
+  removeCheckouts: {
+    backend: string;
+    threadId: string;
+    worktreePath: string;
+    /** The operator reviewed this checkout's over-limit changes and chose to
+     * snapshot them all. Without it an over-limit checkout is kept. */
+    snapshotAll?: boolean;
+  }[];
   /** Orphaned checkouts to move to the Trash. Never selected by default. */
   trashCheckouts: { worktreePath: string }[];
   /** Checkouts no thread refers to, to snapshot and remove. Never selected
