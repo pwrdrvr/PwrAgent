@@ -1765,6 +1765,11 @@ export class DesktopFederationRuntime {
     return await this.restartPromise;
   }
 
+  /** Resolves once any start or restart already in flight has finished, without starting another. */
+  async whenRestartSettled(): Promise<void> {
+    await this.restartPromise?.catch(() => undefined);
+  }
+
   private async drainRestarts(): Promise<void> {
     try {
       do {
@@ -1954,11 +1959,16 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /** The port the running gateway listener is bound to. */
+  private boundListenPort(): number | undefined {
+    if (this.stopping || !this.server) return undefined;
+    const match = /:(\d+)$/.exec(this.listenUrl ?? "");
+    return match ? Number(match[1]) : undefined;
+  }
+
   /** The gateway port reachable on IPv4 loopback, including an all-interface bind. */
   loopbackListenPort(): number | undefined {
-    if (this.stopping || !this.server) return undefined;
-    const match = /^ws:\/\/(?:127\.0\.0\.1|0\.0\.0\.0):(\d+)$/.exec(this.listenUrl ?? "");
-    return match ? Number(match[1]) : undefined;
+    return /^ws:\/\/(?:127\.0\.0\.1|0\.0\.0\.0):\d+$/.test(this.listenUrl ?? "") ? this.boundListenPort() : undefined;
   }
 
   async health(): Promise<FederationHealthStatus> {
@@ -2496,7 +2506,9 @@ export class DesktopFederationRuntime {
     const tailscale = await readTailscaleAdvertisement?.();
     const endpoints = buildFederationAdvertisedEndpoints({
       listenHost: config.listenHost,
-      listenPort: config.listenPort,
+      // Advertise the port the listener holds. It differs from the
+      // configured one only for `listen_port = 0`, where the OS chose it.
+      listenPort: this.boundListenPort() ?? config.listenPort,
       hostname: hostname(),
       platform: process.platform,
       interfaceAddresses: collectFederationInterfaceAddresses(),

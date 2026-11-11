@@ -1,8 +1,7 @@
 import { buildOwnerFixture } from "./built-owner-fixture";
 import { execFile, spawn } from "node:child_process";
-import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -65,6 +64,7 @@ export async function startOutpostDaemon(options: {
   // assertions continue to use the canonical project/directory identity.
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
+  writeOutpostGatewayConfig(root);
   const env: NodeJS.ProcessEnv = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
   const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
@@ -89,13 +89,9 @@ export async function startOutpostDaemon(options: {
       if (daemon.exitCode !== null || attempt >= 200) throw new Error(`Outpost startup failed (${daemon.exitCode}): ${errors} ${output.slice(-3000)}`);
       await delay(20);
     }
-    const inviteParams = path.join(root, "invite-params.json");
-    const reservation = net.createServer();
-    await new Promise<void>((resolve, reject) => { reservation.once("error", reject); reservation.listen(0, "127.0.0.1", resolve); });
-    const port = (reservation.address() as net.AddressInfo).port;
-    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
-    writeFileSync(inviteParams, JSON.stringify({ port }));
-    const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite", "--params-file", inviteParams], { env });
+    // The gateway binds the port it advertises (configured as 0 above), so
+    // no port is ever chosen here and released for the daemon to take.
+    const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite"], { env });
     const invite = decodeFederationInvite(JSON.parse(issued.stdout).invite);
     const identity = generateFederationIdentityKeyPair();
     const viewerId = randomUUID();
@@ -142,4 +138,24 @@ export async function startOutpostDaemon(options: {
     await close();
     throw error;
   }
+}
+
+/**
+ * Configures profile `t` as a loopback gateway on port 0 before the daemon
+ * starts. The daemon's own listener takes an OS-assigned port and the invite
+ * names it. A port reserved here and released for the daemon to bind could be
+ * taken by any other socket in between.
+ */
+function writeOutpostGatewayConfig(root: string): void {
+  const configPath = path.join(root, "profiles", "t", "config.toml");
+  if (existsSync(configPath)) {
+    // A reused profile keeps its config, which must still ask for port 0.
+    if (!/^listen_port = 0$/m.test(readFileSync(configPath, "utf8"))) {
+      throw new Error(`${configPath} must configure the federation gateway with listen_port = 0`);
+    }
+    return;
+  }
+  mkdirSync(path.dirname(configPath), { recursive: true });
+  writeFileSync(configPath, "[onboarding]\ncompleted = false\n\n[federation]\nmode = \"gateway\"\n"
+    + "listen_host = \"127.0.0.1\"\nlisten_port = 0\n");
 }

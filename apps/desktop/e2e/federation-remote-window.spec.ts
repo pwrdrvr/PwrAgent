@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "./fixtures/electron-test";
@@ -159,21 +158,22 @@ async function createLocalControlFixture(options?: {
   };
 }
 
-async function reserveLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("Expected a loopback TCP port for federation E2E");
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-  });
-  return address.port;
+/**
+ * The port an owner's gateway is listening on. Owners here configure
+ * `listen_port = 0`, so the gateway binds an OS-assigned port and holds it.
+ * A port the test chose and released before the owner bound it could be
+ * taken by another worker in between.
+ */
+async function readGatewayPort(page: Page): Promise<number> {
+  let port: number | undefined;
+  await expect.poll(async () => {
+    const health = await page.evaluate(async () =>
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health);
+    const match = /^ws:\/\/127\.0\.0\.1:(\d+)$/.exec(health.listenUrl ?? "");
+    port = match ? Number(match[1]) : undefined;
+    return port ?? 0;
+  }, { timeout: 30_000 }).toBeGreaterThan(0);
+  return port!;
 }
 
 async function restoreE2eFederationIdentity(params: {
@@ -239,7 +239,7 @@ async function setQuitConfirmation(page: Page, enabled: boolean): Promise<void> 
   }, enabled);
 }
 
-function disableE2eFederationBeforeRelaunch(homeRoot: string): void {
+function disableE2eFederationBeforeRelaunch(homeRoot: string, listenPort?: number): void {
   applyDesktopSettingsPatch(
     path.join(
       homeRoot,
@@ -248,7 +248,7 @@ function disableE2eFederationBeforeRelaunch(homeRoot: string): void {
       "default",
       "config.toml",
     ),
-    { federation: { mode: "disabled" } },
+    { federation: { mode: "disabled", ...(listenPort ? { listenPort } : {}) } },
   );
 }
 
@@ -313,7 +313,6 @@ test.describe("federation remote window", () => {
     const ownerNoiseIdentity = generateFederationNoiseStaticKeyPair();
     const viewerIdentity = generateFederationIdentityKeyPair();
     const viewerNoiseIdentity = generateFederationNoiseStaticKeyPair();
-    const port = await reserveLoopbackPort();
     const lifecycle = (completed: boolean): AppServerNotification => ({
       method: "item/completed",
       params: {
@@ -340,8 +339,7 @@ test.describe("federation remote window", () => {
           const profile = path.join(homeRoot, ".pwragent", "profiles", "default");
           await mkdir(path.join(profile, "state"), { recursive: true });
           await writeFile(path.join(profile, "config.toml"), ["[federation]", 'mode = "gateway"',
-            'instance_label = "Fixture sub-agent owner"', 'listen_host = "127.0.0.1"', `listen_port = ${port}`,
-            `public_url = "ws://127.0.0.1:${port}"`, ""].join("\n"));
+            'instance_label = "Fixture sub-agent owner"', 'listen_host = "127.0.0.1"', "listen_port = 0", ""].join("\n"));
           const db = StateDb.open(path.join(profile, "state", "state.db"));
           try {
             const store = new SqliteOverlayStore(db);
@@ -363,7 +361,7 @@ test.describe("federation remote window", () => {
       // listener after identity restoration before minting an invite for it.
       await expect.poll(async () => owner!.window.evaluate(async () =>
         (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health),
-      { timeout: 30_000 }).toMatchObject({ status: "listening", listenUrl: `ws://127.0.0.1:${port}` });
+      { timeout: 30_000 }).toMatchObject({ status: "listening", listenUrl: expect.stringMatching(/^ws:\/\/127\.0\.0\.1:\d+$/) });
       const ownerInstanceId = await owner.window.evaluate(async () =>
         (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.instanceId);
       expect(ownerInstanceId).toBeTruthy();
@@ -1819,7 +1817,6 @@ test.describe("federation remote window", () => {
     );
     const ownerRepo = path.join(fixtureRoot, "owner-repo");
     const viewerRepo = path.join(fixtureRoot, "viewer-repo");
-    const federationPort = await reserveLoopbackPort();
     const ownerIdentity = generateFederationIdentityKeyPair();
     const ownerNoiseIdentity = generateFederationNoiseStaticKeyPair();
     const viewerIdentity = generateFederationIdentityKeyPair();
@@ -1872,8 +1869,7 @@ test.describe("federation remote window", () => {
                 'mode = "gateway"',
                 'instance_label = "Child Lifecycle Owner"',
                 'listen_host = "127.0.0.1"',
-                `listen_port = ${federationPort}`,
-                `public_url = "ws://127.0.0.1:${federationPort}"`,
+                "listen_port = 0",
                 "",
               ].join("\n"),
             }),
@@ -1888,6 +1884,8 @@ test.describe("federation remote window", () => {
         restartMode: "gateway",
       });
 
+      // The invite names the port the gateway holds, so wait for the bind.
+      await readGatewayPort(owner.window);
       const invite = await owner.window.evaluate(async () => {
         const api = (window as typeof window & {
           pwragent?: {
@@ -2132,8 +2130,11 @@ test.describe("federation remote window", () => {
       expect(relationship.parentThread).toMatchObject({ pinnedRank: expect.any(String) });
 
       const ownerHomeRoot = owner.homeRoot;
+      // The viewer reconnects to the endpoint it enrolled with, so the
+      // relaunched owner must listen on the port the first one held.
+      const ownerPort = await readGatewayPort(owner.window);
       await owner.closeApplication();
-      disableE2eFederationBeforeRelaunch(ownerHomeRoot);
+      disableE2eFederationBeforeRelaunch(ownerHomeRoot, ownerPort);
       const remoteParentRow = viewer.window.locator(".thread-row", {
         has: viewer.window.locator(".thread-row__title", {
           hasText: "Remote Kimi parent",
@@ -2258,7 +2259,6 @@ test.describe("federation remote window", () => {
       fixtureRepo,
       FEDERATION_CHILD_ENVIRONMENT_MARKER,
     );
-    const federationPort = await reserveLoopbackPort();
 
     await mkdir(sourceRepo, { recursive: true });
     execFileSync("git", ["init"], { cwd: sourceRepo, stdio: "ignore" });
@@ -2354,8 +2354,7 @@ test.describe("federation remote window", () => {
                 'mode = "gateway"',
                 'instance_label = "Federation Environment Owner"',
                 'listen_host = "127.0.0.1"',
-                `listen_port = ${federationPort}`,
-                `public_url = "ws://127.0.0.1:${federationPort}"`,
+                "listen_port = 0",
                 "",
               ].join("\n"),
             }),
@@ -2392,6 +2391,8 @@ test.describe("federation remote window", () => {
         threadId: "federated-kimi-parent",
       };
 
+      // The invite names the port the gateway holds, so wait for the bind.
+      await readGatewayPort(owner.window);
       const invite = await owner.window.evaluate(async () => {
         const api = (window as typeof window & {
           pwragent?: {

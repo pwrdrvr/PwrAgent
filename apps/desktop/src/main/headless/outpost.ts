@@ -36,13 +36,22 @@ export async function handleOutpostCommand(services: Services, method: string, p
     case "federation-invite": {
       const current = settings.readFederationConfig();
       const listening = current.mode === "gateway" || current.mode === "dual";
-      const port = Number(params.port ?? (listening ? current.listenPort : 47831));
-      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid gateway port.");
+      const requested = params.port === undefined ? undefined : Number(params.port);
+      if (requested !== undefined && (!Number.isInteger(requested) || requested < 1 || requested > 65535)) {
+        throw new Error("Invalid gateway port.");
+      }
+      // Without a port, an already-listening gateway keeps its configured
+      // port, including `listen_port = 0`, and the invite names the port
+      // the listener holds.
+      const port = requested ?? (listening ? current.listenPort : 47831);
       if (!listening || current.listenPort !== port) {
         const patch = { federation: { mode: current.mode === "client" || current.mode === "dual" ? "dual" as const : "gateway" as const,
           listenHost: "127.0.0.1", listenPort: port } };
         await settings.writeConfigPatchTargeted(patch);
         await services.onConfigPatchWritten(patch);
+      } else {
+        // Startup begins the listener without awaiting it.
+        await federation.whenRestartSettled();
       }
       return federation.generateInvite({ label: params.label as string | undefined, permissionRole: "full" as FederationPeerRole });
     }
