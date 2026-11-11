@@ -225,9 +225,12 @@ describe("GitHub tool client", () => {
   });
 
   it("merges only the head the agent checked", async () => {
-    const { calls, client } = harness(() => json({ message: "Head branch was modified. Review and try the merge again." }, 409));
+    const { calls, client } = harness((call) => call.url.endsWith("/graphql")
+      // A branch with no merge queue takes the direct merge.
+      ? json({ data: { repository: { pullRequest: { id: "PR_9", state: "OPEN", headRefOid: "c".repeat(40), isMergeQueueEnabled: false, mergeQueueEntry: null, queueEvents: { nodes: [] }, commits: { nodes: [] } } } } })
+      : json({ message: "Head branch was modified. Review and try the merge again." }, 409));
     await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "c".repeat(40) }, ctx())).rejects.toMatchObject({ code: "head_changed" });
-    expect(calls[0]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
+    expect(calls[1]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
   });
 
   it("resolves only review threads in this repository", async () => {

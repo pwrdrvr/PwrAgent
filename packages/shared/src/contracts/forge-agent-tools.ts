@@ -1036,6 +1036,29 @@ export function readForgeApprovalMergeMethods(
   return { selected, methods: offered };
 }
 
+/**
+ * Elicitation request `_meta` key on a merge approval whose base branch
+ * requires a merge queue (GitHub) or merge train (GitLab). The merge adds the
+ * PR to it, and the queue picks the method, so the card offers none.
+ */
+export const FORGE_APPROVAL_MERGE_QUEUE_META_KEY = "pwragent_merge_queue";
+
+export type ForgeApprovalMergeQueue = {
+  kind: "merge_queue" | "merge_train";
+  baseRef?: string;
+};
+
+/** Read a merge approval's queue from an elicitation request's `_meta`. */
+export function readForgeApprovalMergeQueue(
+  meta: Record<string, unknown> | null | undefined,
+): ForgeApprovalMergeQueue | undefined {
+  const value = meta?.[FORGE_APPROVAL_MERGE_QUEUE_META_KEY];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { kind, baseRef } = value as Record<string, unknown>;
+  if (kind !== "merge_queue" && kind !== "merge_train") return undefined;
+  return { kind, ...(typeof baseRef === "string" && baseRef ? { baseRef: baseRef.slice(0, 255) } : {}) };
+}
+
 /** Read the chosen merge method from an elicitation response's `_meta`. */
 export function readForgeApprovalMergeMethodChoice(
   meta: Record<string, unknown> | null | undefined,

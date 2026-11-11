@@ -144,3 +144,4 @@ export { mergeCausalMessagingContext } from "./messaging-causal-context";
 export * from "./thread-replay-paging";
 export * from "./transcript-image-sources";
 export * from "./research";
+export * from "./pr-merge-queue";
