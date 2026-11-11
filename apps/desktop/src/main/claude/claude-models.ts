@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { query, type McpServerStatus, type ModelInfo, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { query, McpServerStatus, ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { loadClaudeAgentSdk } from "./claude-sdk";
 import type { BackendModelOption } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 
@@ -99,6 +100,8 @@ export async function readClaudeMetadata<T>(params: {
   signal?: AbortSignal;
 }): Promise<T> {
   params.signal?.throwIfAborted();
+  const startQuery = params.query ?? (await loadClaudeAgentSdk()).query;
+  params.signal?.throwIfAborted();
   const controller = new AbortController();
   let release!: () => void;
   const finished = new Promise<void>((resolve) => { release = resolve; });
@@ -121,7 +124,7 @@ export async function readClaudeMetadata<T>(params: {
       };
       params.signal?.addEventListener("abort", onAbort, { once: true });
     });
-    session = (params.query ?? query)({
+    session = startQuery({
       prompt: prompt(),
       options: {
         ...claudeHarnessOptions(params.executable, params.env, {

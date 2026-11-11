@@ -29,7 +29,6 @@ import { Readable, Transform } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
-import { verify as verifySigstore } from "sigstore";
 import type { Bundle as SigstoreBundle } from "sigstore";
 import { getMainLogger } from "./log.js";
 import {
@@ -1228,6 +1227,9 @@ async function verifyManagedCodexSigstoreBundle(
     `https://github.com/${MANAGED_CODEX_REPOSITORY}/.github/workflows/`
     + `pwragent-release.yml@refs/tags/${params.tag}`;
   await mkdir(params.tufCachePath, { recursive: true });
+  // Loaded here, not at module scope: sigstore and its TUF client cost ~50 ms
+  // to load cold, on every owner start, for a check that runs only on install.
+  const { verify: verifySigstore } = await import("sigstore");
   await verifySigstore(bundle as SigstoreBundle, {
     certificateIdentityURI: `^${escapeRegularExpression(workflowIdentity)}$`,
     certificateIssuer: "https://token.actions.githubusercontent.com",
