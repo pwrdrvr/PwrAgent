@@ -6855,6 +6855,7 @@ export class DesktopBackendRegistry {
     }
     this.startupProviderRefreshAttempted = true;
     this.startupProviderRefreshStatus = { state: "checking" };
+    const observationSequence = this.reserveThreadInfoObservation();
     this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
       if (this.shutdownRequested) return;
       const startedAt = Date.now();
@@ -6897,6 +6898,7 @@ export class DesktopBackendRegistry {
         results.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : [],
         ),
+        observationSequence,
       );
       if (this.closed) return;
       await this.emit({
@@ -7007,6 +7009,7 @@ export class DesktopBackendRegistry {
 
   private async publishRefreshedProviderThreadsToCache(
     refreshes: readonly StartupProviderThreadRefresh[],
+    observationSequence = this.reserveThreadInfoObservation(),
   ): Promise<void> {
     if (!this.providerThreadSnapshotStore) {
       return;
@@ -7014,6 +7017,7 @@ export class DesktopBackendRegistry {
     const refreshedBackends = new Set(
       refreshes.flatMap((refresh) => refresh.backends),
     );
+    const acpObservationSequence = this.reserveThreadInfoObservation();
     const acpThreads = await this.readAcpThreadsForCache();
     if (this.closed) return;
     const providerThreads = [
@@ -7026,13 +7030,25 @@ export class DesktopBackendRegistry {
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
     const threads = this.mergeRetainedOwnerThreads(providerThreads, {}, new Set(this.providerThreadSnapshotStore.list()
       .flatMap(snapshot => snapshot.backend === "codex" ? snapshot.threads.filter(thread => thread.archivedAt !== undefined).map(thread => thread.id) : [])));
+    // Model discovery can finish after a rename. Publishing its earlier
+    // inventory is not a new provider observation; retain both its original
+    // sequence and any newer acknowledged title in the cache we publish.
+    const currentThreads = threads.map(thread => {
+      if (isAcpBackendId(thread.source)) return thread;
+      const latest = this.threadInfoStore.get({ backend: thread.source, threadId: thread.id });
+      if (!latest?.title || (latest.title === thread.title && (latest.titleSource ?? thread.titleSource) === thread.titleSource)) return thread;
+      return { ...thread, title: latest.title, titleSource: latest.titleSource ?? thread.titleSource };
+    });
     this.invalidateThreadListCache();
     this.rememberThreadListContexts(
-      threads,
-      this.reserveThreadInfoObservation(),
+      currentThreads.filter(thread => !isAcpBackendId(thread.source)),
+      observationSequence,
       false,
       false,
     );
+    // ACP was reread from its native session store above, independently of
+    // the completed provider inventories, so it owns that read's sequence.
+    this.rememberThreadListContexts(acpThreads, acpObservationSequence, false, false);
     const cacheKey = this.buildThreadListCacheKey({
       callerReason: "navigation-snapshot",
       enrichDirectories: false,
@@ -7040,7 +7056,7 @@ export class DesktopBackendRegistry {
     this.threadListCache.set(cacheKey, {
       archived: false,
       expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
-      threads,
+      threads: currentThreads,
     });
   }
 

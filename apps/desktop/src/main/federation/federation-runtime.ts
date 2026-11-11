@@ -5013,7 +5013,9 @@ export class DesktopFederationRuntime {
   }
 
   private installEgressPolicy(connection: FederationGatewayConnection | FederationClientWebSocketClient): void {
-    installOwnerEgressPolicy(connection, getOwnerHostServices().runtimePolicy?.federationEgressRole, this.ensureLocalInstanceId(),
+    const role = getOwnerHostServices().runtimePolicy?.federationEgressRole;
+    if (!role) return;
+    installOwnerEgressPolicy(connection, role, this.ensureLocalInstanceId(),
       event => appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), event));
   }
 
