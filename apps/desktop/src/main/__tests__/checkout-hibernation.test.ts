@@ -718,6 +718,29 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await exists(fixture.worktree)).toBe(false);
   });
 
+  // Codex reports no archive time, so the archived page is the only archive
+  // evidence. Retired monitor workers once shared a release worktree this way
+  // and held it awake. The provider inventory is the oracle: only an
+  // unarchived co-owner shares the checkout, and an archived row is never
+  // offered for archive again.
+  it("treats co-owners from the provider's archived page as archived, not as sharing users (oracle property)", async () => {
+    const fixture = await createFixture();
+    const target = ArchiveWorktreeTransport.threads[0]!;
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const service = maintenance(registry);
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { maxLength: 4 }), async (archived) => {
+      ArchiveWorktreeTransport.threads = [target, ...archived.map((isArchived, index) => ({
+        id: `co-owner-${index}`, cwd: fixture.worktree, source: "vscode", status: { type: "notLoaded" as const }, archived: isArchived,
+      }))];
+      const scan = await service.scan({ steps: ["threads", "hibernate"], rules: { mode: "age", inactivityDays: 0 } });
+      const shared = archived.some((isArchived) => !isArchived);
+      expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(!shared);
+      const offered = scan.threads.projects.flatMap((project) => project.idle.map((row) => row.threadId));
+      const archivedIds = archived.flatMap((isArchived, index) => isArchived ? [`co-owner-${index}`] : []);
+      expect(offered.filter((threadId) => archivedIds.includes(threadId))).toEqual([]);
+    }), { numRuns: 12, examples: [[[true, true]], [[true, false]]] });
+  });
+
   it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
