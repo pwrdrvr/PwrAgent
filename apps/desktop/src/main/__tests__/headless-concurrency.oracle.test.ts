@@ -72,12 +72,15 @@ async function builtHost(): Promise<Host> {
   config.recordProviderDiscovery("codex", { candidates: [], selectedCommand: process.execPath, selectedVersion: "0.159.2" });
   config.dispose();
   const driver = path.join(root, "driver.cjs");
+  // A synchronous file write survives the driver exiting right after it.
+  // Windows can drop a stderr pipe write that is still pending at exit.
+  const droppedReplies = path.join(root, "dropped-replies.log");
   fs.writeFileSync(driver, `const app = require(${JSON.stringify(path.join(outputDirectory, "index.js"))});
     // The parent owns the channel. A reply that finishes after it disconnected
     // has no reader, so it is dropped instead of crashing the driver.
     const reply = message => {
       if (process.connected) process.send(message);
-      else process.stderr.write("dropped reply after disconnect: " + message.id + "\\n");
+      else require("node:fs").appendFileSync(${JSON.stringify(droppedReplies)}, "dropped reply after disconnect: " + message.id + "\\n");
     };
     app.startHeadlessHost().then(async services => {
       await services.config.write({ onboarding: { completed: true } }, ["onboarding"]);
@@ -123,7 +126,7 @@ async function builtHost(): Promise<Host> {
     closed = true;
     if (child.connected) child.send({ method: "stop" });
     const [code] = await exited;
-    fs.rmSync(root, { recursive: true, force: true });
+    // afterAll removes this host's directory with the shared runtime root.
     expect(code, output).toBe(0);
   };
   onTestFinished(close);
@@ -164,7 +167,7 @@ async function builtHost(): Promise<Host> {
     stopDuringRequest: async (method, values) => {
       child.send({ id: ++id, method, ...values });
       await close();
-      return output;
+      return fs.readFileSync(droppedReplies, "utf8");
     },
     close,
   };
@@ -204,7 +207,7 @@ it("exits cleanly when the parent stops the driver before a reply is sent", asyn
   const thread = await host.startThread();
   // readThread awaits the registry, so stop is handled first and the channel
   // is closed by the time the reply is ready.
-  const output = await host.stopDuringRequest("readThread", { params: thread });
+  const dropped = await host.stopDuringRequest("readThread", { params: thread });
   // Without this, a driver that never replies would pass without the race.
-  expect(output).toContain("dropped reply after disconnect");
+  expect(dropped).toContain("dropped reply after disconnect");
 });
