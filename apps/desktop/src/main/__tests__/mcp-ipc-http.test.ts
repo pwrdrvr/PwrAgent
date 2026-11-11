@@ -227,7 +227,7 @@ describe("verified HTTP MCP over local IPC", () => {
     const f = await fixture();
     f.setSse();
     f.holdCalls();
-    const transport = createMcpIpcTransport(f.url, { executable });
+    const transport = await createMcpIpcTransport(f.url, { executable });
     const client = new Client({ name: "terminal-test", version: "1" }, { capabilities: {} });
     const closed = vi.fn();
     client.onclose = closed;
@@ -270,7 +270,7 @@ describe("verified HTTP MCP over local IPC", () => {
   it("forwards SDK tool cancellation once without replaying the call", async () => {
     const f = await fixture();
     f.holdCalls();
-    const transport = createMcpIpcTransport(f.url, { executable });
+    const transport = await createMcpIpcTransport(f.url, { executable });
     const client = new Client({ name: "cancel-test", version: "1" }, { capabilities: {} });
     cleanups.push(async () => { f.ipc.close(); await client.close(); });
     await client.connect(transport);
@@ -293,7 +293,7 @@ describe("verified HTTP MCP over local IPC", () => {
     const missing = createMcpIpcHttp(f.url.replace("server.sock", "missing.sock").replace("pwragent-test-", "missing-"), { executable });
     cleanups.push(missing.close);
     await expect(missing.fetch(missing.url)).rejects.toThrow();
-    const transport = createMcpIpcTransport(f.url.replace("server.sock", "missing.sock").replace("pwragent-test-", "missing-"), { executable });
+    const transport = await createMcpIpcTransport(f.url.replace("server.sock", "missing.sock").replace("pwragent-test-", "missing-"), { executable });
     const client = new Client({ name: "missing-test", version: "1" }, { capabilities: {} });
     cleanups.push(async () => { await client.close(); await transport.close(); });
     // Terminal lifecycle propagation must retain native verification errors

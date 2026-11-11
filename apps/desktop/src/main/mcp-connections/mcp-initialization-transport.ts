@@ -1,5 +1,6 @@
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { InitializeResultSchema, type InitializeResult, type JSONRPCMessage, type RequestId } from "@modelcontextprotocol/sdk/types.js";
+import type { InitializeResult, JSONRPCMessage, RequestId } from "@modelcontextprotocol/sdk/types.js";
+import { mcpTypes } from "./mcp-sdk";
 
 /** The SDK exposes identity/instructions but has no getter for initialize _meta. */
 export class McpInitializationTransport implements Transport {
@@ -15,6 +16,7 @@ export class McpInitializationTransport implements Transport {
   setProtocolVersion(version: string): void { this.inner.setProtocolVersion?.(version); }
 
   async start(): Promise<void> {
+    const { InitializeResultSchema } = await mcpTypes.load();
     this.inner.onclose = () => this.onclose?.();
     this.inner.onerror = (error) => this.onerror?.(error);
     this.inner.onmessage = (message, extra) => {

@@ -39,7 +39,7 @@ export function createDesktopOwnerHostServices(): OwnerHostServices {
       showItemInFolder: (path) => shell.showItemInFolder(path),
       trashItem: (path) => shell.trashItem(path),
     },
-    images: { createFromBuffer: (buffer) => nativeImage.createFromBuffer(buffer) },
+    images: { createFromBuffer: async (buffer) => nativeImage.createFromBuffer(buffer) },
     renderer: { subscribers: subscribersForChannel, agentEvent: (event) => broadcastAgentEvent(event), environmentSetupProgress: (event) => broadcastCodexEnvironmentSetupProgress(event), inboundPreview: (message) => broadcastInboundPreview(message), managedRuntimeProgress: (event) => broadcastManagedRuntimeProgress(event), managedGrokSignatureRejected: (event) => broadcastManagedGrokSignatureRejection(event) },
     appearance: { broadcast: broadcastAppearanceChange, syncDock: syncThemedDockIcon },
     threads: { showThread: requestShowThread, openMaintenance: requestOpenThreadMaintenance, openThread: createOpenThreadInUi({ localInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId }) },

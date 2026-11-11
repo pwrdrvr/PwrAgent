@@ -20,7 +20,7 @@ export type MessagingNormalizedImage = {
 };
 
 export type MessagingImageNormalizationDependencies = {
-  createImageFromBuffer: (buffer: Buffer) => HostImage;
+  createImageFromBuffer: (buffer: Buffer) => HostImage | Promise<HostImage>;
 };
 
 const DEFAULT_DEPENDENCIES: MessagingImageNormalizationDependencies = {
@@ -37,7 +37,7 @@ export async function normalizeMessagingImageAttachment(params: {
     ...DEFAULT_DEPENDENCIES,
     ...params.dependencies,
   };
-  const source = dependencies.createImageFromBuffer(Buffer.from(params.data));
+  const source = await dependencies.createImageFromBuffer(Buffer.from(params.data));
   if (source.isEmpty()) {
     throw new Error("Attachment image could not be decoded.");
   }

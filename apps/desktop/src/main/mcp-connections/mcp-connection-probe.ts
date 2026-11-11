@@ -1,16 +1,16 @@
-import { discoverOAuthServerInfo } from "@modelcontextprotocol/sdk/client/auth.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPError, type StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ProbeMcpConnectionResponse } from "@pwragent/shared";
 import { MCP_CONNECTION_PROBE_TIMEOUT_MS } from "./mcp-connection-timeouts";
 import { isMcpIpcUrl } from "@pwragent/shared";
 import { createMcpIpcTransport } from "./mcp-ipc-http";
+import { isStreamableHttpError, mcpClient, mcpClientAuth } from "./mcp-sdk";
 
 async function probeIpc(serverUrl: string, executable?: string): Promise<ProbeMcpConnectionResponse> {
+  const { Client } = await mcpClient.load();
   let transport: StreamableHTTPClientTransport;
   try {
-    transport = createMcpIpcTransport(serverUrl, { executable });
+    transport = await createMcpIpcTransport(serverUrl, { executable });
   } catch (error) {
     return { ok: false, problem: "not_a_url", message: error instanceof Error ? error.message : String(error) };
   }
@@ -24,7 +24,7 @@ async function probeIpc(serverUrl: string, executable?: string): Promise<ProbeMc
       ok: true, serverUrl, authMode: "none", serverName: client.getServerVersion()?.name,
     };
   } catch (error) {
-    if (error instanceof StreamableHTTPError && error.code === 401) {
+    if (isStreamableHttpError(error) && error.code === 401) {
       return { ok: true, serverUrl, authMode: "none", needsIpcBearer: true };
     }
     return {
@@ -230,6 +230,7 @@ export async function probeMcpConnectionUrl(
   }
 
   try {
+    const { discoverOAuthServerInfo } = await mcpClientAuth.load();
     await discoverOAuthServerInfo(url, { fetchFn });
     return { ok: true, serverUrl: url.href, authMode: "oauth" };
   } catch {

@@ -7,6 +7,7 @@ import type { startHeadlessHost } from "../headless";
 import type { SqliteWriteDelta, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import type { StateDb } from "../state/state-db";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
+import { LOADED_ON_FIRST_USE, packageOfFile } from "./helpers/headless-first-use-packages";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 type Runtime = {
@@ -87,6 +88,7 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
   let boot: SqliteWriteDelta | undefined;
   let idle: SqliteWriteDelta | undefined;
   let shutdown: SqliteWriteDelta | undefined;
+  let loadedDuringBoot: string[] = [];
   try {
     fs.cpSync(builtBundle, directory, bundleCopy);
     enterFixture(root);
@@ -97,12 +99,19 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
     owner.resetSqliteWriteMetrics();
     const { writes } = await owner.measureSqliteWrites(async () => {
       const started = await owner.measureSqliteWrites(async () => {
+        // Packages that load while the owner boots, beyond what loading
+        // its bundle already did. Deferring a package only helps if boot
+        // does not then load it anyway.
+        const cache = createRequire(import.meta.url).cache;
+        const before = new Set(Object.keys(cache));
         const services = await owner.startHeadlessHost(undefined, { manageSignals: false });
         const permit = owner.issueProviderDiscoveryPermit("startup");
         await services.settings.refreshStartupDiscovery(permit);
         await services.registry.refreshProvidersAtStartup(permit);
         await services.service.startOwnerNavigation();
         await services.registry.listThreads({ backend: "codex", forceRefresh: true, enrichDirectories: false });
+        loadedDuringBoot = [...new Set(Object.keys(cache).filter(file => !before.has(file))
+          .map(packageOfFile).filter(name => name !== undefined))].sort();
         return services;
       });
       boot = started.writes;
@@ -115,6 +124,10 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
       }));
       ({ writes: shutdown } = await owner.measureSqliteWrites(() => owner.shutdownHeadlessHost("idle-budget")));
     });
+    // Startup discovery decodes the icon of each desktop application the
+    // host has installed, so canvas loads during boot on a Mac with any of
+    // them and never on a host with none. Every other package stays unloaded.
+    expect(loadedDuringBoot.filter(name => LOADED_ON_FIRST_USE.includes(name) && name !== "@napi-rs/canvas")).toEqual([]);
     // The first scheduled archive sweep claims and completes its one-time
     // repair. Its two metadata writes belong to this first idle hour.
     expect(idle!.tables.filter(table => table.rowsChanged > 0)).toMatchObject([{ table: "meta", rowsChanged: 2 }]);

@@ -1,15 +1,22 @@
-import {
-  ErrorCode,
+import type {
+  ClientCapabilities,
+  ElicitRequestParams,
   McpError,
-  type ClientCapabilities,
-  type ElicitRequestParams,
 } from "@modelcontextprotocol/sdk/types.js";
+import { loadedMcpTypes } from "./mcp-sdk";
 
 /*
  * Shared by the owner gateway, the bridge child and the RPC client, which is
  * why nothing here validates a schema: the bridge bundle stays free of AJV.
  * The owner checks answers in `mcp-upstream-elicitation.ts`.
  */
+
+// Everything here runs on a request from an MCP server, so the SDK that
+// carried the request has already loaded.
+function invalidParams(message: string): McpError {
+  const { ErrorCode, McpError } = loadedMcpTypes();
+  return new McpError(ErrorCode.InvalidParams, message);
+}
 
 /**
  * The capability a managed thread session declares upstream. A form or a
@@ -86,6 +93,7 @@ export function clientSupportsUrlElicitation(capabilities: ClientCapabilities | 
  * capability, so a server that failed closed then still fails closed now.
  */
 export function elicitationUnavailable(message: string): McpError {
+  const { ErrorCode, McpError } = loadedMcpTypes();
   return new McpError(ErrorCode.MethodNotFound, message);
 }
 
@@ -124,11 +132,11 @@ export function isUrlElicitation(params: ElicitRequestParams): boolean {
 export function assertRelayableUrlElicitation(params: ElicitRequestParams, source: ElicitationSource): void {
   const record = params as { url?: unknown; elicitationId?: unknown; message?: unknown };
   if (typeof record.message !== "string" || !record.message.trim()) {
-    throw new McpError(ErrorCode.InvalidParams, "An MCP link request must say why it needs the page.");
+    throw invalidParams("An MCP link request must say why it needs the page.");
   }
   if (typeof record.elicitationId !== "string" || !record.elicitationId
     || record.elicitationId.length > MAX_ELICITATION_ID_LENGTH) {
-    throw new McpError(ErrorCode.InvalidParams, "An MCP link request must carry an elicitation id.");
+    throw invalidParams("An MCP link request must carry an elicitation id.");
   }
   readRelayableElicitationUrl(record.url, source);
   assertNoHostApprovalMeta(params);
@@ -137,21 +145,20 @@ export function assertRelayableUrlElicitation(params: ElicitRequestParams, sourc
 /** The link an MCP server asked the person to open, or a refusal. */
 export function readRelayableElicitationUrl(value: unknown, source: ElicitationSource): URL {
   if (typeof value !== "string" || !value || value.length > MAX_ELICITATION_URL_LENGTH) {
-    throw new McpError(ErrorCode.InvalidParams, "An MCP link request must carry a web address.");
+    throw invalidParams("An MCP link request must carry a web address.");
   }
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new McpError(ErrorCode.InvalidParams, "The MCP server's link is not a valid web address.");
+    throw invalidParams("The MCP server's link is not a valid web address.");
   }
   if (url.username || url.password) {
-    throw new McpError(ErrorCode.InvalidParams, "PwrAgent does not open an MCP link that carries a user name or password.");
+    throw invalidParams("PwrAgent does not open an MCP link that carries a user name or password.");
   }
   if (url.protocol === "https:") return url;
   if (url.protocol === "http:" && source.local && isLoopbackHost(url.hostname)) return url;
-  throw new McpError(
-    ErrorCode.InvalidParams,
+  throw invalidParams(
     source.local
       ? "PwrAgent opens only https links, or http links to this machine, from a local MCP server."
       : "PwrAgent opens only https links from MCP servers.",
@@ -170,12 +177,12 @@ function isLoopbackHost(host: string): boolean {
 
 function assertRelayableFormElicitation(params: ElicitRequestParams): void {
   if (params.mode !== undefined && params.mode !== "form") {
-    throw new McpError(ErrorCode.InvalidParams, "PwrAgent forwards only form and link elicitation from managed MCP connections.");
+    throw invalidParams("PwrAgent forwards only form and link elicitation from managed MCP connections.");
   }
   const schema = (params as { requestedSchema?: unknown }).requestedSchema;
   if (!schema || typeof schema !== "object" || Array.isArray(schema)
     || (schema as { type?: unknown }).type !== "object") {
-    throw new McpError(ErrorCode.InvalidParams, "An MCP form must request an object schema.");
+    throw invalidParams("An MCP form must request an object schema.");
   }
   assertNoHostApprovalMeta(params);
 }
@@ -193,8 +200,7 @@ function assertNoHostApprovalMeta(params: ElicitRequestParams): void {
  * offers a grant to keep. A server's own form is never shown as one.
  */
 export function hostApprovalFormRefused(): McpError {
-  return new McpError(
-    ErrorCode.InvalidParams,
+  return invalidParams(
     "PwrAgent does not forward an MCP form that marks itself as a host tool approval.",
   );
 }

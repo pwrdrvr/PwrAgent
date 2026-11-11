@@ -5,10 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
-
-/** Packages a headless owner loads on first use, never at start. Each one
- * cost 40-50 ms of cold loading on every owner start when it was static. */
-const LOADED_ON_FIRST_USE = ["sigstore", "@anthropic-ai/claude-agent-sdk"];
+import { LOADED_ON_FIRST_USE } from "./helpers/headless-first-use-packages";
 
 // Loading the bundle in a child gives it a fresh require cache, so the
 // result is what an Outpost process loads, whatever this worker already has.

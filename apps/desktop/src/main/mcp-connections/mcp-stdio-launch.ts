@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
-import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
+import type { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -16,6 +16,7 @@ import {
 } from "@pwragent/shared";
 import { pathIsExecutable, resolveCommandOnPath } from "../settings/command-discovery";
 import { terminateOwnedProcessTree, type OwnedChildProcess } from "../process-tree";
+import { mcpSharedStdio } from "./mcp-sdk";
 
 /** How long a server gets to exit after its stdin closes, then per signal. */
 const STDIN_CLOSE_GRACE_MS = 1_000;
@@ -263,7 +264,9 @@ export class OwnedStdioClientTransport implements Transport {
   onmessage?: (message: JSONRPCMessage) => void;
 
   private child?: StdioChildProcess;
-  private readonly readBuffer = new ReadBuffer();
+  // Set by start(), which loads the SDK's stdio framing.
+  private readBuffer?: ReadBuffer;
+  private serializeMessage?: (message: JSONRPCMessage) => string;
   private outputTail = "";
   private exit?: { code: number | null; signal: NodeJS.Signals | null };
   private closing?: Promise<void>;
@@ -293,6 +296,10 @@ export class OwnedStdioClientTransport implements Transport {
 
   async start(): Promise<void> {
     if (this.child || this.closed) throw new Error("This MCP server transport was already started.");
+    const { ReadBuffer, serializeMessage } = await mcpSharedStdio.load();
+    if (this.child || this.closed) throw new Error("This MCP server transport was already started.");
+    const readBuffer = this.readBuffer = new ReadBuffer();
+    this.serializeMessage = serializeMessage;
     const invocation = createCommandInvocation({
       command: this.launch.command,
       args: this.launch.args,
@@ -344,11 +351,11 @@ export class OwnedStdioClientTransport implements Transport {
         this.onclose?.();
       });
       child.stdout?.on("data", (chunk: Buffer) => {
-        this.readBuffer.append(chunk);
+        readBuffer.append(chunk);
         for (;;) {
           let message: JSONRPCMessage | null;
           try {
-            message = this.readBuffer.readMessage();
+            message = readBuffer.readMessage();
           } catch (error) {
             this.onerror?.(error as Error);
             continue;
@@ -371,7 +378,8 @@ export class OwnedStdioClientTransport implements Transport {
 
   async send(message: JSONRPCMessage): Promise<void> {
     const stdin = this.child?.stdin;
-    if (!stdin || this.closed) throw new Error("The MCP server is not running.");
+    const serializeMessage = this.serializeMessage;
+    if (!stdin || !serializeMessage || this.closed) throw new Error("The MCP server is not running.");
     await new Promise<void>((resolve, reject) => {
       const ok = stdin.write(serializeMessage(message), (error) => {
         if (error) reject(error);
@@ -435,7 +443,7 @@ export class OwnedStdioClientTransport implements Transport {
     try {
       await this.closing;
     } finally {
-      this.readBuffer.clear();
+      this.readBuffer?.clear();
     }
   }
 }

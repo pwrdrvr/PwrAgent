@@ -24,7 +24,7 @@ function fixture() {
   const closed = vi.fn();
   const servers: Server[] = [];
   const names = ["create_sandbox", "list_sandboxes", "exec", "read_file", "write_file", "host_port", "stop_sandbox", "resume_sandbox"];
-  const spawn = vi.spyOn(sandboxer, "createTransport").mockImplementation(() => {
+  const spawn = vi.spyOn(sandboxer, "createTransport").mockImplementation(async () => {
     const [client, remote] = InMemoryTransport.createLinkedPair();
     const server = new Server({ name: "mock-sbx", version: "1" }, {
       capabilities: { tools: {} },
@@ -111,7 +111,7 @@ describe("Sandboxer thread gateway", () => {
   it("closes failed initialization and permits a later fresh session", async () => {
     const f = fixture();
     const close = vi.fn(async () => undefined);
-    f.spawn.mockImplementationOnce(() => ({
+    f.spawn.mockImplementationOnce(async () => ({
       start: async () => { throw new Error("fixture startup failure"); },
       close,
       send: async () => undefined,

@@ -23,11 +23,11 @@ export function federationImageDimensions(width: number, height: number, maxPatc
   return { width: Math.max(1, Math.floor(width * low)), height: Math.max(1, Math.floor(height * low)) };
 }
 
-export function normalizeFederationImage(bytes: Buffer, options: {
+export async function normalizeFederationImage(bytes: Buffer, options: {
   sending: boolean;
-  createImage?: (bytes: Buffer) => HostImage;
-}): Buffer {
-  const source = (options.createImage ?? ((data) => nativeImage.createFromBuffer(data)))(bytes);
+  createImage?: (bytes: Buffer) => HostImage | Promise<HostImage>;
+}): Promise<Buffer> {
+  const source = await (options.createImage ?? ((data) => nativeImage.createFromBuffer(data)))(bytes);
   if (source.isEmpty()) throw new Error("Federation image could not be decoded.");
   const original = source.getSize();
   const dimensions = federationImageDimensions(original.width, original.height);
@@ -44,7 +44,7 @@ export function normalizeFederationImage(bytes: Buffer, options: {
 export async function normalizeFederationImageFile(attachment: StagedTurnInputAttachment, sending: boolean): Promise<StagedTurnInputAttachment> {
   if (attachment.type !== "localImage") return attachment;
   const original = await readFile(attachment.path);
-  const bytes = normalizeFederationImage(original, { sending });
+  const bytes = await normalizeFederationImage(original, { sending });
   if (bytes === original) return attachment;
   return await stageTurnInputAttachment({ type: "localImage", data: bytes, name: attachment.name, mimeType: "image/png" });
 }

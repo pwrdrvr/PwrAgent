@@ -1,11 +1,6 @@
-import {
-  ErrorCode,
-  McpError,
-  type ElicitRequestParams,
-  type ElicitResult,
-} from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+import type { ElicitRequestParams, ElicitResult } from "@modelcontextprotocol/sdk/types.js";
 import { validateJsonSchemaValue } from "./mcp-gateway-catalog";
+import { lazyModule, mcpTypes } from "./mcp-sdk";
 import {
   assertRelayableElicitation,
   elicitationUnavailable,
@@ -24,9 +19,12 @@ import {
  * such as a string field's `pattern`, and the person would then be shown a
  * looser form than the server asked for.
  */
-export const VerbatimElicitRequestSchema = z.object({
-  method: z.literal("elicitation/create"),
-  params: z.looseObject({}),
+export const verbatimElicitRequestSchema = lazyModule(async () => {
+  const { z } = await import("zod");
+  return z.object({
+    method: z.literal("elicitation/create"),
+    params: z.looseObject({}),
+  });
 });
 
 /**
@@ -124,6 +122,7 @@ export class UpstreamElicitationRoutes {
     onOutcome?: (outcome: ElicitationOutcome) => void;
   }): Promise<ElicitResult> {
     const report = (outcome: ElicitationOutcome): void => params.onOutcome?.(outcome);
+    await mcpTypes.load();
     try {
       assertRelayableElicitation(params.request, params.source);
     } catch (error) {
@@ -173,6 +172,7 @@ export class UpstreamElicitationRoutes {
         return CANCELLED;
       }
       report("refused");
+      const { ErrorCode, McpError } = await mcpTypes.load();
       throw error instanceof McpError
         ? error
         : new McpError(ErrorCode.InternalError, error instanceof Error ? error.message : String(error));
@@ -189,7 +189,7 @@ export class UpstreamElicitationRoutes {
     }
     let result: ElicitResult;
     try {
-      result = readElicitationAnswer(params.request, answer);
+      result = await readElicitationAnswer(params.request, answer);
     } catch (error) {
       report("refused");
       throw error;
@@ -212,10 +212,11 @@ export class UpstreamElicitationRoutes {
  * a missing `content` as nothing left to check. Decline and cancel carry no
  * content. The client's `_meta` passes through unchanged.
  */
-export function readElicitationAnswer(
+export async function readElicitationAnswer(
   request: ElicitRequestParams,
   answer: unknown,
-): ElicitResult {
+): Promise<ElicitResult> {
+  const { ErrorCode, McpError } = await mcpTypes.load();
   const record = answer && typeof answer === "object" && !Array.isArray(answer)
     ? answer as Record<string, unknown>
     : undefined;
@@ -234,7 +235,7 @@ export function readElicitationAnswer(
   }
   const schema = (request as { requestedSchema?: Record<string, unknown> }).requestedSchema;
   try {
-    validateJsonSchemaValue(schema ?? { type: "object" }, content);
+    await validateJsonSchemaValue(schema ?? { type: "object" }, content);
   } catch (error) {
     throw new McpError(
       ErrorCode.InvalidParams,
@@ -312,10 +313,14 @@ export class ElicitationWireChannel {
     }
     if (message.elicitError && typeof message.elicitError.id === "number") {
       const { id, message: text, code } = message.elicitError;
-      this.open.get(id)?.reject(new McpError(
+      const form = this.open.get(id);
+      if (!form) return;
+      // A close() before the SDK loads settles the form first; this reject
+      // is then a no-op, as for any reply to a form that is no longer open.
+      void mcpTypes.load().then(({ ErrorCode, McpError }) => form.reject(new McpError(
         typeof code === "number" ? code : ErrorCode.InternalError,
         typeof text === "string" ? text : "The client could not show the MCP form.",
-      ));
+      )), (error: unknown) => form.reject(error));
     }
   }
 

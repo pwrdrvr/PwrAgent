@@ -26,6 +26,7 @@ import {
   elicitationUnavailable,
   type ElicitationRoute,
 } from "./mcp-elicitation-relay.js";
+import { mcpTypes } from "./mcp-sdk.js";
 
 type BridgeDescription = {
   name?: string;
@@ -45,6 +46,9 @@ function logStderr(message: string, extra?: unknown): void {
 
 
 async function main(): Promise<void> {
+  // The bridge imports the SDK statically. Its shared helpers read the
+  // owner's lazily loaded copy, which is this same module.
+  await mcpTypes.load();
   const socketPath = process.env.PWRAGENT_MCP_CONNECTION_SOCKET;
   const token = process.env.PWRAGENT_MCP_CONNECTION_TOKEN;
   const connectionName = process.env.PWRAGENT_MCP_CONNECTION_NAME;

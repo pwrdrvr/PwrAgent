@@ -14,28 +14,21 @@ import {
 } from "node:net";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import {
-  ElicitationCompleteNotificationSchema,
-  ErrorCode,
-  ListRootsRequestSchema,
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type {
+  CallToolResult,
+  ClientCapabilities,
+  ElicitRequestParams,
+  ElicitResult,
+  InitializeResult,
   McpError,
-  PromptListChangedNotificationSchema,
-  ResourceListChangedNotificationSchema,
-  ResourceUpdatedNotificationSchema,
-  ToolListChangedNotificationSchema,
-  type CallToolResult,
-  type ClientCapabilities,
-  type ElicitRequestParams,
-  type ElicitResult,
-  type InitializeResult,
-  type Notification,
-  type Progress,
-  type Root,
+  Notification,
+  Progress,
+  Root,
 } from "@modelcontextprotocol/sdk/types.js";
+import { isMcpError, loadedMcpTypes, mcpClient, mcpClientStreamableHttp, mcpTypes } from "./mcp-sdk";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
-import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { McpDiscovery, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
 import { SandboxerConnection } from "./sandboxer-connection";
 import {
   McpStdioLaunchError,
@@ -68,7 +61,7 @@ import {
 import {
   ElicitationWireChannel,
   UpstreamElicitationRoutes,
-  VerbatimElicitRequestSchema,
+  verbatimElicitRequestSchema,
 } from "./mcp-upstream-elicitation";
 import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool, type McpGatewayInvocation } from "./mcp-gateway-catalog";
 import {
@@ -1023,6 +1016,7 @@ export class McpConnectionGatewayService {
       // Not counted toward "Running": no thread is using this copy.
       transport = await this.createStdioTransport("", launch, secretValues);
       this.stdioTestTransports.add(transport);
+      const { Client } = await mcpClient.load();
       const client = new Client({ name: "pwragent-settings-test", version: "1.0.0" }, { capabilities: {} });
       const abort = (): void => { void transport?.close().catch(() => undefined); };
       controller.signal.addEventListener("abort", abort, { once: true });
@@ -1060,7 +1054,7 @@ export class McpConnectionGatewayService {
         displayName,
         command: command ?? request.stdio?.command ?? "The command",
         timedOut: controller.signal.aborted
-          || (error instanceof McpError && error.code === ErrorCode.RequestTimeout),
+          || (isMcpError(error) && error.code === loadedMcpTypes().ErrorCode.RequestTimeout),
       });
       return {
         ok: false,
@@ -2581,7 +2575,7 @@ export class McpConnectionGatewayService {
   }
 
   private recordDiscoveryFailure(connectionId: string, error: unknown): void {
-    if (!(error instanceof McpDiscoveryError)) return;
+    if (!isMcpDiscoveryError(error)) return;
     const data = error.data as { kind?: string };
     if (data.kind === "cancelled") return;
     this.discoveryHealth.set(connectionId, {
@@ -2759,6 +2753,13 @@ export class McpConnectionGatewayService {
         if (session.client === client) this.sendBridgeEvent(token, notification);
       }
     };
+    // Runs on a client that createUpstreamClient built, so the SDK has loaded.
+    const {
+      PromptListChangedNotificationSchema,
+      ResourceListChangedNotificationSchema,
+      ResourceUpdatedNotificationSchema,
+      ToolListChangedNotificationSchema,
+    } = loadedMcpTypes();
     client.setNotificationHandler(ToolListChangedNotificationSchema, forward);
     client.setNotificationHandler(PromptListChangedNotificationSchema, forward);
     client.setNotificationHandler(ResourceListChangedNotificationSchema, forward);
@@ -2842,22 +2843,23 @@ export class McpConnectionGatewayService {
     }
     if (isMcpIpcUrl(connection.serverUrl)) {
       const credential = await this.credentialVault.read(connection.id, connection.serverUrl);
-      transport = createMcpIpcTransport(connection.serverUrl, { bearerToken: credential?.ipcBearerToken });
+      transport = await createMcpIpcTransport(connection.serverUrl, { bearerToken: credential?.ipcBearerToken });
     } else if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
       const status = await this.sandboxer.readStatus();
       if (!status.configured) throw new Error(status.detail);
-      transport = this.sandboxer.createTransport();
+      transport = await this.sandboxer.createTransport();
     } else {
       const coordinator = this.coordinatorFor(connection);
       if (!(await coordinator.configured())) {
         throw new Error(`${connection.displayName} needs to be reauthorized in Settings → Plugins.`);
       }
+      const { StreamableHTTPClientTransport } = await mcpClientStreamableHttp.load();
       transport = new StreamableHTTPClientTransport(
         new URL(connection.serverUrl),
         { fetch: coordinator.authorizedFetch() },
       );
     }
-    const client = this.createUpstreamClient(connection, options.clientName, options.handlers);
+    const client = await this.createUpstreamClient(connection, options.clientName, options.handlers);
     const onClose = options.onClose;
     if (onClose) client.onclose = () => onClose(client);
     const abort = (): void => { void transport.close().catch(() => undefined); };
@@ -2899,7 +2901,7 @@ export class McpConnectionGatewayService {
   ): Promise<UpstreamSession> {
     if (!launch) throw new Error(`${connection.displayName} has no command to run.`);
     let transport: OwnedStdioClientTransport | undefined;
-    const client = this.createUpstreamClient(connection, options.clientName, options.handlers);
+    const client = await this.createUpstreamClient(connection, options.clientName, options.handlers);
     const abort = (): void => { void transport?.close().catch(() => undefined); };
     options.discovery.signal.addEventListener("abort", abort, { once: true });
     try {
@@ -2944,7 +2946,7 @@ export class McpConnectionGatewayService {
         displayName: connection.displayName,
         command: launch.command,
         timedOut: options.discovery.signal.aborted
-          || (error instanceof McpError && error.code === ErrorCode.RequestTimeout),
+          || (isMcpError(error) && error.code === loadedMcpTypes().ErrorCode.RequestTimeout),
       });
       this.discoveryHealth.set(connection.id, {
         ...this.discoveryHealth.get(connection.id),
@@ -2969,11 +2971,14 @@ export class McpConnectionGatewayService {
    * roots. Settings reads and tests declare nothing, as before, so a server
    * never asks them for a person's answer or a directory.
    */
-  private createUpstreamClient(
+  private async createUpstreamClient(
     connection: McpConnectionRecord,
     clientName: string,
     handlers: UpstreamSessionHandlers = {},
-  ): Client {
+  ): Promise<Client> {
+    const [{ Client }, { ElicitationCompleteNotificationSchema, ListRootsRequestSchema }, VerbatimElicitRequestSchema] = await Promise.all([
+      mcpClient.load(), mcpTypes.load(), verbatimElicitRequestSchema.load(),
+    ]);
     const capabilities: ClientCapabilities = {
       ...(handlers.onElicit ? UPSTREAM_THREAD_ELICITATION_CAPABILITIES : {}),
       ...(handlers.onListRoots ? { roots: { listChanged: true } } : {}),
@@ -3072,6 +3077,7 @@ export class McpConnectionGatewayService {
       : actions.length > 0
         ? " PwrAgent showed the operator the sign-in page, but they did not open it."
         : "";
+    const { McpError } = await mcpTypes.load();
     return new McpError(error.code, `${reason}${note}`, error.data);
   }
 
@@ -3223,6 +3229,8 @@ export class McpConnectionGatewayService {
     const grant = this.grants.get(token);
     const current = this.upstreamSessions.get(token)?.client;
     if (!grant || (current && current !== client)) {
+      // Answers the server's own request, so its SDK session has loaded.
+      const { ErrorCode, McpError } = loadedMcpTypes();
       throw new McpError(ErrorCode.InvalidRequest, "This MCP session is no longer granted to a thread.");
     }
     const key = grantRootsKey(grant);
@@ -3551,12 +3559,12 @@ export class McpConnectionGatewayService {
         connectionId: grant.connectionId,
         errorName: error instanceof Error ? error.name : "Error",
         operation: request.op,
-        ...(error instanceof McpDiscoveryError ? { diagnostic: error.data } : {}),
+        ...(isMcpDiscoveryError(error) ? { diagnostic: error.data } : {}),
       });
       this.respond(socket, {
         ok: false,
         error: message,
-        ...(error instanceof McpError ? { code: error.code, data: error.data } : {}),
+        ...(isMcpError(error) ? { code: error.code, data: error.data } : {}),
       });
     }
   }
@@ -4048,6 +4056,7 @@ export class McpConnectionGatewayService {
         const values = params && typeof params === "object"
           ? params as Record<string, unknown>
           : {};
+        const { ErrorCode, McpError } = await mcpTypes.load();
         switch (operation) {
           case "gateway/tools/list":
             return await this.readGatewayCatalog(token, grant, client, discovery);
@@ -4066,7 +4075,7 @@ export class McpConnectionGatewayService {
             if (delegated && (tool.definition.annotations?.readOnlyHint !== true || tool.definition.annotations.destructiveHint === true)) {
               throw new Error("Job Monitors may invoke only explicitly read-only MCP tools.");
             }
-            validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
+            await validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
             signal?.throwIfAborted();
             discovery.close();
             let result: Awaited<ReturnType<Client["callTool"]>>;

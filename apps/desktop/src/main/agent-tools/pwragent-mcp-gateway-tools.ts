@@ -1,8 +1,8 @@
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import { agentToolFailure, type AgentToolCallContentItems, type AgentToolDefinition } from "./agent-tool-definition";
+import { isMcpError } from "../mcp-connections/mcp-sdk";
 
 export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, store?: TokenMiserStore): AgentToolDefinition[] {
   return [{
@@ -90,6 +90,6 @@ function gatewayFailure(error: unknown) {
   return agentToolFailure({
     code: error instanceof Error && error.name === "AbortError" ? "mcp_gateway_cancelled" : "mcp_gateway_error",
     message: error instanceof Error ? error.message : String(error),
-    ...(error instanceof McpError ? { data: { code: error.code, data: error.data } } : {}),
+    ...(isMcpError(error) ? { data: { code: error.code, data: error.data } } : {}),
   });
 }

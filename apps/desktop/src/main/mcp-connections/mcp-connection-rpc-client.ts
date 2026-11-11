@@ -1,5 +1,4 @@
 import { connect, type Socket } from "node:net";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import {
   MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
@@ -8,6 +7,7 @@ import {
   progressExtendedTimeout,
 } from "./mcp-connection-timeouts.js";
 import { ELICITATION_WIRE_OPT_IN, URL_ELICITATION_WIRE_OPT_IN, type ElicitationRoute } from "./mcp-elicitation-relay.js";
+import { mcpTypes } from "./mcp-sdk.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 type RpcResponse =
@@ -110,7 +110,7 @@ export class ConnectionRpcClient {
    * back, up to `MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS`. With
    * `urlElicitation`, `onElicit` is also handed the server's links.
    */
-  request(
+  async request(
     operation: string,
     params?: unknown,
     signal?: AbortSignal,
@@ -121,7 +121,8 @@ export class ConnectionRpcClient {
     onProgress?: (progress: McpBridgeProgress) => void,
     options?: { urlElicitation?: boolean },
   ): Promise<unknown> {
-    return new Promise((resolve, reject) => {
+    const { McpError } = await mcpTypes.load();
+    return await new Promise((resolve, reject) => {
       const socket: Socket = connect(this.socketPath);
       let buffer = "";
       let settled = false;

@@ -5,9 +5,10 @@ import type { Socket } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { Duplex, Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { parseMcpIpcUrl, type McpIpcEndpoint } from "@pwragent/shared";
+import { mcpClientStreamableHttp } from "./mcp-sdk";
 
 const IPC_ORIGIN = "http://pwragent-ipc.invalid";
 export const MCP_IPC_NO_RECONNECT = {
@@ -15,7 +16,8 @@ export const MCP_IPC_NO_RECONNECT = {
 };
 
 /** Couple the native connection lifetime to the SDK's session lifecycle. */
-export function createMcpIpcTransport(serverUrl: string, options: { executable?: string; bearerToken?: string } = {}): StreamableHTTPClientTransport {
+export async function createMcpIpcTransport(serverUrl: string, options: { executable?: string; bearerToken?: string } = {}): Promise<StreamableHTTPClientTransport> {
+  const { StreamableHTTPClientTransport } = await mcpClientStreamableHttp.load();
   const ipc = createMcpIpcHttp(serverUrl, options);
   const transport = new StreamableHTTPClientTransport(ipc.url, {
     fetch: ipc.fetch, reconnectionOptions: MCP_IPC_NO_RECONNECT,

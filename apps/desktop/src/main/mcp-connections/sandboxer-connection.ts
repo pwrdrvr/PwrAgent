@@ -1,6 +1,5 @@
 import { externalLinks as shell } from "../owner-host";
 import { execFile } from "node:child_process";
-import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   SANDBOXER_CLI_PATH,
@@ -21,6 +20,7 @@ export {
   SANDBOXER_MCP_ARGS,
   SANDBOXER_SETUP_COMMAND,
 } from "@pwragent/shared";
+import { mcpClientStdio } from "./mcp-sdk";
 
 type CliStatus = Pick<
   McpConnectionStatus,
@@ -50,21 +50,22 @@ const ACCOUNT_DETAILS: Record<"no_plan" | "billing_issue" | "out_of_credit" | "c
   cannot_start: "Sandboxer says this account can't start a sandbox right now. Check the Sandboxer dashboard, then refresh status.",
 };
 
-function sandboxerEnvironment(): Record<string, string> {
-  const env = getDefaultEnvironment();
+async function sandboxerEnvironment(): Promise<Record<string, string>> {
+  const env = (await mcpClientStdio.load()).getDefaultEnvironment();
   for (const key of ["SANDBOXER_API_KEY", "SANDBOXER_API_URL", "SANDBOXER_ORG", "XDG_CONFIG_HOME"]) {
     if (process.env[key]) env[key] = process.env[key]!;
   }
   return env;
 }
 
-function runCli(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
+async function runCli(args: string[]): Promise<string> {
+  const env = await sandboxerEnvironment();
+  return await new Promise((resolve, reject) => {
     execFile(SANDBOXER_CLI_PATH, [...args, "--json", "--no-update"], {
       timeout: 8_000,
       maxBuffer: 256 * 1024,
       windowsHide: true,
-      env: sandboxerEnvironment(),
+      env,
     }, (error, stdout) => {
       if (error) reject(error);
       else resolve(stdout);
@@ -246,14 +247,15 @@ export class SandboxerConnection {
     }
   }
 
-  createTransport(): Transport {
+  async createTransport(): Promise<Transport> {
     // Only the official built-in command is allowed. The SDK's default env
     // preserves HOME/PATH for the CLI login. Share only Sandboxer's overrides
     // with status, rather than the desktop's entire secret-bearing environment.
+    const { StdioClientTransport } = await mcpClientStdio.load();
     return new StdioClientTransport({
       command: SANDBOXER_CLI_PATH,
       args: [...SANDBOXER_MCP_LAUNCH_ARGS],
-      env: sandboxerEnvironment(),
+      env: await sandboxerEnvironment(),
       stderr: "ignore",
     });
   }

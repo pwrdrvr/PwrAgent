@@ -6,31 +6,18 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import {
-  Server as McpProtocolServer,
-} from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  WebStandardStreamableHTTPServerTransport,
-} from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListResourcesRequestSchema,
-  ListResourceTemplatesRequestSchema,
-  ListToolsRequestSchema,
-  McpError,
-  ReadResourceRequestSchema,
-  RequestSchema,
-  type ServerNotification,
-  type ServerRequest,
+import type {
+  CallToolRequest,
+  ServerNotification,
+  ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
 import {
   PWRAGENT_TOOL_NAMESPACE,
   type AppServerBackendKind,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
+import { lazyModule, loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 import {
@@ -45,11 +32,17 @@ import {
 } from "./pwragent-workflow-skills.js";
 
 // The SDK's built-in request union does not yet include the skills extension.
-const ListSkillsRequestSchema = RequestSchema.extend({
-  method: z.literal("skills/list"),
-});
-const GetSkillRequestSchema = RequestSchema.extend({
-  method: z.literal("skills/get"),
+// The SDK loads with the first request, not with the owner.
+const skillRequestSchemas = lazyModule(async () => {
+  const [{ RequestSchema }, { z }] = await Promise.all([mcpTypes.load(), import("zod")]);
+  return {
+    ListSkillsRequestSchema: RequestSchema.extend({
+      method: z.literal("skills/list"),
+    }),
+    GetSkillRequestSchema: RequestSchema.extend({
+      method: z.literal("skills/get"),
+    }),
+  };
 });
 
 export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): string {
@@ -339,6 +332,20 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     // A tool call can wait for the operator, a renderer or long work, so it
     // is answered as a stream whose headers go out at once. Every other
     // request answers at once and stays a single JSON response.
+    const [
+      { Server: McpProtocolServer },
+      { WebStandardStreamableHTTPServerTransport },
+      {
+        CallToolRequestSchema,
+        ErrorCode,
+        ListResourcesRequestSchema,
+        ListResourceTemplatesRequestSchema,
+        ListToolsRequestSchema,
+        McpError,
+        ReadResourceRequestSchema,
+      },
+      { ListSkillsRequestSchema, GetSkillRequestSchema },
+    ] = await Promise.all([mcpServerSdk.load(), mcpServerStreamableHttp.load(), mcpTypes.load(), skillRequestSchemas.load()]);
     const streamed = await isToolCallRequest(params.request);
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: !streamed,
@@ -457,7 +464,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   }
 
   private async callTool(
-    request: z.infer<typeof CallToolRequestSchema>,
+    request: CallToolRequest,
     extra: CallToolExtra,
   ): Promise<AgentMcpToolCallResponse> {
     const token = extra.authInfo?.token;
@@ -686,6 +693,8 @@ function closeWhenDone(
 
 function rejectSkillCursor(cursor: unknown): void {
   if (cursor !== undefined) {
+    // Runs inside a request handler, after the SDK has loaded.
+    const { ErrorCode, McpError } = loadedMcpTypes();
     throw new McpError(ErrorCode.InvalidParams, "Invalid cursor.");
   }
 }
