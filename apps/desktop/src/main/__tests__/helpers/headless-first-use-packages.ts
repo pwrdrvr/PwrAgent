@@ -2,7 +2,9 @@ import path from "node:path";
 
 /** Packages a headless owner loads on first use, never at start. Each one
  * cost 25-70 ms of cold loading on every owner start when it was static.
- * zod and ajv arrive only with the MCP SDK and MCP schema validation. */
+ * zod and ajv arrive only with the MCP SDK and MCP schema validation. The
+ * ACP SDK stays out because the owner imports agent-acp's strategies,
+ * discovery and MCP config helpers from their SDK-free subpaths. */
 export const LOADED_ON_FIRST_USE = [
   "sigstore",
   "@anthropic-ai/claude-agent-sdk",
@@ -10,6 +12,7 @@ export const LOADED_ON_FIRST_USE = [
   "@modelcontextprotocol/sdk",
   "zod",
   "ajv",
+  "@agentclientprotocol/sdk",
 ];
 
 /** The npm package that owns a loaded file, or undefined outside node_modules. */

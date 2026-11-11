@@ -1,4 +1,4 @@
-import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp";
+import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -102,7 +102,7 @@ type AcpIdleClosedSession = {
 
 // Host configurations keep record environments for process/Codex callers;
 // only ACP session requests use the protocol's array-based wire type.
-export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-acp";
+export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
