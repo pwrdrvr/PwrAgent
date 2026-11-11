@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -8,12 +5,17 @@ import type {
   MessagingInboundEvent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
-import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
-import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type {
   DesktopMessagingAdapter,
   DesktopMessagingRuntime,
 } from "../messaging/messaging-runtime";
+import {
+  cleanupMessagingRuntimeStores,
+  createBackendBridge,
+  initializeFederationForMessagingTests,
+  prepareMessagingRuntimeStore,
+  telegramConfig,
+} from "./helpers/messaging-runtime-harness";
 
 // Rule: at most one adapter per platform may be connected to the provider at
 // a time. Many providers allow one connection per bot (Telegram polling,
@@ -60,6 +62,7 @@ const START_DEADLINE_MS = 1_000;
 // Captured before any test fakes timers: a case that hangs fails on this
 // real-time limit with its input, instead of timing out the whole property.
 const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
 const CASE_LIMIT_MS = 10_000;
 
 async function withinRealTime<T>(work: Promise<T>): Promise<T> {
@@ -75,7 +78,7 @@ async function withinRealTime<T>(work: Promise<T>): Promise<T> {
       }),
     ]);
   } finally {
-    clearTimeout(timer);
+    realClearTimeout(timer);
   }
 }
 // A start that never settles.
@@ -160,58 +163,12 @@ function createFakeAdapter(
   return adapter;
 }
 
-function createBackendBridge(): MessagingBackendBridge {
-  return {
-    getNavigationSnapshot: vi.fn(async () => {
-      throw new Error("not used");
-    }),
-    onEvent: () => () => {},
-  } as unknown as MessagingBackendBridge;
-}
-
-function telegramConfig(inputDebounceMs: number): DesktopMessagingConfig {
-  return {
-    inputDebounceMs,
-    telegram: {
-      channel: "telegram",
-      botToken: "telegram-token",
-      authorizedActorIds: [{ id: "user-1", displayName: "" }],
-    },
-  } as DesktopMessagingConfig;
-}
-
-const tempDirs: string[] = [];
-
 beforeEach(async () => {
-  const { initializeDesktopFederationRuntime } = await import(
-    "../federation/federation-runtime"
-  );
-  initializeDesktopFederationRuntime();
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-single-connection-"));
-  tempDirs.push(tempDir);
-  vi.stubEnv("PWRAGENT_HOME", tempDir);
-  const { initializeAppState, resetAppStateForTests } = await import(
-    "../state/app-state"
-  );
-  resetAppStateForTests();
-  initializeAppState();
-  const { resetDesktopMessagingStoreForTests } = await import(
-    "../messaging/desktop-messaging-store"
-  );
-  resetDesktopMessagingStoreForTests();
+  await initializeFederationForMessagingTests();
+  await prepareMessagingRuntimeStore("pwragent-single-connection-");
 });
 
-afterEach(async () => {
-  vi.useRealTimers();
-  const { resetAppStateForTests } = await import("../state/app-state");
-  resetAppStateForTests();
-  vi.unstubAllEnvs();
-  await Promise.all(
-    tempDirs.splice(0).map(async (tempDir) => {
-      await rm(tempDir, { recursive: true, force: true });
-    }),
-  );
-});
+afterEach(cleanupMessagingRuntimeStores);
 
 async function runScenario(
   startDurations: readonly number[],

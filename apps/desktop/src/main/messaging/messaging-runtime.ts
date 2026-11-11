@@ -503,6 +503,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   // other in a loop. Settles when every such adapter is down.
   private readonly adapterTeardowns = new Map<MessagingChannelKind, Promise<void>>();
   private readonly startsAwaitingTeardown = new Set<MessagingChannelKind>();
+  // The adapter that has started and not begun stopping, per platform: the
+  // one a replaced controller may hand its work to. Set before the new
+  // controller rehydrates monitors, so that work never waits on it.
+  private readonly liveAdapters = new Map<MessagingChannelKind, DesktopMessagingAdapter>();
+  private readonly liveAdapterWaiters = new Map<MessagingChannelKind, Set<() => void>>();
   private readonly rateLimitCarryovers = new Map<
     MessagingChannelKind,
     MessagingRateLimitCarryover
@@ -524,7 +529,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   >();
   private pendingAdapterStopReason?: string;
   private lifecycleQueue: Promise<void> = Promise.resolve();
-  private lifecycleStepsRunning = 0;
   // Replaced as one object on the serialized config lifecycle. Controllers
   // only read this owned copy; a missing or failed lifecycle read installs the
   // deny/deny snapshot instead of preserving a previously allowed policy.
@@ -1455,14 +1459,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async enqueueLifecycle(
     operation: () => Promise<void>,
   ): Promise<void> {
-    const run = this.lifecycleQueue.catch(() => undefined).then(async () => {
-      this.lifecycleStepsRunning += 1;
-      try {
-        await operation();
-      } finally {
-        this.lifecycleStepsRunning -= 1;
-      }
-    });
+    const run = this.lifecycleQueue.catch(() => undefined).then(operation);
     this.lifecycleQueue = run.then(
       () => undefined,
       () => undefined,
@@ -1815,6 +1812,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return cancelled ? "cancelled" : "failed";
     }
 
+    this.markAdapterLive(adapter);
     const unsubscribeRuntimeError = adapter.onRuntimeError?.((reason) => {
       messagingLog.warn(`${adapter.channel}: adapter runtime error`, {
         channel: adapter.channel,
@@ -1928,27 +1926,40 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
-  /**
-   * The adapter running for a channel right now, for a replaced controller
-   * that still has work in progress. Undefined while a lifecycle step (a
-   * restart) is still running, because the entry may be the stopped adapter.
-   */
+  private markAdapterLive(adapter: DesktopMessagingAdapter): void {
+    this.liveAdapters.set(adapter.channel, adapter);
+    const waiters = this.liveAdapterWaiters.get(adapter.channel);
+    this.liveAdapterWaiters.delete(adapter.channel);
+    for (const wake of waiters ?? []) wake();
+  }
+
+  /** The adapter running for a channel now, for a replaced controller's work. */
   private runningAdapterNow(
     channel: MessagingChannelKind,
   ): DesktopMessagingAdapter | undefined {
-    if (this.lifecycleStepsRunning > 0) return undefined;
-    return this.runningAdapters.get(channel)?.adapter;
+    return this.liveAdapters.get(channel);
   }
 
   /**
-   * Like `runningAdapterNow`, after a restart already queued has finished.
-   * The wait stops at the adapter start deadline: a lifecycle step that is
-   * itself waiting on the delivery asking must not deadlock it.
+   * Like `runningAdapterNow`, once a restart in progress has produced the
+   * replacement or finished without one. The wait also stops at the adapter
+   * start deadline.
    */
   private async runningAdapterSettled(
     channel: MessagingChannelKind,
   ): Promise<DesktopMessagingAdapter | undefined> {
-    const lifecycle = this.lifecycleQueue.catch(() => undefined);
+    const live = this.liveAdapters.get(channel);
+    if (live) return live;
+    let wake!: () => void;
+    const appeared = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    let waiters = this.liveAdapterWaiters.get(channel);
+    if (!waiters) {
+      waiters = new Set();
+      this.liveAdapterWaiters.set(channel, waiters);
+    }
+    waiters.add(wake);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<void>((resolve) => {
       timer = setTimeout(
@@ -1958,11 +1969,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       if (timer.unref) timer.unref();
     });
     try {
-      await Promise.race([lifecycle, deadline]);
+      await Promise.race([
+        this.lifecycleQueue.catch(() => undefined),
+        appeared,
+        deadline,
+      ]);
     } finally {
       clearTimeout(timer);
+      waiters.delete(wake);
     }
-    return this.runningAdapterNow(channel);
+    return this.liveAdapters.get(channel);
   }
 
   private trackAdapterTeardown(
@@ -1993,15 +2009,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<boolean> {
     const teardown = this.adapterTeardowns.get(channel);
     if (!teardown) return true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const waited = await Promise.race([
-      teardown.then(() => true),
-      new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), PREVIOUS_ADAPTER_TEARDOWN_WAIT_MS);
-        if (timer.unref) timer.unref();
-      }),
-    ]);
-    clearTimeout(timer);
+    // A start is already set to run once the earlier adapter is down; another
+    // wait here would only stall the lifecycle queue.
+    const waited = this.startsAwaitingTeardown.has(channel)
+      ? false
+      : await this.waitForTeardown(teardown);
     if (waited && !this.adapterTeardowns.has(channel)) return true;
     const reason =
       "Waiting for the previous connection to shut down before connecting again.";
@@ -2011,6 +2023,21 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.setPlatformHealth(channel, "errored", { reason });
     this.startAfterTeardown(channel);
     return false;
+  }
+
+  private async waitForTeardown(teardown: Promise<void>): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        teardown.then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), PREVIOUS_ADAPTER_TEARDOWN_WAIT_MS);
+          if (timer.unref) timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private startAfterTeardown(channel: MessagingChannelKind): void {
@@ -2198,6 +2225,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private async stopRunningAdapter(running: RunningMessagingAdapter): Promise<void> {
+    if (this.liveAdapters.get(running.adapter.channel) === running.adapter) {
+      this.liveAdapters.delete(running.adapter.channel);
+    }
     try {
       running.unsubscribeDiagnostic?.();
     } catch (error) {

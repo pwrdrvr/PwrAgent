@@ -18172,7 +18172,19 @@ export class MessagingController {
     }
     const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
-    const scope = this.adapter.resolveDeliveryScope?.(routedIntent);
+    // A disposed controller budgets against the adapter that will send, not
+    // the stopped-adapter stub, which has no scope and would skip cool-off.
+    const scopeAdapter = this.disposed
+      ? await this.adapterForSend()
+      : this.options.adapter;
+    if (!scopeAdapter) {
+      return {
+        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+    const scope = scopeAdapter.resolveDeliveryScope?.(routedIntent);
     const priority = messagingDeliveryPriority(routedIntent, {
       userInitiated: isUserInitiatedDeliveryEvent(event),
     });
@@ -18375,6 +18387,11 @@ export class MessagingController {
       }
       this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
+        if (lane.ticket && result.rateLimit.scope.id !== scope?.id) {
+          // The retry belongs in the new scope's line, not the old one's.
+          lane.ticket.release();
+          lane.ticket = undefined;
+        }
         scope = result.rateLimit.scope;
         this.deliveryBudget.recordRateLimit(result.rateLimit);
         if (result.rateLimit.retryable === true) {

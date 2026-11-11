@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,12 +10,17 @@ import {
   type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
-import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
-import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type {
   DesktopMessagingAdapter,
   DesktopMessagingRuntime,
 } from "../messaging/messaging-runtime";
+import {
+  cleanupMessagingRuntimeStores,
+  createBackendBridge,
+  initializeFederationForMessagingTests,
+  prepareMessagingRuntimeStore,
+  telegramConfig,
+} from "./helpers/messaging-runtime-harness";
 
 // Rule: once a provider has answered with a Retry-After, nothing is sent to
 // that provider before the Retry-After expires, however many adapter
@@ -172,26 +174,6 @@ function createFakeAdapter(oracle: Oracle, generation: number): FakeAdapter {
   return adapter;
 }
 
-function createBackendBridge(): MessagingBackendBridge {
-  return {
-    getNavigationSnapshot: vi.fn(async () => {
-      throw new Error("not used");
-    }),
-    onEvent: () => () => {},
-  } as unknown as MessagingBackendBridge;
-}
-
-function telegramConfig(inputDebounceMs: number): DesktopMessagingConfig {
-  return {
-    inputDebounceMs,
-    telegram: {
-      channel: "telegram",
-      botToken: "telegram-token",
-      authorizedActorIds: [{ id: "user-1", displayName: "" }],
-    },
-  } as DesktopMessagingConfig;
-}
-
 let commandSequence = 0;
 
 function helpCommand(): MessagingInboundEvent {
@@ -211,42 +193,12 @@ function helpCommand(): MessagingInboundEvent {
   };
 }
 
-const tempDirs: string[] = [];
-
-async function prepareRuntimeStore(): Promise<void> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-rate-limit-restart-"));
-  tempDirs.push(tempDir);
-  vi.stubEnv("PWRAGENT_HOME", tempDir);
-  const { initializeAppState, resetAppStateForTests } = await import(
-    "../state/app-state"
-  );
-  resetAppStateForTests();
-  initializeAppState();
-  const { resetDesktopMessagingStoreForTests } = await import(
-    "../messaging/desktop-messaging-store"
-  );
-  resetDesktopMessagingStoreForTests();
-}
-
 beforeEach(async () => {
-  const { initializeDesktopFederationRuntime } = await import(
-    "../federation/federation-runtime"
-  );
-  initializeDesktopFederationRuntime();
-  await prepareRuntimeStore();
+  await initializeFederationForMessagingTests();
+  await prepareMessagingRuntimeStore("pwragent-rate-limit-restart-");
 });
 
-afterEach(async () => {
-  vi.useRealTimers();
-  const { resetAppStateForTests } = await import("../state/app-state");
-  resetAppStateForTests();
-  vi.unstubAllEnvs();
-  await Promise.all(
-    tempDirs.splice(0).map(async (tempDir) => {
-      await rm(tempDir, { recursive: true, force: true });
-    }),
-  );
-});
+afterEach(cleanupMessagingRuntimeStores);
 
 async function runScenario(ops: readonly Op[]): Promise<Oracle> {
   const oracle: Oracle = {
