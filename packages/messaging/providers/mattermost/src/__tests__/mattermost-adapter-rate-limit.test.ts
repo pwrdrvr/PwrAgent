@@ -79,8 +79,12 @@ function rateLimitedResponse(headers: Record<string, string>) {
   });
 }
 
-function createAdapter(fetchImpl: (url: string) => Response | Promise<Response>) {
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => await fetchImpl(String(url))));
+function createAdapter(
+  fetchImpl: (url: string, init?: RequestInit) => Response | Promise<Response>,
+) {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) =>
+    await fetchImpl(String(url), init),
+  ));
   const adapter = new MattermostAdapter({
     callbackHandleStore: store,
     callbackServer: { start: async () => {}, stop: async () => {} } as never,
@@ -157,6 +161,98 @@ describe("Mattermost 429 handling", () => {
     expect(result.errorMessage).toBe("no permission");
     expect(result.rateLimit).toBeUndefined();
     expect(emitted).toEqual([]);
+  });
+});
+
+const RESPONSE_URL = "https://chat.example.com/hooks/commands/response-token";
+
+function isCreatePost(url: string, init?: RequestInit): boolean {
+  return url.endsWith("/api/v4/posts") && init?.method?.toLowerCase() === "post";
+}
+
+function responseUrlIntent(): MessagingSurfaceIntent {
+  return {
+    ...messageIntent("picker"),
+    targetSurface: {
+      channel: "mattermost",
+      id: "slash-command",
+      state: { opaque: { responseUrl: RESPONSE_URL, responseUrlInvokerUserId: "user-1" } },
+    },
+  } as unknown as MessagingSurfaceIntent;
+}
+
+describe("Mattermost 429 on a slash-command response_url", () => {
+  it("replays a refused response_url post and never falls back to createPost", async () => {
+    const urls: string[] = [];
+    const { adapter } = createAdapter((url, init) => {
+      urls.push(url);
+      expect(isCreatePost(url, init)).toBe(false);
+      return rateLimitedResponse({ "Retry-After": "6" });
+    });
+
+    const result = await adapter.deliver(responseUrlIntent());
+
+    expect(urls).toEqual([RESPONSE_URL]);
+    expect(result.outcome).toBe("failed");
+    expect(result.rateLimit).toMatchObject({ retryAfterMs: 6_000, retryable: true });
+  });
+
+  it("does not replay once the response_url post is visible", async () => {
+    const { adapter } = createAdapter((url, init) => {
+      expect(isCreatePost(url, init)).toBe(false);
+      if (url === RESPONSE_URL) return jsonResponse(200, { ok: true });
+      // The follow-up lookup of the post just created is refused.
+      return rateLimitedResponse({ "Retry-After": "4" });
+    });
+
+    const result = await adapter.deliver(responseUrlIntent());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.rateLimit).toMatchObject({ retryAfterMs: 4_000, retryable: false });
+  });
+});
+
+describe("Mattermost stream update interrupted by a 429", () => {
+  function streamIntent(text: string, sequence: number): MessagingSurfaceIntent {
+    return {
+      ...messageIntent(),
+      id: `stream-${sequence}`,
+      kind: "stream_update",
+      markdown: "plain",
+      policy: "enabled",
+      text,
+      stream: { key: "codex:thread-1:turn-1", isFinal: false, sequence },
+    } as unknown as MessagingSurfaceIntent;
+  }
+
+  it("keeps the posts it created, so the next snapshot does not post them again", async () => {
+    const created: string[] = [];
+    let refuseNextCreate = false;
+    const { adapter } = createAdapter((url, init) => {
+      if (isCreatePost(url, init)) {
+        if (refuseNextCreate) {
+          refuseNextCreate = false;
+          return rateLimitedResponse({ "Retry-After": "1" });
+        }
+        const { message } = JSON.parse(String(init?.body)) as { message: string };
+        created.push(message.slice(0, 1));
+        // The second chunk of this snapshot is refused.
+        refuseNextCreate = created.length === 1;
+        return jsonResponse(201, { id: `post-${created.length}` });
+      }
+      return jsonResponse(200, { id: "post-1" });
+    });
+    // Two chunks: Mattermost splits at 16,383 characters.
+    const text = `${"a".repeat(16_000)}\n\n${"b".repeat(10_000)}`;
+
+    const first = await adapter.deliver(streamIntent(text, 1));
+    expect(first.outcome).toBe("discarded");
+    expect(first.rateLimit?.retryable).toBe(false);
+
+    await adapter.deliver(streamIntent(text, 2));
+
+    // Chunk "a" once, then chunk "b" once on the next snapshot.
+    expect(created).toEqual(["a", "b"]);
   });
 });
 

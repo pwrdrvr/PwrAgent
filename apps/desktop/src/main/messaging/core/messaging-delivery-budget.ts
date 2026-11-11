@@ -85,11 +85,9 @@ export class MessagingDeliveryBudget {
     const now = this.now();
     const state = this.stateFor(request.scope);
     this.pruneState(state, request.scope, now);
-    let slowMode = this.isScopeInSlowMode(request.scope);
-    const coolOffUntil = Math.max(
-      state.coolOffUntil ?? 0,
-      this.bucketFor(request.scope, now)?.coolOffUntil ?? 0,
-    );
+    const bucket = this.bucketFor(request.scope, now);
+    let slowMode = isSlowMode(state, bucket, now);
+    const coolOffUntil = Math.max(state.coolOffUntil ?? 0, bucket?.coolOffUntil ?? 0);
 
     if (coolOffUntil > now) {
       if (DEFERABLE_PRIORITIES.has(request.priority)) {
@@ -163,16 +161,11 @@ export class MessagingDeliveryBudget {
       return false;
     }
     const now = this.now();
-    const bucket = this.bucketFor(scope, now);
-    if (bucket?.slowModeUntil !== undefined && bucket.slowModeUntil > now) {
-      return true;
-    }
     const state = this.scopes.get(scope.id);
-    if (!state) {
-      return false;
+    if (state) {
+      this.pruneState(state, scope, now);
     }
-    this.pruneState(state, scope, now);
-    return state.slowModeUntil !== undefined && state.slowModeUntil > now;
+    return isSlowMode(state, this.bucketFor(scope, now), now);
   }
 
   private bucketFor(
@@ -236,6 +229,14 @@ export class MessagingDeliveryBudget {
     }
     return state.timestamps.length < Math.max(0, limit - budgetReserved(scope));
   }
+}
+
+function isSlowMode(
+  state: ScopeState | undefined,
+  bucket: BucketState | undefined,
+  now: number,
+): boolean {
+  return Math.max(state?.slowModeUntil ?? 0, bucket?.slowModeUntil ?? 0) > now;
 }
 
 // Platform-qualified, so two providers cannot share a bucket by id.

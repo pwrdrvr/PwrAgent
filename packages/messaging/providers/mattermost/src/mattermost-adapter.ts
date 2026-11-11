@@ -521,7 +521,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     this.client.setUrl(options.config.serverUrl);
     this.client.setToken(options.config.botToken);
     this.client.setUserAgent("PwrAgent");
-    installMattermostRateLimitInterceptor(this.client, () => this.now());
+    if (
+      !installMattermostRateLimitInterceptor(this.client, () => this.now())
+      && !options.client
+    ) {
+      // Only a @mattermost/client change can reach this. Without the
+      // interceptor a 429 is an empty ClientError and starts no cool-off.
+      this.logger.warn("mattermost rate-limit interceptor not installed", {
+        reason: "Client4 has no doFetchWithResponse",
+      });
+    }
 
     // @mattermost/client@11.4.0+ defaults `newWebSocketFn` to
     // `(url) => new WebSocket(url)`, which resolves to Node's global
@@ -2578,6 +2587,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         streamKey,
         error: error instanceof Error ? error.message : String(error),
       });
+      // Posts created before the failure are visible. Keep their anchors, or
+      // the next snapshot would create them again.
+      if (anchors.length > 0) {
+        this.streamSurfaces.set(streamKey, anchors);
+        evictStaleStreamAnchors(this.streamSurfaces);
+      }
       // Stream updates are disposable; a later snapshot supersedes this one.
       const rateLimit = this.rateLimitFromError(error, intent, { retryable: false });
       return {
