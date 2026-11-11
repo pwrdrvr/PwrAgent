@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sqliteThreadChangeVersion } from "@pwragent/sqlite-storage/sqlite-thread-change-version";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 describe("overlay thread upsert statement", () => {
@@ -34,5 +35,16 @@ describe("overlay thread upsert statement", () => {
     const installed = sqliteThreadChangeVersion(db.raw);
     await store.setThreadPin({ backend: "codex", threadId: "after", pinned: true });
     expect(sqliteThreadChangeVersion(db.raw)).toBe(installed + 1);
+  });
+
+  it("counts its writes when write metrics attach after the first write", async () => {
+    // Metrics wrap `prepare`, so a copy compiled before they attach would
+    // run unseen and every write budget measured after it would read zero.
+    await store.setThreadPin({ backend: "codex", threadId: "before", pinned: true });
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.setThreadPin({ backend: "codex", threadId: "after", pinned: true });
+    });
+    expect(writes.statements).toBeGreaterThan(0);
   });
 });
