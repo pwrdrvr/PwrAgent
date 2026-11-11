@@ -81,13 +81,18 @@ describe("CheckoutDirectoryOwners", () => {
   });
 
   it("keeps a sibling with a shared name prefix out, and a nested directory in", () => {
-    const repo = build({ linked: [{ path: "/w/repo", worktreePath: undefined }], extra: undefined, retained: undefined, projectKey: undefined }, 0);
-    const sibling = build({ linked: [{ path: "/w/repo2", worktreePath: undefined }], extra: undefined, retained: undefined, projectKey: undefined }, 1);
-    const nested = build({ linked: [{ path: "/w/repo/sub", worktreePath: undefined }], extra: undefined, retained: undefined, projectKey: undefined }, 2);
+    // Native paths: owners' directories are normalized, and the checkout
+    // asked about is compared as given, so a Windows run uses backslashes.
+    const at = (...segments: string[]) => path.join(path.sep, ...segments);
+    const owner = (cwd: string, index: number) =>
+      build({ linked: [{ path: cwd, worktreePath: undefined }], extra: undefined, retained: undefined, projectKey: undefined }, index);
+    const repo = owner(at("w", "repo"), 0);
+    const sibling = owner(at("w", "repo2"), 1);
+    const nested = owner(at("w", "repo", "sub"), 2);
     const owners = new CheckoutDirectoryOwners([repo, sibling, nested]);
-    expect(owners.owners("/w/repo")).toEqual([repo, nested]);
-    expect(owners.owners("/w/repo2")).toEqual([sibling]);
-    expect(owners.owners("/w/re")).toEqual([]);
+    expect(owners.owners(at("w", "repo"))).toEqual([repo, nested]);
+    expect(owners.owners(at("w", "repo2"))).toEqual([sibling]);
+    expect(owners.owners(at("w", "re"))).toEqual([]);
   });
 
   it("reads each candidate's directories once, the first time a checkout is asked about", () => {
