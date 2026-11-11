@@ -2,20 +2,16 @@ import path from "node:path";
 import fs from "node:fs";
 import type { FederationPeerRole, SubmitDurableTurnRequest } from "@pwragent/shared";
 import { ensureNamedProfileExists } from "../profile";
-import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import type { startOwnerServices } from "../owner-services";
 
 type Services = Awaited<ReturnType<typeof startOwnerServices>>;
 
-/** Profile configuration only. The composition root still constructs every owner. */
-export async function prepareOutpostProfile(profile: string, command: string): Promise<void> {
+/** Only creates the private directories. The root claims ownership before configuring them. */
+export async function prepareOutpostProfile(profile: string): Promise<void> {
   const { profileDir } = ensureNamedProfileExists(profile);
+  fs.mkdirSync(path.join(profileDir, "state"), { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDir, 0o700);
   fs.chmodSync(path.join(profileDir, "state"), 0o700);
-  const config = new DesktopConfigStore({ configPath: path.join(profileDir, "config.toml") });
-  try {
-    await config.write({ onboarding: { completed: true }, models: { codex: { path: command } } }, ["onboarding", "models"]);
-  } finally { config.dispose(); }
 }
 
 /** Local operator transport: the same owner methods used by IPC and federation. */

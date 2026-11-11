@@ -73,6 +73,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
     process.chdir(workspace);
     process.env.PWRAGENT_PROFILE = profile;
     process.env.CODEX_HOME = home;
+    process.env.PWRAGENT_CODEX_HOME = home;
     process.env.PWRAGENT_CODEX_COMMAND = command;
     process.on("SIGTERM", signalStop);
     process.on("SIGINT", signalStop);
@@ -80,7 +81,7 @@ export async function serve({ directory, workspace, home, command, profile }) {
     if (shutdown) return await done;
     if (sandbox.status !== "ready") throw new Error(sandbox.error);
     owner = await import("../dist/index.js");
-    await owner.prepareOutpostProfile(profile, command);
+    await owner.prepareOutpostProfile(profile);
     services = await owner.startHeadlessHost(undefined, { manageSignals: false });
     if (shutdown) { await owner.shutdownHeadlessHost("outpost-startup-cancelled"); return await done; }
     server = net.createServer((socket) => {

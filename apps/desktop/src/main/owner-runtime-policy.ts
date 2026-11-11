@@ -3,6 +3,7 @@ import type { AppServerBackendKind, FederationPeerRole, ThreadExecutionMode } fr
 /** Host configuration; desktop leaves this unset. */
 export interface OwnerRuntimePolicy {
   codexCommand?: string;
+  codexHome?: string;
   exclusiveProfileOwner?: boolean;
   enabledBackends: readonly AppServerBackendKind[];
   approvalPolicy: "never";
@@ -25,6 +26,6 @@ export function assertOwnerExecutionPolicy(policy: OwnerRuntimePolicy | undefine
 }
 
 export function createOutpostRuntimePolicy(env: NodeJS.ProcessEnv = process.env): OwnerRuntimePolicy {
-  return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, enabledBackends: ["codex"], approvalPolicy: "never",
+  return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, codexHome: env.PWRAGENT_CODEX_HOME, enabledBackends: ["codex"], approvalPolicy: "never",
     executionModes: ["default", "auto"], sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained" };
 }

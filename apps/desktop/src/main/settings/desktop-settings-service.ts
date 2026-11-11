@@ -344,6 +344,7 @@ function normalizeCodexProfilesSnapshot(
 
 type DesktopSettingsServiceOptions = {
   tokenMiserStore?: TokenMiserStore;
+  codexHome?: string;
   codexDiscoveryCoordinator?: Pick<
     CodexDiscoveryCoordinator,
     "discover" | "invalidate" | "resolve"
@@ -738,7 +739,7 @@ export class DesktopSettingsService {
       configPath: this.configPath,
     });
     this.now = options.now ?? Date.now;
-    this.startupCodexHome = resolveCodexHomeForProfile(
+    this.startupCodexHome = options.codexHome ?? resolveCodexHomeForProfile(
       this.configStore.read("models").codex?.profile,
       { env: this.env },
     );

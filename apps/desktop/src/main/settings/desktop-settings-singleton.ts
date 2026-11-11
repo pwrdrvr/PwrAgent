@@ -61,6 +61,7 @@ export function initializeDesktopSettingsService(): DesktopSettingsService {
       ? new MemoryDesktopSecretStore()
       : createDesktopSecretStorage(safeStorage);
     desktopSettingsService = new DesktopSettingsService({
+      codexHome: getOwnerHostServices().runtimePolicy?.codexHome,
       defaultDeveloperMode: app.isPackaged === true ? false : true,
       configStore,
       // Dev follows the newest downstream build automatically. Packaged apps

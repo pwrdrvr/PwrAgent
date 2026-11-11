@@ -367,9 +367,18 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   const bootMode = options.bootMode;
   const state = initializeDesktopState(bootMode);
   options.onStateInitialized?.(state);
-  const config = initializeDesktopConfigStore();
-  const settings = initializeDesktopSettingsService();
   const leaseManager = initializeRuntimeLeaseManager();
+  if (host.runtimePolicy?.exclusiveProfileOwner) {
+    for (const kind of ["federation", "messaging"] as const) {
+      const result = leaseManager.acquire(kind, "thread_owner");
+      if (!result.acquired) throw new Error(`Profile ${kind} lease is held by another runtime (${result.holder.instanceId}); stop that owner before starting Outpost.`);
+    }
+  }
+  const config = initializeDesktopConfigStore();
+  if (host.runtimePolicy?.exclusiveProfileOwner && host.runtimePolicy.codexCommand) {
+    await config.write({ onboarding: { completed: true }, models: { codex: { path: host.runtimePolicy.codexCommand } } }, ["onboarding", "models"]);
+  }
+  const settings = initializeDesktopSettingsService();
   const federationLease = initializeRuntimeFederationLeaseCoordinator();
   const messagingLease = initializeRuntimeMessagingLeaseCoordinator();
   const mcpGateway = initializeMcpConnectionGatewayService();
@@ -516,12 +525,6 @@ wireOwnerRendererEvents();
   });
   getDesktopBackendRegistry().setMessagingAgentToolService(messagingRuntime);
   wireOwnerMessagingServices(messagingRuntime);
-  if (host.runtimePolicy?.exclusiveProfileOwner) {
-    for (const kind of ["federation", "messaging"] as const) {
-      const result = leaseManager.acquire(kind, "thread_owner");
-      if (!result.acquired) throw new Error(`Profile ${kind} lease is held by another runtime (${result.holder.instanceId}); stop that owner before starting Outpost.`);
-    }
-  }
 
 
   if (bootMode === "active-profile") {
