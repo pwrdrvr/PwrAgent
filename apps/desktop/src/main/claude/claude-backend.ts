@@ -4,10 +4,11 @@ import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  getSessionInfo, getSessionMessages, getSubagentMessages, query, type AccountInfo, type McpServerStatus, type Options, type Query, type SDKMessage,
-  type SDKResultMessage, type SDKUserMessage, type SlashCommand, type UserPromptSubmitHookInput,
+import type {
+  getSessionInfo, getSessionMessages, getSubagentMessages, query, AccountInfo, McpServerStatus, Options, Query, SDKMessage,
+  SDKResultMessage, SDKUserMessage, SlashCommand, UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
+import { loadClaudeAgentSdk } from "./claude-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackendWake, AppServerBackgroundTask, AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification, AppServerReviewContext,
@@ -1071,6 +1072,7 @@ export class ClaudeBackend {
     let live: LiveSession | undefined;
     try {
       const executable = await this.requireInstallation();
+      const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
       const session = await this.store.read(threadId);
       if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
       const prompted = await claudeInput(params.input);
@@ -1189,7 +1191,7 @@ export class ClaudeBackend {
         yield* input;
       }
       this.options.assertOwnerAdmission?.();
-      current.query = (this.options.query ?? query)({ prompt: prompt(), options: sdkOptions });
+      current.query = startQuery({ prompt: prompt(), options: sdkOptions });
       // Older PwrAgent metadata has no cost baseline. Read the official
       // session totals before releasing the prompt, so this turn cannot race
       // its own baseline. If unavailable, the first result seeds the next turn.
@@ -2187,7 +2189,7 @@ export class ClaudeBackend {
       let title: string | undefined;
       if (claudeSessionReadsSee(live.titleEnv)) {
         try {
-          const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, {
+          const info = await (this.options.getSessionInfo ?? (await loadClaudeAgentSdk()).getSessionInfo)(session.sdkSessionId, {
             dir: session.sdkSessionDir ?? session.cwd,
           });
           title = normalizeClaudeTitle(info?.customTitle);
@@ -3093,11 +3095,12 @@ export class ClaudeBackend {
    */
   private async withSessionReader<T>(work: (reader: ClaudeSessionReads) => Promise<T>): Promise<T> {
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-    const reader: ClaudeSessionReader = claudeSessionReadsSee(env)
+    const sdk = claudeSessionReadsSee(env) ? await loadClaudeAgentSdk() : undefined;
+    const reader: ClaudeSessionReader = sdk
       ? {
-        getSessionMessages: this.options.getSessionMessages ?? getSessionMessages,
-        getSessionInfo: this.options.getSessionInfo ?? getSessionInfo,
-        getSubagentMessages: this.options.getSubagentMessages ?? getSubagentMessages,
+        getSessionMessages: this.options.getSessionMessages ?? sdk.getSessionMessages,
+        getSessionInfo: this.options.getSessionInfo ?? sdk.getSessionInfo,
+        getSubagentMessages: this.options.getSubagentMessages ?? sdk.getSubagentMessages,
         close: () => {},
       }
       : this.openSessionReader(env);
@@ -3208,10 +3211,11 @@ export class ClaudeBackend {
 
   private async runRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {
     const executable = await this.requireInstallation();
+    const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     const input = new ClaudeInputStream();
     this.options.assertOwnerAdmission?.();
-    const control = (this.options.query ?? query)({
+    const control = startQuery({
       prompt: input,
       options: {
         ...claudeHarnessOptions(executable, env),
