@@ -72,6 +72,10 @@ export class BackgroundArchiveCleanupReport {
     const instanceId = context.threadLink?.instanceId;
     const key = completionKey(backend, instanceId, completion);
     if (this.recent.has(key)) return false;
+    // A retry still held by the same threads was reported when it first
+    // happened; repeating it at every launch is noise.
+    const cleanup = completion.cleanup.filter((item) => !item.unchanged);
+    if (!completion.error && completion.cleanup.length > 0 && cleanup.length === 0) return false;
     this.recent.add(key);
     if (this.recent.size > MAX_RECENT_COMPLETIONS) this.recent.delete(this.recent.values().next().value!);
     this.results++;
@@ -103,7 +107,7 @@ export class BackgroundArchiveCleanupReport {
       this.retain({ kind, source, reason: clippedReason, worktreePath, blockers, blockerCount: refs.length, textTruncated });
     };
     if (completion.error) { this.failed++; add("failed", completion.error); }
-    for (const item of completion.cleanup) {
+    for (const item of cleanup) {
       if (item.removedWorktree) this.removed++;
       if (item.error) { this.failed++; add("failed", item.error, item); }
       else if (item.removedWorktree) add("removed", "Worktree removed.", item);

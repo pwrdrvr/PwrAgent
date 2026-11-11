@@ -1137,6 +1137,12 @@ export type ArchiveThreadCleanupResult = {
   error?: string;
   /** Active users on the cleanup owner's instance. A remote viewer qualifies that owner. */
   blockingThreads?: Array<{ backend: AppServerBackendKind; threadId: ThreadIdentifier; title?: string }>;
+  /**
+   * A retry of a deferred checkout ended as the previous attempt did: the
+   * same blocking threads still hold it. Nothing new to report. Owners that
+   * predate the field never set it, so a viewer reports their retries.
+   */
+  unchanged?: boolean;
 };
 
 export type ArchiveCleanupProgress = {

@@ -72,7 +72,11 @@ export class AcpSessionStore implements AcpSessionStorage {
     });
   }
 
-  /** Identity-keyset pages omit transcript history and runtime command data. */
+  /**
+   * Identity-keyset pages omit transcript history and runtime command data.
+   * Hidden helper sessions are included and marked; the caller decides
+   * whether one still uses its checkout.
+   */
   listArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {
     archived: boolean;
     after?: string;
@@ -81,10 +85,11 @@ export class AcpSessionStore implements AcpSessionStorage {
     const rows = this.stateDb.raw.prepare(`
       SELECT session_id, json_object(
         'backendId', backend_id, 'sessionId', session_id,
-        'title', '', 'cwd', json_extract(payload, '$.cwd'),
+        'title', coalesce(json_extract(payload, '$.title'), ''), 'cwd', json_extract(payload, '$.cwd'),
         'createdAt', created_at, 'updatedAt', updated_at,
         'executionMode', 'default', 'status', json_extract(payload, '$.status'),
-        'archivedAt', json_extract(payload, '$.archivedAt')
+        'archivedAt', json_extract(payload, '$.archivedAt'),
+        'hidden', json(CASE WHEN json_extract(payload, '$.hidden') = 1 THEN 'true' ELSE 'false' END)
       ) AS payload
       FROM acp_sessions
       WHERE backend_id = ? AND session_id > ?

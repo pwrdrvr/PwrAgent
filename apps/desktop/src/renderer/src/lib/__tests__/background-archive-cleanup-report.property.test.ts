@@ -302,3 +302,38 @@ it("suppresses exact redelivery within the last 512 completions and forgets olde
     expect(report.record("codex", completion(count - age))).toBe(age > 512);
   }));
 });
+
+// Rule: a launch retry still held by the same threads (`unchanged`) was
+// reported when it first happened. Only the other outcomes are news.
+it("reports only the outcomes that changed since the previous attempt", () => {
+  fc.assert(fc.property(
+    fc.array(fc.array(fc.record({ unchanged: fc.boolean(), failed: fc.boolean() }), { minLength: 1, maxLength: 3 }), { maxLength: 6 }),
+    (completions) => {
+      const report = new BackgroundArchiveCleanupReport();
+      completions.forEach((items, index) => {
+        const cleanup: ArchiveThreadCleanupResult[] = items.map((item, at) => ({
+          worktreePath: `/contrived/worktrees/${index}-${at}`, removedWorktree: false, deletedBranch: false,
+          ...(item.failed ? { error: `Failure ${index}-${at}` } : {
+            skippedReason: `Worktree is still used by another active thread: blocker-${index}.`,
+            blockingThreads: [{ backend: "claude" as const, threadId: `blocker-${index}` }],
+          }),
+          ...(item.unchanged ? { unchanged: true } : {}),
+        }));
+        report.record("codex", { threadId: `archived-${index}`, archivedAt: index, cleanup });
+      });
+      const news = completions.flat().filter((item) => !item.unchanged);
+      const notice = report.notice();
+      if (news.length === 0) {
+        expect(notice).toBeUndefined();
+        return;
+      }
+      const failed = news.filter((item) => item.failed).length;
+      expect(notice?.message).toContain(`${news.length - failed} kept · ${failed} failed`);
+      for (const [index, items] of completions.entries()) {
+        for (const [at, item] of items.entries()) {
+          expect(notice?.copyText?.includes(`/contrived/worktrees/${index}-${at}`)).toBe(!item.unchanged);
+        }
+      }
+    },
+  ), { examples: [[[[{ unchanged: true, failed: false }]]]] });
+});

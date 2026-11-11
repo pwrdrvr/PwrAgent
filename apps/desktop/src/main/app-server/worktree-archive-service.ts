@@ -110,6 +110,15 @@ export class MissingArchiveRepositoryError extends Error {
   }
 }
 
+/** The checkout's changes exceed a snapshot limit. The checkout is kept;
+ * nothing changes on its own, so a retry fails the same way. */
+export class SnapshotLimitExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SnapshotLimitExceededError";
+  }
+}
+
 /** The repository a linked worktree's `.git` file points at, when that
  * repository is gone. A main checkout (a `.git` directory) is never orphaned. */
 export async function missingWorktreeRepository(worktreePath: string): Promise<string | undefined> {
@@ -777,7 +786,7 @@ export class WorktreeArchiveService {
       // not manufacture an empty-change commit (or a branch) for the archive.
       if (files.size === 0 && params.worktree.head) return params.worktree.head;
       if (files.size > MAX_WORKTREE_SNAPSHOT_FILES) {
-        throw new Error(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
+        throw new SnapshotLimitExceededError(`Snapshot file limit exceeded (${MAX_WORKTREE_SNAPSHOT_FILES}); the worktree was kept.`);
       }
       // A reviewed approval may raise the limit; hibernation's own setting
       // may only lower it.
@@ -795,7 +804,7 @@ export class WorktreeArchiveService {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
         if (bytes > limit) {
-          throw new Error(`Snapshot size limit exceeded (${limit} bytes); the worktree was kept.`);
+          throw new SnapshotLimitExceededError(`Snapshot size limit exceeded (${limit} bytes); the worktree was kept.`);
         }
       }
       await this.runGit(params.worktreePath, ["add", "-A", "--", "."], { env });

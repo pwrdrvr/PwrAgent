@@ -742,7 +742,7 @@ import {
 } from "./thread-working-state-refresh-policy";
 import type { AcpAvailableCommandsStorage } from "@pwragent/owner-core/acp-storage";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
-import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
+import { MissingArchiveRepositoryError, MissingArchiveWorktreeError, SnapshotLimitExceededError, SnapshotTreeMismatchError, WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
 import { hasWorktreeRegistration, inspectRegisterableWorktree, sameRegisteredWorktree } from "./worktree-maintenance-registration";
@@ -32524,7 +32524,13 @@ export class DesktopBackendRegistry {
           skippedReason: "Externally managed worktree; thread archive leaves this checkout in place." };
         const activeUsers = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
         if (activeUsers.length > 0) {
-          await this.retainDeferredArchiveWorktree(params, candidate, activeUsers.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+          const blockers = activeUsers.map((thread) => buildThreadIdentityKey(thread.source, thread.id));
+          // A retry that finds exactly the threads that held the checkout last
+          // time has nothing new to report.
+          const priorBlockers = new Set(params.deferredWorktrees?.find((row) => row.worktreePath === candidate.worktreePath)?.blockers);
+          const unchanged = priorBlockers.size > 0 && priorBlockers.size === new Set(blockers).size
+            && blockers.every((blocker) => priorBlockers.has(blocker));
+          await this.retainDeferredArchiveWorktree(params, candidate, blockers);
           const activeThreadIds = activeUsers.map((thread) => thread.id);
           const skippedReason =
             activeThreadIds.length === 1
@@ -32544,6 +32550,7 @@ export class DesktopBackendRegistry {
             deletedBranch: false,
             skippedReason,
             blockingThreads: activeUsers.map((thread) => ({ backend: thread.source, threadId: thread.id, title: thread.title })),
+            ...(unchanged ? { unchanged: true } : {}),
           };
         }
 
@@ -32734,6 +32741,26 @@ export class DesktopBackendRegistry {
             skippedReason: MISSING_REPOSITORY_SKIP_REASON,
           };
         }
+        if (error instanceof SnapshotLimitExceededError && !removedSnapshot) {
+          // Nothing changes the checkout's size on its own, so a retry at each
+          // launch fails the same way and reports it again. Keep the checkout
+          // and stop retrying it.
+          await this.archiveWorktreeReferences.forget(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath);
+          backendRegistryLog.warn("archive thread worktree cleanup kept an oversized worktree", {
+            backend: params.backend,
+            threadId: params.thread.id,
+            repositoryPath: candidate.repositoryPath,
+            worktreePath: candidate.worktreePath,
+            error: error.message,
+          });
+          return {
+            worktreePath: candidate.worktreePath,
+            branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+            removedWorktree: false,
+            deletedBranch: false,
+            skippedReason: `${error.message.replace(/\.$/, "")} and will not be retried.`,
+          };
+        }
         const changed = removalAdmission?.scope.changedThreadKeys() ?? [];
         if (removedSnapshot || changed.length
           || !this.archiveWorktreeReferences.hasPending(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath)) {
@@ -32892,7 +32919,15 @@ export class DesktopBackendRegistry {
         const active = new Map<string, AppServerThreadSummary[]>();
         const unknown: AppServerThreadSummary[] = [];
         const external = new Map<string, Set<AppServerThreadSummary>>();
+        // A monitor worker runs in its parent's checkout. Once its every card
+        // has ended it no longer uses that checkout, even though the provider
+        // still lists it: workers from before they became ephemeral were
+        // never archived, and held their parent's checkout forever.
+        const finishedWorkers = new Set(await this.overlayStore.listFinishedMonitorWorkerThreadKeys?.(
+          params.activeThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+        ) ?? []);
         for (const thread of params.activeThreads) {
+          if (finishedWorkers.has(buildThreadIdentityKey(thread.source, thread.id))) continue;
           const paths = archiveWorkspacePaths(thread);
           if (!paths.length) unknown.push(thread);
           for (const value of params.ownershipPaths?.get(thread) ?? paths) {

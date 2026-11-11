@@ -1534,18 +1534,38 @@ export class AcpBackendAdapter {
     return this.acpSessionStore?.listAllSessions?.();
   }
 
+  /**
+   * Checkout users for archive cleanup. A hidden helper session (thread
+   * naming, command discovery, a managed review) takes its parent's cwd and
+   * is never archived, so a stored one would hold that checkout forever. It
+   * counts only while its owning process is running a turn or operation.
+   * The cursor still follows the stored rows, so filtering cannot end paging.
+   */
   listArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {
     archived: boolean; after?: string; limit: number;
   }): { sessions: AcpSessionMetadata[]; nextCursor?: string } {
-    if (this.acpSessionStore?.listArchiveCleanupSessionsPage) {
-      return this.acpSessionStore.listArchiveCleanupSessionsPage(backendId, params);
-    }
+    const page = this.acpSessionStore?.listArchiveCleanupSessionsPage
+      ? this.acpSessionStore.listArchiveCleanupSessionsPage(backendId, params)
+      : this.listStoredArchiveCleanupSessionsPage(backendId, params);
+    const sessions = page.sessions.filter((session) => !session.hidden || this.isHiddenSessionLive(backendId, session.sessionId));
+    return { sessions, nextCursor: page.nextCursor };
+  }
+
+  private listStoredArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {
+    archived: boolean; after?: string; limit: number;
+  }): { sessions: AcpSessionMetadata[]; nextCursor?: string } {
     // Alternate in-memory stores retain their contract; the shipped SQLite
-    // store always uses bounded identity pages above.
-    const sessions = this.listSessions(backendId, { archived: params.archived })
+    // store always uses bounded identity pages.
+    const sessions = (this.acpSessionStore?.listSessions(backendId, { archived: params.archived, includeHidden: true }) ?? [])
       .filter((session) => !params.after || session.sessionId > params.after)
       .sort((left, right) => left.sessionId.localeCompare(right.sessionId)).slice(0, params.limit);
     return { sessions, nextCursor: sessions.length === params.limit ? sessions.at(-1)?.sessionId : undefined };
+  }
+
+  /** Conservative: any turn or operation on the owning client keeps it live. */
+  private isHiddenSessionLive(backend: AcpBackendId, sessionId: string): boolean {
+    const owner = this.findSessionOwner(backend, sessionId);
+    return owner?.client.hasActiveTurns?.() === true || owner?.client.hasActiveOperations?.() === true;
   }
 
   getSession(
