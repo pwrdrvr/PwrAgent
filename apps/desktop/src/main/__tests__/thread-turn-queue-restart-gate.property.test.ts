@@ -35,11 +35,24 @@ type Op =
   | { kind: "submit"; thread: ThreadName }
   | { kind: "steer"; thread: ThreadName }
   | { kind: "advance"; ms: number }
+  /**
+   * Moves the clock to just around a scheduled time: the dispatch time of
+   * continuation `target` (wrapping), or the deadline when `target` names
+   * the slot past the last one. The plan is random, so a fixed step rarely
+   * lands in the few milliseconds before a continuation may start.
+   */
+  | { kind: "advance-near"; target: number; offset: number }
   | { kind: "complete"; thread: ThreadName }
   | { kind: "cancel-continuation"; thread: ThreadName }
   /** A held submission, as a locked thread's incoming message is. */
   | { kind: "hold"; thread: ThreadName }
   | { kind: "unlock"; thread: ThreadName }
+  /**
+   * The registry rechecks a thread's FIFO when its occupancy changes. With
+   * `offset`, that status event arrives just around the thread's own
+   * dispatch time (or the deadline, for a thread with none).
+   */
+  | { kind: "recheck"; thread: ThreadName; offset?: number }
   | { kind: "release" };
 
 type Scenario = {
@@ -64,11 +77,27 @@ const scenario: fc.Arbitrary<Scenario> = fc.record({
     fc.record({ kind: fc.constant("submit" as const), thread }),
     fc.record({ kind: fc.constant("steer" as const), thread }),
     fc.record({ kind: fc.constant("advance" as const), ms: fc.integer({ min: 0, max: 60 }) }),
+    {
+      arbitrary: fc.record({
+        kind: fc.constant("advance-near" as const),
+        target: fc.nat({ max: THREADS.length }),
+        offset: fc.integer({ min: -12, max: 2 }),
+      }),
+      weight: 3,
+    },
     fc.record({ kind: fc.constant("complete" as const), thread }),
     fc.record({ kind: fc.constant("cancel-continuation" as const), thread }),
     // A lock and its release must meet often enough to reach the held work.
     { arbitrary: fc.record({ kind: fc.constant("hold" as const), thread }), weight: 2 },
     { arbitrary: fc.record({ kind: fc.constant("unlock" as const), thread }), weight: 3 },
+    {
+      arbitrary: fc.record({
+        kind: fc.constant("recheck" as const),
+        thread,
+        offset: fc.option(fc.integer({ min: -10, max: 0 }), { nil: undefined }),
+      }),
+      weight: 3,
+    },
     fc.constant({ kind: "release" as const }),
   ), { maxLength: 30 }),
 });
@@ -215,6 +244,12 @@ async function runScenario(input: Scenario) {
           now += op.ms;
           fireTimers();
           break;
+        case "advance-near": {
+          const slot = op.target % (plan.schedule.length + 1);
+          now = Math.max(now, (plan.schedule[slot]?.dispatchAt ?? plan.releaseBy) + op.offset);
+          fireTimers();
+          break;
+        }
         case "complete":
           await complete(op.thread);
           break;
@@ -232,6 +267,13 @@ async function runScenario(input: Scenario) {
           break;
         case "unlock":
           await queue.releaseHold({ backend: "codex", threadId: op.thread }, (reason) => reason === LOCKED);
+          break;
+        case "recheck":
+          if (op.offset !== undefined) {
+            now = Math.max(now, (dispatchAt.get(continuationId(op.thread)) ?? plan.releaseBy) + op.offset);
+            fireTimers();
+          }
+          queue.scheduleThreadDrain({ backend: "codex", threadId: op.thread });
           break;
         case "release":
           applyGate({ type: "release" });

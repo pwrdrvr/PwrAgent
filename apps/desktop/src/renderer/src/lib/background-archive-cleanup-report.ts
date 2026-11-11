@@ -147,7 +147,13 @@ export class BackgroundArchiveCleanupReport {
     const chars = JSON.stringify(outcome).length + outcomeText(outcome).length;
     if (chars <= MAX_RETAINED_CHARS) {
       while (this.outcomes.length >= MAX_OUTCOMES || this.retainedChars + chars > MAX_RETAINED_CHARS) {
-        const index = this.outcomes.findIndex((entry) => priority(entry.outcome.kind) < priority(outcome.kind));
+        // Evict the oldest record of the lowest kind below this one, so a
+        // failure takes a removed record before a kept one.
+        let index = -1;
+        for (let at = 0; at < this.outcomes.length; at++) {
+          const rank = priority(this.outcomes[at]!.outcome.kind);
+          if (rank < priority(outcome.kind) && (index < 0 || rank < priority(this.outcomes[index]!.outcome.kind))) index = at;
+        }
         if (index < 0) break;
         const [removed] = this.outcomes.splice(index, 1);
         this.retainedChars -= removed.chars;

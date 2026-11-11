@@ -215,6 +215,26 @@ it("models audit identity, repeat windows, first-seen authority, filters and exa
   }), { numRuns: 25 });
 });
 
+// The GC pass keeps exactly the newest 500 audit rows by (createdAt, eventId);
+// listAudit then pages them through its own [1, 500] clamp and 50-row default.
+it("retains the newest 500 audit rows through the GC pass and pages them through the list clamp", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 495, max: 520 }), fc.nat({ max: 7 }),
+    fc.constantFrom(undefined, -1, 0, 49, 50, 51, 499, 500, 501, 10_000), async (count, stride, limit) => {
+    const db = StateDb.open(":memory:"); const store = new SharedStore(db);
+    try {
+      const rows: FederationSessionAuditEntry[] = [];
+      // Distinct details defeat repeat-collapsing; a small stride repeats createdAt so eventId breaks ties.
+      db.raw.transaction(() => { for (let index = 0; index < count; index++) {
+        rows.push(store.appendAudit({ kind: "error", createdAt: (index * stride) % 13, detail: `Invented ${index}` }));
+      } })();
+      db.cleanupExpired();
+      const retained = rows.sort((a, b) => b.createdAt - a.createdAt || b.eventId - a.eventId).slice(0, 500);
+      expect(db.raw.prepare("SELECT COUNT(*) AS count FROM federation_session_audit").get()).toEqual({ count: retained.length });
+      expect(store.listAudit({ limit })).toEqual(retained.slice(0, Math.max(1, Math.min(limit ?? 50, 500))));
+    } finally { db.close(); }
+  }), { numRuns: 10 });
+});
+
 it("preserves outer transaction visibility and rollback and the original independent secret write on insert refusal", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(host, fc.string({ maxLength: 12 }), async (selected, token) => {

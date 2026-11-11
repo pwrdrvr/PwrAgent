@@ -206,3 +206,99 @@ it("keeps same-id results from different owners distinct while suppressing exact
     for (const owner of owners) expect(report.notice()?.copyText).toContain(`Instance ID: ${owner}`);
   }));
 });
+
+type Kind = "removed" | "kept" | "failed" | "absent";
+const KINDS: readonly Kind[] = ["removed", "kept", "failed", "absent"];
+
+function cleanupItem(kind: Kind, index: number, reason = `${kind} reason ${index}`, worktreePath = `/contrived/${index}`): ArchiveThreadCleanupResult {
+  return { worktreePath, deletedBranch: false, removedWorktree: kind === "removed",
+    ...(kind === "kept" ? { skippedReason: reason } : {}),
+    ...(kind === "failed" ? { error: reason } : {}),
+    ...(kind === "absent" ? { skippedReason: "Worktree directory no longer exists." } : {}),
+  };
+}
+
+/** Reads what the notice promises back out of it: Copy's retained outcomes
+ * (one `\n\n` block each after the title, message and detail), the stated
+ * retained total, the per-kind storage omissions and the hidden counts. */
+function readNotice(report: BackgroundArchiveCleanupReport) {
+  const notice = report.notice()!;
+  const blocks = notice.copyText!.split("\n\n").slice(3);
+  const retainedByKind = { failed: 0, kept: 0, removed: 0, absent: 0 };
+  for (const block of blocks) retainedByKind[block.slice(0, block.indexOf("\n")).toLowerCase() as Kind]++;
+  const omittedMatch = /Storage limit: (\d+) failed, (\d+) kept, (\d+) removed and (\d+) absent outcomes omitted/.exec(notice.detail ?? "");
+  const [failed, kept, removed, absent] = omittedMatch ? omittedMatch.slice(1).map(Number) : [0, 0, 0, 0];
+  const hidden = /^(\d+) failed and (\d+) kept outcomes not shown\./.exec(notice.detail ?? "");
+  const visible = renderToStaticMarkup(notice.body);
+  return { notice, blocks, retainedByKind, omittedByKind: { failed, kept, removed, absent },
+    retained: Number(/Copy includes all (\d+) retained outcomes/.exec(notice.detail ?? "")?.[1]),
+    hidden: hidden ? { failed: Number(hidden[1]), kept: Number(hidden[2]) } : { failed: 0, kept: 0 },
+    visible: { failed: visible.split('data-kind="failed"').length - 1, kept: visible.split('data-kind="kept"').length - 1 } };
+}
+
+it("retains at most 128 outcomes, accounts for every one it drops and never drops a failure for a lower kind", () => {
+  // A run draws from a subset of kinds so failure-only and kept-heavy runs
+  // also cross the 128-outcome cap, not just evenly mixed ones.
+  fc.assert(fc.property(fc.subarray([...KINDS], { minLength: 1 })
+    .chain((kinds) => fc.array(fc.constantFrom(...kinds), { minLength: 100, maxLength: 210 })), (kinds) => {
+    const report = new BackgroundArchiveCleanupReport();
+    const recorded = { failed: 0, kept: 0, removed: 0, absent: 0 };
+    kinds.forEach((kind, index) => {
+      recorded[kind]++;
+      report.record("codex", { threadId: `fixture-${index}`, archivedAt: index, cleanup: [cleanupItem(kind, index)] });
+    });
+    if (!recorded.failed && !recorded.kept) {
+      expect(report.notice()).toBeUndefined();
+      return;
+    }
+    const { blocks, retained, retainedByKind, omittedByKind, hidden, visible } = readNotice(report);
+    expect(retained).toBe(Math.min(kinds.length, 128));
+    expect(blocks).toHaveLength(retained);
+    for (const kind of KINDS) expect(retainedByKind[kind] + omittedByKind[kind]).toBe(recorded[kind]);
+    expect(retainedByKind.failed).toBe(Math.min(recorded.failed, 128));
+    if (omittedByKind.failed) expect(retainedByKind.failed).toBe(retained);
+    // Eviction takes the lowest kind first: a kept outcome, which the compact
+    // view can show, goes only once no removed or absent record is left.
+    if (omittedByKind.kept) expect(retainedByKind.removed + retainedByKind.absent).toBe(0);
+    // The compact view shows five attention outcomes, failures first, and
+    // states exactly how many of the rest it left to Copy.
+    const attention = retainedByKind.failed + retainedByKind.kept;
+    expect(visible).toEqual({ failed: Math.min(retainedByKind.failed, 5), kept: Math.min(attention, 5) - Math.min(retainedByKind.failed, 5) });
+    expect(hidden).toEqual({ failed: retainedByKind.failed - visible.failed, kept: retainedByKind.kept - visible.kept });
+  }));
+});
+
+it("keeps retained outcomes inside 256 KiB and drops one only when it no longer fits", () => {
+  const BUDGET = 256 * 1024;
+  const clipped = (length: number) => length > 2048 ? 2048 + " [truncated]".length : length;
+  // Counts land a few outcomes either side of where the budget runs out, so
+  // runs both fill it and stop just short of it without hashing spare text.
+  fc.assert(fc.property(fc.integer({ min: 1500, max: 2400 }), fc.integer({ min: 1500, max: 2400 }), fc.integer({ min: -4, max: 4 }),
+    (reasonLength, pathLength, offset) => {
+      const count = Math.floor(BUDGET / (2 * (clipped(reasonLength) + clipped(pathLength)) + 500)) + offset;
+      const report = new BackgroundArchiveCleanupReport();
+      for (let index = 0; index < count; index++) {
+        report.record("codex", { threadId: `large-${index}`, archivedAt: index,
+          cleanup: [cleanupItem("failed", index, "e".repeat(reasonLength), `/${"p".repeat(pathLength - 1)}`)] });
+      }
+      const { blocks, retained, omittedByKind } = readNotice(report);
+      expect(retained + omittedByKind.failed).toBe(count);
+      // Each retained outcome costs its Copy text plus its stored form, which
+      // holds the clipped reason and path verbatim and a few hundred more.
+      const lower = blocks.map((block) => block.length + clipped(reasonLength) + clipped(pathLength));
+      const upper = lower.map((cost) => cost + 400);
+      expect(lower.reduce((sum, cost) => sum + cost, 0)).toBeLessThanOrEqual(BUDGET);
+      if (omittedByKind.failed) expect(upper.reduce((sum, cost) => sum + cost, 0) + Math.max(...upper)).toBeGreaterThan(BUDGET);
+    }));
+});
+
+it("suppresses exact redelivery within the last 512 completions and forgets older ones", () => {
+  fc.assert(fc.property(fc.integer({ min: 520, max: 540 }), fc.integer({ min: 505, max: 520 }), (count, age) => {
+    const report = new BackgroundArchiveCleanupReport();
+    const completion = (index: number) => ({ threadId: `fixture-${index}`, archivedAt: index, cleanup: [] });
+    let accepted = 0;
+    for (let index = 0; index < count; index++) if (report.record("codex", completion(index))) accepted++;
+    expect(accepted).toBe(count);
+    expect(report.record("codex", completion(count - age))).toBe(age > 512);
+  }));
+});

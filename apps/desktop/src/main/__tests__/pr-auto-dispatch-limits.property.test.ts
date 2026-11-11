@@ -90,6 +90,27 @@ const operation = fc.record({
   reads: fc.subarray([...READS]),
 });
 type Operation = typeof operation extends fc.Arbitrary<infer T> ? T : never;
+/*
+ * One repair as the coordinator runs it: a failure is scheduled and
+ * dispatched within seconds, sometimes after a repair push turned the last
+ * incident's checks green, or after the operator resumed a paused budget.
+ * The third repair in a row empties the 3-token budget and pauses it, so
+ * only a resume followed by a fourth repair reaches the reservation's own
+ * empty check. The single steps above almost never line that up.
+ */
+const repair = fc.record({
+  op: operation,
+  before: fc.constantFrom("none", "resolve", "resume", "resume"),
+  pause: fc.integer({ min: 0, max: 2 }),
+}).map(({ op, before, pause }): Operation[] => {
+  const at: Operation = { ...op, ownerId: "first", advance: pause * 3_750, stopAfterBegin: false, success: true };
+  const first: Operation[] = before === "resume" ? [{ ...at, kind: "resume" }]
+    : before === "resolve" ? [{ ...at, kind: "resolve", resolved: ["ci-failure", "merge-conflict"] }]
+    : [];
+  return [...first, { ...at, kind: "schedule" }, { ...at, kind: "dispatch", advance: 0 }];
+});
+const operations = fc.array(fc.oneof({ arbitrary: operation.map((op) => [op]), weight: 1 }, { arbitrary: repair, weight: 1 }),
+  { minLength: 1, maxLength: 12 }).map((chunks) => chunks.flat());
 
 async function runWrite(store: SqliteOverlayStore, op: Operation, now: number): Promise<unknown> {
   const claim = { ...THREAD, fingerprint: `fingerprint-${op.slot}`, ownerId: op.ownerId, now };
@@ -227,7 +248,9 @@ const step = (partial: Partial<Operation> & Pick<Operation, "kind">): Operation 
  *  - the gate closes between begin and the reservation, so the claim is
  *    restored before any token was reserved: nothing may be refunded;
  *  - the renderer's budget-status read lands while a token is part refilled,
- *    then the budget drains: the durable refill must keep the fraction.
+ *    then the budget drains: the durable refill must keep the fraction;
+ *  - three repairs drain and pause the budget, the operator resumes it, and
+ *    a fourth repair arrives before any refill: the reservation must refuse.
  */
 const STORE_EXAMPLES: Array<[Operation[]]> = [
   [[
@@ -247,12 +270,23 @@ const STORE_EXAMPLES: Array<[Operation[]]> = [
     step({ kind: "schedule", slot: 2, advance: 30_000 }),
     step({ kind: "dispatch" }),
   ]],
+  [[
+    step({ kind: "schedule", slot: 1 }),
+    step({ kind: "dispatch" }),
+    step({ kind: "schedule", slot: 0 }),
+    step({ kind: "dispatch" }),
+    step({ kind: "schedule", slot: 2 }),
+    step({ kind: "dispatch" }),
+    step({ kind: "resume" }),
+    step({ kind: "schedule", slot: 3 }),
+    step({ kind: "dispatch" }),
+  ]],
 ];
 
 describe("Auto-fix PR repair limits (model, oracle: the same writes without reads)", () => {
   it("reads are pure and the incident and budget limits hold", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-    await fc.assert(fc.asyncProperty(fc.array(operation, { minLength: 1, maxLength: 40 }), async (operations) => {
+    await fc.assert(fc.asyncProperty(operations, async (operations) => {
       const readDb = openInMemoryStateDb();
       const oracleDb = openInMemoryStateDb();
       const reader = new SqliteOverlayStore(readDb);

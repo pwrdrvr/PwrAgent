@@ -198,6 +198,37 @@ describe("TelegramAdapter stream throttle model", () => {
     );
   });
 
+  it("counts a 429'd call toward the group's 20 calls per minute", async () => {
+    // Telegram counts a rejected request against the chat's budget too, so
+    // the adapter reserves the window slot before the call and keeps it when
+    // the answer is a 429. Short Retry-After values (1-2 s, under the 3.1 s
+    // spacing floor) keep the stream dense enough to fill the window.
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(fc.integer({ min: 50, max: 250 }), { minLength: 400, maxLength: 600 }),
+        fc.integer({ min: 1, max: 2 }),
+        fc.array(
+          fc.oneof({ weight: 3, arbitrary: fc.constant(0) }, { weight: 1, arbitrary: fc.integer({ min: 1, max: 2 }) }),
+          { maxLength: 6 },
+        ),
+        async (gaps, firstRetryAfter, rest) => {
+          const ops: Op[] = gaps.flatMap((ms) => [
+            { kind: "deliver" as const, chat: 1 },
+            { kind: "advance" as const, ms },
+          ]);
+          const calls = await runOps(ops, [...rest, firstRetryAfter], false);
+          for (const call of calls) {
+            const inWindow = calls.filter(
+              (other) => other.at <= call.at && other.at > call.at - GROUP_WINDOW_MS,
+            ).length;
+            expect(inWindow).toBeLessThanOrEqual(GROUP_MAX_PER_WINDOW);
+          }
+        },
+      ),
+      { numRuns: 60 },
+    );
+  });
+
   it("calls Telegram at the same moments whether or not scope reads run in between", async () => {
     await fc.assert(
       fc.asyncProperty(fc.array(opArb, { maxLength: 120 }), answersArb, async (ops, answers) => {

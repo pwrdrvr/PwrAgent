@@ -32,8 +32,7 @@ function shownAfter(current: Shown, event: ReviewAutoFixRunEvent): Shown {
   return current;
 }
 
-const reviewArb = fc.constantFrom("r1", "r2");
-const eventArb: fc.Arbitrary<{ reviewId: string; event: ReviewAutoFixRunEvent }> = fc.oneof(
+const eventFor = (reviewArb: fc.Arbitrary<string>): fc.Arbitrary<{ reviewId: string; event: ReviewAutoFixRunEvent }> => fc.oneof(
   fc.record({
     reviewId: reviewArb,
     event: fc.record({
@@ -56,6 +55,17 @@ const eventArb: fc.Arbitrary<{ reviewId: string; event: ReviewAutoFixRunEvent }>
     event: fc.record({ kind: fc.constant("reviewUpdated" as const), at: fc.nat() }),
   }),
 );
+const eventArb = eventFor(fc.constantFrom("r1", "r2"));
+
+/** Runs an owner keeps per thread (`RUNS_PER_THREAD`). */
+const KEPT = 20;
+/*
+ * Reviews keep landing on a long-lived thread, so its runs outgrow the cap.
+ * Rule: the thread keeps the KEPT runs whose shown step changed most
+ * recently; an event that leaves a run as it was does not refresh it.
+ */
+const manyReviewsArb = fc.array(eventFor(fc.integer({ min: 0, max: 39 }).map((n) => `r${n}`)),
+  { maxLength: 160, size: "max" });
 
 describe("review auto-fix runs", () => {
   it("show each review's last turn step and announce only changes to it", () => {
@@ -78,6 +88,30 @@ describe("review auto-fix runs", () => {
           .toEqual(after);
       }
     }), { numRuns: 1000 });
+  });
+
+  it("keeps only the runs that changed most recently once a thread outgrows the cap", () => {
+    fc.assert(fc.property(manyReviewsArb, (steps) => {
+      const runs = new ReviewAutoFixRuns();
+      const thread = { backend: "codex" as const, threadId: "owner" };
+      const shown = new Map<string, Shown>();
+      // Review ids, least recently changed first.
+      const order: string[] = [];
+      for (const { reviewId, event } of steps) {
+        const before = shown.get(reviewId);
+        const after = shownAfter(before, event);
+        runs.record(thread, reviewId, event);
+        if (JSON.stringify(before ?? null) !== JSON.stringify(after ?? null)) {
+          const at = order.indexOf(reviewId);
+          if (at >= 0) order.splice(at, 1);
+          shown.delete(reviewId);
+          if (after) { order.push(reviewId); shown.set(reviewId, after); }
+          while (order.length > KEPT) shown.delete(order.shift()!);
+        }
+        // What each kept run shows is the first property's rule.
+        expect(Object.keys(runs.of(thread)).sort()).toEqual([...shown.keys()].sort());
+      }
+    }));
   });
 
   it("keeps a queued run's first time across position updates", () => {
