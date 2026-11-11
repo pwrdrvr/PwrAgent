@@ -4558,6 +4558,12 @@ describe("Claude thread rewind", () => {
     expect(getSubagentMessages.mock.calls.map(([sessionId, , options]) => [sessionId, options?.dir !== undefined])).toEqual([
       [SDK_SESSION, true], [SDK_SESSION, false], ["earlier-session", true], ["earlier-session", false],
     ]);
+    // A running transcript is read again every few seconds; the next read goes
+    // straight to where it was found.
+    getSubagentMessages.mockClear();
+    await f.backend.readSubAgentTranscript(threadId, "agent-1");
+    expect(getSubagentMessages.mock.calls.map(([sessionId, , options]) => [sessionId, options?.dir !== undefined]))
+      .toEqual([["earlier-session", false]]);
     await expect(f.backend.readSubAgentTranscript(threadId, "agent-2"))
       .rejects.toThrow("Claude Code has no saved conversation for this sub-agent.");
   });

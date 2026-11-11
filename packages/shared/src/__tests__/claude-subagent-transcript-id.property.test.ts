@@ -35,6 +35,9 @@ describe("Claude sub-agent transcript ids", () => {
     expect(parseClaudeSubAgentTranscriptThreadId("claude-subagent:")).toBeUndefined();
     expect(parseClaudeSubAgentTranscriptThreadId("claude-subagent:parent:")).toBeUndefined();
     expect(parseClaudeSubAgentTranscriptThreadId("claude-subagent::task")).toBeUndefined();
+    // The task id names a file; a path never reads as one.
+    expect(parseClaudeSubAgentTranscriptThreadId("claude-subagent:parent:../../x")).toBeUndefined();
+    expect(parseClaudeSubAgentTranscriptThreadId("claude-subagent:parent:a/b")).toBeUndefined();
     expect(claudeSubAgentTranscriptThreadIdForMonitor("codex-native:019dde61", "parent")).toBeUndefined();
   });
 });

@@ -96,13 +96,13 @@ function toolActivity(id: string, name: string, rawInput: unknown, createdAt: nu
   const command = name === "Bash" && typeof input.command === "string" ? input.command : undefined;
   const status = "in_progress" as const;
   if (command !== undefined) {
-    return { ...claudeCommandActivity({ id, command, status }), createdAt: createdAt ?? 0, turn: SUB_AGENT_TURN };
+    return { ...claudeCommandActivity({ id, command, status }), ...(createdAt !== undefined ? { createdAt } : {}), turn: SUB_AGENT_TURN };
   }
   const params = { id, name, input, status };
   const detail = claudeToolDetail(params) ?? claudeToolCallDetail(params);
   return {
     type: "activity", id, summary: detail.label, status, details: [detail],
-    createdAt: createdAt ?? 0, turn: SUB_AGENT_TURN,
+    ...(createdAt !== undefined ? { createdAt } : {}), turn: SUB_AGENT_TURN,
   };
 }
 

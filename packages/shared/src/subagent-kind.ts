@@ -31,6 +31,8 @@ export function isClaudeNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "mo
 }
 
 const CLAUDE_SUBAGENT_TRANSCRIPT_THREAD_ID_PREFIX = "claude-subagent:";
+/** Claude's task ids are alphanumeric. Claude Code names the sub-agent's file after one. */
+const CLAUDE_TASK_ID = /^[A-Za-z0-9_-]+$/u;
 
 /**
  * The id a Claude sub-agent's transcript is read by. A Claude sub-agent is a
@@ -60,7 +62,8 @@ export function parseClaudeSubAgentTranscriptThreadId(
   const split = rest.lastIndexOf(":");
   const parentThreadId = rest.slice(0, split);
   const taskId = rest.slice(split + 1);
-  return split > 0 && taskId ? { parentThreadId, taskId } : undefined;
+  // The task id becomes part of a file name, so a path never passes as one.
+  return split > 0 && CLAUDE_TASK_ID.test(taskId) ? { parentThreadId, taskId } : undefined;
 }
 
 /** A worker the agent harness itself started, rather than PwrAgent. */
