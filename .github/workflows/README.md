@@ -24,8 +24,9 @@ Desktop E2E run on every push to `main` (each push has its own concurrency
 group, so none is dropped). A PR runs them only with `ci:full`, or when it
 changes code that only those runners exercise: `pnpm-lock.yaml`, the
 `visual-regression`, `macos-*` and `windows-*` Desktop E2E specs (and the
-visual baselines), `apps/desktop/native/**`, `apps/desktop/build/**`, or
-`scripts/ci/macos-*`. That rule matched 19 of the 296 PRs merged in the week
+visual baselines), `apps/desktop/native/**`, `apps/desktop/build/**`, the
+macOS-only scripts under `apps/desktop/scripts/` (app icon, Swift generators,
+Dock tile plug-in, `macos-*`, `assemble-mac-*`), or `scripts/ci/macos-*`. That rule matched 19 of the 296 PRs merged in the week
 measured below. If the classifier cannot read the labels or the full
 changed-file list, it runs everything. A PR with
 `ci:windows-shutdown-diagnostics` still runs Windows Desktop E2E.

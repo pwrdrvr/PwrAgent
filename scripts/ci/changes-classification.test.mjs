@@ -108,6 +108,14 @@ const platformPaths = [
   { path: "apps/desktop/native/dock-tile-plugin/main.m", platform: true },
   { path: "apps/desktop/build/icon.icon/icon.json", platform: true },
   { path: "scripts/ci/macos-e2e-run-lane.sh", platform: true },
+  { path: "apps/desktop/scripts/app-icon.test.mjs", platform: true },
+  { path: "apps/desktop/scripts/generate-macos-app-icon.swift", platform: true },
+  { path: "apps/desktop/scripts/build-dock-tile-plugin.mjs", platform: true },
+  { path: "apps/desktop/scripts/afterpack-sign-dock-tile-plugin.mjs", platform: true },
+  { path: "apps/desktop/scripts/macos-dryrun-signing.test.mjs", platform: true },
+  { path: "apps/desktop/scripts/assemble-mac-release.mjs", platform: true },
+  { path: "apps/desktop/scripts/release.mjs", platform: false },
+  { path: "apps/desktop/src/main/themed-dock-icon.swift-notes.ts", platform: false },
   { path: "apps/desktop/native/dock-tile-plugin/README.md", platform: false },
   { path: "packages/pnpm-lock.yaml", platform: false },
   { path: "apps/desktop/e2e/thread-view.spec.ts", platform: false },
@@ -198,6 +206,33 @@ it("accepts a skipped macOS lane in the Desktop E2E gate only when the classifie
         const pass = linux === "success" && (macos === "success" || (full === "false" && macos === "skipped"));
         expect(run.status === 0, `linux=${linux} macos=${macos} full=${full}: ${run.stdout}${run.stderr}`).toBe(pass);
       }
+    }
+  }
+});
+
+// Oracle: the flake report's not-run list must name exactly the slices whose
+// jobs the `if:` conditions above skip, or a skipped platform is reported as
+// missing (or a missing one is hidden). Run the step's actual shell.
+it("tells the flake report exactly which gated platforms did not run", () => {
+  const step = jobSection("flake-report").split("      - name: Consolidate reports\n")[1];
+  const script = step.split("        run: |\n")[1].split("\n      - name:")[0]
+    .split("\n").map((line) => line.slice(10)).join("\n")
+    .replace(/FLAKE_NOT_RUN="\$not_run" node scripts\/ci\/write-flake-report\.mjs aggregate/, 'printf %s "$not_run"');
+  expect(script).toContain('printf %s "$not_run"');
+  for (const full of ["true", "false"]) {
+    for (const diagnostics of ["true", "false"]) {
+      const run = spawnSync("bash", ["-c", script], {
+        env: { PATH: process.env.PATH, FULL_PLATFORMS: full, WINDOWS_DIAGNOSTICS: diagnostics },
+        encoding: "utf8",
+      });
+      expect(run.status, run.stderr).toBe(0);
+      const ran = {
+        "unit-macos": full === "true",
+        "e2e-macos": full === "true",
+        "e2e-windows": full === "true" || diagnostics === "true",
+      };
+      const expected = Object.keys(ran).filter((pair) => !ran[pair]).sort();
+      expect(run.stdout.split(",").filter(Boolean).sort(), `full=${full} diagnostics=${diagnostics}`).toEqual(expected);
     }
   }
 });

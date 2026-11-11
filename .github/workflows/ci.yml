@@ -116,7 +116,9 @@ jobs:
             // Code that only a macOS or Windows runner exercises: the
             // dependency lockfile (Electron and native-module bumps), the
             // platform-specific specs and their visual baselines, the macOS
-            // native plug-ins and app icon, and the macOS lane scripts.
+            // native plug-ins, app icon and the scripts that build them (their
+            // tests self-skip off darwin or need actool), and the macOS lane
+            // scripts.
             const isPlatformPath = (path) =>
               path === "pnpm-lock.yaml"
               || path.startsWith("apps/desktop/e2e/visual-regression.spec.ts")
@@ -124,6 +126,11 @@ jobs:
               || path.startsWith("apps/desktop/e2e/windows-")
               || path.startsWith("apps/desktop/native/")
               || path.startsWith("apps/desktop/build/")
+              || path.startsWith("apps/desktop/scripts/macos-")
+              || path.startsWith("apps/desktop/scripts/assemble-mac-")
+              || path.startsWith("apps/desktop/scripts/app-icon")
+              || (path.startsWith("apps/desktop/scripts/") && path.endsWith(".swift"))
+              || (path.startsWith("apps/desktop/scripts/") && path.includes("dock-tile"))
               || path.startsWith("scripts/ci/macos-");
             const pathsOf = (file) => [file.filename, file.previous_filename].filter(Boolean);
             const platformFile = files.find((file) =>
