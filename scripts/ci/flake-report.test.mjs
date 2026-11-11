@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { createSlice, aggregateSlices, expectedSlices } from "./flake-report.mjs";
+import { createSlice, aggregateSlices, expectedSlices, parseNotRun } from "./flake-report.mjs";
 
 const unit = (tests, complete = true) => ({ complete, reason: "failed", unhandledErrors: 0, completion: { reportedTests: tests.length }, suites: [{ project: "desktop-main", file: "/repo/a.test.ts", errors: 0, tests }] });
 const item = (id, state) => ({ id, name: `suite > ${id}`, state, completed: true });
@@ -39,6 +39,29 @@ test("aggregation preserves missing slices, attempts, and distinct diagnostic sa
   assert.equal(report.slices.find((s) => s.key === slice.key).first.available, false);
   assert.equal(report.attempt, 2);
   assert.throws(() => aggregateSlices({ slices: [slice, slice], samples: 3 }), /duplicate/i);
+});
+
+// Model: a platform the workflow skipped is neither expected nor missing, every
+// other slice keeps its usual accounting, and a skipped platform's slice that
+// arrives anyway is still reported.
+test("platforms the classifier skipped are not reported as missing", () => {
+  const pairs = [...new Set(expectedSlices().map(({ kind, platform }) => `${kind}-${platform}`))];
+  for (let mask = 0; mask < 2 ** pairs.length; mask++) {
+    const notRun = pairs.filter((_, index) => mask & (1 << index));
+    const arrived = expectedSlices().filter((_, index) => index % 3 === 0)
+      .map(({ kind, platform, lane, sample }) => createSlice({ kind, platform, lane, sample, first: null, retries: [] }));
+    const report = aggregateSlices({ slices: arrived, notRun });
+    const wanted = expectedSlices().filter(({ kind, platform }) => !notRun.includes(`${kind}-${platform}`));
+    assert.equal(report.expectedSlices, wanted.length);
+    assert.deepEqual(report.missingSlices.map((s) => s.key),
+      wanted.filter((s) => !arrived.some((a) => a.key === s.key)).map((s) => s.key));
+    assert.deepEqual(report.slices.map((s) => s.key), arrived.map((s) => s.key));
+    assert.deepEqual(report.notRun, notRun);
+  }
+  assert.deepEqual(parseNotRun(""), []);
+  assert.deepEqual(parseNotRun(undefined), []);
+  assert.deepEqual(parseNotRun("unit-macos,e2e-macos,e2e-windows"), ["unit-macos", "e2e-macos", "e2e-windows"]);
+  assert.throws(() => parseNotRun("e2e-macOS"), /unknown not-run/i);
 });
 
 test("the expected slice inventory follows every configured workflow matrix", async () => {
@@ -85,6 +108,12 @@ test("the CLI produces a consolidated report including incomplete and absent sli
       const result = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
       assert.equal(result.expectedSlices, 22);
       assert.equal(result.missingSlices.length, 21);
+      const skipped = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", FLAKE_NOT_RUN: "unit-macos,e2e-macos,e2e-windows" }, encoding: "utf8" });
+      assert.equal(skipped.status, 0, skipped.stderr);
+      assert.match(skipped.stdout, /Not run in this workflow run: unit-macos, e2e-macos, e2e-windows\./);
+      const pr = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
+      assert.equal(pr.expectedSlices, 10);
+      assert.equal(pr.missingSlices.length, 9);
       assert.equal(result.slices[0].first.complete, false);
       assert.equal(result.slices[0].failures[0].retry, "unknown");
     }

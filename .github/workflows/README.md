@@ -5,6 +5,7 @@ namespaced with `ci:` when they start, skip, or narrow CI work.
 
 | Label | Workflow | Effect |
 |---|---|---|
+| `ci:full` | `ci.yml` | Runs the macOS unit tests, macOS Desktop E2E and Windows Desktop E2E on a PR. Without it, PRs skip those jobs unless they change a platform-specific path and the required `Desktop E2E` check accepts the skipped macOS lanes; every push to `main` and `releases/**` still runs them. The classifier reads labels live, so after adding the label use **Re-run all jobs** or push. **Re-run failed jobs** does not rerun the succeeded classifier, so it does not pick the label up. See [cross-platform jobs on PRs](#cross-platform-jobs-on-prs). |
 | `ci:benchmark-checks` | `check-performance.yml` | Compares base and PR syntax lint, typed lint and typecheck on one GitHub-hosted `macos-26` runner. Records three paired samples, runner/hardware identity and system load. Adding this label starts the benchmark. |
 | `ci:build-preview` | `preview-build.yml` | Builds an ad-hoc signed, unnotarized macOS preview DMG and uploads it as a workflow artifact. Use for PRs that change release packaging, installer assets, or desktop distribution behavior. |
 | `ci:windows-package` | `ci.yml` | Builds the unsigned Windows NSIS installer (`release.mjs --win`) and uploads it as a workflow artifact. Off by default — the normal Windows CI job is build + test only. Adding the label alone does not start CI; add it before opening the PR, rerun CI, or push a commit after adding it. The release workflow (`release.yml`) builds the Windows installer automatically on version tags. |
@@ -14,6 +15,32 @@ namespaced with `ci:` when they start, skip, or narrow CI work.
 
 If you add another label-influenced workflow path, document it here in the same
 change as the workflow update.
+
+## Cross-platform jobs on PRs
+
+PRs run Lint, Build, the Linux unit and Desktop E2E lanes, and the Windows
+verify and unit lanes. The macOS unit tests, macOS Desktop E2E and Windows
+Desktop E2E run on every push to `main` (each push has its own concurrency
+group, so none is dropped). A PR runs them only with `ci:full`, or when it
+changes code that only those runners exercise: `pnpm-lock.yaml`, the
+`visual-regression`, `macos-*` and `windows-*` Desktop E2E specs (and the
+visual baselines), `apps/desktop/native/**`, `apps/desktop/build/**`, the
+macOS-only scripts under `apps/desktop/scripts/` (app icon, Swift generators,
+Dock tile plug-in, `macos-*`, `assemble-mac-*`), or `scripts/ci/macos-*`. That rule matched 19 of the 296 PRs merged in the week
+measured below. If the classifier cannot read the labels or the full
+changed-file list, it runs everything. A PR with
+`ci:windows-shutdown-diagnostics` still runs Windows Desktop E2E.
+
+Measured over 1,000 CI runs from 2026-11-04 to 2026-11-11 (789 PR, 211 push):
+
+| Job family | Runner minutes per day on PRs | Failed PR runs | PR runs where it was the only E2E failure |
+|---|---|---|---|
+| macOS Desktop E2E (4 lanes) | ~4,200 | 3.5% | 2 of 657 |
+| macOS unit tests (4 lanes) | ~2,900 | 12.5% (not a required check) | n/a |
+| Windows Desktop E2E (4 lanes, advisory) | ~3,500 | 10.0% (not a required check) | n/a |
+
+Over the same week, `main` pushes still caught three macOS-only E2E failures,
+so a macOS break lands on `main` and is caught there instead of on the PR.
 
 ## Consolidated test retry report
 
@@ -29,8 +56,9 @@ alone does not mean the entire job passed.
 
 The report lists absent slices separately and marks an absent or incomplete
 first report; neither is a clean test run. Counts reflect only received
-reports, so missing or incomplete slices may contain unreported failures. A
-workflow cancelled before consolidation may not produce the artifact. Every
+reports, so missing or incomplete slices may contain unreported failures.
+Platforms the classifier skipped on a PR are listed under `notRun` and are not
+counted as missing. A workflow cancelled before consolidation may not produce the artifact. Every
 run attempt has its own artifact: a partial job rerun may leave other slices
 missing in that attempt. Compact per-slice artifacts are retained for seven
 days, and the consolidated artifact for 30 days. Existing detailed retry and

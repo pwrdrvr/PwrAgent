@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { aggregateSlices, createSlice } from "./flake-report.mjs";
+import { aggregateSlices, createSlice, parseNotRun } from "./flake-report.mjs";
 
 const read = (file) => existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
 const write = (file, value) => {
@@ -36,12 +36,14 @@ if (process.argv[2] === "slice") {
       warnings.push(`${entry.name}: ${error.message}`);
     }
   }
-  const report = aggregateSlices({ slices, samples: Number(process.env.FLAKE_SAMPLES), runId: process.env.GITHUB_RUN_ID,
+  const report = aggregateSlices({ slices, samples: Number(process.env.FLAKE_SAMPLES),
+    notRun: parseNotRun(process.env.FLAKE_NOT_RUN), runId: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT, sha: process.env.GITHUB_SHA, headSha: process.env.FLAKE_HEAD_SHA, warnings });
   write(".local/ci/flake-report/flake-report.json", report);
   const incomplete = report.slices.filter((slice) => !slice.first.available || !slice.first.complete).length;
   const lines = ["### Consolidated test retry report", "", `Initial failures: ${report.totals.initialFailures}; recovered: ${report.totals.recovered}; failed: ${report.totals.failed}; unknown: ${report.totals.unknown}.`,
     `Slices received: ${report.slices.length}/${report.expectedSlices}; missing: ${report.missingSlices.length}.`,
+    ...(report.notRun.length ? [`Not run in this workflow run: ${report.notRun.join(", ")}.`] : []),
     `First reports unavailable or incomplete: ${incomplete}.`,
     ...((incomplete || report.missingSlices.length) ? ["Failure counts may be incomplete."] : []),
     `Download the \`ci-flake-report-${report.attempt}\` artifact for per-test and per-slice details.`];
