@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
-import { createServer } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import net from "node:net";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
@@ -9,19 +9,34 @@ import {
   type MessagingRejectedInboundEvent,
   type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import { LineAdapter, verifyLineSignature, type LineApi } from "../line-adapter.ts";
+import {
+  LineAdapter,
+  bindAddressFromCallbackUrl,
+  verifyLineSignature,
+  type LineApi,
+} from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";
+import { postLineWebhook, webhookUrl } from "./helpers/line-webhook.ts";
+import { takeEveryReleasedPort } from "./helpers/take-every-released-port.ts";
 
 describe("LineAdapter", () => {
   const adapters: LineAdapter[] = [];
+  // Every test runs as if another worker takes each port this process
+  // releases, so a test that reserves a port and hands it to the adapter
+  // later fails with EADDRINUSE instead of passing until CI is busy.
+  let adversary: ReturnType<typeof takeEveryReleasedPort>;
+
+  beforeEach(() => {
+    adversary = takeEveryReleasedPort();
+  });
 
   afterEach(async () => {
     await Promise.all(adapters.map((adapter) => adapter.stop().catch(() => undefined)));
     adapters.length = 0;
+    await adversary.restore();
   });
 
   it("does not bind a webhook after startup is stopped during identity lookup", async () => {
-    const port = await getFreePort();
     let resolveBotInfo!: (value: {
       displayName?: string;
       userId: string;
@@ -35,11 +50,13 @@ describe("LineAdapter", () => {
     const api = createApi();
     api.getBotInfo = vi.fn(async () => await pendingBotInfo);
     const adapter = new LineAdapter({
+      listenPort: 0,
       api,
       callbackHandleStore: createCallbackStore(),
-      config: createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` }),
+      config: createConfig(),
     });
     adapters.push(adapter);
+    const listen = vi.spyOn(net.Server.prototype, "listen");
 
     const startPromise = adapter.start(async () => undefined);
     await vi.waitFor(() => {
@@ -49,16 +66,12 @@ describe("LineAdapter", () => {
     resolveBotInfo({ userId: "Uffffffffffffffffffffffffffffffff" });
     await startPromise;
 
-    const probe = createServer();
-    await new Promise<void>((resolve, reject) => {
-      probe.once("error", reject);
-      probe.listen(port, "127.0.0.1", () => resolve());
-    });
-    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    expect(listen).not.toHaveBeenCalled();
+    expect(adapter.listeningPort).toBeUndefined();
+    listen.mockRestore();
   });
 
   it("does not let stale identity lookup stop a newer lifecycle", async () => {
-    const port = await getFreePort();
     let resolveFirstBotInfo!: (value: {
       displayName?: string;
       userId: string;
@@ -78,9 +91,10 @@ describe("LineAdapter", () => {
       .mockImplementationOnce(async () => await firstBotInfo)
       .mockResolvedValueOnce(botInfo);
     const adapter = new LineAdapter({
+      listenPort: 0,
       api,
       callbackHandleStore: createCallbackStore(),
-      config: createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` }),
+      config: createConfig(),
     });
     adapters.push(adapter);
 
@@ -95,7 +109,7 @@ describe("LineAdapter", () => {
     resolveFirstBotInfo(botInfo);
     await staleStart;
 
-    const response = await fetch(`http://127.0.0.1:${port}/`);
+    const response = await fetch(webhookUrl(adapter));
     expect(response.status).toBe(405);
   });
 
@@ -107,17 +121,17 @@ describe("LineAdapter", () => {
   });
 
   it("rejects unsigned webhook bodies before JSON parsing", async () => {
-    const port = await getFreePort();
     const listener = vi.fn();
     const adapter = new LineAdapter({
+      listenPort: 0,
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
-      config: createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` }),
+      config: createConfig(),
     });
     adapters.push(adapter);
     await adapter.start(listener);
 
-    const response = await fetch(`http://127.0.0.1:${port}/`, {
+    const response = await fetch(webhookUrl(adapter), {
       body: "{",
       method: "POST",
       headers: { "x-line-signature": "bad" },
@@ -128,11 +142,10 @@ describe("LineAdapter", () => {
   });
 
   it("starts the webhook listener with only a channel secret", async () => {
-    const port = await getFreePort();
     const adapter = new LineAdapter({
+      listenPort: 0,
       callbackHandleStore: createCallbackStore(),
       config: createConfig({
-        callbackBaseUrl: `http://127.0.0.1:${port}/`,
         channelAccessToken: undefined,
       }),
     });
@@ -141,7 +154,7 @@ describe("LineAdapter", () => {
 
     const rawBody = JSON.stringify({ events: [] });
     const signature = createHmac("sha256", "secret").update(rawBody).digest("base64");
-    const response = await fetch(`http://127.0.0.1:${port}/`, {
+    const response = await fetch(webhookUrl(adapter), {
       body: rawBody,
       method: "POST",
       headers: { "x-line-signature": signature },
@@ -150,13 +163,30 @@ describe("LineAdapter", () => {
     expect(response.status).toBe(200);
   });
 
-  it("binds the webhook listener to the configured local host and port", async () => {
-    const port = await getFreePort();
+  it("takes the bind address from the callback URL; port 0 or none means the default", () => {
+    expect(bindAddressFromCallbackUrl("http://0.0.0.0:4321/")).toEqual({ host: "0.0.0.0", port: 4321 });
+    expect(bindAddressFromCallbackUrl("http://127.0.0.1/")).toEqual({ host: "127.0.0.1", port: 47822 });
+    // An operator's port 0 is not a request for an ephemeral port.
+    expect(bindAddressFromCallbackUrl("http://127.0.0.1:0/")).toEqual({ host: "127.0.0.1", port: 47822 });
+  });
+
+  it("rejects an invalid explicit listen port", () => {
+    for (const listenPort of [-1, 1.5, 65_536, Number.NaN]) {
+      expect(() => new LineAdapter({
+        callbackHandleStore: createCallbackStore(),
+        config: createConfig(),
+        listenPort,
+      })).toThrow(RangeError);
+    }
+  });
+
+  it("binds the webhook listener to the configured local host and logs the bound port", async () => {
     const logger = { info: vi.fn() };
     const adapter = new LineAdapter({
+      listenPort: 0,
       callbackHandleStore: createCallbackStore(),
       config: createConfig({
-        callbackBaseUrl: `http://0.0.0.0:${port}/`,
+        callbackBaseUrl: "http://0.0.0.0:47822/",
         channelAccessToken: undefined,
       }),
       logger,
@@ -164,11 +194,12 @@ describe("LineAdapter", () => {
     adapters.push(adapter);
     await adapter.start(async () => {});
 
+    expect(adapter.listeningPort).toBeGreaterThan(0);
     expect(logger.info).toHaveBeenCalledWith(
       "line webhook listener started",
       expect.objectContaining({
         host: "0.0.0.0",
-        port,
+        port: adapter.listeningPort,
       }),
     );
   });
@@ -601,11 +632,11 @@ describe("LineAdapter", () => {
   });
 
   it("resolves persisted postbacks across adapter restarts", async () => {
-    const port = await getFreePort();
-    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const config = createConfig();
     const store = createCallbackStore();
     const firstApi = createApi();
     const firstAdapter = new LineAdapter({
+      listenPort: 0,
       api: firstApi,
       callbackHandleStore: store,
       config,
@@ -635,6 +666,7 @@ describe("LineAdapter", () => {
 
     const postbackData = extractFirstPostbackData(firstApi);
     const secondAdapter = new LineAdapter({
+      listenPort: 0,
       api: createApi(),
       callbackHandleStore: store,
       config,
@@ -646,7 +678,7 @@ describe("LineAdapter", () => {
       events.push(event);
     });
 
-    await postLineWebhook(port, config.channelSecret, {
+    await postLineWebhook(secondAdapter, config.channelSecret, {
       events: [{
         type: "postback",
         timestamp: 2_000,
@@ -674,9 +706,8 @@ describe("LineAdapter", () => {
     await fc.assert(fc.asyncProperty(fc.constantFrom("accept", "decline", "cancel"), fc.uuid(), async (decision, id) => {
       const store = createCallbackStore();
       const api = createApi();
-      const port = await getFreePort();
-      const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
-      const first = new LineAdapter({ api, callbackHandleStore: store, config, now: () => 1000 });
+      const config = createConfig();
+      const first = new LineAdapter({ listenPort: 0, api, callbackHandleStore: store, config, now: () => 1000 });
       adapters.push(first);
       await first.deliver({ id, kind: "approval", createdAt: 1000, title: "Confirm", body: "Fixture proposal",
         decisions: [{ id: `approval:mcp:${decision}`, label: decision, decision }],
@@ -685,12 +716,12 @@ describe("LineAdapter", () => {
       });
       const record = store.records.find((candidate) => candidate.pendingIntentId === id)!;
       expect(record).toBeDefined();
-      const second = new LineAdapter({ api: createApi(), callbackHandleStore: store, config, now: () => 2000 });
+      const second = new LineAdapter({ listenPort: 0, api: createApi(), callbackHandleStore: store, config, now: () => 2000 });
       adapters.push(second);
       const events: MessagingInboundEvent[] = [];
       await second.start(async (event) => { events.push(event); });
       try {
-        await postLineWebhook(port, config.channelSecret, { events: [{ type: "postback", webhookEventId: id,
+        await postLineWebhook(second, config.channelSecret, { events: [{ type: "postback", webhookEventId: id,
           source: { type: "user", userId: config.authorizedActorIds[0]!.id },
           postback: { data: extractFirstPostbackData(api) },
         }] });
@@ -704,19 +735,17 @@ describe("LineAdapter", () => {
   });
 
   it.each(["group", "room"] as const)("observes unmentioned %s messages and sends results to the same surface", async (kind) => {
-    const port = await getFreePort();
     const conversationId = `${kind === "group" ? "C" : "R"}0123456789abcdef0123456789abcdef`;
     const config = createConfig({
-      callbackBaseUrl: `http://127.0.0.1:${port}/`,
       authorizedGroupIds: [{ id: conversationId, displayName: "Group" }],
       authorizedRoomIds: [{ id: conversationId, displayName: "Room" }],
     });
     const api = createApi();
-    const adapter = new LineAdapter({ api, config, callbackHandleStore: createCallbackStore() });
+    const adapter = new LineAdapter({ listenPort: 0, api, config, callbackHandleStore: createCallbackStore() });
     adapters.push(adapter);
     const events: MessagingInboundEvent[] = [];
     await adapter.start(async (event) => { events.push(event); });
-    await postLineWebhook(port, config.channelSecret, { events: [{
+    await postLineWebhook(adapter, config.channelSecret, { events: [{
       ...(lineGroupTextEvent({ text: "An alert without a mention" }) as Record<string, unknown>),
       source: { type: kind, userId: config.authorizedActorIds[0]!.id, [kind === "group" ? "groupId" : "roomId"]: conversationId },
     }] });
@@ -738,15 +767,14 @@ describe("LineAdapter", () => {
     const OUTSIDER = "U9999999999abcdef0123456789abcdef";
 
     const startObserved = async (observed: string[]) => {
-      const port = await getFreePort();
       const config = createConfig({
-        callbackBaseUrl: `http://127.0.0.1:${port}/`,
         authorizedGroupIds: [
           { id: GROUP_ID, displayName: "Ops" },
           { id: OTHER_GROUP_ID, displayName: "Lab" },
         ],
       });
       const adapter = new LineAdapter({
+        listenPort: 0,
         api: createApi(),
         config,
         callbackHandleStore: createCallbackStore(),
@@ -761,13 +789,13 @@ describe("LineAdapter", () => {
         ...(lineGroupTextEvent({ text: params.text }) as Record<string, unknown>),
         source: { type: "group", userId: params.userId, groupId: params.groupId ?? GROUP_ID },
       });
-      return { config, events, message, port, rejections };
+      return { adapter, config, events, message, rejections };
     };
 
     it("forwards an outside sender's message in a watched group as observed only", async () => {
-      const { config, events, message, port } = await startObserved([GROUP_ID]);
+      const { adapter, config, events, message } = await startObserved([GROUP_ID]);
 
-      await postLineWebhook(port, config.channelSecret, {
+      await postLineWebhook(adapter, config.channelSecret, {
         events: [message({ text: "Deploy failed on prod", userId: OUTSIDER })],
       });
       await waitFor(() => events.length === 1);
@@ -781,11 +809,11 @@ describe("LineAdapter", () => {
     });
 
     it("still drops an outside sender in a group nothing watches", async () => {
-      const { config, events, message, port, rejections } = await startObserved([GROUP_ID]);
+      const { adapter, config, events, message, rejections } = await startObserved([GROUP_ID]);
 
       // One webhook, processed in order: if the first were forwarded it would
       // arrive before the authorized control message.
-      await postLineWebhook(port, config.channelSecret, {
+      await postLineWebhook(adapter, config.channelSecret, {
         events: [
           message({ text: "chatter", userId: OUTSIDER, groupId: OTHER_GROUP_ID }),
           message({ text: "control", userId: config.authorizedActorIds[0]!.id }),
@@ -799,9 +827,9 @@ describe("LineAdapter", () => {
 
     it("rejects an outside sender's command in a watched group", async () => {
       // Observation is not authorization, and it must not hide the attempt.
-      const { config, events, message, port, rejections } = await startObserved([GROUP_ID]);
+      const { adapter, config, events, message, rejections } = await startObserved([GROUP_ID]);
 
-      await postLineWebhook(port, config.channelSecret, {
+      await postLineWebhook(adapter, config.channelSecret, {
         events: [message({ text: "/status", userId: OUTSIDER })],
       });
       await waitFor(() => rejections.length === 1);
@@ -812,9 +840,9 @@ describe("LineAdapter", () => {
   });
 
   it("rejects shared conversation events when no group allowlist is configured", async () => {
-    const port = await getFreePort();
-    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const config = createConfig();
     const adapter = new LineAdapter({
+      listenPort: 0,
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
       config,
@@ -829,7 +857,7 @@ describe("LineAdapter", () => {
       events.push(event);
     });
 
-    await postLineWebhook(port, config.channelSecret, {
+    await postLineWebhook(adapter, config.channelSecret, {
       events: [lineGroupTextEvent({ text: "/status" })],
     });
     await waitFor(() => rejections.length === 1);
@@ -848,9 +876,9 @@ describe("LineAdapter", () => {
   });
 
   it("marks rejected LINE self-mentions as explicit bot mentions", async () => {
-    const port = await getFreePort();
-    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const config = createConfig();
     const adapter = new LineAdapter({
+      listenPort: 0,
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
       config,
@@ -862,7 +890,7 @@ describe("LineAdapter", () => {
     });
     await adapter.start(async () => undefined);
 
-    await postLineWebhook(port, config.channelSecret, {
+    await postLineWebhook(adapter, config.channelSecret, {
       events: [lineGroupTextEvent({
         text: "@PwrAgent status please",
         mentionSelf: true,
@@ -878,14 +906,13 @@ describe("LineAdapter", () => {
   });
 
   it("dispatches LINE /monitor text as a generic command event", async () => {
-    const port = await getFreePort();
     const config = createConfig({
       authorizedGroupIds: [
         { id: "C0123456789abcdef0123456789abcdef", displayName: "Team" },
       ],
-      callbackBaseUrl: `http://127.0.0.1:${port}/`,
     });
     const adapter = new LineAdapter({
+      listenPort: 0,
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
       config,
@@ -896,7 +923,7 @@ describe("LineAdapter", () => {
       events.push(event);
     });
 
-    await postLineWebhook(port, config.channelSecret, {
+    await postLineWebhook(adapter, config.channelSecret, {
       events: [lineGroupTextEvent({ text: "/monitor refresh" })],
     });
     await waitFor(() => events.length === 1);
@@ -912,9 +939,9 @@ describe("LineAdapter", () => {
   });
 
   it("allows pairing tokens from shared conversations before group authorization", async () => {
-    const port = await getFreePort();
-    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const config = createConfig();
     const adapter = new LineAdapter({
+      listenPort: 0,
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
       config,
@@ -926,7 +953,7 @@ describe("LineAdapter", () => {
     });
 
     const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
-    await postLineWebhook(port, config.channelSecret, {
+    await postLineWebhook(adapter, config.channelSecret, {
       events: [lineGroupTextEvent({ text: `pair ${token}` })],
     });
     await waitFor(() => events.length === 1);
@@ -944,15 +971,14 @@ describe("LineAdapter", () => {
   });
 
   it("drops group join lifecycle events without a source user id", async () => {
-    const port = await getFreePort();
     const config = createConfig({
       authorizedGroupIds: [
         { id: "C0123456789abcdef0123456789abcdef", displayName: "Team" },
       ],
-      callbackBaseUrl: `http://127.0.0.1:${port}/`,
     });
     const logger = { debug: vi.fn() };
     const adapter = new LineAdapter({
+      listenPort: 0,
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
       config,
@@ -965,7 +991,7 @@ describe("LineAdapter", () => {
       events.push(event);
     });
 
-    await postLineWebhook(port, config.channelSecret, {
+    await postLineWebhook(adapter, config.channelSecret, {
       events: [{
         type: "join",
         webhookEventId: "event-join",
@@ -1150,39 +1176,6 @@ function createCallbackStore() {
       },
     ),
   };
-}
-
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => {
-        if (address && typeof address === "object") resolve(address.port);
-        else reject(new Error("failed to allocate a port"));
-      });
-    });
-  });
-}
-
-async function postLineWebhook(
-  port: number,
-  channelSecret: string,
-  body: unknown,
-): Promise<Response> {
-  const rawBody = JSON.stringify(body);
-  const signature = createHmac("sha256", channelSecret)
-    .update(rawBody)
-    .digest("base64");
-  return await fetch(`http://127.0.0.1:${port}/`, {
-    method: "POST",
-    body: rawBody,
-    headers: {
-      "content-type": "application/json",
-      "x-line-signature": signature,
-    },
-  });
 }
 
 function lineGroupTextEvent(params: {
