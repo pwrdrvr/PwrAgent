@@ -10,6 +10,17 @@ export type CheckoutOwnerCandidate = {
 };
 
 /**
+ * Whether a housekeeping candidate no longer uses its checkouts. The provider
+ * page that listed it sets `archivedAt`; a tombstone covers a provider that
+ * lost the thread. A retention start is not consulted: a thread restored
+ * outside PwrAgent keeps it, and it would drop a live owner. It does mark a
+ * persisted archive for `isArchivedCheckoutCandidate`, a different question.
+ */
+export function isArchivedCheckoutOwner({ thread, overlay }: Pick<CheckoutOwnerCandidate, "thread" | "overlay">): boolean {
+  return thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined;
+}
+
+/**
  * Which non-archived threads list each checkout, for one pass over one
  * candidate list. Asking whether another thread shares a checkout used to
  * rescan every candidate's directories for every candidate, normalizing both
@@ -39,8 +50,9 @@ export class CheckoutPathOwners {
   private index(): Map<string, Map<string, Set<string>>> {
     if (this.owners) return this.owners;
     const owners = new Map<string, Map<string, Set<string>>>();
-    for (const { thread, overlay, finishedMonitorWorker } of this.candidates) {
-      if (thread.archivedAt !== undefined || overlay?.archiveTombstonedAt !== undefined || finishedMonitorWorker) continue;
+    for (const candidate of this.candidates) {
+      if (isArchivedCheckoutOwner(candidate) || candidate.finishedMonitorWorker) continue;
+      const { thread, overlay } = candidate;
       for (const directory of [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]) {
         const key = path.resolve(directory.worktreePath ?? directory.path);
         const byBackend = owners.get(key) ?? new Map<string, Set<string>>();

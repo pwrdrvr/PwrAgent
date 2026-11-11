@@ -1089,6 +1089,8 @@ export type BackendRegistryMcpConnectionService =
       | "probeConnection"
       | "requestGatewayToolOperation"
       | "closeThreadSessions"
+      | "readThreadSessionStates"
+      | "reconnectThreadConnection"
       | "setThreadRootsResolver"
       | "noteThreadDirectoriesChanged"
     >

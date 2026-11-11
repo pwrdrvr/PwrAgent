@@ -275,9 +275,9 @@ export type ThreadMaintenanceScan = {
     items: ThreadMaintenanceHibernateCheckout[];
     /** Active within `idleDays`. Counted in `checked`, not in `kept`. */
     notIdleYet?: number;
-    /** Checkouts already hibernated. Not counted in `checked`: there is
-     * nothing on disk to hibernate. Absent from owners that predate it,
-     * which count both in `kept`. */
+    /** Checkouts already hibernated, from owners that reported them. Current
+     * owners leave it out: a thread with no worktree on disk is not eligible
+     * and is not reported. Owners older than the field counted them in `kept`. */
     alreadyHibernated?: number;
     kept: Record<string, number>;
     skipped?: string;

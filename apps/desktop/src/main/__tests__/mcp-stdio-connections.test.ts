@@ -744,7 +744,7 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
       await vi.waitFor(async () => expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBeUndefined());
       approve(true);
       expect(await outcome).toMatchObject({ message: expect.stringContaining("turn this connection off and on") });
-      await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" })).rejects.toThrow("Start the desktop yourself");
+      await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" })).rejects.toThrow("open its desktop app independently");
       expect(methods.filter((method) => method === "tools/call")).toHaveLength(0);
       // The existing thread selection control calls this when deselected.
       await service.closeThreadSessions("desktop-thread", [id]);

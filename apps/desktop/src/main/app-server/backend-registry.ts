@@ -759,7 +759,7 @@ import {
   type HibernationContext,
 } from "./checkout-hibernation";
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "./checkout-hibernation-workspace";
-import { CheckoutPathOwners } from "./checkout-path-owners";
+import { CheckoutPathOwners, isArchivedCheckoutOwner } from "./checkout-path-owners";
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
@@ -1346,6 +1346,13 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   }
 
   backendRegistryLog.debug(event, payload);
+}
+
+/** Codex rows, and the summaries built from ACP sessions, carry no archive
+ * time even on the archived page. Which page listed a thread is its archive
+ * state. The sentinel marks presence only; no caller reads the value. */
+function withListedArchiveState(thread: AppServerThreadSummary, archived: boolean): AppServerThreadSummary {
+  return { ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined };
 }
 
 function executionModeSettings(mode: ThreadExecutionMode) {
@@ -7872,7 +7879,7 @@ export class DesktopBackendRegistry {
           const page = await this.codexClient.listArchiveCleanupThreadsPage({
             archived, cursor, limit: 100, checkpoint: async () => {}, directoryFilter: async () => false,
           });
-          codexThreads.push(...page.threads);
+          codexThreads.push(...page.threads.map((thread) => withListedArchiveState(thread, archived)));
           onProgress?.({ detail: "Reading Codex checkout owners, including archived threads and native children", found: codexThreads.length });
           cursor = page.nextCursor?.trim();
           if (cursor && cursors.has(cursor)) throw new Error("Codex maintenance discovery returned a repeated cursor.");
@@ -7890,7 +7897,7 @@ export class DesktopBackendRegistry {
         let after: string | undefined;
         do {
           const page = this.acpBackend.listArchiveCleanupSessionsPage(backendId, { archived, after, limit: 100 });
-          threads.push(...page.sessions.map((session) => this.acpBackend.sessionToThreadSummary(session)));
+          threads.push(...page.sessions.map((session) => withListedArchiveState(this.acpBackend.sessionToThreadSummary(session), archived)));
           if (page.nextCursor && after && page.nextCursor <= after) throw new Error("ACP maintenance discovery did not advance.");
           after = page.nextCursor;
         } while (after);
@@ -7911,7 +7918,10 @@ export class DesktopBackendRegistry {
       });
     };
     for (const backend of new Set(threads.map((thread) => thread.source))) {
+      // A thread can move between the active and archived reads. Active
+      // membership wins, so an ambiguous row still protects its checkout.
       const backendThreads = [...new Map(threads.filter((thread) => thread.source === backend)
+        .sort((left, right) => Number(right.archivedAt !== undefined) - Number(left.archivedAt !== undefined))
         .map((thread) => [thread.id, thread])).values()];
       let overlays: Record<string, ThreadOverlayState | undefined> | undefined;
       try {
@@ -7994,7 +8004,7 @@ export class DesktopBackendRegistry {
       const linkedDirectories = withRetainedWorktrees(
         mergeThreadLinkedDirectories([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]), overlay,
       );
-      (isArchivedCheckoutCandidate(candidate) ? archivedThreads : activeThreads).push({ ...thread, linkedDirectories });
+      (isArchivedCheckoutOwner(candidate) ? archivedThreads : activeThreads).push({ ...thread, linkedDirectories });
     }
     return { activeThreads, archivedThreads };
   }
@@ -8171,7 +8181,7 @@ export class DesktopBackendRegistry {
         this.listAllInstalledAcpThreads(undefined, archived),
         this.claudeBackend.listThreads({ archived, requireComplete: true }),
       ]);
-      return lists.flat().map((thread) => ({ ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined }));
+      return lists.flat().map((thread) => withListedArchiveState(thread, archived));
     }));
     // A thread can move between the two reads. Active membership wins: an
     // ambiguous inventory must never authorize permanent deletion.
@@ -19932,6 +19942,7 @@ export class DesktopBackendRegistry {
         agentInventoryAvailable = false;
       }
     }
+    const sessions = await service?.readThreadSessionStates?.(request.threadId, request.backend);
     const connections: ThreadMcpConnectionReport[] = selection.connectionIds
       .map((connectionId) => {
         const status = byId.get(connectionId);
@@ -19939,13 +19950,16 @@ export class DesktopBackendRegistry {
         const toolCount = serverNameInAgent
           ? toolCounts.get(serverNameInAgent)
           : undefined;
+        const sessionStates = sessions?.[connectionId];
+        const ended = sessionStates?.native === "ended" || sessionStates?.gateway === "ended";
         return {
           connectionId,
           displayName: status?.displayName ?? connectionId,
           ...(serverNameInAgent ? { serverNameInAgent } : {}),
-          state: status?.state ?? "disconnected",
+          state: ended && status?.state === "ready" ? "temporarily_unavailable" : status?.state ?? "disconnected",
           configured: status?.configured ?? false,
           enabled: status?.enabled ?? false,
+          ...(sessionStates ? { sessions: sessionStates } : {}),
           ...(toolCount === undefined ? {} : { toolCount }),
         } satisfies ThreadMcpConnectionReport;
       });
@@ -19986,12 +20000,32 @@ export class DesktopBackendRegistry {
   ): Promise<SetThreadMcpConnectionsResponse> {
     const previousState = await this.overlayStore.getThreadOverlayState(request);
     const previousRevision = previousState?.mcpSelectionRevision;
+    const reconnect = request.reconnectConnectionId;
+    if (reconnect !== undefined) {
+      if (typeof reconnect !== "string" || !previousState?.mcpConnectionIds?.includes(reconnect)
+        || !request.connectionIds.includes(reconnect)) {
+        throw new Error("Reconnect requires a local command already selected by this thread.");
+      }
+      const selected = new Set(previousState.mcpConnectionIds);
+      if (new Set(request.connectionIds).size !== selected.size || request.connectionIds.some((id) => !selected.has(id))
+        || (request.providerServersEnabled !== undefined
+          && request.providerServersEnabled !== (!canIsolateMcpProviderServers(request.backend)
+            || previousState.mcpProviderServersEnabled !== false))) {
+        throw new Error("Change MCP access separately before reconnecting.");
+      }
+      const connection = (await this.mcpConnectionService?.listConnections?.())?.find((entry) => entry.id === reconnect);
+      if (connection?.kind !== "stdio" || !connection.enabled || !connection.configured
+        || !this.mcpConnectionService?.reconnectThreadConnection) {
+        throw new Error("This thread cannot reconnect that local command.");
+      }
+    }
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
     // hidden for those backends, so a value stored once — by an older build,
     // a peer, or a launchpad draft that changed provider — would otherwise
     // never be reachable again.
-    const state = await this.overlayStore.setThreadMcpConnectionIds({
+    // Reconnect changes only live grants and consent, with no SQLite write.
+    const state = reconnect !== undefined ? previousState! : await this.overlayStore.setThreadMcpConnectionIds({
       backend: request.backend,
       threadId: request.threadId,
       connectionIds: request.connectionIds,
@@ -19999,10 +20033,9 @@ export class DesktopBackendRegistry {
         ? request.providerServersEnabled
         : true,
     });
-    // The store mints a revision only when the connection set changes. Only
-    // then do running gateway calls and conversation grants end; toggling
-    // the backend's own servers leaves every gateway tool reachable.
-    if (state.mcpSelectionRevision !== previousRevision) {
+    // A changed selection or explicit reconnect revokes running calls and
+    // conversation grants. Toggling the backend's own servers does neither.
+    if (state.mcpSelectionRevision !== previousRevision || reconnect !== undefined) {
       this.mcpGatewayTools?.cancel(request.backend, request.threadId);
       this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
       for (const monitor of this.taskMonitorDelegations.values()) {
@@ -20028,9 +20061,13 @@ export class DesktopBackendRegistry {
             });
           });
       }
+      if (reconnect !== undefined) {
+        await this.mcpConnectionService!.reconnectThreadConnection!(reconnect, request.threadId, request.backend);
+      }
     }
     const connectionIds = state.mcpConnectionIds ?? [];
-    const providerServersEnabled = state.mcpProviderServersEnabled !== false;
+    const providerServersEnabled = !canIsolateMcpProviderServers(request.backend)
+      || state.mcpProviderServersEnabled !== false;
     await this.emit({
       backend: request.backend,
       notification: {

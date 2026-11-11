@@ -2062,11 +2062,11 @@ export function PluginsSettings(props: {
                 ) : null}
                 {connectionEdit.local.runningIn > 0 ? (
                   <p>
-                    Saving a changed command restarts it in the{" "}
+                    Saving a changed command stops the{" "}
                     {connectionEdit.local.runningIn === 1
-                      ? "thread"
-                      : `${connectionEdit.local.runningIn} threads`}{" "}
-                    using it now.
+                      ? "session"
+                      : `${connectionEdit.local.runningIn} sessions`}{" "}
+                    using it now. Threads start the new command when they next use it.
                   </p>
                 ) : null}
               </>
@@ -2541,11 +2541,9 @@ function ManagedMcpConnectionRow(props: {
           ) : runningIn > 0 ? (
             <span
               className={`settings-pathrow__chip${chipToneClass("ok")}`}
-              title={`${connection.displayName} is running on this computer for ${
-                runningIn === 1 ? "one thread" : `${runningIn} threads`
-              }.`}
+              title={`${connection.displayName} has ${runningIn} live thread ${runningIn === 1 ? "session" : "sessions"} on this computer. Native MCP and tool search use separate sessions. Settings tests are excluded; a particular thread may still need reconnecting.`}
             >
-              Running · {runningIn === 1 ? "1 thread" : `${runningIn} threads`}
+              Running · {runningIn === 1 ? "1 session" : `${runningIn} sessions`}
             </span>
           ) : null}
           {showAuthChip ? (
@@ -2756,7 +2754,7 @@ function ManagedMcpConnectionRow(props: {
             {testResult.status === "testing"
               ? `Testing ${connection.displayName}...`
               : testResult.status === "passed"
-                ? `Connection test passed · ${testResult.toolCount} ${testResult.toolCount === 1 ? "tool" : "tools"} · ${(testResult.elapsedMs / 1_000).toFixed(1)} s`
+                ? `Connection test passed · ${testResult.toolCount} ${testResult.toolCount === 1 ? "tool" : "tools"} · ${(testResult.elapsedMs / 1_000).toFixed(1)} s. Tested a separate session; existing thread sessions were not reconnected.`
                 : `Connection test failed after ${(testResult.elapsedMs / 1_000).toFixed(1)} s.`}
           </p>
         ) : null}

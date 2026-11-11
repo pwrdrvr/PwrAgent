@@ -394,7 +394,8 @@ export type McpConnectionStatus = McpConnectionRecord & {
   detail?: string;
   /**
    * Live copies of a local command running on the owning machine right now:
-   * one per thread session, plus a Settings test while it runs.
+   * one per thread session. Settings tests and listings are separate copies
+   * and are excluded; this count says nothing about a particular thread.
    */
   localProcesses?: number;
   /** In-memory live catalog health, independent of stored authorization. */
@@ -743,6 +744,8 @@ export type SetThreadMcpConnectionsRequest = {
   threadId: string;
   connectionIds: McpConnectionId[];
   providerServersEnabled?: boolean;
+  /** Operator-only: retire this selected local command's grants; never replay a call. */
+  reconnectConnectionId?: McpConnectionId;
 };
 
 export type ReadThreadMcpConnectionsRequest = {
@@ -1244,6 +1247,14 @@ export type ProbeMcpConnectionResponse =
       message: string;
     };
 
+export type McpThreadSessionState = "not_started" | "connecting" | "ready" | "ended";
+
+/** Native MCP and gateway discovery use independent upstream sessions. */
+export type McpThreadSessionStates = {
+  native: McpThreadSessionState;
+  gateway: McpThreadSessionState;
+};
+
 /** What a thread's managed selection actually became inside the agent. */
 export type ThreadMcpConnectionReport = {
   connectionId: McpConnectionId;
@@ -1261,6 +1272,8 @@ export type ThreadMcpConnectionReport = {
   state: McpConnectionRuntimeState;
   configured: boolean;
   enabled: boolean;
+  /** Owner-observed sessions, independent of a successful Settings test. */
+  sessions?: McpThreadSessionStates;
   /** Absent until the agent reports its inventory. */
   toolCount?: number;
 };

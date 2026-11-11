@@ -287,7 +287,7 @@ export type ThreadMaintenanceScanToolResult = {
     }>;
     /** Active within idleDays; not idle yet. */
     notIdleYet?: number;
-    /** Already hibernated; not counted in `checked`. */
+    /** Already hibernated, from owners that reported it; current owners omit it. */
     alreadyHibernated?: number;
     coverage?: import("../thread-maintenance").ThreadMaintenanceCoverage;
     kept: Record<string, number>;

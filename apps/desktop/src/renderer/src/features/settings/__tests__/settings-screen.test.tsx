@@ -10918,7 +10918,7 @@ describe("SettingsScreen", () => {
 
     const row = (await screen.findByText("Project files"))
       .closest<HTMLElement>(".settings-mcp-row")!;
-    expect(within(row).getByText("Running · 2 threads")).toBeInTheDocument();
+    expect(within(row).getByText("Running · 2 sessions")).toBeInTheDocument();
     expect(
       within(row).getByText(
         "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
@@ -10935,7 +10935,7 @@ describe("SettingsScreen", () => {
     const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
     expect(secret).toHaveValue("");
     expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
-    expect(within(dialog).getByText(/restarts it in the 2 threads/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/stops the 2 sessions/)).toBeInTheDocument();
     // Shown as one line, the way it was pasted, with the resolved program.
     const commandLine = within(dialog).getByLabelText(/^Command line/);
     expect(commandLine).toHaveValue(
