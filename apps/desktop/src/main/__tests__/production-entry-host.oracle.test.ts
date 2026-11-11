@@ -20,6 +20,7 @@ const entries = [
   "src/renderer/storage-maintenance.html",
 ];
 const worker = "src/renderer/src/features/thread-detail/image-diff/pixel-diff.worker.ts";
+const headlessPolicyEntry = "src/main/owner-runtime-policy.ts";
 
 function source(file: string, text = fs.readFileSync(file, "utf8")): ts.SourceFile {
   return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
@@ -116,15 +117,19 @@ it("covers every configured production entry and every inline worker", () => {
   // The Node host boots the real owner graph in headless-host.boot.oracle.test.
   // Its four leaf workers use the same owner-free sources checked below.
   expect(Object.values(headlessEntries).sort()).toEqual([
+    headlessPolicyEntry,
     "src/main/headless/index.ts",
     ...entries.slice(1, 5),
   ].sort());
   // A newly introduced bundler must enter this inventory rather than escaping it.
   const otherBuilders = walkFiles(desktop).filter((file) => /(?:from\s*["']esbuild["']|import\(["']esbuild["']\))/.test(fs.readFileSync(file, "utf8")));
-  expect(otherBuilders).toEqual([path.join(desktop, "scripts/build-headless.mjs")]);
+  expect(otherBuilders).toEqual([
+    path.join(desktop, "scripts/build-headless.mjs"),
+    path.join(desktop, "scripts/run-outpost-isolation-oracle.mjs"),
+  ]);
 });
 
-for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker]) {
+for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker, headlessPolicyEntry]) {
   it(`${entry} retains no owner getter in its executable bundle`, async () => {
     const script = entry.endsWith(".html")
       ? fs.readFileSync(path.join(desktop, entry), "utf8").match(/<script\s+type="module"\s+src="([^"]+)"/)?.[1]

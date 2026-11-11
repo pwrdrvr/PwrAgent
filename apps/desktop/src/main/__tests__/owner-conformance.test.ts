@@ -2195,10 +2195,13 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         expect(helpers[0].params?.dynamicTools).toBeUndefined();
         expect(calls.filter(call => call.method === "thread/unsubscribe")).toHaveLength(1);
       }
-      expect(outpostCalls.find(call => call.method === "thread/start" && call.params?.ephemeral === true)?.params)
-        .toMatchObject({ approvalPolicy: "never", sandbox: "read-only" });
-      expect(outpostCalls.find(call => call.method === "turn/start" && String(call.params?.threadId).startsWith("helper-"))?.params)
-        .toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false } });
+      const helperStart = outpostCalls.find(call => call.method === "thread/start" && call.params?.ephemeral === true)?.params;
+      const helperTurn = outpostCalls.find(call => call.method === "turn/start" && String(call.params?.threadId).startsWith("helper-"))?.params;
+      for (const params of [helperStart, helperTurn]) {
+        expect(params).toMatchObject({ approvalPolicy: "never", permissions: "pwragent-read-only" });
+        expect(params?.sandbox).toBeUndefined();
+        expect(params?.sandboxPolicy).toBeUndefined();
+      }
     } finally { await outpost.close(); await desktop.close(); }
   });
 

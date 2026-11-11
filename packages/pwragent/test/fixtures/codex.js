@@ -31,6 +31,12 @@ let acknowledged = false;
 let active;
 let sequence = 0;
 const helpers = new Set();
+function assertLockedDownPermissions(params, expected) {
+  if (expected) assert.equal(params.permissions, expected);
+  else assert.ok(["pwragent-read-only", "pwragent-workspace-write"].includes(params.permissions));
+  assert.equal(params.sandbox, undefined);
+  assert.equal(params.sandboxPolicy, undefined);
+}
 const helperControl = () => {
   try { return JSON.parse(readFileSync(path.join(directory, "helper-title.json"), "utf8")); }
   catch (error) { if (error.code !== "ENOENT") throw error; return undefined; }
@@ -94,7 +100,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({});
     } else if (method === "thread/start" && params.ephemeral === true && helperControl()) {
       assert.equal(params.approvalPolicy, "never");
-      assert.equal(params.sandbox, "read-only");
+      assertLockedDownPermissions(params, "pwragent-read-only");
       assert.equal(params.config.project_doc_max_bytes, 0);
       assert.equal(params.config.features.hooks, false);
       assert.deepEqual(params.config.notify, []);
@@ -103,6 +109,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       helpers.add(threadId);
       reply({ thread: { id: threadId, cwd: params.cwd, ephemeral: true, turns: [] }, instructionSources: [] });
     } else if (method === "turn/start" && helpers.has(params.threadId)) {
+      assertLockedDownPermissions(params, "pwragent-read-only");
       assert.ok(params.outputSchema);
       reply({ turn: { id: `helper-turn-${++sequence}`, status: "completed", items: [
         { type: "agentMessage", text: JSON.stringify({ title: helperControl().title }) },
@@ -112,7 +119,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         supportedReasoningEfforts: [], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
     } else if (method === "thread/start" || method === "thread/resume") {
       if (params.approvalPolicy !== undefined) assert.equal(params.approvalPolicy, "never");
-      if (params.sandbox !== undefined) assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
+      assertLockedDownPermissions(params);
       if (params.cwd !== undefined) assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const threadId = params.threadId || `thread-${Date.now()}-${++sequence}`;
       if (method === "thread/resume") {
@@ -127,7 +134,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({ thread: threads[threadId] });
     } else if (method === "turn/start") {
       assert.equal(params.approvalPolicy, "never");
-      assert.equal(params.sandboxPolicy.networkAccess, false);
+      assertLockedDownPermissions(params);
       assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const prompt = params.input[0].text;
       // Codex reports the first user message as the thread's preview.
