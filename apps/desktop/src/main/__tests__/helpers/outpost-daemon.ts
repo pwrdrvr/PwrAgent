@@ -14,7 +14,7 @@ import { generateNoiseStaticKeyPair } from "../../federation/federation-noise";
 import { FederationRpcEndpoint } from "../../federation/federation-rpc";
 import { connectFederationClient } from "../../federation/federation-transport";
 
-export const OUTPOST_PACKAGE_ROOT = path.join(process.cwd(), "packages/pwragent");
+export const OUTPOST_PACKAGE_ROOT = path.resolve(import.meta.dirname, "../../../../../../packages/pwragent");
 
 /** Every grant a viewer can hold on an Outpost. */
 export const OUTPOST_VIEWER_CAPABILITIES: FederationCapability[] = ["remote_window", "thread_navigation", "thread_detail",
@@ -46,6 +46,7 @@ export async function startOutpostDaemon(options: {
   profileRoot?: string;
   packageRoot?: string;
   hostKind?: "desktop" | "headless";
+  fixturePreload?: string;
 } = {}): Promise<OutpostDaemon> {
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
@@ -66,7 +67,7 @@ export async function startOutpostDaemon(options: {
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
   const env: NodeJS.ProcessEnv = { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
-  const guard = options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind);
+  const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
   if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
   const cli = path.join(packageRoot, "bin/pwragent.js");
   const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspaceInput, "--codex-home", home,

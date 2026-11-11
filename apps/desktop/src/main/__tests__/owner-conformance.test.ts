@@ -1,3 +1,4 @@
+import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
@@ -8,7 +9,7 @@ import { mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, AppServerBackendKind, FederationCapability } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
@@ -1535,22 +1536,32 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await outpost?.close(); await desktop.close(); }
   });
 
-  it("the enrolled Outpost requires both steering feature and turn-control grants before receipt admission", async () => {
-    for (const capabilities of [["turn_control"], ["durable_steer_requests_v1"], ["durable_turn_requests_v1", "turn_control"]] as FederationCapability[][]) {
-      const outpost = await startOutpostDaemon({ capabilities });
-      try {
-        const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
-          request: { backend: "codex", threadId: "unadmitted", expectedTurnId: "unadmitted-turn", input: [{ type: "text", text: "Must not be admitted" }] } };
-        request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(outpost.ownerInstanceId, request)).digest("hex");
-        await expect(outpost.client.submitSteerRequest(request)).rejects.toThrow(/capability|grant|forbidden|allowed/i);
-        await expect(outpost.client.getSteerRequest({ backend: "codex", threadId: "unadmitted", id: request.clientRequest.id })).rejects.toThrow(/capability|grant|forbidden|allowed/i);
-        const db = StateDb.open(path.join(outpost.env.PWRAGENT_HOME!, "profiles/t/state/state.db"));
+  describe("steering grant admission", () => {
+    let fixturePackage: string;
+    let fixturePreload: string;
+    beforeAll(async () => {
+      fixturePackage = await mkdtemp(path.join(os.tmpdir(), "pa-grant-fixture-"));
+      fixturePreload = await buildOwnerFixture(fixturePackage);
+    });
+    afterAll(async () => { await rm(fixturePackage, { recursive: true, force: true }); });
+
+    it("the enrolled Outpost requires both steering feature and turn-control grants before receipt admission", async () => {
+      for (const capabilities of [["turn_control"], ["durable_steer_requests_v1"], ["durable_turn_requests_v1", "turn_control"]] as FederationCapability[][]) {
+        const outpost = await startOutpostDaemon({ capabilities, packageRoot: fixturePackage, fixturePreload });
         try {
-          const scope = JSON.stringify(["steerTurn", JSON.stringify(["federation", outpost.viewerId, ""])]);
-          expect(new SqliteDurableTurnRequestStore(db).read(scope, request.clientRequest.id)).toBeUndefined();
-        } finally { db.close(); }
-      } finally { await outpost.close(); }
-    }
+          const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+            request: { backend: "codex", threadId: "unadmitted", expectedTurnId: "unadmitted-turn", input: [{ type: "text", text: "Must not be admitted" }] } };
+          request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(outpost.ownerInstanceId, request)).digest("hex");
+          await expect(outpost.client.submitSteerRequest(request)).rejects.toThrow(/capability|grant|forbidden|allowed/i);
+          await expect(outpost.client.getSteerRequest({ backend: "codex", threadId: "unadmitted", id: request.clientRequest.id })).rejects.toThrow(/capability|grant|forbidden|allowed/i);
+          const db = StateDb.open(path.join(outpost.env.PWRAGENT_HOME!, "profiles/t/state/state.db"));
+          try {
+            const scope = JSON.stringify(["steerTurn", JSON.stringify(["federation", outpost.viewerId, ""])]);
+            expect(new SqliteDurableTurnRequestStore(db).read(scope, request.clientRequest.id)).toBeUndefined();
+          } finally { db.close(); }
+        } finally { await outpost.close(); }
+      }
+    });
   });
 
   it("the existing durable federation runtime caller shares one acceptance through queue cancellation and terminal reconciliation on both owners", async () => {

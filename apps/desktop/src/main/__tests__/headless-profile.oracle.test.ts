@@ -2,6 +2,7 @@ import { fork } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import fc from "fast-check";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { expect, it } from "vitest";
@@ -60,7 +61,7 @@ async function openOwner(root: string, kind: "desktop" | "headless", command = p
 
 it("fresh desktop and Node roots preserve one profile's native identities, titles and canonical metadata", async () => {
   await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async suffix => {
-    const root = fs.realpathSync(fs.mkdtempSync("/tmp/pa-profile-oracle-"));
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-profile-oracle-")));
     for (const name of ["workspace", "fixture"]) fs.mkdirSync(path.join(root, name));
     let host: Awaited<ReturnType<typeof openOwner>> | undefined;
     type Ref = { backend: "codex"; threadId: string };
@@ -86,7 +87,8 @@ it("fresh desktop and Node roots preserve one profile's native identities, title
         await host.call("renameThread", { ...child, name: next, expectedName: title });
         const provider = JSON.parse(fs.readFileSync(path.join(root, "fixture/fixture-threads.json"), "utf8"));
         expect(provider[child.threadId].name).toBe(next);
-        expect((await host.call<{ thread: unknown }>("getNavigationSelectedDetail", { protocol: 2, ref: child })).thread).toMatchObject({ title: next });
+        const after = await host.call<{ thread: unknown }>("getNavigationSelectedDetail", { protocol: 2, ref: child });
+        expect(after.thread, JSON.stringify({ info: await host.call("getThreadInfo", child), cached: await host.call("getCachedThreadSummary", child) })).toMatchObject({ title: next });
         await host.close(); host = undefined;
       }
     } finally { await host?.close(); fs.rmSync(root, { recursive: true, force: true }); }
@@ -94,7 +96,7 @@ it("fresh desktop and Node roots preserve one profile's native identities, title
 }, 120_000);
 
 it("a refused headless startup cannot rewrite a live owner's profile configuration", async () => {
-  const root = fs.realpathSync(fs.mkdtempSync("/tmp/pa-profile-owner-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-profile-owner-")));
   for (const name of ["workspace", "fixture"]) fs.mkdirSync(path.join(root, name));
   let owner: Awaited<ReturnType<typeof openOwner>> | undefined;
   try {
@@ -106,7 +108,7 @@ it("a refused headless startup cannot rewrite a live owner's profile configurati
 }, 120_000);
 
 it("the Outpost spawn home stays equal to the explicit preflight home despite saved desktop mappings", async () => {
-  const root = fs.realpathSync(fs.mkdtempSync("/tmp/pa-profile-home-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-profile-home-")));
   for (const name of ["workspace", "fixture", "dedicated", "profiles/t"]) fs.mkdirSync(path.join(root, name), { recursive: true });
   fs.writeFileSync(path.join(root, "profiles/t/config.toml"), '[models.codex]\nprofile = "work"\n');
   let owner: Awaited<ReturnType<typeof openOwner>> | undefined;
@@ -121,7 +123,7 @@ it("the Outpost spawn home stays equal to the explicit preflight home despite sa
 // must leave every stored byte intact, including provenance and observation time.
 it("desktop → Codex-only headless → desktop preserves unsupported providers byte-for-byte", async () => {
   await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, suffix) => {
-    const root = fs.realpathSync(fs.mkdtempSync("/tmp/pa-unsupported-"));
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-unsupported-")));
     for (const name of ["workspace", "fixture", "profiles/t/state/claude"]) fs.mkdirSync(path.join(root, name), { recursive: true });
     const database = path.join(root, "profiles/t/state/state.db");
     const claude = path.join(root, `profiles/t/state/claude/${threadId}.json`);

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { installTestOwnerHost } from "../shell/testing/owner-host-fixture";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -5183,6 +5184,7 @@ describe("CodexAppServerClient", () => {
     }));
 
     try {
+      await installTestOwnerHost();
       const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
       const client = new CodexAppServerClient({
@@ -5252,6 +5254,7 @@ describe("CodexAppServerClient", () => {
     }));
 
     try {
+      await installTestOwnerHost();
       const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
 
       const client = new CodexAppServerClient({
