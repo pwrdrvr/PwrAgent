@@ -16,59 +16,74 @@ export const MAX_PWRSNAP_MEDIA_LINKS_PER_SESSION = 512;
  * a transcript image is read only through the PwrSnap session that returned
  * it, for that session's own thread, while that session is still live. A
  * link the model wrote, another server returned, or an ended session
- * returned is never read, and no new session is opened to read it, since a
- * new session would raise a fresh PwrSnap approval.
+ * returned is never read, and no new session is opened to read it: PwrSnap
+ * owns each link by the session that returned it, so no other session can.
  *
- * A session is identified by its token (one per thread and connection) and
- * by the session object itself, so a session reopened on the same token does
- * not inherit the links of the one before it.
+ * A thread's links are kept per session object. PwrSnap's sessions are
+ * pooled: one thread's calls may run on several of them, and several threads
+ * share each. A link is read only through the session that returned it, for
+ * the thread it was returned to, so a session that replaced another never
+ * inherits the links of the one before it.
  */
 export class PwrSnapMediaLinks {
-  private readonly sessions = new Map<string, { session: object; uris: Set<string> }>();
+  private readonly tokens = new Map<string, Map<object, Set<string>>>();
 
-  /** Record the image links in one tool result from the session on `token`. */
+  /** Record the image links in one tool result from `session` on `token`. */
   record(token: string, connectionId: string, session: object, result: unknown): void {
     if (connectionId !== PWRSNAP_MCP_CONNECTION_ID) return;
     const uris = readPwrSnapImageLinks(result);
     if (uris.length === 0) return;
-    let entry = this.sessions.get(token);
-    if (!entry || entry.session !== session) {
-      entry = { session, uris: new Set() };
-      this.sessions.set(token, entry);
+    let sessions = this.tokens.get(token);
+    if (!sessions) {
+      sessions = new Map();
+      this.tokens.set(token, sessions);
+    }
+    let entry = sessions.get(session);
+    if (!entry) {
+      entry = new Set();
+      sessions.set(session, entry);
     }
     for (const uri of uris) {
-      entry.uris.delete(uri);
-      entry.uris.add(uri);
-      if (entry.uris.size > MAX_PWRSNAP_MEDIA_LINKS_PER_SESSION) {
-        const oldest = entry.uris.values().next().value;
-        if (oldest !== undefined) entry.uris.delete(oldest);
+      entry.delete(uri);
+      entry.add(uri);
+      if (entry.size > MAX_PWRSNAP_MEDIA_LINKS_PER_SESSION) {
+        const oldest = entry.values().next().value;
+        if (oldest !== undefined) entry.delete(oldest);
       }
     }
   }
 
-  /** The session on `token` ended; its links are never read again. */
+  /** The thread's grant on `token` ended; its links are never read again. */
   forget(token: string): void {
-    this.sessions.delete(token);
+    this.tokens.delete(token);
+  }
+
+  /** `session` ended; no thread reads a link it returned again. */
+  forgetSession(session: object): void {
+    for (const [token, sessions] of this.tokens) {
+      sessions.delete(session);
+      if (sessions.size === 0) this.tokens.delete(token);
+    }
   }
 
   /**
-   * The token of the live session that returned `uri` to `threadId`, if any.
-   * `liveSession` answers the session currently open on a token, and
-   * `threadOf` the thread a token serves.
+   * The live session that returned `uri` to `threadId`, and the token it
+   * returned it on, if any. `isLive` answers whether a session still serves
+   * a token, and `threadOf` the thread a token serves.
    */
   resolve(
     threadId: string,
     uri: string,
     lookup: {
-      liveSession: (token: string) => object | undefined;
+      isLive: (token: string, session: object) => boolean;
       threadOf: (token: string) => string | undefined;
     },
-  ): string | undefined {
-    for (const [token, entry] of this.sessions) {
-      if (!entry.uris.has(uri)) continue;
+  ): { token: string; session: object } | undefined {
+    for (const [token, sessions] of this.tokens) {
       if (lookup.threadOf(token) !== threadId) continue;
-      if (lookup.liveSession(token) !== entry.session) continue;
-      return token;
+      for (const [session, uris] of sessions) {
+        if (uris.has(uri) && lookup.isLive(token, session)) return { token, session };
+      }
     }
     return undefined;
   }

@@ -509,7 +509,7 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
   it.each([
     { id: "pwrsnap" as const, name: "PwrSnap", installs: "resolveInstallPaths" as const, probe: "isPwrSnapListening" as const },
     { id: "pwrgit" as const, name: "PwrGit", installs: "resolvePwrGitInstallPaths" as const, probe: "isPwrGitListening" as const },
-  ])("starts $name's bundled relay per thread, with no OAuth, and again on a tool call once $name is back", async ({ id, name, installs, probe }) => {
+  ])("shares $name's bundled relay across threads, with no OAuth, and reopens it once $name is back", async ({ id, name, installs, probe }) => {
     const fixture = makeFixture();
     // An install whose relay is the fake server: PwrAgent must start exactly
     // the file inside the install, not anything on PATH.
@@ -538,51 +538,108 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     const first = await whoami(thread.rpc);
     expect(first.calls).toBe(1);
     expect(alive(first.pid)).toBe(true);
+
+    // A second thread uses the same relay session: one session per role.
+    const other = await bridgeFor(service, id, `${id}-other-thread`);
+    const otherLease = await attach(other.socketPath, other.token);
+    const shared = await whoami(other.rpc);
+    expect(shared).toMatchObject({ pid: first.pid, calls: 2 });
     expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBe(1);
 
     // The app quits (an update relaunch, say), and its relay ends with it.
     listening = false;
-    isListening.mockClear();
     process.kill(first.pid, "SIGTERM");
     await waitFor(() => !alive(first.pid), `the ${name} relay to exit`);
     await vi.waitFor(async () => await expect(whoami(thread.rpc)).rejects.toThrow(`${name} is not open`));
-    // A listing never starts a session, because a new one asks the operator
-    // to approve it in the app's own window. It does not even ask.
-    isListening.mockClear();
-    await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} closed`);
-    expect(isListening).not.toHaveBeenCalled();
+    // Nothing starts while the app is closed, a listing included.
+    await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} is not open`);
     expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBeUndefined();
 
-    // Back with Local Agent Access on: still no session until a tool call.
+    // Back with Local Agent Access on: any thread's request reopens the pool,
+    // so a new thread's tool discovery works after an update.
     listening = true;
-    await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} closed`);
+    await expect(other.rpc.request("tools/list", {})).resolves.toBeDefined();
+    const reopened = await whoami(thread.rpc);
+    expect(reopened.pid).not.toBe(first.pid);
+    expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBe(1);
 
-    // A restart that fails (the app closed again, or the operator turned the
-    // approval down) leaves the session ended: a listing still starts nothing.
-    const launches = path.join(fixture.root, `${id}-failed-launches`);
-    const working = fs.readFileSync(relay);
-    fs.writeFileSync(relay, `#!/bin/sh\necho start >> "${launches}"\nexit 3\n`);
-    const failedLaunches = () => fs.existsSync(launches) ? fs.readFileSync(launches, "utf8").trim().split("\n").length : 0;
-    await expect(whoami(thread.rpc)).rejects.toThrow();
-    expect(failedLaunches()).toBe(1);
-    await expect(thread.rpc.request("tools/list", {})).rejects.toThrow(`${name} closed`);
-    expect(failedLaunches()).toBe(1);
-    fs.writeFileSync(relay, working);
-    const restarted = await whoami(thread.rpc);
-    expect(restarted.pid).not.toBe(first.pid);
-    expect(restarted.calls).toBe(1);
-    // The new session serves listings again.
-    await expect(thread.rpc.request("tools/list", {})).resolves.toBeDefined();
-
-    // The thread letting go stops a live relay too.
-    const other = await bridgeFor(service, id, `${id}-other-thread`);
-    const otherLease = await attach(other.socketPath, other.token);
-    const second = await whoami(other.rpc);
+    // One thread letting go leaves the shared relay to the other.
     otherLease.destroy();
-    await waitFor(() => !alive(second.pid), `the second ${name} relay to stop`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(alive(reopened.pid)).toBe(true);
+    expect((await whoami(thread.rpc)).pid).toBe(reopened.pid);
+    // The last one stops it.
     lease.destroy();
+    await waitFor(() => !alive(reopened.pid), `the ${name} relay to stop`);
     expect(fetchFn).not.toHaveBeenCalled();
     expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { id: "pwrsnap" as const, installs: "resolveInstallPaths" as const, probe: "isPwrSnapListening" as const },
+    { id: "pwrgit" as const, installs: "resolvePwrGitInstallPaths" as const, probe: "isPwrGitListening" as const },
+  ])("gives each concurrent $id tool call a session of its own", async ({ id, installs, probe }) => {
+    const fixture = makeFixture();
+    const app = pwrSuiteInstall(id);
+    const relay = pwrSuiteRelayPath(id, app)!;
+    fs.copyFileSync(fixture.command, relay);
+    fs.chmodSync(relay, 0o755);
+    fs.rmSync(fixture.command);
+    const { service } = createService(fixture, {
+      [installs]: () => [app],
+      [probe]: async () => true,
+    });
+    const threads = await Promise.all([0, 1, 2].map(async (index) => {
+      const thread = await bridgeFor(service, id, `${id}-concurrent-${index}`);
+      await attach(thread.socketPath, thread.token);
+      return thread;
+    }));
+    // Three tool calls at once: none may share a session with another
+    // running call, or a question the server asked could reach the wrong one.
+    const calls = await Promise.all(threads.map(async (thread) => await whoami(thread.rpc)));
+    expect(new Set(calls.map((call) => call.pid)).size).toBe(3);
+    // Once they finish, later calls reuse those sessions rather than opening more.
+    const pids = new Set(calls.map((call) => call.pid));
+    for (const thread of threads) expect(pids.has((await whoami(thread.rpc)).pid)).toBe(true);
+    expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBe(3);
+  });
+
+  it.each([
+    { id: "pwrsnap" as const, installs: "resolveInstallPaths" as const, probe: "isPwrSnapListening" as const },
+    { id: "pwrgit" as const, installs: "resolvePwrGitInstallPaths" as const, probe: "isPwrGitListening" as const },
+  ])("stops the shared $id relay when its last user is revoked, not while PwrAgent's gateway uses it", async ({ id, installs, probe }) => {
+    const fixture = makeFixture();
+    const app = pwrSuiteInstall(id);
+    const relay = pwrSuiteRelayPath(id, app)!;
+    fs.copyFileSync(fixture.command, relay);
+    fs.chmodSync(relay, 0o755);
+    fs.rmSync(fixture.command);
+    const { service } = createService(fixture, {
+      [installs]: () => [app],
+      [probe]: async () => true,
+      readGatewaySelection: async () => [id],
+    });
+
+    // A thread's agent session ends: its registration is revoked, not detached.
+    const registration = await service.registerBridge(id, `${id}-revoked`);
+    const env = registration.server.env;
+    const rpc = new ConnectionRpcClient(env.PWRAGENT_MCP_CONNECTION_SOCKET, env.PWRAGENT_MCP_CONNECTION_TOKEN);
+    const first = await whoami(rpc);
+    registration.revoke();
+    await waitFor(() => !alive(first.pid), `the ${id} relay to stop after the last revoke`);
+
+    // PwrAgent's own gateway calls through no bridge, so a thread whose
+    // bridge detaches must not close the sessions under it.
+    const scopeKey = JSON.stringify(["gateway", "codex", `${id}-gateway-thread`]);
+    await service.requestGatewayToolOperation({
+      connectionId: id, scopeKey, operation: "gateway/tools/list", signal: new AbortController().signal,
+    });
+    const thread = await bridgeFor(service, id, `${id}-attached`);
+    const lease = await attach(thread.socketPath, thread.token);
+    const shared = await whoami(thread.rpc);
+    lease.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(alive(shared.pid)).toBe(true);
   });
 
   it("never starts an operator's command again for a thread once it has exited", async () => {
