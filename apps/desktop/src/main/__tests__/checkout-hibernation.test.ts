@@ -9,6 +9,8 @@ import { promisify } from "node:util";
 import type { AppServerThreadSummary, DesktopCheckoutHibernationPolicy, PrSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse,
   ThreadPullRequestWatchSummary, WorktreeSnapshotSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { CheckoutPathOwners } from "../app-server/checkout-path-owners";
+import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
 import { checkoutHibernationReviewDeps, ThreadMaintenanceService } from "../app-server/thread-maintenance-service";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -716,6 +718,96 @@ describe("Thread maintenance's hibernate step", () => {
     const candidate = (await registry.listAutoArchiveCandidates()).find((item) => item.thread.id === THREAD_ID)!;
     expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true })).toBe(true);
     expect(await exists(fixture.worktree)).toBe(false);
+  });
+
+  // Codex reports no archive time, so the archived page is the only archive
+  // evidence. Retired monitor workers once shared a release worktree this way
+  // and held it awake. The provider inventory is the oracle: only an
+  // unarchived co-owner shares the checkout, and an archived row is never
+  // offered for archive again.
+  it("treats co-owners from the provider's archived page as archived, not as sharing users (oracle property)", async () => {
+    const fixture = await createFixture();
+    const target = ArchiveWorktreeTransport.threads[0]!;
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const service = maintenance(registry);
+    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { maxLength: 4 }), async (archived) => {
+      ArchiveWorktreeTransport.threads = [target, ...archived.map((isArchived, index) => ({
+        id: `co-owner-${index}`, cwd: fixture.worktree, source: "vscode", status: { type: "notLoaded" as const }, archived: isArchived,
+      }))];
+      const scan = await service.scan({ steps: ["threads", "hibernate"], rules: { mode: "age", inactivityDays: 0 } });
+      const shared = archived.some((isArchived) => !isArchived);
+      expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(!shared);
+      const offered = scan.threads.projects.flatMap((project) => project.idle.map((row) => row.threadId));
+      const archivedIds = archived.flatMap((isArchived, index) => isArchived ? [`co-owner-${index}`] : []);
+      expect(offered.filter((threadId) => archivedIds.includes(threadId))).toEqual([]);
+    }), { numRuns: 12, examples: [[[true, true]], [[true, false]]] });
+  });
+
+  // ACP summaries drop the session's archive time, as Codex rows have none.
+  // The page that lists the session is the oracle for whether it shares.
+  it("treats an ACP session from the archived page as archived, not as a sharing user (oracle property)", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const acp = (registry as unknown as { acpBackend: {
+      archiveCleanupBackendIds: () => Promise<string[]>;
+      listArchiveCleanupSessionsPage: (backendId: string, params: { archived: boolean }) => { sessions: Array<{ sessionId: string }> };
+      sessionToThreadSummary: (session: { sessionId: string }) => AppServerThreadSummary;
+    } }).acpBackend;
+    let sessionArchived = false;
+    vi.spyOn(acp, "archiveCleanupBackendIds").mockResolvedValue(["acp:kimi"]);
+    vi.spyOn(acp, "listArchiveCleanupSessionsPage").mockImplementation((_backendId, { archived }) =>
+      ({ sessions: archived === sessionArchived ? [{ sessionId: "acp-co-owner" }] : [] }));
+    vi.spyOn(acp, "sessionToThreadSummary").mockImplementation(({ sessionId }) => ({
+      id: sessionId, title: "ACP co-owner", titleSource: "explicit", source: "acp:kimi", threadStatus: "idle", updatedAt: 2,
+      projectKey: fixture.worktree, linkedDirectories: [fixture.directory],
+    }));
+    const service = maintenance(registry);
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (archived) => {
+      sessionArchived = archived;
+      const scan = await service.scan({ steps: ["hibernate"] });
+      expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(archived);
+    }), { numRuns: 4, examples: [[true], [false]] });
+  });
+
+  // Model test. Maintenance splits its owners into active and archived for
+  // checkout ownership, and hibernation's sharing rule indexes owners in
+  // CheckoutPathOwners. A retention start alone (a thread restored in the
+  // Codex app keeps it) used to be archived to the first and a live owner to
+  // the second, so one scan gave the same thread two answers.
+  it("splits checkout owners exactly as the shared-checkout index counts them (model property)", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const inventory = (candidates: ThreadArchiveCandidate[]) => (registry as unknown as {
+      maintenanceOwnershipInventory: (rows: ThreadArchiveCandidate[]) => { activeThreads: AppServerThreadSummary[] };
+    }).maintenanceOwnershipInventory(candidates);
+    const outsider = { thread: { id: "outsider", source: "codex" as const, linkedDirectories: [] } };
+    await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("none", "provider", "tombstone", "retention"), { maxLength: 5 }), async (states) => {
+      const candidates: ThreadArchiveCandidate[] = states.map((state, index) => ({
+        thread: { id: `owner-${index}`, title: "owner", titleSource: "explicit", source: "codex", updatedAt: 2,
+          linkedDirectories: [{ ...fixture.directory, worktreePath: path.join(fixture.root, `checkout-${index}`) }],
+          ...(state === "provider" ? { archivedAt: 1 } : {}) },
+        overlay: { backend: "codex", threadId: `owner-${index}`, executionMode: "default", extraLinkedDirectories: [],
+          ...(state === "tombstone" ? { archiveTombstonedAt: 1 } : {}),
+          ...(state === "retention" ? { archiveRetentionStartedAt: 1 } : {}) },
+      }));
+      const owners = new CheckoutPathOwners(candidates);
+      const active = new Set(inventory(candidates).activeThreads.map((thread) => thread.id));
+      for (const [index, candidate] of candidates.entries()) {
+        expect(active.has(candidate.thread.id)).toBe(owners.sharedWithAnotherThread(outsider, path.join(fixture.root, `checkout-${index}`)));
+      }
+    }), { numRuns: 40, examples: [[["retention"]]] });
+  });
+
+  it("keeps a co-owner that both provider pages list as a sharing user", async () => {
+    const fixture = await createFixture();
+    const coOwner = { id: "co-owner", cwd: fixture.worktree, source: "vscode", status: { type: "notLoaded" as const }, archived: false };
+    ArchiveWorktreeTransport.threads.push(coOwner);
+    // Archived after the active page listed it, before the archived page.
+    ArchiveWorktreeTransport.onList = (params) => { if (params.archived === true) coOwner.archived = true; };
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const scan = await maintenance(registry).scan({ steps: ["hibernate"] });
+    expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(false);
+    expect(scan.hibernate?.kept["Shared with another thread"]).toBeGreaterThan(0);
   });
 
   it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", async () => {

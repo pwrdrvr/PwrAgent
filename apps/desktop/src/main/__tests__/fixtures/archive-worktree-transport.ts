@@ -44,7 +44,8 @@ export class ArchiveWorktreeTransport implements JsonRpcTransport {
     ArchiveWorktreeTransport.requests.push({ method: request.method, params });
     let result: unknown = {};
     const wireThread = (thread: ArchiveWorktreeThread) => {
-      const { wireSource, threadSource, ...metadata } = thread;
+      // Codex reports archive state only through which page lists a thread.
+      const { wireSource, threadSource, archived: _archived, ...metadata } = thread;
       return {
         ...metadata, source: wireSource ?? thread.source,
         name: thread.name ?? thread.id, createdAt: 1, updatedAt: thread.updatedAt ?? 2, modelProvider: "openai",

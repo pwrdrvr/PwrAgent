@@ -759,7 +759,7 @@ import {
   type HibernationContext,
 } from "./checkout-hibernation";
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "./checkout-hibernation-workspace";
-import { CheckoutPathOwners } from "./checkout-path-owners";
+import { CheckoutPathOwners, isArchivedCheckoutOwner } from "./checkout-path-owners";
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
@@ -1346,6 +1346,13 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   }
 
   backendRegistryLog.debug(event, payload);
+}
+
+/** Codex rows, and the summaries built from ACP sessions, carry no archive
+ * time even on the archived page. Which page listed a thread is its archive
+ * state. The sentinel marks presence only; no caller reads the value. */
+function withListedArchiveState(thread: AppServerThreadSummary, archived: boolean): AppServerThreadSummary {
+  return { ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined };
 }
 
 function executionModeSettings(mode: ThreadExecutionMode) {
@@ -7872,7 +7879,7 @@ export class DesktopBackendRegistry {
           const page = await this.codexClient.listArchiveCleanupThreadsPage({
             archived, cursor, limit: 100, checkpoint: async () => {}, directoryFilter: async () => false,
           });
-          codexThreads.push(...page.threads);
+          codexThreads.push(...page.threads.map((thread) => withListedArchiveState(thread, archived)));
           onProgress?.({ detail: "Reading Codex checkout owners, including archived threads and native children", found: codexThreads.length });
           cursor = page.nextCursor?.trim();
           if (cursor && cursors.has(cursor)) throw new Error("Codex maintenance discovery returned a repeated cursor.");
@@ -7890,7 +7897,7 @@ export class DesktopBackendRegistry {
         let after: string | undefined;
         do {
           const page = this.acpBackend.listArchiveCleanupSessionsPage(backendId, { archived, after, limit: 100 });
-          threads.push(...page.sessions.map((session) => this.acpBackend.sessionToThreadSummary(session)));
+          threads.push(...page.sessions.map((session) => withListedArchiveState(this.acpBackend.sessionToThreadSummary(session), archived)));
           if (page.nextCursor && after && page.nextCursor <= after) throw new Error("ACP maintenance discovery did not advance.");
           after = page.nextCursor;
         } while (after);
@@ -7911,7 +7918,10 @@ export class DesktopBackendRegistry {
       });
     };
     for (const backend of new Set(threads.map((thread) => thread.source))) {
+      // A thread can move between the active and archived reads. Active
+      // membership wins, so an ambiguous row still protects its checkout.
       const backendThreads = [...new Map(threads.filter((thread) => thread.source === backend)
+        .sort((left, right) => Number(right.archivedAt !== undefined) - Number(left.archivedAt !== undefined))
         .map((thread) => [thread.id, thread])).values()];
       let overlays: Record<string, ThreadOverlayState | undefined> | undefined;
       try {
@@ -7971,7 +7981,7 @@ export class DesktopBackendRegistry {
       const linkedDirectories = withRetainedWorktrees(
         mergeThreadLinkedDirectories([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]), overlay,
       );
-      (isArchivedCheckoutCandidate(candidate) ? archivedThreads : activeThreads).push({ ...thread, linkedDirectories });
+      (isArchivedCheckoutOwner(candidate) ? archivedThreads : activeThreads).push({ ...thread, linkedDirectories });
     }
     return { activeThreads, archivedThreads };
   }
@@ -8148,7 +8158,7 @@ export class DesktopBackendRegistry {
         this.listAllInstalledAcpThreads(undefined, archived),
         this.claudeBackend.listThreads({ archived, requireComplete: true }),
       ]);
-      return lists.flat().map((thread) => ({ ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined }));
+      return lists.flat().map((thread) => withListedArchiveState(thread, archived));
     }));
     // A thread can move between the two reads. Active membership wins: an
     // ambiguous inventory must never authorize permanent deletion.
