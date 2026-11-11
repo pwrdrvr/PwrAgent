@@ -215,6 +215,18 @@ describe("pull request links in transcript markdown", () => {
     })).toBeInTheDocument();
   });
 
+  it("renders one chip when prose names a PR by number and URL together", () => {
+    renderWithPullRequests(
+      `I opened PR #13290 (${PR_URL}). Then ${PR_URL} (#13290) again.`,
+      [prSummary()],
+    );
+
+    expect(screen.getAllByRole("button", {
+      name: /Open ExampleOrg\/catalog-service#13290/,
+    })).toHaveLength(2);
+    expect(screen.getByText(/I opened PR/)).not.toHaveTextContent("(");
+  });
+
   it("hydrates a bare PR number known by a sibling thread in the same repository", () => {
     const activeThread = projectThread({
       id: "thread-active",

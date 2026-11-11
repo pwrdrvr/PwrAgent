@@ -90,29 +90,24 @@ const CLOSE_PARENTHESIS = /^[ \t]*\)/;
  */
 function collapseRedundantPullRequestPairs(children: MdastNode[]): MdastNode[] {
   const result: MdastNode[] = [];
-  let index = 0;
-  while (index < children.length) {
-    const first = children[index];
-    const open = children[index + 1];
-    const second = children[index + 2];
-    const close = children[index + 3];
+  for (let index = 0; index < children.length; index += 1) {
+    const [first, open, second, close] = children.slice(index, index + 4);
     const urlLink = first && open && second && close
       && isText(open, OPEN_PARENTHESIS)
       && isText(close, CLOSE_PARENTHESIS)
       ? redundantPairUrlLink(first, second)
       : undefined;
-    if (!urlLink || !close?.value) {
-      result.push(first!);
-      index += 1;
+    if (!urlLink) {
+      result.push(children[index] as MdastNode);
       continue;
     }
 
     result.push(urlLink);
-    const rest = close.value.replace(CLOSE_PARENTHESIS, "");
+    const rest = (close?.value ?? "").replace(CLOSE_PARENTHESIS, "");
     if (rest) {
       result.push({ type: "text", value: rest });
     }
-    index += 4;
+    index += 3;
   }
   return result;
 }

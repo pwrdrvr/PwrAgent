@@ -12,7 +12,10 @@ type MdastNode = {
   children?: MdastNode[];
 };
 
-const PR_BASE = "https://github.com/ExampleOrg/catalog-service/pull/";
+const PR_BASES = [
+  "https://github.com/ExampleOrg/catalog-service/pull/",
+  "https://gitlab.com/example-group/catalog-service/-/merge_requests/",
+];
 
 /**
  * Runs the transcript's real GFM + PR-reference pipeline and flattens the
@@ -52,8 +55,9 @@ describe("remarkPullRequestReferences redundant pairs", () => {
       prNumber,
       fc.boolean(),
       fc.boolean(),
-      (before, after, bareNumber, urlNumber, numberFirst, autolink) => {
-        const url = `${PR_BASE}${urlNumber}`;
+      fc.constantFrom(...PR_BASES),
+      (before, after, bareNumber, urlNumber, numberFirst, autolink, base) => {
+        const url = `${base}${urlNumber}`;
         const urlText = autolink ? url : `[PR ${urlNumber}](${url})`;
         const pair = numberFirst
           ? `#${bareNumber} (${urlText})`
