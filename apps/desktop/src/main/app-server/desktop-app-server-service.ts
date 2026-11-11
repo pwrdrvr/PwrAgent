@@ -8057,8 +8057,9 @@ class DesktopAppServerService {
         buildThreadIdentityKey(request.backend, request.threadId),
       );
       // Only a thread that was on hands its PRs to the next eligible thread.
-      // A repeated `enabled: false` must not re-arm a repair the operator
-      // cancelled there.
+      // That election is operator-initiated, so a repeated `enabled: false`
+      // must not run it: it would re-arm a repair the operator cancelled on
+      // the thread that wins.
       if (request.previouslyEnabled) {
         previouslyEligiblePrs.push(
           ...(attachment?.prs ?? []).filter((pr) =>
