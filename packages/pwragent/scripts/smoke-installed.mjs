@@ -20,7 +20,7 @@ assert.match(git.stdout, /git version/);
 const lock = path.join(temporary, "native-helper.lock"); fs.writeFileSync(lock, "", { mode: 0o600 });
 const relay = spawnSync(path.join(installedRoot, "resources/mcp-ipc-relay/mcp-ipc-relay"), ["--maintenance-lock", lock], { input: "", encoding: "utf8" });
 assert.equal(relay.status, 0, relay.error?.message ?? relay.stderr);
-assert.match(relay.stdout, /ready/);
+assert.equal(relay.stdout, "\x01");
 
 const database = new (installed("better-sqlite3"))(":memory:");
 assert.equal(database.prepare("SELECT 42 AS n").get().n, 42); database.close();

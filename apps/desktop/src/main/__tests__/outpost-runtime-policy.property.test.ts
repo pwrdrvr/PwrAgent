@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { buildCodexClientArgs } from "../app-server/backend-registry";
+import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import { expect, it } from "vitest";
 import { assertOwnerExecutionPolicy, type OwnerRuntimePolicy } from "../owner-runtime-policy";
 

@@ -5,13 +5,26 @@
   "observed": {
     "queueA": "started",
     "queueB": "queued",
-    "states": ["active", "idle"],
+    "states": [
+      "active",
+      "idle"
+    ],
     "newThreadError": "handler_failed: Outpost is busy"
   },
   "expected": {
     "queueA": "started",
     "queueB": "started",
-    "states": ["active", "active"],
+    "states": [
+      "active",
+      "active"
+    ],
     "newThreadAdmitted": true
+  },
+  "recheckedAfterRebase": {
+    "mainCommit": "583080a28907f0e95e810f1418b52c242085e0b4",
+    "controlCommit": "e75d32f34",
+    "exitCode": 1,
+    "observedUnchanged": true,
+    "reason": "The old owner queues thread B and refuses a new thread while A is held; no turn has reached a terminal event."
   }
 }

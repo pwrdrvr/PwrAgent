@@ -21,7 +21,13 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
       import { appendFileSync, readFileSync } from "node:fs"; import path from "node:path";
       import { OwnerConformanceCodexTransport } from ${JSON.stringify(fixture)};
       export class StdioJsonRpcTransport extends OwnerConformanceCodexTransport {
+        constructor(options) { super(); this.launchOptions = options; }
+        async connect() {
+          await this.launchOptions.resolveCommand?.();
+          await super.connect();
+        }
         send(message) {
+          OwnerConformanceCodexTransport.recordsFile = path.join(process.env.PWRAGENT_TEST_DATA, "fixture-threads.json");
           appendFileSync(path.join(process.env.PWRAGENT_TEST_DATA, "calls.jsonl"), message + "\\n");
           try { OwnerConformanceCodexTransport.helperTitle = JSON.parse(readFileSync(path.join(process.env.PWRAGENT_TEST_DATA, "helper-title.json"), "utf8")).title; }
           catch (error) { if (error.code !== "ENOENT") throw error; }

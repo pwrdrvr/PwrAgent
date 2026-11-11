@@ -6293,11 +6293,13 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return undefined;
     }
-    const summary = this.findThreadListCachedSummary({
-      ...params,
-      threadId,
-    }) ?? this.threadInfoStore.findLocalSummary({
+    // The store orders provider observations. Different listing variants can
+    // retain older rows, so their Map insertion order cannot choose a title.
+    const summary = this.threadInfoStore.findLocalSummary({
       ...(params.backend ? { backend: params.backend } : {}),
+      threadId,
+    }) ?? this.findThreadListCachedSummary({
+      ...params,
       threadId,
     });
     // Remembered summaries survive list-cache invalidation. ACP mode changes

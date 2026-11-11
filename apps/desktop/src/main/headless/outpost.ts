@@ -38,15 +38,21 @@ export async function handleOutpostCommand(services: Services, method: string, p
     case "federation-join": return federation.importInvite(String(params.invite));
     case "federation-revoke": return federation.revokePeer(String(params.peer));
     case "federation-invite": {
-      const port = Number(params.port ?? 47831);
-      if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid gateway port.");
-      await settings.writeConfigPatchTargeted({ federation: { mode: "gateway", listenHost: "127.0.0.1", listenPort: port } });
-      await federation.restart();
+      const current = settings.readFederationConfig();
+      const listening = current.mode === "gateway" || current.mode === "dual";
+      const port = Number(params.port ?? (listening ? current.listenPort : 47831));
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid gateway port.");
+      if (!listening || current.listenPort !== port) {
+        const patch = { federation: { mode: current.mode === "client" || current.mode === "dual" ? "dual" as const : "gateway" as const,
+          listenHost: "127.0.0.1", listenPort: port } };
+        await settings.writeConfigPatchTargeted(patch);
+        await services.onConfigPatchWritten(patch);
+      }
       return federation.generateInvite({ label: params.label as string | undefined, permissionRole: "full" as FederationPeerRole });
     }
     case "federation-leave":
       await settings.writeConfigPatchTargeted({ federation: { mode: "disabled" } });
-      await federation.restart();
+      await services.onConfigPatchWritten({ federation: { mode: "disabled" } });
       return { left: true };
     default: throw new Error(`Unknown Outpost command: ${method}`);
   }
