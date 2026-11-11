@@ -25,7 +25,7 @@ export async function startHeadlessHost(runtime = readNodeRuntimeMetadata(), opt
   const decision = resolveProfileBootDecision();
   if (decision.kind !== "open") throw new Error("The Node host requires an existing PwrAgent profile. Select it with PWRAGENT_PROFILE or --profile.");
   const profileDirectory = resolveActiveProfileDir();
-  initializeMainLogger({ profileName: resolveActiveProfileName(), logDirectory: path.join(profileDirectory, "logs") });
+  initializeMainLogger({ profileName: resolveActiveProfileName(), logDirectory: path.join(profileDirectory, "logs"), appName: "PwrAgent Outpost" });
   configureBundledGit(runtime.isPackaged ? runtime.resourcesPath : undefined);
   const shutdown = shutdownHeadlessHost;
   const signal = (name: string) => { void shutdown(name).catch((error) => { log.error("headless shutdown failed", error); process.exitCode = 1; }); };

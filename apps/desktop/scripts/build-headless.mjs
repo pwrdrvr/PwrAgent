@@ -28,7 +28,7 @@ export async function buildHeadless({ outputDirectory = path.join(desktop, "out/
         if (args.kind === "entry-point" || path.isAbsolute(args.path) || path.win32.isAbsolute(args.path)
           || args.path.startsWith("node:") || args.path.startsWith("@pwragent/") || args.path.startsWith("@pwrdrvr/codex-app-server-protocol")) return;
         if (portable) {
-          if (["better-sqlite3", "node-pty", "@napi-rs/canvas", "electron-log/node"].some(name => args.path === name || args.path.startsWith(name + "/"))) return { path: args.path, external: true };
+          if (["better-sqlite3", "node-pty", "@napi-rs/canvas", "electron-log/node", "electron-log/node.js"].some(name => args.path === name || args.path.startsWith(name + "/"))) return { path: args.path, external: true };
           return;
         }
         try { return { path: require.resolve(args.path), external: true }; } catch { return; }
