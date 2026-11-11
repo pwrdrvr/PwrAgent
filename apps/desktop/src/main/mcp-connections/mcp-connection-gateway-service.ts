@@ -88,6 +88,8 @@ import {
   type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
   type McpConnectionStatus,
+  type McpThreadSessionState,
+  type McpThreadSessionStates,
   type McpConnectionsChangedEvent,
   type McpConnectionToolApproval,
   type McpStdioLaunch,
@@ -376,7 +378,7 @@ function isPwrSuiteRelayKind(kind: McpConnectionRecord["kind"]): kind is PwrSuit
 }
 
 const ENDED_LOCAL_SESSION_ERROR =
-  "The MCP desktop connection ended. Start the desktop yourself, then turn this connection off and on in the thread MCP access panel. Search tools again and reread relevant skills/resources. Previously injected text may remain in the conversation. Never replay a write or reuse its approval.";
+  "The MCP desktop connection ended. Ask the operator to open its desktop app independently if needed, then Reconnect in the thread MCP access panel (or turn this connection off and on). Search tools again and reread relevant skills/resources. Never replay a write or reuse its approval.";
 
 /**
  * What a thread's request may do once its session's process has ended.
@@ -616,6 +618,7 @@ function callbackHtmlHeaders(): Record<string, string> {
 
 export class McpConnectionGatewayService {
   private readonly consentEpoch = randomBytes(32).toString("base64url");
+  private readonly threadConsentEpochs = new Map<string, string>();
   private readonly readGatewaySelection: NonNullable<McpConnectionGatewayServiceOptions["readGatewaySelection"]>;
   private readonly bridgeEntryPath: string;
   private readonly fetchFn: FetchLike;
@@ -1990,7 +1993,7 @@ export class McpConnectionGatewayService {
       revoke: () => {
         this.grants.delete(token);
         void this.closeUpstreamSession(token);
-        if (currentRegistrationKey) {
+        if (currentRegistrationKey && this.threadRegistrations.get(currentRegistrationKey)?.token === token) {
           this.threadRegistrations.delete(currentRegistrationKey);
         }
       },
@@ -2709,7 +2712,16 @@ export class McpConnectionGatewayService {
       const controller = new AbortController();
       const startDiscovery = new McpDiscovery(connection.id, Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, controller.signal);
       const start = { controller, waiters: 0, discoveryId: startDiscovery.id, promise: undefined as unknown as Promise<Client> };
-      start.promise = startDiscovery.phase("initialize", async () => await this.openUpstreamSession(token, connection, startDiscovery)).finally(() => {
+      start.promise = startDiscovery.phase("initialize", async () => await this.openUpstreamSession(token, connection, startDiscovery)).catch((error: unknown) => {
+        // A command can exit before initialization registers its session.
+        // Discovery must not repeatedly launch that command (or its consent
+        // window). An operator reconnect or launch-config edit permits a new
+        // attempt. Cancellation by the last waiter is not a server failure.
+        if (connection.kind === "stdio" && !controller.signal.aborted && this.grants.get(token) === grant) {
+          this.disconnectedStdioGrants.add(token);
+        }
+        throw error;
+      }).finally(() => {
         startDiscovery.close();
         if (this.upstreamStarts.get(token) === start) this.upstreamStarts.delete(token);
       });
@@ -3258,6 +3270,67 @@ export class McpConnectionGatewayService {
     );
   }
 
+  /** A read of the broker's sessions only: no probing, process start or consent. */
+  async readThreadSessionStates(
+    threadId: string,
+    backend: AppServerBackendKind,
+  ): Promise<Record<string, McpThreadSessionStates>> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker(ownership.holder, "broker/thread-session-states", { threadId, backend });
+    }
+    const state = (token: string | undefined): McpThreadSessionState => {
+      if (!token) return "not_started";
+      if (this.disconnectedStdioGrants.has(token)) return "ended";
+      if (this.upstreamSessions.has(token)) return "ready";
+      if (this.upstreamStarts.has(token)) return "connecting";
+      return "not_started";
+    };
+    const result: Record<string, McpThreadSessionStates> = {};
+    for (const connection of this.registry.list()) {
+      const native = this.threadRegistrations.get(`${connection.id}:${threadId}`)?.token;
+      const gateway = this.threadRegistrations.get(`${connection.id}:${JSON.stringify(["gateway", backend, threadId])}`)?.token;
+      result[connection.id] = { native: state(native), gateway: state(gateway) };
+    }
+    return result;
+  }
+
+  /**
+   * Explicit operator recovery for an arbitrary local command. Retire every
+   * grant before awaiting shutdown so old requests/approvals cannot cross the
+   * boundary. The next discovery opens a new session; this starts no process,
+   * launches no desktop app, and never retries an operation.
+   */
+  async reconnectThreadConnection(connectionId: string, threadId: string, backend: AppServerBackendKind): Promise<void> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      await this.requestOwnerBroker(ownership.holder, "broker/reconnect-thread", { connectionId, threadId, backend });
+      return;
+    }
+    const connection = this.requireAvailableConnection(connectionId);
+    if (connection.kind !== "stdio") throw new Error("Only a local command can be reconnected here.");
+    this.threadConsentEpochs.set(JSON.stringify([connectionId, backend, threadId]), randomUUID());
+    const tokens: string[] = [];
+    for (const [token, grant] of this.grants) {
+      if (grant.connectionId !== connectionId) continue;
+      let matches = grant.threadId === threadId && (!grant.backend || grant.backend === backend);
+      if (grant.threadId?.startsWith("[\"gateway\"")) {
+        const scope = this.gatewaySelectionScope(grant);
+        const owner = scope.delegation?.selectionOwner ?? scope;
+        matches = owner.threadId === threadId && owner.backend === backend;
+      }
+      if (!matches) continue;
+      this.grants.delete(token);
+      this.sendBridgeEvent(token, { method: "connection/closed" });
+      tokens.push(token);
+    }
+    for (const [key, registration] of this.threadRegistrations) {
+      if (tokens.includes(registration.token)) this.threadRegistrations.delete(key);
+    }
+    await Promise.all(tokens.map(async (token) => await this.closeUpstreamSession(token)));
+    this.announceChanged([connectionId]);
+  }
+
   /**
    * The bytes of a `pwrsnap://` image link in a thread's transcript.
    *
@@ -3642,6 +3715,16 @@ export class McpConnectionGatewayService {
         ...(typeof values.connectionId === "string" ? { connectionId: values.connectionId } : {}),
       });
     }
+    if (operation === "broker/thread-session-states" || operation === "broker/reconnect-thread") {
+      if (typeof values.threadId !== "string" || !values.threadId || typeof values.backend !== "string"
+        || !(values.backend === "codex" || values.backend === "claude" || isAcpBackendId(values.backend))) {
+        throw new Error("Invalid MCP thread session request.");
+      }
+      if (operation === "broker/thread-session-states") return await this.readThreadSessionStates(values.threadId, values.backend as AppServerBackendKind);
+      if (typeof values.connectionId !== "string") throw new Error("Invalid MCP reconnect request.");
+      await this.reconnectThreadConnection(values.connectionId, values.threadId, values.backend as AppServerBackendKind);
+      return true;
+    }
     if (operation === "broker/thread-roots") {
       if (typeof values.backend !== "string" || !values.backend
         || typeof values.threadId !== "string" || !values.threadId) {
@@ -3932,6 +4015,9 @@ export class McpConnectionGatewayService {
   ): Promise<McpGatewayTool[]> {
     const connection = this.requireAvailableConnection(grant.connectionId);
     const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
+    const scope = this.gatewaySelectionScope(grant);
+    const owner = scope.delegation?.selectionOwner ?? scope;
+    const consentEpoch = this.threadConsentEpochs.get(JSON.stringify([connection.id, owner.backend, owner.threadId]));
     const tools: McpGatewayTool[] = [];
     const names = new Set<string>();
     const cursors = new Set<string>();
@@ -3953,7 +4039,7 @@ export class McpConnectionGatewayService {
           serverName: connection.displayName,
           toolName: definition.name,
           schemaRevision: gatewayToolRevision(JSON.stringify([token, this.sessionIdentities.get(client)]), generation, definition),
-          consentRevision: gatewayToolRevision(JSON.stringify([this.consentEpoch, connection.id]), generation, definition),
+          consentRevision: gatewayToolRevision(JSON.stringify([this.consentEpoch, connection.id, consentEpoch]), generation, definition),
           definition,
         });
       }

@@ -42,7 +42,7 @@ type McpAccessPanelProps = {
   verifyToken?: number;
   onDismiss: () => void;
   onOpenSettings?: () => void;
-  onSelectionChange: (selection: McpAccessSelection) => Promise<void>;
+  onSelectionChange: (selection: McpAccessSelection, reconnectConnectionId?: string) => Promise<void>;
 };
 
 /**
@@ -116,12 +116,15 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   const apply = async (
     update: (current: McpAccessSelection) => McpAccessSelection,
     busyKey: string,
+    reconnectConnectionId?: string,
   ): Promise<void> => {
     if (busy) return;
     setBusyId(busyKey);
     setError(undefined);
     try {
-      await props.onSelectionChange(update(props.selection));
+      const next = update(props.selection);
+      if (reconnectConnectionId === undefined) await props.onSelectionChange(next);
+      else await props.onSelectionChange(next, reconnectConnectionId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -251,6 +254,17 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                   {showSwitch ? (
                     <div className="mcp-access-panel__row-actions">
                       {authorize}
+                      {props.threadId && checked && connection.kind === "stdio" ? (
+                        <button
+                          className="button button--ghost"
+                          type="button"
+                          disabled={!backendSupported || busy}
+                          title="Open its desktop app independently first, if needed. Reconnect ends this thread's sessions and approvals. Search tools again and reread skills; do not replay an operation."
+                          onClick={() => { void apply((current) => current, connection.id, connection.id); }}
+                        >
+                          Reconnect
+                        </button>
+                      ) : null}
                       <SettingsSwitch
                         checked={checked}
                         disabled={!backendSupported || busy}
@@ -523,7 +537,9 @@ function ThreadMcpVerification(props: {
               {entry.displayName}
             </span>
             <span className="mcp-access-panel__verify-meta">
-              {entry.toolCount !== undefined
+              {entry.sessions?.native === "ended" || entry.sessions?.gateway === "ended"
+                ? `Session ended (${[entry.sessions.native === "ended" ? "native MCP" : "", entry.sessions.gateway === "ended" ? "tool search" : ""].filter(Boolean).join(", ")})`
+                : entry.toolCount !== undefined
                 ? `${entry.toolCount} ${
                     entry.toolCount === 1 ? "tool" : "tools"
                   }`
@@ -541,6 +557,9 @@ function ThreadMcpVerification(props: {
         ))}
       </ul>
       <p className="mcp-access-panel__detail">
+        {report.connections.some((entry) => entry.sessions?.native === "ended" || entry.sessions?.gateway === "ended")
+          ? "For a local command, open its desktop app independently if needed, then Reconnect above. Search tools again and reread skills. A Settings test uses a separate session. Never replay a write or reuse its approval. "
+          : ""}
         {report.agentInventoryAvailable
           ? handedOver
             ? `Read from the agent. Last passed over at ${handedOver}.`
@@ -632,7 +651,7 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
       verifyToken={verifyToken}
       onDismiss={props.onDismiss}
       onOpenSettings={props.onOpenSettings}
-      onSelectionChange={async (next) => {
+      onSelectionChange={async (next, reconnectConnectionId) => {
         const write = desktopApi?.setThreadMcpConnections;
         if (!write) throw new Error("This window cannot change MCP access.");
         const response = await write({
@@ -641,6 +660,7 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
           threadId,
           connectionIds: next.connectionIds,
           providerServersEnabled: next.providerServersEnabled,
+          ...(reconnectConnectionId ? { reconnectConnectionId } : {}),
         });
         // Trust the main process's answer over the optimistic value: a
         // rejected isolation request leaves the saved selection unchanged.

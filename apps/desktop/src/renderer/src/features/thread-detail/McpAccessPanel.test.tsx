@@ -429,6 +429,37 @@ describe("ThreadMcpAccessPanel", () => {
 });
 
 describe("thread verification", () => {
+  it("shows an ended thread despite Settings readiness and reconnects only on an operator click", async () => {
+    const local = connection({ id: "pwrdisk", displayName: "PwrDisk", kind: "stdio", authMode: "none" });
+    const setThreadMcpConnections = vi.fn(async () => ({ connectionIds: [local.id], providerServersEnabled: true }));
+    render(
+      <ThreadMcpAccessPanel
+        backend="codex"
+        threadId="fixture-thread"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [local] }),
+          readThreadMcpConnections: async () => ({ connectionIds: [local.id], providerServersEnabled: true }),
+          describeThreadMcpConnections: async () => ({
+            backend: "codex", threadId: "fixture-thread", providerServersEnabled: true,
+            appliesAt: "next_turn", agentInventoryAvailable: true,
+            connections: [{ connectionId: local.id, displayName: local.displayName, configured: true, enabled: true,
+              state: "temporarily_unavailable", toolCount: 0, sessions: { native: "not_started", gateway: "ended" } }],
+          }),
+          setThreadMcpConnections,
+        }}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("Session ended (tool search)")).toBeTruthy();
+    expect(screen.getByText(/A Settings test uses a separate session/)).toBeTruthy();
+    expect(setThreadMcpConnections).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+    await waitFor(() => expect(setThreadMcpConnections).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex", threadId: "fixture-thread", connectionIds: [local.id],
+      providerServersEnabled: true, reconnectConnectionId: local.id,
+    }));
+  });
+
   it("shows a managed connection by the operator's own name, not its hashed alias", async () => {
     // The only surface that could confirm a thread loaded the tools was the
     // agent's own inventory, which names a managed connection
