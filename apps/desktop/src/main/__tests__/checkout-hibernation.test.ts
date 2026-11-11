@@ -1392,7 +1392,7 @@ describe("Thread maintenance's hibernate step", () => {
 
   // Oracle: the registry's own rules. Every thread with a checkout lands in
   // exactly one count, the dialog's idle days decide "not idle yet" for the
-  // scan and its run, and a hibernated checkout is noted apart from them.
+  // scan and its run, and a hibernated checkout is not eligible at all.
   it("scans and runs with the dialog's idle days, and counts each thread once", async () => {
     const fixture = await createFixture();
     // Last active two days ago: Settings' 7 days keeps it, the dialog's 1 day does not.
@@ -1401,10 +1401,10 @@ describe("Thread maintenance's hibernate step", () => {
     const service = maintenance(registry);
 
     const settings = await service.scan({ steps: ["hibernate"] });
-    expect(settings.hibernate).toMatchObject({ idleDays: 7, checked: 1, notIdleYet: 1, alreadyHibernated: 0, kept: {}, items: [] });
+    expect(settings.hibernate).toMatchObject({ idleDays: 7, checked: 1, notIdleYet: 1, kept: {}, items: [] });
 
     const reviewed = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 1 });
-    expect(reviewed.hibernate).toMatchObject({ idleDays: 1, checked: 1, notIdleYet: 0, alreadyHibernated: 0, kept: {} });
+    expect(reviewed.hibernate).toMatchObject({ idleDays: 1, checked: 1, notIdleYet: 0, kept: {} });
     expect(reviewed.hibernate?.items.map((item) => item.threadId)).toEqual([THREAD_ID]);
     const run = await service.apply({ scanId: reviewed.scanId, archive: [], removeCheckouts: [], trashCheckouts: [],
       removeEmptyFolders: false, hibernate: [identity] });
@@ -1412,7 +1412,8 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await exists(fixture.worktree)).toBe(false);
 
     const after = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 1 });
-    expect(after.hibernate).toMatchObject({ checked: 0, notIdleYet: 0, alreadyHibernated: 1, kept: {}, items: [] });
+    expect(after.hibernate).toMatchObject({ checked: 0, notIdleYet: 0, kept: {}, items: [] });
+    expect(after.hibernate).not.toHaveProperty("alreadyHibernated");
   });
 
   it("keeps a reviewed checkout whose saved work grows past the snapshot limit", async () => {

@@ -455,7 +455,7 @@ export class ThreadMaintenanceService {
     retained.hibernatePolicy = policy;
     const result: NonNullable<ThreadMaintenanceScan["hibernate"]> = {
       idleDays: policy.idleDays, maxSnapshotMb: policy.maxSnapshotMb, removeRebuildableOutput: policy.removeRebuildableOutput,
-      checked: 0, items: [], notIdleYet: 0, alreadyHibernated: 0, kept: {},
+      checked: 0, items: [], notIdleYet: 0, kept: {},
     };
     const candidates = retained.candidates;
     if (!candidates) return { ...result, skipped: "Threads could not be listed" };
@@ -488,14 +488,15 @@ export class ThreadMaintenanceService {
     // them would hold the event loop through promise continuations alone.
     const pace = eventLoopPacer();
     // The list holds every thread, archived ones included, because sharing
-    // is decided against all of them. Only a thread whose checkout is on
-    // disk is checked and counted; the rest are settled here on thread
-    // state and one stat. The archived-checkout step reads its own
-    // inventory, so a thread left out here is still offered there.
+    // is decided against all of them. Only a thread with a worktree on disk
+    // is eligible. One with no worktree recorded, a missing checkout or a
+    // hibernated one is ignored: not counted, checked or reported as kept.
+    // The archived-checkout step reads its own inventory, so a thread left
+    // out here is still offered there.
     progress.list("hibernate");
     let found = 0;
     type OnDisk = { candidate: ThreadArchiveCandidate; listed: { target: string; keep?: string } };
-    const listedRoots = await mapLimit(roots, INSPECT_CONCURRENCY, async (candidate): Promise<OnDisk | { keep: string; hibernated: true } | undefined> => {
+    const listedRoots = await mapLimit(roots, INSPECT_CONCURRENCY, async (candidate): Promise<OnDisk | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       await pace();
       if (this.abort.signal.aborted) return undefined;
@@ -506,15 +507,9 @@ export class ThreadMaintenanceService {
           if (!project || path.resolve(project) !== path.resolve(projectFilter)) return undefined;
         }
         const listed = deps.keepReason(candidate, candidates, policy, now, owners);
-        if (!listed.target) { exclude(listed.keep ?? "No linked worktree checkout"); return undefined; }
-        if (hibernatedSnapshotFor(candidate) || listed.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated) {
-          exclude(HIBERNATION_KEEP_REASONS.alreadyHibernated);
-          return { keep: HIBERNATION_KEEP_REASONS.alreadyHibernated, hibernated: true };
-        }
-        if (this.deps.isCheckoutOnDisk && !await this.deps.isCheckoutOnDisk(listed.target)) {
-          exclude("Checkout missing");
-          return undefined;
-        }
+        if (!listed.target) return undefined;
+        if (hibernatedSnapshotFor(candidate) || listed.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated) return undefined;
+        if (this.deps.isCheckoutOnDisk && !await this.deps.isCheckoutOnDisk(listed.target)) return undefined;
         progress.discovery({ detail: "Finding idle checkouts on disk", found: ++found });
         return { candidate, listed: { target: listed.target, ...(listed.keep ? { keep: listed.keep } : {}) } };
       } catch (error) {
@@ -522,18 +517,16 @@ export class ThreadMaintenanceService {
         return undefined;
       }
     });
-    const onDisk = listedRoots.filter((item): item is OnDisk => !!item && "candidate" in item);
-    const settled = listedRoots.filter((item): item is { keep: string; hibernated: true } => !!item && !("candidate" in item));
+    const onDisk = listedRoots.filter((item) => item !== undefined);
     progress.check("hibernate", onDisk.length);
-    const evaluated = [...settled, ...await mapLimit(onDisk, INSPECT_CONCURRENCY, progress.track(({ candidate }) => candidate.thread.title, async ({ candidate, listed }) => {
+    const evaluated = await mapLimit(onDisk, INSPECT_CONCURRENCY, progress.track(({ candidate }) => candidate.thread.title, async ({ candidate, listed }) => {
       if (this.abort.signal.aborted) return undefined;
       try {
         const space = await this.ownedCheckoutSpace(listed.target, checkoutOwners.owners(listed.target), retained, progress);
         measuredPaths.set(listed.target, space);
-        // A hibernated checkout has nothing on disk, whichever reason keeps it.
-        if (listed.keep) { exclude(listed.keep, listed.target); return { keep: listed.keep, hibernated: !!hibernatedSnapshotFor(candidate) }; }
+        if (listed.keep) { exclude(listed.keep, listed.target); return { keep: listed.keep }; }
         const inspection = await deps.inspect(listed.target, policy, this.abort.signal);
-        if (inspection.keep !== undefined) { exclude(inspection.keep, listed.target); return { keep: inspection.keep, hibernated: false }; }
+        if (inspection.keep !== undefined) { exclude(inspection.keep, listed.target); return { keep: inspection.keep }; }
         const directory = candidate.thread.linkedDirectories.find((item) => item.worktreePath === listed.target);
         const row: ThreadMaintenanceHibernateCheckout = {
           backend: candidate.thread.source,
@@ -554,16 +547,10 @@ export class ThreadMaintenanceService {
         fail("hibernate", error, { threadId: candidate.thread.id });
         return undefined;
       }
-    }))];
+    }));
     let notIdleYet = 0;
-    let alreadyHibernated = 0;
     for (const item of evaluated) {
       if (!item) continue;
-      // Already hibernated: nothing on disk, so it is noted apart, not checked.
-      if ("keep" in item && (item.hibernated || item.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated)) {
-        alreadyHibernated += 1;
-        continue;
-      }
       result.checked += 1;
       if ("keep" in item && item.keep === HIBERNATION_KEEP_REASONS.recentlyActive) {
         notIdleYet += 1;
@@ -577,7 +564,6 @@ export class ThreadMaintenanceService {
       retained.hibernate.set(buildThreadIdentityKey(item.candidate.thread.source, item.candidate.thread.id), item);
     }
     result.notIdleYet = notIdleYet;
-    result.alreadyHibernated = alreadyHibernated;
     result.coverage = allocationCoverage(measuredPaths, providerCounts(candidates.map((item) => item.thread.source)), undefined,
       [...excluded].map(([reason, item]) => ({ reason, count: item.count, paths: [...item.paths] })), now,
       MaintenanceCheckoutOwners.fromCandidates(candidates));
