@@ -9,6 +9,7 @@ import {
   type MessagingRejectedInboundEvent,
   type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import { failingInboundRejectedListeners } from "@pwragent/messaging-interface/testing";
 import {
   LineAdapter,
   bindAddressFromCallbackUrl,
@@ -873,6 +874,39 @@ describe("LineAdapter", () => {
         },
       },
     });
+  });
+
+  it("keeps notifying after an inbound-rejected listener throws or rejects, and logs both", async () => {
+    const config = createConfig();
+    const warn = vi.fn();
+    const adapter = new LineAdapter({
+      listenPort: 0,
+      api: createApi(),
+      callbackHandleStore: createCallbackStore(),
+      config,
+      logger: { warn },
+    });
+    adapters.push(adapter);
+    const probe = failingInboundRejectedListeners();
+    for (const listener of probe.listeners) adapter.onInboundRejected(listener);
+    await adapter.start(async () => undefined);
+    probe.watch();
+
+    await postLineWebhook(adapter, config.channelSecret, {
+      events: [lineGroupTextEvent({ text: "/status" })],
+    });
+    await waitFor(() => probe.received.length === 1);
+    await probe.settle();
+
+    expect(probe.received[0]).toMatchObject({ reason: "unauthorized-conversation" });
+    expect(probe.unhandled).toEqual([]);
+    for (const error of probe.errors) {
+      expect(warn).toHaveBeenCalledWith("line inbound-rejected listener failed", {
+        error: error.message,
+        kind: "command",
+        reason: "unauthorized-conversation",
+      });
+    }
   });
 
   it("marks rejected LINE self-mentions as explicit bot mentions", async () => {

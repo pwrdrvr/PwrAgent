@@ -56,6 +56,7 @@ import {
   splitTextForDelivery,
   type MessagingHttpHeaderReader,
   notifyEachListener,
+  notifyEachListenerAsync,
 } from "@pwragent/messaging-interface";
 import type { MattermostMessagingConfig } from "./mattermost-config.ts";
 import {
@@ -2944,9 +2945,14 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   }
 
   private emitInboundRejected(event: MessagingRejectedInboundEvent): void {
-    for (const listener of this.inboundRejectedListeners) {
-      void listener(event);
-    }
+    // Log only the event kind and reason, never the actor or conversation ids.
+    void notifyEachListenerAsync(this.inboundRejectedListeners, event, (error) => {
+      this.logger.warn("mattermost inbound-rejected listener failed", {
+        error: error instanceof Error ? error.message : String(error),
+        kind: event.kind,
+        reason: event.reason,
+      });
+    });
   }
 }
 

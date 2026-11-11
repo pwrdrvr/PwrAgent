@@ -21,6 +21,7 @@ import type {
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import { failingInboundRejectedListeners } from "@pwragent/messaging-interface/testing";
 
 describe("createSlackApi", () => {
   it("calls Agent Session methods through the generic Web API surface", async () => {
@@ -6146,5 +6147,50 @@ describe("slack automation DM addressing", () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ channel: userId }));
     expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
     await adapter.stop();
+  });
+});
+
+describe("SlackAdapter inbound-rejected listeners", () => {
+  it("keeps notifying after a listener throws or rejects, and logs both", async () => {
+    const socket = fakeSocket();
+    const warn = vi.fn();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      logger: { warn },
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const probe = failingInboundRejectedListeners();
+    for (const listener of probe.listeners) adapter.onInboundRejected(listener);
+    await adapter.start(async () => {});
+    probe.watch();
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        user: "U012OUTSIDER",
+        ts: "1712023032.001100",
+        text: "/status",
+      },
+    });
+    await probe.settle();
+
+    expect(probe.received).toEqual([
+      expect.objectContaining({ reason: "unauthorized-actor" }),
+    ]);
+    expect(probe.unhandled).toEqual([]);
+    for (const error of probe.errors) {
+      expect(warn).toHaveBeenCalledWith("slack inbound-rejected listener failed", {
+        error: error.message,
+        kind: "command",
+        reason: "unauthorized-actor",
+      });
+    }
   });
 });

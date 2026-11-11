@@ -42,6 +42,7 @@ import {
   messagingInlineImageBytes,
   splitTextForDelivery,
   notifyEachListener,
+  notifyEachListenerAsync,
 } from "@pwragent/messaging-interface";
 import type { FeishuMessagingConfig } from "./feishu-config.ts";
 import {
@@ -1379,9 +1380,14 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   }
 
   private async emitInboundRejected(event: MessagingRejectedInboundEvent): Promise<void> {
-    for (const listener of this.inboundRejectedListeners) {
-      await listener(event);
-    }
+    // Log only the event kind and reason, never the actor or conversation ids.
+    await notifyEachListenerAsync(this.inboundRejectedListeners, event, (error) => {
+      this.logger.warn?.("feishu inbound-rejected listener failed", {
+        error: error instanceof Error ? error.message : String(error),
+        kind: event.kind,
+        reason: event.reason,
+      });
+    });
   }
 
   private async emitDiagnostic(event: MessagingAdapterDiagnosticEvent): Promise<void> {

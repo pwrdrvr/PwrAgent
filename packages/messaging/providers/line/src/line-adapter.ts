@@ -34,6 +34,7 @@ import {
   splitTextForDelivery,
   type MessagingHttpHeaderReader,
   notifyEachListener,
+  notifyEachListenerAsync,
 } from "@pwragent/messaging-interface";
 import type { LineMessagingConfig } from "./line-config.ts";
 import {
@@ -1278,13 +1279,14 @@ export class LineAdapter implements LineProviderAdapter {
   }
 
   private emitInboundRejected(event: MessagingRejectedInboundEvent): void {
-    for (const listener of this.inboundRejectedListeners) {
-      try {
-        void listener(event);
-      } catch {
-        // Observability only; webhook handling continues.
-      }
-    }
+    // Log only the event kind and reason, never the actor or conversation ids.
+    void notifyEachListenerAsync(this.inboundRejectedListeners, event, (error) => {
+      this.logger.warn?.("line inbound-rejected listener failed", {
+        error: error instanceof Error ? error.message : String(error),
+        kind: event.kind,
+        reason: event.reason,
+      });
+    });
   }
 }
 

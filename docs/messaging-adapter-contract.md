@@ -650,6 +650,14 @@ Notify `onRateLimit` listeners through `notifyEachListener` from
 `@pwragent/messaging-interface`. A listener that throws is skipped and never
 changes the delivery result.
 
+Notify `onInboundRejected` listeners through `notifyEachListenerAsync`.
+Listeners may be async, as the desktop runtime's is, and an adapter cannot rely
+on each one catching its own failures. The helper starts every listener, passes a throw or a rejected promise to the
+adapter's `onError` logger, and returns a promise that never rejects. An adapter
+whose rejection path is synchronous may discard that promise with `void`. An
+adapter whose rejection path is already async should await it. Log only the
+event kind and rejection reason, never actor or conversation identifiers.
+
 The runtime reports a platform as `degraded` while a rate-limit or reconnect
 reason is active. `degraded` means connected but constrained. Fatal startup or
 runtime failures still report `errored`.
