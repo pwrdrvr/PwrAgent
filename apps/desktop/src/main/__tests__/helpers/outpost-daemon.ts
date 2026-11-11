@@ -1,7 +1,7 @@
 import { buildOwnerFixture } from "./built-owner-fixture";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -146,9 +146,15 @@ export async function startOutpostDaemon(options: {
  * names it. A port reserved here and released for the daemon to bind could be
  * taken by any other socket in between.
  */
-export function writeOutpostGatewayConfig(root: string): void {
+function writeOutpostGatewayConfig(root: string): void {
   const configPath = path.join(root, "profiles", "t", "config.toml");
-  if (existsSync(configPath)) return;
+  if (existsSync(configPath)) {
+    // A reused profile keeps its config, which must still ask for port 0.
+    if (!/^listen_port = 0$/m.test(readFileSync(configPath, "utf8"))) {
+      throw new Error(`${configPath} must configure the federation gateway with listen_port = 0`);
+    }
+    return;
+  }
   mkdirSync(path.dirname(configPath), { recursive: true });
   writeFileSync(configPath, "[onboarding]\ncompleted = false\n\n[federation]\nmode = \"gateway\"\n"
     + "listen_host = \"127.0.0.1\"\nlisten_port = 0\n");

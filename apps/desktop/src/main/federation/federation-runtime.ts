@@ -1968,9 +1968,7 @@ export class DesktopFederationRuntime {
 
   /** The gateway port reachable on IPv4 loopback, including an all-interface bind. */
   loopbackListenPort(): number | undefined {
-    if (this.stopping || !this.server) return undefined;
-    const match = /^ws:\/\/(?:127\.0\.0\.1|0\.0\.0\.0):(\d+)$/.exec(this.listenUrl ?? "");
-    return match ? Number(match[1]) : undefined;
+    return /^ws:\/\/(?:127\.0\.0\.1|0\.0\.0\.0):\d+$/.test(this.listenUrl ?? "") ? this.boundListenPort() : undefined;
   }
 
   async health(): Promise<FederationHealthStatus> {

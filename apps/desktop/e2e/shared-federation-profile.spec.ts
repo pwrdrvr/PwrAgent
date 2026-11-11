@@ -60,8 +60,8 @@ test("desktop consumes portable federation trust and audit facts and hands revoc
     // Port 0: the gateway holds an OS-assigned port, and the invite names it
     // once the listener is up.
     await expect.poll(async () => app.window.evaluate(async () =>
-      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status),
-    { timeout: 30_000 }).toBe("listening");
+      (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.listenUrl ?? ""),
+    { timeout: 30_000 }).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
     const result = await app.window.evaluate(async () => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       const later = await api.readFederationDiagnostics!({ peerId: "invented_portable", limit: 1 });
