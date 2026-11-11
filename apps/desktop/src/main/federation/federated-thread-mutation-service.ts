@@ -14,6 +14,7 @@ import {
   type ResolvedFederatedThreadTarget,
 } from "./federated-thread-target-service";
 import { hasFederationErrorCode } from "./federation-rpc";
+import { lookupFederationArchivedThreads } from "./federation-collection-client";
 import {
   getDesktopFederationRuntime,
   type DesktopFederationRuntime,
@@ -83,17 +84,25 @@ export function createFederatedThreadMutationHandler(
         );
       }
     }
-    // The same refusals the local path makes, read off the peer's own
-    // listing, and made before anything changes.
+    // Exact resolution establishes ownership, not archive membership: its
+    // summary can be stale, and Codex can omit archivedAt even in an archived
+    // listing. Ask the owner for membership unless resolution already used its
+    // exact archive lookup. This also validates previews without waiting for
+    // the viewer's archive event or storing optimistic state on the viewer.
+    let archived = match.archived;
+    if (request.archive !== undefined && !archived) {
+      archived = (await lookupFederationArchivedThreads(match.backend, request.backend, [request.threadId]))
+        .some((thread) => thread.source === request.backend && thread.id === request.threadId);
+    }
     const threadLabel =
       `Thread ${request.backend}:${request.threadId} on ${match.peer.label}`;
-    if (request.archive === true && match.thread.archivedAt !== undefined) {
+    if (request.archive === true && archived) {
       throw new PwrAgentFederatedThreadInspectionError(
         "invalid_arguments",
         `${threadLabel} is already archived.`,
       );
     }
-    if (request.archive === false && match.thread.archivedAt === undefined) {
+    if (request.archive === false && !archived) {
       throw new PwrAgentFederatedThreadInspectionError(
         "invalid_arguments",
         `${threadLabel} is not archived.`,

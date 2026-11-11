@@ -179,6 +179,9 @@ describe("federated thread mutation service", () => {
       } = {},
     ) {
       const backend = {
+        lookupArchivedThreads: vi.fn(async () => ({ threads: options.archivedAt === undefined ? [] : [{
+          source: "codex" as const, id: "remote-thread", title: "Remote thread", linkedDirectories: [],
+        }] })),
         resolveThread: vi.fn(async () => ({
           thread: {
             source: "codex" as const,
@@ -357,6 +360,7 @@ describe("federated thread mutation service", () => {
         dryRun: false,
       })).rejects.toThrow("does not grant turn_control");
       expect(backend.archiveThread).not.toHaveBeenCalled();
+      expect(backend.lookupArchivedThreads).not.toHaveBeenCalled();
     });
 
     it("moves on the peer before anything else changes", async () => {
