@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import net from "node:net";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
@@ -16,13 +17,23 @@ import {
 } from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";
 import { postLineWebhook, webhookUrl } from "./helpers/line-webhook.ts";
+import { takeEveryReleasedPort } from "./helpers/take-every-released-port.ts";
 
 describe("LineAdapter", () => {
   const adapters: LineAdapter[] = [];
+  // Every test runs as if another worker takes each port this process
+  // releases, so a test that reserves a port and hands it to the adapter
+  // later fails with EADDRINUSE instead of passing until CI is busy.
+  let adversary: ReturnType<typeof takeEveryReleasedPort>;
+
+  beforeEach(() => {
+    adversary = takeEveryReleasedPort();
+  });
 
   afterEach(async () => {
     await Promise.all(adapters.map((adapter) => adapter.stop().catch(() => undefined)));
     adapters.length = 0;
+    await adversary.restore();
   });
 
   it("does not bind a webhook after startup is stopped during identity lookup", async () => {
@@ -45,6 +56,7 @@ describe("LineAdapter", () => {
       config: createConfig(),
     });
     adapters.push(adapter);
+    const listen = vi.spyOn(net.Server.prototype, "listen");
 
     const startPromise = adapter.start(async () => undefined);
     await vi.waitFor(() => {
@@ -54,7 +66,9 @@ describe("LineAdapter", () => {
     resolveBotInfo({ userId: "Uffffffffffffffffffffffffffffffff" });
     await startPromise;
 
+    expect(listen).not.toHaveBeenCalled();
     expect(adapter.listeningPort).toBeUndefined();
+    listen.mockRestore();
   });
 
   it("does not let stale identity lookup stop a newer lifecycle", async () => {
