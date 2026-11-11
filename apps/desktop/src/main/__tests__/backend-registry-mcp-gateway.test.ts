@@ -2087,6 +2087,43 @@ select_for_new_threads = true
     expect(events).toHaveLength(2);
   });
 
+  it.each(["pending", "remembered"] as const)("revokes %s approval on an explicit operator reconnect", async (mode) => {
+    await registry.close();
+    const reconnectThreadConnection = vi.fn(async () => undefined);
+    createRegistry({
+      registerBridge, requestGatewayToolOperation: operation, reconnectThreadConnection,
+      listConnections: async () => [{ id: "one", kind: "stdio", enabled: true, configured: true }],
+    } as unknown as McpConnectionGatewayService);
+    const reconnect = async () => await registry.setThreadMcpConnections({
+      backend: "codex", threadId: "thread-1", connectionIds: ["one"], reconnectConnectionId: "one",
+    });
+    if (mode === "pending") {
+      const pending = approval();
+      const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));
+      await pending;
+      await reconnect();
+      expect((await call).success).toBe(false);
+      expect(internals.pendingServerRequests.size).toBe(0);
+      expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
+    } else {
+      const events: AgentEvent[] = [];
+      registry.onEvent(async (event) => {
+        if (event.notification.method !== "mcpServer/elicitation/request") return;
+        events.push(event);
+        await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "accept", content: {}, _meta: { persist: "session" } } });
+      });
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).success).toBe(true);
+      expect(events).toHaveLength(1);
+      await reconnect();
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-3"))).success).toBe(true);
+      expect(events).toHaveLength(2);
+    }
+    expect(reconnectThreadConnection).toHaveBeenCalledExactlyOnceWith("one", "thread-1", "codex");
+    await expect(registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["one"], reconnectConnectionId: "other" })).rejects.toThrow("already selected");
+    expect(reconnectThreadConnection).toHaveBeenCalledTimes(1);
+  });
+
   it("stops a thread's sessions for the connections it turned off, and only those", async () => {
     await registry.close();
     const closeThreadSessions = vi.fn(async () => undefined);

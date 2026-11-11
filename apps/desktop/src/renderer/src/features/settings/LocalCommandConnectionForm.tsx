@@ -346,6 +346,7 @@ export function LocalCommandTestResult(props: { result: TestMcpStdioConnectionRe
       <p className="settings-mcp-probe settings-mcp-probe--ok" role="status">
         Started {name} in {(result.elapsedMs / 1_000).toFixed(1)} s and read {result.toolCount}{" "}
         {result.toolCount === 1 ? "tool" : "tools"}, then stopped it. Nothing is saved yet.
+        {" "}This test used a separate session; existing thread sessions were not reconnected.
       </p>
     );
   }

@@ -19904,6 +19904,7 @@ export class DesktopBackendRegistry {
         agentInventoryAvailable = false;
       }
     }
+    const sessions = await service?.readThreadSessionStates?.(request.threadId, request.backend);
     const connections: ThreadMcpConnectionReport[] = selection.connectionIds
       .map((connectionId) => {
         const status = byId.get(connectionId);
@@ -19911,13 +19912,16 @@ export class DesktopBackendRegistry {
         const toolCount = serverNameInAgent
           ? toolCounts.get(serverNameInAgent)
           : undefined;
+        const sessionStates = sessions?.[connectionId];
+        const ended = sessionStates?.native === "ended" || sessionStates?.gateway === "ended";
         return {
           connectionId,
           displayName: status?.displayName ?? connectionId,
           ...(serverNameInAgent ? { serverNameInAgent } : {}),
-          state: status?.state ?? "disconnected",
+          state: ended && status?.state === "ready" ? "temporarily_unavailable" : status?.state ?? "disconnected",
           configured: status?.configured ?? false,
           enabled: status?.enabled ?? false,
+          ...(sessionStates ? { sessions: sessionStates } : {}),
           ...(toolCount === undefined ? {} : { toolCount }),
         } satisfies ThreadMcpConnectionReport;
       });
@@ -19958,12 +19962,31 @@ export class DesktopBackendRegistry {
   ): Promise<SetThreadMcpConnectionsResponse> {
     const previousState = await this.overlayStore.getThreadOverlayState(request);
     const previousRevision = previousState?.mcpSelectionRevision;
+    const reconnect = request.reconnectConnectionId;
+    if (reconnect !== undefined) {
+      if (typeof reconnect !== "string" || !previousState?.mcpConnectionIds?.includes(reconnect)
+        || !request.connectionIds.includes(reconnect)) {
+        throw new Error("Reconnect requires a local command already selected by this thread.");
+      }
+      const selected = new Set(previousState.mcpConnectionIds);
+      if (new Set(request.connectionIds).size !== selected.size || request.connectionIds.some((id) => !selected.has(id))
+        || (request.providerServersEnabled !== undefined
+          && request.providerServersEnabled !== (previousState.mcpProviderServersEnabled !== false))) {
+        throw new Error("Change MCP access separately before reconnecting.");
+      }
+      const connection = (await this.mcpConnectionService?.listConnections?.())?.find((entry) => entry.id === reconnect);
+      if (connection?.kind !== "stdio" || !connection.enabled || !connection.configured
+        || !this.mcpConnectionService?.reconnectThreadConnection) {
+        throw new Error("This thread cannot reconnect that local command.");
+      }
+    }
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
     // hidden for those backends, so a value stored once — by an older build,
     // a peer, or a launchpad draft that changed provider — would otherwise
     // never be reachable again.
-    const state = await this.overlayStore.setThreadMcpConnectionIds({
+    // Reconnect changes only live grants and consent, with no SQLite write.
+    const state = reconnect !== undefined ? previousState! : await this.overlayStore.setThreadMcpConnectionIds({
       backend: request.backend,
       threadId: request.threadId,
       connectionIds: request.connectionIds,
@@ -19971,10 +19994,9 @@ export class DesktopBackendRegistry {
         ? request.providerServersEnabled
         : true,
     });
-    // The store mints a revision only when the connection set changes. Only
-    // then do running gateway calls and conversation grants end; toggling
-    // the backend's own servers leaves every gateway tool reachable.
-    if (state.mcpSelectionRevision !== previousRevision) {
+    // A changed selection or explicit reconnect revokes running calls and
+    // conversation grants. Toggling the backend's own servers does neither.
+    if (state.mcpSelectionRevision !== previousRevision || reconnect !== undefined) {
       this.mcpGatewayTools?.cancel(request.backend, request.threadId);
       this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
       for (const monitor of this.taskMonitorDelegations.values()) {
@@ -19999,6 +20021,9 @@ export class DesktopBackendRegistry {
               threadId: request.threadId,
             });
           });
+      }
+      if (reconnect !== undefined) {
+        await this.mcpConnectionService!.reconnectThreadConnection!(reconnect, request.threadId, request.backend);
       }
     }
     const connectionIds = state.mcpConnectionIds ?? [];
