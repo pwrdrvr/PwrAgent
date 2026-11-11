@@ -97,6 +97,10 @@ async function builtHost(): Promise<Host> {
         try {
           let result;
           if (request.method === "requests") result = app.fixtureCodex.requests;
+          else if (request.method === "replyAfterDisconnect") {
+            await new Promise(resolve => process.once("disconnect", resolve));
+            result = "late";
+          }
           else if (request.method === "policyProbe") {
             result = [];
             for (const values of [{ backend: "claude" }, { backend: "codex", executionMode: "full-access" }, { backend: "codex", approvalPolicy: "on-request" }, { backend: "codex", sandbox: "danger-full-access" }]) {
@@ -204,10 +208,10 @@ it("admits a new thread and two independently identified turns while both thread
 
 it("exits cleanly when the parent stops the driver before a reply is sent", async () => {
   const host = await builtHost();
-  const thread = await host.startThread();
-  // readThread awaits the registry, so stop is handled first and the channel
-  // is closed by the time the reply is ready.
-  const dropped = await host.stopDuringRequest("readThread", { params: thread });
+  // The request settles only once the channel is closed, so its reply always
+  // comes after the disconnect. A registry call could settle on either side
+  // of the stop depending on the platform.
+  const dropped = await host.stopDuringRequest("replyAfterDisconnect", {});
   // Without this, a driver that never replies would pass without the race.
   expect(dropped).toContain("dropped reply after disconnect");
 });
