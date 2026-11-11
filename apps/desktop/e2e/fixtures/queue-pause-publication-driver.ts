@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../../src/main/app-server/backend-registry-wiring";
 import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -28,7 +29,7 @@ export async function exerciseDesktopPausePublication(root: string, initiallyPau
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   OwnerConformanceCodexTransport.reset();
   const client = new CodexAppServerClient({ directoryResolver: async () => [] });
-  const registry = new DesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
+  const registry = createDesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
     threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "invented-pause-owner",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   const events: AgentEvent[] = [];
@@ -76,7 +77,7 @@ export async function exerciseDesktopWakeupPauseDurability(root: string) {
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   OwnerConformanceCodexTransport.reset();
   const client = new CodexAppServerClient({ directoryResolver: async () => [] });
-  const registry = new DesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
+  const registry = createDesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
     projectHeldWakeupStore: wakeups, threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "invented-wakeup-owner",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   let reopened: DesktopBackendRegistry | undefined;
@@ -106,7 +107,7 @@ export async function exerciseDesktopWakeupPauseDurability(root: string) {
     await registry.close();
     await client.close();
     reopenedClient = new CodexAppServerClient({ directoryResolver: async () => [] });
-    reopened = new DesktopBackendRegistry({ codexClient: reopenedClient, configStore, overlayStore, messagingStore: null,
+    reopened = createDesktopBackendRegistry({ codexClient: reopenedClient, configStore, overlayStore, messagingStore: null,
       projectHeldWakeupStore: wakeups, threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "invented-wakeup-reopened",
       resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
     return { durableRows, restoredHolds: reopened.listProjectHeldWakeups(directoryKey).length, restoredWaiting: reopened.getQueuedTurnsForThread(identity).length,

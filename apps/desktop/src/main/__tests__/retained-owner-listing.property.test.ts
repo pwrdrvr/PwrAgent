@@ -1,8 +1,9 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import path from "node:path";
 import { writeFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { retainedOwnerFixture } from "./helpers/retained-owner-fixture";
@@ -37,7 +38,7 @@ async function checkListing(acceptedImport: boolean, oppositePresent: boolean, k
   const list = vi.spyOn(client, "listThreads").mockImplementation(async params => params?.archived
     ? (oppositePresent ? missing.map(id => ({ ...native, id, archivedAt: 1 })) : []) : listed);
   vi.spyOn(client, "listNativeSubAgentThreads").mockResolvedValue([]);
-  const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: f.overlay, configStore: config,
+  const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: f.overlay, configStore: config,
     retainedOwnerThreadStorage: f.retained, providerThreadSnapshotStore: null, messagingStore: null,
     threadTitleGenerationService: null, pdfToolMcpServer: null, discoverLocalAcpAgents: async () => [] });
   try {

@@ -1,7 +1,8 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import path from "node:path";
 import { writeFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { StateDb } from "../storage/state-db";
@@ -38,7 +39,7 @@ it("budgets actual desktop native confirmation once and passive owner retention 
   config.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   OwnerConformanceCodexTransport.reset();
   const client = new CodexAppServerClient({ directoryResolver: async () => [] });
-  const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: f.overlay, configStore: config,
+  const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: f.overlay, configStore: config,
     retainedOwnerThreadStorage: f.retained, providerThreadSnapshotStore: null, messagingStore: null,
     threadTitleGenerationService: null, pdfToolMcpServer: null, discoverLocalAcpAgents: async () => [] });
   try {

@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import {
   launchpadStorageKey,
@@ -266,7 +267,7 @@ async function setup(): Promise<{ model: Model; real: Real; dispose: () => Promi
   // Saved defaults for both providers, currently on Claude.
   await store.setLaunchpadDefaults({ backend: "codex", model: "gpt-5.4" });
   await store.setLaunchpadDefaults({ backend: "claude", model: "opus" });
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {},
       getInitializeResult: async () => ({ methods: ["thread/start"] }),

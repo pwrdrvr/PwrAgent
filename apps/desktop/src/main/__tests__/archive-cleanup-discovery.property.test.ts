@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { stat, realpath, mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
@@ -97,7 +98,7 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false, real?: { 
     return { id: `snapshot-${removed}`, ...params, repositoryPath: "/fixture/repository", snapshotRef: "refs/codex/snapshots/test",
       snapshotCommit: "abc", createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });
-  const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store as never,
+  const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store as never,
     worktreeArchiveService: real ? new WorktreeArchiveService() : { archive } as never, threadTitleGenerationService: null,
     acpWorktreeRepositoryResolver: async () => { effects.workspace += 1; return undefined; },
   });

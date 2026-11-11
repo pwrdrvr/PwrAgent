@@ -1,5 +1,7 @@
+import type { RegistryContext } from "./registry-context";
+import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy } from "../owner-runtime-policy";
-import { applicationHost as app, requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
+import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
 import { ThreadInterruptionLifecycle } from "@pwragent/owner-core/thread-interruption-lifecycle";
@@ -11,19 +13,19 @@ import {
   type ThreadRenameOptions,
 } from "@pwragent/owner-core/thread-naming-lifecycle";
 import { projectOwnerThreadTitle, projectOverlayThreadTitle } from "@pwragent/owner-core/thread-title-projection";
-import { ProfileThreadOwnerAdmission, type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
-import { getRuntimeLeaseManager } from "../runtime-lease-manager";
-import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
+import { type ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
+
+
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { LaunchpadCreationOperations, type LaunchpadCreationOperation } from "./launchpad-creation-operations";
 import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMessageTarget, ThreadWorktreeRegistration } from "@pwragent/shared";
-import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
+import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
-import { inspectClaudeInstallation } from "../claude/claude-executable";
-import { openClaudeSessionReader } from "../claude/claude-session-reader";
+
+
 import { claudePlanTurnRefusal } from "../claude/claude-permissions";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
@@ -54,8 +56,6 @@ import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   PWRAGENT_TOOL_NAMESPACE,
   TASK_MONITOR_TOOL_NAMESPACE,
-  DEFAULT_CHECKOUT_HIBERNATION_POLICY,
-  DEFAULT_THREAD_ARCHIVE_POLICY,
   FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
   totalTokenMiserGateAccountings,
@@ -116,7 +116,6 @@ import {
   OPEN_RESTART_GATE,
   planRestartDispatch,
   restartContinuationSettles,
-  restartGateHolds,
   transitionRestartGate,
   type RestartDispatchPlanOptions,
   type RestartGateEvent,
@@ -126,11 +125,11 @@ import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall 
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
-import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
+
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
-import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
+
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
-import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
+
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import type { PendingThreadApprovalSummary } from "@pwragent/shared";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
@@ -153,7 +152,6 @@ import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import {
   attributeCodexProviderUsageLine,
-  codexModelProviderApiKeyEnv,
   parseCodexProviderModelId,
   resolveModelOptionReference,
   type CodexModelProviderSettings,
@@ -201,7 +199,7 @@ import { PendingEnvironmentLaunchStore, type PendingEnvironmentLaunch } from "./
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -223,24 +221,13 @@ import {
 } from "../../shared/review-command";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
-  findLiveProfileRuntimeMarkers,
-  getProcessRuntimeIdentity,
   resolveActiveProfileName,
-  resolveActiveProfilePath,
 } from "../profile";
 import {
-  createAcpAvailableCommandsStorage,
-  createArchiveCleanupCheckpointStorage,
-  createProjectHeldWakeupStorage,
-  createProviderThreadSnapshotStorage,
-  createRetainedOwnerThreadStorage,
-  createRestartContinuationStorage,
   createThreadDependencyStorage,
   createThreadSearchStorage,
-  createTokenMiserStorage,
 } from "../storage/desktop-runtime-storage";
 import {
-  getAppStateMode,
   isAppStateInitialized,
 } from "../storage/desktop-runtime-storage";
 import { runOneTimeArchivedWorktreeRepair } from "../storage/desktop-runtime-storage";
@@ -252,7 +239,6 @@ import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUr
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import {
-  getMcpConnectionGatewayService,
   type McpConnectionBridgeRegistration,
 } from "../mcp-connections/mcp-connection-gateway-service";
 import {
@@ -567,7 +553,6 @@ import {
   type DesktopHelperModelSettings,
   type DesktopTaskMonitorModelChoice,
   type HelperModelId,
-  DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
@@ -591,7 +576,6 @@ import {
   acpRuntimeValueLooksPrivileged,
   acpSessionHasConversationHistory,
   acpSessionToThreadSummary,
-  createLocalAcpAgentDiscovery,
   findAcpModelConfigOption,
   findAcpThoughtLevelConfigOption,
   formatAcpRuntimeLabel,
@@ -599,25 +583,17 @@ import {
   acpAdvertisesRuntimeModeSelector,
   isAcpSessionMissingForProjectError,
   mergeAcpRuntimeState,
-  noLocalAcpAgentDiscovery,
   readKimiYoloExecutionModeFromText,
   withAcpModelRuntimeSelection,
-  type AcpBackendAdapterOptions,
-  type AcpClientFactory,
   type AcpRuntimeClient,
   type AcpSessionMetadata,
-  type AcpSessionStoreLike,
-  type AcpTransportFactory,
-  type LocalAcpDiscovery,
 } from "./acp-backend-adapter";
 import {
-  CodexAppServerClient,
   extractRateLimitSummaries,
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
 } from "../codex-app-server/desktop-client";
 import {
-  DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
   codexAppServerRecycleCheckIntervalMs,
   type CodexAppServerProcessSample,
   type CodexAppServerRecycleSettings,
@@ -662,7 +638,6 @@ import {
   isPwrAgentMessagingDynamicToolCall,
 } from "../agent-tools/pwragent-messaging-codex-tools";
 import {
-  buildPwrAgentMessagingPdfToolRouter,
   type PwrAgentMessagingHandler,
 } from "../agent-tools/pwragent-messaging-agent-tools";
 import {
@@ -678,7 +653,7 @@ import {
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { ThreadTodoError } from "../thread-todos/thread-todo-service";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
-import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
+
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
 import { buildAutomationMcpConsent, buildMcpToolApprovalConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -710,13 +685,11 @@ import {
 import type { ThreadRootDirectory } from "../mcp-connections/mcp-upstream-roots";
 import type { ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
 import {
-  getTokenMiserBridgeDescriptorPath,
   TokenMiserHookBridge,
 } from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
-  TOKEN_MISER_DIAGNOSTICS_DIRNAME,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
 import { TokenMiserDiagnostics, type TokenMiserDiagnosticContext } from "../token-miser/token-miser-diagnostics";
@@ -724,16 +697,15 @@ import { TokenMiserService, type TokenMiserServiceOptions } from "../token-miser
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import { type TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import {
-  AgentToolMcpServer,
   type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
   type AgentToolMcpServerLike,
   type ResolvedAgentToolMcpCallContext,
 } from "../agent-tools/agent-tool-mcp-server";
-import { createScratchProjectDirectory } from "./scratch-projects";
+
 import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-capture";
-import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
+
+
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import {
   GitDirectoryService,
@@ -760,7 +732,6 @@ import {
 } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import type { GitReadRequest } from "../git-info/read-cache";
 import {
-  resolveWorktreeRepositoryDirectory,
   type ThreadDirectoryEnrichment,
 } from "./thread-directory-enricher";
 import {
@@ -775,7 +746,7 @@ import { isInManagedWorktreeRoot } from "./managed-worktree-ownership";
 import { hasWorktreeRegistration, inspectRegisterableWorktree, sameRegisteredWorktree } from "./worktree-maintenance-registration";
 import { protectiveMaintenanceWatches, type MaintenancePrObservation } from "./maintenance-pr-watches";
 import { runMaintenanceItems } from "./maintenance-runner";
-import { userHomeWorktreesRoot } from "../settings/desktop-config";
+
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
 import {
   HIBERNATION_KEEP_REASONS,
@@ -794,10 +765,7 @@ import { maintenanceKeptThread } from "./maintenance-checkout-owners";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { compareBindingsByCreation } from "../messaging/core/messaging-binding-thread-match";
 import { toMessagingThreadBindingSummary } from "../messaging/messaging-bindings-snapshot";
-import {
-  createCompositeJsonRpcObserver,
-  createProtocolLogObserverFromEnv,
-} from "./protocol-log-observer";
+
 import {
   detectLargeToolOutput,
   detectNoisyPolling,
@@ -813,11 +781,10 @@ import {
 import { analyzeNormalizedToolReplay } from "./tool-output-replay-analyzer";
 import { detectUsageSpendAlerts } from "./usage-spend-alerts";
 import {
-  ThreadTitleGenerationService,
   type ThreadTitleAdapterResult,
 } from "@pwragent/owner-core/thread-title-generation-service";
-import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
-import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";
+
+
 import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import { getMainLogger } from "../log";
 import {
@@ -828,7 +795,6 @@ import {
 } from "../agent-tools/thread-maintenance-tool-results";
 import { THREAD_MAINTENANCE_TOOL_WAIT_MS, ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
 import {
-  getDesktopConfigStore,
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
@@ -839,17 +805,11 @@ import {
 import {
   PROVIDER_IDS,
   providerLastKnownGoodMatchesConfig,
-  resolveSpendAlertPolicy,
-  resolveToolOutputAlertPolicy,
   type ConfigDomainMap,
   type ProviderId,
 } from "../settings/config-store/config-domains";
+
 import {
-  acpProviderEnabledFromSnapshot,
-  providerProjectionForRegistryId,
-} from "../settings/config-store/provider-runtime-config";
-import {
-  ONBOARDING_CODEX_GATE_ENABLED,
   type ManagedCodexSelectionChange,
 } from "../settings/desktop-settings-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
@@ -1042,11 +1002,9 @@ import {
   type WorktreeRestoreCandidate,
 } from "./backend-registry-types";
 import {
-  ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS,
   ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS,
   ACP_LISTINGS_ARE_ENRICHED,
   ACP_SESSION_IDLE_CLOSE_CHECK_INTERVAL_MS,
-  ACP_SESSION_IDLE_CLOSE_MS,
   ACTIVE_TURN_HANDOFF_ERROR,
   ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR,
   ActiveTurnControlPreconditionError,
@@ -1054,7 +1012,6 @@ import {
   CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS,
   CODEX_THREAD_IDLE_UNSUBSCRIBE_CHECK_INTERVAL_MS,
-  CODEX_THREAD_IDLE_UNSUBSCRIBE_MS,
   CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
   FORGE_APPROVAL_WITHDRAWN_TODO_KEY,
   FORGE_PROJECT_LABEL_TIMEOUT_MS,
@@ -1068,7 +1025,6 @@ import {
   NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT,
   PENDING_APPROVAL_GUIDANCE,
   ProjectPausedThreadMessageError,
-  RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS,
   TASK_MONITOR_RECOVERY_PROGRESS_LIMIT,
   TASK_MONITOR_STALE_CHECK_INTERVAL_MS,
   TASK_MONITOR_STALE_GRACE_MS,
@@ -1082,7 +1038,6 @@ import {
   USAGE_TURN_REPAIR_PEER_QUIET_MS,
   archivedThreadMessageRefusal,
   buildCodexInvalidIdRecoveryCooldownMessage,
-  createReplayClientsFromEnv,
   execFile,
   isCodexInvalidIdRecoveryCooldownActive,
   isCodexMissingRolloutArchiveError,
@@ -1121,7 +1076,6 @@ import {
   buildTitleEligibilityLogDetails,
   buildTurnCausalMessagingContextId,
   buildTurnUserMessageOriginId,
-  createReplayThreadTitleService,
   inferLegacyTaskMonitorMessageOrigins,
   isCausalMessagingContext,
   mergeManagedReviewEntries,
@@ -1144,7 +1098,6 @@ import {
 } from "./backend-registry-notification-values";
 import {
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
-  buildCodexClientArgs,
   buildCodexConnectionMcpConfig,
   buildCodexConnectionMcpServerName,
   buildCodexParentDynamicToolSpecs,
@@ -1160,13 +1113,11 @@ import {
   schemaRequiredKeys,
   structuredRequiredFieldMatches,
   userActionableMcpConnectionConfigError,
-  withTokenMiserBridgeDescriptorEnv,
   withoutMcpProjectToolApprovalOffer,
 } from "./codex-thread-config";
 import {
   appendCodexEnvironmentSetupActivity,
   cloneCodexEnvironmentRuntimeForFork,
-  createDefaultCodexEnvironmentHydrationStore,
   defaultLaunchpadWorkMode,
   fallbackLaunchpadIdentity,
   isEmptyDirectoryLaunchpadDraft,
@@ -1493,6 +1444,7 @@ async function refuseResolvedWorkMode(params: {
 }
 
 export class DesktopBackendRegistry {
+  readonly context: RegistryContext;
   private readonly launchpadCreationOperations = new LaunchpadCreationOperations();
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
@@ -1522,7 +1474,7 @@ export class DesktopBackendRegistry {
    * entry's account is the key captured with each reading, so later Settings
    * edits cannot relabel it. Claude and the ACP agents write through it too.
    */
-  private readonly planLimits = new PlanLimitStore();
+  private readonly planLimits: PlanLimitStore;
   /** The cached Codex summary joined with the store's limits, rebuilt only when either changes. */
   private codexSummaryView?: {
     base: BackendSummary;
@@ -1731,7 +1683,7 @@ export class DesktopBackendRegistry {
    */
   private readonly reviewStartFailureNotices = new Map<string, string>();
   private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
-  private readonly captureStores: ProtocolCaptureStore[] = [];
+  private readonly captureStores: ProtocolCaptureStore[];
   readonly navigationDirectoryScope = new NavigationDirectoryScope();
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -2345,6 +2297,7 @@ export class DesktopBackendRegistry {
   private forgeReadHandler?: ForgeReadHandler;
   private localForgeReadHandler?: ForgeReadHandler;
 
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeReadHandlers(local: ForgeReadHandler, routed: ForgeReadHandler): void {
     this.localForgeReadHandler = local;
     this.forgeReadHandler = routed;
@@ -2363,21 +2316,25 @@ export class DesktopBackendRegistry {
    * call would otherwise infer (a pull request's head), and fails a bad call
    * before asking.
    */
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgePrToolHandler(handler: ForgePrToolHandler, preflight?: ForgePrToolPreflight): void {
     this.forgePrToolHandler = handler;
     this.forgePrToolPreflight = preflight;
   }
 
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
     this.forgeToolPolicyResolver = resolve;
   }
 
   /** Saves the project rule an approval card's "Always allow" option chose. */
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolRuleWriter(write: ForgeToolRuleWriter): void {
     this.forgeToolRuleWriter = write;
   }
 
   /** Names a repository's project as the Directories lens does. */
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeProjectLabelResolver(resolve: (repository: string) => Promise<string | undefined>): void {
     this.forgeProjectLabelResolver = resolve;
   }
@@ -3130,1198 +3087,142 @@ export class DesktopBackendRegistry {
    */
   private readonly isBootstrapModeFn: () => boolean;
   private readonly ownerAdmission?: ThreadOwnerAdmission;
+  constructor(
+    dependencies: RegistryDependencies,
+    connect: (ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>) => void,
+  ) {
+    this.context = dependencies.context;
+    this.ownerAdmission = dependencies.ownerAdmission;
+    this.managedMaintenanceRoots = dependencies.managedMaintenanceRoots;
+    this.readThreadArchivePolicy = dependencies.readThreadArchivePolicy;
+    this.readCheckoutHibernationPolicy = dependencies.readCheckoutHibernationPolicy;
+    this.configStore = dependencies.configStore;
+    this.runtimeInstanceId = dependencies.runtimeInstanceId;
+    this.archiveCleanupCheckpointStore = dependencies.archiveCleanupCheckpointStore;
+    this.projectHeldWakeupStore = dependencies.projectHeldWakeupStore;
+    this.restartContinuationStore = dependencies.restartContinuationStore;
+    this.restartDispatchPlanOptions = dependencies.restartDispatchPlanOptions;
+    this.registrySessionId = dependencies.registrySessionId;
+    this.runningTurnShutdownStopTimeoutMs = dependencies.runningTurnShutdownStopTimeoutMs;
+    this.resolveLiveProfileRuntimeInstanceIdsFn = dependencies.resolveLiveProfileRuntimeInstanceIdsFn;
+    this.mcpConnectionService = dependencies.mcpConnectionService;
+    this.providerThreadSnapshotStore = dependencies.providerThreadSnapshotStore;
+    this.retainedOwnerThreadStorage = dependencies.retainedOwnerThreadStorage;
+    this.codexProtocolCaptureSession = dependencies.codexProtocolCaptureSession;
+    this.correspondenceStore = dependencies.correspondenceStore;
+    this.pendingEnvironmentLaunchStore = dependencies.pendingEnvironmentLaunchStore;
+    this.resolveCodexDefaultModeRequestUserInputFn = dependencies.resolveCodexDefaultModeRequestUserInputFn;
+    this.resolveCodexToolDiscoveryFn = dependencies.resolveCodexToolDiscoveryFn;
+    this.resolveDefaultPrAutoDispatchEnabledFn = dependencies.resolveDefaultPrAutoDispatchEnabledFn;
+    this.resolveProviderModelDefaultsFn = dependencies.resolveProviderModelDefaultsFn;
+    this.resolveHelperModelSettingsFn = dependencies.resolveHelperModelSettingsFn;
+    this.resolveTaskMonitorModelsFn = dependencies.resolveTaskMonitorModelsFn;
+    this.resolvePassSetupVariablesToAgentsFn = dependencies.resolvePassSetupVariablesToAgentsFn;
+    this.resolveUsageAccountGroupsFn = dependencies.resolveUsageAccountGroupsFn;
+    this.resolveProviderThreadModelMigrationsFn = dependencies.resolveProviderThreadModelMigrationsFn;
+    this.resolveCodexLocalModelIdsFn = dependencies.resolveCodexLocalModelIdsFn;
+    this.resolveCodexModelProvidersFn = dependencies.resolveCodexModelProvidersFn;
+    this.resolveCodexModelProviderKeysFn = dependencies.resolveCodexModelProviderKeysFn;
+    this.resolveCodexFastAllowedFn = dependencies.resolveCodexFastAllowedFn;
+    this.resolvePdfAnalysisEnabledFn = dependencies.resolvePdfAnalysisEnabledFn;
+    this.acpSessionIdleCloseMs = dependencies.acpSessionIdleCloseMs;
+    this.codexThreadIdleUnsubscribeMs = dependencies.codexThreadIdleUnsubscribeMs;
+    this.resolveTokenMiserEnabledFn = dependencies.resolveTokenMiserEnabledFn;
+    this.resolveCodexAppServerRecycleSettingsFn = dependencies.resolveCodexAppServerRecycleSettingsFn;
+    this.resolveTokenMiserDefaultEnabledFn = dependencies.resolveTokenMiserDefaultEnabledFn;
+    this.resolveTokenMiserPollingReviewsEnabledFn = dependencies.resolveTokenMiserPollingReviewsEnabledFn;
+    this.resolveManagedTokenMiserActivationRequiredFn = dependencies.resolveManagedTokenMiserActivationRequiredFn;
+    this.markManagedCodexRuntimeSwitchCompleteFn = dependencies.markManagedCodexRuntimeSwitchCompleteFn;
+    this.resolveCodexDiscoveryPendingFn = dependencies.resolveCodexDiscoveryPendingFn;
+    this.resolveToolOutputAlertPolicyFn = dependencies.resolveToolOutputAlertPolicyFn;
+    this.resolveSpendAlertPolicyFn = dependencies.resolveSpendAlertPolicyFn;
+    this.spendAlertPolicy = dependencies.spendAlertPolicy;
+    this.toolOutputAlertPolicy = dependencies.toolOutputAlertPolicy;
+    this.resolveCodexRuntimeCommandFn = dependencies.resolveCodexRuntimeCommandFn;
+    this.resolveTokenMiserCodexRuntimeFn = dependencies.resolveTokenMiserCodexRuntimeFn;
+    this.codexEnvironmentCommandEnv = dependencies.codexEnvironmentCommandEnv;
+    this.codexEnvironmentCommandRunner = dependencies.codexEnvironmentCommandRunner;
+    this.codexEnvironmentHydrationStore = dependencies.codexEnvironmentHydrationStore;
+    this.localFilePrivateStorageRoots = dependencies.localFilePrivateStorageRoots;
+    this.codexClient = dependencies.codexClient;
+    this.tokenMiserDiagnostics = dependencies.tokenMiserDiagnostics;
+    this.tokenMiserStore = dependencies.tokenMiserStore;
+    this.tokenMiserService = dependencies.tokenMiserService;
+    this.tokenMiserHookBridge = dependencies.tokenMiserHookBridge;
+    this.tokenMiserCodeModeReducerDescriptorPath = dependencies.tokenMiserCodeModeReducerDescriptorPath;
+    this.tokenMiserStateDir = dependencies.tokenMiserStateDir;
+    this.tokenMiserPluginManager = dependencies.tokenMiserPluginManager;
+    this.acpWorktreeRepositoryResolver = dependencies.acpWorktreeRepositoryResolver;
+    this.acpAvailableCommandsStore = dependencies.acpAvailableCommandsStore;
+    this.acpAvailableCommandProbeBudgetMs = dependencies.acpAvailableCommandProbeBudgetMs;
+    this.overlayStore = dependencies.overlayStore;
+    this.mcpGatewayTools = dependencies.mcpGatewayTools;
+    this.gitDirectoryService = dependencies.gitDirectoryService;
+    this.gitWorkingStateService = dependencies.gitWorkingStateService;
+    this.worktreeArchiveService = dependencies.worktreeArchiveService;
+    this.worktreeRecoveryService = dependencies.worktreeRecoveryService;
+    this.worktreeContainerService = dependencies.worktreeContainerService;
+    this.pdfToolMcpServer = dependencies.pdfToolMcpServer;
+    this.claudeAgentToolMcpServer = dependencies.claudeAgentToolMcpServer;
+    this.claudeBackend = dependencies.claudeBackend;
+    this.acpBackend = dependencies.acpBackend;
+    this.providerRuntimeFingerprints = dependencies.providerRuntimeFingerprints;
+    this.messagingStore = dependencies.messagingStore;
+    this.messagingArchiveCleaner = dependencies.handlers.messagingArchiveCleaner;
+    this.appManagementHandler = dependencies.handlers.appManagementHandler;
+    this.starMapHandler = dependencies.handlers.starMapHandler;
+    this.gitWorkspaceHandoffService = dependencies.gitWorkspaceHandoffService;
+    this.resolveAcpHelperWorkspace = dependencies.resolveAcpHelperWorkspace;
+    this.createScratchProjectDirectory = dependencies.createScratchProjectDirectory;
+    this.createScheduledThreadActionFn = dependencies.handlers.createScheduledThreadActionFn;
+    this.threadTitleGenerationService = dependencies.threadTitleGenerationService;
+    this.threadInspectionSearchService = dependencies.threadInspectionSearchService;
+    this.codexModelProviderCatalog = dependencies.codexModelProviderCatalog;
+    this.modelCatalog = dependencies.modelCatalog;
+    this.queuedMessageTitler = dependencies.queuedMessageTitler;
+    this.threadTurnQueue = dependencies.threadTurnQueue;
+    this.isCodexBootstrapDeferredFn = dependencies.isCodexBootstrapDeferredFn;
+    this.isBootstrapModeFn = dependencies.isBootstrapModeFn;
+    this.planLimits = dependencies.planLimits;
+    this.captureStores = dependencies.captureStores;
+    this.localForgeReadHandler = dependencies.handlers.localForgeReadHandler;
+    this.forgeReadHandler = dependencies.handlers.forgeReadHandler;
+    this.forgePrToolHandler = dependencies.handlers.forgePrToolHandler;
+    this.forgePrToolPreflight = dependencies.handlers.forgePrToolPreflight;
+    this.forgeToolPolicyResolver = dependencies.handlers.forgeToolPolicyResolver;
+    this.forgeToolRuleWriter = dependencies.handlers.forgeToolRuleWriter;
+    this.forgeProjectLabelResolver = dependencies.handlers.forgeProjectLabelResolver;
+    this.messagingAgentToolService = dependencies.handlers.messagingAgentToolService;
+    this.automationInspectionHandler = dependencies.handlers.automationInspectionHandler;
+    this.federationHandler = dependencies.handlers.federationHandler;
+    this.starMapIntakeFederationHandlerFactory = dependencies.handlers.starMapIntakeFederationHandlerFactory;
+    this.agentThreadActions = dependencies.handlers.agentThreadActions;
+    this.threadTodoHandler = dependencies.handlers.threadTodoHandler;
+    this.federatedThreadMessageHandler = dependencies.handlers.federatedThreadMessageHandler;
+    this.federatedThreadInspectionHandler = dependencies.handlers.federatedThreadInspectionHandler;
+    this.federatedThreadMutationHandler = dependencies.handlers.federatedThreadMutationHandler;
+    this.federatedThreadControlHandler = dependencies.handlers.federatedThreadControlHandler;
+    this.threadPullRequestStatusToolHandler = dependencies.handlers.threadPullRequestStatusToolHandler;
+    this.threadPullRequestCanonicalizer = dependencies.handlers.threadPullRequestCanonicalizer;
+    this.pullRequestReferenceResolver = dependencies.handlers.pullRequestReferenceResolver;
+    this.threadProjectRepositoryResolver = dependencies.handlers.threadProjectRepositoryResolver;
+    this.threadPrimaryGitRepositoryReader = dependencies.handlers.threadPrimaryGitRepositoryReader;
+    this.localPullRequestAuthorityResolver = dependencies.handlers.localPullRequestAuthorityResolver;
+    this.threadPullRequestWatchToolHandler = dependencies.handlers.threadPullRequestWatchToolHandler;
+    this.threadMaintenanceToolHandler = dependencies.handlers.threadMaintenanceToolHandler;
+    this.threadMaintenanceToolScans = dependencies.threadMaintenanceToolScans;
+    this.threadDependencyToolHandler = dependencies.handlers.threadDependencyToolHandler;
+    this.directoryGitStatusWriter = dependencies.handlers.directoryGitStatusWriter;
+    this.threadPrAutoDispatchHandler = dependencies.handlers.threadPrAutoDispatchHandler;
+    this.threadPullRequestDetachHandler = dependencies.handlers.threadPullRequestDetachHandler;
+    this.threadDependenciesPeerHandler = dependencies.handlers.threadDependenciesPeerHandler;
+    this.threadPrWatchesPeerHandler = dependencies.handlers.threadPrWatchesPeerHandler;
+    this.projectForgeAutomationHandler = dependencies.handlers.projectForgeAutomationHandler;
+    this.threadPullRequestRefreshHandler = dependencies.handlers.threadPullRequestRefreshHandler;
+    this.threadGitWorkingStateRefreshHandler = dependencies.handlers.threadGitWorkingStateRefreshHandler;
+    // Providers call back into the registry; bind only after every dependency is assigned.
+    connect(this.constructionPorts());
 
-  constructor(options?: {
-    ownerAdmission?: ThreadOwnerAdmission;
-    getThreadArchivePolicy?: () => DesktopThreadArchivePolicy;
-    getCheckoutHibernationPolicy?: () => DesktopCheckoutHibernationPolicy;
-    codexClient?: BackendClient;
-    overlayStore?: BackendRegistryOverlayStoreLike;
-    correspondenceStore?: ThreadCorrespondenceStore;
-    pendingEnvironmentLaunchStore?: PendingEnvironmentLaunchStore;
-    gitDirectoryService?: GitDirectoryService;
-    gitWorkingStateService?: GitWorkingStateService;
-    gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
-    worktreeArchiveService?: WorktreeArchiveService;
-    worktreeRecoveryService?: WorktreeRecoveryService;
-    acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
-    acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
-    acpSessionStore?: AcpSessionStoreLike | null;
-    acpAvailableCommandsStore?: AcpAvailableCommandsStorage | null;
-    providerThreadSnapshotStore?: ProviderThreadSnapshotStorage | null;
-    retainedOwnerThreadStorage?: RetainedOwnerThreadStorage | null;
-    acpAvailableCommandProbeBudgetMs?: number;
-    discoverLocalAcpAgents?: LocalAcpDiscovery;
-    /**
-     * Opt in to real machine ACP discovery — scanning the operator's machine,
-     * and installing/probing a managed Grok build under the PwrAgent root.
-     * Only `getDesktopBackendRegistry()` sets this. Every other construction
-     * (all of them in tests) gets `noLocalAcpAgentDiscovery` unless it injects
-     * its own `discoverLocalAcpAgents`, so a test cannot reach the machine by
-     * forgetting an option.
-     */
-    useMachineAcpDiscovery?: boolean;
-    useMachineClaudeDiscovery?: boolean;
-    claudeBackendOptions?: Partial<ClaudeBackendOptions>;
-    /** Tests: PwrAgent's worktree roots, which default to ~/.pwragent's. */
-    managedWorktreeRoots?: () => Promise<string[]>;
-    isAcpAgentEnabled?: (registryId: string) => boolean;
-    createAcpClient?: AcpClientFactory;
-    /** The transport of an ACP helper's own agent process. */
-    createAcpTransport?: AcpTransportFactory;
-    /** The cwd of ACP helper sessions; defaults to the profile's helper workspace. */
-    resolveAcpHelperWorkspace?: () => Promise<string>;
-    agentToolMcpServer?: AgentToolMcpServerLike | null;
-    pdfToolMcpServer?: AgentToolMcpServerLike | null;
-    mcpConnectionService?: BackendRegistryMcpConnectionService | null;
-    messagingStore?: MessagingArchiveCleanupStore | null;
-    messagingArchiveCleaner?: MessagingArchiveCleaner | null;
-    automationInspectionMcpCommand?: string;
-    appManagementHandler?: PwrAgentAppManagementHandler | null;
-    starMapHandler?: PwrAgentStarMapHandler | null;
-    createScratchProjectDirectory?: () => Promise<string>;
-    createScheduledThreadAction?: (
-      request: CreateScheduledThreadActionRequest,
-      options: { id: string },
-    ) => Promise<ScheduledThreadActionMutationResponse>;
-    codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
-    codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
-    threadTitleGenerationService?: ThreadTitleService | null;
-    threadSearchService?: ThreadSearchService | null;
-    isCodexBootstrapDeferred?: () => boolean;
-    isBootstrapMode?: () => boolean;
-    resolveCodexDefaultModeRequestUserInput?: () => boolean;
-    resolveCodexToolDiscovery?: () => boolean;
-    /** Legacy injection accepted for older callers; runMode owns routing. */
-    resolveManagedReviewEnabled?: () => boolean;
-    resolveDefaultPrAutoDispatchEnabled?: () => boolean;
-    resolveProviderModelDefaults?: () => Record<
-      string,
-      DesktopProviderModelDefaults
-    >;
-    resolveHelperModelSettings?: () => DesktopHelperModelSettings;
-    resolveTaskMonitorModels?: () => Record<string, DesktopTaskMonitorModelChoice>;
-    resolvePassSetupVariablesToAgents?: () => boolean;
-    resolveUsageAccountGroups?: () => Record<string, string>;
-    resolveProviderThreadModelMigrations?: () => Record<
-      string,
-      DesktopProviderThreadModelMigration
-    >;
-    resolveCodexFastAllowed?: () => boolean;
-    resolveCodexLocalModelIds?: () => string[];
-    resolveCodexModelProviders?: () => CodexModelProviderSettings[];
-    resolveCodexModelProviderKeys?: () => Promise<Record<string, string>>;
-    /** Test seam for provider model discovery; never the network in Vitest. */
-    codexModelProviderFetch?: (input: string, init?: RequestInit) => Promise<Response>;
-    resolvePdfAnalysisEnabled?: () => boolean;
-    resolveTokenMiserEnabled?: () => boolean;
-    resolveTokenMiserPollingReviewsEnabled?: () => boolean;
-    /** Test seam: how long an ACP session idles before it is closed. */
-    acpSessionIdleCloseMs?: number;
-    resolveCodexAppServerRecycleSettings?: () => CodexAppServerRecycleSettings;
-    /** Test seam: how long a Codex thread idles before it is released. */
-    codexThreadIdleUnsubscribeMs?: number;
-    configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
-    resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
-    resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
-    resolveManagedTokenMiserActivationRequired?: () => boolean;
-    resolveCodexDiscoveryPending?: () => boolean;
-    markManagedCodexRuntimeSwitchComplete?: () => void;
-    /** Overrides the settings service's Codex executable resolution. */
-    resolveCodexRuntimeCommand?: () => Promise<{
-      command: string;
-      version?: string;
-    }>;
-    watchManagedCodexRuntime?: (
-      listener: (
-        change: ManagedCodexSelectionChange,
-      ) => Promise<unknown> | unknown,
-    ) => () => void;
-    runtimeInstanceId?: string;
-    archiveCleanupCheckpointStore?: ArchiveCleanupCheckpointStorage | null;
-    /** `null` keeps held wake-ups in memory only. */
-    projectHeldWakeupStore?: ProjectHeldWakeupStoreLike | null;
-    /** `null` keeps no restart continuations. */
-    restartContinuationStore?: RestartContinuationStoreLike | null;
-    /** Batch size, delays, and jitter for continuations. Tests only. */
-    restartDispatchPlan?: Omit<RestartDispatchPlanOptions, "now">;
-    registrySessionId?: string;
-    resolveLiveProfileRuntimeInstanceIds?: () => string[];
-    runningTurnShutdownStopTimeoutMs?: number;
-    /** How long a queued message waits before it is titled. Tests only. */
-    queuedMessageTitleSettleMs?: number;
-    acpWorktreeRepositoryResolver?: (
-      cwd: string,
-    ) => Promise<LinkedDirectorySummary | undefined>;
-  }) {
-    this.ownerAdmission = options?.ownerAdmission;
-    this.activeTurnKeys.onDelete((key) => { this.activeCodexTurnCollaborationModes.delete(key); });
-    this.managedMaintenanceRoots = options?.managedWorktreeRoots
-      ?? (async () => [userHomeWorktreesRoot(), resolveActiveProfilePath("worktrees")]);
-    this.readThreadArchivePolicy = options?.getThreadArchivePolicy ?? (() => {
-      try { return getDesktopSettingsService().resolveThreadArchivePolicy(); }
-      catch { return { ...DEFAULT_THREAD_ARCHIVE_POLICY }; }
-    });
-    this.readCheckoutHibernationPolicy = options?.getCheckoutHibernationPolicy ?? (() => {
-      try { return getDesktopSettingsService().resolveCheckoutHibernationPolicy(); }
-      catch { return { ...DEFAULT_CHECKOUT_HIBERNATION_POLICY }; }
-    });
-    const processRuntimeIdentity = getProcessRuntimeIdentity();
-    this.configStore = options?.configStore;
-    this.runtimeInstanceId =
-      options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
-    this.archiveCleanupCheckpointStore = options?.archiveCleanupCheckpointStore === null ? undefined
-      : options?.archiveCleanupCheckpointStore ?? (isAppStateInitialized() ? createArchiveCleanupCheckpointStorage() : undefined);
-    this.projectHeldWakeupStore = options?.projectHeldWakeupStore === null ? undefined
-      : options?.projectHeldWakeupStore ?? (isAppStateInitialized() ? createProjectHeldWakeupStorage() : undefined);
-    this.restartContinuationStore = options?.restartContinuationStore === null ? undefined
-      : options?.restartContinuationStore ?? (isAppStateInitialized() ? createRestartContinuationStorage() : undefined);
-    this.restartDispatchPlanOptions = options?.restartDispatchPlan ?? {};
-    this.registrySessionId = options?.registrySessionId ?? randomUUID();
-    this.runningTurnShutdownStopTimeoutMs =
-      options?.runningTurnShutdownStopTimeoutMs
-      ?? RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS;
-    this.resolveLiveProfileRuntimeInstanceIdsFn =
-      options?.resolveLiveProfileRuntimeInstanceIds ??
-      (() =>
-        findLiveProfileRuntimeMarkers(resolveActiveProfileName()).map(
-          (marker) => marker.instanceId,
-        ));
-    this.mcpConnectionService =
-      options?.mcpConnectionService === null
-        ? undefined
-        : options?.mcpConnectionService ??
-          (isAppStateInitialized() ? getMcpConnectionGatewayService() : undefined);
-    this.mcpConnectionService?.setThreadRootsResolver?.(
-      async (scope) => await this.resolveThreadMcpRootDirectories(scope),
-    );
-    this.providerThreadSnapshotStore =
-      options?.providerThreadSnapshotStore === null
-        ? undefined
-        : options?.providerThreadSnapshotStore
-          ?? (isAppStateInitialized()
-            ? createProviderThreadSnapshotStorage()
-            : undefined);
-    this.retainedOwnerThreadStorage = options?.retainedOwnerThreadStorage === null ? undefined
-      : options?.retainedOwnerThreadStorage ?? (isAppStateInitialized() ? createRetainedOwnerThreadStorage() : undefined);
-    const replayClients = createReplayClientsFromEnv();
-    const createsLiveCodexClient =
-      !options?.codexClient && !replayClients?.codexClient;
-    this.codexProtocolCaptureSession = createsLiveCodexClient
-      ? new CodexProtocolCaptureSession()
-      : undefined;
-    const codexCapture = options?.codexClient
-      || replayClients
-      ? undefined
-      : createProtocolCaptureFromEnv({
-          backend: "codex",
-          backendInstance: "default",
-        });
-    if (codexCapture) {
-      this.captureStores.push(codexCapture.store);
-    }
-    const codexObserver = createCompositeJsonRpcObserver([
-      codexCapture?.observer,
-      this.codexProtocolCaptureSession?.observer,
-      createProtocolLogObserverFromEnv({
-        backend: "codex",
-      }),
-    ]);
-    const settingsService = createsLiveCodexClient
-      ? getDesktopSettingsService()
-      : undefined;
-    this.correspondenceStore = options?.correspondenceStore
-      ?? new ThreadCorrespondenceStore(isAppStateInitialized()
-        ? resolveActiveProfilePath("state/thread-correspondence")
-        : undefined);
-    this.pendingEnvironmentLaunchStore = options?.pendingEnvironmentLaunchStore
-      ?? new PendingEnvironmentLaunchStore(isAppStateInitialized()
-        ? resolveActiveProfilePath("state/pending-environment-launches")
-        : undefined);
-    const tokenMiserStateDir =
-      createsLiveCodexClient && isAppStateInitialized()
-        ? resolveActiveProfilePath("state/token-miser")
-        : undefined;
-    const tokenMiserBridgeDescriptorPath = tokenMiserStateDir
-      ? getTokenMiserBridgeDescriptorPath(
-          tokenMiserStateDir,
-          this.runtimeInstanceId,
-        )
-      : undefined;
-    const tokenMiserActivationNonce = tokenMiserStateDir
-      ? randomBytes(32).toString("base64url")
-      : undefined;
-    this.resolveCodexDefaultModeRequestUserInputFn =
-      options?.resolveCodexDefaultModeRequestUserInput ??
-      (() => {
-        try {
-          return (
-            settingsService?.resolveCodexDefaultModeRequestUserInput() ?? false
-          );
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve Codex default-mode request_user_input setting",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return false;
-        }
-      });
-    this.resolveCodexToolDiscoveryFn = options?.resolveCodexToolDiscovery ?? (() => {
-      try {
-        return settingsService?.resolveCodexToolDiscovery() ?? true;
-      } catch (error) {
-        backendRegistryLog.warn("failed to resolve Codex tool discovery setting", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return true;
-      }
-    });
-    this.resolveDefaultPrAutoDispatchEnabledFn =
-      options?.resolveDefaultPrAutoDispatchEnabled ??
-      (() => {
-        try {
-          return (
-            settingsService?.resolveDefaultPrAutoDispatchEnabled()
-            ?? DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS
-          );
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve default Auto-fix PR setting",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS;
-        }
-      });
-    this.resolveProviderModelDefaultsFn =
-      options?.resolveProviderModelDefaults ??
-      (() => settingsService?.resolveProviderModelDefaults() ?? {});
-    this.resolveHelperModelSettingsFn =
-      options?.resolveHelperModelSettings ??
-      (() => settingsService?.resolveHelperModelSettings?.() ?? { helpers: {} });
-    this.resolveTaskMonitorModelsFn =
-      options?.resolveTaskMonitorModels ??
-      (() => settingsService?.resolveTaskMonitorModels?.() ?? {});
-    this.resolvePassSetupVariablesToAgentsFn =
-      options?.resolvePassSetupVariablesToAgents ??
-      (() => settingsService?.resolvePassSetupVariablesToAgents?.() ?? true);
-    this.resolveUsageAccountGroupsFn = options?.resolveUsageAccountGroups
-      ?? (() => settingsService?.resolveUsageAccountGroups?.() ?? {});
-    this.resolveProviderThreadModelMigrationsFn =
-      options?.resolveProviderThreadModelMigrations ??
-      (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
-    this.resolveCodexLocalModelIdsFn = options?.resolveCodexLocalModelIds
-      ?? (() => settingsService?.resolveCodexLocalModelIds?.() ?? []);
-    this.resolveCodexModelProvidersFn = options?.resolveCodexModelProviders
-      ?? (() => settingsService?.resolveCodexModelProviders?.() ?? []);
-    this.resolveCodexModelProviderKeysFn = options?.resolveCodexModelProviderKeys
-      ?? (async () => await settingsService?.resolveCodexModelProviderKeys?.() ?? {});
-    this.resolveCodexFastAllowedFn =
-      options?.resolveCodexFastAllowed ??
-      (() => settingsService?.resolveCodexFastAllowed() ?? true);
-    this.resolvePdfAnalysisEnabledFn =
-      options?.resolvePdfAnalysisEnabled ??
-      (() => {
-        try {
-          return (
-            settingsService ?? getDesktopSettingsService()
-          ).resolvePdfAnalysisEnabled();
-        } catch (error) {
-          backendRegistryLog.warn("failed to resolve PDF analysis setting", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return true;
-        }
-      });
-    this.acpSessionIdleCloseMs =
-      options?.acpSessionIdleCloseMs ?? ACP_SESSION_IDLE_CLOSE_MS;
-    this.codexThreadIdleUnsubscribeMs =
-      options?.codexThreadIdleUnsubscribeMs ?? CODEX_THREAD_IDLE_UNSUBSCRIBE_MS;
-    this.resolveTokenMiserEnabledFn = options?.resolveTokenMiserEnabled ?? (() => {
-      try {
-        return (
-          settingsService ?? getDesktopSettingsService()
-        ).resolveTokenMiserEnabled();
-      } catch (error) {
-        backendRegistryLog.warn("failed to resolve Token Miser setting", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return false;
-      }
-    });
-    this.resolveCodexAppServerRecycleSettingsFn =
-      options?.resolveCodexAppServerRecycleSettings ?? (() => {
-        try {
-          return (
-            settingsService ?? getDesktopSettingsService()
-          ).resolveCodexAppServerRecycleSettings();
-        } catch (error) {
-          backendRegistryLog.warn("failed to resolve Codex app server recycle settings", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS;
-        }
-      });
-    this.resolveTokenMiserDefaultEnabledFn = () => {
-      try {
-        return (
-          settingsService ?? getDesktopSettingsService()
-        ).resolveTokenMiserDefaultEnabled();
-      } catch (error) {
-        backendRegistryLog.warn(
-          "failed to resolve Token Miser thread default setting",
-          {
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-        return true;
-      }
-    };
-    this.resolveTokenMiserPollingReviewsEnabledFn =
-      options?.resolveTokenMiserPollingReviewsEnabled
-      ?? (() => {
-        try {
-          return (
-            settingsService ?? getDesktopSettingsService()
-          ).resolveTokenMiserPollingReviewsEnabled?.() ?? false;
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve Token Miser polling review setting",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return false;
-        }
-      });
-    this.resolveManagedTokenMiserActivationRequiredFn =
-      options?.resolveManagedTokenMiserActivationRequired
-      ?? (() => settingsService?.requiresManagedTokenMiserActivation() ?? false);
-    this.markManagedCodexRuntimeSwitchCompleteFn =
-      options?.markManagedCodexRuntimeSwitchComplete
-      ?? (() => settingsService?.markManagedCodexRuntimeSwitchComplete());
-    // A replay or test registry has no settings service and therefore no
-    // startup discovery to wait for: its summary is final the moment it is
-    // read, never pending.
-    this.resolveCodexDiscoveryPendingFn =
-      options?.resolveCodexDiscoveryPending
-      ?? (() => settingsService?.isCodexDiscoveryPending() ?? false);
-    this.resolveToolOutputAlertPolicyFn =
-      options?.resolveToolOutputAlertPolicy ??
-      (() => {
-        try {
-          if (options?.configStore) {
-            return resolveToolOutputAlertPolicy(
-              options.configStore.read("general"),
-            );
-          }
-          return (
-            settingsService ?? getDesktopSettingsService()
-          ).resolveToolOutputAlertPolicy();
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve tool-output alert settings",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
-        }
-      });
-    this.resolveSpendAlertPolicyFn =
-      options?.resolveSpendAlertPolicy ??
-      (() => {
-        try {
-          if (options?.configStore) {
-            return resolveSpendAlertPolicy(
-              options.configStore.read("general"),
-            );
-          }
-          if (settingsService) {
-            return typeof settingsService.resolveSpendAlertPolicy === "function"
-              ? settingsService.resolveSpendAlertPolicy()
-              : DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
-          }
-          return getDesktopSettingsService().resolveSpendAlertPolicy();
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve spend alert settings",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
-        }
-      });
-    this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
-    this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
-    if (options?.configStore) {
-      this.unsubscribers.push(
-        options.configStore.subscribe(["general"], () => {
-          this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
-          this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
-        }),
-      );
-    } else if (typeof settingsService?.onConfigWritten === "function") {
-      this.unsubscribers.push(
-        settingsService.onConfigWritten(() => {
-          this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
-          this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
-        }),
-      );
-    }
-    const codexCommand = settingsService?.resolveCodexCommandPreference();
-    const codexEnv =
-      typeof settingsService?.resolveCodexSpawnEnv === "function"
-        ? settingsService.resolveCodexSpawnEnv()
-        : undefined;
-    const codexSpawnEnv = withTokenMiserBridgeDescriptorEnv(
-      codexEnv,
-      tokenMiserBridgeDescriptorPath,
-    );
-    this.resolveCodexRuntimeCommandFn =
-      options?.resolveCodexRuntimeCommand
-      ?? (settingsService
-        ? async () => {
-              const selected = await settingsService.resolveCodexCommand();
-              const pinned = getOwnerHostServices().runtimePolicy?.codexCommand;
-              if (pinned && selected.command !== pinned) throw new Error("The configured Outpost Codex executable is unavailable; refusing to launch another installation.");
-              return selected;
-            }
-        : undefined);
-    this.resolveTokenMiserCodexRuntimeFn = settingsService
-      ? async () => {
-          const [resolvedCommand, resolvedEnv] = await Promise.all([
-            settingsService.resolveCodexCommand(),
-            settingsService.resolveCodexSpawnEnvAsync(),
-          ]);
-          return {
-            codexCommand: resolvedCommand.command,
-            codexEnv: resolvedEnv,
-          };
-        }
-      : async () => ({
-          codexCommand: codexCommand ?? "codex",
-          codexEnv: codexEnv ?? process.env,
-        });
-    this.codexEnvironmentCommandEnv = codexEnv;
-    this.codexEnvironmentCommandRunner = options?.codexEnvironmentCommandRunner;
-    this.codexEnvironmentHydrationStore =
-      options?.codexEnvironmentHydrationStore ??
-      createDefaultCodexEnvironmentHydrationStore();
-    const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
-    this.localFilePrivateStorageRoots = codexHome ? [codexHome] : [];
-    const clientVersion =
-      typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
-    const createCodexClient = (provider?: CodexModelProviderSettings): CodexAppServerClient => {
-      let resources: Promise<Awaited<ReturnType<typeof prepareBonsaiRuntime>>> | undefined;
-      let cleanup = Promise.resolve();
-      const releaseResources = (): Promise<void> => {
-        const previous = resources;
-        resources = undefined;
-        cleanup = cleanup.then(async () => {
-          const runtime = await previous?.catch(() => undefined);
-          await runtime?.close();
-        });
-        return cleanup;
-      };
-      const client = new CodexAppServerClient({
-        assertOwnerAdmission: () => this.assertThreadOwnership(),
-        args: settingsService ? undefined : buildCodexClientArgs(codexEnv, [], [], getOwnerHostServices().runtimePolicy),
-        command: codexCommand,
-        connectionObserver: codexObserver,
-        env: codexSpawnEnv,
-        resolveArgs: async (env) => {
-          const args = buildCodexClientArgs(
-              env,
-              settingsService?.resolveCodexConfigOverrides?.() ?? [],
-              settingsService?.resolveCodexModelProviders?.() ?? [],
-              getOwnerHostServices().runtimePolicy,
-            );
-          if (!provider) return args;
-          await cleanup;
-          resources ??= prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)]);
-          try {
-            const prepared = await resources;
-            const nativeMcpNames = await this.codexClient.readConfiguredMcpServerNames?.() ?? [];
-            return [
-              ...args,
-              ...bonsaiNativeMcpOverrides(nativeMcpNames).flatMap((override) => ["-c", override]),
-              ...prepared.overrides.flatMap((override) => ["-c", override]),
-            ];
-          } catch (error) {
-            await releaseResources();
-            throw error;
-          }
-        },
-        resolveCommand: settingsService
-          ? async () => {
-              const selected = await settingsService.resolveCodexCommand();
-              const pinned = getOwnerHostServices().runtimePolicy?.codexCommand;
-              if (pinned && selected.command !== pinned) throw new Error("The configured Outpost Codex executable is unavailable; refusing to launch another installation.");
-              return selected;
-            }
-          : undefined,
-        resolveEnv: settingsService
-          ? async () => withTokenMiserBridgeDescriptorEnv(
-              {
-                ...await settingsService.resolveCodexSpawnEnvAsync(),
-                // Model provider keys go to the App Server alone.
-                ...await settingsService.resolveCodexModelProviderEnv?.(),
-              },
-              tokenMiserBridgeDescriptorPath,
-            )
-          : undefined,
-        resolveModelProviderIds: () => new Set(
-          (settingsService?.resolveCodexModelProviders?.() ?? []).map((provider) => provider.id),
-        ),
-        clientVersion,
-        readHelperModelSettings: () => this.resolveHelperModelSettingsFn(),
-        passSetupVariablesToAgents: () => this.resolvePassSetupVariablesToAgentsFn(),
-        resolveUsageAccountKey: () => this.captureUsageAccount("codex"),
-        resolvePwrdrvrTokenMiserActivationNonce: () =>
-          this.resolveTokenMiserEnabledFn()
-            ? tokenMiserActivationNonce
-            : undefined,
-        // Fire the bootstrap gate at the client level too, not just the
-        // listThreads layer. Startup and explicit Settings/setup discovery
-        // may initialize this client; ordinary backend summaries are passive.
-        isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
-      });
-      if (provider) {
-        const close = client.close.bind(client);
-        client.close = async () => {
-          try { await close(); } finally { await releaseResources(); }
-        };
-        client.onAppServerUnexpectedExit(() => {
-          void releaseResources().catch((error) => backendRegistryLog.warn("Bonsai runtime cleanup failed", { error: String(error) }));
-        });
-      }
-      return client;
-    };
-    this.codexClient = options?.codexClient ?? replayClients?.codexClient ?? createProviderRuntimeClient(
-      createCodexClient(),
-      {
-        resolveProviders: () => settingsService?.resolveCodexModelProviders?.() ?? [],
-        create: createCodexClient,
-      },
-    );
-    if (typeof settingsService?.onCodexModelProviderKeysChanged === "function") {
-      this.unsubscribers.push(settingsService.onCodexModelProviderKeysChanged(() => {
-        this.codexModelProviderKeysRead = undefined;
-        this.codexModelProviderCatalog?.invalidate();
-        void this.invalidateProviderRuntimeSelections({ acp: false, codex: true }).catch((error) => {
-          backendRegistryLog.warn("Codex reconnect after a provider key change failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }));
-    }
-    if (this.codexClient.onAppServerUnexpectedExit) {
-      this.unsubscribers.push(
-        this.codexClient.onAppServerUnexpectedExit((threadIds) => {
-          void this.handleCodexAppServerUnexpectedExit(threadIds).catch((error) => {
-            backendRegistryLog.warn("Codex app server exit cleanup failed", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-        }),
-      );
-    }
-    const watchManagedCodexRuntime =
-      options?.watchManagedCodexRuntime
-      ?? (typeof settingsService?.watchManagedCodexRuntime === "function"
-        ? settingsService.watchManagedCodexRuntime.bind(settingsService)
-        : undefined);
-    if (watchManagedCodexRuntime) {
-      this.unsubscribers.push(
-        watchManagedCodexRuntime((change) => {
-          backendRegistryLog.info("managed Codex selection changed", {
-            enabled: change.enabled,
-            reason: change.reason,
-            version: change.runtime?.metadata.version,
-          });
-          this.codexRuntimeRestartPending = true;
-          this.managedCodexRuntimeSwitchPending = true;
-          this.redescribeCachedCodexRuntime(change.runtime);
-          return this.maybeRestartCodexForManagedRuntimeChange();
-        }),
-      );
-    }
-    if (tokenMiserStateDir) {
-      this.tokenMiserDiagnostics = new TokenMiserDiagnostics({
-        filePath: path.join(tokenMiserStateDir, TOKEN_MISER_DIAGNOSTICS_DIRNAME, `${this.runtimeInstanceId}.jsonl`),
-        isEnabled: () => {
-          try {
-            return this.resolveTokenMiserEnabledFn()
-              && ((settingsService ?? getDesktopSettingsService()).resolveTokenMiserDiagnosticsEnabled?.() ?? false);
-          } catch { return false; }
-        },
-        onError: () => backendRegistryLog.warn("Token Miser diagnostic batch could not be saved"),
-      });
-      this.tokenMiserStore = createTokenMiserStorage(
-        path.join(tokenMiserStateDir, "objects"),
-        {
-          onMetadataUpdated: async (metadata, reason) => {
-            if (reason === "retrieval") this.tokenMiserDiagnostics?.recordRetrieval(metadata);
-            this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
-            this.rememberActiveTokenMiserReplayEntry(metadata);
-            // A replay-counter write changes nothing the gate card or its usage
-            // line renders, and it fires once per active gate per model
-            // request. Republishing the whole ledger for each one turned a
-            // single usage event into N pricing reads and 2N notifications;
-            // `recordTokenMiserParentModelRequest` already emits once for the
-            // whole batch.
-            if (reason === "replay" || reason === "flushed") {
-              return;
-            }
-            const publish = this.tokenMiserLivePublishChain.then(() =>
-              this.publishLiveTokenMiserLedgerEntry(metadata),
-            );
-            this.tokenMiserLivePublishChain = publish.catch(() => undefined);
-            try {
-              await publish;
-            } catch (error) {
-              backendRegistryLog.warn("live Token Miser ledger publish failed", {
-                error: error instanceof Error ? error.message : String(error),
-                objectId: metadata.objectId,
-                threadId: metadata.threadId,
-              });
-            }
-          },
-          onCodeModeObservationUpdated: (observation) => {
-            // Persist the observation before Codex receives its result, but do
-            // not make the reducer response wait for a full accounting read
-            // and renderer notification. Those are observational UI work.
-            void this.emitThreadToolAccountingUpdated({
-              backend: "codex",
-              threadId: observation.threadId,
-            }).catch((error) => {
-              backendRegistryLog.warn("live Code Mode accounting publish failed", {
-                error: error instanceof Error ? error.message : String(error),
-                threadId: observation.threadId,
-              });
-            });
-          },
-        },
-      );
-      const tokenMiserService = new TokenMiserService({
-        diagnostics: this.tokenMiserDiagnostics,
-        store: this.tokenMiserStore,
-        isEnabled: () => this.resolveTokenMiserEnabledFn(),
-        isFocusedEnabled: () => {
-          try {
-            return (settingsService ?? getDesktopSettingsService())
-              .resolveTokenMiserFocusedSummariesEnabled?.() ?? false;
-          } catch {
-            return false;
-          }
-        },
-        isEnabledByDefault: () => this.resolveTokenMiserDefaultEnabledFn(),
-        // A thread can override the inherited default while the experiment is
-        // available; the global experimental flag remains the outer gate.
-        isEnabledForThread: async (threadId) =>
-          await this.resolveTokenMiserThreadOverride("codex", threadId),
-        getParentCumulativeInputTokens: (threadId) =>
-          this.liveThreadReplayInputCursor.get(
-            ["codex", threadId].join(":"),
-          )?.cumulativeInputTokens,
-        resolveParentModel: (threadId) =>
-          this.resolveTokenMiserParentModel(threadId),
-        codeModeGroupingVersion: () =>
-          this.tokenMiserCodeModeGroupingVersion,
-        postToolUseExactOutputVersion: () =>
-          this.tokenMiserPostToolUseExactOutputVersion,
-        onFocusedInference: (params) => this.recordTokenMiserFocusedInference(params),
-        generateSummary: async (params) => {
-          if (!this.codexClient.generateStructuredObject) {
-            return {
-              status: "unavailable",
-              reason: "codex_structured_generation_unavailable",
-            };
-          }
-          return await this.codexClient.generateStructuredObject({
-            ...params,
-            isMatch: (record) =>
-              params.schema.properties && "answers" in (params.schema.properties as Record<string, unknown>)
-                ? Array.isArray(record.answers)
-                : (record.disposition === "pass_through"
-                || record.disposition === "summarize")
-              && typeof record.summary === "string"
-              && Array.isArray(record.usefulDetails)
-              && (
-                !Array.isArray(params.schema.required)
-                || !params.schema.required.includes("members")
-                || Array.isArray(record.members)
-              ),
-          });
-        },
-      });
-      this.tokenMiserService = tokenMiserService;
-      this.tokenMiserHookBridge = new TokenMiserHookBridge({
-        stateDir: tokenMiserStateDir,
-        service: tokenMiserService,
-        instanceId: this.runtimeInstanceId,
-        activationNonce: tokenMiserActivationNonce,
-      });
-      this.tokenMiserCodeModeReducerDescriptorPath =
-        this.tokenMiserHookBridge.codeModeReducerDescriptorPath;
-      this.tokenMiserStateDir = tokenMiserStateDir;
-      this.tokenMiserPluginManager = new TokenMiserPluginManager({
-        stateDir: tokenMiserStateDir,
-        profileName: resolveActiveProfileName(),
-        executablePath: process.execPath,
-        hookEntryPath: path.join(__dirname, "token-miser-hook.js"),
-      });
-    }
-    this.acpWorktreeRepositoryResolver =
-      options?.acpWorktreeRepositoryResolver ??
-      resolveWorktreeRepositoryDirectory;
-    this.acpAvailableCommandsStore =
-      options?.acpAvailableCommandsStore === null
-        ? undefined
-        : options?.acpAvailableCommandsStore ??
-          (isAppStateInitialized()
-            ? createAcpAvailableCommandsStorage()
-            : undefined);
-    this.acpAvailableCommandProbeBudgetMs =
-      options?.acpAvailableCommandProbeBudgetMs
-      ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
-    this.overlayStore = wrapCodexProviderUsageAttribution(
-      options?.overlayStore ?? getDesktopOverlayStore(),
-      (line) => this.attributeCodexProviderUsage(line),
-    );
-    const gatewayConnections = this.mcpConnectionService;
-    if (gatewayConnections?.requestGatewayToolOperation) {
-      this.mcpGatewayTools = new McpGatewayToolService({
-        connections: { requestGatewayToolOperation: (params) => gatewayConnections.requestGatewayToolOperation!(params) },
-        selectedConnections: async (context) => {
-          if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("MCP gateway tools require an active turn on the owning thread.");
-          const denied = await this.dynamicToolPermissionDenied(context.backend, "mcp_connections", {
-            ...context, tool: "call_mcp_tool",
-          });
-          if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
-          return await this.readMcpGatewaySelection(context);
-        },
-        scopeKey: (context) => {
-          const access = this.taskMonitorForThread(context)?.mcpAccess;
-          return JSON.stringify(["gateway", context.backend, context.threadId, ...(access ? [{
-            selectionOwner: access.selectionOwner, connectionIds: access.connectionIds,
-            grantedConnectionIds: access.automation?.grantedConnectionIds, readOnly: true,
-          }] : [])]);
-        },
-        serverNameInAgent: (connectionId, context) => this.threadMcpServerNameInAgent(connectionId, context),
-        toolAllowed: (tool, context) => !this.isTaskMonitorThread(context)
-          || (tool.definition.annotations?.readOnlyHint === true && tool.definition.annotations.destructiveHint !== true),
-        approve: (invocation, context, signal, annotations, catalogRevision, consentRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, consentRevision),
-        elicit: (request, invocation, context, signal) => this.requestUpstreamMcpForm(request, invocation, context, signal),
-      });
-    }
-    if (this.tokenMiserStore) {
-      void this.initializeTokenMiserLedger();
-    }
-    this.gitDirectoryService =
-      options?.gitDirectoryService ??
-      new GitDirectoryService({
-        codexHome,
-        gitEnv: codexEnv,
-        resolveWorktreeStorage: () =>
-          getDesktopSettingsService().resolveWorktreeStorage(),
-      });
-    this.gitWorkingStateService =
-      options?.gitWorkingStateService ??
-      new GitWorkingStateService({ gitEnv: codexEnv });
-    this.worktreeArchiveService =
-      options?.worktreeArchiveService ??
-      new WorktreeArchiveService({ gitEnv: codexEnv });
-    this.worktreeRecoveryService =
-      options?.worktreeRecoveryService ??
-      new WorktreeRecoveryService({ gitEnv: codexEnv });
-    this.worktreeContainerService = new WorktreeContainerService({ codexHome });
-    const agentToolMcpServer =
-      options?.agentToolMcpServer === null
-        ? undefined
-        : options?.agentToolMcpServer ??
-          new AgentToolMcpServer({
-            resolveCallContext: (context) =>
-              this.resolveAgentToolMcpCallContext(context),
-            resolveCatalogs: (context) => context.threadId && this.isTaskMonitorThread({ ...context, threadId: context.threadId })
-              ? [
-                  { id: "thread_orchestration", router: new AgentToolRouter([
-                    ...buildPwrAgentTaskMonitorToolDefinitions(async (request) => await this.handleAgentTaskMonitorRequest(request), "monitor"),
-                    buildPwrAgentToolGuideDefinition(),
-                  ]) },
-                  { id: "mcp_connections", router: new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools)) },
-                  { id: "forge", router: new AgentToolRouter(this.buildTaskMonitorForgeToolDefinitions(this.resolveForgeToolPolicy())) },
-                ]
-              : resolveAgentToolCatalogs({
-                appManagementHandler: this.appManagementHandler,
-                automationInspectionHandler: this.automationInspectionHandler,
-                federationHandler: this.federationHandler,
-                mcpGatewayTools: this.mcpGatewayTools,
-                mcpConnectionHandler: async (request) =>
-                  await this.handleAgentMcpConnectionRequest(request),
-                messagingHandler: this.messagingHandler,
-                taskMonitorHandler: async (request) =>
-                  await this.handleAgentTaskMonitorRequest(request),
-                threadInspectionHandler: this.threadInspectionHandler,
-                forgeReadHandler: this.gatedForgeReadHandler,
-                forgePrToolHandler: this.gatedForgePrToolHandler,
-                forgeToolPolicy: this.resolveForgeToolPolicy(),
-                threadOrchestrationHandler: this.threadOrchestrationHandler,
-                tokenMiserStore: this.tokenMiserStore,
-                tokenMiserFocused: this.tokenMiserService?.focused,
-                starMapHandler: this.starMapHandler,
-                threadTodoHandler: this.threadTodoHandler,
-              }, { taskMonitorRole: "all" }),
-            authorizeToolCall: (params) =>
-              this.authorizeAgentToolMcpCall(params),
-            resolveToolResultReminder: (context) =>
-              this.takeAcpMonitorJobSuggestion(context),
-          });
-    this.pdfToolMcpServer =
-      options?.pdfToolMcpServer === null
-        ? undefined
-        : options?.pdfToolMcpServer ??
-          (createsLiveCodexClient
-            ? new AgentToolMcpServer({
-                resolveCallContext: (context) =>
-                  this.resolveAgentToolMcpCallContext(context),
-                resolveCatalogs: () => [
-                  {
-                    // These are messaging-context tools; none of them maps to
-                    // a permission today, so naming the category leaves them
-                    // ungated while routing any future mapping through RBAC.
-                    id: "messaging_context",
-                    router: buildPwrAgentMessagingPdfToolRouter(
-                      this.messagingHandler,
-                    ),
-                  },
-                ],
-              })
-            : undefined);
-    this.claudeAgentToolMcpServer = agentToolMcpServer;
-    this.claudeBackend = new ClaudeBackend({
-      inspectInstallation: options?.useMachineClaudeDiscovery
-        ? async () => inspectClaudeInstallation({ env: await settingsService?.resolveTerminalSpawnEnvAsync() })
-        : async () => ({ authStatus: "unknown" }),
-      resolveEnv: async () => await settingsService?.resolveTerminalSpawnEnvAsync() ?? process.env,
-      // A chunk's __dirname is its own folder; this module is bundled into
-      // the main entry, beside the worker.
-      openSessionReader: (env) => openClaudeSessionReader(env, {
-        workerPath: path.join(__dirname, "claude-session-reader-worker.js"),
-      }),
-      emit: async (event) => { await this.emit(event); },
-      request: async (request, signal) => await this.handleServerRequest("claude", request, signal),
-      cancelRequest: async (threadId, turnId, requestId) => {
-        const key = buildPendingRequestKey({ backend: "claude", threadId, requestId });
-        const pending = this.pendingServerRequests.get(key);
-        this.pendingServerRequests.delete(key);
-        pending?.resolve({ decision: "cancel" });
-        await this.emit({ backend: "claude", notification: {
-          method: "serverRequest/resolved", params: { threadId, turnId, requestId },
-        } });
-      },
-      resolveReviewContext: async ({ threadId, cwd, pullRequests }) => await this.resolveReviewContext({
-        backend: "claude", cwd, threadId,
-        overlay: await this.overlayStore.getThreadOverlayState({ backend: "claude", threadId }),
-        // `/code-review` with no target reviews the checked-out work, so the
-        // branch and its attached pull request name the card. One that named
-        // pull requests is named by those.
-        target: { type: "custom", instructions: "/code-review" },
-        ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
-      }),
-      suggestMonitorJob: async (request) => await this.suggestClaudeMonitorJob(request),
-      holdSelfStartedTurn: async ({ threadId, prompt, source }) => await this.holdBackendSelfStartedTurn({
-        backend: "claude", threadId, prompt, source,
-      }),
-      recordSubAgents: async (params) => await this.recordClaudeSubAgents(params),
-      planLimits: this.planLimits,
-      ...options?.claudeBackendOptions,
-      assertOwnerAdmission: () => this.assertThreadOwnership(),
-    });
-    this.acpBackend = new AcpBackendAdapter({
-      assertOwnerAdmission: () => this.assertThreadOwnership(),
-      planLimits: this.planLimits,
-      acpAgentStore: options?.acpAgentStore,
-      acpRolloutStore: options?.acpRolloutStore,
-      acpSessionStore: options?.acpSessionStore,
-      agentToolMcpServer,
-      captureStores: this.captureStores,
-      createAcpClient: options?.createAcpClient,
-      createAcpTransport: options?.createAcpTransport,
-      discoverLocalAcpAgents:
-        options?.discoverLocalAcpAgents
-        ?? (options?.useMachineAcpDiscovery
-          ? createLocalAcpAgentDiscovery(
-              {
-                configStore: options?.configStore ?? getDesktopConfigStore(),
-                ...(settingsService
-                  ? {
-                      resolveEnv: async () =>
-                        await settingsService.resolveTerminalSpawnEnvAsync(),
-                    }
-                  : {}),
-              },
-            )
-          : noLocalAcpAgentDiscovery),
-      isAcpAgentEnabled:
-        options?.isAcpAgentEnabled
-        ?? (options?.configStore
-          ? (registryId) => {
-              const providers = options.configStore?.read("providers");
-              return providers
-                ? acpProviderEnabledFromSnapshot(providers, registryId)
-                : true;
-            }
-          : undefined),
-      resolveProviderDependencyFingerprint: options?.configStore
-        ? (registryId) =>
-            providerProjectionForRegistryId(
-              options.configStore!.read("providers"),
-              registryId,
-            )?.dependencyFingerprint
-        : undefined,
-      emit: async (event) => {
-        this.rememberAcpAvailableCommands(event);
-        await this.emit(event);
-      },
-      handleServerRequest: async (backend, request) =>
-        await this.handleServerRequest(backend, request),
-      resolveMcpConnectionServers: async ({ backendId, sessionId }) => {
-        if (!sessionId) return undefined;
-        const overlay = await this.overlayStore.getThreadOverlayState({
-          backend: backendId,
-          threadId: sessionId,
-        });
-        return await this.registerAcpMcpConnections(
-          overlay?.mcpConnectionIds,
-          sessionId,
-          backendId,
-        );
-      },
-      automationInspectionMcpCommand:
-        options?.automationInspectionMcpCommand ??
-        resolveAutomationInspectionMcpCommand(),
-    });
-    // A Codex window leaves the summary when it resets; tell listeners, so a
-    // surface that refreshes only on events drops the row. Claude and the ACP
-    // agents report their own.
-    this.unsubscribers.push(this.planLimits.subscribe((provider) => {
-      if (provider !== "codex" || this.closed) return;
-      void this.emit({
-        backend: "codex",
-        notification: { method: "backend/providerStatus/updated", params: { backend: "codex" } },
-      }).catch((error) => {
-        backendRegistryLog.warn("Codex rate-limit expiry broadcast failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }));
-    if (this.configStore) {
-      this.unsubscribers.push(
-        this.configStore.subscribe(["experimental"], () => {
-          this.tokenMiserDiagnostics?.isEnabled();
-        }),
-      );
-      this.providerRuntimeFingerprints = readProviderRuntimeFingerprints(
-        this.configStore.read("providers"),
-      );
-      this.unsubscribers.push(
-        this.configStore.subscribe(["providers"], () => {
-          void this.synchronizeProviderRuntimeSelections().catch((error) => {
-            backendRegistryLog.warn(
-              "provider runtime config invalidation failed",
-              {
-                error: error instanceof Error ? error.message : String(error),
-              },
-            );
-          });
-        }),
-      );
-    }
-    this.messagingStore = options?.messagingStore;
-    this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
-    this.appManagementHandler = options?.appManagementHandler ?? undefined;
-    this.starMapHandler = options?.starMapHandler ?? undefined;
-    this.gitWorkspaceHandoffService =
-      options?.gitWorkspaceHandoffService ??
-      new GitWorkspaceHandoffService({
-        gitEnv: codexEnv,
-        worktreeArchiveService: this.worktreeArchiveService,
-        resolveWorktreeStorage: () =>
-          getDesktopSettingsService().resolveWorktreeStorage(),
-      });
-    this.resolveAcpHelperWorkspace =
-      options?.resolveAcpHelperWorkspace ?? ensureAcpHelperWorkspace;
-    this.createScratchProjectDirectory =
-      options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
-    this.createScheduledThreadActionFn = options?.createScheduledThreadAction;
-    this.threadTitleGenerationService =
-      options?.threadTitleGenerationService === null
-        ? undefined
-        : options?.threadTitleGenerationService ??
-          (replayClients
-            ? createReplayThreadTitleService()
-            : new ThreadTitleGenerationService({
-                generators: {
-                  codex: this.codexClient.generateTitle
-                    ? {
-                        generateTitle: (params) =>
-                          this.codexClient.generateTitle!(params),
-                      }
-                    : undefined,
-                },
-                generatorResolver: (backend) => {
-                  if (!isAcpBackendId(backend)) {
-                    return undefined;
-                  }
-                  const helperSession =
-                    backend === "acp:grok"
-                      ? GROK_TITLE_HELPER_SESSION_POLICY
-                      : undefined;
-                  return new AcpThreadTitleGenerator({
-                    backend,
-                    resolveUsageAccountKey: () => this.captureUsageAccount(backend),
-                    configureHelperSession: async ({
-                      client,
-                      parentSession,
-                      reasoningEffort,
-                      session,
-                    }) => {
-                      const model = parentSession?.acpRuntime?.currentModelId
-                        ?? parentSession?.acpRuntime?.configValues?.model
-                        ?? session.acpRuntime?.currentModelId
-                        ?? session.acpRuntime?.configValues?.model;
-                      await this.applyAcpRuntimeSelection(
-                        backend,
-                        client,
-                        session.sessionId,
-                        model ? { currentModelId: model } : undefined,
-                        reasoningEffort,
-                      );
-                    },
-                    helperSession,
-                    getClient: (acpBackend) =>
-                      this.acpBackend.getClient(acpBackend),
-                    getSession: (acpBackend, threadId) =>
-                      this.acpBackend.getSession(acpBackend, threadId),
-                  });
-                },
-              }));
-    this.threadInspectionSearchService =
-      options && "threadSearchService" in options
-        ? options.threadSearchService ?? null
-        : options?.codexClient || replayClients
-          ? null
-          : undefined;
-    this.codexModelProviderCatalog = new CodexModelProviderCatalog({
-      resolveProviders: () => this.resolveCodexModelProvidersFn(),
-      resolveKeys: () => this.resolveCodexModelProviderKeysFn(),
-      ...(options?.codexModelProviderFetch ? { fetch: options.codexModelProviderFetch } : {}),
-    });
-    const codexModelClient = this.codexClient;
-    this.modelCatalog = new BackendModelCatalog({
-      codex: {
-        // Codex's own catalog, then every configured provider's models. A
-        // provider that cannot be reached must not hide Codex's models.
-        listModels: codexModelClient.listModels || this.resolveCodexModelProvidersFn().length
-          ? async (diagnostics) => [
-              ...await codexModelClient.listModels?.(diagnostics) ?? [],
-              ...await this.codexModelProviderCatalog.listModelOptions().catch((error: unknown) => {
-                backendRegistryLog.warn("Codex model provider models unavailable", {
-                  error: error instanceof Error ? error.message : String(error),
-                });
-                return [];
-              }),
-            ]
-          : undefined,
-      },
-    });
-    let providersFingerprint = JSON.stringify(this.resolveCodexModelProvidersFn());
-    const refreshCodexProviderModels = (): void => {
-      const next = JSON.stringify(this.resolveCodexModelProvidersFn());
-      if (next === providersFingerprint) return;
-      providersFingerprint = next;
-      this.codexModelProviderCatalog.invalidate();
-      this.modelCatalog.invalidate("codex");
-    };
-    if (this.configStore) {
-      this.unsubscribers.push(this.configStore.subscribe(["models"], refreshCodexProviderModels));
-    } else if (typeof settingsService?.onConfigWritten === "function") {
-      this.unsubscribers.push(settingsService.onConfigWritten(refreshCodexProviderModels));
-    }
-    this.queuedMessageTitler = new QueuedMessageTitler({
-      generate: async (params) =>
-        await this.generateStructuredObject({
-          ...params,
-          helper: "queued_message_titles",
-        }),
-      isCurrent: (request) => this.isQueuedMessageTitleCurrent(request),
-      apply: (request, title) => this.applyQueuedMessageTitle(request, title),
-      settle: async (request, settlement) =>
-        await this.recordQueuedMessageTitle(request, settlement),
-      log: (message, fields) => backendRegistryLog.info(message, fields),
-      ...(options?.queuedMessageTitleSettleMs !== undefined
-        ? { settleMs: options.queuedMessageTitleSettleMs }
-        : {}),
-    });
-    this.threadTurnQueue = new ThreadTurnQueue({
-      startTurn: async (entry) => await this.startTurnNow(entry),
-      canSteerThread: (entry) => !this.stoppingRunningTurnsForShutdown
-        && !this.threadHasBlockingWorkspaceMove(entry)
-        && this.getActiveTurnForThread(entry) !== undefined
-        && this.findReviewForParentTurn({
-          backend: entry.backend,
-          parentThreadId: entry.threadId,
-        })?.mode !== "native",
-      steerTurn: async (entry) => {
-        const active = this.getActiveTurnForThread(entry);
-        if (!active) return undefined;
-        const backend = (await this.listBackends({ includeUnavailable: true })).backends
-          .find((candidate) => candidate.kind === entry.backend);
-        if (!backend?.capabilities.steerTurn) return undefined;
-        // Review ownership can change while backend discovery is pending.
-        if (this.findReviewForParentTurn({
-          backend: entry.backend,
-          parentThreadId: entry.threadId,
-        })?.mode === "native") return undefined;
-        try {
-          const result = await this.steerTurn({
-            backend: entry.backend,
-            threadId: entry.threadId,
-            expectedTurnId: active.turnId,
-            requestId: entry.id,
-            input: entry.input,
-          }, entry.messageOrigin);
-          return { backend: result.backend, threadId: result.threadId, turnId: result.turnId };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (/no active turn|expected active turn id/.test(message)) {
-            const current = this.getActiveTurnForThread(entry);
-            return current?.turnId !== active.turnId ? "retry" : undefined;
-          }
-          throw error;
-        }
-      },
-      // A turn a quit stopped releases its thread; the next queued turn must
-      // not start in its place, so every thread reads as busy from then on.
-      isThreadActive: ({ backend, threadId }) =>
-        this.stoppingRunningTurnsForShutdown
-        || this.threadHasActiveTurn(threadId, backend)
-        || this.threadHasBlockingWorkspaceMove({ backend, threadId })
-        // A send waits behind a checkout restore like a queued message.
-        || this.checkoutRestores.has(buildThreadIdentityKey(backend, threadId)),
-      isDispatchHeld: (entry) => restartGateHolds(this.restartGate, {
-        ...(entry.restartContinuation && entry.id ? { restartEntryId: entry.id } : {}),
-      }, Date.now()),
-      onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
-    });
-    this.restoreProjectHeldWakeups();
-    this.restoreRestartContinuations();
     this.taskMonitorWatchdogTimer = setInterval(() => {
       void this.checkStaleTaskMonitors().catch((error) => {
         backendRegistryLog.warn("task monitor stale watchdog failed", {
@@ -4330,33 +3231,6 @@ export class DesktopBackendRegistry {
       });
     }, TASK_MONITOR_STALE_CHECK_INTERVAL_MS);
     this.taskMonitorWatchdogTimer.unref?.();
-
-    this.isCodexBootstrapDeferredFn =
-      options?.isCodexBootstrapDeferred ??
-      (() => {
-        try {
-          return ONBOARDING_CODEX_GATE_ENABLED
-            && !getDesktopConfigStore().read("onboarding").completed;
-        } catch (error) {
-          // The settings singleton can only throw if app-state init
-          // never ran. That should not be reachable in production —
-          // `initializeAppState()` runs before any IPC handler that
-          // reaches the registry. If it does happen, default to "gate
-          // off" so we fall back to the historical behavior (Codex
-          // prewarm runs) rather than presenting an empty sidebar that
-          // the operator has no way to unstick. Surface the failure
-          // loudly so the underlying init bug is fixable.
-          backendRegistryLog.warn(
-            "isCodexBootstrapDeferred fell back to false; settings service unavailable",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return false;
-        }
-      });
-    this.isBootstrapModeFn =
-      options?.isBootstrapMode ?? (() => getAppStateMode() === "bootstrap");
 
     this.subscribeClient("codex", this.codexClient);
 
@@ -4405,6 +3279,123 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /** Callback ports for composition only; feature modules use RegistryContext. */
+  constructionPorts() {
+    const current = () => this;
+    return {
+      get acpBackend() { return current().acpBackend; },
+      get activeCodexTurnCollaborationModes() { return current().activeCodexTurnCollaborationModes; },
+      get activeTurnKeys() { return current().activeTurnKeys; },
+      get appManagementHandler() { return current().appManagementHandler; },
+      applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
+      applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
+      approveGatewayInvocation: (...args: Parameters<typeof this.approveGatewayInvocation>) => this.approveGatewayInvocation(...args),
+      assertThreadOwnership: (...args: Parameters<typeof this.assertThreadOwnership>) => this.assertThreadOwnership(...args),
+      attributeCodexProviderUsage: (...args: Parameters<typeof this.attributeCodexProviderUsage>) => this.attributeCodexProviderUsage(...args),
+      authorizeAgentToolMcpCall: (...args: Parameters<typeof this.authorizeAgentToolMcpCall>) => this.authorizeAgentToolMcpCall(...args),
+      get automationInspectionHandler() { return current().automationInspectionHandler; },
+      buildTaskMonitorForgeToolDefinitions: (...args: Parameters<typeof this.buildTaskMonitorForgeToolDefinitions>) => this.buildTaskMonitorForgeToolDefinitions(...args),
+      captureUsageAccount: (...args: Parameters<typeof this.captureUsageAccount>) => this.captureUsageAccount(...args),
+      get checkoutRestores() { return current().checkoutRestores; },
+      get closed() { return current().closed; },
+      get codexClient() { return current().codexClient; },
+      get codexModelProviderCatalog() { return current().codexModelProviderCatalog; },
+      get codexModelProviderKeysRead() { return current().codexModelProviderKeysRead; },
+      set codexModelProviderKeysRead(value) { current().codexModelProviderKeysRead = value; },
+      get codexRuntimeRestartPending() { return current().codexRuntimeRestartPending; },
+      set codexRuntimeRestartPending(value) { current().codexRuntimeRestartPending = value; },
+      get configStore() { return current().configStore; },
+      dynamicToolPermissionDenied: (...args: Parameters<typeof this.dynamicToolPermissionDenied>) => this.dynamicToolPermissionDenied(...args),
+      emit: (...args: Parameters<typeof this.emit>) => this.emit(...args),
+      emitThreadToolAccountingUpdated: (...args: Parameters<typeof this.emitThreadToolAccountingUpdated>) => this.emitThreadToolAccountingUpdated(...args),
+      emitTurnQueueLifecycle: (...args: Parameters<typeof this.emitTurnQueueLifecycle>) => this.emitTurnQueueLifecycle(...args),
+      get federationHandler() { return current().federationHandler; },
+      findReviewForParentTurn: (...args: Parameters<typeof this.findReviewForParentTurn>) => this.findReviewForParentTurn(...args),
+      get gatedForgePrToolHandler() { return current().gatedForgePrToolHandler; },
+      get gatedForgeReadHandler() { return current().gatedForgeReadHandler; },
+      generateStructuredObject: (...args: Parameters<typeof this.generateStructuredObject>) => this.generateStructuredObject(...args),
+      getActiveTurnForThread: (...args: Parameters<typeof this.getActiveTurnForThread>) => this.getActiveTurnForThread(...args),
+      handleAgentMcpConnectionRequest: (...args: Parameters<typeof this.handleAgentMcpConnectionRequest>) => this.handleAgentMcpConnectionRequest(...args),
+      handleAgentTaskMonitorRequest: (...args: Parameters<typeof this.handleAgentTaskMonitorRequest>) => this.handleAgentTaskMonitorRequest(...args),
+      handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.handleCodexAppServerUnexpectedExit>) => this.handleCodexAppServerUnexpectedExit(...args),
+      handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
+      holdBackendSelfStartedTurn: (...args: Parameters<typeof this.holdBackendSelfStartedTurn>) => this.holdBackendSelfStartedTurn(...args),
+      initializeTokenMiserLedger: (...args: Parameters<typeof this.initializeTokenMiserLedger>) => this.initializeTokenMiserLedger(...args),
+      invalidateProviderRuntimeSelections: (...args: Parameters<typeof this.invalidateProviderRuntimeSelections>) => this.invalidateProviderRuntimeSelections(...args),
+      get isCodexBootstrapDeferredFn() { return current().isCodexBootstrapDeferredFn; },
+      isLiveDynamicToolCall: (...args: Parameters<typeof this.isLiveDynamicToolCall>) => this.isLiveDynamicToolCall(...args),
+      isQueuedMessageTitleCurrent: (...args: Parameters<typeof this.isQueuedMessageTitleCurrent>) => this.isQueuedMessageTitleCurrent(...args),
+      isTaskMonitorThread: (...args: Parameters<typeof this.isTaskMonitorThread>) => this.isTaskMonitorThread(...args),
+      listBackends: (...args: Parameters<typeof this.listBackends>) => this.listBackends(...args),
+      get liveThreadReplayInputCursor() { return current().liveThreadReplayInputCursor; },
+      get managedCodexRuntimeSwitchPending() { return current().managedCodexRuntimeSwitchPending; },
+      set managedCodexRuntimeSwitchPending(value) { current().managedCodexRuntimeSwitchPending = value; },
+      maybeRestartCodexForManagedRuntimeChange: (...args: Parameters<typeof this.maybeRestartCodexForManagedRuntimeChange>) => this.maybeRestartCodexForManagedRuntimeChange(...args),
+      get mcpConnectionService() { return current().mcpConnectionService; },
+      get mcpGatewayTools() { return current().mcpGatewayTools; },
+      get messagingHandler() { return current().messagingHandler; },
+      get modelCatalog() { return current().modelCatalog; },
+      get overlayStore() { return current().overlayStore; },
+      get pendingServerRequests() { return current().pendingServerRequests; },
+      get pendingTokenMiserInterceptions() { return current().pendingTokenMiserInterceptions; },
+      get planLimits() { return current().planLimits; },
+      publishLiveTokenMiserLedgerEntry: (...args: Parameters<typeof this.publishLiveTokenMiserLedgerEntry>) => this.publishLiveTokenMiserLedgerEntry(...args),
+      readMcpGatewaySelection: (...args: Parameters<typeof this.readMcpGatewaySelection>) => this.readMcpGatewaySelection(...args),
+      recordClaudeSubAgents: (...args: Parameters<typeof this.recordClaudeSubAgents>) => this.recordClaudeSubAgents(...args),
+      recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
+      recordTokenMiserFocusedInference: (...args: Parameters<typeof this.recordTokenMiserFocusedInference>) => this.recordTokenMiserFocusedInference(...args),
+      redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
+      registerAcpMcpConnections: (...args: Parameters<typeof this.registerAcpMcpConnections>) => this.registerAcpMcpConnections(...args),
+      rememberAcpAvailableCommands: (...args: Parameters<typeof this.rememberAcpAvailableCommands>) => this.rememberAcpAvailableCommands(...args),
+      rememberActiveTokenMiserReplayEntry: (...args: Parameters<typeof this.rememberActiveTokenMiserReplayEntry>) => this.rememberActiveTokenMiserReplayEntry(...args),
+      requestUpstreamMcpForm: (...args: Parameters<typeof this.requestUpstreamMcpForm>) => this.requestUpstreamMcpForm(...args),
+      resolveAgentToolMcpCallContext: (...args: Parameters<typeof this.resolveAgentToolMcpCallContext>) => this.resolveAgentToolMcpCallContext(...args),
+      get resolveCodexModelProviderKeysFn() { return current().resolveCodexModelProviderKeysFn; },
+      get resolveCodexModelProvidersFn() { return current().resolveCodexModelProvidersFn; },
+      resolveForgeToolPolicy: (...args: Parameters<typeof this.resolveForgeToolPolicy>) => this.resolveForgeToolPolicy(...args),
+      get resolveHelperModelSettingsFn() { return current().resolveHelperModelSettingsFn; },
+      get resolvePassSetupVariablesToAgentsFn() { return current().resolvePassSetupVariablesToAgentsFn; },
+      resolveReviewContext: (...args: Parameters<typeof this.resolveReviewContext>) => this.resolveReviewContext(...args),
+      get resolveSpendAlertPolicyFn() { return current().resolveSpendAlertPolicyFn; },
+      resolveThreadMcpRootDirectories: (...args: Parameters<typeof this.resolveThreadMcpRootDirectories>) => this.resolveThreadMcpRootDirectories(...args),
+      get resolveTokenMiserDefaultEnabledFn() { return current().resolveTokenMiserDefaultEnabledFn; },
+      get resolveTokenMiserEnabledFn() { return current().resolveTokenMiserEnabledFn; },
+      resolveTokenMiserParentModel: (...args: Parameters<typeof this.resolveTokenMiserParentModel>) => this.resolveTokenMiserParentModel(...args),
+      resolveTokenMiserThreadOverride: (...args: Parameters<typeof this.resolveTokenMiserThreadOverride>) => this.resolveTokenMiserThreadOverride(...args),
+      get resolveToolOutputAlertPolicyFn() { return current().resolveToolOutputAlertPolicyFn; },
+      get restartGate() { return current().restartGate; },
+      restoreProjectHeldWakeups: (...args: Parameters<typeof this.restoreProjectHeldWakeups>) => this.restoreProjectHeldWakeups(...args),
+      restoreRestartContinuations: (...args: Parameters<typeof this.restoreRestartContinuations>) => this.restoreRestartContinuations(...args),
+      get spendAlertPolicy() { return current().spendAlertPolicy; },
+      set spendAlertPolicy(value) { current().spendAlertPolicy = value; },
+      get starMapHandler() { return current().starMapHandler; },
+      startTurnNow: (...args: Parameters<typeof this.startTurnNow>) => this.startTurnNow(...args),
+      steerTurn: (...args: Parameters<typeof this.steerTurn>) => this.steerTurn(...args),
+      get stoppingRunningTurnsForShutdown() { return current().stoppingRunningTurnsForShutdown; },
+      suggestClaudeMonitorJob: (...args: Parameters<typeof this.suggestClaudeMonitorJob>) => this.suggestClaudeMonitorJob(...args),
+      synchronizeProviderRuntimeSelections: (...args: Parameters<typeof this.synchronizeProviderRuntimeSelections>) => this.synchronizeProviderRuntimeSelections(...args),
+      takeAcpMonitorJobSuggestion: (...args: Parameters<typeof this.takeAcpMonitorJobSuggestion>) => this.takeAcpMonitorJobSuggestion(...args),
+      taskMonitorForThread: (...args: Parameters<typeof this.taskMonitorForThread>) => this.taskMonitorForThread(...args),
+      threadHasActiveTurn: (...args: Parameters<typeof this.threadHasActiveTurn>) => this.threadHasActiveTurn(...args),
+      threadHasBlockingWorkspaceMove: (...args: Parameters<typeof this.threadHasBlockingWorkspaceMove>) => this.threadHasBlockingWorkspaceMove(...args),
+      get threadInspectionHandler() { return current().threadInspectionHandler; },
+      threadMcpServerNameInAgent: (...args: Parameters<typeof this.threadMcpServerNameInAgent>) => this.threadMcpServerNameInAgent(...args),
+      get threadOrchestrationHandler() { return current().threadOrchestrationHandler; },
+      get threadTodoHandler() { return current().threadTodoHandler; },
+      get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
+      get tokenMiserDiagnostics() { return current().tokenMiserDiagnostics; },
+      get tokenMiserLivePublishChain() { return current().tokenMiserLivePublishChain; },
+      set tokenMiserLivePublishChain(value) { current().tokenMiserLivePublishChain = value; },
+      get tokenMiserPostToolUseExactOutputVersion() { return current().tokenMiserPostToolUseExactOutputVersion; },
+      get tokenMiserService() { return current().tokenMiserService; },
+      get tokenMiserStore() { return current().tokenMiserStore; },
+      get toolOutputAlertPolicy() { return current().toolOutputAlertPolicy; },
+      set toolOutputAlertPolicy(value) { current().toolOutputAlertPolicy = value; },
+      get unsubscribers() { return current().unsubscribers; },
+    };
+  }
+
+  // Scheduled actions need the registry before they can supply their creator.
   setScheduledThreadActionCreator(
     creator:
       | ((
@@ -4916,30 +3907,35 @@ export class DesktopBackendRegistry {
     return await this.codexProtocolCaptureSession?.stop();
   }
 
+  // Messaging needs the registry bridge before it can supply these bindings.
   setMessagingArchiveCleaner(
     cleaner: MessagingArchiveCleaner | null | undefined,
   ): void {
     this.messagingArchiveCleaner = cleaner;
   }
 
+  // Messaging needs the registry bridge before it can supply these bindings.
   setMessagingAgentToolService(
     service: MessagingAgentToolService | null | undefined,
   ): void {
     this.messagingAgentToolService = service ?? undefined;
   }
 
+  // Automations need the registry before they can supply their inspection binding.
   setAutomationInspectionHandler(
     handler: AutomationInspectionHandler | null | undefined,
   ): void {
     this.automationInspectionHandler = handler ?? undefined;
   }
 
+  // App management diagnostics resolve the published owner registry.
   setPwrAgentAppManagementHandler(
     handler: PwrAgentAppManagementHandler | null | undefined,
   ): void {
     this.appManagementHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setPwrAgentFederationHandler(
     handler: PwrAgentFederationHandler | null | undefined,
   ): void {
@@ -4953,6 +3949,7 @@ export class DesktopBackendRegistry {
    * attachments belong to it — so one instance built at startup could not
    * carry either.
    */
+  // Federation needs the registry before it can supply routed owner bindings.
   setStarMapIntakeFederationHandlerFactory(
     factory:
       | ((attachments: AppServerTurnInputItem[]) => PwrAgentFederationHandler)
@@ -4970,16 +3967,19 @@ export class DesktopBackendRegistry {
    * reach, and the pin and seen paths publish the events every window
    * redraws from.
    */
+  // The app-server service needs the registry before it can supply this owner binding.
   setAgentThreadActions(actions: AgentThreadActions | null | undefined): void {
     this.agentThreadActions = actions ?? undefined;
   }
 
+  // The owner installs host view bindings after publishing its registry.
   setPwrAgentStarMapHandler(
     handler: PwrAgentStarMapHandler | null | undefined,
   ): void {
     this.starMapHandler = handler ?? undefined;
   }
 
+  // The to-do owner needs the registry before it can supply its handler.
   setPwrAgentThreadTodoHandler(
     handler: PwrAgentThreadTodoHandler | null | undefined,
   ): void {
@@ -5084,42 +4084,49 @@ export class DesktopBackendRegistry {
     return thread?.linkedDirectories?.[0];
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadMessageHandler(
     handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
   ): void {
     this.federatedThreadMessageHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadInspectionHandler(
     handler: PwrAgentFederatedThreadInspectionHandler | null | undefined,
   ): void {
     this.federatedThreadInspectionHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadMutationHandler(
     handler: PwrAgentFederatedThreadMutationHandler | null | undefined,
   ): void {
     this.federatedThreadMutationHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadControlHandler(
     handler: PwrAgentFederatedThreadControlHandler | null | undefined,
   ): void {
     this.federatedThreadControlHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestStatusToolHandler(
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestCanonicalizer(
     canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
   ): void {
     this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setPullRequestReferenceResolver(
     resolver: PullRequestReferenceResolver | null | undefined,
   ): void {
@@ -5130,18 +4137,21 @@ export class DesktopBackendRegistry {
   private threadProjectRepositoryResolver?: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>;
 
   /** Reads a thread's primary repository when the navigation cache has none yet. */
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadProjectRepositoryResolver(
     resolver: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>,
   ): void {
     this.threadProjectRepositoryResolver = resolver;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrimaryGitRepositoryReader(
     reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
   ): void {
     this.threadPrimaryGitRepositoryReader = reader;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setLocalPullRequestAuthorityResolver(
     resolver: LocalPullRequestAuthorityResolver | null | undefined,
   ): void {
@@ -5161,12 +4171,14 @@ export class DesktopBackendRegistry {
     return this.localPullRequestAuthorityResolver?.(prKey) ?? false;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestWatchToolHandler(
     handler: ThreadPullRequestWatchToolHandler | null | undefined,
   ): void {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadMaintenanceToolHandler(handler: ThreadMaintenanceToolHandler | undefined): void {
     this.threadMaintenanceToolHandler = handler;
     this.threadMaintenanceToolScans = handler ? new ThreadMaintenanceToolScans({
@@ -5175,24 +4187,28 @@ export class DesktopBackendRegistry {
     }) : undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadDependencyToolHandler(
     handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
   ): void {
     this.threadDependencyToolHandler = handler;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setDirectoryGitStatusWriter(
     writer: DirectoryGitStatusWriter | null | undefined,
   ): void {
     this.directoryGitStatusWriter = writer ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrAutoDispatchHandler(
     handler: ThreadPrAutoDispatchHandler | null | undefined,
   ): void {
     this.threadPrAutoDispatchHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestDetachHandler(
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
@@ -5204,6 +4220,7 @@ export class DesktopBackendRegistry {
     requesterInstanceId: string | undefined,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadDependenciesPeerHandler(handler: typeof this.threadDependenciesPeerHandler): void {
     this.threadDependenciesPeerHandler = handler;
   }
@@ -5217,6 +4234,7 @@ export class DesktopBackendRegistry {
     return await this.threadDependenciesPeerHandler(request, requesterInstanceId);
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrWatchesPeerHandler(
     handler: ThreadPrWatchesPeerHandler | null | undefined,
   ): void {
@@ -5237,6 +4255,7 @@ export class DesktopBackendRegistry {
     return await handler(request);
   }
 
+  // The app-server service needs the registry before it can supply these forge bindings.
   setProjectForgeAutomationHandler(
     handler: ProjectForgeAutomationHandler | null | undefined,
   ): void {
@@ -5257,6 +4276,7 @@ export class DesktopBackendRegistry {
     return handler;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestRefreshHandler(
     handler: ThreadPullRequestRefreshHandler | null | undefined,
   ): void {
@@ -5277,6 +4297,7 @@ export class DesktopBackendRegistry {
     return await handler(request);
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadGitWorkingStateRefreshHandler(
     handler: ThreadGitWorkingStateRefreshHandler | null | undefined,
   ): void {
@@ -47429,21 +46450,9 @@ export function getExistingDesktopBackendRegistry(): DesktopBackendRegistry | nu
   return registry;
 }
 
-export function initializeDesktopBackendRegistry(): DesktopBackendRegistry {
-  if (!registry) {
-    // The one construction that wants the operator's real machine. Every other
-    // `new DesktopBackendRegistry(...)` in the tree is a test, and defaults to
-    // `noLocalAcpAgentDiscovery` — keeping the config read, the GitHub release
-    // fetch, the managed-Grok install, and the 5-16s binary probe out of the
-    // suite even when a test forgets to inject its own discovery stub.
-    registry = new DesktopBackendRegistry({
-      ownerAdmission: new ProfileThreadOwnerAdmission(() => getRuntimeLeaseManager()),
-      configStore: getDesktopConfigStore(),
-      useMachineAcpDiscovery: !getOwnerHostServices().runtimePolicy || getOwnerHostServices().runtimePolicy!.enabledBackends.some(isAcpBackendId),
-      useMachineClaudeDiscovery: !getOwnerHostServices().runtimePolicy || getOwnerHostServices().runtimePolicy!.enabledBackends.includes("claude"),
-    });
-  }
-
+/** The root supplies construction; singleton readers never compose owners. */
+export function initializeDesktopBackendRegistry(create: () => DesktopBackendRegistry): DesktopBackendRegistry {
+  registry ??= create();
   return registry;
 }
 

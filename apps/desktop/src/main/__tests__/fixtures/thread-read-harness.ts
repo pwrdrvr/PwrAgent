@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../../app-server/backend-registry-wiring";
 import { vi } from "vitest";
 import type {
   AppServerBackendKind,
@@ -155,7 +156,7 @@ export function createThreadReadRegistry(threads: AppServerThreadSummary[]): {
   registry: DesktopBackendRegistry;
 } {
   const client = new CountingBackendClient(threads);
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: client as never,
     overlayStore: overlayStoreStub() as never,
     threadTitleGenerationService: null,

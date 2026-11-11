@@ -1,8 +1,9 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -58,7 +59,7 @@ async function replayCadence(scenario: typeof scenarios[number], signal: AbortSi
     const temp = createTempStateDb("pwragent-usage-cadence-");
     const db = StateDb.open(temp.dbPath);
     const store = new SqliteOverlayStore(db);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       overlayStore: store,
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }),

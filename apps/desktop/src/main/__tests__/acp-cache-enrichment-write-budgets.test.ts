@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { AcpSessionStore } from "@pwragent/sqlite-storage/acp-session-store";
 import { SqliteOverlayStore } from "@pwragent/sqlite-storage/overlay-store-sqlite";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "@pwragent/sqlite-storage/sqlite-write-metrics";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -27,7 +28,7 @@ it("budgets first ACP worktree enrichment and zero-write repeated cache publicat
   writeFileSync(configPath, "");
   const configStore = new DesktopConfigStore({ configPath });
   const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
-  const desktop = new DesktopBackendRegistry({ codexClient, configStore, overlayStore: new SqliteOverlayStore(db), acpSessionStore: sessions,
+  const desktop = createDesktopBackendRegistry({ codexClient, configStore, overlayStore: new SqliteOverlayStore(db), acpSessionStore: sessions,
     providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db), discoverLocalAcpAgents: async () => [], messagingStore: null,
     pdfToolMcpServer: null, threadTitleGenerationService: null, acpWorktreeRepositoryResolver: async () => ({
       id: repo, path: repo, worktreePath: cwd, kind: "worktree", label: "repo" }) });

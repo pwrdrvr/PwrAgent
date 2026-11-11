@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
@@ -116,9 +117,9 @@ type OwnerHost = {
  * the shared capability table. Provider subprocesses use protocol fixtures.
  */
 async function startDesktopOwner(
-  threadTitleGenerationService: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
+  threadTitleGenerationService: NonNullable<Parameters<typeof createDesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
   prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
-  claudeOptions?: (workspace: string) => NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["claudeBackendOptions"],
+  claudeOptions?: (workspace: string) => NonNullable<Parameters<typeof createDesktopBackendRegistry>[0]>["claudeBackendOptions"],
   profileRoot?: string,
   protocolHelperTitle?: string,
 ): Promise<OwnerHost> {
@@ -143,7 +144,7 @@ async function startDesktopOwner(
   await writeFile(configPath, "");
   const configStore = new DesktopConfigStore({ configPath });
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
-  const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
+  const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
     ...(profileRoot ? { providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db) } : {}),
     ...(profileRoot ? { retainedOwnerThreadStorage: new RetainedOwnerThreadStore(db, path.join(profileRoot, "profiles/t/state/headless")) } : {}),
     ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
@@ -1557,21 +1558,27 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 
   describe("steering grant admission", () => {
     it("the enrolled Outpost requires both steering feature and turn-control grants before receipt admission", async () => {
-      for (const capabilities of [["turn_control"], ["durable_steer_requests_v1"], ["durable_turn_requests_v1", "turn_control"]] as FederationCapability[][]) {
-        const outpost = await startConformanceDaemon({ capabilities });
-        try {
-          const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
-            request: { backend: "codex", threadId: "unadmitted", expectedTurnId: "unadmitted-turn", input: [{ type: "text", text: "Must not be admitted" }] } };
-          request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(outpost.ownerInstanceId, request)).digest("hex");
-          await expect(outpost.client.submitSteerRequest(request)).rejects.toThrow(/capability|grant|forbidden|allowed/i);
-          await expect(outpost.client.getSteerRequest({ backend: "codex", threadId: "unadmitted", id: request.clientRequest.id })).rejects.toThrow(/capability|grant|forbidden|allowed/i);
-          const db = StateDb.open(path.join(outpost.env.PWRAGENT_HOME!, "profiles/t/state/state.db"));
+      const outpost = await startConformanceDaemon();
+      try {
+        // Grants are per viewer; the fully granted viewer must not authorize another peer.
+        for (const capabilities of [["turn_control"], ["durable_steer_requests_v1"], ["durable_turn_requests_v1", "turn_control"]] as FederationCapability[][]) {
+          const viewer = await outpost.enrollViewer(capabilities);
           try {
-            const scope = JSON.stringify(["steerTurn", JSON.stringify(["federation", outpost.viewerId, ""])]);
-            expect(new SqliteDurableTurnRequestStore(db).read(scope, request.clientRequest.id)).toBeUndefined();
-          } finally { db.close(); }
-        } finally { await outpost.close(); }
-      }
+            expect(viewer.ownerInstanceId).toBe(outpost.ownerInstanceId);
+            expect(viewer.viewerId).not.toBe(outpost.viewerId);
+            const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+              request: { backend: "codex", threadId: "unadmitted", expectedTurnId: "unadmitted-turn", input: [{ type: "text", text: "Must not be admitted" }] } };
+            request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(outpost.ownerInstanceId, request)).digest("hex");
+            await expect(viewer.client.submitSteerRequest(request)).rejects.toThrow(/capability|grant|forbidden|allowed/i);
+            await expect(viewer.client.getSteerRequest({ backend: "codex", threadId: "unadmitted", id: request.clientRequest.id })).rejects.toThrow(/capability|grant|forbidden|allowed/i);
+            const db = StateDb.open(path.join(outpost.env.PWRAGENT_HOME!, "profiles/t/state/state.db"));
+            try {
+              const scope = JSON.stringify(["steerTurn", JSON.stringify(["federation", viewer.viewerId, ""])]);
+              expect(new SqliteDurableTurnRequestStore(db).read(scope, request.clientRequest.id)).toBeUndefined();
+            } finally { db.close(); }
+          } finally { await viewer.close(); }
+        }
+      } finally { await outpost.close(); }
     });
   });
 

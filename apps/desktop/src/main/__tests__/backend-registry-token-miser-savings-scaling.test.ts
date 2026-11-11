@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { estimateTokenUsageCost } from "@pwragent/shared";
 import type {
   ThreadSubAgentSummary,
@@ -64,7 +65,7 @@ describe("Token Miser savings scaling", () => {
     directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-token-miser-scale-"));
     stateDb = openInMemoryStateDb();
     store = new SqliteOverlayStore(stateDb);
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {},
         getInitializeResult: async () => ({ methods: [] }),

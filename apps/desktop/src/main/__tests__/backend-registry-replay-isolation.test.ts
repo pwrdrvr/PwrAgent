@@ -1,10 +1,11 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import { createReplayClientsFromEnv } from "../shell/testing/replay-runtime";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 
@@ -187,7 +188,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
       ]
     });
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),
     });
 
@@ -197,7 +198,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
     await registry.close();
   });
   it("spawns exactly one codex child process with workspace-write defaults so newly created threads inherit Default Access", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),
     });
 
@@ -221,7 +222,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
     const codexHome = path.join(os.tmpdir(), "pwragent-overlay-home");
     settingsState.codexEnv = { CODEX_HOME: codexHome };
     settingsState.configOverrides = ['model_provider="local"', 'model="fixture-one"'];
-    const registry = new DesktopBackendRegistry({ overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ overlayStore: createOverlayStoreMock() });
     try {
       const resolveArgs = constructorState.codexResolveArgs[0]!;
       const first = await resolveArgs(settingsState.codexEnv);
@@ -251,7 +252,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
       CODEX_HOME: codexHome,
     } as NodeJS.ProcessEnv;
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),
     });
 
@@ -275,7 +276,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
       PATH: "/opt/homebrew/bin:/usr/bin:/bin",
     } as NodeJS.ProcessEnv;
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),
     });
 

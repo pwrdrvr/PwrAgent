@@ -19,19 +19,23 @@ export const OUTPOST_PACKAGE_ROOT = path.resolve(import.meta.dirname, "../../../
 export const OUTPOST_VIEWER_CAPABILITIES: FederationCapability[] = ["remote_window", "thread_navigation", "thread_detail",
   "federated_search", "turn_control", "durable_turn_requests_v1", "durable_steer_requests_v1", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"];
 
-export type OutpostDaemon = {
+export type OutpostViewer = {
   client: FederationRemoteBackendClient;
   rpc: FederationRpcEndpoint;
   /** `backend.event` payloads, in arrival order, once `subscribe` is called. */
   events: AgentEvent[];
   subscribe(eventClasses: string[]): void;
   waitForEvent(method: string, matches: (event: AgentEvent) => boolean): Promise<AgentEvent>;
-  workspace: string;
-  cli: string;
-  env: NodeJS.ProcessEnv;
   viewerId: string;
   ownerInstanceId: string;
   close(): Promise<void>;
+};
+
+export type OutpostDaemon = OutpostViewer & {
+  workspace: string;
+  cli: string;
+  env: NodeJS.ProcessEnv;
+  enrollViewer(capabilities: FederationCapability[]): Promise<OutpostViewer>;
 };
 
 /**
@@ -77,18 +81,16 @@ export async function startOutpostDaemon(options: {
   daemon.stdout.on("data", (chunk) => { output += String(chunk); });
   daemon.stderr.on("data", (chunk) => { errors += String(chunk); });
   const exited = new Promise<void>((resolve) => daemon.once("exit", () => resolve()));
-  let connection: Awaited<ReturnType<typeof connectFederationClient>> | undefined;
+  const connections = new Set<Awaited<ReturnType<typeof connectFederationClient>>>();
   const close = async () => {
-    connection?.close();
+    for (const connection of connections) connection.close();
+    connections.clear();
     daemon.kill("SIGTERM");
     await exited;
     if (!options.profileRoot) rmSync(root, { recursive: true, force: true });
   };
-  try {
-    for (let attempt = 0; !output.includes('"ready":true'); attempt++) {
-      if (daemon.exitCode !== null || attempt >= 200) throw new Error(`Outpost startup failed (${daemon.exitCode}): ${errors} ${output.slice(-3000)}`);
-      await delay(20);
-    }
+  // Grants belong to an enrolled viewer. Independent viewers share one owner.
+  const enrollViewer = async (capabilities: FederationCapability[]): Promise<OutpostViewer> => {
     // The gateway binds the port it advertises (configured as 0 above), so
     // no port is ever chosen here and released for the daemon to take.
     const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite"], { env });
@@ -98,11 +100,11 @@ export async function startOutpostDaemon(options: {
     const events: AgentEvent[] = [];
     const eventWaiters = new Set<(event: AgentEvent) => void>();
     let rpc: FederationRpcEndpoint;
-    connection = await connectFederationClient({ url: invite.gatewayUrl, mode: "enroll", ...identity,
+    const connected = await connectFederationClient({ url: invite.gatewayUrl, mode: "enroll", ...identity,
       peerInstanceId: viewerId, role: "client", inviteToken: invite.token,
       gatewayInstanceId: invite.gatewayInstanceId, gatewayPublicKeyPem: invite.gatewayPublicKeyPem,
       gatewayNoisePublicKey: Buffer.from(invite.gatewayNoisePublicKey!, "base64"), noiseStatic: generateNoiseStaticKeyPair(),
-      capabilities: options.capabilities ?? OUTPOST_VIEWER_CAPABILITIES, deferReceiving: true,
+      capabilities, deferReceiving: true,
       onEnvelope: (envelope) => {
         if (envelope.kind === "notification" && envelope.method === "backend.event") {
           const event = envelope.params as AgentEvent;
@@ -113,12 +115,13 @@ export async function startOutpostDaemon(options: {
         rpc.receiveEnvelope(envelope);
       },
     });
-    const connected = connection;
+    connections.add(connected);
     rpc = new FederationRpcEndpoint({ localInstanceId: viewerId, remoteInstanceId: invite.gatewayInstanceId,
       sendEnvelope: (envelope) => connected.sendEnvelope(envelope), defaultTimeoutMs: 3000 });
     connected.startReceiving();
     return {
-      client: new FederationRemoteBackendClient(rpc), rpc, events, workspace, cli, env, viewerId, ownerInstanceId: invite.gatewayInstanceId, close,
+      client: new FederationRemoteBackendClient(rpc), rpc, events, viewerId, ownerInstanceId: invite.gatewayInstanceId,
+      close: async () => { connected.close(); connections.delete(connected); },
       waitForEvent: (method, matches) => {
         const found = events.find(event => event.notification.method === method && matches(event));
         if (found) return Promise.resolve(found);
@@ -134,6 +137,14 @@ export async function startOutpostDaemon(options: {
         id: randomUUID(), params: { eventClasses, threadSelection: { kind: "all" } }, protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: viewerId, targetInstanceId: invite.gatewayInstanceId, createdAt: Date.now() }),
     };
+  };
+  try {
+    for (let attempt = 0; !output.includes('"ready":true'); attempt++) {
+      if (daemon.exitCode !== null || attempt >= 200) throw new Error(`Outpost startup failed (${daemon.exitCode}): ${errors} ${output.slice(-3000)}`);
+      await delay(20);
+    }
+    const viewer = await enrollViewer(options.capabilities ?? OUTPOST_VIEWER_CAPABILITIES);
+    return { ...viewer, workspace, cli, env, enrollViewer, close };
   } catch (error) {
     await close();
     throw error;

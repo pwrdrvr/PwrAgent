@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import type {
   AgentEvent,
   ThreadUsageLineRecord,
@@ -110,7 +111,7 @@ describe("turn end read budget", () => {
   }) {
     const store = new SqliteOverlayStore(params.stateDb);
     const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-turn-end-"));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {},
         getInitializeResult: async () => ({ methods: [] }),

@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -35,7 +36,7 @@ async function fixture(archived: boolean, run: (
     id: "target", source: "codex", title: "Launcher shutdown", titleSource: "explicit",
     linkedDirectories: [], threadStatus: "notLoaded",
   };
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
       onNotification: () => () => {}, onPendingRequest: () => () => {},

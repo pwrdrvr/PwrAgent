@@ -1,9 +1,10 @@
+import { createDesktopBackendRegistry } from "../../src/main/app-server/backend-registry-wiring";
 import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { AgentEvent } from "@pwragent/shared";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
-import { DesktopBackendRegistry } from "../../src/main/app-server/backend-registry";
+
 import { CodexAppServerClient } from "../../src/main/codex-app-server/desktop-client";
 import { DesktopConfigStore } from "../../src/main/settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../../src/main/storage/overlay-store-sqlite";
@@ -27,7 +28,7 @@ export async function exerciseDesktopAgentReplacement(root: string, grouped: boo
   OwnerConformanceCodexTransport.reset();
   const client = new CodexAppServerClient({ directoryResolver: async () => [] });
   const correspondenceDirectory = path.join(root, "correspondence");
-  const registry = new DesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
+  const registry = createDesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
     correspondenceStore: new ThreadCorrespondenceStore(correspondenceDirectory),
     threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "invented-replacement-owner",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });

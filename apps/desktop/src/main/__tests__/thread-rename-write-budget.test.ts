@@ -1,5 +1,6 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { afterEach, expect, it, vi } from "vitest";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { buildPwrAgentThreadToolRouter, type PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -16,7 +17,7 @@ it.each([false, true])("budgets self-renaming through the real SQLite store (Age
   const store = new SqliteOverlayStore(db);
   let title = "Original title";
   const summary = () => ({ id: "ordinary-thread", title, titleSource: "explicit", source: "codex", linkedDirectories: [] });
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {},
       getInitializeResult: async () => ({ methods: [] }),

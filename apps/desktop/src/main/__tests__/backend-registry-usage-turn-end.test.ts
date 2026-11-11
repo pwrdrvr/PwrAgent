@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,7 +48,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       resolveUsageAccountGroups?: () => Record<string, string>;
     } = {},
   ) => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {},
         getInitializeResult: async () => ({ methods: [] }),

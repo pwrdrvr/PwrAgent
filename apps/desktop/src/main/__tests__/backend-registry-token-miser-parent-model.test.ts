@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -89,7 +90,7 @@ describe("Token Miser parent model resolution", () => {
   beforeEach(() => {
     db = openInMemoryStateDb();
     store = new SqliteOverlayStore(db);
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
         listThreads: async () => [], onNotification: () => () => {},

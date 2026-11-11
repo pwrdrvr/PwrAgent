@@ -1,6 +1,7 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadReplay, AppServerThreadSummary, ThreadUsageLineRecord } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import * as appState from "../state/app-state";
 import { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -44,7 +45,7 @@ describe("production owner content search persistence", () => {
     };
     const store = new SqliteOverlayStore(db);
     const readPricing = vi.spyOn(store, "readThreadPricing");
-    const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store, messagingStore: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client as never, overlayStore: store, messagingStore: null });
     const listWithMaintenance = vi.spyOn(registry, "listThreads");
     // Injecting a protocol client disables the inspection factory in tests.
     // Enable that real factory too so reverting owner routing reproduces the

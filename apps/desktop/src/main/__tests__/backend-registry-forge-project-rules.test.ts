@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -53,7 +54,11 @@ describe("forge project rules at the write gate", () => {
     db = StateDb.open(fixture.dbPath);
     overlayStore = new SqliteOverlayStore(db);
     codexProvider = "openai";
-    registry = new DesktopBackendRegistry({
+    policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
+    github = vi.fn<ForgePrToolHandler>(async () => ({ ok: true }));
+    writeRule = vi.fn<ForgeToolRuleWriter>(async () => []);
+    const forgeRead = vi.fn<ForgeReadHandler>(async () => ({ source: "cache", observations: [] }));
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
         listThreads: async () => [{ id: "thread-1", title: "Fixture work", titleSource: "explicit", source: "codex", linkedDirectories: [] }],
@@ -61,19 +66,19 @@ describe("forge project rules at the write gate", () => {
         reportedModelProviderForThread: () => codexProvider,
       } as never,
       overlayStore, isBootstrapMode: () => false,
+      handlers: {
+        localForgeReadHandler: forgeRead,
+        forgeReadHandler: forgeRead,
+        forgePrToolHandler: github,
+        forgePrToolPreflight: async (_operation, args) => ({ repository, args }),
+        forgeToolPolicyResolver: () => policy,
+        forgeToolRuleWriter: writeRule,
+      },
     });
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
     internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
     internals.handleAttachThreadPullRequestInspectionRequest = async () => ({ ok: true });
-    policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
-    github = vi.fn<ForgePrToolHandler>(async () => ({ ok: true }));
-    writeRule = vi.fn<ForgeToolRuleWriter>(async () => []);
-    const forgeRead = vi.fn<ForgeReadHandler>(async () => ({ source: "cache", observations: [] }));
-    registry.setForgeReadHandlers(forgeRead, forgeRead);
-    registry.setForgePrToolHandler(github, async (_operation, args) => ({ repository, args }));
-    registry.setForgeToolPolicyResolver(() => policy);
-    registry.setForgeToolRuleWriter(writeRule);
   });
 
   afterEach(async () => {

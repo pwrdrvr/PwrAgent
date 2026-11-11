@@ -1,7 +1,8 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, ThreadExecutionMode } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -50,7 +51,7 @@ function fixture() {
     notify = listener;
     return () => {};
   });
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: client, overlayStore, messagingStore: null, pdfToolMcpServer: null,
     threadTitleGenerationService: null, discoverLocalAcpAgents: async () => [],
     resolveLiveProfileRuntimeInstanceIds: () => [],

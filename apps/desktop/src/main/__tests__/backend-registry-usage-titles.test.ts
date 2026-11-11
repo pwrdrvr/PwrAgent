@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import type { AgentEvent, AppServerBackendKind, ThreadUsageLineRecord } from "@pwragent/shared";
 import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +18,7 @@ describe("DesktopBackendRegistry usage titles", () => {
     stateDb = openInMemoryStateDb();
     store = new SqliteOverlayStore(stateDb);
     listThreads.mockClear();
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {},
         getInitializeResult: async () => ({ methods: [] }),

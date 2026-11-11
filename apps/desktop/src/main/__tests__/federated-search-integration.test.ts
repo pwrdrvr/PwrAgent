@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
@@ -58,7 +59,7 @@ describe("generic search through the owner adapter, registry and real SQLite", (
     sessions = new AcpSessionStore(db);
     rows = [];
     listThreads.mockClear();
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       overlayStore: store as never,
       acpSessionStore: sessions,
       codexClient: {

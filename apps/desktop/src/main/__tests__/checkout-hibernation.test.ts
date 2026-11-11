@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
@@ -138,7 +139,7 @@ async function createFixture(options: { environment?: boolean; worktreeRoot?: ".
     const store = new SqliteOverlayStore(db);
     const client = new CodexAppServerClient({ directoryResolver: async (cwd) => cwd === worktree ? [directory] : [] });
     let current = policy;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
       runtimeInstanceId: `hibernate-${registries.length}`, resolveLiveProfileRuntimeInstanceIds: () => [],
       archiveCleanupCheckpointStore: null,
