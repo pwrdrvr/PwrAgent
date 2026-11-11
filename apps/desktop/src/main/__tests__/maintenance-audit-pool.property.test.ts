@@ -6,7 +6,7 @@ describe("read-only maintenance audit scheduling", () => {
   // Model: at most six independent reads, one pause per 25 items, and the
   // input order returned even when different reads yield different times.
   it("preserves the ordered result with bounded work and batch pacing", async () => {
-    await fc.assert(fc.asyncProperty(fc.array(fc.record({ value: fc.integer(), yields: fc.nat({ max: 4 }) }), { maxLength: 85 }), async (items) => {
+    await fc.assert(fc.asyncProperty(fc.array(fc.record({ value: fc.integer(), yields: fc.nat({ max: 4 }) }), { maxLength: 85, size: "max" }), async (items) => {
       let active = 0, peak = 0;
       const checkpoint = vi.fn(async () => {}), assertCurrent = vi.fn();
       const result = await mapMaintenanceAudit(items, { checkpoint, assertCurrent }, async (item) => {

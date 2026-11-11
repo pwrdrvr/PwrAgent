@@ -420,7 +420,7 @@ describe("ThreadMaintenanceService.scan", () => {
 
   it("keeps measured allocation and coverage in bounded agent tool results", async () => {
     const scan = await harness([]).service.scan({ steps: ["checkouts"] });
-    fc.assert(fc.property(fc.array(fc.nat({ max: 1_000_000 }), { maxLength: 140 }), (sizes) => {
+    fc.assert(fc.property(fc.array(fc.nat({ max: 1_000_000 }), { maxLength: 140, size: "max" }), (sizes) => {
       scan.hibernate = { idleDays: 3, maxSnapshotMb: 100, removeRebuildableOutput: true, checked: sizes.length, kept: {},
         coverage: { roots: [], providers: [{ backend: "codex", threads: sizes.length }] },
         items: sizes.map((bytes, index) => ({ backend: "codex", threadId: String(index), title: "Fixture",

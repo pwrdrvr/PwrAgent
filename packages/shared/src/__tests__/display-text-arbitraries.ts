@@ -20,7 +20,7 @@ export const displayPiece = fc.constantFrom(...PIECES);
 
 /** Text up to about `maxPieces` pieces long, so both sides of a budget appear. */
 export function displayText(maxPieces = 60): fc.Arbitrary<string> {
-  return fc.array(displayPiece, { maxLength: maxPieces }).map((pieces) => pieces.join(""));
+  return fc.array(displayPiece, { maxLength: maxPieces, size: "max" }).map((pieces) => pieces.join(""));
 }
 
 /**
