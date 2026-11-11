@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
@@ -116,9 +117,9 @@ type OwnerHost = {
  * the shared capability table. Provider subprocesses use protocol fixtures.
  */
 async function startDesktopOwner(
-  threadTitleGenerationService: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
+  threadTitleGenerationService: NonNullable<Parameters<typeof createDesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
   prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
-  claudeOptions?: (workspace: string) => NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["claudeBackendOptions"],
+  claudeOptions?: (workspace: string) => NonNullable<Parameters<typeof createDesktopBackendRegistry>[0]>["claudeBackendOptions"],
   profileRoot?: string,
   protocolHelperTitle?: string,
 ): Promise<OwnerHost> {
@@ -143,7 +144,7 @@ async function startDesktopOwner(
   await writeFile(configPath, "");
   const configStore = new DesktopConfigStore({ configPath });
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
-  const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
+  const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
     ...(profileRoot ? { providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db) } : {}),
     ...(profileRoot ? { retainedOwnerThreadStorage: new RetainedOwnerThreadStore(db, path.join(profileRoot, "profiles/t/state/headless")) } : {}),
     ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),

@@ -1,7 +1,8 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { buildLegacyEncodedThreadIdentityKey, buildPullRequestStatusKey, type AgentEvent, type PrSummary, type ThreadDependency, type ThreadPullRequestWatchSummary } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
 import { PrAutoDispatchCoordinator } from "../pr-status/pr-auto-dispatch";
 import { ThreadDependencyCoordinator } from "../app-server/thread-dependency-coordinator";
@@ -98,7 +99,7 @@ describe("PR watches end at archive", () => {
     const db = openInMemoryStateDb();
     const store = new SqliteOverlayStore(db);
     const client = new CountingBackendClient([]);
-    const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client as never, overlayStore: store, threadTitleGenerationService: null });
     const events: AgentEvent[] = [];
     let watchCount = 1;
     const dependencies = new Set(["codex:watcher", "codex:foundation", "claude:foundation"]);
@@ -139,7 +140,7 @@ describe("PR watches end at archive", () => {
   it("publishes no retirement updates when archive rolls back", async () => {
     const db = openInMemoryStateDb();
     const store = new SqliteOverlayStore(db);
-    const registry = new DesktopBackendRegistry({ codexClient: new CountingBackendClient([]) as never, overlayStore: store, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: new CountingBackendClient([]) as never, overlayStore: store, threadTitleGenerationService: null });
     const changed = vi.fn();
     registry.onEvent(changed);
     try {

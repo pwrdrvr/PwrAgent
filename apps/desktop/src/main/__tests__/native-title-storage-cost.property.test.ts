@@ -1,7 +1,8 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { buildPwrAgentThreadToolRouter, type PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -14,7 +15,7 @@ function fixture(rows: AppServerThreadSummary[]) {
   const temp = createTempStateDb("native-title-cost-");
   const db = StateDb.open(temp.dbPath);
   const store = new SqliteOverlayStore(db);
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {},
       getInitializeResult: async () => ({ methods: [] }),

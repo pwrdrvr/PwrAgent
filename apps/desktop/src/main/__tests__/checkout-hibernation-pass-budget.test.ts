@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary, DesktopCheckoutHibernationPolicy } from "@pwragent/shared";
@@ -30,7 +31,7 @@ afterEach(async () => {
 
 function registry(): DesktopBackendRegistry {
   const stateDb = openInMemoryStateDb();
-  const instance = new DesktopBackendRegistry({
+  const instance = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {},
       getInitializeResult: async () => ({ methods: [] }),

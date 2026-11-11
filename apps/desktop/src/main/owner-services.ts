@@ -1,3 +1,6 @@
+import { createDesktopBackendRegistry } from "./app-server/backend-registry-wiring";
+import { ProfileThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
+import { isAcpBackendId } from "@pwragent/shared";
 import { initializeDesktopAutomationService, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
@@ -382,7 +385,12 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   const federationLease = initializeRuntimeFederationLeaseCoordinator();
   const messagingLease = initializeRuntimeMessagingLeaseCoordinator();
   const mcpGateway = initializeMcpConnectionGatewayService();
-  const registry = initializeDesktopBackendRegistry();
+  const registry = initializeDesktopBackendRegistry(() => createDesktopBackendRegistry({
+    ownerAdmission: new ProfileThreadOwnerAdmission(() => leaseManager),
+    configStore: config,
+    useMachineAcpDiscovery: !host.runtimePolicy || host.runtimePolicy.enabledBackends.some(isAcpBackendId),
+    useMachineClaudeDiscovery: !host.runtimePolicy || host.runtimePolicy.enabledBackends.includes("claude"),
+  }));
   const service = initializeDesktopAppServerService();
   const scheduledActions = initializeScheduledThreadActionService(registry);
   const automations = initializeDesktopAutomationService(registry);

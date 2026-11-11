@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { randomUUID } from "node:crypto";
@@ -72,7 +73,7 @@ import * as navigationQuerySource from "../app-server/navigation-query-source";
 import * as directoryRegistration from "../app-server/directory-registration-service";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 
-// `initializeDesktopBackendRegistry()` is the one construction that opts into real
+// The owner root is the one construction that opts into real
 // machine ACP discovery, so a test that reaches the singleton inherits it — the
 // config read, the GitHub release fetch, the managed-Grok install under the
 // PwrAgent root, and the 5-16s probe. Nothing here needs an installed agent, so
@@ -826,7 +827,7 @@ describe("DesktopFederationRuntime", () => {
       .mockReturnValue({
         read: () => ({ settings: {} }), subscribe: () => () => undefined,
       } as never);
-    const registry = initializeDesktopBackendRegistry();
+    const registry = initializeDesktopBackendRegistry(() => createDesktopBackendRegistry());
     const candidates = vi.spyOn(registry, "listThreadSearchCandidates").mockResolvedValue([{
       id: "project-thread", source: "codex", title: "Project thread",
       titleSource: "explicit",
@@ -954,7 +955,7 @@ describe("DesktopFederationRuntime", () => {
       counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
       entries: [{ row: parentRow, orderKey: "0", placement: { kind: "root" } }],
     });
-    const publish = vi.spyOn(initializeDesktopBackendRegistry(), "publishLocalEvent").mockResolvedValue(undefined);
+    const publish = vi.spyOn(initializeDesktopBackendRegistry(() => createDesktopBackendRegistry()), "publishLocalEvent").mockResolvedValue(undefined);
     try {
       const response = await runtime.localBackend().setThreadParent({
         backend: "codex",
@@ -1011,7 +1012,7 @@ describe("DesktopFederationRuntime", () => {
       read: () => ({ settings: {} }),
       subscribe: () => () => undefined,
     } as never);
-    const registry = initializeDesktopBackendRegistry();
+    const registry = initializeDesktopBackendRegistry(() => createDesktopBackendRegistry());
     const parentSummary = {
       ref: { backend: "codex" as const, threadId: "parent", ownerInstanceId: "parent-peer" },
       rowRevision: "parent-revision",

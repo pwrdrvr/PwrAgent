@@ -1,7 +1,8 @@
+import { createDesktopBackendRegistry } from "../../src/main/app-server/backend-registry-wiring";
 import { installTestOwnerHost } from "../../src/main/shell/testing/owner-host-fixture";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import { DesktopBackendRegistry } from "../../src/main/app-server/backend-registry";
+
 import { CodexAppServerClient } from "../../src/main/codex-app-server/desktop-client";
 import { DesktopConfigStore } from "../../src/main/settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../../src/main/storage/overlay-store-sqlite";
@@ -23,7 +24,7 @@ export async function exerciseHeldQueueIdentity(root: string) {
   configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
   OwnerConformanceCodexTransport.reset();
   const client = new CodexAppServerClient({ directoryResolver: async () => [] });
-  const registry = new DesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
+  const registry = createDesktopBackendRegistry({ codexClient: client, configStore, overlayStore, messagingStore: null,
     threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "invented-held-owner",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   const scheduler = new ScheduledThreadActionService({ registry, store: new ScheduledThreadActionStore(db) });

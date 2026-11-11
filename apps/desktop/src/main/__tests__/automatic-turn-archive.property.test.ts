@@ -1,7 +1,8 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import * as attachments from "../app-server/turn-input-attachment-files";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { CountingBackendClient, createThreadReadRegistry, publishNotification } from "./fixtures/thread-read-harness";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -55,7 +56,7 @@ describe("automatic turns respect provider archival", () => {
     const store = new SqliteOverlayStore(db);
     const target = identities[0]!;
     await store.observeArchivedThreads([target], 1);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new CountingBackendClient([]) as never, overlayStore: store, threadTitleGenerationService: null,
     });
     const admit = vi.spyOn(registry["threadTurnQueue"], "submitIfIdle")

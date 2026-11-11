@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -42,7 +43,7 @@ describe("Codex catalog dynamic tool dispatch", () => {
     const fixture = createTempStateDb("pwragent-catalog-dispatch-");
     directory = fixture.tempDir;
     db = StateDb.open(fixture.dbPath);
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {}, readConfiguredMcpServerNames: async () => [],

@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { pwrSuiteInstallOptions, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -94,7 +95,7 @@ describe("backend MCP gateway dispatch", () => {
   });
 
   function buildRegistry(overlayStore = store, service?: McpConnectionGatewayService) {
-    return new DesktopBackendRegistry({
+    return createDesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
@@ -2089,7 +2090,7 @@ select_for_new_threads = true
   it("stops a thread's sessions for the connections it turned off, and only those", async () => {
     await registry.close();
     const closeThreadSessions = vi.fn(async () => undefined);
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},

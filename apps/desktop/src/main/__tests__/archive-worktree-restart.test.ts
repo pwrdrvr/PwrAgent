@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
@@ -80,7 +81,7 @@ async function createFixture(managed: boolean | "claude" = false) {
       [workspace, ...extraWorkspaces].filter((row) => row.worktreePath === cwd) });
     const acpAgentStore = new AcpAgentStore(db);
     const acpSessionStore = new AcpSessionStore(db);
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
       runtimeInstanceId: `restart-${registries.length}`, resolveLiveProfileRuntimeInstanceIds: () => [],
       archiveCleanupCheckpointStore: checkpoint ? new ArchiveCleanupCheckpointStore(db.raw, { processAlive: () => false }) : null,
       claudeBackendOptions: { store: claudeStore },

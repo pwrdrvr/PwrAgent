@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
@@ -135,7 +136,7 @@ describe("sqlite write metrics", () => {
       linkedDirectories: [{ id: cwd, path: cwd, label: "repo", kind: "local" }],
     } });
     await store.setThreadExpectedBranch({ ...identity, branch: "HEAD" });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null, claudeBackendOptions: { store: sessions },
     });
@@ -206,7 +207,7 @@ describe("sqlite write metrics", () => {
     const prompts: SDKUserMessage[] = [];
     const queries: Array<{ resume?: string }> = [];
     const events: AgentEvent[] = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
       claudeBackendOptions: {
@@ -282,7 +283,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("budgets Claude result accounting independently of context updates and preserves provider pricing", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
     });
@@ -323,7 +324,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("budgets a Claude turn's live usage reports at one commit each", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
     });
@@ -355,7 +356,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
       claudeBackendOptions: {
@@ -389,7 +390,7 @@ describe("sqlite write metrics", () => {
     const progressDone = Promise.withResolvers<void>();
     const finishGate = Promise.withResolvers<void>();
     const events: AgentEvent[] = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
       claudeBackendOptions: {
@@ -487,7 +488,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("budgets one commit when a Claude sub-agent starts and one when it ends", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
     });
@@ -523,7 +524,7 @@ describe("sqlite write metrics", () => {
     });
     const finish = Promise.withResolvers<void>();
     const prompts: SDKUserMessage[] = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
       claudeBackendOptions: {
@@ -576,7 +577,7 @@ describe("sqlite write metrics", () => {
       linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
     };
     await store.setThreadArchiveTombstone({ backend: "codex", threadId: thread.id, restoredAt: Date.now() });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient({ threads: [thread] }), overlayStore: store,
       getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
     });
@@ -601,7 +602,7 @@ describe("sqlite write metrics", () => {
       archiveThread: async () => { archived = true; return { threadId: thread.id }; },
       restoreThread: async () => { archived = false; return { threadId: thread.id }; },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: client, overlayStore: store, messagingStore: null,
       getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
     });
@@ -665,7 +666,7 @@ describe("sqlite write metrics", () => {
       readServerCapabilities: async () => ({ codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } }),
       refreshThreadTools: vi.fn(async () => undefined),
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store });
     try {
       const { writes } = await measureSqliteWrites(async () => {
         await registry.setThreadAgent({ ...identity, agent: { name: "Fixture manager" } });
@@ -686,7 +687,7 @@ describe("sqlite write metrics", () => {
       readServerCapabilities: async () => ({ codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } }),
       refreshThreadTools,
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store });
     const internals = registry as unknown as {
       threadHasActiveTurn: () => boolean;
       flushQueuedAgentChange: (threadId: string) => Promise<void>;
@@ -1421,7 +1422,7 @@ describe("sqlite write metrics", () => {
     mkdirSync(environmentDir, { recursive: true });
     writeFileSync(path.join(environmentDir, "environment.toml"),
       'version = 1\nname = "Fixture"\n[setup]\nscript = "fixture-setup"\n');
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient({ threads: [{
         id: "environment-thread", source: "codex", title: "Fixture",
         titleSource: "explicit", updatedAt: 1,
@@ -1455,7 +1456,7 @@ describe("sqlite write metrics", () => {
     mkdirSync(environmentDir, { recursive: true });
     writeFileSync(path.join(environmentDir, "environment.toml"),
       'version = 1\nname = "Fixture"\n[setup]\nscript = "fixture-setup"\n');
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
       codexEnvironmentHydrationStore: new CodexEnvironmentHydrationStore(stateDb),
@@ -1510,7 +1511,7 @@ describe("sqlite write metrics", () => {
       writeFileSync(path.join(environmentDir, "environment.toml"),
         'version = 1\nname = "Fixture"\n[[actions]]\nname = "Dev"\ncommand = "fixture-dev"\n');
       const detached: { params?: Parameters<CodexEnvironmentCommandRunner>[0] } = {};
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: createStubBackendClient({ threads: [{
           id: "action-thread", source: "codex", title: "Fixture",
           titleSource: "explicit", updatedAt: 1,
@@ -1606,7 +1607,7 @@ describe("sqlite write metrics", () => {
         id: tempDir, path: tempDir, worktreePath: cwd, label: "repo", kind: "worktree" as const,
       }] }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store as never });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store as never });
     try {
       const { writes } = await measureSqliteWrites(() => registry.refreshThreadDirectoryRelationship({
         backend: "codex", threadId: thread.id,
@@ -1626,7 +1627,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("budgets first-use Star Map intake launchpad initialization", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -1661,7 +1662,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("budgets a Codex thread creation with a Token Miser override", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -1703,7 +1704,7 @@ describe("sqlite write metrics", () => {
     // implicit transaction per streamed 8 KiB chunk — 3,693 commits and 58 MB
     // of WAL for a single `find /`. Nothing caught it: every test over that
     // path uses a mocked overlay store, so no sqlite was involved.
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
       resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
@@ -1758,7 +1759,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("persists a streamed large-output alert boundary in one commit", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
       resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
@@ -1814,7 +1815,7 @@ describe("sqlite write metrics", () => {
   });
 
   it.each(["missing", "reported", "late"])("bounds subAgentActivity metadata writes: %s", async (metadata) => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -1886,7 +1887,7 @@ describe("sqlite write metrics", () => {
     const codexClient = Object.assign(createStubBackendClient() as object, {
       readThreadModelSettings: async () => ({ model: "gpt-5.5", reasoningEffort: "high" }),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: codexClient as never,
       overlayStore: store as never,
     });
@@ -2000,7 +2001,7 @@ describe("sqlite write metrics", () => {
       const codexClient = Object.assign(createStubBackendClient() as object, {
         readThreadModelSettings: async () => settings,
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: codexClient as never,
         overlayStore: store as never,
       });
@@ -2075,7 +2076,7 @@ describe("sqlite write metrics", () => {
         id: "thread-parent", source: "codex", title: "Review audit",
         titleSource: "explicit", linkedDirectories: [], updatedAt: now,
       };
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: createStubBackendClient({
           threads: [parent],
           nativeSubAgentThreads: [{
@@ -2139,7 +2140,7 @@ describe("sqlite write metrics", () => {
       id: "thread-parent", source: "codex", title: "Review audit",
       titleSource: "explicit", linkedDirectories: [], updatedAt: now,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient({
         threads: [parent],
         nativeSubAgentThreads: [{
@@ -2224,7 +2225,7 @@ describe("sqlite write metrics", () => {
       codexNativeSubAgent: { parentThreadId: parent.id, agentPath: "/root/review_savers" },
     }] }) as { listNativeSubAgentThreads: () => Promise<AppServerThreadSummary[]> };
     const listNativeSubAgentThreads = vi.spyOn(stub, "listNativeSubAgentThreads");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: stub as never,
       overlayStore: store as never,
     });
@@ -2278,7 +2279,7 @@ describe("sqlite write metrics", () => {
         }],
       });
     }
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient({ replay, nativeSubAgentThreads: [{
         ...parent, id: "worker-review", threadStatus: "idle", model: "gpt-6-luna", reasoningEffort: "high",
         codexNativeSubAgent: { parentThreadId: parent.id, agentNickname: "Noether" },
@@ -2331,7 +2332,7 @@ describe("sqlite write metrics", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient({
         threads: [
           {
@@ -2426,7 +2427,7 @@ describe("sqlite write metrics", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient({
         threads: [
           {
@@ -2483,7 +2484,7 @@ describe("sqlite write metrics", () => {
 
   it("holds five deferred checks and their first alert to one commit", async () => {
     vi.useFakeTimers();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
       resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
@@ -2532,7 +2533,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("holds one capped structured MCP result and its alert to one commit", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
       resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
@@ -2576,7 +2577,7 @@ describe("sqlite write metrics", () => {
 
   it("holds a burst of live token usage to one commit", async () => {
     vi.useFakeTimers();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -2633,7 +2634,7 @@ describe("sqlite write metrics", () => {
   });
 
   it.each([false, true])("bounds one ACP monitor lifecycle independently of heartbeat count (causal messaging=%s)", async (causal) => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -2788,7 +2789,7 @@ describe("sqlite write metrics", () => {
     const codexClient = Object.assign(createStubBackendClient() as object, {
       startTurn: async () => ({ threadId: "monitor-thread", turnId: "monitor-recovery-turn" }),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: codexClient as never,
       overlayStore: store as never,
     });
@@ -3186,7 +3187,7 @@ describe("sqlite write metrics", () => {
       toFake: ["Date", "clearTimeout", "setTimeout"],
     });
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -3227,7 +3228,7 @@ describe("sqlite write metrics", () => {
     const threadId = "thread-hydration-race";
     const turnId = "turn-hydration-race";
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient({
         replay: buildHydratedUsageReplay({ threadId, turnId }),
       }),
@@ -3278,7 +3279,7 @@ describe("sqlite write metrics", () => {
       },
     );
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -3339,7 +3340,7 @@ describe("sqlite write metrics", () => {
         return await readOverlay(params);
       });
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -3396,7 +3397,7 @@ describe("sqlite write metrics", () => {
       new Error("overlay unavailable"),
     );
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -3430,7 +3431,7 @@ describe("sqlite write metrics", () => {
   it("flushes coalesced live usage on the bounded timer", async () => {
     vi.useFakeTimers();
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -3503,7 +3504,7 @@ describe("sqlite write metrics", () => {
         throw new Error("disk busy");
       })
       .mockImplementation(async (params) => await originalBatchWrite(params));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
@@ -3555,7 +3556,7 @@ describe("sqlite write metrics", () => {
   it("flushes live usage on close and ignores post-close writes", async () => {
     vi.useFakeTimers();
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });

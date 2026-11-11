@@ -1,7 +1,8 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { expect, it } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
@@ -21,7 +22,7 @@ async function lateHelperRename(suffix: string): Promise<void> {
   const operatorTitle = `Operator ${suffix}`.trim();
   let title = prompt;
   const events: AgentEvent[] = [];
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {},
       getInitializeResult: async () => ({ methods: [] }),
@@ -73,7 +74,7 @@ it("does not start a later helper after an explicit rename matching the first pr
   const db = openInMemoryStateDb();
   const prompt = "Inspect the invented fixture";
   let generated = 0;
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
       readThreadSummary: async () => ({ id: "thread", title: prompt, titleSource: "fallback", source: "codex", linkedDirectories: [] }),

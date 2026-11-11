@@ -1,9 +1,10 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
@@ -31,7 +32,7 @@ async function checkGitReadBoundary(scenario: Scenario) {
     ...(scenario.pathSource === "project" ? { projectKey: worktreePath } : {}),
     ...(scenario.archived && scenario.archiveTimestamp ? { archivedAt: 1_000 } : {}),
   };
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
       onNotification: () => () => {}, onPendingRequest: () => () => {},

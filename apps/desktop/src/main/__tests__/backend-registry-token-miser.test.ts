@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import type { TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import { buildTokenMiserSavingsSummary, estimateTokenUsageCost } from "@pwragent/shared";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
@@ -36,7 +37,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-token-miser-ledger-"));
     stateDb = openInMemoryStateDb();
     store = new SqliteOverlayStore(stateDb);
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {},
         getInitializeResult: async () => ({ methods: [] }),
@@ -64,7 +65,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
   it("captures protocol commentary, excludes final answers, and seals terminal turns without writing", async () => {
     await registry.close();
     let notify!: (notification: AgentEvent["notification"]) => Promise<void>;
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: (callback: typeof notify) => { notify = callback; return () => {}; },

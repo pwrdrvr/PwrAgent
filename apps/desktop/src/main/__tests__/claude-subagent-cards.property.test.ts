@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { installTestOwnerHost } from "../shell/testing/owner-host-fixture";
 import fc from "fast-check";
 import type { AgentEvent, ThreadSubAgentStatus } from "@pwragent/shared";
@@ -57,7 +58,7 @@ describe("Claude sub-agent cards", () => {
   beforeAll(async () => {
     await installTestOwnerHost();
     store = new SqliteOverlayStore(openInMemoryStateDb());
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {},
         getInitializeResult: async () => ({ methods: [] }),

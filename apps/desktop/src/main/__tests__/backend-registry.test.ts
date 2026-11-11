@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import fc from "fast-check";
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
@@ -2920,17 +2921,17 @@ function createKimiAcpRegistry(options?: {
   startPrompt?: KimiStartPrompt;
   overlayStore?: ReturnType<typeof createOverlayStoreMock>;
   codexClient?: MockBackendClient;
-  ownerAdmission?: NonNullable<ConstructorParameters<typeof DesktopBackendRegistry>[0]>["ownerAdmission"];
+  ownerAdmission?: NonNullable<Parameters<typeof createDesktopBackendRegistry>[0]>["ownerAdmission"];
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
   worktreeArchiveService?: WorktreeArchiveService;
   mcpConnectionService?: NonNullable<
-    ConstructorParameters<typeof DesktopBackendRegistry>[0]
+    Parameters<typeof createDesktopBackendRegistry>[0]
   >["mcpConnectionService"];
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   threadTitleGenerationService?: NonNullable<
-    ConstructorParameters<typeof DesktopBackendRegistry>[0]
+    Parameters<typeof createDesktopBackendRegistry>[0]
   >["threadTitleGenerationService"];
   acpWorktreeRepositoryResolver?: (
     cwd: string,
@@ -3046,7 +3047,7 @@ function createKimiAcpRegistry(options?: {
       ? { offersThoughtLevel: options.offersThoughtLevel }
       : {}),
   };
-  const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+  const registry = createDesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
     ownerAdmission: options?.ownerAdmission,
     correspondenceStore: options?.correspondenceStore,
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
@@ -3348,7 +3349,7 @@ describe("DesktopBackendRegistry", () => {
       fc.array(fc.constantFrom("awaiting-review", "target-ended"), { minLength: 1, maxLength: 8 }),
       async (reasons) => {
         const client = new MockBackendClient({ threads: [] });
-        const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+        const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
         const identity = { backend: "codex" as const, threadId: "shared-queue-owner" };
         const events: AgentEvent[] = [];
         registry.onEvent((event) => { events.push(event); });
@@ -3469,7 +3470,7 @@ describe("DesktopBackendRegistry", () => {
     const finished = Promise.withResolvers<void>();
     vi.spyOn(client, "close").mockImplementation(async () => { entered.resolve(); await finished.promise; });
     const close = vi.fn();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), ownerAdmission: { assertOwnership: vi.fn(), close } });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), ownerAdmission: { assertOwnership: vi.fn(), close } });
     const closing = registry.close();
     await entered.promise;
     expect(close).not.toHaveBeenCalled();
@@ -3489,7 +3490,7 @@ describe("DesktopBackendRegistry", () => {
       const client = new MockBackendClient({ threads: [] });
       const assertOwnership = vi.fn(() => { throw new Error("fixture profile owner holds the lease"); });
       const close = vi.fn();
-      const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(),
+      const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(),
         ownerAdmission: { assertOwnership, close } });
       try {
         const request = turn
@@ -3510,7 +3511,7 @@ describe("DesktopBackendRegistry", () => {
       { threadId: "thread-1", turnId: "turn-1" },
       { threadId: "thread-1", turnId: "turn-2" },
     ] });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore });
     const bridge = new DesktopMessagingBackendBridge(registry);
     if (legacy) Object.defineProperty(bridge, "ownsTurnQueue", { value: false });
     const db = openInMemoryStateDb();
@@ -3563,7 +3564,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("supplies authoritative directory scope and withdraws it before asynchronous membership recording", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -3600,7 +3601,7 @@ describe("DesktopBackendRegistry", () => {
   it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)(
     "orders %s, idle queue release, and the next turn behind pending images",
     async (terminalMethod) => {
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({ threads: [] }),
         overlayStore: createOverlayStoreMock({ executionMode: "default" }),
       });
@@ -3730,7 +3731,7 @@ describe("DesktopBackendRegistry", () => {
     const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=", "base64");
     await writeFile(imagePath, imageBytes);
     await writeFile(filePath, "Fixture report");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: codex,
       overlayStore,
       messagingStore,
@@ -3879,7 +3880,7 @@ describe("DesktopBackendRegistry", () => {
   it("lists active and archived PwrAgent Claude threads for checkout maintenance", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
     const claudeStore = new ClaudeSessionStore(path.join(root, "sessions"));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: Object.assign(new MockBackendClient({}), {
         listArchiveCleanupThreadsPage: vi.fn(async () => ({ threads: [], nextCursor: undefined })),
       }),
@@ -3916,7 +3917,7 @@ describe("DesktopBackendRegistry", () => {
     const turnFinished = Promise.withResolvers<AgentEvent>();
     const events: AgentEvent[] = [];
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore,
       pdfToolMcpServer: null,
@@ -3966,7 +3967,7 @@ describe("DesktopBackendRegistry", () => {
     const release = Promise.withResolvers<void>();
     const events: AgentEvent[] = [];
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore,
       pdfToolMcpServer: null,
@@ -4032,7 +4033,7 @@ describe("DesktopBackendRegistry", () => {
       server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
       bindThread: vi.fn(), revoke: revokeBridge,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: { registerBridge },
@@ -4095,7 +4096,7 @@ describe("DesktopBackendRegistry", () => {
   it("checks service thread membership without trusting error-tolerant navigation inventory", async () => {
     const thread: AppServerThreadSummary = { id: "service-thread", title: "Preview", titleSource: "explicit", source: "codex", linkedDirectories: [] };
     const client = new MockBackendClient({ threads: [thread] });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const list = vi.spyOn(client, "listThreads").mockRejectedValue(new Error("Provider temporarily unavailable"));
     const target = { backend: "codex" as const, threadId: thread.id };
@@ -4136,7 +4137,7 @@ describe("DesktopBackendRegistry", () => {
         extraLinkedDirectories: [{ id: "pwragent-handoff:codex:handoff-source", label: "repo", path: "/repo", kind: "worktree", worktreePath: "/new-checkout" }],
       },
     } });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore });
     onTestFinished(() => registry.close());
     expect(await registry.exportThreadForHandoff(thread.id)).toEqual({ ...exported, cwd: "/new-checkout" });
   });
@@ -4148,7 +4149,7 @@ describe("DesktopBackendRegistry", () => {
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const overlayStore = createOverlayStoreMock();
     const client = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore,
       gitDirectoryService: { prepareLaunchpadWorkspace, recordCodexWorktreeOwnerThread } as never,
     });
     onTestFinished(() => registry.close());
@@ -4189,7 +4190,7 @@ describe("DesktopBackendRegistry", () => {
         executionMode: "full-access", model: "gpt-6.1-sol", reasoningEffort: "high", fastMode: false,
       },
     } });
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
     onTestFinished(() => registry.close());
     await expect(registry.readThreadHandoffSettings({ backend: "codex", threadId: "sol-source" })).resolves.toEqual({
       executionMode: "full-access", model: "gpt-6.1-sol", reasoningEffort: "high", fastMode: false,
@@ -4197,7 +4198,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("reserves a handoff source against turn admission and releases on failure", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const params = { backend: "codex" as const, threadId: "handoff-source", input: [{ type: "text" as const, text: "Continue" }] };
     await expect(registry.withThreadHandoff(params.threadId, async () => {
@@ -4213,7 +4214,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("refuses every turn source on a locked thread, naming the note, until it is unlocked", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Continue" }] };
     await registry.setThreadLock({ ...params, locked: true, note: "Worktree handed to the repair thread" }, { source: "operator" });
@@ -4237,7 +4238,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const idle = { backend: "codex" as const, threadId: "answered-idle" };
     await expect(registry.submitThreadReply({
@@ -4260,7 +4261,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("returns busy when a turn becomes active after immediate admission", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const startTurn = vi.spyOn(codexClient, "startTurn");
     const params = { backend: "codex" as const, threadId: "thread-race", input: [{ type: "text" as const, text: "Repair PR" }] };
@@ -4285,7 +4286,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("preserves backend submission errors from immediate admission", async () => {
     const error = new Error("Backend disconnected before turn start");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ startTurnError: error }), overlayStore: createOverlayStoreMock(),
     });
     onTestFinished(() => registry.close());
@@ -4296,7 +4297,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("holds a delivery on a locked thread and starts it once unlocked", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Monitor result" }] };
     const { lock } = await registry.setThreadLock({ ...params, locked: true, note: "Parked" }, { source: "operator" });
@@ -4318,7 +4319,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("starts deliveries held on a locked thread in the order they arrived", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const identity = { backend: "codex" as const, threadId: "parked" };
     const { lock } = await registry.setThreadLock({ ...identity, locked: true, note: "Parked" }, { source: "operator" });
@@ -4349,7 +4350,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("holds distinct self-started prompts under fresh identities and sends them in order on unlock", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const identity = { backend: "codex" as const, threadId: "parked" };
     const notification = { ...identity, prompt: "<task-notification>Build passed</task-notification>", source: "task_notification" as const };
@@ -4388,7 +4389,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("leaves a queue held for another reason alone on unlock", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Retry me" }] };
     await registry.submitHeldTurn({ ...params, queueEntryId: "failed-turn", holdReason: "The previous turn failed." });
@@ -4401,7 +4402,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("keeps a failed turn's hold when a delivery held by a lock is unlocked", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const identity = { backend: "codex" as const, threadId: "parked" };
     const failed = "The previous turn failed.";
@@ -4427,7 +4428,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("starts a delivery held by a lock on unlock though a later stale steer stays held", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const identity = { backend: "codex" as const, threadId: "parked" };
     const staleSteer = "This steering message was held after its target turn ended. Retry it when the provider is ready.";
@@ -4483,7 +4484,7 @@ describe("DesktopBackendRegistry", () => {
 
     it("refuses an agent's message into a paused project, never the operator's or a messaging app's", async () => {
       pauseProject();
-      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
       const target = { backend: "codex" as const, threadId: "parked" };
 
@@ -4512,7 +4513,7 @@ describe("DesktopBackendRegistry", () => {
 
     it("lets messages through when the paused project does not refuse them", () => {
       pauseProject({ ...paused, refuseThreadMessages: false });
-      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
       expect(registry.projectPausedThreadMessageRefusal({ backend: "codex", threadId: "parked" })).toBeUndefined();
     });
@@ -4520,7 +4521,7 @@ describe("DesktopBackendRegistry", () => {
     it("holds a wake-up without blocking the operator, lists it, and sends it on request", async () => {
       pauseProject();
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
 
       await expect(registry.deliverProjectPausedWakeup(wake())).resolves.toMatchObject({
@@ -4555,7 +4556,7 @@ describe("DesktopBackendRegistry", () => {
     it("starts the operator's own message past a held wake-up, and discards the wake on request", async () => {
       pauseProject();
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
       await registry.deliverProjectPausedWakeup(wake());
 
@@ -4576,7 +4577,7 @@ describe("DesktopBackendRegistry", () => {
     it("discards a wake-up by policy and leaves a note in the thread", async () => {
       pauseProject({ ...paused, wakeupPolicy: "discard" });
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
 
       await expect(registry.deliverProjectPausedWakeup(wake())).resolves.toEqual({ status: "discarded" });
@@ -4601,7 +4602,7 @@ describe("DesktopBackendRegistry", () => {
           linkedDirectories: [],
         }],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         threadTitleGenerationService: null,
@@ -4661,7 +4662,7 @@ describe("DesktopBackendRegistry", () => {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         // Full access, so the allowed handoff does not wait on an approval for the new path.
         overlayStore: createOverlayStoreMock({
@@ -4713,7 +4714,7 @@ describe("DesktopBackendRegistry", () => {
           models: TEST_TASK_MONITOR_MODELS,
           startThreadResult: { threadId: "monitor-thread" },
         });
-        const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+        const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
         onTestFinished(() => registry.close());
         const turnEvent = async (method: "turn/started" | "turn/completed") =>
           await registry.publishLocalEvent({
@@ -4835,7 +4836,7 @@ describe("DesktopBackendRegistry", () => {
       };
       const launch = (store: ProjectHeldWakeupStore, instanceId: string, live: string[] = []) => {
         const codexClient = new MockBackendClient({});
-        const registry = new DesktopBackendRegistry({
+        const registry = createDesktopBackendRegistry({
           codexClient,
           overlayStore: createOverlayStoreMock(),
           projectHeldWakeupStore: store,
@@ -5068,7 +5069,7 @@ describe("DesktopBackendRegistry", () => {
       plan: Omit<RestartDispatchPlanOptions, "now"> = {},
     ) => {
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         projectHeldWakeupStore: null,
@@ -5311,7 +5312,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("publishes each lock change and keeps the original time and source when the note changes", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     const unsubscribe = registry.onEvent((event) => {
@@ -5353,7 +5354,7 @@ describe("DesktopBackendRegistry", () => {
 
   async function assertFailedTurnPreparationRetires(threadId: string, text: string, discovery: "none" | "idle" | "provider-active" = "none"): Promise<void> {
     const client = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
     const internal = registry as unknown as {
@@ -5418,7 +5419,7 @@ describe("DesktopBackendRegistry", () => {
 
   async function assertFailedTurnSubmissionRetires(threadId: string, notificationRejects: boolean, providerActive: boolean, duringDelivery = false, genuineTurn = false, observesProvider = true): Promise<void> {
     const client = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const internal = registry as unknown as {
       emit: (event: AgentEvent, sequence?: number) => Promise<void>;
       reconcileCodexThreadListStatus: (thread: AppServerThreadSummary) => AppServerThreadSummary;
@@ -5508,7 +5509,7 @@ describe("DesktopBackendRegistry", () => {
   ): Promise<void> {
     const client = new MockBackendClient({});
     const overlay = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: overlay, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: overlay, threadTitleGenerationService: null });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
     const internal = registry as unknown as {
@@ -5636,7 +5637,7 @@ describe("DesktopBackendRegistry", () => {
     const revoke = vi.fn();
     const registration = { server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} },
       bindThread: vi.fn(), revoke };
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock({ overlays: { [`claude:${threadId}`]: {
         backend: "claude", threadId, extraLinkedDirectories: [], mcpConnectionIds: ["fixture"],
       } } }), mcpConnectionService: { registerBridge: vi.fn(async () => registration) },
@@ -5701,7 +5702,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("rejects handoff while a turn start is awaiting its provider", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const started = createDeferred<{ backend: "codex"; threadId: string; turnId: string }>();
     const internal = registry as unknown as { startTurnWithoutHandoff: () => Promise<{ backend: "codex"; threadId: string; turnId: string }> };
@@ -5720,7 +5721,7 @@ describe("DesktopBackendRegistry", () => {
     };
     const client = new MockBackendClient({ threads: [thread] });
     const archive = vi.fn();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), worktreeArchiveService: { archive } as never });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), worktreeArchiveService: { archive } as never });
     onTestFinished(() => registry.close());
     const result = await registry.archiveThread({ backend: "codex", threadId: thread.id, preserveWorktrees: true });
     expect(client.lastArchiveThreadParams).toEqual({ threadId: thread.id });
@@ -5741,7 +5742,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("preserves the coding start reservation when voice joins during preparation", async () => {
     const codexClient = voiceClient();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const preparing = createDeferred<void>();
     const ready = createDeferred<string | undefined>();
     const internals = registry as unknown as { resolveThreadEnvironmentCwd: () => Promise<string | undefined> };
@@ -5780,7 +5781,7 @@ describe("DesktopBackendRegistry", () => {
     });
     const client = Object.assign(codexClient, { prepareFreshNativeVoiceThread: prepare });
     const overlayStore = { ...createOverlayStoreMock(), getVoiceManagerThread: () => ({ backend: "codex", threadId: "thread-1" }) };
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, resolveCodexToolDiscovery: () => true, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore, resolveCodexToolDiscovery: () => true, threadTitleGenerationService: null });
     try {
       const started = await registry.startThread({ backend: "codex", cwd: "/sample/voice-manager", tokenMiserEnabled: false });
       const voice = await registry.acquireNativeVoiceBackend(started.threadId);
@@ -5802,7 +5803,7 @@ describe("DesktopBackendRegistry", () => {
     const client = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
       prepareFreshNativeVoiceThread: vi.fn(async () => false),
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
     try {
       await expect(registry.acquireNativeVoiceBackend("persisted-manager")).rejects.toThrow("Select a supported PwrAgent managed Codex runtime");
       await expect(registry.acquireNativeVoiceBackend("changed-catalog")).rejects.toThrow("Restarting the app or recreating the Voice manager does not add tool-refresh support");
@@ -5823,7 +5824,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = { ...createOverlayStoreMock({ overlays: {
       [`codex:${threadId}`]: { backend: "codex", threadId, model: "gpt-5.4", reasoningEffort: "high", serviceTier: "priority", executionMode: "full-access", extraLinkedDirectories: [] },
     } }), getVoiceManagerThread: () => ({ backend: "codex", threadId }) };
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, resolveCodexToolDiscovery: () => true });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore, resolveCodexToolDiscovery: () => true });
     try {
       const voice = await registry.acquireNativeVoiceBackend(threadId);
       expect(resume).toHaveBeenCalledWith(expect.objectContaining({
@@ -5860,7 +5861,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = { ...createOverlayStoreMock({ overlays: {
       "codex:persisted-director": { backend: "codex", threadId: "persisted-director", codexEnvironmentRuntime: runtime, extraLinkedDirectories: [] },
     } }), getVoiceManagerThread: () => ({ backend: "codex", threadId: "persisted-director" }) };
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore });
     try {
       for (const threadId of ["ordinary-thread", "persisted-director"]) {
         await expect(registry.acquireNativeVoiceBackend(threadId)).rejects.toThrow("Select a supported PwrAgent managed Codex runtime");
@@ -5875,7 +5876,7 @@ describe("DesktopBackendRegistry", () => {
       prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
     });
     const overlayStore = { ...createOverlayStoreMock(), getVoiceManagerThread: () => ({ backend: "codex", threadId: "persisted-director" }) };
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore });
     try {
       const voice = await registry.acquireNativeVoiceBackend("persisted-director");
       expect(client.refreshThreadTools).toHaveBeenCalledOnce();
@@ -5885,7 +5886,7 @@ describe("DesktopBackendRegistry", () => {
     const stock = Object.assign(voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} }), {
       prepareFreshNativeVoiceThread: vi.fn(async () => false), resumeNativeVoiceThread: resume,
     });
-    const stockRegistry = new DesktopBackendRegistry({ codexClient: stock, overlayStore });
+    const stockRegistry = createDesktopBackendRegistry({ codexClient: stock, overlayStore });
     try {
       await expect(stockRegistry.acquireNativeVoiceBackend("persisted-director")).rejects.toThrow("Sample restoration rejected");
       expect(stock.startRealtime).not.toHaveBeenCalled();
@@ -5895,7 +5896,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("uses negotiated refresh when fresh voice proof no longer matches", async () => {
     const client = Object.assign(voiceClient(), { prepareFreshNativeVoiceThread: vi.fn(async () => false) });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
     try {
       const voice = await registry.acquireNativeVoiceBackend("changed-catalog");
       expect(client.refreshThreadTools).toHaveBeenCalledOnce();
@@ -5917,7 +5918,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock({ overlays: {
       [`codex:${threadId}`]: { backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [], codexEnvironmentRuntime: runtime },
     } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     try {
       await registry.setThreadModelSettings({ backend: "codex", threadId, model: "sample-model", reasoningEffort: "high" });
       const voice = await registry.acquireNativeVoiceBackend(threadId);
@@ -5937,7 +5938,7 @@ describe("DesktopBackendRegistry", () => {
       startRealtime: vi.fn(async () => {}), stopRealtime: vi.fn(async () => {}), appendRealtimeText: vi.fn(async () => {}),
       onRealtimeEvent: vi.fn(() => () => {}), onRealtimeDisconnect: vi.fn(() => () => {}),
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       expect(await registry.nativeVoiceCapability()).toEqual({ available: true });
       const idle = await registry.acquireNativeVoiceBackend("voice-fixture");
@@ -5962,7 +5963,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     const pricingRead = vi.spyOn(overlayStore, "readThreadPricing");
     const accountingRead = vi.spyOn(overlayStore, "readThreadToolAccounting");
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     try {
       const response = await registry.readThread({ backend: "codex", threadId: "thread", display: {
         resource: "activity", activity: { turnId: "turn", entryId: entry.id },
@@ -5983,7 +5984,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     const pricingRead = vi.spyOn(overlayStore, "readThreadPricing");
     const accountingRead = vi.spyOn(overlayStore, "readThreadToolAccounting");
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     try {
       const response = await registry.readThread({ backend: "codex", threadId: "thread", viewOnly: true, display: {
         resource: "activity", activity: { turnId: "turn", entryId: "activity-middle", invocationItemId: "middle" },
@@ -6029,7 +6030,7 @@ describe("DesktopBackendRegistry", () => {
       | undefined;
     const stopWatching = vi.fn();
     const markSwitchComplete = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
       overlayStore: createOverlayStoreMock(),
@@ -6053,7 +6054,7 @@ describe("DesktopBackendRegistry", () => {
     const resetAppServerRestarts = vi.fn();
     Object.assign(codexClient, { resetAppServerRestarts });
     const markSwitchComplete = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
       overlayStore: createOverlayStoreMock(),
@@ -6076,7 +6077,7 @@ describe("DesktopBackendRegistry", () => {
     let selectionListener:
       | ((change: ManagedCodexSelectionChange) => void)
       | undefined;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
       overlayStore: createOverlayStoreMock(),
@@ -6117,7 +6118,7 @@ describe("DesktopBackendRegistry", () => {
       ...DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS,
       idleMs: 60_000,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolveCodexAppServerRecycleSettings: () => settings,
@@ -6172,7 +6173,7 @@ describe("DesktopBackendRegistry", () => {
       isThreadBusy: (threadId: string) => boolean;
     }) => [] as string[]);
     Object.assign(codexClient, { unsubscribeIdleThreads: unsubscribe });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       codexThreadIdleUnsubscribeMs: 123_000,
@@ -6230,7 +6231,7 @@ describe("DesktopBackendRegistry", () => {
           }
         })(),
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -6319,7 +6320,7 @@ describe("DesktopBackendRegistry", () => {
           };
         })(),
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -6394,7 +6395,7 @@ describe("DesktopBackendRegistry", () => {
       })),
       writeThreadGitWorkingStateCacheEntry,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -6466,7 +6467,7 @@ describe("DesktopBackendRegistry", () => {
       readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -6552,7 +6553,7 @@ describe("DesktopBackendRegistry", () => {
       })),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -6645,7 +6646,7 @@ describe("DesktopBackendRegistry", () => {
       readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -6701,7 +6702,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("does not start an automatic Git fleet for inactive history", async () => {
     const readWorkingStateEntries = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitWorkingStateService: { readWorkingStateEntries } as unknown as GitWorkingStateService,
@@ -6733,7 +6734,7 @@ describe("DesktopBackendRegistry", () => {
       readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -6797,7 +6798,7 @@ describe("DesktopBackendRegistry", () => {
       readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -6882,7 +6883,7 @@ describe("DesktopBackendRegistry", () => {
       ),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -6940,7 +6941,7 @@ describe("DesktopBackendRegistry", () => {
       })),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -6979,7 +6980,7 @@ describe("DesktopBackendRegistry", () => {
       readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -7094,7 +7095,7 @@ describe("DesktopBackendRegistry", () => {
       { ...activeWorkingStateThread({ worktreePath: otherPath }), id: "thread-other" },
     ];
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: new GitWorkingStateService({ runGit }),
       overlayStore: new SqliteOverlayStore(db),
@@ -7205,7 +7206,7 @@ describe("DesktopBackendRegistry", () => {
       })),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -7244,7 +7245,7 @@ describe("DesktopBackendRegistry", () => {
       readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -7297,7 +7298,7 @@ describe("DesktopBackendRegistry", () => {
       readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       gitWorkingStateService: {
         readWorkingStateEntries,
@@ -7331,7 +7332,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("does not publish navigation for unchanged Git probes", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: {
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: {
       ...createOverlayStoreMock(), readThreadGitWorkingStateCache: vi.fn(async () => ({})),
       writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
     } });
@@ -7348,7 +7349,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("does not regress completed provider coverage during late durable hydration", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
       providerThreadSnapshotStore: { list: () => [], replace: vi.fn() },
     });
@@ -7373,7 +7374,7 @@ describe("DesktopBackendRegistry", () => {
         async (_entry: { fetchedAt: number }) => undefined,
       ),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -7424,7 +7425,7 @@ describe("DesktopBackendRegistry", () => {
       projectKey: worktreePath,
       linkedDirectories: [],
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [thread] }),
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -7470,7 +7471,7 @@ describe("DesktopBackendRegistry", () => {
   it("evaluates the current PR state when auto-fix is enabled", async () => {
     const preferenceChanged = vi.fn(async () => undefined);
     const sendPendingNow = vi.fn(async () => true);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
     });
@@ -7515,7 +7516,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     const preferenceChanged = vi.fn(async () => undefined);
     const preferencesChanged = vi.fn(async () => undefined);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -7571,7 +7572,7 @@ describe("DesktopBackendRegistry", () => {
         generateStructuredObject: typeof generateStructuredObject;
       }
     ).generateStructuredObject = generateStructuredObject;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         launchpadDefaults: {
@@ -7641,7 +7642,7 @@ describe("DesktopBackendRegistry", () => {
         generateStructuredObject: typeof generateStructuredObject;
       }
     ).generateStructuredObject = generateStructuredObject;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -7672,7 +7673,7 @@ describe("DesktopBackendRegistry", () => {
       isAuthenticationRequired: vi.fn(() => false),
       generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Queue title" } })),
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     codexClient.isAuthenticationRequired.mockReturnValue(auth === "rejected");
@@ -7693,7 +7694,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = Object.assign(new MockBackendClient({ account }), {
       generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Queue title" } })),
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
 
@@ -7710,7 +7711,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     let enabled = true;
     let defaultEnabled = false;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }), overlayStore,
     });
     const internals = registry as unknown as {
@@ -7744,7 +7745,7 @@ describe("DesktopBackendRegistry", () => {
     it.each([false, true])("refreshes, persists and authorizes promotion independently of discovery (%s)", async (discovery) => {
       const overlayStore = createOverlayStoreMock();
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore, resolveCodexToolDiscovery: () => discovery });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore, resolveCodexToolDiscovery: () => discovery });
       const dispatch = vi.fn(async () => ({ ok: true, data: {} }) as PwrAgentMessagingResponse);
       registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: dispatch, checkDynamicToolPermission: () => ({ allowed: true }) });
       const call = {
@@ -7781,7 +7782,7 @@ describe("DesktopBackendRegistry", () => {
         await registry.close();
       }
       // A new registry reads the durable designation; no process-local grant.
-      const reloaded = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore });
+      const reloaded = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore });
       try {
         expect(await reloaded.getThreadAgentMetadata(identity)).toBeUndefined();
       } finally {
@@ -7792,7 +7793,7 @@ describe("DesktopBackendRegistry", () => {
     it("queues promotion without granting authority, deduplicates, and allows cancellation", async () => {
       const overlayStore = createOverlayStoreMock();
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const save = vi.spyOn(overlayStore, "setQueuedThreadAgentChange");
       try {
         await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
@@ -7811,12 +7812,12 @@ describe("DesktopBackendRegistry", () => {
 
     it("restores a queued promotion and applies it before the next turn", async () => {
       const overlayStore = createOverlayStoreMock();
-      const original = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], serverCapabilities: capabilities }), overlayStore });
+      const original = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], serverCapabilities: capabilities }), overlayStore });
       await original.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
       await original.setThreadAgent({ ...identity, agent });
       await original.close();
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
-      const reloaded = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const reloaded = createDesktopBackendRegistry({ codexClient, overlayStore });
       try {
         await reloaded.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] });
         expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
@@ -7829,7 +7830,7 @@ describe("DesktopBackendRegistry", () => {
     it("keeps failed queued changes visible without automatic retries and accepts an explicit retry", async () => {
       const overlayStore = createOverlayStoreMock();
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       try {
         await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
         await registry.setThreadAgent({ ...identity, agent });
@@ -7848,7 +7849,7 @@ describe("DesktopBackendRegistry", () => {
 
     it("rejects unsupported runtimes without saving", async () => {
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: {} });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       try {
         await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("Update to a supported");
         expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
@@ -7860,7 +7861,7 @@ describe("DesktopBackendRegistry", () => {
 
     it("keeps the previous designation on failed refresh and releases the reservation", async () => {
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       try {
         codexClient.refreshThreadTools.mockRejectedValueOnce(new Error("refresh refused"));
         await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("refresh refused");
@@ -7877,7 +7878,7 @@ describe("DesktopBackendRegistry", () => {
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
       let release!: () => void;
       codexClient.refreshThreadTools.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       try {
         const promotion = registry.setThreadAgent({ ...identity, agent });
         await vi.waitFor(() => expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce());
@@ -7894,7 +7895,7 @@ describe("DesktopBackendRegistry", () => {
 
     it("does not demote while an attachment dispatched by the previous turn is still in flight", async () => {
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       let release!: () => void;
       const dispatch = vi.fn(async () => {
         await new Promise<void>((resolve) => { release = resolve; });
@@ -7919,7 +7920,7 @@ describe("DesktopBackendRegistry", () => {
 
     it("preserves non-Codex designation without a Codex runtime", async () => {
       const codexClient = new MockBackendClient({ threads: [] });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       try {
         await registry.setThreadAgent({ backend: "acp:gemini", threadId: "fixture", agent });
         expect(await registry.getThreadAgentMetadata({ backend: "acp:gemini", threadId: "fixture" })).toEqual(agent);
@@ -7950,7 +7951,7 @@ describe("DesktopBackendRegistry", () => {
       initializeResult: { userAgent: `pwragent/${version} (Mac OS 26.6.2; arm64) unknown` },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore });
     try {
       await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
       await registry.startThread({
@@ -7975,7 +7976,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("dispatches the advertised tool guide only from a live owning turn", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       await registry.startThread({ backend: "codex", cwd: process.cwd() });
       expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name)).toContain("read_tool_guide");
@@ -7998,7 +7999,7 @@ describe("DesktopBackendRegistry", () => {
       threads: [],
       serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore: createOverlayStoreMock(),
       resolveCodexToolDiscovery: () => enabled,
     });
@@ -8045,7 +8046,7 @@ describe("DesktopBackendRegistry", () => {
       threads: [],
       serverCapabilities: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore,
       messagingStore: createMessagingArchiveCleanupStoreMock({
         bindings: [{ id: "binding-bound", backend: "codex", threadId: "bound-thread" }],
@@ -8078,7 +8079,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("passes the Codex default-mode question toggle to new and resumed threads", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolveCodexDefaultModeRequestUserInput: () => true,
@@ -8128,7 +8129,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -8235,7 +8236,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -8269,7 +8270,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("keeps Token Miser available for per-thread opt-in when its default is off", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -8318,7 +8319,7 @@ describe("DesktopBackendRegistry", () => {
       ...createOverlayStoreMock(),
       recordThreadCompaction,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -8360,7 +8361,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("configures the code-mode reducer when a Token Miser thread is created", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -8444,7 +8445,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -8523,7 +8524,7 @@ describe("DesktopBackendRegistry", () => {
     Object.assign(codexClient, { isTokenMiserActivationNegotiated: () => negotiated });
     const readCapabilities = vi.spyOn(codexClient, "readServerCapabilities");
     let selectionListener: ((change: ManagedCodexSelectionChange) => unknown) | undefined;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       watchManagedCodexRuntime: (listener) => {
         selectionListener = listener;
@@ -8604,7 +8605,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -8687,7 +8688,7 @@ describe("DesktopBackendRegistry", () => {
     const resolveRuntime = vi.fn();
     const startBridge = vi.fn(async () => undefined);
     const closeBridge = vi.fn(async () => undefined);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -8762,7 +8763,7 @@ describe("DesktopBackendRegistry", () => {
     const ensureInstalled = vi.fn();
     const ensurePluginSource = vi.fn();
     const resolveRuntime = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolveManagedTokenMiserActivationRequired: () => true,
@@ -8812,7 +8813,7 @@ describe("DesktopBackendRegistry", () => {
       configurable: true,
       value: undefined,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -8847,7 +8848,7 @@ describe("DesktopBackendRegistry", () => {
       threads: [],
       serverCapabilitiesError: new Error("Method not found"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -8893,7 +8894,7 @@ describe("DesktopBackendRegistry", () => {
         new Error("codex app server connection cancelled"),
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -8950,7 +8951,7 @@ describe("DesktopBackendRegistry", () => {
         threads: [],
         serverCapabilities: params.serverCapabilities,
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         resolveManagedTokenMiserActivationRequired: () =>
@@ -9133,7 +9134,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -9199,7 +9200,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -9249,7 +9250,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -9312,7 +9313,7 @@ describe("DesktopBackendRegistry", () => {
       return startTurn(params);
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -9449,7 +9450,7 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {},
       startThreadResult: { threadId: "managed-review-child" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -9498,12 +9499,12 @@ describe("DesktopBackendRegistry", () => {
 
   it("seeds Auto-fix PR for new threads from the configured default", async () => {
     const defaultOverlayStore = createOverlayStoreMock();
-    const defaultRegistry = new DesktopBackendRegistry({
+    const defaultRegistry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: defaultOverlayStore,
     });
     const disabledOverlayStore = createOverlayStoreMock();
-    const disabledRegistry = new DesktopBackendRegistry({
+    const disabledRegistry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: disabledOverlayStore,
       resolveDefaultPrAutoDispatchEnabled: () => false,
@@ -9538,7 +9539,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("saves the launchpad Auto-fix PR choice through materialization", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -9588,7 +9589,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       createScratchProjectDirectory: async () =>
@@ -9657,7 +9658,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord("acp:kimi")]),
@@ -10040,7 +10041,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("adds Codex compact app-server command to listSkills", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: {
           methods: ["skills/list", "review/start", "thread/compact/start"],
@@ -10080,7 +10081,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("rejects retired persisted backend ids instead of routing them to Codex", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
     });
@@ -10128,7 +10129,7 @@ describe("DesktopBackendRegistry", () => {
       ],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -10287,7 +10288,7 @@ describe("DesktopBackendRegistry", () => {
   it("keeps quota and terminal polls outside Codex request activity", async () => {
     const { codexRequestCountsAsActivity } = await import("../codex-app-server/request-activity");
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     const readAccount = codexClient.readAccount.bind(codexClient);
     const readRateLimits = codexClient.readRateLimits.bind(codexClient);
@@ -10327,7 +10328,7 @@ describe("DesktopBackendRegistry", () => {
       activity.push(codexRequestCountsAsActivity());
       return await readThread(params);
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await registry.readThread({ backend: "codex", threadId: "thread-1", viewOnly: true, countsAsActivity: false });
     await registry.readThread({ backend: "codex", threadId: "thread-1", viewOnly: true });
     expect(activity).toEqual([false, true]);
@@ -10340,7 +10341,7 @@ describe("DesktopBackendRegistry", () => {
     }), {
       isAuthenticationRequired: vi.fn(() => false),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -10363,7 +10364,7 @@ describe("DesktopBackendRegistry", () => {
     const temp = createTempStateDb("pwragent-display-card-reads-");
     const db = StateDb.open(temp.dbPath);
     const overlayStore = new SqliteOverlayStore(db);
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore });
     onTestFinished(async () => {
       await registry.close();
       db.close();
@@ -10452,7 +10453,7 @@ describe("DesktopBackendRegistry", () => {
     };
     const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
     let localIds = [id];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ models: [{ id, label: "PrismML Bonsai 2 27B" }] }),
       overlayStore, resolveCodexLocalModelIds: () => localIds,
     });
@@ -10481,7 +10482,7 @@ describe("DesktopBackendRegistry", () => {
     const lines: ThreadUsageLineRecord[] = [];
     const overlayStore = { ...createOverlayStoreMock(), readThreadPricing: vi.fn(async () => ({ lines, summaries: [] })) };
     const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     onTestFinished(() => registry.close());
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "tools" } });
@@ -10511,7 +10512,7 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
     let localIds = [model];
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, resolveCodexLocalModelIds: () => localIds });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, resolveCodexLocalModelIds: () => localIds });
     onTestFinished(() => registry.close());
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     const response = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
@@ -10544,7 +10545,7 @@ describe("DesktopBackendRegistry", () => {
       }
       return result;
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -10590,7 +10591,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
       rateLimits: [{ name: "Weekly limit", usedPercent: 22 }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => {
       await registry.close();
       configStore.dispose();
@@ -10609,7 +10610,7 @@ describe("DesktopBackendRegistry", () => {
   it("recovers a failed account read and retains it when a later read fails", async () => {
     const codexClient = new MockBackendClient({ rateLimits: [{ name: "Weekly limit", usedPercent: 22 }] });
     const accountRead = vi.spyOn(codexClient, "readAccount").mockRejectedValueOnce(new Error("temporary failure"));
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     accountRead.mockResolvedValue({ type: "chatgpt", email: "user@example.com", planType: "pro" });
@@ -10629,7 +10630,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "user@example.com", planType: "pro", requiresOpenaiAuth: true },
       rateLimits: [{ name: "Weekly limit", usedPercent: 54 }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     vi.spyOn(codexClient, "readAccount").mockResolvedValue({ requiresOpenaiAuth: true });
@@ -10645,7 +10646,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "previous@example.com", planType: "pro" },
       rateLimits: [{ name: "Weekly limit", usedPercent: 54 }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     vi.spyOn(codexClient, "readAccount").mockResolvedValue({ type: "chatgpt", email: "current@example.com", planType: "free" });
@@ -10676,7 +10677,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "previous@example.com", planType: "pro" },
       rateLimits: [{ name: "Weekly limit", usedPercent: 54 }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const pending = createDeferred<BackendRateLimitSummary[]>();
     onTestFinished(async () => { pending.resolve([]); await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
@@ -10713,7 +10714,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
       rateLimits: [{ name: "Weekly limit", usedPercent: 54 }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     vi.spyOn(codexClient, "readAccount").mockResolvedValue({ type: "chatgpt", email: "user@example.com", planType: "free" });
@@ -10731,7 +10732,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
       rateLimits: [{ name: "Weekly limit", usedPercent: 54 }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const pending = createDeferred<BackendRateLimitSummary[]>();
     onTestFinished(async () => { pending.resolve([]); await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
@@ -10751,7 +10752,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("discards an account refresh from an invalidated runtime", async () => {
     const codexClient = new MockBackendClient({ account: { type: "chatgpt", planType: "pro" } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     const pending = createDeferred<BackendAccountSummary>();
@@ -10769,7 +10770,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({
       rateLimits: [{ name: "Weekly limit", remaining: 91 }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -10841,7 +10842,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -10958,7 +10959,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
       rateLimits: [window("primary", 40, fiveHourReset), window("secondary", 10, weeklyReset)],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     const update = (
@@ -11023,7 +11024,7 @@ describe("DesktopBackendRegistry", () => {
       account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
       rateLimits: [fiveHour(98)],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
     vi.spyOn(codexClient, "readRateLimits").mockResolvedValue([fiveHour(0)]);
@@ -11063,7 +11064,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -11149,7 +11150,7 @@ describe("DesktopBackendRegistry", () => {
         account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
         rateLimits: [limit("primary", 10), limit("secondary", 20)],
       });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       const pending = createDeferred<BackendRateLimitSummary[]>();
       onTestFinished(async () => { pending.resolve([]); await registry.close(); });
       await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
@@ -11218,7 +11219,7 @@ describe("DesktopBackendRegistry", () => {
       },
       rateLimits: [fiveHourLimit, creditsLimit],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -11315,7 +11316,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -11407,7 +11408,7 @@ describe("DesktopBackendRegistry", () => {
       },
       rateLimitReads: [initialRateLimits, refetchedRateLimits],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -11476,7 +11477,7 @@ describe("DesktopBackendRegistry", () => {
       initializeResult: { methods: ["thread/list"] },
       rateLimitReads: [[weeklyLimit], refetchedRateLimits],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -11542,7 +11543,7 @@ describe("DesktopBackendRegistry", () => {
       initializeResult: { methods: ["thread/list"] },
       rateLimitReads: [initialRateLimits, refetchedRateLimits],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolveCodexRuntimeCommand: async () => {
@@ -11618,7 +11619,7 @@ describe("DesktopBackendRegistry", () => {
         ],
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -11682,7 +11683,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolveCodexRuntimeCommand: async () => {
@@ -11745,7 +11746,7 @@ describe("DesktopBackendRegistry", () => {
     // The two disagree while a managed switch is pending: the connection is
     // still answering from the old build while resolution already names the
     // one a fresh launch would pick. The running server owns its own version.
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: {
           methods: ["thread/list"],
@@ -11775,7 +11776,7 @@ describe("DesktopBackendRegistry", () => {
     let notify:
       | ((change: ManagedCodexSelectionChange) => Promise<unknown> | unknown)
       | undefined;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
       }),
@@ -11849,7 +11850,7 @@ describe("DesktopBackendRegistry", () => {
         selectedCommand: command,
         selectedVersion: version,
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({
           initializeResult: {
             methods: ["thread/list"],
@@ -11890,7 +11891,7 @@ describe("DesktopBackendRegistry", () => {
       "pwragent-v0.149.0-pwragent.2",
       "codex",
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
       }),
@@ -11917,7 +11918,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("delegates Codex project trust to the Codex client", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -11942,7 +11943,7 @@ describe("DesktopBackendRegistry", () => {
 
   it.each(["codex", "claude"] as const)("records a %s turn/failed outcome to the thread overlay turnFailureLog", async (backend) => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore,
     });
@@ -11984,7 +11985,7 @@ describe("DesktopBackendRegistry", () => {
   it("does NOT record a turn failure for ACP backends (they persist their own entry)", async () => {
     const overlayStore = createOverlayStoreMock();
     const appendTurnFailureSpy = vi.spyOn(overlayStore, "appendTurnFailure");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore,
     });
@@ -12016,7 +12017,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("buffers the latest Codex config warning until the project is trusted", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -12058,7 +12059,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("reports installed ACP agents as backend summaries", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       isAcpAgentEnabled: () => true,
@@ -12125,7 +12126,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("marks the durable Codex summary pending while startup discovery runs", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12149,7 +12150,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("keeps a cached Codex summary pending while discovery is outstanding", async () => {
     let pending = true;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12186,7 +12187,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("leaves the Codex summary unpending once discovery has answered", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12206,7 +12207,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("does not report banned ACP adapters as backend summaries", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -12235,7 +12236,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("reports locally discovered ACP agents as backend summaries", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12293,7 +12294,7 @@ describe("DesktopBackendRegistry", () => {
 
   it.each(["queued", "closed"] as const)("startup registry ownership oracle: no discovery after %s close", async (boundary) => {
     const discoverLocalAcpAgents = vi.fn(async () => []);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12311,7 +12312,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({});
     const closeSpy = vi.spyOn(codexClient, "close");
     const discoverLocalAcpAgents = vi.fn(async () => []);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12341,7 +12342,7 @@ describe("DesktopBackendRegistry", () => {
   // of the gate: default off, and still wired when production asks for it.
   it("does not reach machine ACP discovery without an explicit opt-in", async () => {
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockClear();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12361,7 +12362,7 @@ describe("DesktopBackendRegistry", () => {
     const tempRoot = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-backend-registry-"),
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12404,7 +12405,7 @@ describe("DesktopBackendRegistry", () => {
     process.env.PWRAGENT_HOME = tempRoot;
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockReset();
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12455,7 +12456,7 @@ describe("DesktopBackendRegistry", () => {
       "[acp_agents.gemini]\ncli_path = \"/path/gemini-one\"\n",
     );
     const configStore = new DesktopConfigStore({ configPath });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12500,7 +12501,7 @@ describe("DesktopBackendRegistry", () => {
       selectedVersion: "0.162.1",
     });
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       configStore,
       overlayStore: createOverlayStoreMock(),
@@ -12557,7 +12558,7 @@ describe("DesktopBackendRegistry", () => {
     );
     const configStore = new DesktopConfigStore({ configPath });
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
@@ -12614,7 +12615,7 @@ describe("DesktopBackendRegistry", () => {
       ].join("\n"),
     );
     process.env.PWRAGENT_HOME = tempRoot;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -12678,7 +12679,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("lists persisted ACP sessions as thread summaries", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -12807,7 +12808,7 @@ describe("DesktopBackendRegistry", () => {
         })),
       }];
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       discoverLocalAcpAgents: async () => [],
@@ -12871,7 +12872,7 @@ describe("DesktopBackendRegistry", () => {
           cwd, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" };
         sessions.upsertSession(native);
         sessions.upsertSession({ ...native, backendId: "acp:other", title: "Other", cwd: repo });
-        const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
+        const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
           overlayStore: new SqliteOverlayStore(db), acpSessionStore: sessions, providerThreadSnapshotStore: inventory,
           discoverLocalAcpAgents: async () => [], acpWorktreeRepositoryResolver: async () => directory });
         try {
@@ -12913,7 +12914,7 @@ describe("DesktopBackendRegistry", () => {
       const native: AcpSessionMetadata = { backendId: "acp:uninstalled", sessionId: "member", title: "Before",
         cwd, createdAt: 1, updatedAt: 2, executionMode: "default", status: "idle" };
       sessions.upsertSession(native);
-      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
         overlayStore: new SqliteOverlayStore(db), acpSessionStore: sessions, providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db),
         discoverLocalAcpAgents: async () => [], acpWorktreeRepositoryResolver: async () => {
           entered.resolve(); await resume.promise;
@@ -12950,7 +12951,7 @@ describe("DesktopBackendRegistry", () => {
       ],
     });
     const replace = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       discoverLocalAcpAgents: async () => [],
@@ -12995,7 +12996,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({
       listThreadsError: new Error("provider unavailable"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       discoverLocalAcpAgents: async () => [],
@@ -13046,7 +13047,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({
       listThreadsError: new Error("provider unavailable"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       discoverLocalAcpAgents: async () => [],
@@ -13135,7 +13136,7 @@ describe("DesktopBackendRegistry", () => {
       selectedCommand: command,
       selectedVersion: "0.160.0",
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       configStore,
       overlayStore: createOverlayStoreMock(),
@@ -13198,7 +13199,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("marks a navigation listing incomplete when a managed Codex runtime fails without a recorded selection", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ listThreadsError: new Error("codex app server client closed") }),
       overlayStore: createOverlayStoreMock(),
       discoverLocalAcpAgents: async () => [],
@@ -13213,7 +13214,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("does not mark a listing incomplete when no Codex executable is selected", async () => {
     const noExecutable = new Error("Codex discovery has not selected an executable. Refresh Codex in Settings.");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ listThreadsError: noExecutable }),
       overlayStore: createOverlayStoreMock(),
       discoverLocalAcpAgents: async () => [],
@@ -13227,7 +13228,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("marks Gemini ACP thread workspace handoff unavailable after conversation history", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -13302,7 +13303,7 @@ describe("DesktopBackendRegistry", () => {
       },
     ];
     const sessionStore = createAcpSessionStoreMock(sessions);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -13425,7 +13426,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -13550,7 +13551,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -13596,7 +13597,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -13634,7 +13635,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -13677,7 +13678,7 @@ describe("DesktopBackendRegistry", () => {
     await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), async suffix => {
       const thread: AppServerThreadSummary = { id: "startup-title", source: "codex", title: `Before ${suffix}`,
         titleSource: "explicit", linkedDirectories: [] };
-      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [thread] }),
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [thread] }),
         overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
         providerThreadSnapshotStore: { list: () => [], replace: () => {} } });
       const owner = registry as unknown as {
@@ -13717,7 +13718,7 @@ describe("DesktopBackendRegistry", () => {
       await enrichment.promise;
       return {};
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     const pendingList = registry.listThreads({ backend: "codex" });
     await waitForCondition(() => getThreadOverlayStates.mock.calls.length === 1);
@@ -13766,7 +13767,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -13811,7 +13812,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -13863,7 +13864,7 @@ describe("DesktopBackendRegistry", () => {
   it.each([true, false])("propagates retention evidence failures for archived=%s", async (archived) => {
     const codexClient = new MockBackendClient({ threads: [] });
     vi.spyOn(codexClient, "listThreads").mockRejectedValue(new Error("Provider unavailable"));
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       await expect(registry.listThreads({ archived, forceRefresh: true, callerReason: "archive-cleanup" })).rejects.toThrow("Provider unavailable");
     } finally { await registry.close(); }
@@ -13872,7 +13873,7 @@ describe("DesktopBackendRegistry", () => {
   it("links registry listing cache hits to the physical scan without retaining row content", async () => {
     const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       const before = listingDiagnostics.snapshot().recorded;
       await registry.listThreads({ backend: "codex", callerReason: "renderer-navigation-query" });
@@ -13889,7 +13890,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({
       threads: [{ id: "fixture", title: "Before", titleSource: "explicit", linkedDirectories: [], source: "codex" }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       await registry.listThreads({ backend: "codex" });
       codexClient.setThreads([{ id: "fixture", title: "After", titleSource: "explicit", linkedDirectories: [], source: "codex" }]);
@@ -13911,7 +13912,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -13987,7 +13988,7 @@ describe("DesktopBackendRegistry", () => {
         }),
       ),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -14100,7 +14101,7 @@ describe("DesktopBackendRegistry", () => {
         }),
       ),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -14297,7 +14298,7 @@ describe("DesktopBackendRegistry", () => {
         status: "idle",
       },
     ];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -14448,7 +14449,7 @@ describe("DesktopBackendRegistry", () => {
         threadStatus: "idle",
       })),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -15060,7 +15061,7 @@ describe("DesktopBackendRegistry", () => {
       })),
       setRuntimeOption,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -15387,7 +15388,7 @@ describe("DesktopBackendRegistry", () => {
       })),
     };
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -15529,7 +15530,7 @@ describe("DesktopBackendRegistry", () => {
       })),
     };
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -15782,7 +15783,7 @@ describe("DesktopBackendRegistry", () => {
       })),
     };
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -16090,7 +16091,7 @@ describe("DesktopBackendRegistry", () => {
         }),
       ),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -16228,7 +16229,7 @@ describe("DesktopBackendRegistry", () => {
       },
       threads: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       createScheduledThreadAction,
@@ -16339,7 +16340,7 @@ describe("DesktopBackendRegistry", () => {
   async function assertRejectedCreationPreparationCleansUp(failingRevokes: boolean[], failure: "isolation" | "config" | "inventory"): Promise<void> {
     const effects: string[] = [];
     const client = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const internal = registry as unknown as {
       gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
       registerMcpConnections: () => Promise<unknown[]>;
@@ -16397,7 +16398,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("drains admitted runtime work after synchronous creation preparation refuses", async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), async (runtimeRejects) => {
-      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock() });
       const internal = registry as unknown as {
         gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
         prepareTokenMiserRuntime: () => Promise<void>;
@@ -16430,7 +16431,7 @@ describe("DesktopBackendRegistry", () => {
   async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event" | "workspace"): Promise<void> {
     const client = new MockBackendClient({ threads: [], startThreadResult: { threadId: "same:thread" } });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore, threadTitleGenerationService: null });
     const internal = registry as unknown as {
       claudeBackend: { startThread: () => Promise<{ threadId: string }> };
       startAcpSession: () => Promise<{ threadId: string }>;
@@ -16499,7 +16500,7 @@ describe("DesktopBackendRegistry", () => {
     const directoryKey = `directory:${directoryPath}`;
     await overlayStore.setThreadPin({ backend: parentBackend, threadId: parentId, pinnedRank: "1024" });
     await overlayStore.setSubthreadsCollapsed({ backend: parentBackend, parentThreadId: parentId, collapsed: true });
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], startThreadResult: { threadId } }),
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], startThreadResult: { threadId } }),
       overlayStore, threadTitleGenerationService: null });
     const internal = registry as unknown as {
       claudeBackend: { startThread: () => Promise<{ threadId: string }> };
@@ -16572,7 +16573,7 @@ describe("DesktopBackendRegistry", () => {
     );
     const directoryKey = `directory:${directoryPath}`;
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -16614,7 +16615,7 @@ describe("DesktopBackendRegistry", () => {
     const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-project"));
     const directoryKey = `directory:${directoryPath}`;
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -16651,7 +16652,7 @@ describe("DesktopBackendRegistry", () => {
     const directoryKey = `directory:${directoryPath}`;
     const overlayStore = new SqliteOverlayStore(db);
     await overlayStore.setThreadPin({ backend: "codex", threadId: "thread-pinned", pinnedRank: "1024" });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -16704,7 +16705,7 @@ describe("DesktopBackendRegistry", () => {
       ],
     });
     const listThreads = vi.spyOn(codexClient, "listThreads");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -16775,7 +16776,7 @@ describe("DesktopBackendRegistry", () => {
     overlayStore.setThreadPin = vi.fn(async () => {
       throw new Error("state database is unavailable");
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       gitDirectoryService: {
@@ -16842,7 +16843,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [
           {
@@ -16930,7 +16931,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [
           {
@@ -17075,7 +17076,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [
           {
@@ -17206,7 +17207,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [
           {
@@ -17323,7 +17324,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [
           {
@@ -17451,7 +17452,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [
           {
@@ -17509,7 +17510,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("returns the materialized thread when the first launchpad turn fails", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         threads: [],
         startTurnError: new Error("invalid model"),
@@ -17559,7 +17560,7 @@ describe("DesktopBackendRegistry", () => {
       cwd: "/repo/project",
       workMode: "local" as const,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: { prepareLaunchpadWorkspace } as never,
@@ -17605,7 +17606,7 @@ describe("DesktopBackendRegistry", () => {
       cwd: "/repo/project",
       workMode: "local" as const,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: { prepareLaunchpadWorkspace } as never,
@@ -17649,7 +17650,7 @@ describe("DesktopBackendRegistry", () => {
       workMode: "worktree" as const,
       rollback,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -17690,7 +17691,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("preserves the project Working Updates override after materialization", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       gitDirectoryService: {
@@ -17750,7 +17751,7 @@ describe("DesktopBackendRegistry", () => {
       ) => Promise<{ cwd: string; workMode: "local" }>,
     ) => {
       const overlayStore = createOverlayStoreMock();
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({ threads: [], models: [
           { id: "gpt-5.5", current: true }, { id: "project-model" },
         ] }),
@@ -17911,7 +17912,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("notifies when a launchpad thread is materialized before starting input", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -17960,7 +17961,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("auto-approves ACP permission requests for Yolo runtime sessions", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -18069,7 +18070,7 @@ describe("DesktopBackendRegistry", () => {
       ),
     };
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -18155,7 +18156,7 @@ describe("DesktopBackendRegistry", () => {
 
   it.each(["qwen", "grok"])("keeps human approvals for requests escalated by %s Auto", async (registryId) => {
     const acpBackendId = `acp:${registryId}` as AcpBackendId;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -18260,7 +18261,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("does not auto-approve ACP permission requests when runtime mode is Default", async () => {
     const acpBackendId = "acp:qwen" as AcpBackendId;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -18851,7 +18852,7 @@ script = "echo setup"
       executionMode: "default",
       status: "idle",
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -18954,7 +18955,7 @@ script = "echo setup"
       })),
       setRuntimeOption,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -19088,7 +19089,7 @@ script = "echo setup"
       })),
       setRuntimeOption,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -19212,7 +19213,7 @@ script = "echo setup"
       })),
       setRuntimeOption,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -19325,7 +19326,7 @@ script = "echo setup"
         threadStatus: "active",
       })),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -19413,7 +19414,7 @@ script = "echo setup"
         throw new Error("No previous sessions found for this project.");
       }),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -19526,7 +19527,7 @@ script = "echo setup"
         throw new Error("No previous sessions found for this project.");
       }),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -19590,7 +19591,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -19661,7 +19662,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -19718,7 +19719,7 @@ script = "echo setup"
       return await answerInitialize();
     };
     const onCodexConnected = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -19746,7 +19747,7 @@ script = "echo setup"
       models: [],
     });
     const onCodexConnected = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -19771,7 +19772,7 @@ script = "echo setup"
       },
       models: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -19800,7 +19801,7 @@ script = "echo setup"
         methods: ["thread/start", "turn/start"],
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -19834,7 +19835,7 @@ script = "echo setup"
     });
     const overlayStore = createOverlayStoreMock();
     const pdfMcp = createPdfMcpServerMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -19937,7 +19938,7 @@ script = "echo setup"
       bindThread,
       revoke: vi.fn(),
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       mcpConnectionService: { registerBridge },
@@ -20003,7 +20004,7 @@ script = "echo setup"
       bindThread: vi.fn(),
       revoke: vi.fn(),
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: { registerBridge },
@@ -20049,7 +20050,7 @@ script = "echo setup"
       bindThread: vi.fn(),
       revoke,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: { registerBridge },
@@ -20075,7 +20076,7 @@ script = "echo setup"
         "json-rpc error (-32600): failed to load configuration: invalid transport\nin `mcp_servers.pwragent_pwrsnap`",
       ),
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: {
@@ -20116,7 +20117,7 @@ script = "echo setup"
         "json-rpc error (-32600): failed to load configuration: invalid transport\nin `mcp_servers.pwragent_pwrgit`",
       ),
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: {
@@ -20154,7 +20155,7 @@ script = "echo setup"
     // that starts the thread without the app the operator switched on.
     const codexClient = new MockBackendClient({ threads: [] });
     const startThread = vi.spyOn(codexClient, "startThread");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: null,
@@ -20179,7 +20180,7 @@ script = "echo setup"
     // the operator selected.
     const codexClient = new MockBackendClient({ threads: [] });
     const startThread = vi.spyOn(codexClient, "startThread");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: null,
@@ -20203,7 +20204,7 @@ script = "echo setup"
       server: { name: "pwrgit", command: process.execPath, args: ["bridge.js"], env: {} },
       bindThread: vi.fn(), revoke: vi.fn(),
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       mcpConnectionService: { registerBridge },
@@ -20227,7 +20228,7 @@ script = "echo setup"
     const pdfPath = path.join(root, "Jeep");
     await copyFile(jeepStickerPageFixture, pdfPath);
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -20286,7 +20287,7 @@ script = "echo setup"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -20362,7 +20363,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -20393,7 +20394,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -20512,7 +20513,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: null,
@@ -20682,7 +20683,7 @@ script = "echo setup"
         { threadId, turnId: "turn-retried" },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -20753,7 +20754,7 @@ script = "echo setup"
       startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: null,
@@ -20848,7 +20849,7 @@ script = "echo setup"
         ],
       });
       const overlayStore = createOverlayStoreMock();
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
         threadTitleGenerationService: null,
@@ -20933,7 +20934,7 @@ script = "echo setup"
         { threadId, turnId: "turn-retried-once" },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -21002,7 +21003,7 @@ script = "echo setup"
         ],
         ...options,
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock({
           overlays: {
@@ -21174,7 +21175,7 @@ script = "echo setup"
       invalidIdRecoveryBlockingTurns: [{ threadId: "thread-busy" }],
       invalidIdRecoveryWaitsForAbort: true,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -21222,7 +21223,7 @@ script = "echo setup"
       invalidIdRecoveryDelay: recoveryDelay.promise,
       startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -21279,7 +21280,7 @@ script = "echo setup"
       invalidIdRecoveryError: new Error("rollout path belongs to another thread"),
       startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -21365,7 +21366,7 @@ script = "echo setup"
       initializeResult: { methods: ["turn/start"] },
       startTurnResults: [{ threadId, turnId: "new-user-turn" }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: null,
@@ -21421,7 +21422,7 @@ script = "echo setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -21458,7 +21459,7 @@ script = "echo setup"
         methods: ["turn/start"],
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -21501,7 +21502,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -21538,7 +21539,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -21604,7 +21605,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -21662,7 +21663,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -21703,7 +21704,7 @@ script = "echo setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -21772,7 +21773,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -21838,7 +21839,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -21898,7 +21899,7 @@ script = "echo setup"
         snapshotRef: "refs/pwragent/snapshot", snapshotCommit: "abc123",
         createdAt: 1, archivedAt: 1, state: "archived", ignoredFilesExcluded: true,
       }));
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore,
         worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
       });
@@ -21958,7 +21959,7 @@ script = "echo setup"
               threads: archived ? [{ ...thread, archived: true, linkedDirectories: [primary] }] : [],
             })),
           });
-          const archiveRegistry = new DesktopBackendRegistry({
+          const archiveRegistry = createDesktopBackendRegistry({
             codexClient: archiveClient,
             overlayStore: reopenedStore,
             worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
@@ -21994,7 +21995,7 @@ script = "echo setup"
     const codexClient = new MockBackendClient({ threads });
     const enrichThreadDirectories = vi.fn(async (rows: AppServerThreadSummary[]) => rows);
     Object.assign(codexClient, { enrichThreadDirectories });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     for (const callerReason of ["startup-provider-refresh", "startup-prewarm", "navigation-snapshot", "thread-list"] as const) {
       await registry.listThreads({ backend: "codex", callerReason, forceRefresh: true });
       expect(codexClient.lastListThreadsParams?.enrichDirectories).toBe(false);
@@ -22110,7 +22111,7 @@ script = "echo setup"
     );
     Object.assign(codexClient, { enrichThreadDirectories });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22226,7 +22227,7 @@ script = "echo setup"
     );
     Object.assign(codexClient, { enrichThreadDirectories });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22304,7 +22305,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22363,7 +22364,7 @@ script = "echo setup"
       async (threads: AppServerThreadSummary[]) => threads,
     );
     Object.assign(codexClient, { enrichThreadDirectories });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -22426,7 +22427,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22492,7 +22493,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22561,7 +22562,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22645,7 +22646,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22716,7 +22717,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     await registry.listThreads({
       backend: "codex",
@@ -22796,7 +22797,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     await registry.listThreads({
       backend: "codex",
@@ -22876,7 +22877,7 @@ script = "echo setup"
     );
     Object.assign(codexClient, { enrichThreadDirectories });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -22974,7 +22975,7 @@ script = "echo setup"
     );
     Object.assign(codexClient, { enrichThreadDirectories });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -23068,7 +23069,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -23171,7 +23172,7 @@ script = "echo setup"
         pagination: { supportsPagination: true, hasPreviousPage: true },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -23234,7 +23235,7 @@ script = "echo setup"
         pagination: { supportsPagination: true, hasPreviousPage: false },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -23314,7 +23315,7 @@ script = "echo setup"
         pagination: { supportsPagination: true, hasPreviousPage: true },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -23386,7 +23387,7 @@ script = "echo setup"
         pagination: { supportsPagination: true, hasPreviousPage: true },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -23439,7 +23440,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -23470,7 +23471,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -23508,7 +23509,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -23550,7 +23551,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -23587,7 +23588,7 @@ script = "echo setup"
   });
 
   it("assumes Codex can create threads when initialize omits methods", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: {
           serverInfo: { name: "Codex App Server", version: "0.120.0" },
@@ -23616,7 +23617,7 @@ script = "echo setup"
   });
 
   it("remembers launchpad work mode for future directory drafts", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -23649,7 +23650,7 @@ script = "echo setup"
 
   it("leaves a launchpad as stored when its update condition fails", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -23685,7 +23686,7 @@ script = "echo setup"
   });
 
   it("seeds empty launchpad defaults from the profile provider baseline", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -23736,7 +23737,7 @@ script = "echo setup"
   });
 
   it("keeps learned provider choices ahead of the profile baseline", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -23797,7 +23798,7 @@ script = "echo setup"
 
   it("keeps an unavailable profile model suspended instead of learning the fallback", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -23842,7 +23843,7 @@ script = "echo setup"
   });
 
   it("keeps sticky model and permission settings scoped to the selected provider", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -23936,7 +23937,7 @@ script = "echo setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -23988,7 +23989,7 @@ script = "echo setup"
   });
 
   it("restores sticky launchpad reasoning when switching back to a model", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -24049,7 +24050,7 @@ script = "echo setup"
 
   it("restores thread reasoning when switching back to a model", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -24154,7 +24155,7 @@ script = "echo setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveProviderThreadModelMigrations: () => migrations,
@@ -24312,7 +24313,7 @@ script = "echo setup"
   });
 
   it("forces Codex Fast off when the profile policy prohibits it", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
         models: [
@@ -24363,7 +24364,7 @@ script = "echo setup"
         supportsImage: false,
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ overlays: {
         "codex:local-thread": {
@@ -24402,7 +24403,7 @@ script = "echo setup"
         serviceTiers: available ? ["priority", "ultrafast"] : ["priority"],
       }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await registry.ensureDirectoryLaunchpad({
       directoryKey: "directory:/repo-a", directoryKind: "directory",
       directoryLabel: "Repo A", directoryPath: "/repo-a",
@@ -24454,7 +24455,7 @@ script = "echo setup"
         fastMode: false,
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -24520,7 +24521,7 @@ command = "pnpm grok"
       "utf8",
     );
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -24641,7 +24642,7 @@ command = "pnpm grok"
   });
 
   it("refreshes empty saved directory drafts from current launchpad work mode defaults", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -24677,7 +24678,7 @@ command = "pnpm grok"
   });
 
   it("keeps a selected Agent designation when reopening a blank launchpad", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -24736,7 +24737,7 @@ command = "pnpm grok"
 
     function registryWith(connections: () => McpConnectionStatus[]) {
       const listConnections = vi.fn(async () => connections());
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({
           initializeResult: { methods: ["thread/start"] },
         }),
@@ -24785,7 +24786,7 @@ command = "pnpm grok"
         bindThread,
         revoke: vi.fn(),
       }));
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
         mcpConnectionService: { registerBridge, listConnections },
@@ -25027,7 +25028,7 @@ command = "pnpm grok"
         const listConnections = vi.fn(
           () => new Promise<McpConnectionStatus[]>(() => undefined),
         );
-        const registry = new DesktopBackendRegistry({
+        const registry = createDesktopBackendRegistry({
           codexClient: new MockBackendClient({
             initializeResult: { methods: ["thread/start"] },
           }),
@@ -25083,7 +25084,7 @@ command = "pnpm grok"
       const listConnections = vi.fn(async (): Promise<McpConnectionStatus[]> => {
         throw new Error("owner broker went away");
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({
           initializeResult: { methods: ["thread/start"] },
         }),
@@ -25107,7 +25108,7 @@ command = "pnpm grok"
   });
 
   it("keeps workspace launchpads in workspace mode even when directory drafts prefer worktrees", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25138,7 +25139,7 @@ command = "pnpm grok"
 
   it("persists directory launchpad identity when opening it", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25168,7 +25169,7 @@ command = "pnpm grok"
 
   it("marks picked project directories as registered launchpads", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25197,7 +25198,7 @@ command = "pnpm grok"
 
   it("keeps launchpad directory metadata when the first draft update arrives", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25226,7 +25227,7 @@ command = "pnpm grok"
 
   it("keeps sub-thread parent metadata when launchpad drafts update", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25259,7 +25260,7 @@ command = "pnpm grok"
 
   it("repairs stale non-empty launchpad directory metadata when reopened", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25297,7 +25298,7 @@ command = "pnpm grok"
   });
 
   it("does not rewrite sticky defaults when only pending prompt data is saved", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25325,7 +25326,7 @@ command = "pnpm grok"
   });
 
   it("derives launchpad identity when a late update recreates a missing row", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
@@ -25377,7 +25378,7 @@ command = "pnpm grok"
         methods: ["thread/start", "turn/start"],
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
@@ -25435,7 +25436,7 @@ command = "pnpm grok"
       ],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -25523,7 +25524,7 @@ command = "pnpm grok"
       });
       return {
         codexClient,
-        registry: new DesktopBackendRegistry({
+        registry: createDesktopBackendRegistry({
           codexClient,
           overlayStore: createOverlayStoreMock(),
         }),
@@ -25548,7 +25549,7 @@ command = "pnpm grok"
 
   it.each(["directory:/owner/repo", "subthread:acp%3Akimi:parent:same-worktree"])("stores remote model choices without resolving them against this viewer's catalog: %s", async (directoryKey) => {
     const codexClient = new MockBackendClient({ models: [{ id: "viewer-only", current: true }] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const owner = { scope: "remote" as const, instanceId: "owner" };
     try {
       await registry.ensureDirectoryLaunchpad({ directoryKey, directoryKind: "directory", directoryLabel: "Owner", directoryPath: "/owner/repo" },
@@ -25594,7 +25595,7 @@ command = "pnpm grok"
       resolveRenamed();
       return result;
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -25682,7 +25683,7 @@ command = "pnpm grok"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/Users/test/.pwragent/projects/2026-04-16-a1b2c3",
@@ -25745,7 +25746,7 @@ command = "pnpm grok"
       initializeResult: { methods: ["thread/list", "thread/start"] },
       threads: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -25783,7 +25784,7 @@ command = "pnpm grok"
       initializeResult: { methods: ["thread/list", "thread/start"] },
       threads: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -25811,7 +25812,7 @@ command = "pnpm grok"
       initializeResult: { methods: ["thread/list", "thread/start"] },
       threads: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -25862,7 +25863,7 @@ command = "pnpm grok"
       repositoryPath: "/Users/test/repo",
       workMode: "worktree" as const,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -25892,7 +25893,7 @@ command = "pnpm grok"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/Users/test/.pwragent/projects/2026-05-02-a1b2c3",
@@ -25945,7 +25946,7 @@ command = "pnpm grok"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -26005,7 +26006,7 @@ command = "pnpm grok"
     vi.spyOn(overlayStore, "getDirectoryLaunchpad").mockImplementation((request) => persisted.getDirectoryLaunchpad(request));
     vi.spyOn(overlayStore, "upsertDirectoryLaunchpad").mockImplementation((value) => persisted.upsertDirectoryLaunchpad(value));
     vi.spyOn(overlayStore, "resetDirectoryLaunchpad").mockImplementation((request) => persisted.resetDirectoryLaunchpad(request));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start"] } }),
       overlayStore,
     });
@@ -26089,7 +26090,7 @@ command = "pnpm grok"
       vi.spyOn(overlayStore, "listDirectoryLaunchpads").mockImplementation(() => persisted.listDirectoryLaunchpads());
       vi.spyOn(overlayStore, "upsertDirectoryLaunchpad").mockImplementation((value) => persisted.upsertDirectoryLaunchpad(value));
       vi.spyOn(overlayStore, "resetDirectoryLaunchpad").mockImplementation((value) => persisted.resetDirectoryLaunchpad(value));
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start"] } }),
         overlayStore,
       });
@@ -26316,7 +26317,7 @@ name = "Repo Environment"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -26372,7 +26373,7 @@ command = "pnpm dev:messaging"
     );
 
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [
@@ -26448,7 +26449,7 @@ command = "pnpm dev:messaging"
       }],
     } });
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       agentToolMcpServer: null,
@@ -26602,7 +26603,7 @@ command = "pnpm dev:messaging"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       codexEnvironmentCommandRunner: commandRunner,
@@ -26761,7 +26762,7 @@ command = "pnpm test"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [
@@ -26851,7 +26852,7 @@ command = '''${expectedActionCommand}'''
       },
     });
     let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -26931,7 +26932,7 @@ command = '''${expectedActionCommand}'''
       },
     });
     let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27021,7 +27022,7 @@ command = '''${expectedActionCommand}'''
       },
     });
     let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27088,7 +27089,7 @@ command = '''${expectedActionCommand}'''
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27153,7 +27154,7 @@ command = '''${expectedActionCommand}'''
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/list"] }, threads: [] }),
       overlayStore,
     });
@@ -27202,7 +27203,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
     let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
     const stop = vi.spyOn(codexEnvironmentRuntime, "stopCodexEnvironmentDetachedCommand")
       .mockReturnValue({ found: true, alreadyClosed: false });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [{
@@ -27303,7 +27304,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
       },
     });
     let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27420,7 +27421,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
       },
     });
     const commandParams: Array<Parameters<CodexEnvironmentCommandRunner>[0]> = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27589,7 +27590,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27666,7 +27667,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27730,7 +27731,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -27754,7 +27755,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
   });
 
   it("cancels a pending startup when close requests shutdown", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null, pdfToolMcpServer: null });
     const start = vi.spyOn(registry, "startThread");
     let ready!: () => void;
@@ -27780,7 +27781,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
   });
 
   it("observes and cancels attachment preparation after a federation reconnect without duplicate starts", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null, pdfToolMcpServer: null });
     const prepare = vi.spyOn(GitDirectoryService.prototype, "prepareLaunchpadWorkspace");
     const start = vi.spyOn(registry, "startThread");
@@ -27868,7 +27869,7 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
       createdAt: 1, updatedAt: 1,
     };
     await overlayStore.upsertDirectoryLaunchpad(launchpad);
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
       codexEnvironmentCommandRunner: commandRunner, threadTitleGenerationService: null, pdfToolMcpServer: null,
       gitDirectoryService: { prepareLaunchpadWorkspace } as never });
     const start = vi.spyOn(registry, "startThread").mockImplementation(async () => {
@@ -27955,7 +27956,7 @@ script = "printf setup-output"
         output: "setup-output",
       };
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
       overlayStore,
@@ -28022,7 +28023,7 @@ script = "printf setup-output"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/metadata/update"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -28098,7 +28099,7 @@ script = "printf setup-output"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -28219,7 +28220,7 @@ script = "printf setup-output"
       })),
       recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
     } as never;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService,
@@ -28269,7 +28270,7 @@ script = "printf setup-output"
         ],
       });
 
-      restartedRegistry = new DesktopBackendRegistry({
+      restartedRegistry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({
           initializeResult: { methods: ["thread/start"] },
           threads: [providerThread(worktreePath)],
@@ -28317,7 +28318,7 @@ script = "printf setup-output"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -28376,7 +28377,7 @@ script = "printf setup-output"
     });
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
     const createScratchProjectDirectory = vi.fn(async () => "/tmp/fresh-fork-workspace");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       createScratchProjectDirectory,
@@ -28410,7 +28411,7 @@ script = "printf setup-output"
     } });
     await sessions.append(sourceId, [{ type: "message", id: "user:1", role: "user", text: "Fix the queue", turn: { id: "1" } }]);
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore,
       agentToolMcpServer: null,
@@ -28444,7 +28445,7 @@ script = "printf setup-output"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -28549,7 +28550,7 @@ script = "printf setup-output"
       initializeResult: { methods: ["thread/fork"] },
     });
     const pdfMcp = createPdfMcpServerMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       pdfToolMcpServer: pdfMcp.server,
@@ -28604,7 +28605,7 @@ script = "printf setup-output"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -28684,7 +28685,7 @@ script = "printf setup-output"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -28756,7 +28757,7 @@ script = "printf setup-output"
     });
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
     const commandRunner = vi.fn<CodexEnvironmentCommandRunner>();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       codexEnvironmentCommandRunner: commandRunner,
@@ -28859,7 +28860,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
       overlayStore,
@@ -28921,7 +28922,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -29000,7 +29001,7 @@ command = "pnpm dev"
       ),
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -29115,7 +29116,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -29161,7 +29162,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -29220,7 +29221,7 @@ command = "pnpm dev"
     } }));
     const overlayStore = createOverlayStoreMock();
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, pendingEnvironmentLaunchStore, createScheduledThreadAction });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, pendingEnvironmentLaunchStore, createScheduledThreadAction });
     try {
       const response = await registry.continueThreadEnvironmentStartup(identity);
       expect(response.scheduledAction).toMatchObject({ scheduledFor, status: "scheduled" });
@@ -29237,7 +29238,7 @@ command = "pnpm dev"
       }
       // A different viewer can send its original optimistic prompt after the
       // owner has restarted, when no active turn or history proves admission.
-      const recovered = new DesktopBackendRegistry({ codexClient, overlayStore, createScheduledThreadAction });
+      const recovered = createDesktopBackendRegistry({ codexClient, overlayStore, createScheduledThreadAction });
       try {
         await expect(recovered.continueThreadEnvironmentStartup({ ...identity, fallbackTurn: { input } }))
           .rejects.toThrow("environment startup has already been continued");
@@ -29292,7 +29293,7 @@ script = "printf setup-failed && exit 42"
     const pendingDirectory = path.join(root, "pending-launches");
     const acknowledgeThreadEnvironmentFailure = vi.fn(async () => true);
     const overlayStore = { ...createOverlayStoreMock(), acknowledgeThreadEnvironmentFailure };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       pendingEnvironmentLaunchStore: new PendingEnvironmentLaunchStore(pendingDirectory),
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
@@ -29350,7 +29351,7 @@ script = "printf setup-failed && exit 42"
       expect(codexClient.lastStartTurnParams).toBeUndefined();
       // A fresh registry and store model an owner restart. The viewer supplies
       // only a thread identity; the owner recovers the original request.
-      const recovered = new DesktopBackendRegistry({
+      const recovered = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
         pendingEnvironmentLaunchStore: new PendingEnvironmentLaunchStore(pendingDirectory),
@@ -29408,7 +29409,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -29469,7 +29470,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/list", "thread/start"] },
       threads: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -29532,7 +29533,7 @@ command = "pnpm dev"
       { id: "fixture-no-reasoning", supportsReasoning: false, supportsFast: false },
     ] });
     const prepareLaunchpadWorkspace = vi.fn(async () => ({ cwd: "/fixture/worktree", workMode: "worktree" as const }));
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null, pdfToolMcpServer: null,
       claudeBackendOptions: { inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }) },
       gitDirectoryService: { prepareLaunchpadWorkspace } as never });
@@ -29547,7 +29548,7 @@ command = "pnpm dev"
   });
 
   it("refuses a federated Claude/Terra creation at the owner", async () => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null });
     const replies: import("@pwragent/shared").FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
@@ -29569,7 +29570,7 @@ command = "pnpm dev"
 
   it("refuses invalid launchpad models before workspace preparation on local and remote sends", async () => {
     const prepareLaunchpadWorkspace = vi.fn(async () => ({ cwd: "/fixture/worktree", workMode: "worktree" as const }));
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, pdfToolMcpServer: null,
       gitDirectoryService: { prepareLaunchpadWorkspace } as never });
     try {
@@ -29628,7 +29629,7 @@ command = "pnpm dev"
   it("refuses invalid fork models before workspace preparation", async () => {
     const prepareLaunchpadWorkspace = vi.fn();
     const codexClient = new MockBackendClient({ models: [{ id: "gpt-5.5" }] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
       gitDirectoryService: { prepareLaunchpadWorkspace } as never });
     try {
       await expect(registry.forkThread({ backend: "codex", sourceThreadId: "parent", model: "opus", directoryPath: "/fixture/repo" }))
@@ -29642,7 +29643,7 @@ command = "pnpm dev"
 
   it("refuses invalid automation models before creating a headless thread", async () => {
     const codexClient = new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       await expect(registry.startAutomationHeadlessTurn({ backend: "codex", agentThreadId: "fixture", automationRunId: "fixture-run",
         model: "opus", input: [{ type: "text", text: "Inspect" }] }))
@@ -29669,7 +29670,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] });
     const overlayStore = createOverlayStoreMock();
     const save = vi.spyOn(overlayStore, "setThreadModelSettings");
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const settings = { backend: "claude" as const, threadId: "fixture", model: "gpt-6.1-terra" };
     try {
       for (const result of [
@@ -29690,7 +29691,7 @@ command = "pnpm dev"
     const codexClient = Object.assign(new MockBackendClient({ models: [{ id: "gpt-6.1-terra" }] }), {
       modelProviderForThread: () => "fixture-provider",
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const settings = { backend: "codex" as const, threadId: "fixture", model: "gpt-6.1-terra" };
     try {
       for (const result of [
@@ -29718,7 +29719,7 @@ command = "pnpm dev"
       reportedModelProviderForThread: () => provider,
       readThreadModelSettings,
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
       resolveCodexModelProviders: () => [{ id: "fixture-provider", name: "Fixture", baseUrl: "http://localhost:9999/v1", models: ["custom"], discoverModels: false }] });
     try {
       await expect(registry.setThreadModelSettings({ backend: "codex", threadId: "fixture", model }))
@@ -29735,7 +29736,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -29815,7 +29816,7 @@ command = "pnpm dev"
         NVM_DIR: "/Users/fixture-user/.nvm",
       },
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -29848,7 +29849,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -29886,7 +29887,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -29934,7 +29935,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -29992,7 +29993,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore,
     });
@@ -30170,7 +30171,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -30232,7 +30233,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -30275,7 +30276,7 @@ command = "pnpm dev"
     const overlayStore = createOverlayStoreMock({
       executionMode: "default",
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -30312,7 +30313,7 @@ command = "pnpm dev"
       threads: [{ id: "thread-1", source: "codex", title: "Starting", titleSource: "explicit",
         linkedDirectories: [], updatedAt: 1, threadStatus: "idle" }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       expect(await registry.listThreads({ backend: "codex" })).toEqual([
         expect.objectContaining({ id: "thread-1", threadStatus: "idle" }),
@@ -30330,7 +30331,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start", "thread/list"] },
       threads,
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
       await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Start" }] });
       expect(await registry.listThreads({ backend: "codex", forceRefresh: true })).toEqual([
@@ -30355,7 +30356,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -30412,7 +30413,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -30458,7 +30459,7 @@ command = "pnpm dev"
       .mockResolvedValue({ supported: true, terminals: [] });
     const terminateBackgroundTerminal = vi.fn(async () => true);
     Object.assign(codexClient, { listBackgroundTerminals, terminateBackgroundTerminal });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     expect(await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" }))
       .toEqual({ supported: true, terminals: [terminal] });
     expect(registry.getInProgressThreadSnapshotForQuit().threadIds).toEqual(["codex:thread-1"]);
@@ -30478,7 +30479,7 @@ command = "pnpm dev"
       .mockRejectedValue(new Error("thread/backgroundTerminals/list timed out"));
     const terminateBackgroundTerminal = vi.fn(async () => true);
     Object.assign(codexClient, { listBackgroundTerminals, terminateBackgroundTerminal });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
     expect(await registry.terminateBackgroundTerminal({ backend: "codex", threadId: "thread-1", processId: "session-1" }))
       .toEqual({ terminated: true });
@@ -30492,7 +30493,7 @@ command = "pnpm dev"
     let resolveRead!: (response: { supported: boolean; terminals: typeof terminal[] }) => void;
     const listBackgroundTerminals = vi.fn(() => new Promise((resolve) => { resolveRead = resolve; }));
     Object.assign(codexClient, { listBackgroundTerminals });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const read = registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
     await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(1));
     await codexClient.emit({ method: "item/completed", params: {
@@ -30514,7 +30515,7 @@ command = "pnpm dev"
     function setup(listBackgroundTerminals: ReturnType<typeof vi.fn>) {
       const codexClient = new MockBackendClient({ threads: [] });
       Object.assign(codexClient, { listBackgroundTerminals });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
       const updates: unknown[] = [];
       registry.onEvent((event) => {
@@ -30856,7 +30857,7 @@ command = "pnpm dev"
       const codexClient = new MockBackendClient({ threads: [] });
       let selectionListener: ((change: ManagedCodexSelectionChange) => Promise<unknown> | unknown) | undefined;
       const markSwitchComplete = vi.fn();
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(),
         markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
         watchManagedCodexRuntime: (listener) => { selectionListener = listener; return () => undefined; },
@@ -30945,7 +30946,7 @@ command = "pnpm dev"
         source: "codex",
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -30997,7 +30998,7 @@ command = "pnpm dev"
       | ((change: ManagedCodexSelectionChange) => Promise<unknown> | unknown)
       | undefined;
     const markSwitchComplete = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
       overlayStore: createOverlayStoreMock(),
@@ -31063,7 +31064,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -31167,7 +31168,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -31236,7 +31237,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -31266,7 +31267,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
       startTurnError: new Error("codex start failed"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -31297,7 +31298,7 @@ command = "pnpm dev"
       startTurnDelay: startTurnDelay.promise,
       startTurnErrors: [new Error("first start failed"), undefined],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -31353,7 +31354,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -31378,7 +31379,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -31439,7 +31440,7 @@ command = "pnpm dev"
     });
     const enrichThreadDirectories = vi.fn(async (threads) => threads);
     Object.assign(codexClient, { enrichThreadDirectories });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -31514,7 +31515,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -31585,7 +31586,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -31659,7 +31660,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/list", "turn/start"] },
       listThreadsError: new Error("provider list unavailable"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -31707,7 +31708,7 @@ command = "pnpm dev"
 
   it("keeps cached quit titles qualified when backends reuse a thread id", async () => {
     const threadId = "shared-thread-id";
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
       }),
@@ -31768,7 +31769,7 @@ command = "pnpm dev"
       }
       return { status: "generated" as const, title: "Generated" };
     }) };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/name/set"] }, threads,
       }),
@@ -31827,7 +31828,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -31899,7 +31900,7 @@ command = "pnpm dev"
       },
       threads: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -31989,7 +31990,7 @@ command = "pnpm dev"
     vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
       threadId: pendingThreadIds.shift() ?? "unexpected-thread",
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -32066,7 +32067,7 @@ command = "pnpm dev"
       id: threadId, title: "Untitled thread", titleSource: "explicit", linkedDirectories: [], source: "codex",
     }) });
     const renameThread = vi.spyOn(codexClient, "renameThread");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -32123,7 +32124,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -32183,7 +32184,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -32279,7 +32280,7 @@ command = "pnpm dev"
       return result;
     });
     const pdfMcp = createPdfMcpServerMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -32371,7 +32372,7 @@ command = "pnpm dev"
     const text = "Inspect the disk image only if needed.\n";
     await writeFile(filePath, text, "utf8");
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolvePdfAnalysisEnabled: () => false,
@@ -32439,7 +32440,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -32552,7 +32553,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       runtimeInstanceId: "runtime-current",
@@ -32623,7 +32624,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -32722,7 +32723,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -32778,7 +32779,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: titleService,
@@ -32856,7 +32857,7 @@ command = "pnpm dev"
       executionMode: "full-access" as const,
       monitorJobSuggestionsEnabled: scenario.override,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: { ...overlayStore, getThreadOverlayState, claimMonitorJobSuggestion: claim },
       resolveToolOutputAlertPolicy: () => ({
@@ -33046,7 +33047,7 @@ command = "pnpm dev"
     Object.assign(codexClient, { generateStructuredObject });
     const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
     const claim = vi.fn(() => true);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: { ...overlayStore, claimMonitorJobSuggestion: claim },
       resolveTokenMiserEnabled: () => true,
@@ -33118,7 +33119,7 @@ command = "pnpm dev"
       upsertThreadToolInvocation,
       upsertThreadToolInvocationAlert,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
       resolveToolOutputAlertPolicy: () => ({
@@ -33184,7 +33185,7 @@ command = "pnpm dev"
         "json-rpc error (-32600): expected active turn id `turn-0` but found `turn-1`",
       ),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
     });
@@ -33214,7 +33215,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
     });
@@ -33248,7 +33249,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
     });
@@ -33731,7 +33732,7 @@ command = "pnpm dev"
     const steerSpy = vi
       .spyOn(codexClient, "steerTurn")
       .mockImplementation(async () => await steerDeferred.promise);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
     });
@@ -33795,7 +33796,7 @@ command = "pnpm dev"
   it("keeps every duplicate steer pending through causal-origin completion (generated)", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 6 }), fc.string({ maxLength: 30 }), async (copies, text) => {
       const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
-      const registry = new DesktopBackendRegistry({ codexClient,
+      const registry = createDesktopBackendRegistry({ codexClient,
         overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
       const read = createDeferred<AppServerThreadMessageOrigin | undefined>();
       const host = registry as unknown as {
@@ -33824,7 +33825,7 @@ command = "pnpm dev"
   it("recovers causal-origin failure without resending an accepted steer (generated)", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), async (failures) => {
       const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
-      const registry = new DesktopBackendRegistry({ codexClient,
+      const registry = createDesktopBackendRegistry({ codexClient,
         overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
       const host = registry as unknown as {
         readTurnCausalMessagingOrigin: () => Promise<AppServerThreadMessageOrigin | undefined>;
@@ -33852,7 +33853,7 @@ command = "pnpm dev"
     // Retry completes that effect; it must never submit the input again.
     async function recoverAcceptedSubmission(backend: "codex" | "claude", failures: number, copies: number): Promise<void> {
       const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/steer"] } });
-      const registry = new DesktopBackendRegistry({ codexClient,
+      const registry = createDesktopBackendRegistry({ codexClient,
         overlayStore: createOverlayStoreMock({ executionMode: "full-access" }), threadTitleGenerationService: null });
       const host = registry as unknown as {
         claudeBackend: ClaudeBackend;
@@ -33900,7 +33901,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start", "turn/steer"] },
     });
     const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -34013,7 +34014,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -34070,7 +34071,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -34117,7 +34118,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -34165,7 +34166,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -34233,7 +34234,7 @@ command = "pnpm dev"
         threadStatus: "idle",
       })),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -34353,7 +34354,7 @@ command = "pnpm dev"
       initializeError: new Error(codexState === "missing" ? "spawn codex ENOENT" : "Codex is not logged in"),
       account: { requiresOpenaiAuth: true },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
@@ -34516,7 +34517,7 @@ command = "pnpm dev"
     };
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -34616,7 +34617,7 @@ command = "pnpm dev"
     const overlayStore = Object.assign(createOverlayStoreMock(), {
       readUsageActivity: vi.fn(async () => ({ rows: [], truncated: false, limitHistory: [] })),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -34729,7 +34730,7 @@ command = "pnpm dev"
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
     const events: AgentEvent[] = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -34887,7 +34888,7 @@ command = "pnpm dev"
         threadStatus: "idle",
       })),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -34939,7 +34940,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -34969,7 +34970,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -34990,7 +34991,7 @@ command = "pnpm dev"
   it.each([["manual", true], ["agent", true], ["manual", false], ["agent", false]] as const)("preserves %s submission order while retaining an attachment: active=%s", async (origin, active) => {
     const image = await stageTurnInputAttachment({ type: "localImage", name: "first.png", data: Buffer.from([1, 2, 3]) }, { backend: "codex", threadId: "order-source" });
     const client = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const retentionEntered = createDeferred<void>();
     const retentionRelease = createDeferred<void>();
     const originalRetain = turnInputAttachmentFiles.ownThreadInputAttachments;
@@ -35035,7 +35036,7 @@ command = "pnpm dev"
     const client = new MockBackendClient({ initializeResult: { methods: ["turn/start"] }, startTurnDelay: providerRelease.promise });
     const start = client.startTurn.bind(client);
     vi.spyOn(client, "startTurn").mockImplementation((params) => { providerEntered.resolve(); return start(params); });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const submissions: Array<Promise<unknown>> = [];
     try {
       const first = registry.submitTurn({ backend: "codex", threadId: "starting-order", input: [{ type: "text", text: "Start" }] });
@@ -35056,7 +35057,7 @@ command = "pnpm dev"
     const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-owned-queue-"));
     const previousHome = process.env.PWRAGENT_HOME;
     process.env.PWRAGENT_HOME = tempHome;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ initializeResult: { methods: ["turn/start"] } }),
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -35095,7 +35096,7 @@ command = "pnpm dev"
       type: "localImage", name: `${operation}.png`, data: Buffer.from([1, 2, 3]),
     }, { backend: "codex", threadId: `source-${operation}` });
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: `source-${operation}` } };
     let release!: () => void;
     const blockedSteer = new Promise<void>((resolve) => { release = resolve; });
@@ -35143,7 +35144,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -35192,7 +35193,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -35264,7 +35265,7 @@ command = "pnpm dev"
   });
   it.each([undefined, "codex-sub-agent"] as const)("preserves native review for mode %s despite the legacy experiment", async (runMode) => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["review/start", "turn/start", "thread/start"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), resolveManagedReviewEnabled: () => true });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), resolveManagedReviewEnabled: () => true });
     await registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode });
     expect(codexClient.lastStartReviewParams).toMatchObject({ threadId: "parent", delivery: "inline" });
     expect(codexClient.lastStartTurnParams).toBeUndefined();
@@ -35276,7 +35277,7 @@ command = "pnpm dev"
     { runMode: "pwragent-sub-agent", methods: ["review/start"], error: "thread/start" },
   ] as const)("rejects unsupported explicit $runMode without substituting engines", async ({ runMode, methods, error }) => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: [...methods] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode })).rejects.toThrow(error);
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartTurnParams).toBeUndefined();
@@ -35285,7 +35286,7 @@ command = "pnpm dev"
 
   it.each(["codex-sub-agent", "pwragent-sub-agent"] as const)("rejects detached delivery with explicit %s", async (runMode) => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode, delivery: "detached" })).rejects.toThrow("detached delivery");
     await registry.close();
   });
@@ -35312,7 +35313,7 @@ command = "pnpm dev"
         VIRTUAL_ENV: "/repo/app/.venv",
       },
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -35377,7 +35378,7 @@ command = "pnpm dev"
         } as ThreadOverlayState,
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     await registry.startReview({
       backend: "codex",
@@ -35423,7 +35424,7 @@ command = "pnpm dev"
         } as ThreadOverlayState,
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     await registry.startReview({
       backend: "codex",
@@ -35448,7 +35449,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     await expect(
       registry.startReview({
@@ -35471,7 +35472,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
       models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
@@ -35513,7 +35514,7 @@ command = "pnpm dev"
       models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
       startThreadResult: { threadId: "codex-review-child" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
@@ -35589,7 +35590,7 @@ command = "pnpm dev"
         startThreadResult: { threadId: childId },
         interruptEndsTurn: true,
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), pdfToolMcpServer: null,
         claudeBackendOptions: {
           store,
@@ -35642,7 +35643,7 @@ command = "pnpm dev"
       startThreadResult: { threadId: "codex-review-child" },
       interruptEndsTurn: true,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
@@ -35709,7 +35710,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/resume"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
@@ -35757,7 +35758,7 @@ command = "pnpm dev"
   it("advertises Claude review modes without claiming Claude runs reviews", async () => {
     // The owner accepts a run mode for a Claude thread, because the review
     // itself runs on another provider. Claude is never a reviewer.
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
@@ -35784,7 +35785,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     const codexBackend = (
       await registry.listBackends({ includeUnavailable: true })
@@ -35802,7 +35803,7 @@ command = "pnpm dev"
     // An ordinary turn is not a review engine: each mode needs either native
     // review/start or a thread to run a managed reviewer in.
     const codexClient = new MockBackendClient({ initializeResult: { methods } });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
     });
     // Discovery is what reads the initialize methods; before it runs the
@@ -36042,7 +36043,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -36165,7 +36166,7 @@ command = "pnpm dev"
         } as ThreadOverlayState,
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -36233,7 +36234,7 @@ command = "pnpm dev"
       }),
       upsertThreadToolInvocation,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -36343,7 +36344,7 @@ command = "pnpm dev"
       ...createOverlayStoreMock(),
       readThreadPricing: vi.fn(async () => pricing),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: overlayStore as never,
       resolveSpendAlertPolicy: () => ({
@@ -36396,7 +36397,7 @@ command = "pnpm dev"
     expect(pendingAlert?.kind).toBe("thread-spend");
     await registry.close();
 
-    const restartedRegistry = new DesktopBackendRegistry({
+    const restartedRegistry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: overlayStore as never,
       resolveSpendAlertPolicy: () => ({
@@ -36447,7 +36448,7 @@ command = "pnpm dev"
     );
     await restartedRegistry.close();
 
-    const acknowledgedRegistry = new DesktopBackendRegistry({
+    const acknowledgedRegistry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: overlayStore as never,
       resolveSpendAlertPolicy: () => ({
@@ -36514,7 +36515,7 @@ command = "pnpm dev"
         summaries: [],
       })),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       resolveSpendAlertPolicy: () => ({
@@ -36571,7 +36572,7 @@ command = "pnpm dev"
       ...createOverlayStoreMock(),
       upsertThreadToolInvocation,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
     });
@@ -36638,7 +36639,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -36722,7 +36723,7 @@ command = "pnpm dev"
       persistThreadToolInvocationBoundary,
       upsertThreadToolInvocation,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
       resolveToolOutputAlertPolicy: () => ({
@@ -36833,7 +36834,7 @@ command = "pnpm dev"
       ...createOverlayStoreMock(),
       upsertThreadToolInvocation,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
     });
@@ -36895,7 +36896,7 @@ command = "pnpm dev"
       ...createOverlayStoreMock(),
       upsertThreadToolInvocation,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
     });
@@ -36948,7 +36949,7 @@ command = "pnpm dev"
         } as ThreadOverlayState,
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -37038,7 +37039,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -37281,7 +37282,7 @@ command = "pnpm dev"
         } as ThreadOverlayState,
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveManagedReviewEnabled: () => true,
@@ -37365,7 +37366,7 @@ command = "pnpm dev"
         } as ThreadOverlayState,
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -37451,7 +37452,7 @@ command = "pnpm dev"
       startThreadResult: { threadId: "managed-review-child" },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
@@ -37548,7 +37549,7 @@ command = "pnpm dev"
       },
       startThreadResult: { threadId: "selected-project-review" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -37641,7 +37642,7 @@ command = "pnpm dev"
       executionTarget: "remote",
       cwd: "/remote/primary",
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -37705,7 +37706,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -38373,7 +38374,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -38401,7 +38402,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -38466,7 +38467,7 @@ command = "pnpm dev"
         return await baseStore.readThreadPricing(request);
       },
     };
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     try {
       await codexClient.emit({ method: "thread/tokenUsage/updated", params: {
         threadId: request.threadId, turnId: "turn-live", model: "gpt-6-astra",
@@ -38487,7 +38488,7 @@ command = "pnpm dev"
   it.each([0.007023, 0, undefined, -1, Number.NaN])(
     "retains Claude monitor provider costs (%s) across usage normalization", async (reportedCost) => {
       const overlayStore = createOverlayStoreMock();
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/read"] } }),
         overlayStore,
       });
@@ -38556,7 +38557,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -38631,7 +38632,7 @@ command = "pnpm dev"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const total = {
         input_tokens: 400_000, cached_input_tokens: 200_000,
         output_tokens: 20_000, reasoning_output_tokens: 0, total_tokens: 420_000,
@@ -38709,7 +38710,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     // Two requests land between observations: the cumulative total grows by
     // more than the single `last` snapshot, so the observed request components
@@ -38780,7 +38781,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     for (const cumulativeInputTokens of [200_000, 400_000]) {
       for (let emission = 0; emission < 2; emission += 1) {
@@ -38852,7 +38853,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const requests = [
       { cached: 100_000, input: 200_000, totalInput: 200_000 },
       { cached: 100_000, input: 300_000, totalInput: 500_000 },
@@ -38911,7 +38912,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/read"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     await codexClient.emit({
       method: "thread/tokenUsage/updated",
@@ -38959,7 +38960,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     await codexClient.emit({
       method: "thread/tokenUsage/updated",
@@ -39041,7 +39042,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/read"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     for (const [lastTotalTokens, cumulativeTotalTokens] of [
       [243_864, 243_864],
@@ -39104,7 +39105,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39207,7 +39208,7 @@ command = "pnpm dev"
       ...baseOverlayStore,
       getThreadOverlayState,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39281,7 +39282,7 @@ command = "pnpm dev"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const emitUsage = async (turnId: string | undefined, total: number, last: number) => {
         const tokens = (inputTokens: number) => ({
           inputTokens, cachedInputTokens: 0, outputTokens: 0,
@@ -39335,7 +39336,7 @@ command = "pnpm dev"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const emitUsage = async (turnId: string | undefined, total: number, last: number) => {
         const tokens = (inputTokens: number) => ({
           inputTokens, cachedInputTokens: 0, outputTokens: 0,
@@ -39397,7 +39398,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39454,7 +39455,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/read"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39509,7 +39510,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["thread/read"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39579,7 +39580,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39638,7 +39639,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39763,7 +39764,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39822,7 +39823,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -39924,7 +39925,7 @@ command = "pnpm dev"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     vi.spyOn(
       registry as unknown as {
         resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
@@ -40016,7 +40017,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
     const response = await registry.readThread({
       backend: "codex",
@@ -40058,7 +40059,7 @@ command = "pnpm dev"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -40200,7 +40201,7 @@ command = "pnpm dev"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -40297,7 +40298,7 @@ command = "pnpm dev"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -40392,7 +40393,7 @@ command = "pnpm dev"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -40460,7 +40461,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -40554,7 +40555,7 @@ command = "pnpm dev"
     });
     const overlayStore = createOverlayStoreMock();
     const upsertThreadSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -40782,7 +40783,7 @@ command = "pnpm dev"
       overlayStore,
       "upsertThreadSubAgent",
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -40828,7 +40829,7 @@ command = "pnpm dev"
     });
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const emitActivity = async (kind: "started" | "interacted" | "completed" | "interrupted") => {
       await codexClient.emit({
         method: "item/completed",
@@ -40885,7 +40886,7 @@ command = "pnpm dev"
     }));
     Object.assign(codexClient, { readThreadModelSettings });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const workerThreadId = "019ebb70-2c58-7143-850e-0a699607c7aa";
     const emitUsage = async (total: number) => {
       await codexClient.emit({
@@ -40938,7 +40939,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const workerThreadId = "019ebb70-2c58-7143-850e-0a699607c7ab";
     // The worker finishes during the model read; its card is written then.
     const readThreadModelSettings = vi.fn(async () => {
@@ -40994,7 +40995,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -41062,7 +41063,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -41090,7 +41091,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -41164,7 +41165,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -41209,7 +41210,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -41248,7 +41249,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -41400,7 +41401,7 @@ command = "pnpm dev"
       ],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -41497,7 +41498,7 @@ command = "pnpm dev"
         initializeResult: { methods: ["turn/start", "turn/steer", "review/start"] },
         startReviewResult: { threadId: "thread-parent", reviewThreadId, turnId: "review-turn" },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
       });
       let elapsed = 0;
@@ -41604,7 +41605,7 @@ command = "pnpm dev"
           threadId: "thread-parent", reviewThreadId, turnId: "review-turn",
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(),
       });
       await discoverCodexBackendForTest(registry);
@@ -41670,7 +41671,7 @@ command = "pnpm dev"
         startReviewResult: { threadId: "thread-parent", reviewThreadId, turnId: "review-turn" },
         startTurnResults: [1, 2, 3].map(index => ({ threadId: "thread-parent", turnId: `guidance-${index}` })),
       });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       onTestFinished(() => registry.close());
       await discoverCodexBackendForTest(registry);
       const steer = vi.spyOn(registry, "steerTurn");
@@ -41718,7 +41719,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start", "review/start"] },
       startReviewResult: { threadId: "parent", reviewThreadId: "review", turnId: "review-turn" },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const start = vi.spyOn(codexClient, "startTurn");
     await registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" } });
     await registry.submitTurn({
@@ -41756,7 +41757,7 @@ command = "pnpm dev"
           return { threadId: "thread-parent", reviewThreadId: "thread-parent", turnId: "outer" };
         });
       }
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       const start = vi.spyOn(codexClient, "startTurn");
       await registry.startReview({ backend: "codex", threadId: "thread-parent", target: { type: "uncommittedChanges" } });
       if (!startedBeforeResponse) await codexClient.emit(started);
@@ -41787,7 +41788,7 @@ command = "pnpm dev"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["review/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -41864,7 +41865,7 @@ command = "pnpm dev"
         initializeResult: { methods: ["turn/start", "review/start"] },
       });
       const overlayStore = createOverlayStoreMock();
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       vi.spyOn(codexClient, "startReview").mockImplementation(async () => {
         await codexClient.emit({
           method: "turn/started",
@@ -41901,7 +41902,7 @@ command = "pnpm dev"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -41972,7 +41973,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42022,7 +42023,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42162,7 +42163,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42220,7 +42221,7 @@ command = "pnpm dev"
         { threadId: "ephemeral-2", turnId: "turn-2" },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42263,7 +42264,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -42328,7 +42329,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -42403,7 +42404,7 @@ command = "pnpm dev"
         { name: "other", authStatus: "oAuth", tools: ["search"] },
       ]),
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await registry.startAutomationHeadlessTurn({
       backend: "codex", agentThreadId: "agent-thread-1", automationRunId: "run-1",
       executionMode: "default", mcpAllowlist: ["datadog"], toolAllowlist: ["get_metrics"],
@@ -42421,7 +42422,7 @@ command = "pnpm dev"
 
   it("publishes headless automation start before an early terminal notification", async () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const statuses: unknown[] = [];
     registry.onEvent((event) => {
       if (event.notification.method === "thread/turnQueue/updated") statuses.push(event.notification.params.status);
@@ -42442,7 +42443,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42502,7 +42503,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42582,7 +42583,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42619,7 +42620,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/read"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42641,7 +42642,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42697,7 +42698,7 @@ command = "pnpm dev"
 
   it("redisplays the remaining MCP request after answering a concurrent request", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
     const request = (requestId: string): AppServerPendingRequestNotification => ({
@@ -42733,7 +42734,7 @@ command = "pnpm dev"
   it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)(
     "retires MCP requests belonging to an ended turn on %s", async (method) => {
       const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
       const events: AgentEvent[] = [];
       registry.onEvent((event) => { events.push(event); });
       const request: AppServerPendingRequestNotification = {
@@ -42770,7 +42771,7 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -42877,7 +42878,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -42943,7 +42944,7 @@ command = "pnpm dev"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -43020,7 +43021,7 @@ command = "pnpm dev"
     vi.useFakeTimers();
     onTestFinished(() => { vi.useRealTimers(); });
     const codexClient = new MockBackendClient({ initializeResult: { methods: [] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => await registry.close());
     const hostResult = vi.fn();
     const hostResponse = codexClient.emitRequest({
@@ -43074,7 +43075,7 @@ command = "pnpm dev"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/read"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         mcpConnectionService: {
@@ -43157,7 +43158,7 @@ command = "pnpm dev"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore: createMessagingArchiveCleanupStoreMock({
         bindings: [
@@ -43292,7 +43293,7 @@ command = "pnpm dev"
         result: { status: "reported" as const },
       },
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       appManagementHandler,
       codexClient,
       overlayStore: createOverlayStoreMock({
@@ -43399,7 +43400,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: new GitDirectoryService({
         resolveWorktreeStorage: () => "in-repo",
@@ -43664,7 +43665,7 @@ command = "pnpm dev"
       "codex:parent": { backend: "codex", threadId: "parent", extraLinkedDirectories: [],
         model: "source-model", reasoningEffort: "high", fastMode: true, serviceTier: "priority" },
     } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore,
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore,
       threadTitleGenerationService: null, createScratchProjectDirectory: async () => "/fixture/child" });
     try {
       await registry.publishLocalEvent({ backend: "codex", notification: {
@@ -44416,7 +44417,7 @@ command = "pnpm dev"
       });
       const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
       const updateSubthreadOrder = vi.spyOn(overlayStore, "updateSubthreadOrder");
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: {
           inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
@@ -44560,7 +44561,7 @@ command = "pnpm dev"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: {
           inspectWorkspaceGit: vi.fn(async () => ({
@@ -44754,7 +44755,7 @@ command = "pnpm dev"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
       gitDirectoryService: {
@@ -44944,7 +44945,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
       gitDirectoryService: {
@@ -45227,7 +45228,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: {
         inspectWorkspaceGit: vi.fn(async () => ({ kind: "non_git" as const })),
@@ -45336,7 +45337,7 @@ script = "printf setup"
         threadStatus: "active",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -45531,7 +45532,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -45645,7 +45646,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -45755,7 +45756,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -45879,7 +45880,7 @@ script = "printf setup"
         threadStatus: "active",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -46024,7 +46025,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -46149,7 +46150,7 @@ script = "printf setup"
     }));
     const recordCodexWorktreeOwnerThread = vi.fn();
     const codexClient = new MockBackendClient({ threads: [thread] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore,
       gitWorkspaceHandoffService: { handoff } as never,
       gitDirectoryService: { recordCodexWorktreeOwnerThread } as never,
@@ -46258,7 +46259,7 @@ script = "printf setup"
           backend: "codex", executionMode, workMode: "worktree", prompt: "", createdAt: 1000, updatedAt: 1000,
         });
         const codexClient = new MockBackendClient({ threads: [thread] });
-        const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+        const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
         onTestFinished(() => registry.close());
         await registry.publishLocalEvent({ backend: "codex", notification: {
           method: "turn/started", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1" } },
@@ -46298,7 +46299,7 @@ script = "printf setup"
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const handoff = vi.fn();
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": { ...createAgentOverlay(), executionMode } } }),
       gitWorkspaceHandoffService: { handoff } as never,
     });
@@ -46353,7 +46354,7 @@ script = "printf setup"
       linkedDirectory: { id: "pwragent-handoff:codex:agent-thread", kind: "local", label: "first", path: expectedDir(firstPath) },
       warnings: [], completedAt: 1000,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
       gitWorkspaceHandoffService: { handoff } as never,
     });
@@ -46447,7 +46448,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -46560,7 +46561,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitWorkspaceHandoffService: {
@@ -46691,7 +46692,7 @@ script = "printf setup"
       },
       startTurnError: new Error("continuation boom"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitWorkspaceHandoffService: {
@@ -46851,7 +46852,7 @@ script = "printf setup"
       },
       startTurnError: new Error("continuation boom"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitWorkspaceHandoffService: {
@@ -47074,7 +47075,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
       gitDirectoryService: {
@@ -47172,7 +47173,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -47269,7 +47270,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: new GitDirectoryService({
           resolveWorktreeStorage: () => "in-repo",
@@ -47512,7 +47513,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: new GitDirectoryService({
         resolveWorktreeStorage: () => "in-repo",
@@ -47640,7 +47641,7 @@ script = "printf setup"
         createdAt: 1000,
         updatedAt: 1000,
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: new GitDirectoryService({
           resolveWorktreeStorage: () => "in-repo",
@@ -47744,7 +47745,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: new GitDirectoryService({
           resolveWorktreeStorage: () => "in-repo",
@@ -47873,7 +47874,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: {
           inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
@@ -48013,7 +48014,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: new GitDirectoryService({
           resolveWorktreeStorage: () => "in-repo",
@@ -48167,7 +48168,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: {
           inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
@@ -48305,7 +48306,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: new GitDirectoryService({
           resolveWorktreeStorage: () => "in-repo",
@@ -48471,7 +48472,7 @@ script = "printf setup"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         gitDirectoryService: new GitDirectoryService({
           resolveWorktreeStorage: () => "in-repo",
@@ -48620,7 +48621,7 @@ script = "printf setup"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         createScratchProjectDirectory: async () => scratchPath,
         overlayStore,
@@ -48727,7 +48728,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: new GitDirectoryService({
         resolveWorktreeStorage: () => "in-repo",
@@ -48819,7 +48820,7 @@ script = "printf setup"
       ],
     });
     const inspectError = new Error("fatal: bad object refs/heads/main");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: {
         inspectWorkspaceGit: vi.fn(async () => {
@@ -48927,7 +48928,7 @@ script = "printf setup"
     const inspectWorkspaceGit = vi.fn(async () => {
       throw new Error("EACCES: cannot inspect child workspace");
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       createScratchProjectDirectory: async () => "/repo/scratch",
       gitDirectoryService: {
@@ -49009,7 +49010,7 @@ script = "printf setup"
     });
     const readTurnRoot = vi.fn(async () => "review-root");
     Object.assign(codexClient, { readTurnRoot });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -49082,7 +49083,7 @@ script = "printf setup"
       ],
       interruptEndsTurn: true,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -49224,7 +49225,7 @@ script = "printf setup"
       },
       startTurnDelay: startTurnDelay.promise,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -49278,7 +49279,7 @@ script = "printf setup"
       },
       startReviewDelay: startReviewDelay.promise,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -49331,7 +49332,7 @@ script = "printf setup"
         methods: ["turn/start", "review/start", "thread/resume"],
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -49470,7 +49471,7 @@ script = "printf setup"
       },
       startReviewError: new Error("Codex disconnected"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -49527,7 +49528,7 @@ script = "printf setup"
         methods: ["turn/start", "review/start", "thread/resume"],
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -49572,7 +49573,7 @@ script = "printf setup"
   it("does not let correspondence status persistence failures alter the recipient FIFO", async () => {
     const correspondenceStore = new ThreadCorrespondenceStore();
     vi.spyOn(correspondenceStore, "update").mockImplementation(() => { throw new Error("Fixture disk failure"); });
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     await expect(registry.submitHeldTurn({
       backend: "codex", threadId: "recipient", queueEntryId: "held-durable", input: [{ type: "text", text: "Keep this message" }], holdReason: "Fixture hold",
@@ -49583,7 +49584,7 @@ script = "printf setup"
   });
 
   it.each(["codex", "acp:grok"] as const)("reads the authoritative %s FIFO without changing ownership or order", async (backend) => {
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const input: AppServerTurnInputItem[] = [{ type: "text", text: "First paragraph Ω\n\n" + "long ".repeat(200) }, { type: "file", name: "notes.txt", mimeType: "text/plain", data: "AQID" }];
     await registry.submitHeldTurn({ backend, threadId: "recipient", queueEntryId: "held-one", input, holdReason: "Fixture hold" });
@@ -49604,7 +49605,7 @@ script = "printf setup"
 
   it("publishes bounded incoming-work metadata for a direct handoff start without altering its prompt", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -49626,7 +49627,7 @@ script = "printf setup"
   it("keeps cross-thread send and steer admissions immutable while a previous steer is dispatching", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
     const correspondenceStore = new ThreadCorrespondenceStore();
-    const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -49709,7 +49710,7 @@ script = "printf setup"
     });
     const overlayStore = createOverlayStoreMock();
     const recordHelper = vi.spyOn(overlayStore, "upsertThreadSubAgent");
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     await registry.publishLocalEvent({ backend, notification: {
@@ -49738,7 +49739,7 @@ script = "printf setup"
     Object.assign(codexClient, { generateStructuredObject: generate });
     const overlayStore = createOverlayStoreMock();
     const recordHelper = vi.spyOn(overlayStore, "upsertThreadSubAgent");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 20,
     });
     onTestFinished(() => registry.close());
@@ -49770,7 +49771,7 @@ script = "printf setup"
     const generate = vi.fn(async (_params: { prompt: string; disableExecution?: boolean }) =>
       ({ status: "ok" as const, object: { title: "Image director: hold PR64 render" } }));
     Object.assign(codexClient, { generateStructuredObject: generate });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0,
     });
     onTestFinished(() => registry.close());
@@ -49813,7 +49814,7 @@ script = "printf setup"
     ).generateStructuredObject = (request) => new Promise((resolve) => {
       helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     const events: AgentEvent[] = [];
@@ -49871,7 +49872,7 @@ script = "printf setup"
     const generate = vi.fn(async () => await pendingTitle);
     Object.assign(codexClient, { generateStructuredObject: generate });
     const correspondenceStore = new ThreadCorrespondenceStore();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0,
     });
@@ -49943,7 +49944,7 @@ script = "printf setup"
         tokenUsage: { inputTokens: 100 * run, cachedInputTokens: 20, outputTokens: 10, totalTokens: 100 * run + 10 },
       }) });
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     const events: AgentEvent[] = [];
@@ -50031,7 +50032,7 @@ script = "printf setup"
     (
       codexClient as unknown as { generateStructuredObject: () => Promise<unknown> }
     ).generateStructuredObject = async () => results.shift();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     await registry.publishLocalEvent({ backend: "codex", notification: {
@@ -50071,7 +50072,7 @@ script = "printf setup"
       ).generateStructuredObject = (request) => new Promise((resolve) => {
         helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
       });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
       try {
         await discoverCodexBackendForTest(registry);
         const events: AgentEvent[] = [];
@@ -50117,7 +50118,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] },
         threads: ["sender", "recipient"].map(id => ({ id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] })),
       });
-      const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+      const registry = createDesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
       try {
         for (const threadId of ["sender", "recipient"]) await registry.publishLocalEvent({ backend: "codex", notification: {
           method: "turn/started", params: { threadId, turnId: `active:${threadId}`, turn: { id: `active:${threadId}` } },
@@ -50170,7 +50171,7 @@ script = "printf setup"
         id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
       })),
     });
-    const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -50255,7 +50256,7 @@ script = "printf setup"
     { queueMode: "settings", turnId: undefined, rootTurnId: undefined },
   ])("refreshes ungrouped replacement ancestry: $queueMode, $turnId, $rootTurnId", async ({ queueMode, turnId, rootTurnId }) => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const target = { backend: "codex" as const, threadId: "recipient" };
     await registry.publishLocalEvent({ ...target, notification: {
@@ -50304,7 +50305,7 @@ script = "printf setup"
         id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
       })),
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     await registry.publishLocalEvent({ backend: "codex", notification: {
       method: "turn/started", params: { threadId: "recipient", turnId: "busy", turn: { id: "busy" } },
@@ -50337,7 +50338,7 @@ script = "printf setup"
       initializeResult: { methods: ["turn/start"] },
       threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) => ({
       backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
@@ -50366,7 +50367,7 @@ script = "printf setup"
       initializeResult: { methods: ["turn/start"] },
       threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) =>
       request.resolutionMode === "remembered_only" ? undefined : {
@@ -50389,7 +50390,7 @@ script = "printf setup"
       initializeResult: { methods: ["turn/start"] },
       threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const search = vi.fn(async (_request: unknown) => ({
       ok: true as const,
@@ -50435,7 +50436,7 @@ script = "printf setup"
       initializeResult: { methods: ["turn/start"] },
       threads: [{ id: "sender", title: "Sender", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const federatedSend = vi.fn(async (request: PwrAgentFederatedThreadMessageRequest) => ({
       backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
@@ -50475,7 +50476,7 @@ script = "printf setup"
         { id: "unnamed", title: "New thread", titleSource: "fallback" as const, source: "codex" as const, linkedDirectories: [] },
       ],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
 
     await expect(registry.buildThreadTodoMessageOrigin({
@@ -50506,7 +50507,7 @@ script = "printf setup"
         id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
       })),
     });
-    const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -50556,7 +50557,7 @@ script = "printf setup"
 
   it.each(["original-root", undefined])("keeps queued delegation ancestry exact: %s", async (rootTurnId) => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     try {
       await registry.publishLocalEvent({ backend: "codex", notification: {
         method: "turn/started", params: { threadId: "recipient", turn: { id: "busy" } },
@@ -50597,7 +50598,7 @@ script = "printf setup"
     const readTurnRoot = vi.fn(async () => "root-original");
     Object.assign(codexClient, { readTurnRoot });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: null,
@@ -50783,7 +50784,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -50913,7 +50914,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -51004,7 +51005,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -51252,7 +51253,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -51375,7 +51376,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -51479,7 +51480,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -51697,7 +51698,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ replay }),
       overlayStore,
       threadTitleGenerationService: null,
@@ -51785,7 +51786,7 @@ script = "printf setup"
       },
     };
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ replay }),
       overlayStore,
       threadTitleGenerationService: null,
@@ -51823,7 +51824,7 @@ script = "printf setup"
   it("persists an injected origin from a started user item", async () => {
     const codexClient = new MockBackendClient({});
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: null,
@@ -51881,7 +51882,7 @@ script = "printf setup"
   ])("keeps a manual steer separate from pending agent provenance ($payload, started=$agentStarted)", async ({ payload, agentStarted }) => {
     const codexClient = new MockBackendClient({});
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: null,
@@ -51982,7 +51983,7 @@ script = "printf setup"
       messages: [message], pagination: { supportsPagination: false, hasPreviousPage: false },
     } });
     const store = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
     const items: unknown[] = [];
     registry.onEvent((event) => {
       const notification = event.notification;
@@ -52038,7 +52039,7 @@ script = "printf setup"
   }): Promise<void> {
     const client = new MockBackendClient({});
     const store = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
     const origin: AppServerThreadMessageOrigin = { kind: "agent", sourceThread: { backend: "claude", threadId: "sender" } };
     const items: Array<{ id: string; origin?: unknown }> = [];
     registry.onEvent((event) => {
@@ -52116,7 +52117,7 @@ script = "printf setup"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -52186,7 +52187,7 @@ script = "printf setup"
       },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -52254,7 +52255,7 @@ script = "printf setup"
   ))("retains pending steer provenance after $method (item started=$itemStarted)", async ({ method, itemStarted }) => {
     const codexClient = new MockBackendClient({});
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -52329,7 +52330,7 @@ script = "printf setup"
   it("binds pending provenance to the started item when identical steers complete out of order", async () => {
     const codexClient = new MockBackendClient({});
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       threadTitleGenerationService: null,
@@ -52421,7 +52422,7 @@ script = "printf setup"
       messageId: "user:turn-1",
       origin: { kind: "automation" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ replay }),
       overlayStore,
       threadTitleGenerationService: null,
@@ -52479,7 +52480,7 @@ script = "printf setup"
     };
     const steerCodexTurn = async (firstPromptOrigin?: AppServerThreadMessageOrigin) => {
       const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({
           initializeResult: { methods: ["turn/start", "turn/steer"] },
           replay: codexReplay(),
@@ -52582,7 +52583,7 @@ script = "printf setup"
         backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
         origin: { kind: "messaging", causalMessagingSource },
       });
-      const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
       onTestFinished(() => registry.close());
 
       await expect(registry.readCausalMessagingContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }))
@@ -52595,7 +52596,7 @@ script = "printf setup"
       const firstPromptRead = Promise.withResolvers<void>();
       const turnFinished = Promise.withResolvers<AgentEvent>();
       const prompts: Array<{ uuid?: string }> = [];
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({}),
         overlayStore: createOverlayStoreMock(),
         agentToolMcpServer: null,
@@ -52712,7 +52713,7 @@ script = "printf setup"
         hasPreviousPage: false,
       },
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         readThreadReplays: [laterPage, initialPage],
       }),
@@ -52781,7 +52782,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -52885,7 +52886,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -52941,7 +52942,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -53080,7 +53081,7 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -53169,7 +53170,7 @@ script = "printf setup"
           linkedDirectories: [],
         }],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         threadTitleGenerationService: null,
@@ -53250,7 +53251,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -53368,7 +53369,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -53483,7 +53484,7 @@ script = "printf setup"
       ],
       truncated: false,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore: createMessagingArchiveCleanupStoreMock({
         bindings: [
@@ -53675,7 +53676,7 @@ script = "printf setup"
       ],
       truncated: false,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -53793,7 +53794,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -53880,7 +53881,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -53975,7 +53976,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -54055,7 +54056,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore: createMessagingArchiveCleanupStoreMock({
         bindings: [
@@ -54165,7 +54166,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -54289,7 +54290,7 @@ script = "printf setup"
       workMode: "worktree" as const,
     }));
     const recordCodexWorktreeOwnerThread = vi.fn(async () => undefined);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: {
         prepareLaunchpadWorkspace,
@@ -54429,7 +54430,7 @@ script = "printf setup"
       workMode: "worktree" as const,
     }));
     const recordCodexWorktreeOwnerThread = vi.fn(async () => undefined);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: {
         prepareLaunchpadWorkspace,
@@ -54526,7 +54527,7 @@ script = "printf setup"
       rollback: vi.fn(async () => undefined),
       workMode: "worktree" as const,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: {
         prepareLaunchpadWorkspace,
@@ -54647,7 +54648,7 @@ script = "printf setup"
       workMode: "worktree" as const,
     }));
     const recordCodexWorktreeOwnerThread = vi.fn(async () => undefined);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       gitDirectoryService: {
         prepareLaunchpadWorkspace,
@@ -54748,7 +54749,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -54809,7 +54810,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -54916,7 +54917,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -54976,7 +54977,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -55051,7 +55052,7 @@ script = "printf setup"
         "codex:agent-thread": createAgentOverlay(),
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -55160,7 +55161,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -55296,7 +55297,7 @@ script = "printf setup"
         "codex:agent-thread": createAgentOverlay(),
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -55377,7 +55378,7 @@ script = "printf setup"
         "codex:agent-thread": createAgentOverlay(),
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -55459,7 +55460,7 @@ script = "printf setup"
         "codex:agent-thread": createAgentOverlay(),
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -55569,7 +55570,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -55659,7 +55660,7 @@ script = "printf setup"
           "codex:agent-thread": createAgentOverlay(),
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
       });
@@ -55781,7 +55782,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -55882,7 +55883,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -55967,7 +55968,7 @@ script = "printf setup"
 
   it("routes durable dependencies with the trusted waiting thread defaults", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
     registry.setThreadDependencyToolHandler(handler);
     await registry.publishLocalEvent({ backend: "codex", notification: {
@@ -55988,7 +55989,7 @@ script = "printf setup"
 
   it("requires agents to write down what the resumed turn should do", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
     registry.setThreadDependencyToolHandler(handler);
     await registry.publishLocalEvent({ backend: "codex", notification: {
@@ -56010,7 +56011,7 @@ script = "printf setup"
   it("saves prerequisite titles for agent-registered dependencies that omit them", async () => {
     const foundation: AppServerThreadSummary = { id: "foundation", title: "Extract retry helper", titleSource: "explicit", source: "codex", updatedAt: 1000, linkedDirectories: [] };
     const codexClient = new MockBackendClient({ threads: [foundation], initializeResult: { methods: ["thread/list"] } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
     registry.setThreadDependencyToolHandler(handler);
     await registry.publishLocalEvent({ backend: "codex", notification: {
@@ -56037,7 +56038,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -56118,7 +56119,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list", "thread/read"] },
       listThreadsError: new Error("local codex backend unavailable"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: { "codex:agent-thread": createAgentOverlay() },
@@ -56266,7 +56267,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list"] },
       threads: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: { "codex:agent-thread": createAgentOverlay() },
@@ -56314,7 +56315,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/read"] },
       readThreadError: new Error("thread not loaded"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: { "codex:agent-thread": createAgentOverlay() },
@@ -56623,7 +56624,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -56750,7 +56751,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -56810,7 +56811,7 @@ script = "printf setup"
         updatedAt: 900,
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: { "codex:agent-thread": createAgentOverlay() },
@@ -56926,7 +56927,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list"] },
       listThreadsError: new Error("local codex backend unavailable"),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: { "codex:agent-thread": createAgentOverlay() },
@@ -57029,7 +57030,7 @@ script = "printf setup"
           ...options.overlays,
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
       });
@@ -57649,7 +57650,7 @@ script = "printf setup"
         initializeResult: { methods: ["thread/list"] },
         listThreadsError: new Error("local codex backend unavailable"),
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock({
           overlays: { "codex:agent-thread": createAgentOverlay() },
@@ -57739,7 +57740,7 @@ script = "printf setup"
         threads: [{ id: "ordinary-thread", title: "Original title", titleSource: "explicit", source: "codex", linkedDirectories: [] }],
       });
       Object.assign(codexClient, { readThreadName: async () => "Original title" });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -57874,7 +57875,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -57978,7 +57979,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -58063,7 +58064,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -58132,7 +58133,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -58191,7 +58192,7 @@ script = "printf setup"
     const tokenMiserRoot = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-token-miser-disabled-call-"),
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -58265,7 +58266,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -58340,7 +58341,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -58396,7 +58397,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -58463,7 +58464,7 @@ script = "printf setup"
       startThreadResult: { threadId: "monitor-thread" },
     });
     Object.assign(codexClient, { readTurnRoot: vi.fn(async () => rootTurnId) });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -58601,7 +58602,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
@@ -58695,7 +58696,7 @@ script = "printf setup"
 
   it("marks idle Claude threads with running background tasks as working in navigation", () => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
     const claude = (registry as unknown as {
       claudeBackend: { backgroundTaskThreadIds: () => string[] };
@@ -58728,7 +58729,7 @@ script = "printf setup"
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -58790,7 +58791,7 @@ script = "printf setup"
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -58849,7 +58850,7 @@ script = "printf setup"
         PATH: "/repo/app/.bin:/usr/bin",
       },
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -58934,7 +58935,7 @@ script = "printf setup"
       ],
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -59050,7 +59051,7 @@ script = "printf setup"
       ],
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -59106,7 +59107,7 @@ script = "printf setup"
       ],
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       resolveHelperModelSettings: () => ({
@@ -59187,7 +59188,7 @@ script = "printf setup"
           return true;
         },
       };
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
         agentToolMcpServer: null,
@@ -59842,7 +59843,7 @@ script = "printf setup"
       startThreadResult: { threadId: "monitor-thread" },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -60255,7 +60256,7 @@ script = "printf setup"
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -60373,7 +60374,7 @@ script = "printf setup"
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -60450,7 +60451,7 @@ script = "printf setup"
       startThreadResult: { threadId: "monitor-thread" },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -60690,7 +60691,7 @@ script = "printf setup"
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -60850,7 +60851,7 @@ script = "printf setup"
       startTurnResults: [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     await overlayStore.upsertThreadMessageOrigin!({
       backend: "codex", threadId: "thread-1", messageId: "user:turn-1",
       origin: { kind: "messaging", causalMessagingSource },
@@ -60913,7 +60914,7 @@ script = "printf setup"
       ],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const authorizeRetainedTool = vi.fn(async (
       _context: unknown,
       check: { tool: string },
@@ -61011,7 +61012,7 @@ script = "printf setup"
       startTurnResults: [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(),
       checkDynamicToolPermission: () => ({ allowed: true }),
       authorizeRetainedTool: async () => ({ allowed: true }),
@@ -61066,7 +61067,7 @@ script = "printf setup"
       ...createOverlayStoreMock(),
       reconcileOrphanedThreadSubAgents,
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       runtimeInstanceId: "runtime-current",
@@ -61096,7 +61097,7 @@ script = "printf setup"
       startThreadResult: { threadId: "monitor-thread" },
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       runtimeInstanceId: "runtime-current",
@@ -61224,7 +61225,7 @@ script = "printf setup"
       startTurnResults: [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
       startTurnErrors: [undefined, new Error("no rollout found for thread id monitor-thread")],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -61299,7 +61300,7 @@ script = "printf setup"
       ],
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -61439,7 +61440,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       runtimeInstanceId: "runtime-current",
@@ -61502,7 +61503,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       runtimeInstanceId: "runtime-current",
@@ -61569,7 +61570,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       runtimeInstanceId: "runtime-current",
@@ -61596,7 +61597,7 @@ script = "printf setup"
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -61751,7 +61752,7 @@ script = "printf setup"
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread-1" },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -61863,7 +61864,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -61891,7 +61892,7 @@ script = "printf setup"
       threadId: "thread-1",
       enabled: false,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/read"] },
       }),
@@ -61941,7 +61942,7 @@ script = "printf setup"
         threadStatus: "idle",
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -61965,7 +61966,7 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume"] },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -61999,7 +62000,7 @@ script = "printf setup"
         supportsReasoning: true, reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
       }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -62029,7 +62030,7 @@ script = "printf setup"
     const revertThread = vi.fn(async () => undefined);
     Object.assign(codexClient, { revertThread });
     const overlayStore = createOverlayStoreMock({ executionMode: "default" });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -62095,7 +62096,7 @@ script = "printf setup"
       });
     });
     Object.assign(codexClient, { revertThread });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -62138,7 +62139,7 @@ script = "printf setup"
     });
     Object.assign(codexClient, { revertThread });
     const overlayStore = createOverlayStoreMock({ executionMode: "default" });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
       events.push(event);
@@ -62161,7 +62162,7 @@ script = "printf setup"
   });
 
   it("names a Claude review card by the pull requests its /code-review targeted", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -62205,7 +62206,7 @@ script = "printf setup"
       linkedDirectory: { id: "pwragent-handoff:claude:claude-1", label: "app", path: "/repo/app", worktreePath: targetPath, kind: "worktree" as const },
       warnings: [], completedAt: 1000,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: { recordCodexWorktreeOwnerThread: vi.fn(async () => {}) } as never,
@@ -62244,7 +62245,7 @@ script = "printf setup"
 
   it("refuses a Claude workspace move before touching any files", async () => {
     const handoff = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       gitWorkspaceHandoffService: { handoff } as never,
@@ -62263,7 +62264,7 @@ script = "printf setup"
   });
 
   it("rewinds a Claude thread with its files, announces it, and drains replies held meanwhile", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -62319,7 +62320,7 @@ script = "printf setup"
 
   it("records a Claude rewind as undoable and undoes it, once", async () => {
     const overlayStore = createOverlayStoreMock({ executionMode: "default" });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
@@ -62369,7 +62370,7 @@ script = "printf setup"
     });
     const revertThread = vi.fn(async () => undefined);
     Object.assign(codexClient, { revertThread });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -62401,7 +62402,7 @@ script = "printf setup"
       id: "gpt-6.1-sol", label: "GPT-6.1-Sol", supportsReasoning: true,
       reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
     }] });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ overlays: {
         "codex:thread-direct-compact": {
@@ -62450,7 +62451,7 @@ script = "printf setup"
           model: "gpt-6.1-sol", reasoningEffort: "high",
         },
       } });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
         threadTitleGenerationService: null,
@@ -62514,7 +62515,7 @@ script = "printf setup"
 
     it.each(["completed", "cancelled", "unrelated-error"])("does not repair a manual compaction ending with %s", async (outcome) => {
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       try {
@@ -62552,7 +62553,7 @@ script = "printf setup"
     it("cleans up a rejected compaction request without repairing unrelated errors", async () => {
       const codexClient = new MockBackendClient({});
       const compact = vi.spyOn(codexClient, "compactThread").mockRejectedValueOnce(new Error("thread not found"));
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       try {
@@ -62571,7 +62572,7 @@ script = "printf setup"
       const temp = createTempStateDb("pwragent-compact-recovery-");
       const db = StateDb.open(temp.dbPath);
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
       });
       const recovered = createDeferred<void>();
@@ -62627,7 +62628,7 @@ script = "printf setup"
         await respond.promise;
         return { threadId, turnId: `compact:${threadId}`, itemId: "compact-item" };
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       registry.onEvent((event) => {
@@ -62693,7 +62694,7 @@ script = "printf setup"
 
     it("keeps queued follow-ups held after a failed compaction", async () => {
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       try {
@@ -62724,7 +62725,7 @@ script = "printf setup"
       const compact = vi.spyOn(codexClient, "compactThread").mockResolvedValue({
         threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       const recovered = createDeferred<void>();
@@ -62772,7 +62773,7 @@ script = "printf setup"
       const compact = vi.spyOn(codexClient, "compactThread").mockResolvedValue({
         threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       const events: AgentEvent[] = [];
@@ -62806,7 +62807,7 @@ script = "printf setup"
       vi.spyOn(codexClient, "compactThread").mockResolvedValue({
         threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
       });
       const unloaded = createDeferred<AgentEvent>();
@@ -62840,7 +62841,7 @@ script = "printf setup"
       vi.spyOn(codexClient, "compactThread").mockResolvedValue({
         threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       const events: AgentEvent[] = [];
@@ -62875,7 +62876,7 @@ script = "printf setup"
       vi.spyOn(codexClient, "compactThread").mockResolvedValue({
         threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       const events: AgentEvent[] = [];
@@ -62915,7 +62916,7 @@ script = "printf setup"
       vi.spyOn(codexClient, "compactThread").mockResolvedValue({
         threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
       });
       const events: AgentEvent[] = [];
@@ -62960,7 +62961,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({
         startTurnResults: [{ threadId: busyThreadId, turnId: "busy-turn" }],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         threadTitleGenerationService: null,
@@ -63015,7 +63016,7 @@ script = "printf setup"
         methods: ["mcpServerStatus/list", "config/mcpServer/reload"],
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -63057,7 +63058,7 @@ script = "printf setup"
   it("binds Settings MCP mutations to the active Codex profile", async () => {
     const codexHome = "/home/example/.codex/profiles/work";
     const codexClient = new MockBackendClient({ codexHome });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "default" }),
     });
@@ -63123,7 +63124,7 @@ script = "printf setup"
         },
       ],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
     });
@@ -63171,7 +63172,7 @@ script = "printf setup"
         createdAt: now - 10_000, updatedAt: now - 1_000, lastMessage: "Still running",
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     try {
       const threads = await registry.listThreads({ backend: "codex" });
       expect(threads[0]?.codexNativeSubAgents?.[0]?.threadStatus).toBe(status);
@@ -63251,7 +63252,7 @@ script = "printf setup"
         },
       });
     }
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     try {
       if (!stored) {
         expect((await registry.listThreads({ backend: "codex" }))[0]?.codexNativeSubAgents).toBeUndefined();
@@ -63332,7 +63333,7 @@ script = "printf setup"
     const discovery = vi.spyOn(codexClient, "listNativeSubAgentThreads")
       .mockImplementation(async (params) => params?.ancestorThreadId === parent.id ? [worker] : []);
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     // Lifecycle reports finish the card, so its status already matches the
     // replay. This client cannot read thread settings, so the card and its
     // usage line have no model: the state an earlier build left behind.
@@ -63421,7 +63422,7 @@ script = "printf setup"
         createdAt: now - 20, updatedAt: now - 10,
       },
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     try {
       // The lifecycle report names the worker by its path before discovery runs.
       await codexClient.emit({
@@ -63523,7 +63524,7 @@ script = "printf setup"
       ],
     });
     const overlayStore = createOverlayStoreMock({ executionMode: "default" });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -63635,7 +63636,7 @@ script = "printf setup"
       overlayStore,
       "upsertThreadSubAgent",
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -63751,7 +63752,7 @@ script = "printf setup"
     );
     const fullOverlayReads = vi.spyOn(overlayStore, "getThreadOverlayStates");
     const usageActivityReads = vi.spyOn(overlayStore as SqliteOverlayStore, "readThreadUsageActivities");
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -63907,7 +63908,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -64006,7 +64007,7 @@ script = "printf setup"
       });
     }
     const upsertThreadSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -64109,7 +64110,7 @@ script = "printf setup"
       overlayStore,
       "upsertThreadUsageLine",
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -64145,7 +64146,7 @@ script = "printf setup"
 
   it("rejects a group archive when the owner parent changed before admission", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list", "thread/archive"] }, threads: [] });
-    const registry = new DesktopBackendRegistry({ codexClient,
+    const registry = createDesktopBackendRegistry({ codexClient,
       overlayStore: createOverlayStoreMock({ overlays: { "codex:child": { backend: "codex", threadId: "child",
         parentThreadId: "new-parent", parentThreadBackend: "codex", extraLinkedDirectories: [] } } }) });
     await expect(registry.archiveThread({ backend: "codex", threadId: "child",
@@ -64179,7 +64180,7 @@ script = "printf setup"
       archivedThreads: ownershipOnArchivedThread ? [{ ...thread, id: markerThreadId, archivedAt: 900 }] : [],
     });
     const archive = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient, overlayStore, worktreeArchiveService: { archive } as never,
     });
     onTestFinished(() => registry.close());
@@ -64273,7 +64274,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -64350,7 +64351,7 @@ script = "printf setup"
       threads: [parentThread, forkedThread],
     });
     const archiveWorktree = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -64432,7 +64433,7 @@ script = "printf setup"
         deleteThread: vi.fn(async () => ({ threadId: id })),
         readThreadSummary: vi.fn(async () => { throw new Error(`Thread not found: ${id}`); }),
       });
-      const registry = new DesktopBackendRegistry({ codexClient: codex, overlayStore, claudeBackendOptions: { store },
+      const registry = createDesktopBackendRegistry({ codexClient: codex, overlayStore, claudeBackendOptions: { store },
         worktreeArchiveService: { deleteSnapshot } as unknown as WorktreeArchiveService,
         getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: scenario === "disabled" ? 0 : 30 }),
       });
@@ -64472,7 +64473,7 @@ script = "printf setup"
       listThreadArchiveStates: async () => [overlay], observeArchivedThreads: vi.fn(async () => {}), forgetThreadArchiveStates: vi.fn(async () => {}),
     });
     const policy = { ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 };
-    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore,
       claudeBackendOptions: { store }, getThreadArchivePolicy: () => ({ ...policy }) });
     let mutation: Promise<void> | undefined;
     const deletion = vi.spyOn(store, "delete");
@@ -64532,7 +64533,7 @@ script = "printf setup"
       readThreadSummary: vi.fn(async (id: string) => family.find((thread) => thread.id === id)!),
     });
     vi.spyOn(client, "listNativeSubAgentThreads").mockImplementation(async (params) => (params as { archived?: boolean })?.archived ? family.slice(1) : []);
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore,
       getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 }),
     });
     try {
@@ -64579,7 +64580,7 @@ script = "printf setup"
         return action === "activity" ? { ...thread, threadStatus: "active" as const, updatedAt: Date.now() } : thread;
       }),
     });
-    registry = new DesktopBackendRegistry({ codexClient: client, overlayStore, getThreadArchivePolicy: () => ({ ...policy }) });
+    registry = createDesktopBackendRegistry({ codexClient: client, overlayStore, getThreadArchivePolicy: () => ({ ...policy }) });
     try {
       await registry.sweepInactiveThreads();
       await mutation;
@@ -64604,7 +64605,7 @@ script = "printf setup"
     const overlayStore = Object.assign(createOverlayStoreMock({ overlays: { "codex:moving": overlay } }), {
       listThreadArchiveStates: async () => [overlay], observeArchivedThreads: vi.fn(async () => {}), forgetThreadArchiveStates: vi.fn(async () => {}),
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore,
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore,
       getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, retentionDays: 30 }) });
     try { await registry.sweepInactiveThreads(); expect(deleteThread).not.toHaveBeenCalled(); }
     finally { await registry.close(); }
@@ -64625,7 +64626,7 @@ script = "printf setup"
     const client = Object.assign(new MockBackendClient({ threads: [thread] }), { readThreadSummary: vi.fn(async () => thread) });
     const archive = vi.spyOn(client, "archiveThread");
     // An old config.toml can still hold the retired switch; it archives nothing.
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age", inactivityDays: 1, enabled: true } as typeof DEFAULT_THREAD_ARCHIVE_POLICY),
       codexClient: client,
       overlayStore: new SqliteOverlayStore(db), messagingStore: null,
@@ -64687,7 +64688,7 @@ script = "printf setup"
       threads: [parentThread, childThread],
     });
     const archiveWorktree = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -64821,7 +64822,7 @@ script = "printf setup"
         threads: archived ? [{ ...codexThread, archived: true }] : [],
       })),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       pdfToolMcpServer: null,
@@ -64869,7 +64870,7 @@ script = "printf setup"
       codexClient.setThreads(threads);
       return { threadId };
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     // The tray must survive the foreground mutation, even while expensive
     // worktree cleanup has not reached its child-ungrouping stage.
     const cleanup = vi.spyOn(registry as unknown as {
@@ -64913,7 +64914,7 @@ script = "printf setup"
         threads: [{ id: "nested", title: "nested", titleSource: "explicit", linkedDirectories: [],
           source: "codex", updatedAt: 1 }],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient, overlayStore,
         claudeBackendOptions: { store, inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
           discoverModels: async () => [] },
@@ -64973,7 +64974,7 @@ script = "printf setup"
     await overlayStore.observeArchivedThreads([identity], 1000);
     await overlayStore.setThreadArchiveTombstone({ ...identity, archivedAt: 1000 });
     const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     const observations: Array<ThreadOverlayState | undefined> = [];
     const unsubscribe = registry.onEvent(async (event) => {
       if (event.notification.method === "thread/unarchived") observations.push(await overlayStore.getThreadOverlayState(identity));
@@ -65026,7 +65027,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list", "thread/archive"] },
       threads: [parentThread, childThread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       worktreeArchiveService: {
@@ -65183,7 +65184,7 @@ script = "printf setup"
     const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] }, threads: [childThread] });
     const archiveCodexThread = vi.spyOn(codexClient, "archiveThread");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       pdfToolMcpServer: null,
@@ -65256,7 +65257,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -65341,7 +65342,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -65429,7 +65430,7 @@ script = "printf setup"
       state: "archived" as const,
       ignoredFilesExcluded: true,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
@@ -65526,7 +65527,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       worktreeArchiveService: {
@@ -65614,7 +65615,7 @@ script = "printf setup"
       threads: [thread],
     });
     const archiveWorktree = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -65665,7 +65666,7 @@ script = "printf setup"
     });
     const overlayStore = createOverlayStoreMock();
     const upsertSnapshot = vi.spyOn(overlayStore, "upsertWorktreeSnapshot");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       worktreeArchiveService: new WorktreeArchiveService(),
@@ -65738,7 +65739,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/unarchive"] },
     });
     const restoreWorktree = vi.fn(async () => restoredSnapshot);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
         overlays: {
@@ -65827,7 +65828,7 @@ script = "printf setup"
       archivedThreads: [archivedThread],
     });
     const restoreDetached = vi.fn(async () => restoredSnapshot);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -65909,7 +65910,7 @@ script = "printf setup"
         state: "archived" as const,
         ignoredFilesExcluded: true,
       }));
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         worktreeArchiveService: {
@@ -65960,7 +65961,7 @@ script = "printf setup"
       ],
       pendingIntentIds: ["intent-approval", "intent-question"],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore,
       overlayStore,
@@ -66019,7 +66020,7 @@ script = "printf setup"
       notifiedCount: 1,
       revokedCount: 1,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
@@ -66084,7 +66085,7 @@ script = "printf setup"
     const messagingArchiveCleaner = createMessagingArchiveCleanerMock(
       cleanerReleased.promise,
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
@@ -66150,7 +66151,7 @@ script = "printf setup"
     });
     const overlayStore = createOverlayStoreMock();
     const tombstone = vi.spyOn(overlayStore, "setThreadArchiveTombstone");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
@@ -66202,7 +66203,7 @@ script = "printf setup"
       notifiedCount: 1,
       revokedCount: 1,
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
@@ -66244,7 +66245,7 @@ script = "printf setup"
     const messagingStore = createMessagingArchiveCleanupStoreMock({
       bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore,
       overlayStore: createOverlayStoreMock(),
@@ -66273,7 +66274,7 @@ script = "printf setup"
       bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
       pendingIntentIds: ["intent-approval"],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore,
       overlayStore: createOverlayStoreMock(),
@@ -66314,7 +66315,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list", "thread/archive"] },
       threads: [restoredThread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -66345,7 +66346,7 @@ script = "printf setup"
     const messagingStore = createMessagingArchiveCleanupStoreMock({
       bindings: [{ id: "closing-binding", threadId: "archived" }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
     await registry.listThreads({ backend: "codex" });
     await waitForCondition(() => archivedReads === 1);
     await registry.close();
@@ -66369,7 +66370,7 @@ script = "printf setup"
     const messagingStore = createMessagingArchiveCleanupStoreMock({
       bindings: [{ id: "restored-binding", threadId: "restored" }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { await registry.close(); });
     await registry.listThreads({ backend: "codex" });
     await waitForCondition(() => archivedReads === 1);
@@ -66400,7 +66401,7 @@ script = "printf setup"
       bindings: [{ id: "restored-binding", threadId: "restored" }],
       pendingIntentIds: ["restored-intent"],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
     const listing = registry.listThreads({ backend: "codex", archived: true, enrichDirectories: false });
     await transport.whenListing(true);
@@ -66474,7 +66475,7 @@ script = "printf setup"
     const findBindings = messagingStore.findActiveBindingsForBackend.bind(messagingStore);
     const bindingReads = vi.spyOn(messagingStore, "findActiveBindingsForBackend")
       .mockImplementation(async (params) => { await bindingGate; return await findBindings(params); });
-    const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
+    const registry = createDesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
     await registry.listThreads({ backend: "codex", enrichDirectories: false });
     await waitForCondition(() => bindingReads.mock.calls.length === 1);
@@ -66514,7 +66515,7 @@ script = "printf setup"
       bindings: [{ id: "unresolved-binding", threadId: "missing" }],
     });
     const reads = vi.spyOn(messagingStore, "findActiveBindingsForBackend");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore,
       overlayStore: createOverlayStoreMock(),
@@ -66581,7 +66582,7 @@ script = "printf setup"
       bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
       pendingIntentIds: ["intent-approval"],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore,
       overlayStore: createOverlayStoreMock(),
@@ -66641,7 +66642,7 @@ script = "printf setup"
         return { notifiedCount: 1, revokedCount: 1 };
       },
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
@@ -66689,7 +66690,7 @@ script = "printf setup"
       bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
       pendingIntentIds: ["intent-approval"],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingStore,
       overlayStore: createOverlayStoreMock(),
@@ -66728,7 +66729,7 @@ script = "printf setup"
       listThreadsError: new Error("thread list unavailable"),
     });
     const archiveWorktree = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       worktreeArchiveService: {
@@ -66785,7 +66786,7 @@ script = "printf setup"
       notifiedCount: 0,
       revokedCount: 0,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner: {
         requestBindingRevokeAllForThread,
@@ -66894,7 +66895,7 @@ script = "printf setup"
     const archiveWorktree = vi.fn(async () => {
       throw new Error("worktree unavailable");
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner: {
         requestBindingRevokeAllForThread,
@@ -66959,7 +66960,7 @@ script = "printf setup"
       archiveThreadError: new Error("archive transport unavailable"),
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -67017,7 +67018,7 @@ script = "printf setup"
         initializeResult: { methods: ["thread/list", "thread/archive"] },
         threads: [thread],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -67069,7 +67070,7 @@ script = "printf setup"
         id: "thread-1", title: "Repeated project move", titleSource: "explicit", source: "codex",
         projectKey: created.targetPath, linkedDirectories: [created.linkedDirectory], gitBranch: "HEAD", updatedAt: 2,
       };
-      registry = new DesktopBackendRegistry({
+      registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({ threads: [thread] }), overlayStore, gitWorkspaceHandoffService: handoffService,
       });
       for (let move = 0; move < 2; move += 1) {
@@ -67115,7 +67116,7 @@ script = "printf setup"
         id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex",
         linkedDirectories: [], gitBranch: "HEAD", updatedAt: 2,
       };
-      registry = new DesktopBackendRegistry({
+      registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({ threads: [thread] }), overlayStore, gitWorkspaceHandoffService: handoffService,
       });
 
@@ -67177,7 +67178,7 @@ script = "printf setup"
     const overlayStore = createOverlayStoreMock({ overlays: { "codex:thread-1": {
       backend: "codex", threadId: "thread-1", executionMode: "default", extraLinkedDirectories: [source],
     } } });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [{
         id: "thread-1", title: "Fresh start", titleSource: "explicit", source: "codex", linkedDirectories: [source], updatedAt: 1,
       }] }),
@@ -67231,7 +67232,7 @@ script = "printf setup"
         threads: archived ? [{ ...thread, archived: true }] : sharedWithActiveThread ? [child] : [],
       })),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ overlays: { "codex:thread-1": {
         backend: "codex", threadId: "thread-1", executionMode: "default",
@@ -67297,7 +67298,7 @@ script = "printf setup"
     });
     await overlayStore.setThreadParent({ backend: "codex", threadId: thread.id, parentThreadId: "parent", parentThreadBackend: "acp:grok", parentThreadInstanceId: "remote-instance" });
     const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [thread] }), overlayStore,
       gitDirectoryService: { recordCodexWorktreeOwnerThread } as never,
       gitWorkspaceHandoffService: { handoff } as never,
@@ -67343,7 +67344,7 @@ script = "printf setup"
       warnings: [], completedAt: 1000,
     }));
     const recordCodexWorktreeOwnerThread = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       gitDirectoryService: { recordCodexWorktreeOwnerThread } as never,
       codexClient, overlayStore, gitWorkspaceHandoffService: { handoff } as never,
     });
@@ -67410,7 +67411,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitDirectoryService: {
@@ -67538,7 +67539,7 @@ script = "printf setup"
       updateThreadWorkspaceError: new Error(error),
     });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitWorkspaceHandoffService: { handoff } as never,
@@ -67643,7 +67644,7 @@ script = "printf setup"
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -67755,7 +67756,7 @@ script = "printf setup"
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -67886,7 +67887,7 @@ script = "printf setup"
       warnings: [],
       completedAt: 1000,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -68036,7 +68037,7 @@ script = "printf setup"
       backend: acpBackendId, threadId: "session-1", parentThreadId: "parent", parentThreadBackend: "codex",
     });
     const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
@@ -68116,7 +68117,7 @@ script = "printf setup"
   it.each(["local-to-worktree", "to-project"] as const)("rejects Gemini ACP workspace handoff after the first message: %s", async (direction) => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const handoff = vi.fn();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -68226,7 +68227,7 @@ script = "printf setup"
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
     };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
@@ -68313,7 +68314,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list", "turn/start"] },
       threads: [thread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -68383,7 +68384,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
@@ -68483,7 +68484,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       gitWorkspaceHandoffService: {
@@ -68575,7 +68576,7 @@ script = "printf setup"
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
         gitWorkspaceHandoffService: {
@@ -68663,7 +68664,7 @@ script = "printf setup"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({
           initializeResult: { methods: ["thread/list"] },
           threads: [thread],
@@ -68739,7 +68740,7 @@ script = "printf setup"
         initializeResult: { methods: ["thread/list", "thread/metadata/update"] },
         threads: [thread],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
       });
@@ -68822,7 +68823,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
@@ -68866,7 +68867,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
@@ -68927,7 +68928,7 @@ script = "printf setup"
       observedGitBranch: adoptedBranch,
       extraLinkedDirectories: [],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
@@ -68974,7 +68975,7 @@ script = "printf setup"
       lookupStarted.resolve();
       return await listThreads(...args);
     });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore });
     try {
       const response = registry.checkThreadBranchDrift({ ...identity, expectedBranch: previousBranch });
       await lookupStarted.promise;
@@ -69021,7 +69022,7 @@ script = "printf setup"
       },
     });
     const setThreadObservedBranch = vi.spyOn(overlayStore, "setThreadObservedBranch");
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
@@ -69080,7 +69081,7 @@ script = "printf setup"
           id: threadId, source: backend, title: "Branch fixture", titleSource: "explicit",
           projectKey: cwd, linkedDirectories: [directory],
         } });
-        registry = new DesktopBackendRegistry({
+        registry = createDesktopBackendRegistry({
           codexClient: new MockBackendClient({ threads: [] }), overlayStore,
           claudeBackendOptions: { store },
         });
@@ -69212,7 +69213,7 @@ script = "printf setup"
         id: threadId, source: "claude", title: "Review fixture", titleSource: "explicit", projectKey: cwd,
         linkedDirectories: [directory],
       } });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: new MockBackendClient({ threads: [] }), overlayStore,
         claudeBackendOptions: {
           store,
@@ -69349,7 +69350,7 @@ script = "printf setup"
         id: identity.threadId, source: "codex", title: "Branch oracle", titleSource: "explicit",
         linkedDirectories: [{ id: cwd, path: cwd, label: "fixture", kind: "local" }],
       }] });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient: client, overlayStore: createOverlayStoreMock(),
         agentToolMcpServer: null, pdfToolMcpServer: null,
       });
@@ -69420,7 +69421,7 @@ script = "printf setup"
           gitBranch: "feature/previous", observedGitBranch: "feature/previous" },
       } });
       const client = new MockBackendClient({ threads: [thread] });
-      const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+      const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore });
       const methods: string[] = [];
       registry.onEvent((event) => { methods.push(event.notification.method); });
       try {
@@ -69456,7 +69457,7 @@ script = "printf setup"
     };
     const client = new MockBackendClient({ threads: [thread] });
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore });
     const probeStarted = createDeferred<AbortSignal>();
     const releaseProbe = createDeferred<{ stdout: string; stderr: string }>();
     // An unproven layout reads its branch through the owned Git process.
@@ -69534,7 +69535,7 @@ script = "printf setup"
       initializeResult: { methods: ["thread/list", "thread/metadata/update"] },
       threads: [thread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -69850,7 +69851,7 @@ script = "printf setup"
 
   it("notifies listeners when the renderer adopts a new expected branch", async () => {
     const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/metadata/update"] },
       }),
@@ -69895,7 +69896,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
       }),
@@ -69963,7 +69964,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
@@ -70001,7 +70002,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/name/set"] },
       }),
@@ -70044,7 +70045,7 @@ script = "printf setup"
         status: "idle",
       },
     ];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpSessionStore: createAcpSessionStoreMock(sessions),
@@ -70088,7 +70089,7 @@ script = "printf setup"
       initializeResult: { methods: ["turn/start"] },
       startTurnError: new Error(error),
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({ executionMode }),
     });
@@ -70128,7 +70129,7 @@ script = "printf setup"
         },
       },
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -70190,7 +70191,7 @@ script = "printf setup"
       const overlayStore = createOverlayStoreMock({
         executionMode: options?.executionMode ?? "default",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
       });
@@ -70277,7 +70278,7 @@ script = "printf setup"
           },
         },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
         resolveManagedReviewEnabled: () => managed,
@@ -70754,7 +70755,7 @@ script = "printf setup"
       const overlayStore = createOverlayStoreMock({
         executionMode: "default",
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore,
       });
@@ -70904,7 +70905,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         isBootstrapMode: () => true,
@@ -70937,7 +70938,7 @@ script = "printf setup"
       // operator-visible path leads here, so failing loud is the
       // right signal that something is wrong.
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         isBootstrapMode: () => true,
@@ -70956,7 +70957,7 @@ script = "printf setup"
 
     it("throws on startThread in bootstrap mode", async () => {
       const codexClient = new MockBackendClient({});
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         isBootstrapMode: () => true,
@@ -70989,7 +70990,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         isBootstrapMode: () => false,
@@ -71025,7 +71026,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         isCodexBootstrapDeferred: () => true,
@@ -71053,7 +71054,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
         isCodexBootstrapDeferred: () => false,
@@ -72070,7 +72071,7 @@ script = "printf setup"
     vi.spyOn(transport, "request").mockImplementation(async (method, params) =>
       method === "session/prompt" ? await prompt : await request(method, params),
     );
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([{
@@ -72400,7 +72401,7 @@ script = "printf setup"
 
   describe("notification wiring", () => {
     function makeRegistry(): DesktopBackendRegistry {
-      return new DesktopBackendRegistry({
+      return createDesktopBackendRegistry({
         codexClient: new MockBackendClient({}),
         overlayStore: createOverlayStoreMock(),
       });
@@ -72597,7 +72598,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -72686,7 +72687,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -72738,7 +72739,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -72771,7 +72772,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -72827,7 +72828,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -72873,7 +72874,7 @@ script = "printf setup"
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start"] },
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -73007,7 +73008,7 @@ script = "printf setup"
           },
         ],
       });
-      const registry = new DesktopBackendRegistry({
+      const registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
       });
@@ -73273,7 +73274,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
   });
 
   it("canonicalizes navigation PR chips and degrades when the registry read fails", async () => {
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
     });
@@ -73488,7 +73489,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threads: fixture.threads.filter((thread) => thread.id === "archive-target"),
         archivedThreads: fixture.threads.filter((thread) => thread.id === "already-archived"),
       });
-      registry = new DesktopBackendRegistry({
+      registry = createDesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock({ overlays: fixture.overlays }),
       });
@@ -73532,7 +73533,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       vi.spyOn(overlayStore, "setThreadArchiveTombstone").mockRejectedValue(
         new Error("archive storage unavailable"),
       );
-      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
       expect(codexClient.archivedThreadIds).toEqual([]);
@@ -73568,7 +73569,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threads: fixture.threads,
       });
       const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const events: AgentEvent[] = [];
       registry.onEvent((event) => {
         events.push(event);
@@ -73612,7 +73613,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threads: fixture.threads,
       });
       const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const events: AgentEvent[] = [];
       registry.onEvent((event) => {
         events.push(event);
@@ -73657,7 +73658,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threads: fixture.threads,
       });
       const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
@@ -73703,7 +73704,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threads: fixture.threads,
       });
       const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      registry = createDesktopBackendRegistry({ codexClient, overlayStore });
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
@@ -73748,7 +73749,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threads: fixture.threads,
       });
       const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const events: AgentEvent[] = [];
       registry.onEvent((event) => {
         events.push(event);
@@ -73820,7 +73821,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threads: fixture.threads,
       });
       const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      registry = createDesktopBackendRegistry({ codexClient, overlayStore });
       const events: AgentEvent[] = [];
       registry.onEvent((event) => {
         events.push(event);
@@ -73925,7 +73926,7 @@ it("serves owner display panels without replaying the provider transcript", asyn
     backend: "codex", threadId: "thread-1", executionMode: "default", extraLinkedDirectories: [],
     subAgents: [{ monitorId: "monitor-1", task: "A displayed task", createdAt: 1, updatedAt: 1, status: "success" }],
   } } });
-  const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+  const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
   onTestFinished(() => registry.close());
   for (const resource of ["pricing", "tools", "subagents", "accounting"] as const) {
     const result = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource }, viewOnly: true, includeTurns: false });
@@ -73941,7 +73942,7 @@ it("serves owner display panels without replaying the provider transcript", asyn
 describe("mark_project_read dynamic tool", () => {
   async function setup() {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
-    const registry = new DesktopBackendRegistry({ codexClient,
+    const registry = createDesktopBackendRegistry({ codexClient,
       overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
     });
     onTestFinished(() => registry.close());
@@ -74035,7 +74036,7 @@ describe("thread maintenance agent tools", () => {
 
   async function setup() {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
-    const registry = new DesktopBackendRegistry({ codexClient,
+    const registry = createDesktopBackendRegistry({ codexClient,
       overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
     });
     onTestFinished(() => registry.close());
@@ -74262,7 +74263,7 @@ describe("DesktopBackendRegistry queued turn reordering", () => {
       initializeResult: { methods: ["turn/start"] },
       threads: [{ id: "busy", title: "busy", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -74302,7 +74303,7 @@ describe("DesktopBackendRegistry queued turn pausing", () => {
       initializeResult: { methods: ["turn/start"] },
       threads: [{ id: "busy", title: "busy", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
@@ -74387,7 +74388,7 @@ describe("DesktopBackendRegistry workspace recovery", () => {
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
     });
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
       worktreeRecoveryService: services.recovery as never,
@@ -74626,7 +74627,7 @@ command = "pnpm dev"
       },
     });
     const claudeOptionsSeen: ClaudeOptions[] = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       codexEnvironmentCommandRunner: commandRunner,
       gitDirectoryService: {
@@ -75016,7 +75017,7 @@ command = "pnpm dev"
       shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
     }));
     const optionsSeen: ClaudeOptions[] = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       codexEnvironmentCommandRunner: commandRunner,
       overlayStore: createOverlayStoreMock(),
@@ -75079,7 +75080,7 @@ command = "pnpm dev"
       shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
     }));
     const optionsSeen: ClaudeOptions[] = [];
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       codexEnvironmentCommandRunner: commandRunner,
       overlayStore: createOverlayStoreMock(),
@@ -75255,7 +75256,7 @@ command = "pnpm dev"
       repositoryPath: repoPath,
       workMode: "worktree" as const,
     }));
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start"] } }),
       codexEnvironmentCommandRunner: commandRunner,
       overlayStore: createOverlayStoreMock(),

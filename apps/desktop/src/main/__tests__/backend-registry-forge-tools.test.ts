@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
@@ -60,7 +61,7 @@ describe("backend forge tool dispatch", () => {
     overlayStore = new SqliteOverlayStore(db);
     startCodexTurn = vi.fn(async ({ threadId }) => ({ threadId, turnId: "turn-2" }));
     lifecycleTurnSequence = 0;
-    registry = new DesktopBackendRegistry({
+    registry = createDesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
         listThreads: async () => [{ id: "thread-1", title: "Fixture work", titleSource: "explicit", source: "codex", linkedDirectories: [] }],

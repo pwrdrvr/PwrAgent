@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../../app-server/backend-registry-wiring";
 import { vi } from "vitest";
 import { realpath } from "node:fs/promises";
 import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState, WorktreeSnapshotSummary } from "@pwragent/shared";
@@ -249,7 +250,7 @@ export function buildFleetRegistry(fs: ArchiveFleetFs, fleet: Fleet, checkpoint:
   }
   const claudeStore = new ClaudeSessionStore("/contrived/claude");
   vi.spyOn(claudeStore, "list").mockImplementation(async () => { counts.claudeLists += 1; return []; });
-  const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store as never,
+  const registry = createDesktopBackendRegistry({ codexClient: client as never, overlayStore: store as never,
     claudeBackendOptions: { store: claudeStore }, archiveCleanupCheckpointStore: checkpoint,
     runtimeInstanceId: options.instanceId ?? "scaling-fixture", resolveLiveProfileRuntimeInstanceIds: () => [options.instanceId ?? "scaling-fixture"],
     worktreeArchiveService: { archive } as never, threadTitleGenerationService: null });

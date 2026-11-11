@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -182,7 +183,7 @@ async function createBoundThread(turns: RawTurn[], options: { linkedDirectory?: 
       threadId: THREAD_ID,
     });
   }
-  const registry = new DesktopBackendRegistry({
+  const registry = createDesktopBackendRegistry({
     codexClient: codex.client as never,
     overlayStore: store,
     messagingStore: null,
@@ -563,7 +564,7 @@ async function createPeerBoundThread(
   const codex = createFakeCodexClient(turns);
   const store = new SqliteOverlayStore(db);
   setDesktopOverlayStoreForTests(store);
-  const ownerRegistry = new DesktopBackendRegistry({
+  const ownerRegistry = createDesktopBackendRegistry({
     codexClient: codex.client as never,
     overlayStore: store,
     messagingStore: null,
@@ -1010,7 +1011,7 @@ describe("transcript-only thread reads", () => {
       readThread,
     };
     const store = new SqliteOverlayStore(db);
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: client as never,
       overlayStore: store,
       messagingStore: null,

@@ -1486,7 +1486,7 @@ vi.mock("../codex-app-server/stdio-transport", () => {
 // Load the registry's desktop dependency graph during collection, after the
 // transport mock's base class is initialized. Its cold transform/import cost
 // must not consume the listing workload test's five-second execution budget.
-const { DesktopBackendRegistry } = await import("../app-server/backend-registry");
+const { createDesktopBackendRegistry } = await import("../app-server/backend-registry-wiring");
 
 async function waitForLatestTransportRequest(
   method: string,
@@ -3205,7 +3205,7 @@ describe("CodexAppServerClient", () => {
     const db = openInMemoryStateDb();
     const store = new SqliteOverlayStore(db);
     const client = new CodexAppServerClient({ command: "codex" });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
     await registry["subAgentStartupReconciliation"];
     await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
     const ids = Array.from({ length: 120 }, (_, index) => `overlay-budget-${index}`);

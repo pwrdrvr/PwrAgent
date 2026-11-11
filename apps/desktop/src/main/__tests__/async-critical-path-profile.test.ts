@@ -1,3 +1,4 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,7 +26,7 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
     let firstTokenAt = 0;
     let providerAcceptedAt = 0;
     const replay = { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } };
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       overlayStore: store,
       threadTitleGenerationService: null,
       codexClient: {

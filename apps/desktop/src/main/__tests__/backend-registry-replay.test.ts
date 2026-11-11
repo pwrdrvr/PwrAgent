@@ -1,6 +1,7 @@
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerBackendKind } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 import { ReplayClient } from "../shell/testing/replay-client";
@@ -82,7 +83,7 @@ describe("DesktopBackendRegistry replay integration", () => {
       readThreadPricing: async () => ({ summaries: [], lines: [] }),
       readThreadToolAccounting: async () => undefined,
     } as unknown as OverlayStoreLike;
-    const registry = new DesktopBackendRegistry({ codexClient: replayClient, correspondenceStore, overlayStore, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: replayClient, correspondenceStore, overlayStore, threadTitleGenerationService: null });
     try {
       for (const id of ["newer", "older"]) {
         const result = await registry.readThread({
@@ -167,7 +168,7 @@ describe("DesktopBackendRegistry replay integration", () => {
       readThreadPricing: async () => ({ summaries: [], lines: [] }),
       readThreadToolAccounting: async () => undefined,
     } as unknown as OverlayStoreLike;
-    const registry = new DesktopBackendRegistry({ codexClient: replayClient, correspondenceStore, overlayStore, threadTitleGenerationService: null });
+    const registry = createDesktopBackendRegistry({ codexClient: replayClient, correspondenceStore, overlayStore, threadTitleGenerationService: null });
     try {
       for (const display of [{ resource: "transcript" as const }, undefined]) {
         const result = await registry.readThread({ ...source, viewOnly: true, ...(display ? { display } : {}) });
@@ -238,7 +239,7 @@ describe("DesktopBackendRegistry replay integration", () => {
       persistThreadToolHistoryAnalysis,
       readThreadToolAccounting,
     } as unknown as OverlayStoreLike;
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: replayClient,
       overlayStore,
     });
@@ -327,7 +328,7 @@ describe("DesktopBackendRegistry replay integration", () => {
       ]
     });
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: replayClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -440,7 +441,7 @@ describe("DesktopBackendRegistry replay integration", () => {
       ]
     });
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: replayClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -560,7 +561,7 @@ describe("DesktopBackendRegistry replay integration", () => {
       ]
     });
 
-    const registry = new DesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient: replayClient,
       overlayStore: createOverlayStoreMock(),
     });
