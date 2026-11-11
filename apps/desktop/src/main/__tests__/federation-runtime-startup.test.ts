@@ -434,19 +434,20 @@ describe("Invite endpoints for an OS-assigned gateway port", () => {
       port: boundPort,
     });
     const runtime = new DesktopFederationRuntime() as unknown as StartupHarness;
-    await runtime.startAfterLeaseAcquired("gateway", config);
     try {
+      await runtime.startAfterLeaseAcquired("gateway", config);
       return await runtime.defaultAdvertisedEndpoints(config);
     } finally {
       await runtime.stop();
     }
   }
 
-  it("advertises what the gateway would if it had been configured with the port it bound", async () => {
+  // Every host runs, not a sample: the wildcard and IPv6 hosts are the ones
+  // the configured-port fallback got wrong.
+  it.each(["127.0.0.1", "localhost", "::1", "0.0.0.0", "::"])("advertises what a gateway on %s would if it had been configured with the port it bound", async (listenHost) => {
     await fc.assert(fc.asyncProperty(
-      fc.constantFrom("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"),
       fc.integer({ min: 1, max: 65_535 }),
-      async (listenHost, boundPort) => {
+      async (boundPort) => {
         const osAssigned = await advertisedWhileBound({ ...fakeSettings, listenHost, listenPort: 0 }, boundPort);
         const configured = await advertisedWhileBound({ ...fakeSettings, listenHost, listenPort: boundPort }, boundPort);
         expect(osAssigned).toEqual(configured);
@@ -455,6 +456,6 @@ describe("Invite endpoints for an OS-assigned gateway port", () => {
           expect(endpoint).toMatch(new RegExp(`:${boundPort}$`));
         }
       },
-    ), { numRuns: 40 });
+    ), { numRuns: 10 });
   });
 });
