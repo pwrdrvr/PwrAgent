@@ -8,6 +8,8 @@ import {
 } from "react";
 import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon, EyeIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
+import { sidebarPrCardBridge, type BridgedHoverCard } from "../../lib/hover-card-bridge";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { statusPulseRef } from "../../lib/status-pulse";
@@ -57,8 +59,32 @@ type PrChipProps = {
    * has no room for it.
    */
   hideDetachButton?: boolean;
+  /**
+   * The sidebar's card: it opens beside the sidebar, the pointer can cross
+   * into it (`sidebarPrCardBridge`), and its footer offers Copy URL and
+   * Detach.
+   */
+  cardActions?: boolean;
   onVisibilityChange?: (visible: boolean) => void;
 };
+
+/** The sidebar, so the card opens past its edge rather than over the rows. */
+function sidebarAnchorRect(target: HTMLElement): DOMRect {
+  return (target.closest(".sidebar") ?? target).getBoundingClientRect();
+}
+
+/**
+ * Whether the card sits clear of the sidebar, where the pointer can reach it
+ * without crossing other rows. A card that fell back over the rows (a narrow
+ * window) does not qualify, and neither does one with no laid-out box.
+ */
+function cardIsBesideSidebar(card: HTMLElement | null, target: HTMLElement): boolean {
+  const sidebar = target.closest(".sidebar");
+  if (!card || !sidebar) return false;
+  const box = card.getBoundingClientRect();
+  const edges = sidebar.getBoundingClientRect();
+  return box.width > 0 && (box.left >= edges.right || box.right <= edges.left);
+}
 
 export const PrChip = memo(function PrChip(props: PrChipProps) {
   const { pr } = props;
@@ -75,9 +101,22 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     y: number;
     anchorTop?: number;
   }>();
-  const tooltipController = useViewportTooltip({
-    className: "pr-status-card",
-  });
+  const cardActions = Boolean(props.cardActions);
+  const tooltipController = useViewportTooltip(cardActions
+    ? {
+      className: "pr-status-card pr-status-card--actions",
+      placement: "beside",
+      getAnchorRect: sidebarAnchorRect,
+      interactive: {
+        onPointerEnter: () => sidebarPrCardBridge.enterCard(bridgeCardRef.current),
+        onPointerLeave: () => sidebarPrCardBridge.leaveCard(bridgeCardRef.current),
+      },
+    }
+    : { className: "pr-status-card" });
+  const hideTooltip = tooltipController.hide;
+  // This chip's card, as the shared bridge knows it.
+  const bridgeCardRef = useRef<BridgedHoverCard>({ hide: hideTooltip });
+  bridgeCardRef.current.hide = hideTooltip;
   const updateTooltip = tooltipController.update;
   const label = prNumberLabel(pr, props.showRepoPrefix);
   const presentation = resolvePrChipPresentation(pr, {
@@ -90,14 +129,53 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   // mounts exactly zero cards.
   // Only a supplied menu can stop a watch; the standalone menu copies.
   const watchStopHint = Boolean(props.onOpenContextMenu);
+  const onDetach = props.onDetach;
   const card = (
-    <PrStatusCard
-      pr={pr}
-      withStatusPills={props.withStatusPills}
-      branchDrift={props.branchDrift}
-      watch={props.watch}
-      watchStopHint={watchStopHint}
-    />
+    <>
+      <PrStatusCard
+        pr={pr}
+        withStatusPills={props.withStatusPills}
+        branchDrift={props.branchDrift}
+        watch={props.watch}
+        watchStopHint={watchStopHint}
+      />
+      {/* Pointer shortcuts, out of the Tab order like the chip's ✕: the
+          keyboard detaches with Delete on the chip, and copies from its
+          menu. */}
+      {/* Hidden from the chip's description: the keyboard cannot reach
+          these, so they would announce controls it cannot use. */}
+      {cardActions ? (
+        <div className="pr-status-card__actions" aria-hidden="true">
+          <button
+            type="button"
+            tabIndex={-1}
+            className="pr-status-card__action"
+            onClick={() => {
+              hideTooltip();
+              void copyText(pr.url);
+            }}
+          >
+            Copy URL
+          </button>
+          {onDetach ? (
+            <button
+              type="button"
+              tabIndex={-1}
+              className="pr-status-card__action pr-status-card__action--detach"
+              onClick={() => {
+                // The detach warning returns focus to its opener: make that
+                // the chip, which outlives the card.
+                contextMenuInvokerRef.current?.focus();
+                hideTooltip();
+                onDetach(pr);
+              }}
+            >
+              Detach
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
   );
   const latestCardRef = useRef(card);
   latestCardRef.current = card;
@@ -143,6 +221,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
       ? props.watch.autoFixBlocked.threadTitle
       : undefined,
     watchStopHint,
+    cardActions,
+    Boolean(onDetach),
   ].join("|");
   const pushedCardKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -151,16 +231,24 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     if (!moved || !tooltipVisible) {
       return;
     }
-    updateTooltip(
-      <PrStatusCard
-        pr={pr}
-        withStatusPills={props.withStatusPills}
-        branchDrift={props.branchDrift}
-        watch={props.watch}
-        watchStopHint={watchStopHint}
-      />,
-    );
-  }, [cardKey, pr, props.withStatusPills, props.branchDrift, props.watch, watchStopHint, tooltipVisible, updateTooltip]);
+    updateTooltip(latestCardRef.current);
+  }, [cardKey, tooltipVisible, updateTooltip]);
+
+  // The bridge tracks which sidebar card is up, so entering another chip can
+  // close this one at once.
+  useEffect(() => {
+    if (!cardActions) return;
+    const bridgeCard = bridgeCardRef.current;
+    if (tooltipVisible) {
+      sidebarPrCardBridge.shown(bridgeCard);
+    } else {
+      sidebarPrCardBridge.hidden(bridgeCard);
+    }
+  }, [cardActions, tooltipVisible]);
+  useEffect(() => {
+    const bridgeCard = bridgeCardRef.current;
+    return () => sidebarPrCardBridge.hidden(bridgeCard);
+  }, []);
 
   // `resolvePrChipPresentation` owns the draft / conflict / checks-running
   // rules, including the "defer to the sibling status pills" case, so the
@@ -208,7 +296,13 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         data-pr-chip=""
         data-pr-url={pr.url}
         draggable={false}
-        onBlur={tooltipController.hide}
+        // Focus moving onto the card's own buttons keeps it.
+        onBlur={(event) => {
+          const card = tooltipController.getElement();
+          if (!card || !card.contains(event.relatedTarget as Node | null)) {
+            tooltipController.hide();
+          }
+        }}
         onClick={handleActivate}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -247,13 +341,30 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
             handleDetach(event);
           }
         }}
-        onMouseEnter={(event) =>
+        onMouseEnter={(event) => {
+          // Another sidebar card is up: swap to this one at once.
+          if (cardActions && sidebarPrCardBridge.enterTrigger(bridgeCardRef.current)) {
+            tooltipController.show(event.currentTarget, latestCardRef.current);
+            return;
+          }
           tooltipController.showAfterDelay(
             event.currentTarget,
             () => latestCardRef.current,
-          )
-        }
-        onMouseLeave={tooltipController.hide}
+          );
+        }}
+        onMouseLeave={(event) => {
+          // Bridge to a card the pointer can reach; one drawn over the rows
+          // closes as before, so it never blocks the next row.
+          if (
+            cardActions
+            && tooltipVisible
+            && cardIsBesideSidebar(tooltipController.getElement(), event.currentTarget)
+          ) {
+            sidebarPrCardBridge.leaveTrigger(bridgeCardRef.current);
+            return;
+          }
+          tooltipController.hide();
+        }}
       >
         <span
           className="pr-chip__dot"

@@ -1663,6 +1663,15 @@ budget is a record of what a path costs, not permission for it to cost that.
     dedicated Star Map window has the same shape: `.star-map-window`
     opens a stacking context that scopes the card z-scale, so its portal
     tooltips (`.star-map-card__tooltip`) also carry an explicit layer.
+  - **An enterable card passes `interactive`.** The sidebar's PR cards
+    (`PrChip` `cardActions`) open beside the sidebar and carry Copy URL and
+    Detach. `lib/hover-card-bridge.ts` owns them: leaving a chip or its card
+    keeps the card for the 300 ms bridge, and entering any chip closes it
+    at once and shows the new one without the hover delay, so a sweep across
+    chips reads as before. A card that falls back over the rows does not
+    bridge. Its buttons stay out of the Tab order and the chip's description;
+    the chip keeps Delete and its menu for the keyboard. The card stops React
+    propagation of presses, since its portal sits in the row's React tree.
   - **A card with content worth hearing needs `aria-describedby`.** Point the
     trigger at the hook's `tooltipId` while `visible`; nothing else references
     the portal, so an unwired card is sighted-only. Do not solve this by

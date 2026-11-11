@@ -8642,6 +8642,46 @@ a.button {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* The sidebar card's footer (`PrChip` `cardActions`): words, like the PR
+   list's Detach all, not a corner ✕ that would read as "close this card". */
+.pr-status-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 10px -6px -4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pr-status-card__action {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pr-status-card__action:hover,
+.pr-status-card__action:focus-visible {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.pr-status-card__action--detach:hover,
+.pr-status-card__action--detach:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.pr-status-card__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 .pr-status-card__section-title {
   margin-bottom: 2px;
 }
