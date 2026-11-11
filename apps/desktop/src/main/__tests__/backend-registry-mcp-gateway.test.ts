@@ -2124,6 +2124,21 @@ select_for_new_threads = true
     expect(reconnectThreadConnection).toHaveBeenCalledTimes(1);
   });
 
+  it("reconnects with the effective provider-server policy on a legacy ACP selection", async () => {
+    await registry.close();
+    const reconnectThreadConnection = vi.fn(async () => undefined);
+    createRegistry({
+      registerBridge, requestGatewayToolOperation: operation, reconnectThreadConnection,
+      listConnections: async () => [{ id: "one", kind: "stdio", enabled: true, configured: true }],
+    } as unknown as McpConnectionGatewayService);
+    // Older versions could persist false for a backend that cannot honor it.
+    await store.setThreadMcpConnectionIds({ backend: "acp:fixture", threadId: "thread-1", connectionIds: ["one"], providerServersEnabled: false });
+    const selection = await registry.readThreadMcpConnections({ backend: "acp:fixture", threadId: "thread-1" });
+    expect(selection.providerServersEnabled).toBe(true);
+    await expect(registry.setThreadMcpConnections({ backend: "acp:fixture", threadId: "thread-1", ...selection, reconnectConnectionId: "one" })).resolves.toEqual(selection);
+    expect(reconnectThreadConnection).toHaveBeenCalledExactlyOnceWith("one", "thread-1", "acp:fixture");
+  });
+
   it("stops a thread's sessions for the connections it turned off, and only those", async () => {
     await registry.close();
     const closeThreadSessions = vi.fn(async () => undefined);

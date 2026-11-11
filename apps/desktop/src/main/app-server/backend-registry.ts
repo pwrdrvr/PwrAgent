@@ -19971,7 +19971,8 @@ export class DesktopBackendRegistry {
       const selected = new Set(previousState.mcpConnectionIds);
       if (new Set(request.connectionIds).size !== selected.size || request.connectionIds.some((id) => !selected.has(id))
         || (request.providerServersEnabled !== undefined
-          && request.providerServersEnabled !== (previousState.mcpProviderServersEnabled !== false))) {
+          && request.providerServersEnabled !== (!canIsolateMcpProviderServers(request.backend)
+            || previousState.mcpProviderServersEnabled !== false))) {
         throw new Error("Change MCP access separately before reconnecting.");
       }
       const connection = (await this.mcpConnectionService?.listConnections?.())?.find((entry) => entry.id === reconnect);
@@ -20027,7 +20028,8 @@ export class DesktopBackendRegistry {
       }
     }
     const connectionIds = state.mcpConnectionIds ?? [];
-    const providerServersEnabled = state.mcpProviderServersEnabled !== false;
+    const providerServersEnabled = !canIsolateMcpProviderServers(request.backend)
+      || state.mcpProviderServersEnabled !== false;
     await this.emit({
       backend: request.backend,
       notification: {
