@@ -1,7 +1,6 @@
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
-import { appendFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -96,7 +95,7 @@ import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-bu
 import { MessagingStore } from "../messaging/core/messaging-store";
 import { StateDb } from "../state/state-db";
 import { SqliteMessagingRequestStore } from "../state/messaging-request-store";
-import { createTempStateDb } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";
 import {
   inspectPdfDocument,
   renderPdfPages,
@@ -1128,67 +1127,53 @@ describe("MessagingController", () => {
   });
 
   it("preserves the Auto-fix choice under any sequence of toggles and picker navigation", async () => {
-    const probe = { started: performance.now(), examples: 0, actions: 0, readData: { calls: 0, ms: 0 }, writeData: { calls: 0, ms: 0 }, settleMs: 0 };
-    const prototype = MessagingStore.prototype as unknown as Record<"readData" | "writeData", (...args: unknown[]) => Promise<unknown>>;
-    const spies = (["readData", "writeData"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(async function (this: MessagingStore, ...args: unknown[]) {
-        const started = performance.now();
-        probe[method].calls++;
-        try {
-          if (process.env.PICKER_IO_DELAY_MS) await new Promise((resolve) => setTimeout(resolve, Number(process.env.PICKER_IO_DELAY_MS)));
-          return await original.apply(this, args);
-        } finally { probe[method].ms += performance.now() - started; }
-      });
-    });
-    try {
     // Model: new reviews fix by default; only a toggle changes that choice.
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom("toggle", "scope", "mode", "reviewer"), { maxLength: 6 }),
       async (steps) => {
-        probe.examples++;
-        const harness = await createHarness({ listBackends: async () => ({
-          fetchedAt: 1000, backends: [
-            buildBackendSummary({ capabilities: {
-              ...buildBackendSummary().capabilities, reviewRunner: true,
-              reviewRunMode: true, reviewCodexSubAgent: true, reviewAutoFix: true,
-            } }),
-            buildBackendSummary({ kind: "acp:grok", capabilities: {
-              ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: false,
-            } }),
-          ],
-        }) });
-        await bindThread(harness);
-        await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
-        let autoFix = true;
-        for (const step of steps) {
-          const actions = step === "toggle" ? ["review:summary:auto-fix"]
-            : step === "scope" ? ["review:summary:target", "review:target:current-changes"]
-              : step === "mode" ? ["review:summary:mode", "review:mode:pwragent-sub-agent"]
-                : ["review:summary:reviewer", "review:reviewer:provider:1", "review:reviewer:model:default"];
-          for (const actionId of actions) {
-            probe.actions++;
-            await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId }));
+        // This property checks picker state, not file persistence. Repeating
+        // the JSON store's reads and atomic rewrites for 25 examples can
+        // exhaust the test timeout while other survey files are doing I/O.
+        const db = openInMemoryStateDb();
+        try {
+          const harness = await createHarness({ store: new SqliteMessagingStore(db), listBackends: async () => ({
+            fetchedAt: 1000, backends: [
+              buildBackendSummary({ capabilities: {
+                ...buildBackendSummary().capabilities, reviewRunner: true,
+                reviewRunMode: true, reviewCodexSubAgent: true, reviewAutoFix: true,
+              } }),
+              buildBackendSummary({ kind: "acp:grok", capabilities: {
+                ...buildBackendSummary().capabilities, reviewRunner: true, reviewAutoFix: false,
+              } }),
+            ],
+          }) });
+          await bindThread(harness);
+          await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+          let autoFix = true;
+          for (const step of steps) {
+            const actions = step === "toggle" ? ["review:summary:auto-fix"]
+              : step === "scope" ? ["review:summary:target", "review:target:current-changes"]
+                : step === "mode" ? ["review:summary:mode", "review:mode:pwragent-sub-agent"]
+                  : ["review:summary:reviewer", "review:reviewer:provider:1", "review:reviewer:model:default"];
+            for (const actionId of actions) {
+              await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId }));
+            }
+            if (step === "toggle") autoFix = !autoFix;
+            expect(harness.delivered.at(-1)).toMatchObject({
+              review: { afterReview: autoFix ? "auto-fix" : "wait" },
+              body: expect.stringContaining(`Auto-fix findings: ${autoFix ? "On" : "Off"}`),
+            });
           }
-          if (step === "toggle") autoFix = !autoFix;
-          expect(harness.delivered.at(-1)).toMatchObject({
-            review: { afterReview: autoFix ? "auto-fix" : "wait" },
-            body: expect.stringContaining(`Auto-fix findings: ${autoFix ? "On" : "Off"}`),
-          });
+          await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+          expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({
+            afterReview: autoFix ? "auto-fix" : "wait",
+          }));
+        } finally {
+          await settleHarnessWork();
+          db.close();
         }
-        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
-        expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({
-          afterReview: autoFix ? "auto-fix" : "wait",
-        }));
-        const settleStarted = performance.now();
-        await settleHarnessWork();
-        probe.settleMs += performance.now() - settleStarted;
       },
-    ), { numRuns: 25, seed: 20261110 });
-    } finally {
-      appendFileSync("/private/tmp/pwragent-picker-probe.jsonl", JSON.stringify({ ...probe, elapsedMs: performance.now() - probe.started, ioDelayMs: process.env.PICKER_IO_DELAY_MS ?? "0" }) + "\n");
-      for (const spy of spies) spy.mockRestore();
-    }
+    ), { numRuns: 25 });
   });
 
   it("keeps Auto-fix off in a restored pending review and resets it for the next review", async () => {
