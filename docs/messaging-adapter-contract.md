@@ -571,6 +571,25 @@ that is still in progress; with no replacement, the send is discarded and
 other calls see an adapter with no optional methods. Only one adapter
 instance per platform talks to the provider at a time.
 
+The runtime never starts an adapter while an earlier adapter for the same
+platform may still be connected. Many providers allow one connection per bot
+(Telegram polling, Slack Socket Mode, a Discord gateway), and a second one
+makes them drop each other in a loop. When the runtime gives up on a start
+(its deadline passed, or messaging stopped), that start keeps running, so
+the platform stays closed until the start has settled and the adapter has
+been stopped again. A new start waits a few seconds for that; if it is not
+enough, the platform reports errored ("Waiting for the previous connection
+to shut down") and starts by itself once the earlier adapter is down. A
+start that never settles keeps the platform closed.
+
+So every adapter must:
+
+- check after each await in `start()` whether `stop()` ran meanwhile, and
+  tear down whatever it opened (the providers use a lifecycle generation
+  counter);
+- let `start()` settle, resolved or rejected, after `stop()`. A start left
+  pending forever keeps its platform closed until the app restarts.
+
 Deliveries the budget holds back keep their order. A deferrable delivery
 (final answers, user command replies, critical interactive prompts) that is
 deferred, or that arrives while its scope already has deferred deliveries,

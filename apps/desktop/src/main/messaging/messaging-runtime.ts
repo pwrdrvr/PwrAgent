@@ -351,6 +351,9 @@ const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
 const REJECTED_ROUTE_AGENT_METADATA_TTL_MS = 60_000;
 const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
 const FAILED_START_STOP_TIMEOUT_MS = 3_000;
+// How long a new start waits for an earlier adapter of the same platform to
+// finish shutting down before it gives up and retries once that is done.
+const PREVIOUS_ADAPTER_TEARDOWN_WAIT_MS = 3_000;
 const CONFIGURABLE_MESSAGING_CHANNELS = [
   "discord",
   "feishu",
@@ -493,6 +496,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   // short, and persisting them would add a commit per 429.
   private readonly deliveryBudgets = new Map<MessagingChannelKind, MessagingDeliveryBudget>();
   private readonly deliveryLanes = new Map<MessagingChannelKind, MessagingDeliveryLane>();
+  // An adapter whose start the runtime gave up on (deadline, cancellation)
+  // keeps starting, and may still connect. Until its start has settled and it
+  // has been stopped again, no other adapter for the platform may start: many
+  // providers allow one connection per bot, and two make them drop each
+  // other in a loop. Settles when every such adapter is down.
+  private readonly adapterTeardowns = new Map<MessagingChannelKind, Promise<void>>();
+  private readonly startsAwaitingTeardown = new Set<MessagingChannelKind>();
   private readonly rateLimitCarryovers = new Map<
     MessagingChannelKind,
     MessagingRateLimitCarryover
@@ -1566,6 +1576,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     store: MessagingStoreLike;
   }): Promise<AdapterStartOutcome> {
     const { adapter, config, store } = params;
+    if (!(await this.previousAdapterIsDown(adapter.channel))) {
+      return "failed";
+    }
     const authorizedActorIds = [...adapter.authorizedActorIds];
     const authorization: RunningMessagingAuthorization = {
       actorIds: authorizedActorIds,
@@ -1896,10 +1909,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         || error instanceof AdapterStartTimeoutError
       ) {
         // Cancellation settles the admission race, not adapter.start itself.
-        // Both late success and rejection still own cleanup of this adapter.
-        void startPromise.then(
-          async () => this.stopAdapterAfterLateStart(adapter),
-          async () => this.stopAdapterAfterLateStart(adapter),
+        // Both late success and rejection still own cleanup of this adapter,
+        // and the platform stays closed to new adapters until it is done.
+        this.trackAdapterTeardown(
+          adapter.channel,
+          startPromise.then(
+            async () => this.stopAdapterAfterLateStart(adapter),
+            async () => this.stopAdapterAfterLateStart(adapter),
+          ),
         );
       }
       throw error;
@@ -1946,6 +1963,74 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       clearTimeout(timer);
     }
     return this.runningAdapterNow(channel);
+  }
+
+  private trackAdapterTeardown(
+    channel: MessagingChannelKind,
+    teardown: Promise<unknown>,
+  ): void {
+    const previous = this.adapterTeardowns.get(channel);
+    const all: Promise<void> = Promise.all([previous, teardown]).then(
+      () => undefined,
+      () => undefined,
+    );
+    this.adapterTeardowns.set(channel, all);
+    void all.then(() => {
+      if (this.adapterTeardowns.get(channel) === all) {
+        this.adapterTeardowns.delete(channel);
+      }
+    });
+  }
+
+  /**
+   * Whether every earlier adapter for the platform has finished starting and
+   * been stopped. Waits a short while; when that is not enough, reports the
+   * platform errored, starts it once the earlier adapter is down, and
+   * answers false. A start that never settles keeps the platform closed.
+   */
+  private async previousAdapterIsDown(
+    channel: MessagingChannelKind,
+  ): Promise<boolean> {
+    const teardown = this.adapterTeardowns.get(channel);
+    if (!teardown) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = await Promise.race([
+      teardown.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), PREVIOUS_ADAPTER_TEARDOWN_WAIT_MS);
+        if (timer.unref) timer.unref();
+      }),
+    ]);
+    clearTimeout(timer);
+    if (waited && !this.adapterTeardowns.has(channel)) return true;
+    const reason =
+      "Waiting for the previous connection to shut down before connecting again.";
+    messagingLog.warn(`${channel}: earlier adapter still starting; not connecting a second one`, {
+      channel,
+    });
+    this.setPlatformHealth(channel, "errored", { reason });
+    this.startAfterTeardown(channel);
+    return false;
+  }
+
+  private startAfterTeardown(channel: MessagingChannelKind): void {
+    const teardown = this.adapterTeardowns.get(channel);
+    if (!teardown || this.startsAwaitingTeardown.has(channel)) return;
+    this.startsAwaitingTeardown.add(channel);
+    void teardown.then(async () => {
+      this.startsAwaitingTeardown.delete(channel);
+      if (!this.started) return;
+      await this.enqueueLifecycle(async () => {
+        if (!this.started || this.runningAdapters.has(channel)) return;
+        const config = await this.loadConfigForLifecycle();
+        await this.applyConfigWithFailureStatus(config);
+      });
+    }).catch((error: unknown) => {
+      messagingLog.warn(`${channel}: start after the previous adapter shut down failed`, {
+        channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private deliveryLaneFor(channel: MessagingChannelKind): MessagingDeliveryLane {
@@ -2011,9 +2096,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     adapter: DesktopMessagingAdapter,
   ): Promise<void> {
     this.captureRateLimitCarryover(adapter);
+    const stopping = Promise.resolve().then(async () => adapter.stop?.());
+    // The wait below is bounded; the platform still waits for the stop itself.
+    this.trackAdapterTeardown(adapter.channel, stopping);
     try {
       await promiseWithTimeout(
-        Promise.resolve().then(async () => adapter.stop?.()),
+        stopping,
         FAILED_START_STOP_TIMEOUT_MS,
         `${adapter.channel} adapter cleanup after failed startup`,
       );
