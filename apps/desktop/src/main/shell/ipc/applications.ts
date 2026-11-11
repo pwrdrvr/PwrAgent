@@ -60,6 +60,7 @@ import {
 import {
   discoverDesktopApplications,
   openDesktopApplication,
+  withApplicationIcons,
 } from "../../settings/application-discovery";
 
 const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
@@ -177,7 +178,7 @@ async function readApplications(
         .readApplications(),
     };
   }
-  return { applications: await discoverDesktopApplications() };
+  return { applications: await withApplicationIcons(await discoverDesktopApplications()) };
 }
 
 export function registerApplicationIpcHandlers(): void {

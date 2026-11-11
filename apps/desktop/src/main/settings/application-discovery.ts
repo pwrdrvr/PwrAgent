@@ -423,11 +423,16 @@ async function discoverApplication(
     source: appPath ? "application" : "path",
     appPath,
     executablePath,
-    iconDataUrl: appPath ? await readApplicationIconDataUrl(appPath) : undefined,
     canOpenWorkspace: application.canOpenWorkspace ?? true,
   };
 }
 
+/**
+ * Finds the installed editors and terminals. It reads no icon: decoding one
+ * loads the image codec (canvas on a Node owner), and every boot discovers
+ * applications whether or not a surface ever shows them. A surface that
+ * draws icons passes the snapshot through `withApplicationIcons`.
+ */
 export async function discoverDesktopApplications(params?: {
   env?: NodeJS.ProcessEnv;
 }): Promise<DesktopApplicationsSnapshot> {
@@ -456,6 +461,65 @@ export async function discoverDesktopApplications(params?: {
       discovery: { candidates: [] },
     },
   };
+}
+
+/**
+ * Adds each application bundle's icon to a discovered snapshot. Call it where
+ * a surface reads the applications, never at boot. Each decoded icon is kept
+ * for the life of the process, keyed by the icon file's path, mtime and size,
+ * so a repeat read decodes nothing and an updated bundle decodes again.
+ */
+export async function withApplicationIcons(
+  snapshot: DesktopApplicationsSnapshot,
+): Promise<DesktopApplicationsSnapshot> {
+  const addIcons = (candidates: DesktopApplicationDiscoveryCandidate[]) =>
+    Promise.all(candidates.map(async (candidate) => {
+      if (!candidate.appPath || candidate.iconDataUrl) return candidate;
+      const iconDataUrl = await readCachedApplicationIconDataUrl(candidate.appPath);
+      return iconDataUrl ? { ...candidate, iconDataUrl } : candidate;
+    }));
+  const [editors, terminals] = await Promise.all([
+    addIcons(snapshot.editors),
+    addIcons(snapshot.terminals),
+  ]);
+  return { ...snapshot, editors, terminals };
+}
+
+const decodedApplicationIcons = new Map<
+  string,
+  { key: string; dataUrl: Promise<string | undefined> }
+>();
+
+async function readCachedApplicationIconDataUrl(
+  appPath: string,
+): Promise<string | undefined> {
+  const iconPath = findApplicationIconPath(appPath);
+  if (!iconPath) {
+    log.warn("application-icon-not-found", { appPath });
+    return undefined;
+  }
+  let key: string;
+  try {
+    const iconStat = await stat(iconPath);
+    key = `${iconPath}\0${iconStat.mtimeMs}\0${iconStat.size}`;
+  } catch (error) {
+    log.warn("application-icon-failed", {
+      appPath,
+      iconPath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+  const cached = decodedApplicationIcons.get(appPath);
+  if (cached?.key === key) return await cached.dataUrl;
+  const dataUrl = readApplicationIconDataUrl(appPath, iconPath);
+  decodedApplicationIcons.set(appPath, { key, dataUrl });
+  return await dataUrl;
+}
+
+/** Test seam: forget every decoded icon. */
+export function resetDecodedApplicationIconsForTests(): void {
+  decodedApplicationIcons.clear();
 }
 
 export async function openDesktopApplication(
@@ -703,15 +767,11 @@ async function spawnDetached(
   });
 }
 
-async function readApplicationIconDataUrl(appPath: string): Promise<string | undefined> {
-  const iconPath = findApplicationIconPath(appPath);
-  if (!iconPath) {
-    log.warn("application-icon-not-found", { appPath });
-    return undefined;
-  }
-
+async function readApplicationIconDataUrl(
+  appPath: string,
+  iconPath: string,
+): Promise<string | undefined> {
   try {
-
     // `nativeImage.createFromPath()` returns an EMPTY image for `.icns`
     // files, so decode the container ourselves: a modern `.icns` embeds a
     // PNG per size, and `nativeImage` CAN decode PNG from a buffer. Everything
