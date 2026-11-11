@@ -4,10 +4,14 @@ import path from "node:path";
 import type { DesktopApplicationsSnapshot } from "@pwragent/shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  discoverDesktopApplications,
   resetDecodedApplicationIconsForTests,
   withApplicationIcons,
 } from "../settings/application-discovery";
+import {
+  FAKE_APPLICATION_ID,
+  REAL_APPLICATION_PATH,
+  installFakeApplicationBundle,
+} from "./helpers/fake-application-bundle";
 
 const { createFromBuffer } = vi.hoisted(() => ({
   createFromBuffer: vi.fn(async (buffer: Buffer) => ({
@@ -30,6 +34,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -53,12 +58,33 @@ function snapshotOf(appPath: string): DesktopApplicationsSnapshot {
   };
 }
 
-it("discovery decodes no icon, whatever the host has installed", async () => {
-  const snapshot = await discoverDesktopApplications();
+it("discovery decodes no icon, on any host", async () => {
+  // Discovery also looks in ~/Applications, so a fake home gives every host,
+  // Linux CI included, a bundle with a decodable icon to discover. A Mac
+  // with the real app in /Applications discovers that one first, and its
+  // icon decodes too.
+  const home = path.join(tempDir, "home");
+  const { appPath } = installFakeApplicationBundle(home);
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
+  // The known applications are built from os.homedir() when the module loads.
+  vi.resetModules();
+  const discovery = await import("../settings/application-discovery");
+
+  const snapshot = await discovery.discoverDesktopApplications();
+  const discovered = snapshot.editors.find((candidate) => candidate.id === FAKE_APPLICATION_ID);
+  expect([appPath, REAL_APPLICATION_PATH]).toContain(discovered?.appPath);
   expect(createFromBuffer).not.toHaveBeenCalled();
   for (const candidate of [...snapshot.editors, ...snapshot.terminals]) {
     expect(candidate.iconDataUrl).toBeUndefined();
   }
+
+  // The bundle's icon does decode once a surface asks, so the zero above is
+  // discovery declining to decode, not an icon nothing could decode.
+  const withIcons = await discovery.withApplicationIcons(snapshot);
+  expect(createFromBuffer).toHaveBeenCalled();
+  expect(withIcons.editors.find((candidate) => candidate.id === FAKE_APPLICATION_ID)?.iconDataUrl)
+    .toMatch(/^data:image\/png;base64,/);
 });
 
 it("decodes an icon once per icon file version, on the read that asks for it", async () => {

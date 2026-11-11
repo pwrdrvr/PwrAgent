@@ -9,6 +9,7 @@ import type { StateDb } from "../state/state-db";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { LOADED_ON_FIRST_USE, packageOfFile } from "./helpers/headless-first-use-packages";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { installFakeApplicationBundle } from "./helpers/fake-application-bundle";
 
 type Runtime = {
   StateDb: typeof StateDb;
@@ -30,6 +31,13 @@ function createFixtureRoot(): string {
 function enterFixture(root: string): void {
   for (const name of ["workspace", "fixture", "codex", "profiles/t/state"]) fs.mkdirSync(path.join(root, name), { recursive: true });
   vi.stubEnv("PWRAGENT_HOME", root);
+  // Startup discovery also looks in ~/Applications. A fake home holding an
+  // editor bundle with a decodable icon means every host, Linux CI included,
+  // boots with an application whose icon a regression would decode.
+  const home = path.join(root, "home");
+  installFakeApplicationBundle(home);
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
   vi.stubEnv("PWRAGENT_PROFILE", "t");
   vi.stubEnv("PWRAGENT_INSTANCE_ROOT", path.join(root, "workspace"));
   vi.stubEnv("PWRAGENT_CODEX_COMMAND", process.execPath);
@@ -124,8 +132,8 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
       ({ writes: shutdown } = await owner.measureSqliteWrites(() => owner.shutdownHeadlessHost("idle-budget")));
     });
     // No first-use package loads during boot. Startup discovery finds the
-    // installed desktop applications without decoding their icons, so canvas
-    // stays unloaded on a Mac with VS Code installed too.
+    // fake home's editor bundle without decoding its icon, so canvas stays
+    // unloaded on every host.
     expect(loadedAfterBoot.filter(name => LOADED_ON_FIRST_USE.includes(name))).toEqual([]);
     // The first scheduled archive sweep claims and completes its one-time
     // repair. Its two metadata writes belong to this first idle hour.
