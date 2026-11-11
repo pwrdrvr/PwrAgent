@@ -26,6 +26,8 @@ import path from "node:path";
  */
 
 export type OutpostSandboxMode = "read-only" | "workspace-write";
+// Full access is no Codex sandbox at all, so it has no permission profile.
+type OutpostRequestMode = OutpostSandboxMode | "danger-full-access";
 
 export const OUTPOST_PERMISSION_PROFILE_IDS: Readonly<Record<OutpostSandboxMode, string>> = {
   "read-only": "pwragent-outpost-read-only",
@@ -163,6 +165,10 @@ export interface OutpostCodexSandboxOptions {
    * workspace root. The rewriter refuses a working directory inside one.
    */
   readOnlyRoots?: readonly string[];
+  /** PWRAGENT_OUTPOST_AGENT_NETWORK: network for commands in both profiles. */
+  network?: boolean;
+  /** The operator allowed Full Access, which reaches Codex as a legacy sandbox. */
+  allowFullAccess?: boolean;
 }
 
 function assertSandboxPaths(protectedRoots: readonly string[], readOnlyRoots: readonly string[]): void {
@@ -197,7 +203,7 @@ export function buildOutpostCodexPermissionOverrides(
   return [
     ...(Object.entries(OUTPOST_PERMISSION_PROFILE_IDS) as Array<[OutpostSandboxMode, string]>).flatMap(([mode, id]) => [
       `permissions.${id}.filesystem=${filesystem(mode)}`,
-      `permissions.${id}.network.enabled=false`,
+      `permissions.${id}.network.enabled=${options.network === true}`,
     ]),
     `default_permissions=${JSON.stringify(OUTPOST_PERMISSION_PROFILE_IDS["read-only"])}`,
   ];
@@ -208,18 +214,26 @@ export function isOutpostManagedConfigKey(key: string): boolean {
     key === managed || key.startsWith(`${managed}.`) || managed.startsWith(`${key}.`));
 }
 
-function sandboxModeFrom(value: unknown, field: string): OutpostSandboxMode {
+function sandboxModeFrom(value: unknown, field: string, allowFullAccess: boolean): OutpostRequestMode {
   if (value === "read-only" || value === "workspace-write") return value;
+  if (allowFullAccess && value === "danger-full-access") return value;
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const type = (value as { type?: unknown }).type;
     if (type === "readOnly") return "read-only";
     if (type === "workspaceWrite") return "workspace-write";
+    if (allowFullAccess && type === "dangerFullAccess") return "danger-full-access";
   }
-  throw new Error(`This Outpost refuses ${field} other than read-only or workspace-write.`);
+  throw new Error(allowFullAccess
+    ? `This Outpost refuses ${field} other than read-only, workspace-write or danger-full-access.`
+    : `This Outpost refuses ${field} other than read-only or workspace-write.`);
 }
 
-function narrower(left: OutpostSandboxMode | undefined, right: OutpostSandboxMode): OutpostSandboxMode {
-  return left === "read-only" || right === "read-only" ? "read-only" : "workspace-write";
+const MODE_RANK: Readonly<Record<OutpostRequestMode, number>> = {
+  "read-only": 0, "workspace-write": 1, "danger-full-access": 2,
+};
+
+function narrower(left: OutpostRequestMode | undefined, right: OutpostRequestMode): OutpostRequestMode {
+  return left !== undefined && MODE_RANK[left] < MODE_RANK[right] ? left : right;
 }
 
 function isWithin(child: string, parent: string): boolean {
@@ -254,10 +268,11 @@ export function createOutpostCodexMessageRewriter(
   const readOnlyRoots = options.readOnlyRoots ?? [];
   assertSandboxPaths(protectedRoots, readOnlyRoots);
   const refusedRoots = [...protectedRoots, ...readOnlyRoots];
-  return (raw) => rewriteOutpostCodexMessage(raw, refusedRoots);
+  const allowFullAccess = options.allowFullAccess === true;
+  return (raw) => rewriteOutpostCodexMessage(raw, refusedRoots, allowFullAccess);
 }
 
-function rewriteOutpostCodexMessage(raw: string, refusedRoots: readonly string[]): string {
+function rewriteOutpostCodexMessage(raw: string, refusedRoots: readonly string[], allowFullAccess: boolean): string {
   let envelope: unknown;
   try { envelope = JSON.parse(raw); } catch { return raw; }
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return raw;
@@ -271,10 +286,14 @@ function rewriteOutpostCodexMessage(raw: string, refusedRoots: readonly string[]
   const params = message.params as Record<string, unknown>;
   const profileField = method === "command/exec" ? "permissionProfile" : "permissions";
   let changed = false;
-  let mode: OutpostSandboxMode | undefined;
+  let mode: OutpostRequestMode | undefined;
+  const legacy: Partial<Record<"sandbox" | "sandboxPolicy", unknown>> = {};
   for (const field of ["sandbox", "sandboxPolicy"] as const) {
     if (!Object.hasOwn(params, field)) continue;
-    if (params[field] !== null && params[field] !== undefined) mode = narrower(mode, sandboxModeFrom(params[field], field));
+    if (params[field] !== null && params[field] !== undefined) {
+      mode = narrower(mode, sandboxModeFrom(params[field], field, allowFullAccess));
+      legacy[field] = params[field];
+    }
     delete params[field];
     changed = true;
   }
@@ -294,6 +313,12 @@ function rewriteOutpostCodexMessage(raw: string, refusedRoots: readonly string[]
     throw new Error("This Outpost refuses thread config that sets Codex sandbox or permission keys.");
   }
   if (mode === undefined && PROFILE_REQUIRED_METHODS.has(method)) mode = "read-only";
+  if (mode === "danger-full-access") {
+    // Every selection asked for full access, which the operator allowed.
+    // Restore the legacy fields as sent; no permission profile applies.
+    Object.assign(params, legacy);
+    return JSON.stringify(message);
+  }
   if (mode !== undefined && params[profileField] !== OUTPOST_PERMISSION_PROFILE_IDS[mode]) {
     params[profileField] = OUTPOST_PERMISSION_PROFILE_IDS[mode];
     changed = true;

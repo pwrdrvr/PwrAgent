@@ -60,7 +60,10 @@ export function buildCodexClientArgs(
     // An Outpost selects named permission profiles that deny its own state.
     // Codex prefers a legacy `sandbox_mode`, so an Outpost never sets one.
     ...(policy
-      ? buildOutpostCodexPermissionOverrides(policy.codexProtectedRoots, { readOnlyRoots: policy.codexReadOnlyRoots }).flatMap((override) => ["-c", override])
+      ? buildOutpostCodexPermissionOverrides(policy.codexProtectedRoots, {
+        readOnlyRoots: policy.codexReadOnlyRoots,
+        network: policy.agentNetwork === true,
+      }).flatMap((override) => ["-c", override])
       : ["-c", `sandbox_mode=${JSON.stringify("workspace-write")}`]),
     // PwrAgent already waits for idle before unsubscribing; unload without
     // a second Codex delay once the last subscriber leaves an inactive thread.

@@ -82,9 +82,23 @@ standard profile SQLite database directly.
 
 ## Unattended execution
 
-The Outpost host enables only Codex. Approval is always `never`; full access is unavailable. Default mode
-is read-only; Auto mode grants workspace-write with tool network access disabled
-and temporary directories excluded. Host configuration cannot widen those rules.
+The Outpost host enables only Codex. Approval is always `never`. Default mode
+is read-only; Auto mode can also write the thread's workspace. Unless the
+operator widens them, Full Access is unavailable and tool network access is
+disabled.
+
+The operator sets two environment variables when the Outpost starts, for
+example with `docker run -e`. Agents cannot change the running owner's
+environment. An unknown value stops startup instead of falling back.
+
+| Variable | Values | Default |
+| --- | --- | --- |
+| `PWRAGENT_OUTPOST_EXECUTION_MODES` | Comma-separated `default`, `auto`, `full-access` | `default,auto` |
+| `PWRAGENT_OUTPOST_AGENT_NETWORK` | `on` or `off`: network for agent commands | `off` |
+
+With `full-access` allowed, those turns run without the Codex sandbox, so the
+container is the only boundary: agents can read everything in it, including
+the Outpost's own keys. Allow it only for models you trust.
 The shared federation containment guard covers direct and backpressured sends;
 a contained Outpost cannot initiate remote owner mutations or file transfers.
 Refusals are audited without recording request payloads.
@@ -94,9 +108,12 @@ out of its profile directory, which holds `state/headless/rpc.sock`, the
 `headless-secret.key` file and the state database. Each Outpost Codex sandbox
 is a named permission profile (`pwragent-outpost-read-only`,
 `pwragent-outpost-workspace-write`) that denies `$PWRAGENT_HOME/profiles`.
-The Outpost refuses any other sandbox or profile, a thread working directory
+Both profiles take their network from `PWRAGENT_OUTPOST_AGENT_NETWORK`. The
+Outpost refuses any other sandbox or profile, a thread working directory
 inside that directory, and Codex config overrides of `permissions`,
-`default_permissions`, `sandbox_mode` or `sandbox_workspace_write`.
+`default_permissions`, `sandbox_mode` or `sandbox_workspace_write`. The one
+exception is Full Access when the operator allows it: a request whose every
+sandbox selection asks for it reaches Codex unchanged, with no profile.
 
 The Codex sandbox preflight runs before the owner starts. It applies the
 workspace-write profile and fails unless the sandbox prevents a read of the
@@ -137,9 +154,8 @@ docker run -d --name pwragent-outpost \
 ```
 
 The container options permit Codex to create its sandbox. Outpost turns still
-use approval policy `never`, read-only or workspace-write access, and disabled
-tool network access. Full access is unavailable. The startup check never
-retries with broader permissions.
+use approval policy `never` and the execution modes and network setting above.
+The startup check never retries with broader permissions.
 
 ## Validation
 
