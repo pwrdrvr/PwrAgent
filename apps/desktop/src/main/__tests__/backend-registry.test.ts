@@ -7491,6 +7491,19 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "thread-1",
         enabled: true,
+        previouslyEnabled: false,
+      });
+      // A repeat reports that Auto-fix was already on, so it resets nothing.
+      await registry.setThreadPrAutoDispatch({
+        backend: "codex",
+        threadId: "thread-1",
+        enabled: true,
+      });
+      expect(preferenceChanged).toHaveBeenLastCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        enabled: true,
+        previouslyEnabled: true,
       });
       await expect(registry.sendThreadPrAutoDispatchNow({
         backend: "codex",
@@ -7536,8 +7549,8 @@ describe("DesktopBackendRegistry", () => {
       expect(preferenceChanged).not.toHaveBeenCalled();
       expect(preferencesChanged).toHaveBeenCalledTimes(1);
       expect(preferencesChanged).toHaveBeenCalledWith([
-        { backend: "codex", threadId: "thread-1", enabled: true },
-        { backend: "codex", threadId: "thread-2", enabled: true },
+        { backend: "codex", threadId: "thread-1", enabled: true, previouslyEnabled: false },
+        { backend: "codex", threadId: "thread-2", enabled: true, previouslyEnabled: false },
       ]);
       await expect(overlayStore.getThreadOverlayState({
         backend: "codex",

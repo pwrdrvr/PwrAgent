@@ -96,7 +96,6 @@ import {
   type ThreadPullRequestWatchBaseline,
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
-  type SetThreadPrAutoDispatchRequest,
   type SetEligibleThreadsPrAutoDispatchRequest,
   type SetEligibleThreadsPrAutoDispatchResponse,
   type ThreadSearchRequest,
@@ -392,7 +391,9 @@ import { PrPollingFocusTracker } from "../pr-status/pr-polling-focus";
 import {
   PrAutoDispatchCoordinator,
   getPrAutoDispatchEventKinds,
+  isPrAutoDispatchTurnedOn,
   pullRequestMatchesRepositoryKey,
+  type ThreadPrAutoDispatchPreferenceChange,
 } from "../pr-status/pr-auto-dispatch";
 import {
   PrActivityJournal,
@@ -7965,7 +7966,7 @@ class DesktopAppServerService {
   }
 
   async handleThreadPrAutoDispatchPreference(
-    request: SetThreadPrAutoDispatchRequest,
+    request: ThreadPrAutoDispatchPreferenceChange,
   ): Promise<void> {
     await this.handleThreadPrAutoDispatchPreferences([request]);
   }
@@ -7977,7 +7978,7 @@ class DesktopAppServerService {
    * avoids a GraphQL request per thread.
    */
   async handleThreadPrAutoDispatchPreferences(
-    requests: SetThreadPrAutoDispatchRequest[],
+    requests: ThreadPrAutoDispatchPreferenceChange[],
   ): Promise<void> {
     if (requests.length === 0) {
       return;
@@ -8043,7 +8044,7 @@ class DesktopAppServerService {
   }
 
   private async applyThreadPrAutoDispatchPreferences(
-    requests: SetThreadPrAutoDispatchRequest[],
+    requests: ThreadPrAutoDispatchPreferenceChange[],
   ): Promise<void> {
 
     const coordinator = this.getPrAutoDispatchCoordinator();
@@ -8055,11 +8056,17 @@ class DesktopAppServerService {
       const attachment = this.attachedPrsByThreadKey.get(
         buildThreadIdentityKey(request.backend, request.threadId),
       );
-      previouslyEligiblePrs.push(
-        ...(attachment?.prs ?? []).filter((pr) =>
-          this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
-        ),
-      );
+      // Only a thread that was on hands its PRs to the next eligible thread.
+      // That election is operator-initiated, so a repeated `enabled: false`
+      // must not run it: it would re-arm a repair the operator cancelled on
+      // the thread that wins.
+      if (request.previouslyEnabled) {
+        previouslyEligiblePrs.push(
+          ...(attachment?.prs ?? []).filter((pr) =>
+            this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
+          ),
+        );
+      }
       await coordinator.cancelAllPendingForThread(request);
       await this.syncThreadPrAutoDispatchCandidates(request);
     }
@@ -8080,18 +8087,23 @@ class DesktopAppServerService {
       const overlay = await this.getOverlayStore().getThreadOverlayState(request);
       const prs = this.canonicalizePrs(overlay?.prs ?? []);
       await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
-      await coordinator.resetForOperator(request);
+      // Only an off -> on change refills the incident's attempts. A repeated
+      // `enabled: true` must not, or each one buys another round of repairs.
+      await coordinator.resetIfTurnedOn(request);
       primaryPrs.push(...this.primaryAttachedPrsForThread({ ...request, prs }));
     }
     if (!this.isPrAutoDispatchAvailable()) {
       return;
     }
 
+    // Re-arming a repair the operator cancelled is for a request that turned
+    // Auto-fix on, not one that repeated the current setting.
+    const operatorInitiated = enabledRequests.some(isPrAutoDispatchTurnedOn);
     const uniquePrimaryPrs = dedupePrsByStatusKey(primaryPrs);
     await this.handlePrAutoDispatchSnapshots(
       uniquePrimaryPrs,
       this.nextPrObservationTimestamp(),
-      true,
+      operatorInitiated,
     );
 
     const refs = [
@@ -8123,7 +8135,7 @@ class DesktopAppServerService {
     await this.handlePrAutoDispatchSnapshots(
       refreshed,
       fetchedAt,
-      true,
+      operatorInitiated,
     );
   }
 
