@@ -51,6 +51,7 @@ import {
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   messagingInlineImageBytes,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type { DiscordMessagingConfig } from "./discord-config.ts";
 import type {
@@ -1942,13 +1943,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   private emitRateLimit(info: MessagingRateLimitInfo): void {
-    for (const listener of this.rateLimitListeners) {
-      try {
-        listener(info);
-      } catch {
-        // Runtime listeners are observability. Delivery handling continues.
-      }
-    }
+    notifyEachListener(this.rateLimitListeners, info);
   }
 
   private remoteImageUrls(intent: MessagingSurfaceIntent): string[] {

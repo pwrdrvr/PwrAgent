@@ -35,6 +35,7 @@ export {
   type MessagingRateLimitAdmission,
   type MessagingRateLimitBucket,
 } from "./rate-limit-gate";
+export { notifyEachListener } from "./listeners";
 export {
   MESSAGING_RETRY_AFTER_MAX_MS,
   parseRetryAfterMs,

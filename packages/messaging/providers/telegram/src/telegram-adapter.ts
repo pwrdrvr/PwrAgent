@@ -43,6 +43,7 @@ import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   MESSAGING_COMMAND_CATALOG,
   messagingInlineImageBytes,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
@@ -2796,13 +2797,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private emitRateLimit(info: MessagingRateLimitInfo): void {
-    for (const listener of this.rateLimitListeners) {
-      try {
-        listener(info);
-      } catch {
-        // Runtime listeners are observability. Delivery handling continues.
-      }
-    }
+    notifyEachListener(this.rateLimitListeners, info);
   }
 
   private sleep(ms: number): Promise<void> {

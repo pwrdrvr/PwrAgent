@@ -55,6 +55,7 @@ import {
   retryAfterMsFromHttpHeaders,
   splitTextForDelivery,
   type MessagingHttpHeaderReader,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type { MattermostMessagingConfig } from "./mattermost-config.ts";
 import {
@@ -836,13 +837,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       retryAfterMs: info.retryAfterMs,
       scopeId: info.scope.id,
     });
-    for (const listener of this.rateLimitListeners) {
-      try {
-        listener(info);
-      } catch {
-        // Runtime listeners are observability. Delivery handling continues.
-      }
-    }
+    notifyEachListener(this.rateLimitListeners, info);
     return info;
   }
 
