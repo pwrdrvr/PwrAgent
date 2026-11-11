@@ -465,8 +465,55 @@ describe("ThreadMaintenanceService.scan", () => {
         keepReason: () => ({ target: "/gone/checkout" }), inspect: async () => ({ files: 0, bytes: 0 }), hibernate: async () => true },
     });
     const scan = await service.scan({ steps: ["hibernate"] });
-    expect(scan.hibernate).toMatchObject({ checked: 0, items: [], coverage: { roots: [], excluded: [{ reason: "Checkout missing", count: 1 }] } });
+    expect(scan.hibernate).toMatchObject({ checked: 0, items: [], kept: {}, coverage: { roots: [], excluded: [] } });
     expect(measureAllocation).not.toHaveBeenCalled();
+  });
+
+  // Model: the idle-checkout step counts and checks exactly the threads whose
+  // checkout is on disk, however many other threads (archived or not) the
+  // provider list holds. No worktree, a missing one or a hibernated one is
+  // not eligible, so it is not reported at all. Archived checkouts are the
+  // next step's own inventory, so a thread left out here is offered there.
+  it("checks and counts only checkouts on disk, leaving archived checkouts to their own step", async () => {
+    const kinds = ["noCheckout", "missing", "hibernated", "onDisk"] as const;
+    await fc.assert(fc.asyncProperty(fc.array(fc.record({ kind: fc.constantFrom(...kinds), archived: fc.boolean() }), { maxLength: 30 }),
+      async (specs) => {
+        const rows = specs.map((spec, index) => {
+          const row = candidate(String(index), spec.kind === "noCheckout" ? {} : { cwd: `/${spec.kind}/${index}` });
+          if (spec.archived) row.thread.archivedAt = NOW - 10 * DAY;
+          return row;
+        });
+        const kindOf = (target: string) => target.split("/")[1];
+        const inspect = vi.fn(async (_target: string) => ({ files: 0, bytes: 0 }));
+        const measureAllocation = vi.fn(async () => ({ allocatedBytes: 4096 }));
+        const zombies = rows.filter((row) => row.thread.archivedAt !== undefined)
+          .map((row) => ({ backend: "codex" as const, threadId: row.thread.id, worktreePath: `/zombie/${row.thread.id}` }));
+        const { service } = harness(rows, {
+          isCheckoutOnDisk: async (target) => kindOf(target) !== "missing",
+          measureAllocation,
+          auditArchivedCheckouts: async () => ({ candidates: zombies, kept: {}, emptyFolders: 0 }),
+          hibernation: {
+            getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+            keepReason: (row) => {
+              const target = row.thread.linkedDirectories[0]?.worktreePath;
+              return target && kindOf(target) === "hibernated" ? { target, keep: "Already hibernated" } : { target };
+            },
+            inspect,
+            hibernate: async () => true,
+          },
+        });
+        const progress: ScanProgressSnapshot[] = [];
+        const scan = await service.scan({ steps: ["hibernate", "checkouts"] }, { onProgress: (next) => progress.push(next) });
+        const onDisk = rows.filter((_, index) => specs[index]!.kind === "onDisk").map((row) => row.thread.linkedDirectories[0]!.worktreePath!);
+        const checking = progress.filter((item) => item.step === "hibernate" && item.stage === "checking");
+        expect(checking.every((item) => item.total === onDisk.length)).toBe(true);
+        expect(checking.at(-1)?.processed).toBe(onDisk.length);
+        expect(vi.mocked(inspect).mock.calls.map(([target]) => target).sort()).toEqual([...onDisk].sort());
+        expect(scan.hibernate?.items.map((row) => row.worktreePath).sort()).toEqual([...onDisk].sort());
+        expect(scan.hibernate).toMatchObject({ checked: onDisk.length, kept: {}, coverage: { excluded: [] } });
+        expect(scan.hibernate).not.toHaveProperty("alreadyHibernated");
+        expect(scan.checkouts.items.map((item) => item.worktreePath).sort()).toEqual(zombies.map((item) => item.worktreePath).sort());
+      }), { numRuns: 25 });
   });
 
   it("publishes provider discovery while the archived audit is still pending", async () => {
@@ -1055,7 +1102,7 @@ describe("hibernate idle checkouts", () => {
 
     expect(scan.threads.projects.flatMap((project) => project.idle).map((row) => row.threadId)).toEqual(["idle"]);
     expect(scan.hibernate).toEqual({
-      idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 3, notIdleYet: 0, alreadyHibernated: 0,
+      idleDays: 5, maxSnapshotMb: 25, removeRebuildableOutput: true, checked: 3, notIdleYet: 0,
       items: [
         // The archive row offers it too; the dialog hides it once that row is chosen.
         expect.objectContaining({ threadId: "idle", archiveKey: "codex:idle" }),
@@ -1081,9 +1128,9 @@ describe("hibernate idle checkouts", () => {
     expect(run.problems).toEqual([expect.objectContaining({ step: "hibernate", kind: "failed", reason: "Not in this scan" })]);
   });
 
-  // Oracle: a hibernated checkout has nothing on disk, so it counts as already
-  // hibernated whichever keep reason the rules reach first.
-  it("counts a hibernated checkout apart even when another reason keeps it", async () => {
+  // Oracle: a hibernated checkout has nothing on disk, so it is not eligible
+  // and goes unreported, whichever keep reason the rules reach first.
+  it("ignores a hibernated checkout even when another reason keeps it", async () => {
     const hibernated = (id: string, keep: string) => {
       const item = candidate(id, { daysIdle: 30, cwd: `/w/${id}` });
       item.overlay = { worktreeSnapshots: [{ id: `s-${id}`, backend: "codex", threadId: id, worktreePath: `/w/${id}`,
@@ -1098,9 +1145,10 @@ describe("hibernate idle checkouts", () => {
       keepReason: (item: ThreadArchiveCandidate) => ({ target: `/w/${item.thread.id}`,
         ...(item.thread.id === "on-disk" ? { keep: "Kept awake" } : { keep: keeps.get(item.thread.id) }) }),
     }) });
-    expect((await service.scan({ steps: ["hibernate"] })).hibernate).toEqual(expect.objectContaining({
-      checked: 1, alreadyHibernated: 3, notIdleYet: 0, kept: { "Kept awake": 1 }, items: [],
-    }));
+    const scanned = (await service.scan({ steps: ["hibernate"] })).hibernate;
+    expect(scanned).toEqual(expect.objectContaining({ checked: 1, notIdleYet: 0, kept: { "Kept awake": 1 }, items: [] }));
+    expect(scanned).not.toHaveProperty("alreadyHibernated");
+    expect(scanned?.coverage?.excluded).toEqual([{ reason: "Kept awake", count: 1 }]);
   });
 
   it("hibernates after archiving, re-checks each one, and keeps going after a failure", async () => {
