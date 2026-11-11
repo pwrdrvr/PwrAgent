@@ -5,6 +5,7 @@ from pathlib import Path
 import plistlib
 import random
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -237,6 +238,84 @@ class CleanupTests(unittest.TestCase):
                     retained = next(item for item in result["preserved"] if item["path"] == str(backups[0]))
                     self.assertEqual(retained["inode"], original_directory_inode)
                     self.assertEqual(retained["witness"]["inode"], original_inode)
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS APFS preservation oracle")
+    def test_open_handles_cannot_lose_writes_to_the_original_backup(self):
+        for change in ("file-write", "directory-write", "inspection-error"):
+            with self.subTest(change=change):
+                dist = runtime(self.linked, "-" + change)
+                source = self.base / ("cache-" + change)
+                shutil.copytree(dist, source / "dist", symlinks=True)
+                identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+                (source / "runtime.json").write_text(json.dumps({"identity": identity,
+                    "files": cleanup.content_inventory(source / "dist")}))
+                binary = dist / "Electron.app/Contents/MacOS/Electron"
+                inode, directory_inode = binary.stat().st_ino, dist.stat().st_ino
+                modified = False
+                directory_fd = os.open(dist, os.O_RDONLY)
+                original_state = cleanup.tree_state
+                def state(path, *args, **kwargs):
+                    if change == "inspection-error" and Path(path).name == "previous-dist":
+                        raise OSError("Original backup inspection failed")
+                    return original_state(path, *args, **kwargs)
+                try:
+                    with binary.open("r+b") as handle:
+                        def snapshot():
+                            nonlocal modified
+                            # Ordinary writable handles are intentionally absent
+                            # from cwd/txt ownership: prove filesystem revalidation.
+                            if dist.exists() and binary.stat().st_ino != inode and not modified:
+                                if change == "file-write":
+                                    handle.seek(0)
+                                    handle.write(b"operator write through original handle")
+                                    handle.flush()
+                                    os.fsync(handle.fileno())
+                                elif change == "directory-write":
+                                    fd = os.open("unique-data", os.O_CREAT | os.O_WRONLY, 0o600, dir_fd=directory_fd)
+                                    try:
+                                        os.write(fd, b"operator data through original directory")
+                                    finally:
+                                        os.close(fd)
+                                modified = True
+                            return IDLE
+                        report = cleanup.audit(self.project, IDLE, for_sharing=True)
+                        with mock.patch.object(cleanup, "tree_state", side_effect=state):
+                            result = cleanup.share(report, snapshot_fn=snapshot,
+                                prepare_fn=lambda _package, _arch: {"cache": str(source), "identity": identity},
+                                arch_fn=lambda _path: "arm64")
+                    backups = list(dist.parent.glob(".sharing-install-*/previous-dist"))
+                    self.assertEqual(len(backups), 1, result)
+                    self.assertEqual(backups[0].stat().st_ino, directory_inode)
+                    self.assertEqual((backups[0] / binary.relative_to(dist)).stat().st_ino, inode)
+                    self.assertTrue(any(item["path"] == str(backups[0]) for item in result["preserved"]))
+                    if change == "file-write":
+                        self.assertTrue((backups[0] / binary.relative_to(dist)).read_bytes().startswith(b"operator write"))
+                    elif change == "directory-write":
+                        self.assertEqual((backups[0] / "unique-data").read_bytes(), b"operator data through original directory")
+                finally:
+                    os.close(directory_fd)
+
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS APFS preservation oracle")
+    def test_special_permission_changes_are_never_verified_as_stock(self):
+        for entry in ("Electron.app/Contents", "Electron.app/Contents/MacOS/Electron"):
+            for bit in (stat.S_ISVTX, stat.S_ISUID, stat.S_ISGID):
+                with self.subTest(entry=entry, bit=oct(bit)):
+                    suffix = "-" + entry.replace("/", "-") + "-" + str(bit)
+                    dist = runtime(self.linked, suffix)
+                    source = self.base / ("cache" + suffix)
+                    shutil.copytree(dist, source / "dist", symlinks=True)
+                    identity = {"version": "44.10.1", "platform": "darwin", "arch": "arm64", "checksum": "fixture"}
+                    (source / "runtime.json").write_text(json.dumps({"identity": identity,
+                        "files": cleanup.content_inventory(source / "dist")}))
+                    target = dist / entry
+                    mode = stat.S_IMODE(target.stat().st_mode) | bit
+                    target.chmod(mode)
+                    self.assertEqual(stat.S_IMODE(target.stat().st_mode), mode)
+                    with self.assertRaises(cleanup.Unsafe):
+                        cleanup.verified_source(dist, {"cache": str(source), "identity": identity}, "44.10.1", "arm64")
+                    self.assertEqual(stat.S_IMODE(target.stat().st_mode), mode)
+
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS runtime preparation")
     def test_cache_root_follows_configured_home_or_explicit_override(self):
