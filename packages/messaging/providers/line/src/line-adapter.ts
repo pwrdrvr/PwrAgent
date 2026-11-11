@@ -106,6 +106,13 @@ export type LineAdapterOptions = {
   api?: LineApi;
   callbackHandleStore: MessagingCallbackHandleStore;
   config: LineMessagingConfig;
+  /**
+   * Port the webhook listener binds instead of the one in `callbackBaseUrl`.
+   * Constructor-only, never read from config: 0 asks the OS for a free port,
+   * so a test can bind a port it holds and read it back from
+   * `listeningPort`. Operators set the port through `callbackBaseUrl`.
+   */
+  listenPort?: number;
   logger?: LineProviderLogger;
   now?: () => number;
 };
@@ -198,6 +205,7 @@ export class LineAdapter implements LineProviderAdapter {
   private readonly api?: LineApi;
   private readonly callbackHandleStore: MessagingCallbackHandleStore;
   private readonly config: LineMessagingConfig;
+  private readonly listenPort: number | undefined;
   private readonly logger: LineProviderLogger;
   private readonly now: () => number;
   private server: Server | undefined;
@@ -221,6 +229,13 @@ export class LineAdapter implements LineProviderAdapter {
         ? createLineApi(options.config.channelAccessToken)
         : undefined);
     this.callbackHandleStore = options.callbackHandleStore;
+    if (
+      options.listenPort !== undefined
+      && !(Number.isInteger(options.listenPort) && options.listenPort >= 0 && options.listenPort <= 65535)
+    ) {
+      throw new RangeError(`Invalid LINE webhook listen port: ${options.listenPort}`);
+    }
+    this.listenPort = options.listenPort;
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
     this.authorizedActorIdsValue = options.config.authorizedActorIds.map((actor) => actor.id);
@@ -228,6 +243,12 @@ export class LineAdapter implements LineProviderAdapter {
       .update(options.config.channelSecret)
       .digest("hex");
     this.botUserId = options.config.botUserId;
+  }
+
+  /** The port the webhook listener is bound to, or undefined when not listening. */
+  get listeningPort(): number | undefined {
+    const address = this.server?.listening ? this.server.address() : null;
+    return address && typeof address === "object" ? address.port : undefined;
   }
 
   get authorizedActorIds(): readonly string[] {
@@ -302,7 +323,11 @@ export class LineAdapter implements LineProviderAdapter {
     if (lifecycleGeneration !== this.lifecycleGeneration) {
       return;
     }
-    const bindAddress = bindAddressFromCallbackUrl(this.config.callbackBaseUrl);
+    const callbackAddress = bindAddressFromCallbackUrl(this.config.callbackBaseUrl);
+    const bindAddress = {
+      host: callbackAddress.host,
+      port: this.listenPort ?? callbackAddress.port,
+    };
     const server = createServer((request, response) => {
       void this.handleWebhookRequest(request, response);
     });
@@ -324,7 +349,7 @@ export class LineAdapter implements LineProviderAdapter {
     this.started = true;
     this.logger.info?.("line webhook listener started", {
       host: bindAddress.host,
-      port: bindAddress.port,
+      port: this.listeningPort ?? bindAddress.port,
       callbackBaseUrl: this.config.callbackBaseUrl,
       botUserId: this.botUserId,
       authorizedActorCount: this.authorizedActorIds.length,
@@ -1232,7 +1257,7 @@ export function verifyLineSignature(
   return safeEqual(expected, signature);
 }
 
-function bindAddressFromCallbackUrl(callbackBaseUrl: string): {
+export function bindAddressFromCallbackUrl(callbackBaseUrl: string): {
   host: string;
   port: number;
 } {
