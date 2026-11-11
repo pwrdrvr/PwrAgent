@@ -29,14 +29,14 @@ import type {
 // - the provider's own throttle (Slack's gate, Telegram's stream limits),
 //   which the fake adapter models with a `MessagingRateLimitGate`.
 // A send is a `deliver` call the provider throttle let through. The oracle:
-// - a budget block holds for every send, from any adapter;
-// - a provider block holds for sends through the adapter that recorded it
-//   and every adapter that replaced it.
-// Not covered: a send that was already waiting on the budget when the
-// adapter restarted wakes on the disposed controller and goes out through
-// the stopped adapter, which never sees a 429 its replacement records later.
-// That is a question of where in-flight deliveries go after a restart, not
-// of carrying state, and is tracked separately.
+// - a budget block or a provider block holds for every send, from any
+//   adapter, whichever adapter recorded it;
+// - only the running adapter sends: a stopped adapter is never called, so a
+//   reply still waiting out a cool-off when its adapter restarts is handed
+//   to the replacement;
+// - replies reach the provider in the order they were requested;
+// - nothing is lost: every requested reply is either sent or refused by the
+//   provider throttle.
 
 vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => ({
@@ -85,7 +85,9 @@ type Op =
   | { kind: "controller-429"; retryAfterMs: number }
   | { kind: "provider-429"; retryAfterMs: number }
   | { kind: "restart-adapters" }
-  | { kind: "stop-start" };
+  | { kind: "stop-start" }
+  // Example tests only: messaging is turned off and stays off.
+  | { kind: "stop" };
 
 const opArb: fc.Arbitrary<Op> = fc.oneof(
   { weight: 3, arbitrary: fc.integer({ min: 0, max: 6_000 }).map((ms) => ({ kind: "advance" as const, ms })) },
@@ -99,13 +101,17 @@ const opArb: fc.Arbitrary<Op> = fc.oneof(
 type FakeAdapter = DesktopMessagingAdapter & {
   gate: MessagingRateLimitGate;
   generation: number;
+  stopped: boolean;
   listener?: (event: MessagingInboundEvent) => Promise<void>;
   rateLimitListener?: (info: MessagingRateLimitInfo) => void;
 };
 
 type Oracle = {
   budgetBlockedUntil: number;
-  providerBlocks: Array<{ generation: number; until: number }>;
+  providerBlocks: number[];
+  providerRefusals: number;
+  requested: number;
+  sentOrder: number[];
   sends: number;
   violations: string[];
 };
@@ -118,18 +124,22 @@ function createFakeAdapter(oracle: Oracle, generation: number): FakeAdapter {
     channel: "telegram",
     gate,
     generation,
+    stopped: false,
     resolveDeliveryScope: () => SCOPE,
     deliver: async (intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> => {
       const now = Date.now();
+      if (adapter.stopped) {
+        oracle.violations.push(`stopped adapter ${generation} was asked to send ${intent.kind}`);
+      }
       if (!gate.admit(PROVIDER_BUCKET).admitted) {
+        oracle.providerRefusals += 1;
         return { channel: "telegram", deliveredAt: now, outcome: "discarded" };
       }
       oracle.sends += 1;
+      oracle.sentOrder.push(intent.audit?.occurredAt ?? -1);
       const blockedUntil = Math.max(
         oracle.budgetBlockedUntil,
-        ...oracle.providerBlocks
-          .filter((block) => block.generation <= generation)
-          .map((block) => block.until),
+        ...oracle.providerBlocks,
       );
       if (now < blockedUntil) {
         oracle.violations.push(
@@ -155,6 +165,7 @@ function createFakeAdapter(oracle: Oracle, generation: number): FakeAdapter {
       adapter.listener = listener;
     },
     stop: async () => {
+      adapter.stopped = true;
       adapter.listener = undefined;
     },
   };
@@ -241,6 +252,9 @@ async function runScenario(ops: readonly Op[]): Promise<Oracle> {
   const oracle: Oracle = {
     budgetBlockedUntil: 0,
     providerBlocks: [],
+    providerRefusals: 0,
+    requested: 0,
+    sentOrder: [],
     sends: 0,
     violations: [],
   };
@@ -269,9 +283,11 @@ async function runScenario(ops: readonly Op[]): Promise<Oracle> {
         const listener = current()?.listener;
         if (listener) {
           // A deferred send waits on the budget's timer, so it is not awaited
-          // here; later `advance` ops release it.
+          // here; later `advance` ops release it. The 1 ms step gives each
+          // reply its own audit time, which is how the oracle orders them.
+          oracle.requested += 1;
           pending.push(listener(helpCommand()).catch(() => {}));
-          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(1);
         }
       } else if (op.kind === "controller-429") {
         const adapter = current();
@@ -292,14 +308,13 @@ async function runScenario(ops: readonly Op[]): Promise<Oracle> {
         const adapter = current();
         if (adapter?.listener) {
           adapter.gate.recordRateLimit(PROVIDER_BUCKET.id, op.retryAfterMs);
-          oracle.providerBlocks.push({
-            generation: adapter.generation,
-            until: Date.now() + op.retryAfterMs,
-          });
+          oracle.providerBlocks.push(Date.now() + op.retryAfterMs);
         }
       } else if (op.kind === "restart-adapters") {
         debounce = debounce === 0 ? 250 : 0;
         await runtime.applyConfig(telegramConfig(debounce));
+      } else if (op.kind === "stop") {
+        await runtime.stop();
       } else {
         await runtime.stop();
         await runtime.start();
@@ -328,6 +343,36 @@ describe("messaging rate limits across adapter restarts", () => {
     ]);
     // Guards the property below against passing because nothing was sent.
     expect(oracle.sends).toBe(3);
+    expect(oracle.requested).toBe(3);
+    expect(oracle.violations).toEqual([]);
+  }, 30_000);
+
+  it("keeps replies in order when a second 429 extends the cool-off", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    // The first reply wakes when the first cool-off ends, finds the second
+    // one still running, and must not lose its place to the second reply.
+    const oracle = await runScenario([
+      { kind: "controller-429", retryAfterMs: 1_000 },
+      { kind: "send" },
+      { kind: "controller-429", retryAfterMs: 1_000 },
+      { kind: "send" },
+    ]);
+    expect(oracle.sends).toBe(2);
+    expect(oracle.sentOrder).toEqual([1_000_000, 1_000_001]);
+    expect(oracle.violations).toEqual([]);
+  }, 30_000);
+
+  it("discards a waiting reply when messaging stops with nothing to replace its adapter", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const oracle = await runScenario([
+      { kind: "controller-429", retryAfterMs: 1_000 },
+      { kind: "send" },
+      { kind: "stop" },
+    ]);
+    expect(oracle.requested).toBe(1);
+    expect(oracle.sends).toBe(0);
     expect(oracle.violations).toEqual([]);
   }, 30_000);
 
@@ -339,11 +384,15 @@ describe("messaging rate limits across adapter restarts", () => {
         try {
           const oracle = await runScenario(ops);
           expect(oracle.violations).toEqual([]);
+          expect(oracle.sentOrder).toEqual(
+            [...oracle.sentOrder].sort((a, b) => a - b),
+          );
+          expect(oracle.sends + oracle.providerRefusals).toBe(oracle.requested);
         } finally {
           vi.useRealTimers();
         }
       }),
-      { numRuns: 40 },
+      { numRuns: 100 },
     );
   }, 120_000);
 });

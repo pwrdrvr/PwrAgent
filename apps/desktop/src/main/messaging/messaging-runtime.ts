@@ -113,6 +113,7 @@ import {
   MessagingDeliveryBudget,
   type MessagingDeliveryPriority,
 } from "./core/messaging-delivery-budget";
+import { MessagingDeliveryLane } from "./core/messaging-delivery-lane";
 import type {
   DynamicToolPermissionCheck,
   DynamicToolPermissionResult,
@@ -491,6 +492,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   // must hold for the replacement. Memory only: Retry-After windows are
   // short, and persisting them would add a commit per 429.
   private readonly deliveryBudgets = new Map<MessagingChannelKind, MessagingDeliveryBudget>();
+  private readonly deliveryLanes = new Map<MessagingChannelKind, MessagingDeliveryLane>();
   private readonly rateLimitCarryovers = new Map<
     MessagingChannelKind,
     MessagingRateLimitCarryover
@@ -512,6 +514,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   >();
   private pendingAdapterStopReason?: string;
   private lifecycleQueue: Promise<void> = Promise.resolve();
+  private lifecycleStepsRunning = 0;
   // Replaced as one object on the serialized config lifecycle. Controllers
   // only read this owned copy; a missing or failed lifecycle read installs the
   // deny/deny snapshot instead of preserving a previously allowed policy.
@@ -1442,7 +1445,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async enqueueLifecycle(
     operation: () => Promise<void>,
   ): Promise<void> {
-    const run = this.lifecycleQueue.catch(() => undefined).then(operation);
+    const run = this.lifecycleQueue.catch(() => undefined).then(async () => {
+      this.lifecycleStepsRunning += 1;
+      try {
+        await operation();
+      } finally {
+        this.lifecycleStepsRunning -= 1;
+      }
+    });
     this.lifecycleQueue = run.then(
       () => undefined,
       () => undefined,
@@ -1581,6 +1591,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       backend: this.options.backendBridge,
       channel: adapter.channel,
       deliveryBudget,
+      deliveryLane: this.deliveryLaneFor(adapter.channel),
+      replacementAdapter: {
+        now: () => this.runningAdapterNow(adapter.channel),
+        settled: () => this.runningAdapterSettled(adapter.channel),
+      },
       inputDebounceMs: config.inputDebounceMs,
       pdfAnalysisEnabled: () =>
         this.messagingAdmissionPolicySnapshot.pdfAnalysisEnabled,
@@ -1894,6 +1909,52 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         this.pendingAdapterStarts.delete(adapter.channel);
       }
     }
+  }
+
+  /**
+   * The adapter running for a channel right now, for a replaced controller
+   * that still has work in progress. Undefined while a lifecycle step (a
+   * restart) is still running, because the entry may be the stopped adapter.
+   */
+  private runningAdapterNow(
+    channel: MessagingChannelKind,
+  ): DesktopMessagingAdapter | undefined {
+    if (this.lifecycleStepsRunning > 0) return undefined;
+    return this.runningAdapters.get(channel)?.adapter;
+  }
+
+  /**
+   * Like `runningAdapterNow`, after a restart already queued has finished.
+   * The wait stops at the adapter start deadline: a lifecycle step that is
+   * itself waiting on the delivery asking must not deadlock it.
+   */
+  private async runningAdapterSettled(
+    channel: MessagingChannelKind,
+  ): Promise<DesktopMessagingAdapter | undefined> {
+    const lifecycle = this.lifecycleQueue.catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(
+        resolve,
+        this.options.adapterStartTimeoutMs ?? DEFAULT_ADAPTER_START_TIMEOUT_MS,
+      );
+      if (timer.unref) timer.unref();
+    });
+    try {
+      await Promise.race([lifecycle, deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+    return this.runningAdapterNow(channel);
+  }
+
+  private deliveryLaneFor(channel: MessagingChannelKind): MessagingDeliveryLane {
+    let lane = this.deliveryLanes.get(channel);
+    if (!lane) {
+      lane = new MessagingDeliveryLane();
+      this.deliveryLanes.set(channel, lane);
+    }
+    return lane;
   }
 
   private deliveryBudgetFor(channel: MessagingChannelKind): MessagingDeliveryBudget {

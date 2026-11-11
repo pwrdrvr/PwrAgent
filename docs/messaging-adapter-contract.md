@@ -564,6 +564,21 @@ provider that keys a bucket by a fallback id before it learns the real one
 (Slack's `configured-workspace`) moves the block to the real id with
 `MessagingRateLimitGate.moveBucket` once it is known.
 
+A stopped adapter is never called again. A controller whose adapter was
+replaced keeps its in-progress work, but every adapter call it still makes
+goes to the adapter now running for the platform. A send waits for a restart
+that is still in progress; with no replacement, the send is discarded and
+other calls see an adapter with no optional methods. Only one adapter
+instance per platform talks to the provider at a time.
+
+Deliveries the budget holds back keep their order. A deferrable delivery
+(final answers, user command replies, critical interactive prompts) that is
+deferred, or that arrives while its scope already has deferred deliveries,
+waits in a first-in, first-out line for that scope. Only the head of the line
+is admitted and sent, and it keeps its place until its provider call
+returns. The runtime keeps the line beside the budget, so a delivery keeps
+its place when its adapter restarts.
+
 The controller budgets all outbound intent kinds against the resolved scope:
 final assistant messages, user prompts, command replies, status updates, tool
 updates, and stream updates. Slow Mode is local: it starts when the shared
