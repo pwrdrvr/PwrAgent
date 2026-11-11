@@ -9,7 +9,7 @@ import type { StateDb } from "../state/state-db";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { LOADED_ON_FIRST_USE, packageOfFile } from "./helpers/headless-first-use-packages";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { installFakeApplicationBundle } from "./helpers/fake-application-bundle";
+import { FAKE_APPLICATION_ID, installFakeApplicationBundle } from "./helpers/fake-application-bundle";
 
 type Runtime = {
   StateDb: typeof StateDb;
@@ -17,6 +17,7 @@ type Runtime = {
   startHeadlessHost: typeof startHeadlessHost;
   shutdownHeadlessHost(source: string): Promise<void>;
   measureSqliteWrites: typeof measureSqliteWrites;
+  discoverDesktopApplications: typeof import("../settings/application-discovery").discoverDesktopApplications;
   resetSqliteWriteMetrics(): void;
 };
 
@@ -69,6 +70,7 @@ beforeAll(async () => {
     export { measureSqliteWrites, resetSqliteWriteMetrics } from "../state/sqlite-write-metrics";
     export { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
     export { StateDb } from "../state/state-db";
+    export { discoverDesktopApplications } from "../settings/application-discovery";
   `);
   // The bundle loads ~680 third-party files from node_modules by absolute
   // path, and Node caches them for the whole worker. Whichever case ran first
@@ -135,6 +137,10 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
     // fake home's editor bundle without decoding its icon, so canvas stays
     // unloaded on every host.
     expect(loadedAfterBoot.filter(name => LOADED_ON_FIRST_USE.includes(name))).toEqual([]);
+    // The owner's own discovery sees that bundle, so the check above has an
+    // icon to decline. Discovery decodes nothing, so this loads no codec.
+    const applications = await owner.discoverDesktopApplications();
+    expect(applications.editors.map(candidate => candidate.id)).toContain(FAKE_APPLICATION_ID);
     // The first scheduled archive sweep claims and completes its one-time
     // repair. Its two metadata writes belong to this first idle hour.
     expect(idle!.tables.filter(table => table.rowsChanged > 0)).toMatchObject([{ table: "meta", rowsChanged: 2 }]);
