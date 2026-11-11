@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopFederationMode,
@@ -41,6 +42,14 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   })),
 }));
 
+// A fixed, usable machine name, so a wildcard listener always has a
+// hostname endpoint to advertise whatever machine runs the suite.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const hostname = () => "fixture-host.example";
+  return { ...actual, hostname, default: { ...actual, hostname } };
+});
+
 vi.mock("../federation/federation-host-info", () => ({
   collectFederationHostInfo: mocks.collectHostInfo,
 }));
@@ -82,6 +91,7 @@ type StartupHarness = {
   stop(): Promise<void>;
   server?: unknown;
   listenUrl?: string;
+  defaultAdvertisedEndpoints(config: FederationRuntimeConfig): Promise<string[]>;
 };
 
 const fakeSettings = {
@@ -408,5 +418,44 @@ describe("Federation activity during connection attempts", () => {
     vi.spyOn(dial, "connectClient").mockRejectedValue(new Error("ECONNREFUSED"));
     await expect(dial.connectToGateway()).rejects.toThrow("ECONNREFUSED");
     expect((await runtime.activity({ includeHistory: false })).running).toBe(false);
+  });
+});
+
+describe("Invite endpoints for an OS-assigned gateway port", () => {
+  async function advertisedWhileBound(
+    config: FederationRuntimeConfig,
+    boundPort: number,
+  ): Promise<string[]> {
+    mocks.getNoiseKeyPair.mockResolvedValue(NOISE_KEY);
+    mocks.getIdentityKeyPair.mockResolvedValue(IDENTITY_KEY);
+    // The same URL shape the real gateway reports once its listener is up.
+    mocks.gatewayServerStart.mockResolvedValue({
+      url: `ws://${config.listenHost}:${boundPort}`,
+      port: boundPort,
+    });
+    const runtime = new DesktopFederationRuntime() as unknown as StartupHarness;
+    try {
+      await runtime.startAfterLeaseAcquired("gateway", config);
+      return await runtime.defaultAdvertisedEndpoints(config);
+    } finally {
+      await runtime.stop();
+    }
+  }
+
+  // Every host runs, not a sample: the wildcard and IPv6 hosts are the ones
+  // the configured-port fallback got wrong.
+  it.each(["127.0.0.1", "localhost", "::1", "0.0.0.0", "::"])("advertises what a gateway on %s would if it had been configured with the port it bound", async (listenHost) => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 1, max: 65_535 }),
+      async (boundPort) => {
+        const osAssigned = await advertisedWhileBound({ ...fakeSettings, listenHost, listenPort: 0 }, boundPort);
+        const configured = await advertisedWhileBound({ ...fakeSettings, listenHost, listenPort: boundPort }, boundPort);
+        expect(osAssigned).toEqual(configured);
+        expect(osAssigned.length).toBeGreaterThan(0);
+        for (const endpoint of osAssigned) {
+          expect(endpoint).toMatch(new RegExp(`:${boundPort}$`));
+        }
+      },
+    ), { numRuns: 10 });
   });
 });
