@@ -759,7 +759,7 @@ import {
   type HibernationContext,
 } from "./checkout-hibernation";
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "./checkout-hibernation-workspace";
-import { CheckoutPathOwners } from "./checkout-path-owners";
+import { CheckoutPathOwners, isArchivedCheckoutOwner } from "./checkout-path-owners";
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
@@ -7981,7 +7981,7 @@ export class DesktopBackendRegistry {
       const linkedDirectories = withRetainedWorktrees(
         mergeThreadLinkedDirectories([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]), overlay,
       );
-      (isArchivedCheckoutCandidate(candidate) ? archivedThreads : activeThreads).push({ ...thread, linkedDirectories });
+      (isArchivedCheckoutOwner(candidate) ? archivedThreads : activeThreads).push({ ...thread, linkedDirectories });
     }
     return { activeThreads, archivedThreads };
   }
