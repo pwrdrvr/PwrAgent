@@ -31,6 +31,7 @@ import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight, type ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
 import {
   forgePrToolGroup,
   type ForgePrToolArgs,
@@ -20111,11 +20112,20 @@ export class DesktopBackendRegistry {
       return;
     }
 
+    // The coordinator resets a thread's repair attempts only when Auto-fix
+    // turns on, so each change carries the value it replaced.
+    const changes: ThreadPrAutoDispatchPreferenceChange[] = [];
     for (const request of requests) {
+      const identity = { backend: request.backend, threadId: request.threadId };
+      const previous = await this.overlayStore.getThreadOverlayState(identity);
       await this.overlayStore.setThreadPrAutoDispatchEnabled({
-        backend: request.backend,
-        threadId: request.threadId,
+        ...identity,
         enabled: request.enabled,
+      });
+      changes.push({
+        ...identity,
+        enabled: request.enabled,
+        previouslyEnabled: previous?.prAutoDispatchEnabled === true,
       });
       await this.emit({
         backend: request.backend,
@@ -20129,16 +20139,16 @@ export class DesktopBackendRegistry {
       });
     }
 
-    if (requests.length === 1) {
-      await this.threadPrAutoDispatchHandler?.preferenceChanged(requests[0]!);
+    if (changes.length === 1) {
+      await this.threadPrAutoDispatchHandler?.preferenceChanged(changes[0]!);
       return;
     }
     if (this.threadPrAutoDispatchHandler?.preferencesChanged) {
-      await this.threadPrAutoDispatchHandler.preferencesChanged(requests);
+      await this.threadPrAutoDispatchHandler.preferencesChanged(changes);
       return;
     }
-    for (const request of requests) {
-      await this.threadPrAutoDispatchHandler?.preferenceChanged(request);
+    for (const change of changes) {
+      await this.threadPrAutoDispatchHandler?.preferenceChanged(change);
     }
   }
 

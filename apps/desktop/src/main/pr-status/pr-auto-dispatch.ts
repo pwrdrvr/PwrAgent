@@ -29,6 +29,26 @@ export const PR_AUTO_DISPATCH_LEASE_MS = 60_000;
 const PR_AUTO_DISPATCH_LEASE_HEARTBEAT_MS = 20_000;
 const PR_AUTO_DISPATCH_RESUME_RETRY_MS = 15_000;
 
+/** An Auto-fix preference write, with the value it replaced. */
+export type ThreadPrAutoDispatchPreferenceChange = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  enabled: boolean;
+  /** Whether Auto-fix was on before this write. */
+  previouslyEnabled: boolean;
+};
+
+/**
+ * Only an off -> on change is the operator asking for a fresh start. A
+ * repeated `enabled: true` (a stale viewer's toggle, a peer re-sending the
+ * preference) must not refill the incident's attempts.
+ */
+export function isPrAutoDispatchTurnedOn(
+  change: ThreadPrAutoDispatchPreferenceChange,
+): boolean {
+  return change.enabled && !change.previouslyEnabled;
+}
+
 export type PrAutoDispatchOutcome = {
   threadKey: string;
   status:
@@ -262,6 +282,14 @@ export class PrAutoDispatchCoordinator {
     this.clearTimer(this.threadKey(params));
     if (reset) await this.notifyPending(params, null);
     return reset;
+  }
+
+  /** Reset the thread's claims and attempts only when Auto-fix turned on. */
+  async resetIfTurnedOn(
+    change: ThreadPrAutoDispatchPreferenceChange,
+  ): Promise<boolean> {
+    if (!isPrAutoDispatchTurnedOn(change)) return false;
+    return await this.resetForOperator(change);
   }
 
   async sendPendingNow(params: {

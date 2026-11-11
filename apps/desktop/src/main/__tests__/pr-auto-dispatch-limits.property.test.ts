@@ -7,6 +7,7 @@ import {
   type ThreadPrAutoDispatchEventKind,
   type ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import {
   MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
   PR_AUTO_DISPATCH_LEASE_MS,
@@ -14,6 +15,7 @@ import {
 } from "../pr-status/pr-auto-dispatch";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { CountingBackendClient } from "./fixtures/thread-read-harness";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 /*
@@ -419,5 +421,141 @@ describe("Auto-fix repair turns over a PR stream (model)", () => {
         db.close();
       }
     }), { numRuns: 120, examples: [[PENDING_IS_NOT_HEALTHY]] });
+  });
+});
+
+/*
+ * Rule 2 again, with the operator's preference in the stream. Only an
+ * off -> on change is a legitimate reset. A thread that is already on can
+ * receive `enabled: true` again: a stale viewer's composer toggle sends
+ * `!thread.prAutoDispatchEnabled`, and a peer can forward the same request.
+ * Each repeat once cleared the incident, so every repeat bought MAX more
+ * repair turns for the same failure.
+ *
+ * The registry is real, so the value the request replaced comes from the
+ * production store read. The handler forwards to the coordinator the way
+ * `applyThreadPrAutoDispatchPreferences` does.
+ */
+const enableStep = fc.record({
+  observation,
+  /** Repeated `enabled: true` requests around this observation. */
+  reenables: fc.integer({ min: 0, max: 3 }),
+  beforeSnapshot: fc.boolean(),
+  /** An operator turning Auto-fix off and back on: a legitimate reset. */
+  toggle: fc.constantFrom(false, false, false, false, true),
+});
+type EnableStep = typeof enableStep extends fc.Arbitrary<infer T> ? T : never;
+
+async function runPreferenceStream(steps: EnableStep[]): Promise<{ started: number; maxPerEpoch: number }> {
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  const registry = createDesktopBackendRegistry({
+    codexClient: new CountingBackendClient([]) as never, overlayStore: store, threadTitleGenerationService: null,
+  });
+  let now = 1_000;
+  let currentPr: PrSummary | undefined;
+  let submission: Observation["submission"] = "started";
+  let started = 0;
+  const coordinator = new PrAutoDispatchCoordinator({
+    store,
+    registry: {
+      submitTurnIfIdle: async () => {
+        if (submission === "throws") throw new Error("submission rejected");
+        if (submission === "busy") return { status: "busy" as const };
+        started += 1;
+        return { status: "started" as const, turnId: `turn-${started}` };
+      },
+    },
+    getCurrentPr: () => currentPr,
+    isPrAttached: () => true,
+    isBackgroundPollingEnabled: () => true,
+    getBudgetConfig: () => ({ capacity: 1_000, refillPerMinute: 1_000, pauseWhenEmpty: false }),
+    now: () => now,
+  });
+  registry.setThreadPrAutoDispatchHandler({
+    preferenceChanged: async (change) => {
+      if (change.enabled) await coordinator.resetIfTurnedOn(change);
+      else await coordinator.cancelAllPendingForThread(change);
+    },
+    cancelPending: async () => false,
+    sendPendingNow: async () => false,
+  });
+  const setEnabled = async (enabled: boolean) =>
+    await registry.setThreadPrAutoDispatch({ ...THREAD, enabled });
+  const reenable = async (count: number) => {
+    for (let i = 0; i < count; i += 1) await setEnabled(true);
+  };
+  // Same oracle as above, plus: an off -> on toggle starts a new epoch.
+  const active = new Set<ThreadPrAutoDispatchEventKind>();
+  let epochStart = 0;
+  let maxPerEpoch = 0;
+  try {
+    await setEnabled(true);
+    for (const { observation: step, reenables, beforeSnapshot, toggle } of steps) {
+      now += step.advance;
+      submission = step.submission;
+      if (toggle) {
+        await setEnabled(false);
+        await setEnabled(true);
+        active.clear();
+        epochStart = started;
+      }
+      const pr = observedPr(step);
+      currentPr = pr;
+      const resolved: ThreadPrAutoDispatchEventKind[] = [];
+      if (pr.checkState === "passing") resolved.push("ci-failure");
+      if (pr.mergeState === "mergeable") resolved.push("merge-conflict");
+      const hadKinds = active.size > 0;
+      for (const kind of resolved) active.delete(kind);
+      if (hadKinds && active.size === 0) epochStart = started;
+      const kinds: ThreadPrAutoDispatchEventKind[] = [];
+      if (pr.checkState === "failing" && !pr.checksStillRunning) kinds.push("ci-failure");
+      if (pr.mergeState === "conflicting") kinds.push("merge-conflict");
+
+      if (beforeSnapshot) await reenable(reenables);
+      const [outcome] = await coordinator.handleStatusSnapshot({
+        pr, threadKeys: ["codex:thread-1"], observedAt: now, backgroundPollingEnabled: true,
+      });
+      if (outcome?.status === "scheduled") {
+        if (kinds.some((kind) => !active.has(kind))) epochStart = started;
+        for (const kind of kinds) active.add(kind);
+      }
+      const record = await store.getThreadPrAutoDispatchPending(THREAD);
+      if (record) await coordinator.sendPendingNow({ ...THREAD, fingerprint: record.pending.fingerprint });
+      if (!beforeSnapshot) await reenable(reenables);
+      maxPerEpoch = Math.max(maxPerEpoch, started - epochStart);
+    }
+    return { started, maxPerEpoch };
+  } finally {
+    coordinator.close();
+    await registry.close();
+    db.close();
+  }
+}
+
+const failingStep = (head: string, reenables: number, toggle = false): EnableStep => ({
+  observation: failing(head), reenables, beforeSnapshot: false, toggle,
+});
+
+describe("Auto-fix repair turns with repeated enable requests (model)", () => {
+  it("never lets repeated `enabled: true` start more than MAX repairs for one incident", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(enableStep, { minLength: 1, maxLength: 30 }), async (steps) => {
+      const { maxPerEpoch } = await runPreferenceStream(steps);
+      expect(maxPerEpoch, "an incident started more than MAX repair turns").toBeLessThanOrEqual(MAX);
+    }), {
+      numRuns: 100,
+      // A failing PR with a repeat after every repair: the shortest refill.
+      examples: [[HEADS.slice(0, 5).map((head) => failingStep(head, 1))]],
+    });
+  });
+
+  it("still gives the operator a fresh start when Auto-fix turns off and back on", async () => {
+    const spent = await runPreferenceStream(HEADS.slice(0, 4).map((head) => failingStep(head, 0)));
+    expect(spent.started).toBe(MAX);
+    const restarted = await runPreferenceStream([
+      ...HEADS.slice(0, 3).map((head) => failingStep(head, 0)),
+      failingStep(HEADS[3]!, 0, true),
+    ]);
+    expect(restarted.started).toBe(MAX + 1);
   });
 });

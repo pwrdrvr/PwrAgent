@@ -28,6 +28,7 @@ import {
   type SetProjectForgeAutomationResponse,
 } from "@pwragent/shared";
 import { type PullRequestReferenceIdentity } from "../pr-status/forge-reference";
+import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
   ThreadForkParams as CodexThreadForkParams,
@@ -75,7 +76,6 @@ import {
   type NavigationDirectoryGitStatus,
   type NavigationDirectorySummary,
   type NavigationLaunchpadDefaults,
-  type SetThreadPrAutoDispatchRequest,
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
   type DetachThreadPullRequestRequest,
@@ -559,9 +559,9 @@ export type ThreadGitWorkingStateRefreshHandler = (
 ) => Promise<RefreshThreadGitWorkingStateResponse>;
 
 export type ThreadPrAutoDispatchHandler = {
-  preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
+  preferenceChanged: (change: ThreadPrAutoDispatchPreferenceChange) => Promise<void>;
   preferencesChanged?: (
-    requests: SetThreadPrAutoDispatchRequest[],
+    changes: ThreadPrAutoDispatchPreferenceChange[],
   ) => Promise<void>;
   cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
   /** A lock or unlock moves the thread out of or back into the Auto-fix election. */
