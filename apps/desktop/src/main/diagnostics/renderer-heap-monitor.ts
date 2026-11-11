@@ -291,6 +291,9 @@ export class RendererHeapMonitor {
     const filename = createSnapshotFilename(snapshotIndex);
     const filePath = path.join(this.session.directoryPath, filename);
     this.snapshotInFlight = true;
+    // The cooldown starts with the attempt: a failed write still stalled the
+    // process, and retrying it every sample is the storm the cooldown bounds.
+    this.lastSnapshotAtMs = nowMs;
     this.snapshotPromise = this.captureSnapshot({
       capturedAt: sample.capturedAt,
       deltaBytes,
@@ -323,7 +326,6 @@ export class RendererHeapMonitor {
     try {
       await this.target.takeHeapSnapshot(options.filePath);
       this.snapshotCount += 1;
-      this.lastSnapshotAtMs = Date.parse(options.capturedAt);
       await this.session.registerSnapshotFile(options.filename);
       await this.appendEvent({
         source: "renderer",
