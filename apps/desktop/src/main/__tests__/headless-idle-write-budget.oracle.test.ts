@@ -2,32 +2,32 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
-import { expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { startHeadlessHost } from "../headless";
 import type { SqliteWriteDelta, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import type { StateDb } from "../state/state-db";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
-it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])("the built Node owner's boot, one idle hour and shutdown stay within the lifecycle write budget (%s path)", async spelling => {
-  const canonicalRoot = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-idle-budget-")));
-  const root = spelling === "symlink" ? `${canonicalRoot}-alias` : canonicalRoot;
-  if (root !== canonicalRoot) fs.symlinkSync(canonicalRoot, root, "dir");
-  const directory = path.join(root, "bundle");
+type Runtime = {
+  StateDb: typeof StateDb;
+  issueProviderDiscoveryPermit: typeof import("../settings/provider-discovery-permit").issueProviderDiscoveryPermit;
+  startHeadlessHost: typeof startHeadlessHost;
+  shutdownHeadlessHost(source: string): Promise<void>;
+  measureSqliteWrites: typeof measureSqliteWrites;
+  resetSqliteWriteMetrics(): void;
+};
+
+function createFixtureRoot(): string {
+  // Every root sits at the same depth, so the bundle's relative runtime.json
+  // resolves the same from a copy as from the directory it was built in.
+  return fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-idle-budget-")));
+}
+
+/** The fixture environment and clock, installed before any bundle evaluates so
+ * module-level consumers cannot capture the outer host. */
+function enterFixture(root: string): void {
   for (const name of ["workspace", "fixture", "codex", "profiles/t/state"]) fs.mkdirSync(path.join(root, name), { recursive: true });
-  await buildOwnerFixture(directory, "headless", `
-    export { measureSqliteWrites, resetSqliteWriteMetrics } from "../state/sqlite-write-metrics";
-    export { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
-    export { StateDb } from "../state/state-db";
-  `);
-  type Runtime = {
-    StateDb: typeof StateDb;
-    issueProviderDiscoveryPermit: typeof import("../settings/provider-discovery-permit").issueProviderDiscoveryPermit;
-    startHeadlessHost: typeof startHeadlessHost;
-    shutdownHeadlessHost(source: string): Promise<void>;
-    measureSqliteWrites: typeof measureSqliteWrites;
-    resetSqliteWriteMetrics(): void;
-  };
   vi.stubEnv("PWRAGENT_HOME", root);
   vi.stubEnv("PWRAGENT_PROFILE", "t");
   vi.stubEnv("PWRAGENT_INSTANCE_ROOT", path.join(root, "workspace"));
@@ -37,9 +37,53 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
   vi.stubEnv("PWRAGENT_TEST_DATA", path.join(root, "fixture"));
   vi.stubEnv("CLAUDE_CONFIG_DIR", path.join(root, "claude"));
   vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
-  // Install the fixture environment and clock before evaluating the fresh
-  // module graph, so module-level consumers cannot capture the outer host.
   vi.useFakeTimers({ now: Date.UTC(2026, 10, 10, 12) });
+}
+
+function leaveFixture(): void {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+}
+
+// One build serves every case; each case runs its own copy, so each still
+// evaluates a fresh owner module graph. Building per case cost ~150 ms each.
+let buildRoot: string | undefined;
+let builtBundle: string;
+
+beforeAll(async () => {
+  buildRoot = createFixtureRoot();
+  builtBundle = path.join(buildRoot, "bundle");
+  await buildOwnerFixture(builtBundle, "headless", `
+    export { measureSqliteWrites, resetSqliteWriteMetrics } from "../state/sqlite-write-metrics";
+    export { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+    export { StateDb } from "../state/state-db";
+  `);
+  // The bundle loads ~680 third-party files from node_modules by absolute
+  // path, and Node caches them for the whole worker. Whichever case ran first
+  // paid that load inside its own timeout, the symlink case never did. One
+  // throwaway evaluation here loads them once for both cases. It never boots
+  // a host, and its owner modules are discarded with this copy.
+  const warmup = path.join(buildRoot, "warmup");
+  fs.cpSync(builtBundle, warmup, { recursive: true });
+  enterFixture(buildRoot);
+  try {
+    createRequire(import.meta.url)(path.join(warmup, "dist/index.js"));
+  } finally {
+    leaveFixture();
+  }
+});
+
+afterAll(() => {
+  if (buildRoot) fs.rmSync(buildRoot, { recursive: true, force: true });
+});
+
+it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])("the built Node owner's boot, one idle hour and shutdown stay within the lifecycle write budget (%s path)", async spelling => {
+  const canonicalRoot = createFixtureRoot();
+  const root = spelling === "symlink" ? `${canonicalRoot}-alias` : canonicalRoot;
+  if (root !== canonicalRoot) fs.symlinkSync(canonicalRoot, root, "dir");
+  const directory = path.join(root, "bundle");
+  fs.cpSync(builtBundle, directory, { recursive: true });
+  enterFixture(root);
   const runtime = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
   // Schema creation is fixture setup; every owner lifecycle write is measured.
   const db = runtime.StateDb.open(path.join(root, "profiles/t/state/state.db"));
@@ -80,8 +124,7 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
     }
   } finally {
     await runtime.shutdownHeadlessHost("idle-budget-cleanup");
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+    leaveFixture();
     if (root !== canonicalRoot) fs.unlinkSync(root);
     fs.rmSync(canonicalRoot, { recursive: true, force: true });
   }
