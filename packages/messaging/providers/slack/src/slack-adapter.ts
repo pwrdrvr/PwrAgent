@@ -65,6 +65,7 @@ import {
   SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
   SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
   messagingInlineImageBytes,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type {
   SlackAuthorizedContact,
@@ -2950,13 +2951,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   private emitRateLimit(info: MessagingRateLimitInfo): void {
-    for (const listener of this.rateLimitListeners) {
-      try {
-        listener(info);
-      } catch {
-        // Runtime listeners are observability. Delivery handling continues.
-      }
-    }
+    notifyEachListener(this.rateLimitListeners, info);
   }
 
   private buildCallbackValueBuilder(params: {

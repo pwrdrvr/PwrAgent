@@ -338,6 +338,47 @@ describe("FeishuAdapter", () => {
     expect(spies.updated.every((u) => u.messageId === "om_sent")).toBe(true);
   });
 
+  it("reports a rate limit even when a rate-limit listener throws", async () => {
+    const api = fakeApi({});
+    api.sendMessage = async () => {
+      throw Object.assign(new Error("Too Many Requests"), { retryAfter: 3 });
+    };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      now: () => 1_700_000_000_000,
+    });
+    const observed: unknown[] = [];
+    adapter.onRateLimit(() => {
+      throw new Error("listener failed");
+    });
+    adapter.onRateLimit((info) => observed.push(info));
+
+    const result = await adapter.deliver({
+      id: "assistant-message-1",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text: "Final answer" }],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "feishu",
+          conversation: { id: "ou_user", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      rateLimit: { retryAfterMs: 3_000, retryable: true },
+    });
+    expect(observed).toEqual([result.rateLimit]);
+  });
+
   it("splits a long text-only message across multiple sends", async () => {
     const spies: { sent: unknown[]; updated: unknown[] } = { sent: [], updated: [] };
     const adapter = new FeishuAdapter({

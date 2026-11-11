@@ -33,6 +33,7 @@ import {
   retryAfterMsFromHttpHeaders,
   splitTextForDelivery,
   type MessagingHttpHeaderReader,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type { LineMessagingConfig } from "./line-config.ts";
 import {
@@ -638,13 +639,7 @@ export class LineAdapter implements LineProviderAdapter {
       retryAfterMs: info.retryAfterMs,
       scopeId: info.scope.id,
     });
-    for (const listener of this.rateLimitListeners) {
-      try {
-        listener(info);
-      } catch {
-        // Runtime listeners are observability. Delivery handling continues.
-      }
-    }
+    notifyEachListener(this.rateLimitListeners, info);
     return info;
   }
 

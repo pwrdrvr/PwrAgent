@@ -44,6 +44,7 @@ import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   MESSAGING_COMMAND_CATALOG,
   messagingInlineImageBytes,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
@@ -889,15 +890,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private emitRuntimeError(reason: string): void {
-    for (const listener of this.runtimeErrorListeners) {
-      try {
-        listener(reason);
-      } catch (error) {
-        this.options.logger?.warn?.("telegram runtime-error listener threw", {
-          error: errorMessage(error),
-        });
-      }
-    }
+    notifyEachListener(this.runtimeErrorListeners, reason, (error) => {
+      this.options.logger?.warn?.("telegram runtime-error listener threw", {
+        error: errorMessage(error),
+      });
+    });
   }
 
   async stop(): Promise<void> {
@@ -2827,13 +2824,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private emitRateLimit(info: MessagingRateLimitInfo): void {
-    for (const listener of this.rateLimitListeners) {
-      try {
-        listener(info);
-      } catch {
-        // Runtime listeners are observability. Delivery handling continues.
-      }
-    }
+    notifyEachListener(this.rateLimitListeners, info);
   }
 
   private sleep(ms: number): Promise<void> {

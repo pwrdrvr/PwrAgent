@@ -624,6 +624,8 @@ When the platform limits the whole bot or app rather than one conversation,
 give every delivery scope the same `bucketId` and report the 429 with
 `rateLimit.appliesTo: "bucket"`. The budget then cools off every scope with
 that platform and `bucketId`. Each scope keeps its own sliding-window budget.
+Platform health shows one `all conversations` cool-off for the bucket, not one
+per conversation that received the 429.
 Use `bucket` only when the platform says the limit is shared:
 
 | Provider | 429 applies to |
@@ -643,6 +645,10 @@ status or headers, recover them at the HTTP layer. Mattermost's `Client4`
 builds its error from the response body, and the server's 429 body is plain
 text. The Mattermost adapter therefore wraps `Client4`'s fetch helper to
 surface 429 as `MattermostRateLimitError`.
+
+Notify `onRateLimit` listeners through `notifyEachListener` from
+`@pwragent/messaging-interface`. A listener that throws is skipped and never
+changes the delivery result.
 
 The runtime reports a platform as `degraded` while a rate-limit or reconnect
 reason is active. `degraded` means connected but constrained. Fatal startup or

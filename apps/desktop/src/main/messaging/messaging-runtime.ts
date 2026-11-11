@@ -2530,28 +2530,44 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     platform: MessagingChannelKind,
     info: MessagingRateLimitInfo,
   ): void {
-    const startedAt = info.observedAt ?? Date.now();
+    const observedAt = info.observedAt ?? Date.now();
     const retryAfterMs = Math.max(0, Math.floor(info.retryAfterMs ?? 0));
-    const expiresAt = startedAt + retryAfterMs + RATE_LIMIT_HEALTH_BUFFER_MS;
-    const key = degradationKey(platform, "rate-limited", info.scope.id);
+    // A bot-wide 429 pauses every conversation that shares the bucket, so
+    // report it as one bot-wide reason rather than the conversation that
+    // happened to receive it.
+    const scope = rateLimitHealthScope(info);
+    const key = degradationKey(platform, "rate-limited", scope.id);
+    // Another 429 on the same key extends the reason; it never shortens it,
+    // as the delivery budget's own cool-off never shortens.
+    const previous = this.platformDegradationReasons.get(platform)?.get(key);
+    const previousExpiresAt = previous ? degradationExpiresAt(previous) : undefined;
+    const active = previous !== undefined
+      && previousExpiresAt !== undefined
+      && previousExpiresAt > observedAt;
+    const startedAt = active ? Math.min(previous.startedAt, observedAt) : observedAt;
+    const expiresAt = Math.max(
+      active ? previousExpiresAt : 0,
+      observedAt + retryAfterMs + RATE_LIMIT_HEALTH_BUFFER_MS,
+    );
     this.addPlatformDegradationReason(platform, {
       kind: "rate-limited",
       key,
       message: clipStatusText(
         info.message ?? `Cool Off active for ${formatDurationForStatus(retryAfterMs)}.`,
       ),
-      scope: sanitizeDeliveryScope(info.scope),
-      retryAfterMs,
+      scope: sanitizeDeliveryScope(scope),
+      // The wait that is left, which can be longer than this 429's own.
+      retryAfterMs: Math.max(0, expiresAt - observedAt - RATE_LIMIT_HEALTH_BUFFER_MS),
       startedAt,
       expiresAt,
     });
     this.recordDiagnosticActivity({
       platform,
-      summary: `Cool Off started: ${info.scope.id}`,
-      createdAt: startedAt,
+      summary: `Cool Off started: ${scope.id}`,
+      createdAt: observedAt,
       payload: {
         type: "provider-cool-off",
-        scope: sanitizeDeliveryScope(info.scope),
+        scope: sanitizeDeliveryScope(scope),
         retryAfterMs,
         expiresAt,
         message: clipStatusText(info.message),
@@ -3710,6 +3726,25 @@ function degradationExpiresAt(
   reason: MessagingDegradationReason,
 ): number | undefined {
   return "expiresAt" in reason ? reason.expiresAt : undefined;
+}
+
+/**
+ * The scope a rate-limit health reason describes. A bot-wide limit
+ * (`appliesTo: "bucket"`) covers every conversation in the bucket, so it is
+ * keyed and labelled by the bucket, not by the conversation that got the 429.
+ */
+function rateLimitHealthScope(info: MessagingRateLimitInfo): MessagingDeliveryScope {
+  const bucketId = info.scope.bucketId;
+  if (info.appliesTo !== "bucket" || !bucketId) {
+    return info.scope;
+  }
+  return {
+    platform: info.scope.platform,
+    id: `bucket:${bucketId}`,
+    kind: "global",
+    label: "all conversations",
+    bucketId,
+  };
 }
 
 function sanitizeDeliveryScope(

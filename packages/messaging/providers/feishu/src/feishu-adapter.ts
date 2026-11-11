@@ -41,6 +41,7 @@ import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   messagingInlineImageBytes,
   splitTextForDelivery,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type { FeishuMessagingConfig } from "./feishu-config.ts";
 import {
@@ -1718,9 +1719,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       observedAt: this.now(),
       retryable: options?.retryable ?? false,
     };
-    for (const listener of this.rateLimitListeners) {
-      listener(info);
-    }
+    notifyEachListener(this.rateLimitListeners, info);
     return info;
   }
 

@@ -2690,6 +2690,113 @@ describe("DesktopMessagingRuntime", () => {
     }
   }, 30_000);
 
+  it("reports a bot-wide cool-off once, for the bot, however many conversations hit it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    await prepareRuntimeStore();
+    let fireRateLimit: ((info: MessagingRateLimitInfo) => void) | undefined;
+    const conversation = (id: string): MessagingDeliveryScope => ({
+      bucketId: "telegram:bot",
+      id: `telegram:group:${id}`,
+      kind: "group",
+      label: `Telegram group ${id}`,
+      platform: "telegram",
+    });
+    const adapter = createAdapter("telegram", {
+      onRateLimit: (listener: (info: MessagingRateLimitInfo) => void) => {
+        fireRateLimit = listener;
+        return () => {
+          fireRateLimit = undefined;
+        };
+      },
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: createBackendBridge(),
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    const reasons = () =>
+      runtime.getPlatformStatuses().flatMap((status) => status.degradationReasons ?? []);
+
+    try {
+      await runtime.start();
+      fireRateLimit?.({
+        appliesTo: "bucket",
+        observedAt: 1000,
+        retryAfterMs: 10_000,
+        scope: conversation("-100123"),
+      });
+      // A shorter bot-wide 429 from another conversation must not shorten it.
+      fireRateLimit?.({
+        appliesTo: "bucket",
+        observedAt: 1000,
+        retryAfterMs: 1_000,
+        scope: conversation("-100456"),
+      });
+
+      expect(reasons()).toEqual([
+        expect.objectContaining({
+          expiresAt: 1000 + 10_000 + 2_000,
+          kind: "rate-limited",
+          // The wait left, not the shorter second 429's own.
+          retryAfterMs: 10_000,
+          scope: expect.objectContaining({
+            bucketId: "telegram:bot",
+            label: "all conversations",
+          }),
+        }),
+      ]);
+
+      // A limit on one conversation stays its own reason.
+      fireRateLimit?.({
+        observedAt: 1000,
+        retryAfterMs: 1_000,
+        scope: conversation("-100789"),
+      });
+      expect(reasons().map((reason) => reason.scope?.label)).toEqual([
+        "all conversations",
+        "Telegram group -100789",
+      ]);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(reasons()).toEqual([
+        expect.objectContaining({
+          scope: expect.objectContaining({ label: "all conversations" }),
+        }),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(reasons()).toEqual([]);
+
+      // A 429 after the reason expired starts a new one; nothing carries over.
+      fireRateLimit?.({
+        appliesTo: "bucket",
+        observedAt: Date.now(),
+        retryAfterMs: 1_000,
+        scope: conversation("-100123"),
+      });
+      expect(reasons()).toEqual([
+        expect.objectContaining({
+          expiresAt: Date.now() + 1_000 + 2_000,
+          retryAfterMs: 1_000,
+          startedAt: Date.now(),
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+      await runtime.stop();
+    }
+  }, 30_000);
+
   it("restores errored adapter health after an explicit reconnect recovery", async () => {
     await prepareRuntimeStore();
     let fireReconnect: ((info: MessagingReconnectInfo) => void) | undefined;

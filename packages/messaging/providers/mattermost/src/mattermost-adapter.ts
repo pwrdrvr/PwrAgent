@@ -55,6 +55,7 @@ import {
   retryAfterMsFromHttpHeaders,
   splitTextForDelivery,
   type MessagingHttpHeaderReader,
+  notifyEachListener,
 } from "@pwragent/messaging-interface";
 import type { MattermostMessagingConfig } from "./mattermost-config.ts";
 import {
@@ -836,38 +837,24 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       retryAfterMs: info.retryAfterMs,
       scopeId: info.scope.id,
     });
-    for (const listener of this.rateLimitListeners) {
-      try {
-        listener(info);
-      } catch {
-        // Runtime listeners are observability. Delivery handling continues.
-      }
-    }
+    notifyEachListener(this.rateLimitListeners, info);
     return info;
   }
 
   private emitRuntimeError(reason: string): void {
-    for (const listener of this.runtimeErrorListeners) {
-      try {
-        listener(reason);
-      } catch (error) {
-        this.logger.warn("mattermost runtime-error listener threw", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    notifyEachListener(this.runtimeErrorListeners, reason, (error) => {
+      this.logger.warn("mattermost runtime-error listener threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private emitReconnect(info: MessagingReconnectInfo): void {
-    for (const listener of this.reconnectListeners) {
-      try {
-        listener(info);
-      } catch (error) {
-        this.logger.warn("mattermost reconnect listener threw", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    notifyEachListener(this.reconnectListeners, info, (error) => {
+      this.logger.warn("mattermost reconnect listener threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
