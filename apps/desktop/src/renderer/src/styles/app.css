@@ -1469,13 +1469,18 @@
    Pinned group header are `.thread-row` buttons too (for the title
    type), with their own 4px left inset and 8px gap. Without the
    exclusion these rules moved their caret 8px right in Compact and
-   Minimal. */
+   Minimal.
+
+   The left inset is `--thread-row-inline-start`: a nested tray row sets
+   it from its depth (see `.thread-row-shell--nested`), and every other
+   row falls back to 12px. A flat 12px here once dropped the depth step,
+   so a grandchild lined up with the child above it. */
 :root[data-density="compact"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary),
 .density-preview--compact .thread-row:not(.directory-row__summary) {
   --thread-row-header-gap: 4px;
   --thread-row-action-gap: 2px;
   gap: 4px;
-  padding-left: 12px;
+  padding-left: var(--thread-row-inline-start, 12px);
 }
 
 :root[data-density="compact"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
@@ -1560,7 +1565,7 @@
   --thread-row-header-gap: 4px;
   --thread-row-action-gap: 2px;
   gap: 4px;
-  padding-left: 12px;
+  padding-left: var(--thread-row-inline-start, 12px);
 }
 
 :root[data-density="minimal"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary):not(:has(.thread-row__chip--essential)),
@@ -1658,10 +1663,10 @@
   z-index: 6;
   /* The density rules' inset and title-line gaps, which the card escapes
      with them: the title must not move when the card lifts. X-ray runs
-     only in those densities. */
+     only in those densities. A nested row keeps its depth inset. */
   --thread-row-header-gap: 4px;
   --thread-row-action-gap: 2px;
-  padding-left: 12px;
+  padding-left: var(--thread-row-inline-start, 12px);
   border-color: var(--accent-border);
   background: var(--bg-panel-elevated);
   box-shadow: 0 8px 20px var(--shadow-tint-soft);
@@ -6671,16 +6676,21 @@ a.button {
    extra step of indent per level of real depth is what separates it from the
    sibling above — and it is the same distinction that decides whether the row
    drags, since `subthreadOrder` ranks direct children only. `ThreadRow` sets
-   `--thread-row-nested-depth` only past depth 1, so an ordinary child pays no
-   calc.
+   `--thread-row-nested-depth` only past depth 1; the shell resolves it into
+   `--thread-row-inline-start`, the one inset every density and the X-ray
+   card read, so a grandchild stays a step in from its parent in all of them.
 
    The step stops paying out after four levels. Real depth has no bound — a
    sub-thread can create a sub-thread forever — and the sidebar's width does,
    so an uncapped step eventually indents a row's title off the end of the
    card. Past the cap the rows read as "deeper than the one above", which is
    all a flat tray can say anyway. */
+.thread-row-shell--nested {
+  --thread-row-inline-start: min(48px, calc(12px * var(--thread-row-nested-depth, 1)));
+}
+
 .thread-row-shell--nested .thread-row {
-  padding-left: min(48px, calc(12px * var(--thread-row-nested-depth, 1)));
+  padding-left: var(--thread-row-inline-start);
 }
 
 /* A parent card (has sub-threads) stays flush with its sibling rows —
@@ -6736,20 +6746,22 @@ a.button {
    depth step above, so the toggle shifts with it and keeps the top-level
    distance to the card's content edge (10px padding, toggle at 8px). */
 .thread-row-shell--nested .thread-row__subthread-toggle {
-  left: calc(min(48px, 12px * var(--thread-row-nested-depth, 1)) - 2px);
+  left: calc(var(--thread-row-inline-start) - 2px);
 }
 
-/* Compact and Minimal give every row a flat 12px padding-left at any depth,
-   so a nested chevron stays at the top-level 8px. Following the depth there
-   put it over the title from depth 2. The X-ray row keeps the depth inset. */
-:root[data-density="compact"] .thread-row-shell--nested:not(:is(.density-preview, [data-xray-target]) *):not([data-xray-target]) .thread-row__subthread-toggle,
+/* Compact and Minimal pad a top-level card 12px with the toggle still at
+   8px, 2px further from the content than Mission Control; a nested toggle
+   keeps that distance. The X-ray card is padded like these densities, the
+   only ones X-ray runs in, and its shell is not inside the excluded target,
+   so this reaches its toggle too. */
+:root[data-density="compact"] .thread-row-shell--nested:not(:is(.density-preview, [data-xray-target]) *) .thread-row__subthread-toggle,
 .density-preview--compact .thread-row-shell--nested .thread-row__subthread-toggle {
-  left: 8px;
+  left: calc(var(--thread-row-inline-start) - 4px);
 }
 
-:root[data-density="minimal"] .thread-row-shell--nested:not(:is(.density-preview, [data-xray-target]) *):not([data-xray-target]) .thread-row__subthread-toggle,
+:root[data-density="minimal"] .thread-row-shell--nested:not(:is(.density-preview, [data-xray-target]) *) .thread-row__subthread-toggle,
 .density-preview--minimal .thread-row-shell--nested .thread-row__subthread-toggle {
-  left: 8px;
+  left: calc(var(--thread-row-inline-start) - 4px);
 }
 
 .thread-row__subthread-toggle::before {

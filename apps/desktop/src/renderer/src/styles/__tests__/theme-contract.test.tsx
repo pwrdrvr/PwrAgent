@@ -680,6 +680,11 @@ describe("Tangerine Terminal theme contract", () => {
       // from the digit count of the newest sequence. The rows, the gap rows
       // and the mark row all indent by it. Geometry, not theme.
       "log-gutter-width",
+      // A nested tray row's left inset, defined on `.thread-row-shell--nested`
+      // from its depth. Every density's row padding, the X-ray card and the
+      // nested chevron read it, so the indent and the chevron cannot drift
+      // apart. Geometry, not theme.
+      "thread-row-inline-start",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
