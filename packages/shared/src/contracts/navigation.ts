@@ -520,6 +520,46 @@ export type PrLifecycleState = "open" | "merged" | "closed";
 export type PrReviewState = "draft" | "ready_for_review";
 export type PrMergeState = "mergeable" | "conflicting" | "unknown";
 
+/**
+ * Where a PR stands in its base branch's merge queue (GitHub) or merge train
+ * (GitLab). `not_queued`: the base branch requires the queue and the PR is
+ * not in it. `group_checks_running`: the forge is testing the PR's merge group.
+ * `merging`: the group passed and the forge is landing it. `unmergeable`:
+ * the group failed and the forge is about to remove the PR. `removed`: the
+ * PR left the queue without merging. `merged_by_queue`: the queue landed it.
+ * The names match PwrGit's (pwrdrvr/PwrGit#586) where the meaning is the same.
+ */
+export type PrMergeQueueState =
+  | "not_queued"
+  | "queued"
+  | "group_checks_running"
+  | "merging"
+  | "unmergeable"
+  | "removed"
+  | "merged_by_queue";
+
+/** Why the forge removed a PR from its queue. `other` keeps the forge's text. */
+export type PrMergeQueueRemovalReason =
+  | "checks_failed"
+  | "checks_timed_out"
+  | "merge_conflict"
+  | "other";
+
+export type PrMergeQueueStatus = {
+  /** GitHub calls it a merge queue, GitLab a merge train. */
+  kind: "merge_queue" | "merge_train";
+  state: PrMergeQueueState;
+  /** 1-based place in the queue, when the forge reports one. */
+  position?: number;
+  /** Epoch milliseconds. */
+  enqueuedAt?: number;
+  /** Epoch milliseconds of the removal, for `removed`. */
+  removedAt?: number;
+  removedReason?: PrMergeQueueRemovalReason;
+  /** The forge's own reason, for `other`. Untrusted, capped short. */
+  removedReasonText?: string;
+};
+
 export const DEFAULT_PULL_REQUEST_PROVIDER = "github.com";
 export type PullRequestProvider = string;
 
@@ -578,6 +618,11 @@ export type PrSummary = {
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;
+  /**
+   * Present only when the PR's base branch has a merge queue or merge train.
+   * Absent from older builds and peers: treat absence as "no queue known".
+   */
+  mergeQueue?: PrMergeQueueStatus;
   /** Head commit observed with this status snapshot. */
   headSha?: string;
   /** Direct destination for the first failed CI check in this snapshot. */

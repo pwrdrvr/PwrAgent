@@ -316,6 +316,10 @@ function describeEnded(
       return "Ended when the PR merged";
     case "pr_closed":
       return "Ended when the PR closed";
+    case "pr_dequeued":
+      return entry.status === "dispatched"
+        ? "Woke the thread · removed from merge queue"
+        : "Ended when the merge queue removed the PR";
     case "failed":
       return "Could not wake the thread";
     case undefined:

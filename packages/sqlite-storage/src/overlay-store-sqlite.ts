@@ -8838,6 +8838,33 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     }).immediate();
   }
 
+  async observeThreadPrQueueRemovalWatches(params: {
+    pr: PrSummary;
+    observedAt: number;
+    removedAt: number;
+    now: number;
+  }): Promise<PrStatusWatchThreadRef[]> {
+    const prKey = buildPullRequestStatusKey(params.pr);
+    // Only watches armed before the removal: one armed after it is waiting
+    // for the next attempt, and must not wake on the old removal. A woken
+    // watch has ended, so each removal wakes a watch at most once.
+    const select = this.stateDb.raw.prepare(`SELECT watch_id, backend, thread_id, pr_key
+      FROM pr_status_watches WHERE pr_key = ? AND head_sha = '' AND status = 'watching'
+        AND notify_on_merged = 1 AND created_at < ?`);
+    type Row = { watch_id: string; backend: string; thread_id: string; pr_key: string };
+    if ((select.all(prKey, params.removedAt) as Row[]).length === 0) return [];
+    return this.stateDb.raw.transaction(() => {
+      const rows = select.all(prKey, params.removedAt) as Row[];
+      const update = this.stateDb.raw.prepare(`UPDATE pr_status_watches
+        SET status = 'pending_terminal', lease_owner = NULL, lease_expires_at = NULL, updated_at = ?,
+          payload = json_set(payload, '$.endedReason', 'pr_dequeued', '$.terminalObservation', json(?))
+        WHERE watch_id = ? AND status = 'watching'`);
+      const observation = JSON.stringify({ pr: params.pr, observedAt: params.observedAt });
+      for (const row of rows) update.run(params.now, observation, row.watch_id);
+      return uniquePrStatusWatchThreads(rows);
+    }).immediate();
+  }
+
   /** Pending notifications carry their original observation, even if the PR
    * later reopens or its status cache is evicted. They are not subscriptions. */
   async listPendingPrTerminalWatchObservations(params: {
@@ -8918,7 +8945,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async finishThreadPrTerminalWatch(params: {
     watchId: string;
     ownerId: string;
-    outcome: "merged" | "closed";
+    outcome: "merged" | "closed" | "dequeued";
     now: number;
   }): Promise<void> {
     const finish = this.stateDb.raw.transaction(() => {
@@ -8932,6 +8959,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         | { backend: string; thread_id: string; pr_key: string }
         | undefined;
       if (!claimed) return;
+      if (params.outcome === "dequeued") {
+        // The merge it waited for did not happen: no watched event woke it.
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_status_watches
+             SET status = 'dispatched', lease_owner = NULL,
+                 lease_expires_at = NULL, updated_at = ?,
+                 payload = json_set(payload, '$.endedReason', 'pr_dequeued')
+             WHERE watch_id = ? AND status = 'notifying_terminal' AND lease_owner = ?`,
+          )
+          .run(params.now, params.watchId, params.ownerId);
+        return;
+      }
       this.stateDb.raw
         .prepare(
           `UPDATE pr_status_watches
@@ -12657,6 +12697,7 @@ export type OverlayStoreLike = Pick<
   | "cancelThreadPrStatusWatch"
   | "cancelThreadPrStatusWatchesForPr"
   | "observeThreadPrTerminalWatches"
+  | "observeThreadPrQueueRemovalWatches"
   | "listPendingPrTerminalWatchObservations"
   | "claimThreadPrTerminalWatches"
   | "finishThreadPrTerminalWatch"

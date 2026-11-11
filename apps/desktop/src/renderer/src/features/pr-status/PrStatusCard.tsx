@@ -1,4 +1,8 @@
-import type { PrSummary } from "@pwragent/shared";
+import {
+  describeMergeQueueRemoval,
+  mergeQueueNoun,
+  type PrSummary,
+} from "@pwragent/shared";
 import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
@@ -61,6 +65,7 @@ export function PrStatusCard(props: {
   const branch = splitPrBranch(pr.headRefName);
   const drift = readBranchDriftRows(props.branchDrift);
   const wakes = readWatchRows(props.watch);
+  const queue = readMergeQueueSection(pr, now);
   const stoppable = Boolean(props.watch?.ci || props.watch?.terminal);
 
   return (
@@ -99,6 +104,20 @@ export function PrStatusCard(props: {
         />
         <span>{prStatusLabel(pr)}</span>
       </div>
+      {queue ? (
+        <div className="pr-status-card__section">
+          <span className="pr-status-card__section-title">{queue.title}</span>
+          {queue.rows.map((row) => (
+            <div className="pr-status-card__row" key={row.label}>
+              <span className="pr-status-card__row-label">{row.label}</span>
+              <span className="pr-status-card__row-value">{row.value}</span>
+            </div>
+          ))}
+          {queue.detail ? (
+            <div className="pr-status-card__caption">{queue.detail}</div>
+          ) : null}
+        </div>
+      ) : null}
       {changes ? (
         <div className="pr-status-card__section">
           <span className="pr-status-card__section-title">Changes</span>
@@ -335,6 +354,49 @@ function readBranchDriftRows(drift: PrBranchDrift | undefined): PrTimelineRow[] 
  * of switching to a lifespan reading the moment it merges. The lifespan is
  * still there for anyone who wants it — it is the difference between the rows.
  */
+const MERGE_QUEUE_STATE_LABELS = {
+  not_queued: "Not queued",
+  queued: "Waiting",
+  group_checks_running: "Checks running",
+  merging: "Merging",
+  unmergeable: "Leaving",
+  removed: "Removed",
+  merged_by_queue: "Merged",
+} as const;
+
+/**
+ * The Merge queue section: drawn while the base branch has a queue and the
+ * PR is open. A merged PR's status line already says the queue landed it.
+ */
+function readMergeQueueSection(
+  pr: PrSummary,
+  now: number,
+): { title: string; rows: PrTimelineRow[]; detail?: string } | undefined {
+  const queue = pr.mergeQueue;
+  if (!queue || resolveLifecycleState(pr) !== "open") return undefined;
+  const noun = mergeQueueNoun(queue.kind);
+  const title = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}${pr.baseRefName ? ` · ${pr.baseRefName}` : ""}`;
+  const rows: PrTimelineRow[] = [];
+  if (queue.position && (queue.state === "queued" || queue.state === "group_checks_running")) {
+    rows.push({ label: "Position", value: `#${queue.position}` });
+  }
+  rows.push({ label: "State", value: MERGE_QUEUE_STATE_LABELS[queue.state] });
+  const enqueuedAt = readTimestamp(queue.enqueuedAt);
+  if (enqueuedAt !== undefined && queue.state !== "removed" && queue.state !== "not_queued") {
+    rows.push({ label: "Joined", value: `${formatSpan(now - enqueuedAt)} ago` });
+  }
+  const removedAt = readTimestamp(queue.removedAt);
+  if (queue.state === "removed" && removedAt !== undefined) {
+    rows.push({ label: "Removed", value: `${formatSpan(now - removedAt)} ago` });
+  }
+  const detail = queue.state === "removed"
+    ? describeMergeQueueRemoval(queue)
+    : queue.state === "not_queued"
+      ? `Merging adds it to the ${noun}.`
+      : undefined;
+  return { title, rows, ...(detail ? { detail } : {}) };
+}
+
 function readPrTimeline(pr: PrSummary, now: number): PrTimelineRow[] {
   const createdAt = readTimestamp(pr.createdAt);
   const lifecycleState = resolveLifecycleState(pr);

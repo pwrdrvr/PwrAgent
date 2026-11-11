@@ -1,4 +1,4 @@
-import type { PrSummary } from "@pwragent/shared";
+import { describeMergeQueueState, isMergeQueueActive, type PrSummary } from "@pwragent/shared";
 
 /**
  * Shared reading of a `PrSummary`'s display state.
@@ -144,7 +144,7 @@ export function prStatusLabel(pr: PrSummary): string {
   const lifecycleState = resolveLifecycleState(pr);
   const parts: string[] = [];
   if (lifecycleState === "merged") {
-    return "merged";
+    return pr.mergeQueue?.state === "merged_by_queue" ? describeMergeQueueState(pr.mergeQueue)! : "merged";
   } else if (lifecycleState === "closed") {
     return "closed without merge";
   } else if (pr.reviewState === "draft") {
@@ -157,8 +157,35 @@ export function prStatusLabel(pr: PrSummary): string {
     parts.push("merge conflict");
   }
 
+  const queue = describeMergeQueueState(pr.mergeQueue);
+  if (queue) {
+    parts.push(queue);
+  }
+
   parts.push(checkStateTooltipLabel(resolveCheckState(pr), pr.checksStillRunning));
   return parts.join(" · ");
+}
+
+/**
+ * The chip's merge queue badge, while the PR is in the queue or was removed
+ * from it. Undefined otherwise: a PR that is merely not queued, or merged,
+ * draws nothing.
+ */
+export type PrChipQueueBadge = {
+  state: NonNullable<PrSummary["mergeQueue"]>["state"];
+  /** The place number, while waiting or tested. */
+  position?: number;
+};
+
+export function resolvePrChipQueueBadge(pr: PrSummary): PrChipQueueBadge | undefined {
+  const queue = pr.mergeQueue;
+  if (!queue || resolveLifecycleState(pr) !== "open") return undefined;
+  if (!isMergeQueueActive(queue) && queue.state !== "removed") return undefined;
+  const numbered = queue.state === "queued" || queue.state === "group_checks_running";
+  return {
+    state: queue.state,
+    ...(numbered && queue.position ? { position: queue.position } : {}),
+  };
 }
 
 /**

@@ -491,6 +491,20 @@ export function useLivePullRequest(pr: PrSummary): PrSummary {
   );
 }
 
+/** `useLivePullRequest` for a PR that may not be resolved yet. */
+export function useOptionalLivePullRequest(pr: PrSummary | undefined): PrSummary | undefined {
+  const links = usePullRequestLinks();
+  const subscribe = useCallback(
+    (listener: () => void) => pr ? links?.subscribe(pr, listener) ?? (() => {}) : () => {},
+    [links, pr],
+  );
+  const getSnapshot = useCallback(
+    () => pr ? links?.getSnapshot(pr) ?? pr : undefined,
+    [links, pr],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => pr);
+}
+
 export function useLivePullRequestNumber(number: number): PrSummary | undefined {
   const links = usePullRequestLinks();
   const subscribe = useCallback(

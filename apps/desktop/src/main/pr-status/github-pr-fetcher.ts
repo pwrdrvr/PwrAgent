@@ -1,4 +1,15 @@
-import { parsePullRequestReferenceUrl } from "./forge-reference";
+import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "./forge-reference";
+import { describeMergeQueueState } from "@pwragent/shared";
+import {
+  GITHUB_ENABLE_AUTO_MERGE_MUTATION,
+  GITHUB_ENQUEUE_MUTATION,
+  GITHUB_MERGE_QUEUE_GATE_QUERY,
+  githubQueueAction,
+  isMergeQueueSchemaUnsupported,
+  parseGithubAutoMergeResult,
+  parseGithubEnqueueResult,
+  parseGithubMergeQueueGate,
+} from "./github-merge-queue";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
@@ -139,6 +150,8 @@ export type GithubPrFetcherOptions = {
    * Defaults to `DEFAULT_GH_AVAILABLE_CACHE_TTL_MS` (60s).
    */
   ghAvailableCacheTtlMs?: number;
+  /** Override the `gh` subprocess a to-do merge runs — used by tests. */
+  runGhCommand?: (command: string, args: string[], options: { cwd?: string; timeout: number }) => Promise<{ stdout: string }>;
 };
 
 export class GithubPrFetcher {
@@ -159,6 +172,7 @@ export class GithubPrFetcher {
   >;
   private readonly authStatusCacheTtlMs: number;
   private readonly ghAvailableCacheTtlMs: number;
+  private readonly runGhCommand: NonNullable<GithubPrFetcherOptions["runGhCommand"]>;
   private ghAvailableCache: { value: boolean; fetchedAt: number } | undefined;
   private ghDiscoveryCache:
     | { value: DesktopGhDiscoverySnapshot; fetchedAt: number }
@@ -206,6 +220,12 @@ export class GithubPrFetcher {
       options.authStatusCacheTtlMs ?? DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS;
     this.ghAvailableCacheTtlMs =
       options.ghAvailableCacheTtlMs ?? DEFAULT_GH_AVAILABLE_CACHE_TTL_MS;
+    this.runGhCommand = options.runGhCommand ?? (async (command, args, runOptions) => await execFileAsync(command, args, {
+      ...(runOptions.cwd ? { cwd: runOptions.cwd } : {}),
+      env: buildPwrAgentChildProcessEnv(process.env),
+      timeout: runOptions.timeout,
+      encoding: "utf8",
+    }));
   }
 
   /**
@@ -214,36 +234,33 @@ export class GithubPrFetcher {
    * a number, resolved against the repository at `cwd`, or a github.com URL.
    * The branch is left alone: `--delete-branch` would also check out the
    * default branch in `cwd`, which may be the thread's worktree.
+   *
+   * A base branch that requires a merge queue never takes a direct merge:
+   * the PR is added to the queue (or auto-merge waits for its checks), the
+   * method does not apply, and the summary says it was queued.
    */
   async mergePullRequest(params: {
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
     assertCanMerge?: (url: string) => void;
-  }): Promise<{ summary: string }> {
+  }): Promise<{ summary: string; queued?: boolean }> {
     const command = await this.resolveGhCommand();
-    if (params.assertCanMerge) {
-      let url = params.pullRequest;
-      if (!parsePullRequestReferenceUrl(url)) {
-        const result = await execFileAsync(command, ["pr", "view", params.pullRequest, "--json", "url", "--jq", ".url"], {
-          ...(params.cwd ? { cwd: params.cwd } : {}), env: buildPwrAgentChildProcessEnv(process.env), timeout: 30_000, encoding: "utf8",
-        });
-        url = result.stdout.trim();
-        if (!parsePullRequestReferenceUrl(url)) throw new Error("Could not identify the pull request before checking merge holds.");
-      }
-      params.assertCanMerge(url);
+    const run = async (args: string[], timeout = 30_000) => await this.runGhCommand(command, args, {
+      ...(params.cwd ? { cwd: params.cwd } : {}), timeout,
+    });
+    let reference = parsePullRequestReferenceUrl(params.pullRequest);
+    if (!reference) {
+      const result = await run(["pr", "view", params.pullRequest, "--json", "url", "--jq", ".url"]);
+      reference = parsePullRequestReferenceUrl(result.stdout.trim());
+      if (!reference) throw new Error("Could not identify the pull request before merging.");
     }
+    params.assertCanMerge?.(reference.url);
+    const label = `#${reference.number}`;
+    const queued = await this.mergeThroughQueue(reference, label, run);
+    if (queued) return queued;
     try {
-      await execFileAsync(
-        command,
-        ["pr", "merge", params.pullRequest, `--${params.method}`],
-        {
-          ...(params.cwd ? { cwd: params.cwd } : {}),
-          env: buildPwrAgentChildProcessEnv(process.env),
-          timeout: 60_000,
-          encoding: "utf8",
-        },
-      );
+      await run(["pr", "merge", params.pullRequest, `--${params.method}`], 60_000);
     } catch (error) {
       const err = error as { stderr?: string; message?: string };
       const detail = err.stderr?.trim() || err.message || String(error);
@@ -255,6 +272,52 @@ export class GithubPrFetcher {
       summary: /^\d+$/.test(params.pullRequest)
         ? `${verb} #${params.pullRequest}`
         : verb,
+    };
+  }
+
+  /**
+   * Add the PR to its base branch's merge queue when the branch requires
+   * one. Undefined when it does not, so the caller merges directly.
+   */
+  private async mergeThroughQueue(
+    reference: PullRequestReferenceIdentity,
+    label: string,
+    run: (args: string[], timeout?: number) => Promise<{ stdout: string }>,
+  ): Promise<{ summary: string; queued: true } | undefined> {
+    const host = ["--hostname", reference.provider];
+    const graphql = async (query: string, fields: string[]) => {
+      try {
+        const result = await run(["api", "graphql", ...host, "-f", `query=${query}`, ...fields]);
+        return (JSON.parse(result.stdout) as { data?: unknown }).data;
+      } catch (error) {
+        const err = error as { stderr?: string; message?: string };
+        const detail = (err.stderr?.trim() || err.message || String(error)).split("\n")[0];
+        throw new Error(`gh api graphql failed: ${detail}${mergeScopeHint(detail)}`);
+      }
+    };
+    let gate;
+    try {
+      gate = parseGithubMergeQueueGate(await graphql(GITHUB_MERGE_QUEUE_GATE_QUERY, [
+        "-f", `owner=${reference.org}`, "-f", `repo=${reference.repo}`, "-F", `number=${reference.number}`,
+      ]));
+    } catch (error) {
+      // An Enterprise Server without merge queues refuses the fields.
+      if (error instanceof Error && isMergeQueueSchemaUnsupported(error.message)) return undefined;
+      throw error;
+    }
+    if (!gate.required) return undefined;
+    const action = githubQueueAction(gate);
+    if (action === "already_queued") {
+      return { queued: true, summary: `${label} is already in the merge queue · ${describeMergeQueueState(gate.status) ?? "queued"}` };
+    }
+    if (action === "auto_merge") {
+      parseGithubAutoMergeResult(await graphql(GITHUB_ENABLE_AUTO_MERGE_MUTATION, ["-f", `id=${gate.pullRequestId}`]));
+      return { queued: true, summary: `Auto-merge on for ${label}: GitHub adds it to the merge queue when its checks pass` };
+    }
+    const status = parseGithubEnqueueResult(await graphql(GITHUB_ENQUEUE_MUTATION, ["-f", `id=${gate.pullRequestId}`]));
+    return {
+      queued: true,
+      summary: `Added ${label} to the merge queue · ${describeMergeQueueState(status) ?? "queued"}`,
     };
   }
 

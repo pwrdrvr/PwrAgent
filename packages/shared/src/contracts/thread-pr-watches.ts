@@ -157,7 +157,8 @@ export type ThreadPrWatchEndedStatus =
  * `moved` means a push moved a CI watch to the new head, where a copy waits.
  * `another_thread_woke` means an older watch on another thread received the
  * same result, and this thread got no turn. `pr_merged` and `pr_closed` end a
- * CI watch when its thread's merge/close watch woke it.
+ * CI watch when its thread's merge/close watch woke it. `pr_dequeued` ends a
+ * merge watch that woke its thread because the merge queue removed the PR.
  */
 export type ThreadPrWatchEndedReason =
   | "woke"
@@ -171,6 +172,7 @@ export type ThreadPrWatchEndedReason =
   | "covered_by_auto_fix"
   | "pr_merged"
   | "pr_closed"
+  | "pr_dequeued"
   | "failed";
 
 export type ThreadPrWatchHistoryEntry = ThreadPullRequestWatchSummary & {

@@ -1008,6 +1008,7 @@ const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const claimThreadPrTerminalWatches = vi.fn(async () => []);
 const observeThreadPrTerminalWatches = vi.fn(async () => []);
+const observeThreadPrQueueRemovalWatches = vi.fn(async () => []);
 const listPendingPrTerminalWatchObservations = vi.fn(async () => []);
 const finishThreadPrTerminalWatch = vi.fn(async () => undefined);
 const listPendingPrTerminalWatchPrKeys = vi.fn(async () => [] as string[]);
@@ -1198,6 +1199,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     cancelThreadPrStatusWatchesForPr,
     claimThreadPrTerminalWatches,
     observeThreadPrTerminalWatches,
+    observeThreadPrQueueRemovalWatches,
     listPendingPrTerminalWatchObservations,
     finishThreadPrTerminalWatch,
     listPendingPrTerminalWatchPrKeys,
