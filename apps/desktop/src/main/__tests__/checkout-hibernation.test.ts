@@ -741,6 +741,18 @@ describe("Thread maintenance's hibernate step", () => {
     }), { numRuns: 12, examples: [[[true, true]], [[true, false]]] });
   });
 
+  it("keeps a co-owner that both provider pages list as a sharing user", async () => {
+    const fixture = await createFixture();
+    const coOwner = { id: "co-owner", cwd: fixture.worktree, source: "vscode", status: { type: "notLoaded" as const }, archived: false };
+    ArchiveWorktreeTransport.threads.push(coOwner);
+    // Archived after the active page listed it, before the archived page.
+    ArchiveWorktreeTransport.onList = (params) => { if (params.archived === true) coOwner.archived = true; };
+    const { registry } = fixture.open({ ...ON, enabled: false });
+    const scan = await maintenance(registry).scan({ steps: ["hibernate"] });
+    expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(false);
+    expect(scan.hibernate?.kept["Shared with another thread"]).toBeGreaterThan(0);
+  });
+
   it("reads archived fleet membership once for a multi-wave reviewed hibernation batch", async () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
