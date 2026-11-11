@@ -14,7 +14,8 @@ import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { observeStorageArchive } from "../state/storage-maintenance";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 
-async function openOwner(root: string, kind: "desktop" | "headless", command = process.execPath, home?: string) {
+async function openOwner(root: string, kind: "desktop" | "headless", command = process.execPath, home = path.join(root, "codex")) {
+  fs.mkdirSync(home, { recursive: true });
   const directory = path.join(root, `bundle-${kind}`);
   const guard = await buildOwnerFixture(directory, kind);
   const driver = path.join(directory, "driver.cjs");
@@ -30,8 +31,8 @@ async function openOwner(root: string, kind: "desktop" | "headless", command = p
       process.send({ ready: true });
     })().catch(error => { process.send({ startupError: error.message }); process.exitCode = 1; process.disconnect(); });`);
   const child = fork(driver, [], { cwd: path.join(root, "workspace"),
-    env: { ...process.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_CODEX_COMMAND: command,
-      ...(home ? { PWRAGENT_CODEX_HOME: home, CODEX_HOME: home } : {}),
+    env: { ...process.env, PWRAGENT_HOME: path.join(root, "owner"), PWRAGENT_PROFILE: "t", PWRAGENT_CODEX_COMMAND: command,
+      PWRAGENT_OUTPOST_WORKSPACE: path.join(root, "workspace"), PWRAGENT_CODEX_HOME: home, CODEX_HOME: home,
       PWRAGENT_TEST_DATA: path.join(root, "fixture"), CLAUDE_CONFIG_DIR: path.join(root, "claude") },
     execArgv: ["--require", guard], stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
@@ -101,7 +102,7 @@ it("a refused headless startup cannot rewrite a live owner's profile configurati
   let owner: Awaited<ReturnType<typeof openOwner>> | undefined;
   try {
     owner = await openOwner(root, "desktop");
-    const file = path.join(root, "profiles/t/config.toml"), before = fs.readFileSync(file);
+    const file = path.join(root, "owner/profiles/t/config.toml"), before = fs.readFileSync(file);
     await expect(openOwner(root, "headless", "/fixture/different-codex")).rejects.toThrow(/lease is held/);
     expect(fs.readFileSync(file)).toEqual(before);
   } finally { await owner?.close(); fs.rmSync(root, { recursive: true, force: true }); }
@@ -109,13 +110,13 @@ it("a refused headless startup cannot rewrite a live owner's profile configurati
 
 it("the Outpost spawn home stays equal to the explicit preflight home despite saved desktop mappings", async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-profile-home-")));
-  for (const name of ["workspace", "fixture", "dedicated", "profiles/t"]) fs.mkdirSync(path.join(root, name), { recursive: true });
-  fs.writeFileSync(path.join(root, "profiles/t/config.toml"), '[models.codex]\nprofile = "work"\n');
+  for (const name of ["workspace", "fixture", "dedicated", "owner/profiles/t"]) fs.mkdirSync(path.join(root, name), { recursive: true });
+  fs.writeFileSync(path.join(root, "owner/profiles/t/config.toml"), '[models.codex]\nprofile = "work"\n');
   let owner: Awaited<ReturnType<typeof openOwner>> | undefined;
   try {
     owner = await openOwner(root, "headless", process.execPath, path.join(root, "dedicated"));
     expect((await owner.call<NodeJS.ProcessEnv>("resolveCodexSpawnEnvAsync", undefined)).CODEX_HOME).toBe(path.join(root, "dedicated"));
-    expect(fs.readFileSync(path.join(root, "profiles/t/config.toml"), "utf8")).toContain('profile = "work"');
+    expect(fs.readFileSync(path.join(root, "owner/profiles/t/config.toml"), "utf8")).toContain('profile = "work"');
   } finally { await owner?.close(); fs.rmSync(root, { recursive: true, force: true }); }
 }, 120_000);
 
@@ -124,9 +125,9 @@ it("the Outpost spawn home stays equal to the explicit preflight home despite sa
 it("desktop → Codex-only headless → desktop preserves unsupported providers byte-for-byte", async () => {
   await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, suffix) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-unsupported-")));
-    for (const name of ["workspace", "fixture", "profiles/t/state/claude"]) fs.mkdirSync(path.join(root, name), { recursive: true });
-    const database = path.join(root, "profiles/t/state/state.db");
-    const claude = path.join(root, `profiles/t/state/claude/${threadId}.json`);
+    for (const name of ["workspace", "fixture", "owner/profiles/t/state/claude"]) fs.mkdirSync(path.join(root, name), { recursive: true });
+    const database = path.join(root, "owner/profiles/t/state/state.db");
+    const claude = path.join(root, `owner/profiles/t/state/claude/${threadId}.json`);
     const db = StateDb.open(database);
     try {
       const overlay = new SqliteOverlayStore(db);
