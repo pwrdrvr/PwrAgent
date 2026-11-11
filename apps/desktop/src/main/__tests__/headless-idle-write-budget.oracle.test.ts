@@ -123,10 +123,10 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
       }));
       ({ writes: shutdown } = await owner.measureSqliteWrites(() => owner.shutdownHeadlessHost("idle-budget")));
     });
-    // Startup discovery decodes the icon of each desktop application the
-    // host has installed, so canvas loads during boot on a Mac with any of
-    // them and never on a host with none. Every other package stays unloaded.
-    expect(loadedAfterBoot.filter(name => LOADED_ON_FIRST_USE.includes(name) && name !== "@napi-rs/canvas")).toEqual([]);
+    // No first-use package loads during boot. Startup discovery finds the
+    // installed desktop applications without decoding their icons, so canvas
+    // stays unloaded on a Mac with VS Code installed too.
+    expect(loadedAfterBoot.filter(name => LOADED_ON_FIRST_USE.includes(name))).toEqual([]);
     // The first scheduled archive sweep claims and completes its one-time
     // repair. Its two metadata writes belong to this first idle hour.
     expect(idle!.tables.filter(table => table.rowsChanged > 0)).toMatchObject([{ table: "meta", rowsChanged: 2 }]);

@@ -251,7 +251,7 @@ import {
   resolveCodexHomeForProfile,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
-import { discoverDesktopApplications } from "./application-discovery";
+import { discoverDesktopApplications, withApplicationIcons } from "./application-discovery";
 import { GIT_COMMAND_ENV, discoverGitCommands } from "./git-discovery";
 import {
   cancelManagedGitInstall,
@@ -920,8 +920,11 @@ export class DesktopSettingsService {
     const ghDiscovery = this.ghDiscoveryCache?.result ?? { candidates: [] };
     const gitDiscovery = this.gitDiscoveryCache?.result ?? { candidates: [] };
     const managedGit = await this.readManagedGitSnapshot(config.applications?.git);
+    // A projection is a surface read, so it carries icons; boot discovery
+    // decodes none.
     const applications = this.applicationsDiscovery
-      ?? emptyApplicationsSnapshot();
+      ? await withApplicationIcons(this.applicationsDiscovery)
+      : emptyApplicationsSnapshot();
     const preferredEditorId = this.resolveConfigString(
       config.applications?.editor?.preferredId,
     );
@@ -2852,11 +2855,17 @@ export class DesktopSettingsService {
     return this.startupCodexHome;
   }
 
+  /**
+   * Runs the startup probes. It returns no projection: building one decodes
+   * every application icon, which a boot that no surface reads must not do.
+   * A surface reads the projection itself once `onStartupDiscoveryResult`
+   * says a leg landed.
+   */
   async refreshStartupDiscovery(
     permit: ProviderDiscoveryPermit,
-  ): Promise<DesktopSettingsSnapshot> {
+  ): Promise<void> {
     assertProviderDiscoveryPermit(permit, ["startup"]);
-    if (this.commandDiscoveryLifetime.signal.aborted) return await this.readSettingsProjection();
+    if (this.commandDiscoveryLifetime.signal.aborted) return;
     const startedAt = performance.now();
     // Keep startup timings at info level without logging probe results or
     // settings values. Failures still flow to the existing allSettled boundary.
@@ -2929,15 +2938,9 @@ export class DesktopSettingsService {
       });
     }
     await this.startupDiscoveryPromise;
-    const discoveryDurationMs = Math.round(performance.now() - startedAt);
-    try {
-      return await measure("projection", () => this.readSettingsProjection());
-    } finally {
-      settingsLog.info("startup settings discovery completed", {
-        discoveryDurationMs,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
-    }
+    settingsLog.info("startup settings discovery completed", {
+      durationMs: Math.round(performance.now() - startedAt),
+    });
   }
 
   /**

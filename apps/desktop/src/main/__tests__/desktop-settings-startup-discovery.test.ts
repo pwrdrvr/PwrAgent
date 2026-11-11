@@ -122,7 +122,7 @@ describe("DesktopSettingsService startup discovery", () => {
       codexDiscoveryCoordinator: { discover, invalidate: vi.fn(), resolve: vi.fn() },
       retainCachedCodexCommand: retain,
     });
-    let startup: Promise<DesktopSettingsSnapshot> | undefined;
+    let startup: Promise<void> | undefined;
     try {
       if (boundary !== "before-start") {
         startup = service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));

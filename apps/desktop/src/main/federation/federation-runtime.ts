@@ -340,6 +340,7 @@ import { getMainLogger } from "../log";
 import {
   discoverDesktopApplications,
   openDesktopApplication,
+  withApplicationIcons,
 } from "../settings/application-discovery";
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -8409,7 +8410,7 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().renameThread(request);
     },
     async readApplications(): Promise<DesktopApplicationsSnapshot> {
-      return await discoverDesktopApplications();
+      return await withApplicationIcons(await discoverDesktopApplications());
     },
     async openApplication(
       request: OpenDesktopApplicationRequest,
