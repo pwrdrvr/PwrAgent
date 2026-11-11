@@ -3095,12 +3095,17 @@ export class ClaudeBackend {
    */
   private async withSessionReader<T>(work: (reader: ClaudeSessionReads) => Promise<T>): Promise<T> {
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-    const sdk = claudeSessionReadsSee(env) ? await loadClaudeAgentSdk() : undefined;
-    const reader: ClaudeSessionReader = sdk
+    const { getSessionMessages, getSessionInfo, getSubagentMessages } = this.options;
+    const readsHere = claudeSessionReadsSee(env);
+    // Injected readers need no SDK, so a fully injected reader never loads it.
+    const sdk = readsHere && !(getSessionMessages && getSessionInfo && getSubagentMessages)
+      ? await loadClaudeAgentSdk()
+      : undefined;
+    const reader: ClaudeSessionReader = readsHere
       ? {
-        getSessionMessages: this.options.getSessionMessages ?? sdk.getSessionMessages,
-        getSessionInfo: this.options.getSessionInfo ?? sdk.getSessionInfo,
-        getSubagentMessages: this.options.getSubagentMessages ?? sdk.getSubagentMessages,
+        getSessionMessages: getSessionMessages ?? sdk!.getSessionMessages,
+        getSessionInfo: getSessionInfo ?? sdk!.getSessionInfo,
+        getSubagentMessages: getSubagentMessages ?? sdk!.getSubagentMessages,
         close: () => {},
       }
       : this.openSessionReader(env);
