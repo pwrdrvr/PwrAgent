@@ -56,20 +56,32 @@ export function createSlice({ kind, platform, lane, sample = 1, workspace, first
   };
 }
 
-export function aggregateSlices({ slices, samples = 1, runId, attempt, sha, headSha, warnings = [] }) {
-  const expected = expectedSlices(samples);
+// `notRun` names the `kind-platform` pairs the workflow deliberately skipped
+// (pull requests leave macOS and Windows E2E to `main`). They are neither
+// expected nor missing; a slice that arrives for one anyway is still kept.
+export function parseNotRun(value) {
+  const pairs = (value ?? "").split(",").map((pair) => pair.trim()).filter(Boolean);
+  const known = new Set(expectedSlices().map(({ kind, platform }) => `${kind}-${platform}`));
+  for (const pair of pairs) if (!known.has(pair)) throw new Error(`Unknown not-run platform: ${pair}`);
+  return [...new Set(pairs)];
+}
+
+export function aggregateSlices({ slices, samples = 1, notRun = [], runId, attempt, sha, headSha, warnings = [] }) {
+  const inventory = expectedSlices(samples);
+  const skipped = new Set(notRun);
   const byKey = new Map();
-  const allowed = new Set(expected.map((slice) => slice.key));
+  const allowed = new Set(inventory.map((slice) => slice.key));
   for (const slice of slices) {
     if (!allowed.has(slice.key) || slice.key !== keyOf(slice)) throw new Error(`Unexpected slice: ${slice.key}`);
     if (byKey.has(slice.key)) throw new Error(`Duplicate slice: ${slice.key}`);
     byKey.set(slice.key, slice);
   }
+  const expected = inventory.filter((slice) => !skipped.has(`${slice.kind}-${slice.platform}`));
   const missingSlices = expected.filter((slice) => !byKey.has(slice.key));
-  const ordered = expected.filter((slice) => byKey.has(slice.key)).map((slice) => byKey.get(slice.key));
+  const ordered = inventory.filter((slice) => byKey.has(slice.key)).map((slice) => byKey.get(slice.key));
   const failures = ordered.flatMap((slice) => slice.failures);
   return { schemaVersion: 1, runId: runId ?? null, attempt: Number(attempt ?? 1), sha: sha ?? null, headSha: headSha || null,
-    generatedAt: new Date().toISOString(), expectedSlices: expected.length, missingSlices, warnings,
+    generatedAt: new Date().toISOString(), expectedSlices: expected.length, missingSlices, notRun: [...skipped], warnings,
     totals: { initialFailures: failures.length, recovered: failures.filter((test) => test.retry === "recovered").length,
       failed: failures.filter((test) => test.retry === "failed").length, unknown: failures.filter((test) => test.retry === "unknown").length },
     slices: ordered };

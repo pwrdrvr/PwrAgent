@@ -42,6 +42,13 @@ jobs:
     outputs:
       code_impacting: ${{ steps.classify.outputs.code_impacting }}
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      # `true` runs the macOS unit tests, macOS Desktop E2E and Windows
+      # Desktop E2E. Pull requests leave them to `main` unless the `ci:full`
+      # label is present or a platform-specific path changed, because on PRs
+      # they rarely catch what the Linux and Windows lanes miss (see the
+      # README in this directory for the measurements). Every push, and every
+      # case this script cannot decide, runs them.
+      full_platforms: ${{ steps.classify.outputs.full_platforms }}
     steps:
       - name: Classify changed files
         id: classify
@@ -51,11 +58,33 @@ jobs:
             const fullCi = (reason) => {
               core.setOutput("code_impacting", "true");
               core.setOutput("docs_only", "false");
+              core.setOutput("full_platforms", "true");
               core.notice(`Running full CI: ${reason}`);
             };
 
             if (context.eventName !== "pull_request") {
               fullCi(`${context.eventName} events always run full CI`);
+              return;
+            }
+
+            // Read labels live. A rerun replays the original event payload,
+            // so a label added after the push is visible only through the
+            // API. "Re-run failed jobs" does not rerun this succeeded job:
+            // after adding the label, use "Re-run all jobs" or push.
+            let labels;
+            try {
+              labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100,
+              });
+            } catch (error) {
+              fullCi(`label lookup failed (${error.message})`);
+              return;
+            }
+            if (labels.some((label) => label.name === "ci:full")) {
+              fullCi("the ci:full label is present");
               return;
             }
 
@@ -84,10 +113,29 @@ jobs:
               path.startsWith("docs/")
               || path.toLowerCase().endsWith(".md")
               || path.startsWith(".agents/skills/");
-            const codeImpactingFile = files.find((file) => {
-              const paths = [file.filename, file.previous_filename].filter(Boolean);
-              return paths.some((path) => !isNonProductPath(path));
-            });
+            // Code that only a macOS or Windows runner exercises: the
+            // dependency lockfile (Electron and native-module bumps), the
+            // platform-specific specs and their visual baselines, the macOS
+            // native plug-ins and app icon, and the macOS lane scripts.
+            const isPlatformPath = (path) =>
+              path === "pnpm-lock.yaml"
+              || path.startsWith("apps/desktop/e2e/visual-regression.spec.ts")
+              || path.startsWith("apps/desktop/e2e/macos-")
+              || path.startsWith("apps/desktop/e2e/windows-")
+              || path.startsWith("apps/desktop/native/")
+              || path.startsWith("apps/desktop/build/")
+              || path.startsWith("scripts/ci/macos-");
+            const pathsOf = (file) => [file.filename, file.previous_filename].filter(Boolean);
+            const platformFile = files.find((file) =>
+              pathsOf(file).some((path) => !isNonProductPath(path) && isPlatformPath(path)));
+            if (platformFile) {
+              fullCi(`\`${platformFile.filename}\` is exercised only on macOS or Windows runners`);
+              return;
+            }
+            core.setOutput("full_platforms", "false");
+
+            const codeImpactingFile = files.find((file) =>
+              pathsOf(file).some((path) => !isNonProductPath(path)));
             const skipFullCi = codeImpactingFile === undefined;
 
             core.setOutput("code_impacting", String(!skipFullCi));
@@ -101,7 +149,11 @@ jobs:
               .addRaw(
                 skipFullCi
                   ? "Only `docs/**`, Markdown, or `.agents/skills/**` changed; expensive CI jobs are skipped."
-                  : `Full CI runs because \`${codeImpactingFile.filename}\` requires product CI.`,
+                  : `Product CI runs because \`${codeImpactingFile.filename}\` requires it. `
+                    + "No platform-specific path changed, so the macOS unit tests, macOS Desktop E2E "
+                    + "and Windows Desktop E2E run on `main`; "
+                    + "to run them here, add the `ci:full` label, then push or use **Re-run all jobs** "
+                    + "(\"Re-run failed jobs\" does not rerun this classifier).",
               )
               .write();
 
@@ -765,6 +817,7 @@ jobs:
         env:
           LINUX_E2E_RESULT: ${{ needs.desktop-e2e.result }}
           MACOS_E2E_RESULT: ${{ needs.desktop-e2e-macos.result }}
+          FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
         run: |
           set -euo pipefail
 
@@ -791,7 +844,14 @@ jobs:
 
           say "### Desktop E2E platform results"
           require "Linux" "$LINUX_E2E_RESULT"
-          require "macOS" "$MACOS_E2E_RESULT"
+          # The classifier leaves macOS to `main` on pull requests. Accept a
+          # skip only when it said so; any other skip, and every other
+          # result, still fails the gate.
+          if [[ "$FULL_PLATFORMS" == "false" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
+            say "- SKIP \`macOS\` (runs on \`main\`; add the \`ci:full\` label and use **Re-run all jobs** to run it here)"
+          else
+            require "macOS" "$MACOS_E2E_RESULT"
+          fi
 
           exit "$status"
   macos-install-deps:
@@ -801,7 +861,7 @@ jobs:
     # configure-nodejs keys the store on runner.os + runner.arch, so this
     # primes the cache the unit and E2E lanes restore. Do not use
     # macos-26-intel or a paid larger size.
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: needs.changes.outputs.code_impacting == 'true' && needs.changes.outputs.full_platforms == 'true'
     runs-on: macos-26
     needs: changes
     timeout-minutes: 15
@@ -835,8 +895,9 @@ jobs:
     name: macOS unit tests (lane ${{ matrix.lane }} of 4)
     runs-on: macos-26
     needs: [changes, macos-install-deps]
-    # Exercise the release unit-test platform before a tag is cut.
-    if: needs.changes.outputs.code_impacting == 'true'
+    # Exercise the release unit-test platform before a tag is cut. Pull
+    # requests run it only when `changes` sets `full_platforms`.
+    if: needs.changes.outputs.code_impacting == 'true' && needs.changes.outputs.full_platforms == 'true'
     # Two lanes exhausted this deadline while still running tests. Four keep
     # native-module process isolation and the deadline with less work per VM.
     timeout-minutes: 15
@@ -937,7 +998,8 @@ jobs:
     name: macOS Desktop E2E (lane ${{ matrix.lane }} of 4)
     # GitHub-hosted, fresh VM per job, so fork PRs run here too. Never move
     # this lane back to self-hosted machines: this is a public repository.
-    if: needs.changes.outputs.code_impacting == 'true'
+    # Pull requests run it only when `changes` sets `full_platforms`.
+    if: needs.changes.outputs.code_impacting == 'true' && needs.changes.outputs.full_platforms == 'true'
     runs-on: macos-26
     needs: [changes, macos-install-deps]
     strategy:
@@ -1078,9 +1140,16 @@ jobs:
     # lane ran Playwright on Windows. The first guards native `.cmd` discovery
     # and launch, which is exactly the Git-for-Windows launcher-handoff class
     # that CLAUDE.md records as expensive.
+    #
+    # Pull requests run it only when `changes` sets `full_platforms`, or with
+    # the shutdown-diagnostics label, which exists to run this job.
     runs-on: windows-latest
     needs: [changes, windows-install-deps]
-    if: needs.changes.outputs.code_impacting == 'true'
+    if: >-
+      needs.changes.outputs.code_impacting == 'true' && (
+        needs.changes.outputs.full_platforms == 'true'
+        || contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics')
+      )
     strategy:
       # Keep the other lanes running after a failure so their artifacts show
       # whether a failure is isolated or suite-wide, exactly as the Linux and
@@ -1241,7 +1310,20 @@ jobs:
         env:
           FLAKE_SAMPLES: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && '3' || '1' }}
           FLAKE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/ci/write-flake-report.mjs aggregate
+          FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
+          WINDOWS_DIAGNOSTICS: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') }}
+        # Mirror the `if:` of test-macos, desktop-e2e-macos and windows-e2e, so
+        # a platform the classifier skipped is not reported as missing.
+        run: |
+          set -euo pipefail
+          not_run=""
+          if [[ "$FULL_PLATFORMS" != "true" ]]; then
+            not_run="unit-macos,e2e-macos"
+            if [[ "$WINDOWS_DIAGNOSTICS" != "true" ]]; then
+              not_run+=",e2e-windows"
+            fi
+          fi
+          FLAKE_NOT_RUN="$not_run" node scripts/ci/write-flake-report.mjs aggregate
       - name: Upload consolidated report
         uses: actions/upload-artifact@v7
         with:
