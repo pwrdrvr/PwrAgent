@@ -9,6 +9,8 @@ import type { SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-
 export type ClaudeSessionReads = {
   getSessionMessages(sessionId: string, options?: { dir?: string }): Promise<SessionMessage[]>;
   getSessionInfo(sessionId: string, options?: { dir?: string }): Promise<SDKSessionInfo | undefined>;
+  /** One sub-agent's conversation, by the parent session and the agent's id. */
+  getSubagentMessages(sessionId: string, agentId: string, options?: { dir?: string }): Promise<SessionMessage[]>;
 };
 
 
@@ -19,6 +21,8 @@ export type ClaudeSessionReadRequest = {
   id: number;
   method: keyof ClaudeSessionReads;
   sessionId: string;
+  /** The sub-agent `getSubagentMessages` reads. */
+  agentId?: string;
   options?: { dir?: string };
 };
 

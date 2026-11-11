@@ -5,7 +5,12 @@ import type {
   FederationTarget,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
-import { hasDurableSubAgentTranscript, isCodexNativeSubAgent } from "@pwragent/shared";
+import {
+  claudeSubAgentTranscriptThreadIdForMonitor,
+  hasDurableSubAgentTranscript,
+  isClaudeNativeSubAgent,
+  isCodexNativeSubAgent,
+} from "@pwragent/shared";
 import { CloseIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { copyText } from "../../../lib/copy-text";
@@ -73,10 +78,13 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
     backend: subAgent.backend ?? props.defaultBackend,
     origin: isCodexNativeSubAgent(subAgent) ? "codex-native" : "pwragent",
   });
-  const transcriptThreadId =
-    hasDurableTranscript &&
-    subAgent.monitorThreadId &&
-    subAgent.monitorThreadId !== props.parentThreadId
+  // A Claude sub-agent has no thread of its own; its transcript is read
+  // from its parent's session by the task id.
+  const transcriptThreadId = isClaudeNativeSubAgent(subAgent)
+    ? claudeSubAgentTranscriptThreadIdForMonitor(subAgent.monitorId, props.parentThreadId)
+    : hasDurableTranscript &&
+      subAgent.monitorThreadId &&
+      subAgent.monitorThreadId !== props.parentThreadId
       ? subAgent.monitorThreadId
       : undefined;
   const backendLabel = formatBackendLabel(subAgent.backend ?? props.defaultBackend);
@@ -153,7 +161,10 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
                       ? { federationTarget: props.federationTarget }
                       : {}),
                     threadId: transcriptThreadId,
-                    title: subAgent.agentName ?? subAgent.task,
+                    // A Claude agent name is its type, the same for most of them.
+                    title: isClaudeNativeSubAgent(subAgent)
+                      ? subAgent.task
+                      : subAgent.agentName ?? subAgent.task,
                   });
                   props.onClose();
                 }}

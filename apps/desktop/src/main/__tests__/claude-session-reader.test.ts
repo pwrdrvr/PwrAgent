@@ -51,6 +51,19 @@ describe("Claude session reader", () => {
     await expect(reader.getSessionInfo("session-1")).rejects.toThrow("closed");
   });
 
+  it("sends a sub-agent read with the agent's id", async () => {
+    const child = fakeChild();
+    const reader = openClaudeSessionReader({}, { workerPath: WORKER, fork: async () => child });
+    const read = reader.getSubagentMessages("session-1", "a1b2", { dir: "/work/project" });
+    await settle();
+    expect(child.posted).toEqual([
+      { id: 1, method: "getSubagentMessages", sessionId: "session-1", agentId: "a1b2", options: { dir: "/work/project" } },
+    ]);
+    child.reply({ id: 1, result: [{ uuid: "subagent-prompt" }] });
+    await expect(read).resolves.toEqual([{ uuid: "subagent-prompt" }]);
+    reader.close();
+  });
+
   it("reports the SDK's error for one read", async () => {
     const child = fakeChild();
     const reader = openClaudeSessionReader({}, { workerPath: WORKER, fork: async () => child });
@@ -100,6 +113,7 @@ describe("Claude session reader", () => {
     const reads = {
       getSessionMessages: vi.fn(async () => [{ uuid: "prompt" }] as never),
       getSessionInfo: vi.fn(async () => { throw new Error("unreadable"); }),
+      getSubagentMessages: vi.fn(async () => [{ uuid: "subagent-prompt" }] as never),
     };
     await expect(answerClaudeSessionRead(
       { id: 3, method: "getSessionMessages", sessionId: "session-1", options: { dir: "/work" } }, reads,
@@ -107,5 +121,12 @@ describe("Claude session reader", () => {
     expect(reads.getSessionMessages).toHaveBeenCalledWith("session-1", { dir: "/work" });
     await expect(answerClaudeSessionRead({ id: 4, method: "getSessionInfo", sessionId: "session-1" }, reads))
       .resolves.toEqual({ id: 4, error: "unreadable" });
+    await expect(answerClaudeSessionRead(
+      { id: 5, method: "getSubagentMessages", sessionId: "session-1", agentId: "a1b2", options: { dir: "/work" } }, reads,
+    )).resolves.toEqual({ id: 5, result: [{ uuid: "subagent-prompt" }] });
+    expect(reads.getSubagentMessages).toHaveBeenCalledWith("session-1", "a1b2", { dir: "/work" });
+    // Without the agent's id there is nothing to read; it never reads a guess.
+    await expect(answerClaudeSessionRead({ id: 6, method: "getSubagentMessages", sessionId: "session-1" }, reads))
+      .resolves.toEqual({ id: 6, error: "A sub-agent read needs the agent's id." });
   });
 });

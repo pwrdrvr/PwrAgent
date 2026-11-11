@@ -1,6 +1,7 @@
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
 import { useState } from "react";
+import { claudeSubAgentTranscriptThreadIdForMonitor } from "@pwragent/shared";
 import { SubAgentsIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useDesktopApi } from "../../lib/desktop-api";
@@ -39,6 +40,9 @@ export function isSubthreadSectionCollapsed(thread: NavigationPresentedThread): 
   return thread.subthreadsCollapsed === true;
 }
 
+/** The type Claude's Agent tool uses when the call names none. */
+const CLAUDE_DEFAULT_AGENT_TYPE = "general-purpose";
+
 // The group draws native workers only; the thread's other card history stays unread.
 const NATIVE_SUB_AGENT_COLLECTIONS = ["codexNativeSubAgents"] as const;
 
@@ -58,10 +62,8 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
     return null;
   }
 
-  // A Claude sub-agent is a task in its parent's session, not a thread, so
-  // there is no transcript window to open for it.
-  const harnessLabel = props.thread.source === "claude" ? "Claude" : "native Codex";
-  const opensTranscript = props.thread.source === "codex";
+  const claude = props.thread.source === "claude";
+  const harnessLabel = claude ? "Claude" : "native Codex";
   const activeCount = nativeSubAgents.filter(
     (subAgent) => subAgent.threadStatus === "active",
   ).length;
@@ -121,7 +123,20 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
           aria-label={`${props.thread.source === "claude" ? "Claude" : "Native Codex"} sub-agents for ${props.thread.title}`}
         >
           {nativeSubAgents.map((subAgent) => {
-            const label = subAgent.agentNickname ?? subAgent.title;
+            // A Claude row's nickname is its agent type, which most share
+            // ("general-purpose"), so the row names its task instead and
+            // keeps a type that tells it apart as the role.
+            const label = claude ? subAgent.title : subAgent.agentNickname ?? subAgent.title;
+            const role = claude
+              ? subAgent.agentNickname && subAgent.agentNickname !== CLAUDE_DEFAULT_AGENT_TYPE
+                ? subAgent.agentNickname
+                : undefined
+              : subAgent.agentRole;
+            // A Claude sub-agent is a task in its parent's session, not a
+            // thread; its transcript is read from the parent by the task id.
+            const transcriptThreadId = claude
+              ? claudeSubAgentTranscriptThreadIdForMonitor(subAgent.threadId, props.thread.id)
+              : props.thread.source === "codex" ? subAgent.threadId : undefined;
             const content = (
               <>
                 {subAgent.threadStatus === "active" ? (
@@ -132,14 +147,12 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
                   />
                 ) : null}
                 <span className="native-subagents__agent-label">{label}</span>
-                {subAgent.agentRole ? (
-                  <span className="native-subagents__agent-role">
-                    {subAgent.agentRole}
-                  </span>
+                {role ? (
+                  <span className="native-subagents__agent-role">{role}</span>
                 ) : null}
               </>
             );
-            if (!opensTranscript) {
+            if (!transcriptThreadId) {
               return (
                 <div key={subAgent.threadId} role="listitem">
                   <span className="native-subagents__agent native-subagents__agent--static" title={subAgent.title}>
@@ -161,11 +174,11 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
                       return;
                     }
                     void openSubAgentTranscriptWindow({
-                      backend: "codex",
+                      backend: props.thread.source,
                       federationTarget:
                         props.thread.federation?.ref.target
                         ?? readRendererFederationTarget(),
-                      threadId: subAgent.threadId,
+                      threadId: transcriptThreadId,
                       title: label,
                     });
                   }}

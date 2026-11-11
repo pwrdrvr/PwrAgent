@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
+import type { HookEvent, HookInput, Options, Query, SDKMessage, SDKUserMessage, SessionMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, AppServerThreadMessageOrigin, BackendModelOption } from "@pwragent/shared";
 import {
   CLAUDE_FORK_SOURCE_GONE_MESSAGE, CLAUDE_SESSION_GONE_MESSAGE, CLAUDE_SESSION_GONE_REWIND_MESSAGE,
@@ -4527,6 +4527,39 @@ describe("Claude thread rewind", () => {
     await f.waitForTurn();
     expect(f.queries.at(-1)).toMatchObject({ resume: SDK_SESSION, resumeSessionAt: "assistant-1" });
     expect((await f.store.read(threadId)).resumeSessionAt).toBeUndefined();
+  });
+
+  it("reads a sub-agent's transcript from the session that ran it", async () => {
+    const f = await fixture();
+    const { threadId } = await runTurns(f, ["Audit the limiters"]);
+    // The sub-agent ran before the thread continued in a new session, and
+    // that session was written under another project folder.
+    const stored = await f.store.read(threadId);
+    stored.sessionRestarts = [{ at: 1, previousSdkSessionId: "earlier-session" }];
+    await f.store.save(stored);
+    const getSubagentMessages = vi.fn(async (sessionId: string, agentId: string, options?: { dir?: string }) =>
+      sessionId === "earlier-session" && agentId === "agent-1" && !options?.dir
+        ? [
+          { type: "user", uuid: "u1", session_id: sessionId, parent_tool_use_id: "toolu_p", parent_agent_id: null,
+            message: { role: "user", content: "Audit PR-status limiters" } },
+          { type: "assistant", uuid: "a1", session_id: sessionId, parent_tool_use_id: "toolu_p", parent_agent_id: null,
+            message: { id: "msg-1", role: "assistant", content: [{ type: "text", text: "Found two." }] } },
+        ] as SessionMessage[]
+        : []);
+    Object.assign(f.backendOptions, { getSubagentMessages });
+
+    const replay = await f.backend.readSubAgentTranscript(threadId, "agent-1");
+
+    expect(replay.messages.map((message) => [message.role, message.text])).toEqual([
+      ["user", "Audit PR-status limiters"], ["assistant", "Found two."],
+    ]);
+    expect(replay.threadStatus).toBe("idle");
+    // The current session first, in its own folder and then anywhere.
+    expect(getSubagentMessages.mock.calls.map(([sessionId, , options]) => [sessionId, options?.dir !== undefined])).toEqual([
+      [SDK_SESSION, true], [SDK_SESSION, false], ["earlier-session", true], ["earlier-session", false],
+    ]);
+    await expect(f.backend.readSubAgentTranscript(threadId, "agent-2"))
+      .rejects.toThrow("Claude Code has no saved conversation for this sub-agent.");
   });
 
   it("records where a second rewind's branch ends before any turn resumed", async () => {

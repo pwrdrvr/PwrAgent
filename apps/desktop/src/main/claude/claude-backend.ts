@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  getSessionInfo, getSessionMessages, query, type AccountInfo, type McpServerStatus, type Options, type Query, type SDKMessage,
+  getSessionInfo, getSessionMessages, getSubagentMessages, query, type AccountInfo, type McpServerStatus, type Options, type Query, type SDKMessage,
   type SDKResultMessage, type SDKUserMessage, type SlashCommand, type UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -37,6 +37,7 @@ import {
 } from "./claude-usage";
 import { PlanLimitStore } from "../app-server/plan-limit-store";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
+import { claudeSubAgentTranscriptEntries } from "./claude-subagent-transcript";
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeSessionWakeTracker, claudeSessionWakeHooks } from "./claude-session-wakes";
@@ -66,6 +67,7 @@ export type ClaudeBackendOptions = {
   query?: typeof query;
   getSessionInfo?: typeof getSessionInfo;
   getSessionMessages?: typeof getSessionMessages;
+  getSubagentMessages?: typeof getSubagentMessages;
   /** Session reads for a Claude launched under another CLAUDE_CONFIG_DIR. */
   openSessionReader?: (env: NodeJS.ProcessEnv) => ClaudeSessionReader;
   inspectInstallation?: typeof inspectClaudeInstallation;
@@ -865,6 +867,42 @@ export class ClaudeBackend {
       lastAssistantMessage: messages.findLast((entry) => entry.role === "assistant")?.text,
       pagination: { supportsPagination: false, hasPreviousPage: false },
       threadStatus: live?.turn ? "active" : "idle",
+    };
+  }
+
+  /**
+   * One sub-agent's transcript. Claude Code saves each sub-agent's
+   * conversation beside its parent's session, under the task's id, and the
+   * parent's live stream carries none of it, so it is read back from there.
+   */
+  async readSubAgentTranscript(threadId: string, taskId: string): Promise<AppServerThreadReplay> {
+    const session = await this.store.read(threadId);
+    // A sub-agent from before the thread continued in a new session, or
+    // before a fork, lives under that earlier session.
+    const sessionIds = [...new Set([
+      session.sdkSessionId,
+      ...(session.sessionRestarts ?? []).map((restart) => restart.previousSdkSessionId).reverse(),
+      session.forkFromSdkSessionId,
+    ].filter((id): id is string => Boolean(id)))];
+    const messages = await this.withSessionReader(async (reader) => {
+      for (const sessionId of sessionIds) {
+        const local = await reader.getSubagentMessages(sessionId, taskId, { dir: session.sdkSessionDir ?? session.cwd });
+        // A session written before a move sits under another project folder.
+        const found = local.length > 0 ? local : await reader.getSubagentMessages(sessionId, taskId);
+        if (found.length > 0) return found;
+      }
+      return [];
+    });
+    if (messages.length === 0) throw new Error("Claude Code has no saved conversation for this sub-agent.");
+    const running = this.runsTask(threadId, taskId);
+    const entries = claudeSubAgentTranscriptEntries(messages, { running });
+    const messageEntries = entries.filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message");
+    return {
+      entries, messages: messageEntries,
+      lastUserMessage: messageEntries.findLast((entry) => entry.role === "user")?.text,
+      lastAssistantMessage: messageEntries.findLast((entry) => entry.role === "assistant")?.text,
+      pagination: { supportsPagination: false, hasPreviousPage: false },
+      threadStatus: running ? "active" : "idle",
     };
   }
 
@@ -3043,6 +3081,7 @@ export class ClaudeBackend {
       ? {
         getSessionMessages: this.options.getSessionMessages ?? getSessionMessages,
         getSessionInfo: this.options.getSessionInfo ?? getSessionInfo,
+        getSubagentMessages: this.options.getSubagentMessages ?? getSubagentMessages,
         close: () => {},
       }
       : this.openSessionReader(env);

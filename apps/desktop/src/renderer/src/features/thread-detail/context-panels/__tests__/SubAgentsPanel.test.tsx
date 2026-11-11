@@ -471,6 +471,44 @@ describe("SubAgentsPanel", () => {
     });
   });
 
+  it("opens a Claude sub-agent's transcript from its details, by the parent thread and task", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true as const }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: { openSubAgentTranscriptWindow },
+    });
+    try {
+      render(
+        <SubAgentsPanel
+          thread={{
+            ...thread,
+            id: "claude-parent",
+            source: "claude",
+            subAgents: [{
+              monitorId: "claude-native:agent-1",
+              task: "Cluster: rules & matching",
+              status: "success",
+              createdAt: 1_800_000_000_000,
+              updatedAt: 1_800_000_000_100,
+              backend: "claude",
+              agentName: "general-purpose",
+            }],
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Details" }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Open transcript" }));
+      expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+        backend: "claude",
+        threadId: "claude-subagent:claude-parent:agent-1",
+        title: "Cluster: rules & matching",
+      });
+    } finally {
+      delete (window as Window & { pwragent?: unknown }).pwragent;
+    }
+  });
+
   it("keeps an open details dialog on the live sub-agent record", () => {
     const { rerender } = render(<SubAgentsPanel thread={thread} />);
 
