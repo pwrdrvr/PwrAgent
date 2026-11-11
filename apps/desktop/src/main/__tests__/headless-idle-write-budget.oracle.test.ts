@@ -49,6 +49,9 @@ function leaveFixture(): void {
 // evaluates a fresh owner module graph. Building per case cost ~150 ms each.
 let buildRoot: string | undefined;
 let builtBundle: string;
+// Node reads no source map without --enable-source-maps; skipping them saves
+// copying 22 MB of the bundle's 34 MB into every case.
+const bundleCopy = { recursive: true, filter: (source: string) => !source.endsWith(".map") };
 
 beforeAll(async () => {
   buildRoot = createFixtureRoot();
@@ -62,12 +65,10 @@ beforeAll(async () => {
   // path, and Node caches them for the whole worker. Whichever case ran first
   // paid that load inside its own timeout, the symlink case never did. One
   // throwaway evaluation here loads them once for both cases. It never boots
-  // a host, and its owner modules are discarded with this copy.
-  const warmup = path.join(buildRoot, "warmup");
-  fs.cpSync(builtBundle, warmup, { recursive: true });
-  enterFixture(buildRoot);
+  // a host, and each case requires its own copy at another path.
   try {
-    createRequire(import.meta.url)(path.join(warmup, "dist/index.js"));
+    enterFixture(buildRoot);
+    createRequire(import.meta.url)(path.join(builtBundle, "dist/index.js"));
   } finally {
     leaveFixture();
   }
@@ -82,21 +83,22 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
   const root = spelling === "symlink" ? `${canonicalRoot}-alias` : canonicalRoot;
   if (root !== canonicalRoot) fs.symlinkSync(canonicalRoot, root, "dir");
   const directory = path.join(root, "bundle");
-  fs.cpSync(builtBundle, directory, { recursive: true });
-  enterFixture(root);
-  const runtime = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
-  // Schema creation is fixture setup; every owner lifecycle write is measured.
-  const db = runtime.StateDb.open(path.join(root, "profiles/t/state/state.db"));
-  db.close();
-  runtime.resetSqliteWriteMetrics();
+  let runtime: Runtime | undefined;
   let boot: SqliteWriteDelta | undefined;
   let idle: SqliteWriteDelta | undefined;
   let shutdown: SqliteWriteDelta | undefined;
   try {
-    const { writes } = await runtime.measureSqliteWrites(async () => {
-      const started = await runtime.measureSqliteWrites(async () => {
-        const services = await runtime.startHeadlessHost(undefined, { manageSignals: false });
-        const permit = runtime.issueProviderDiscoveryPermit("startup");
+    fs.cpSync(builtBundle, directory, bundleCopy);
+    enterFixture(root);
+    const owner = runtime = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
+    // Schema creation is fixture setup; every owner lifecycle write is measured.
+    const db = owner.StateDb.open(path.join(root, "profiles/t/state/state.db"));
+    db.close();
+    owner.resetSqliteWriteMetrics();
+    const { writes } = await owner.measureSqliteWrites(async () => {
+      const started = await owner.measureSqliteWrites(async () => {
+        const services = await owner.startHeadlessHost(undefined, { manageSignals: false });
+        const permit = owner.issueProviderDiscoveryPermit("startup");
         await services.settings.refreshStartupDiscovery(permit);
         await services.registry.refreshProvidersAtStartup(permit);
         await services.service.startOwnerNavigation();
@@ -105,13 +107,13 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
       });
       boot = started.writes;
       const services = started.result;
-      ({ writes: idle } = await runtime.measureSqliteWrites(async () => {
+      ({ writes: idle } = await owner.measureSqliteWrites(async () => {
         await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
         if (services.registry.getThreadArchiveSweepStatus().running) {
           await services.registry.sweepInactiveThreads({ manual: false });
         }
       }));
-      ({ writes: shutdown } = await runtime.measureSqliteWrites(() => runtime.shutdownHeadlessHost("idle-budget")));
+      ({ writes: shutdown } = await owner.measureSqliteWrites(() => owner.shutdownHeadlessHost("idle-budget")));
     });
     // The first scheduled archive sweep claims and completes its one-time
     // repair. Its two metadata writes belong to this first idle hour.
@@ -123,9 +125,12 @@ it.each(process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"])
       throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ lifecycle: writes.tables, boot: boot!.tables, idle: idle!.tables, shutdown: shutdown!.tables }, null, 2)}`, { cause: error });
     }
   } finally {
-    await runtime.shutdownHeadlessHost("idle-budget-cleanup");
-    leaveFixture();
-    if (root !== canonicalRoot) fs.unlinkSync(root);
-    fs.rmSync(canonicalRoot, { recursive: true, force: true });
+    try {
+      await runtime?.shutdownHeadlessHost("idle-budget-cleanup");
+    } finally {
+      leaveFixture();
+      if (root !== canonicalRoot) fs.unlinkSync(root);
+      fs.rmSync(canonicalRoot, { recursive: true, force: true });
+    }
   }
 });
