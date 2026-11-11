@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.4.0 - 2026-11-11
+
+- Outpost Rebuilt - Run the desktop's owner services under plain Node without Electron or a display server. Outpost now shares the desktop registry, inbox, queue, federation handlers, and shutdown lifecycle. Run turns in separate threads concurrently and create new threads while other work is running.
+- Outpost Queue Controls - Pause, reorder, edit, replace, cancel, and release queued input, and steer individual entries through the owning queue. Keep durable acceptance identities and independent holds intact through retries, handovers, and failed status publication instead of duplicating or losing accepted work.
+- Outpost Startup and Containment - Detect unusable Codex sandboxes before startup, preserve profile observations and custom Codex-home mappings across owner restarts, and wait for PTY shutdown. Outpost remains Codex-only, with read-only Default mode and workspace-write Auto mode, no Full Access, and no outbound remote mutations or file transfers from contained peers.
+- Faster Thread Maintenance - Process independent checkout work in parallel, avoid repeated directory reads and quadratic shared-checkout scans, and retain per-checkout progress while cleanup runs. Register existing linked worktrees for cleanup and identify the peer and thread behind cleanup notices. Measure Windows allocation natively.
+- Worktree Disk Usage - Reuse verified Electron runtime data across development worktrees instead of keeping separate runtime copies for each checkout.
+- Claude Sub-agent Transcripts - Name sub-agents by their task rather than repeating their agent type. Open their transcripts from sidebar rows or details, including on connected machines, and refresh running transcripts in place. Update the Claude Agent SDK to 0.3.322.
+- PwrSnap and PwrGit Connections - Connect PwrSnap 1.3+ and PwrGit 0.56+ through their bundled local MCP relays instead of retired TCP/OAuth endpoints. Each application approves its own thread session, and connections recover after the application restarts without opening an OAuth browser.
+- PwrSnap Images - Read transcript images through the MCP session that returned them and cache the bytes per thread so they remain visible after the session ends, including through federation. Legacy loopback media URLs are no longer fetched and may appear unavailable.
+- Pull Request Controls - Add enterable sidebar PR cards, Copy URL and Detach actions, PR-list context menus, a Copy PR URL submenu, and a Mission Control overflow chip. Recover watches owned by exited runtimes and retire terminal watches before dispatch. Reset Auto-fix attempts only when Auto-fix is turned on.
+- Thread Navigation - Fold and page nested sub-threads, preserve nesting indentation in Compact and Minimal layouts, resolve transcript thread links when encountered, and offer only connected machines in machine pickers.
+- Messaging Reliability - Preserve rate-limit cool-offs and one provider connection across adapter restarts. Handle Mattermost and LINE HTTP 429 responses as rate limits rather than immediately repeating requests.
+- Status and Responsiveness - Preserve provider transcript order through racing reads, prevent finished Codex turns from becoming active again, ignore obsolete usage-forecast deadlines, avoid unchanged metadata writes, and release unused MCP sockets during shutdown.
+
+Outpost upgrade: Node 24+ is required, along with a C compiler, curl, tar, and enabled npm install scripts for target-native dependencies and the pinned Git runtime. Stop the old daemon before upgrading and restart it afterward. Legacy Outpost job files, command parameters, and output formats are retired; update CLI automation to the owner-based commands and queue-entry identities.
+
 ## v1.3.16 - 2026-11-08
 
 - Thread Maintenance: Reclaim Disk Space - Find the checkouts actually used by this profile's threads, not just those in default worktree folders. See their disk usage, largest contents, owning threads, and exactly why a checkout is being kept, with links to the threads so you can resolve the blocker and scan again.
