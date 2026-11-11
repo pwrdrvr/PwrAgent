@@ -21,13 +21,18 @@ function ownersByFilter(candidates: readonly ThreadArchiveCandidate[], target: s
 // several depths, a trailing separator, spellings `path.normalize` rewrites
 // (`.`, `..`, doubled separators), a relative path the owners list drops,
 // and the filesystem root.
-const PATHS = [
+// Each also appears with the platform's own separator, so a Windows run
+// compares backslash paths that match, not only forward-slash ones that
+// normalize away from every target. On POSIX the two forms are the same.
+const native = (value: string) => value.split("/").join(path.sep);
+const POSIX_PATHS = [
   "/w/repo", "/w/repo2", "/w/re", "/w/repo/sub", "/w/repo/sub/deep", "/w/repo2/sub", "/w/repo/",
   "/w/./repo/sub", "/w/x/../repo", "//w//repo", "/w", "/", "w/repo",
 ];
+const PATHS = [...new Set(POSIX_PATHS.flatMap((value) => [value, native(value)]))];
 // Checkouts asked about, unnormalized ones included: the step passes the
 // thread's raw worktree path.
-const TARGETS = [...PATHS, "/w/repo/sub/", "/w/./repo", "", "/x"];
+const TARGETS = [...new Set([...PATHS, ...["/w/repo/sub/", "/w/./repo", "", "/x"].flatMap((value) => [value, native(value)])])];
 
 const directory = fc.record({
   path: fc.constantFrom(...PATHS),
