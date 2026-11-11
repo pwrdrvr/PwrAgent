@@ -2029,12 +2029,13 @@ describe("FeishuAdapter inbound-rejected listeners", () => {
       },
     });
     // Feishu waits for its listeners, so the event has arrived by now.
-    expect(probe.received).toEqual([
-      expect.objectContaining({ reason: "unauthorized-actor" }),
-    ]);
+    const receivedBeforeSettle = [...probe.received];
     await probe.settle();
     await adapter.stop();
 
+    expect(receivedBeforeSettle).toEqual([
+      expect.objectContaining({ reason: "unauthorized-actor" }),
+    ]);
     expect(probe.unhandled).toEqual([]);
     for (const error of probe.errors) {
       expect(warn).toHaveBeenCalledWith("feishu inbound-rejected listener failed", {

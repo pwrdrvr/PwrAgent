@@ -650,9 +650,9 @@ Notify `onRateLimit` listeners through `notifyEachListener` from
 `@pwragent/messaging-interface`. A listener that throws is skipped and never
 changes the delivery result.
 
-Notify `onInboundRejected` listeners through `notifyEachListenerAsync`. The
-desktop runtime's listener is async and writes Messaging Activity to the store.
-The helper starts every listener, passes a throw or a rejected promise to the
+Notify `onInboundRejected` listeners through `notifyEachListenerAsync`.
+Listeners may be async, as the desktop runtime's is, and an adapter cannot rely
+on each one catching its own failures. The helper starts every listener, passes a throw or a rejected promise to the
 adapter's `onError` logger, and returns a promise that never rejects. An adapter
 whose rejection path is synchronous may discard that promise with `void`. An
 adapter whose rejection path is already async should await it. Log only the
