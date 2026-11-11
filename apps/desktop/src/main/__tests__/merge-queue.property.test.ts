@@ -15,8 +15,8 @@ import type { ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";
 import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { mapGraphqlPrNode, type GraphqlPrNode } from "../pr-status/github-graphql-client";
-import { githubMergeQueueStatus, type GithubMergeQueueObservation } from "../pr-status/pr-merge-queue";
-import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
+import { githubMergeQueueStatus, gitlabMergeTrainStatus, type GithubMergeQueueObservation } from "../pr-status/pr-merge-queue";
+import { PrStatusWatchCoordinator, terminalWakeOutcomeOf } from "../pr-status/pr-status-watch";
 import { computePrStatusTransition } from "../pr-status/pr-transitions";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -328,6 +328,33 @@ describe("merge_pull_request on a branch that requires a merge queue", () => {
     await expect(refusing.execute("merge_pull_request", { number: 3631, expectedHeadSha: head }, ctx())).rejects.toMatchObject({ code: "rejected" });
   });
 
+  it("never reads a github.com refusal as a server without the queue schema", async () => {
+    const calls: string[] = [];
+    const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+      calls.push(init?.method ?? "GET");
+      if (init?.method === "PUT") return json({ merged: true, sha: "c".repeat(40) });
+      return json({ errors: [{ message: "Field 'isMergeQueueEnabled' doesn't exist on type 'PullRequest'" }] });
+    }) as unknown as typeof fetch;
+    const client = new GithubPrToolClient({ ci: new ForgeCiClient({
+      fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+    }), tempRoots: [os.tmpdir()] });
+    await expect(client.execute("merge_pull_request", { number: 3631, expectedHeadSha: head }, ctx())).rejects.toMatchObject({ code: "rejected" });
+    expect(calls).not.toContain("PUT");
+  });
+
+  it("fails rather than reports auto-merge on when GitHub did not turn it on", async () => {
+    const pending: Gate = { required: true, entry: null, checks: "PENDING", lastRemoved: false };
+    const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const query = (init?.body ? JSON.parse(String(init.body)) as { query?: string } : {}).query ?? "";
+      if (query.includes("enablePullRequestAutoMerge")) return json({ data: { enablePullRequestAutoMerge: { pullRequest: { autoMergeRequest: null } } } });
+      return json({ data: gateData(pending) });
+    }) as unknown as typeof fetch;
+    const client = new GithubPrToolClient({ ci: new ForgeCiClient({
+      fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+    }), tempRoots: [os.tmpdir()] });
+    await expect(client.execute("merge_pull_request", { number: 3631, expectedHeadSha: head }, ctx())).rejects.toMatchObject({ code: "rejected" });
+  });
+
   it("does the same through a to-do card's gh merge, and says it queued rather than merged", async () => {
     await fc.assert(fc.asyncProperty(gateArb, async (gate) => {
       const ran: string[][] = [];
@@ -381,6 +408,28 @@ async function registerMergeWatch(store: SqliteOverlayStore, threadId: string, c
     prNumber: prBase.number, kind: "terminal", headSha: "", notifyOn: ["merged"], createdAt, failureHandledByAutoFix: false,
   } });
 }
+
+describe("a GitLab merge train car that merged", () => {
+  // The car and the MR are separate reads. A car that already merged while
+  // the MR still reads open is the train landing it, never a removal: a
+  // removal would end the merge watch with "It has not merged".
+  it("reads as merging, and wakes no merge watch, until the MR reads merged", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("merged", "skip_merged", "MERGED"),
+      fc.option(fc.constantFrom("success", "failed", "canceled"), { nil: null }),
+      (status, pipelineStatus) => {
+        const open = gitlabMergeTrainStatus({
+          lifecycle: "open", enabled: true,
+          car: { status, createdAt: "2026-11-11T18:00:00Z", updatedAt: "2026-11-11T18:20:00Z", pipelineStatus },
+        });
+        expect(open?.state).toBe("merging");
+        const pr = { provider: "gitlab.com", org: "fixture", repo: "project", number: 17, url: "https://gitlab.com/fixture/project/-/merge_requests/17", lifecycleState: "open", mergeQueue: open } as PrSummary;
+        expect(terminalWakeOutcomeOf(pr)).toBeUndefined();
+        expect(gitlabMergeTrainStatus({ lifecycle: "merged", enabled: true, car: { status } })?.state).toBe("merged_by_queue");
+      },
+    ));
+  });
+});
 
 describe("a merge queue removal wakes merge watches", () => {
   it("wakes each watch armed before the removal exactly once, and none armed after it", async () => {

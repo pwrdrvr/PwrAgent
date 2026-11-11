@@ -1,14 +1,10 @@
 import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from "./forge-reference";
 import { describeMergeQueueState } from "@pwragent/shared";
 import {
-  GITHUB_ENABLE_AUTO_MERGE_MUTATION,
-  GITHUB_ENQUEUE_MUTATION,
   GITHUB_MERGE_QUEUE_GATE_QUERY,
-  githubQueueAction,
   isMergeQueueSchemaUnsupported,
-  parseGithubAutoMergeResult,
-  parseGithubEnqueueResult,
   parseGithubMergeQueueGate,
+  runGithubQueueMerge,
 } from "./github-merge-queue";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -302,22 +298,22 @@ export class GithubPrFetcher {
       ]));
     } catch (error) {
       // An Enterprise Server without merge queues refuses the fields.
-      if (error instanceof Error && isMergeQueueSchemaUnsupported(error.message)) return undefined;
+      if (error instanceof Error && isMergeQueueSchemaUnsupported(reference.provider, error.message)) return undefined;
       throw error;
     }
     if (!gate.required) return undefined;
-    const action = githubQueueAction(gate);
-    if (action === "already_queued") {
-      return { queued: true, summary: `${label} is already in the merge queue · ${describeMergeQueueState(gate.status) ?? "queued"}` };
+    const result = await runGithubQueueMerge(gate, async (query, variables) => await graphql(query, [
+      "-f", `id=${variables.id}`, ...(variables.head ? ["-f", `head=${variables.head}`] : []),
+    ]));
+    if (result.action === "already_queued") {
+      return { queued: true, summary: `${label} is already in the merge queue · ${describeMergeQueueState(result.status) ?? "queued"}` };
     }
-    if (action === "auto_merge") {
-      parseGithubAutoMergeResult(await graphql(GITHUB_ENABLE_AUTO_MERGE_MUTATION, ["-f", `id=${gate.pullRequestId}`]));
+    if (result.action === "auto_merge") {
       return { queued: true, summary: `Auto-merge on for ${label}: GitHub adds it to the merge queue when its checks pass` };
     }
-    const status = parseGithubEnqueueResult(await graphql(GITHUB_ENQUEUE_MUTATION, ["-f", `id=${gate.pullRequestId}`]));
     return {
       queued: true,
-      summary: `Added ${label} to the merge queue · ${describeMergeQueueState(status) ?? "queued"}`,
+      summary: `Added ${label} to the merge queue · ${describeMergeQueueState(result.status) ?? "queued"}`,
     };
   }
 

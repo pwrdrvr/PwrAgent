@@ -152,7 +152,7 @@ export type GitlabMergeTrainObservation = {
 /**
  * The train status of a GitLab MR. GitLab marks a car `idle` while it waits,
  * `fresh` while its pipeline runs against the train, `merging` while it
- * lands, and keeps it `merged` afterwards. A car that left the train with the
+ * lands, and keeps it `merged` afterwards. A car that left the train any other way with the
  * MR still open was dropped: GitLab drops a car when its pipeline fails or
  * the MR can no longer merge.
  */
@@ -181,10 +181,14 @@ export function gitlabMergeTrainStatus(
     case "fresh":
       return { ...base, state: "group_checks_running" };
     case "merging":
+    case "merged":
+    case "skip_merged":
+      // A car that merged while the MR still reads open is the train landing
+      // it: the car and the MR are separate reads, and the MR's state follows.
+      // Reading it as a removal would end a merge watch on a merge.
       return { ...base, state: "merging" };
     default: {
-      // Merged or skip_merged with the MR open, or a status GitLab added
-      // later: the car is no longer on the train.
+      // A status GitLab added later: the car is no longer on the train.
       const pipeline = car.pipelineStatus?.trim().toLowerCase();
       return removal(
         kind,
