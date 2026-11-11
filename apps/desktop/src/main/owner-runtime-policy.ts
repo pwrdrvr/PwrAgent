@@ -1,4 +1,4 @@
-import { isAppServerBackendKind, type AppServerBackendKind, type FederationPeerRole, type ThreadExecutionMode } from "@pwragent/shared";
+import type { AppServerBackendKind, FederationPeerRole, ThreadExecutionMode } from "@pwragent/shared";
 
 /** Host configuration; desktop leaves this unset. */
 export interface OwnerRuntimePolicy {
@@ -25,8 +25,6 @@ export function assertOwnerExecutionPolicy(policy: OwnerRuntimePolicy | undefine
 }
 
 export function createOutpostRuntimePolicy(env: NodeJS.ProcessEnv = process.env): OwnerRuntimePolicy {
-  const extra = (env.PWRAGENT_HEADLESS_BACKENDS ?? "").split(",").map(value => value.trim()).filter(Boolean);
-  if (!extra.every(isAppServerBackendKind)) throw new Error("PWRAGENT_HEADLESS_BACKENDS contains an unknown backend.");
-  return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, enabledBackends: ["codex", ...extra], approvalPolicy: "never",
+  return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, enabledBackends: ["codex"], approvalPolicy: "never",
     executionModes: ["default", "auto"], sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained" };
 }

@@ -73,9 +73,7 @@ standard profile SQLite database directly.
 
 ## Unattended execution
 
-Codex is enabled by default. Operators can additionally enable installed backends
-with `PWRAGENT_HEADLESS_BACKENDS=claude,acp:...` using backend IDs known to the
-application. Approval is always `never`; full access is unavailable. Default mode
+The Outpost host enables only Codex. Approval is always `never`; full access is unavailable. Default mode
 is read-only; Auto mode grants workspace-write with tool network access disabled
 and temporary directories excluded. Host configuration cannot widen those rules.
 The shared federation containment guard covers direct and backpressured sends;
