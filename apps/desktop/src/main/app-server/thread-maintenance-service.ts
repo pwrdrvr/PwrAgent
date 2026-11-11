@@ -61,6 +61,12 @@ const INSPECT_CONCURRENCY = 6;
 /** Scans kept for a later apply. A newer scan replaces the oldest. */
 const RETAINED_SCANS = 4;
 
+/** The snapshot cap an operator's over-limit approval grants: 10% above the
+ * reviewed size, so ordinary drift does not undo the decision. */
+function reviewedSnapshotCap(reviewedBytes: number): number {
+  return Math.ceil(reviewedBytes * 11 / 10);
+}
+
 export type ArchivedCheckoutAudit = {
   candidates: { backend: string; threadId: string; worktreePath: string }[];
   kept: Record<string, number>;
@@ -963,7 +969,7 @@ export class ThreadMaintenanceService {
       if (checkout?.kind !== "removable") return false;
       if (checkout.workspace?.kind !== "overLimit") return true;
       if (!item.snapshotAll) return false;
-      snapshotLimits.push({ worktreePath: item.worktreePath, bytes: Math.ceil(checkout.workspace.bytes * 11 / 10) });
+      snapshotLimits.push({ worktreePath: item.worktreePath, bytes: reviewedSnapshotCap(checkout.workspace.bytes) });
       return true;
     });
     for (const item of request.removeCheckouts) {
@@ -1141,7 +1147,7 @@ export class ThreadMaintenanceService {
     const workspace = inspection.workspace;
     if (workspace.kind === "overLimit") {
       if (!overLimit) return "Changes are over the snapshot limit";
-      if (entry.row.workspace.kind !== "overLimit" || workspace.bytes > entry.row.workspace.bytes * 1.1) {
+      if (entry.row.workspace.kind !== "overLimit" || workspace.bytes > reviewedSnapshotCap(entry.row.workspace.bytes)) {
         return "Changes grew after the review";
       }
     }
@@ -1149,7 +1155,7 @@ export class ThreadMaintenanceService {
     const archived = await this.deps.archiveFamily(refreshed, {
       preserveWorktrees: workspace.kind === "overLimit" && overLimit === "keepCheckout",
       ...(workspace.kind === "overLimit" && overLimit === "snapshotAll"
-        ? { snapshotLimitBytes: Math.ceil(workspace.bytes * 11 / 10) } : {}),
+        ? { snapshotLimitBytes: reviewedSnapshotCap(workspace.bytes) } : {}),
     });
     return archived ? true : "Archive cancelled";
   }

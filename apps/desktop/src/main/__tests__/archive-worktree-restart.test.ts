@@ -1629,6 +1629,28 @@ describe("archive cleanup and finished helper threads", () => {
     }
   }, 30_000);
 
+  // Rule: an approval covers its own checkout's removal only. Removals of a
+  // thread's checkouts run concurrently, so one must neither use nor clear an
+  // approval held for another checkout of the same thread.
+  it("keeps a checkout's snapshot approval separate from the thread's other approvals", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true }];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "changes larger than the tiny limit\n");
+    const service = new WorktreeArchiveService({ maxSnapshotBytes: 1 });
+    const archive = vi.spyOn(service, "archive");
+    const instance = fixture.reopen(fixture.directory, false, undefined, [], { worktreeArchiveService: service });
+    // A sibling checkout's removal holds this thread-wide approval meanwhile.
+    instance.registry.approveReviewedSnapshotLimit("codex", "archived-owner", 7);
+
+    const result = await instance.registry.removeArchivedCheckouts({ worktreePaths: [fixture.worktree], emptyFolders: false,
+      snapshotLimits: [{ worktreePath: fixture.worktree, bytes: 1_000_000 }] });
+
+    expect(result.removed).toEqual([{ worktreePath: fixture.worktree }]);
+    expect(archive.mock.calls.map(([options]) => options.maxSnapshotBytes)).toEqual([1_000_000]);
+    const held = (instance.registry as unknown as { reviewedSnapshotLimits: Map<string, { bytes: number }> }).reviewedSnapshotLimits;
+    expect([...held.values()].map((approval) => approval.bytes)).toEqual([7]);
+  }, 30_000);
+
   // Rule: the background report names the archived thread. Its window rarely
   // has it loaded, so the owner must say what it was called.
   it("names the archived thread on its background cleanup completion", async () => {

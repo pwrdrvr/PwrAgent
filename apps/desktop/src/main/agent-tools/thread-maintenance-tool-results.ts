@@ -94,6 +94,9 @@ export function summarizeThreadMaintenanceScan(
       removable: removable.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         backend: item.backend, threadId: item.threadId, worktreePath: item.worktreePath,
         ...(item.workspace ? { workspace: item.workspace.kind } : {}),
+        // What the operator approves when choosing snapshotAll.
+        ...(item.workspace && "files" in item.workspace
+          ? { changedFiles: item.workspace.files, changedBytes: item.workspace.bytes } : {}),
         ...(item.space ? { space: item.space } : {}),
       })),
       repositoryGone: gone.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({

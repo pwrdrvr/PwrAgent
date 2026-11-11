@@ -629,7 +629,7 @@ export class ThreadSubAgentTable {
     for (const row of rows) {
       const key = managedChildKeyFromCard(row.thread_id, row.backend, row.monitor_thread_id);
       if (!key || !wanted.has(key)) continue;
-      const monitorWorker = row.monitor_id >= "monitor-" && row.monitor_id < "monitor.";
+      const monitorWorker = row.monitor_id.startsWith("monitor-");
       if (monitorWorker && row.completed_at !== null) finished.add(key);
       else unfinished.add(key);
     }
