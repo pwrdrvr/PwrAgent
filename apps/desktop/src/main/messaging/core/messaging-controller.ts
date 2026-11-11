@@ -309,9 +309,14 @@ import {
   type MessagingToolUpdatePolicyDelivery,
 } from "./messaging-tool-update-policy.js";
 import {
+  isDeferrableDeliveryPriority,
   MessagingDeliveryBudget,
   type MessagingDeliveryPriority,
 } from "./messaging-delivery-budget.js";
+import {
+  MessagingDeliveryLane,
+  type MessagingDeliveryLaneTicket,
+} from "./messaging-delivery-lane.js";
 import { coalesceBackoffMs } from "./messaging-coalesce-backoff.js";
 import {
   DEFAULT_MESSAGING_ATTACHMENT_POLICY,
@@ -950,6 +955,11 @@ type MessagingDeliveryGuard = {
   whenCancelled?: Promise<void>;
 };
 
+type DeliveryLaneState = {
+  lane?: MessagingDeliveryLane;
+  ticket?: MessagingDeliveryLaneTicket;
+};
+
 type MessagingCancellationSignal = MessagingDeliveryGuard & {
   cancel: () => void;
 };
@@ -996,6 +1006,18 @@ export type MessagingControllerOptions = {
   fullAccessControlsSource?: "dynamic" | "runtime-snapshot";
   fullAccessPolicyRevision?: () => number;
   deliveryBudget?: MessagingDeliveryBudget;
+  /** Orders deliveries the budget holds back; see MessagingDeliveryLane. */
+  deliveryLane?: MessagingDeliveryLane;
+  /**
+   * The adapter running for this channel after this controller's adapter was
+   * replaced. A disposed controller never calls its own, stopped adapter.
+   * `now` answers undefined while a restart is still in progress or nothing
+   * replaced it; `settled` waits for a restart in progress first.
+   */
+  replacementAdapter?: {
+    now(): MessagingAdapter | undefined;
+    settled(): Promise<MessagingAdapter | undefined>;
+  };
   sleepUntil?: (retryAt: number, now: () => number) => Promise<void>;
   activityLog?: () => MessagingActivityStorage;
   onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
@@ -1167,6 +1189,7 @@ export class MessagingController {
   // handle open, which blocks the test harness from deleting the temp profile
   // dir. Gate re-scheduling on this flag so a disposed controller stays quiet.
   private disposed = false;
+  private stoppedAdapterStub: MessagingAdapter | undefined;
   private readonly browseRenderGenerations = new Map<string, symbol>();
   private readonly browseQueryPool = new MessagingBrowseQueryPool((request) => {
     const backend = this.options.backend;
@@ -1481,8 +1504,8 @@ export class MessagingController {
       text: "",
     };
     if (params.target.recipientUserId) {
-      const resolve = this.options.adapter.resolveDirectConversation
-        ?.bind(this.options.adapter);
+      const resolve = this.adapter.resolveDirectConversation
+        ?.bind(this.adapter);
       if (!resolve) {
         return {
           ok: false,
@@ -4921,7 +4944,7 @@ export class MessagingController {
       }
       const attachmentProcessingStartedAt = this.now();
       const processed = await processMessagingAttachments({
-        adapter: this.options.adapter,
+        adapter: this.adapter,
         attachments: turnEvent.attachments,
         policy: {
           ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
@@ -12121,7 +12144,7 @@ export class MessagingController {
       return existing;
     }
 
-    if (!this.options.adapter.createManagedConversation) {
+    if (!this.adapter.createManagedConversation) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("topics-create-unsupported"),
@@ -12136,7 +12159,7 @@ export class MessagingController {
       return undefined;
     }
 
-    const result = await this.options.adapter.createManagedConversation({
+    const result = await this.adapter.createManagedConversation({
       actor: event.actor,
       parent: event.channel,
       routingState: event.routingState,
@@ -12254,13 +12277,13 @@ export class MessagingController {
 
     let result: MessagingManagedConversationActionResult | undefined;
     if (item.action === "close") {
-      result = await this.options.adapter.closeManagedConversation?.({
+      result = await this.adapter.closeManagedConversation?.({
         actor: event.actor,
         channel: topicChannelRef(topic),
         routingState: topic.routingState,
       });
     } else if (item.action === "delete") {
-      result = await this.options.adapter.deleteManagedConversation?.({
+      result = await this.adapter.deleteManagedConversation?.({
         actor: event.actor,
         channel: topicChannelRef(topic),
         routingState: topic.routingState,
@@ -12330,7 +12353,7 @@ export class MessagingController {
     event: MessagingInboundEvent,
     topic: MessagingManagedTopicRecord,
   ): Promise<void> {
-    const rights = await this.options.adapter.getManagedConversationRights?.({
+    const rights = await this.adapter.getManagedConversationRights?.({
       actor: event.actor,
       channel: event.channel,
       routingState: event.routingState,
@@ -12449,7 +12472,7 @@ export class MessagingController {
     event: MessagingInboundEvent,
     controlTopic: MessagingManagedTopicRecord,
   ): Promise<void> {
-    if (!this.options.adapter.createManagedConversation) {
+    if (!this.adapter.createManagedConversation) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("topics-fanout-unsupported"),
@@ -12491,7 +12514,7 @@ export class MessagingController {
         reused.push(thread.title);
         continue;
       }
-      const result = await this.options.adapter.createManagedConversation({
+      const result = await this.adapter.createManagedConversation({
         actor: event.actor,
         parent: event.channel,
         routingState: event.routingState,
@@ -15512,7 +15535,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    if (!this.options.adapter.setConversationTitle) {
+    if (!this.adapter.setConversationTitle) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("status-sync-name-unavailable"),
@@ -15549,7 +15572,7 @@ export class MessagingController {
       return;
     }
 
-    const result = await this.options.adapter.setConversationTitle({
+    const result = await this.adapter.setConversationTitle({
       actor: event.actor,
       channel: binding.channel,
       routingState: event.routingState ?? binding.routingState,
@@ -15872,7 +15895,7 @@ export class MessagingController {
    * Platform-agnostic detach pipeline. Called by both the inbound
    * `/detach` slash-command path and the bus-driven UI / archive
    * paths. The only seam for platform-specific behavior is
-   * `this.options.adapter.deliver`, which the registered adapter
+   * `this.adapter.deliver`, which the registered adapter
    * implements per the messaging contract — adding a new platform
    * requires zero changes to this method. `event` is supplied only
    * when the detach was initiated by an inbound command (used for
@@ -17055,8 +17078,8 @@ export class MessagingController {
   }
 
   private rememberHumanMessagingSource(binding: MessagingBindingRecord, event: MessagingInboundEvent): MessagingRequestSource | undefined {
-    const connectionId = this.options.adapter.retainedSourceConnectionId?.();
-    if (!this.options.adapter.authorizeRetainedSource || !connectionId) return undefined;
+    const connectionId = this.adapter.retainedSourceConnectionId?.();
+    if (!this.adapter.authorizeRetainedSource || !connectionId) return undefined;
     return this.options.requestStore?.remember({
       agent: { backend: binding.backend, threadId: binding.threadId },
       bindingId: isDefaultAgentRouteBinding(binding) ? undefined : binding.id,
@@ -18082,6 +18105,45 @@ export class MessagingController {
     return this.options.activityLog?.();
   }
 
+  /**
+   * The adapter this controller talks to. Once the controller is disposed its
+   * own adapter has been stopped and must never be called again: work still
+   * in progress goes to the adapter now running for the channel, or to a
+   * stub that does nothing when none is running.
+   */
+  private get adapter(): MessagingAdapter {
+    if (!this.disposed) return this.options.adapter;
+    const replacement = this.options.replacementAdapter?.now();
+    if (replacement && replacement !== this.options.adapter) return replacement;
+    return this.stoppedAdapter();
+  }
+
+  private stoppedAdapter(): MessagingAdapter {
+    this.stoppedAdapterStub ??= {
+      capabilityProfile: this.options.adapter.capabilityProfile,
+      deliver: async () => ({
+        channel: this.options.channel ?? "telegram",
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      }),
+    };
+    return this.stoppedAdapterStub;
+  }
+
+  /**
+   * The adapter for a send. A disposed controller waits for a restart in
+   * progress, then sends through the replacement, or gets undefined when
+   * nothing replaced its adapter.
+   */
+  private async adapterForSend(): Promise<MessagingAdapter | undefined> {
+    if (!this.disposed) return this.options.adapter;
+    const replacement = this.options.replacementAdapter?.now()
+      ?? await this.options.replacementAdapter?.settled();
+    return replacement && replacement !== this.options.adapter
+      ? replacement
+      : undefined;
+  }
+
   private async deliver(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
@@ -18110,7 +18172,19 @@ export class MessagingController {
     }
     const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
-    let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
+    // A disposed controller budgets against the adapter that will send, not
+    // the stopped-adapter stub, which has no scope and would skip cool-off.
+    const scopeAdapter = this.disposed
+      ? await this.adapterForSend()
+      : this.options.adapter;
+    if (!scopeAdapter) {
+      return {
+        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+    const scope = scopeAdapter.resolveDeliveryScope?.(routedIntent);
     const priority = messagingDeliveryPriority(routedIntent, {
       userInitiated: isUserInitiatedDeliveryEvent(event),
     });
@@ -18122,12 +18196,76 @@ export class MessagingController {
       deliveredAt: this.now(),
       outcome: "discarded",
     });
+    // Deferrable deliveries the budget holds back wait in one line per scope,
+    // so they reach the provider in the order they were requested, across
+    // cool-off extensions and adapter restarts alike. The ticket is held
+    // until the provider call returns, and released on every exit.
+    const lane: DeliveryLaneState = {
+      lane: this.deliveryBudget && isDeferrableDeliveryPriority(priority)
+        ? this.options.deliveryLane
+        : undefined,
+    };
+    try {
+      return await this.deliverThroughBudget({
+        binding,
+        cancelledResult,
+        channel,
+        consumeDeliveryBudget,
+        guard,
+        intent,
+        lane,
+        priority,
+        routedIntent,
+        scope,
+      });
+    } finally {
+      lane.ticket?.release();
+    }
+  }
+
+  private async deliverThroughBudget(params: {
+    binding: MessagingBindingRecord | undefined;
+    cancelledResult: () => MessagingDeliveryResult;
+    channel: MessagingChannelKind | undefined;
+    consumeDeliveryBudget: boolean;
+    guard: MessagingDeliveryGuard | undefined;
+    intent: MessagingSurfaceIntent;
+    lane: DeliveryLaneState;
+    priority: MessagingDeliveryPriority;
+    routedIntent: MessagingSurfaceIntent;
+    scope: MessagingDeliveryScope | undefined;
+  }): Promise<MessagingDeliveryResult> {
+    const {
+      binding,
+      cancelledResult,
+      channel,
+      consumeDeliveryBudget,
+      guard,
+      intent,
+      lane,
+      priority,
+      routedIntent,
+    } = params;
+    let { scope } = params;
+    const waitForTurn = async (): Promise<boolean> => {
+      if (lane.ticket || !lane.lane || !scope) return true;
+      lane.ticket = lane.lane.enter(scope.id);
+      if (guard?.whenCancelled) {
+        await Promise.race([lane.ticket.ready, guard.whenCancelled]);
+      } else {
+        await lane.ticket.ready;
+      }
+      return !guard?.isCancelled();
+    };
     while (true) {
       if (guard?.isCancelled()) {
         return cancelledResult();
       }
       if (this.deliveryBudget) {
         const budgetChannel = channel ?? scope?.platform ?? "telegram";
+        if (scope && lane.lane?.isOccupied(scope.id) && !(await waitForTurn())) {
+          return cancelledResult();
+        }
         let admission = this.deliveryBudget.admit({
           consumeCapacity: consumeDeliveryBudget,
           priority,
@@ -18162,6 +18300,18 @@ export class MessagingController {
             slowMode: admission.slowMode,
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
+          if (!lane.ticket && lane.lane && scope) {
+            // Take a place in line, then ask again: time may have passed.
+            if (!(await waitForTurn())) {
+              return cancelledResult();
+            }
+            admission = this.deliveryBudget.admit({
+              consumeCapacity: consumeDeliveryBudget,
+              priority,
+              scope,
+            });
+            continue;
+          }
           const delay = (this.options.sleepUntil ?? sleepUntil)(
             admission.retryAt,
             this.now,
@@ -18218,13 +18368,30 @@ export class MessagingController {
       if (guard?.isCancelled()) {
         return cancelledResult();
       }
-      const result = await this.options.adapter.deliver(routedIntent);
+      const adapter = await this.adapterForSend();
+      if (!adapter) {
+        this.logger.info?.("messaging delivery discarded: adapter stopped and nothing replaced it", {
+          bindingId: binding?.id ?? intent.bindingId,
+          intentId: routedIntent.id,
+          intentKind: routedIntent.kind,
+        });
+        return cancelledResult();
+      }
+      if (guard?.isCancelled()) {
+        return cancelledResult();
+      }
+      const result = await adapter.deliver(routedIntent);
       if (guard?.isCancelled()) {
         await guard.onCancelledDelivery?.(result);
         return cancelledResult();
       }
       this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
+        if (lane.ticket && result.rateLimit.scope.id !== scope?.id) {
+          // The retry belongs in the new scope's line, not the old one's.
+          lane.ticket.release();
+          lane.ticket = undefined;
+        }
         scope = result.rateLimit.scope;
         this.deliveryBudget.recordRateLimit(result.rateLimit);
         if (result.rateLimit.retryable === true) {
@@ -18831,9 +18998,9 @@ export class MessagingController {
 
   private async retainedSourceIsAuthorized(source: MessagingRequestSource, verifyAccess = true): Promise<boolean | undefined> {
     if (!this.isChannelInScope(source.event.channel)
-      || !source.connectionId || source.connectionId !== this.options.adapter.retainedSourceConnectionId?.()
-      || !this.options.adapter.authorizeRetainedSource) return false;
-    const providerAdmission = await this.options.adapter.authorizeRetainedSource(source.event, verifyAccess);
+      || !source.connectionId || source.connectionId !== this.adapter.retainedSourceConnectionId?.()
+      || !this.adapter.authorizeRetainedSource) return false;
+    const providerAdmission = await this.adapter.authorizeRetainedSource(source.event, verifyAccess);
     if (providerAdmission !== true) return providerAdmission;
     if (source.bindingId) {
       const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
@@ -19114,7 +19281,7 @@ export class MessagingController {
     if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
       || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
     if (resolvedPlacement.placement === "new_child") {
-      if (!this.options.adapter.createManagedConversation) {
+      if (!this.adapter.createManagedConversation) {
         return {
           ok: false,
           error: {
@@ -19124,7 +19291,7 @@ export class MessagingController {
           },
         };
       }
-      const createResult = await this.options.adapter.createManagedConversation({
+      const createResult = await this.adapter.createManagedConversation({
         actor: origin.origin.event.actor,
         parent: origin.origin.event.channel,
         routingState: origin.origin.event.routingState,
@@ -19216,7 +19383,7 @@ export class MessagingController {
     if (!origin.ok) {
       return origin;
     }
-    if (!this.options.adapter.setConversationTitle) {
+    if (!this.adapter.setConversationTitle) {
       return {
         ok: false,
         error: {
@@ -19227,7 +19394,7 @@ export class MessagingController {
       };
     }
 
-    const result = await this.options.adapter.setConversationTitle({
+    const result = await this.adapter.setConversationTitle({
       actor: origin.origin.event.actor,
       channel: origin.origin.event.channel,
       routingState:
@@ -19405,7 +19572,7 @@ export class MessagingController {
     if (!origin.ok) {
       return origin;
     }
-    if (!this.options.adapter.resolvePrivateConversation) {
+    if (!this.adapter.resolvePrivateConversation) {
       return {
         ok: false,
         error: {
@@ -19418,7 +19585,7 @@ export class MessagingController {
 
     let privateConversation: MessagingPrivateConversationResolveResult;
     try {
-      privateConversation = await this.options.adapter.resolvePrivateConversation({
+      privateConversation = await this.adapter.resolvePrivateConversation({
         actor: origin.origin.event.actor,
         ...(awaitReply ? { replyContinuationRequired: true } : {}),
         source: origin.origin.event.channel,
@@ -19741,7 +19908,7 @@ export class MessagingController {
     // without reading it.
     let deliveryEvent = origin.origin.event;
     if (sendPrivately) {
-      if (!this.options.adapter.resolvePrivateConversation) {
+      if (!this.adapter.resolvePrivateConversation) {
         return {
           ok: false,
           error: {
@@ -19753,7 +19920,7 @@ export class MessagingController {
       }
       let privateConversation: MessagingPrivateConversationResolveResult;
       try {
-        privateConversation = await this.options.adapter.resolvePrivateConversation({
+        privateConversation = await this.adapter.resolvePrivateConversation({
           actor: origin.origin.event.actor,
           source: origin.origin.event.channel,
           routingState: origin.origin.event.routingState,
@@ -20383,7 +20550,7 @@ export class MessagingController {
         allowed:
           permissions === null
           || permissions.permissions.has("thread.settings.name"),
-        supported: this.options.adapter.supportsConversationTitle?.({
+        supported: this.adapter.supportsConversationTitle?.({
           actor: origin.event.actor,
           channel: origin.event.channel,
           routingState: origin.event.routingState ?? origin.binding?.routingState,
@@ -20506,8 +20673,8 @@ export class MessagingController {
     origin: ActiveAgentMessagingOrigin,
   ): Promise<PwrAgentMessagingManagedConversationSummary> {
     const providerSupportsCreation =
-      typeof this.options.adapter.createManagedConversation === "function";
-    if (!this.options.adapter.getManagedConversationRights) {
+      typeof this.adapter.createManagedConversation === "function";
+    if (!this.adapter.getManagedConversationRights) {
       const operation = {
         operation: "create_child" as const,
         supported: providerSupportsCreation,
@@ -20524,7 +20691,7 @@ export class MessagingController {
       };
     }
 
-    const rights = await this.options.adapter.getManagedConversationRights({
+    const rights = await this.adapter.getManagedConversationRights({
       actor: origin.event.actor,
       channel: origin.event.channel,
       routingState: origin.event.routingState,

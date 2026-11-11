@@ -5705,6 +5705,113 @@ describe("SlackAdapter", () => {
     }
   });
 
+  it("keeps a card-start block recorded before the workspace is known once auth names it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    // Before `auth.test` answers, a target without a workspace id buckets
+    // under the configured-workspace fallback. The 429 recorded there must
+    // still hold for sends that resolve to the real workspace afterwards.
+    const withoutWorkspace = (sequence: number, key: string): MessagingSurfaceIntent => {
+      const intent = slackWorkingCardIntent(sequence, { key });
+      const conversation = intent.audit?.channel.conversation;
+      if (conversation) delete conversation.workspaceId;
+      return intent;
+    };
+    try {
+      let startAttempts = 0;
+      const api = fakeApi({});
+      api.startStream = async (params) => {
+        startAttempts += 1;
+        if (startAttempts === 1) {
+          throw Object.assign(new Error("rate_limited"), {
+            status: 429,
+            retryAfterMs: 60_000,
+          });
+        }
+        return { channel: params.channel, ts: `1700000000.90000${startAttempts}` };
+      };
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api,
+        socketClient: fakeSocket(),
+      });
+
+      await adapter.deliver(withoutWorkspace(1, "card-before-auth"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(startAttempts).toBe(1);
+
+      await adapter.start(async () => {});
+      await adapter.deliver(slackWorkingCardIntent(2, { key: "card-after-auth" }));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(startAttempts).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(startAttempts).toBeGreaterThan(1);
+      await adapter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hands unexpired card-start blocks to the adapter that replaces it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      let startAttempts = 0;
+      const rateLimitedApi = fakeApi({});
+      rateLimitedApi.startStream = async () => {
+        startAttempts += 1;
+        throw Object.assign(new Error("rate_limited"), {
+          status: 429,
+          retryAfterMs: 60_000,
+        });
+      };
+      const first = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api: rateLimitedApi,
+        socketClient: fakeSocket(),
+      });
+      await first.start(async () => {});
+      await first.deliver(slackWorkingCardIntent(1, { key: "first-card" }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(startAttempts).toBe(1);
+      const carryover = first.exportRateLimitCarryover();
+      await first.stop();
+      expect(carryover.blocks).toEqual([
+        expect.objectContaining({
+          id: "slack:workspace:T012ABCDEF0:chat.startStream",
+        }),
+      ]);
+
+      let replacementStarts = 0;
+      const api = fakeApi({});
+      api.startStream = async (params) => {
+        replacementStarts += 1;
+        return { channel: params.channel, ts: "1700000000.900009" };
+      };
+      const replacement = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api,
+        socketClient: fakeSocket(),
+      });
+      replacement.restoreRateLimitCarryover(carryover);
+      await replacement.start(async () => {});
+      await replacement.deliver(slackWorkingCardIntent(2, { key: "second-card" }));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(replacementStarts).toBe(0);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(replacementStarts).toBe(1);
+      await replacement.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the original display mode when a queued start receives a terminal snapshot", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);

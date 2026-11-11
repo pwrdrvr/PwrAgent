@@ -6,6 +6,7 @@ import type {
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingCapabilityProfile,
+  MessagingRateLimitCarryover,
   MessagingContentPart,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
@@ -98,6 +99,8 @@ type TelegramDeliveryTarget = {
   messageId?: number;
   messageThreadId?: number;
 };
+
+const TELEGRAM_STREAM_BLOCK_PREFIX = "telegram:stream:";
 
 type TelegramStreamRateLimitState = {
   blockedUntil?: number;
@@ -481,6 +484,8 @@ export type TelegramProviderAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  exportRateLimitCarryover?(): MessagingRateLimitCarryover;
+  restoreRateLimitCarryover?(carryover: MessagingRateLimitCarryover): void;
   updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
@@ -732,6 +737,32 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return () => {
       this.rateLimitListeners.delete(listener);
     };
+  }
+
+  /** Unexpired stream Retry-After blocks, for the adapter that replaces this one. */
+  exportRateLimitCarryover(): MessagingRateLimitCarryover {
+    const now = this.now();
+    const blocks: MessagingRateLimitCarryover["blocks"][number][] = [];
+    for (const [key, state] of this.streamRateLimits) {
+      if (state.blockedUntil !== undefined && state.blockedUntil > now) {
+        blocks.push({
+          id: `${TELEGRAM_STREAM_BLOCK_PREFIX}${key}`,
+          blockedUntil: state.blockedUntil,
+        });
+      }
+    }
+    return { blocks };
+  }
+
+  restoreRateLimitCarryover(carryover: MessagingRateLimitCarryover): void {
+    const now = this.now();
+    for (const block of carryover.blocks) {
+      if (!block.id.startsWith(TELEGRAM_STREAM_BLOCK_PREFIX)) continue;
+      if (!Number.isFinite(block.blockedUntil) || block.blockedUntil <= now) continue;
+      const key = block.id.slice(TELEGRAM_STREAM_BLOCK_PREFIX.length);
+      const state = this.streamRateLimitState(key, now);
+      state.blockedUntil = Math.max(state.blockedUntil ?? 0, block.blockedUntil);
+    }
   }
 
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {

@@ -388,6 +388,29 @@ describe("TelegramAdapter rich messages", () => {
     expect(rich).toHaveBeenCalledTimes(1);
   });
 
+  it("hands an unexpired stream retry_after to the adapter that replaces it", async () => {
+    let now = 1000;
+    const first = harness(() => now);
+    first.rich.mockRejectedValue({ error_code: 429, parameters: { retry_after: 2 } });
+    expect((await first.adapter.deliver(intent)).outcome).toBe("failed");
+    const carryover = first.adapter.exportRateLimitCarryover();
+    expect(carryover.blocks).toHaveLength(1);
+
+    const replacement = harness(() => now);
+    replacement.adapter.restoreRateLimitCarryover(carryover);
+    const streamUpdate = (sequence: number) => ({
+      id: `next-stream-${sequence}`, kind: "stream_update" as const, createdAt: sequence,
+      audit: intent.audit, text: "Working", markdown: "markdown" as const,
+      stream: { key: "next-stream", sequence, isFinal: false },
+    });
+    expect((await replacement.adapter.deliver(streamUpdate(1))).outcome).toBe("discarded");
+    expect(replacement.send).not.toHaveBeenCalled();
+    expect(replacement.rich).not.toHaveBeenCalled();
+
+    now += 10_000;
+    expect(replacement.adapter.exportRateLimitCarryover().blocks).toEqual([]);
+  });
+
   it("does not duplicate an ambiguously delivered rich message after a timeout", async () => {
     const { adapter, send, rich } = harness();
     rich.mockRejectedValue(new Error("Request timed out after sending"));

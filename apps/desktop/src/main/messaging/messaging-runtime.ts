@@ -65,6 +65,7 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingPrivateConversationResolveRequest,
   MessagingPrivateConversationResolveResult,
+  MessagingRateLimitCarryover,
   MessagingRateLimitInfo,
   MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
@@ -112,6 +113,7 @@ import {
   MessagingDeliveryBudget,
   type MessagingDeliveryPriority,
 } from "./core/messaging-delivery-budget";
+import { MessagingDeliveryLane } from "./core/messaging-delivery-lane";
 import type {
   DynamicToolPermissionCheck,
   DynamicToolPermissionResult,
@@ -160,6 +162,13 @@ export type DesktopMessagingAdapter = {
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  /**
+   * Provider throttle blocks (Retry-After) that have not expired. The runtime
+   * reads them before stopping the adapter and hands them to its replacement
+   * through `restoreRateLimitCarryover`, before that adapter starts.
+   */
+  exportRateLimitCarryover?(): MessagingRateLimitCarryover;
+  restoreRateLimitCarryover?(carryover: MessagingRateLimitCarryover): void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   onInboundChannelMetadata?(listener: MessagingInboundChannelMetadataListener): () => void;
@@ -342,6 +351,9 @@ const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
 const REJECTED_ROUTE_AGENT_METADATA_TTL_MS = 60_000;
 const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
 const FAILED_START_STOP_TIMEOUT_MS = 3_000;
+// How long a new start waits for an earlier adapter of the same platform to
+// finish shutting down before it gives up and retries once that is done.
+const PREVIOUS_ADAPTER_TEARDOWN_WAIT_MS = 3_000;
 const CONFIGURABLE_MESSAGING_CHANNELS = [
   "discord",
   "feishu",
@@ -477,6 +489,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     ReturnType<typeof setTimeout>
   >();
   private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
+  // Rate-limit state outlives the adapter. A config change or a messaging
+  // stop/start replaces the adapter and its controller, but the provider is
+  // still limiting the bot, so the cool-off, slow mode and provider blocks
+  // must hold for the replacement. Memory only: Retry-After windows are
+  // short, and persisting them would add a commit per 429.
+  private readonly deliveryBudgets = new Map<MessagingChannelKind, MessagingDeliveryBudget>();
+  private readonly deliveryLanes = new Map<MessagingChannelKind, MessagingDeliveryLane>();
+  // An adapter whose start the runtime gave up on (deadline, cancellation)
+  // keeps starting, and may still connect. Until its start has settled and it
+  // has been stopped again, no other adapter for the platform may start: many
+  // providers allow one connection per bot, and two make them drop each
+  // other in a loop. Settles when every such adapter is down.
+  private readonly adapterTeardowns = new Map<MessagingChannelKind, Promise<void>>();
+  private readonly startsAwaitingTeardown = new Set<MessagingChannelKind>();
+  // The adapter that has started and not begun stopping, per platform: the
+  // one a replaced controller may hand its work to. Set before the new
+  // controller rehydrates monitors, so that work never waits on it.
+  private readonly liveAdapters = new Map<MessagingChannelKind, DesktopMessagingAdapter>();
+  private readonly liveAdapterWaiters = new Map<MessagingChannelKind, Set<() => void>>();
+  private readonly rateLimitCarryovers = new Map<
+    MessagingChannelKind,
+    MessagingRateLimitCarryover
+  >();
   private readonly rejectedRouteAgentNameCache = new Map<
     string,
     { expiresAt: number; value: Promise<string | undefined> }
@@ -1538,12 +1573,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     store: MessagingStoreLike;
   }): Promise<AdapterStartOutcome> {
     const { adapter, config, store } = params;
+    if (!(await this.previousAdapterIsDown(adapter.channel))) {
+      return "failed";
+    }
     const authorizedActorIds = [...adapter.authorizedActorIds];
     const authorization: RunningMessagingAuthorization = {
       actorIds: authorizedActorIds,
       actorIdSet: new Set(authorizedActorIds),
     };
-    const deliveryBudget = new MessagingDeliveryBudget();
+    const deliveryBudget = this.deliveryBudgetFor(adapter.channel);
+    this.restoreRateLimitCarryover(adapter);
     if (adapter.clientRateLimitStrategy === "sdk-managed") {
       messagingLog.warn(`${adapter.channel}: SDK-managed rate-limit retries are enabled`, {
         channel: adapter.channel,
@@ -1562,6 +1601,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       backend: this.options.backendBridge,
       channel: adapter.channel,
       deliveryBudget,
+      deliveryLane: this.deliveryLaneFor(adapter.channel),
+      replacementAdapter: {
+        now: () => this.runningAdapterNow(adapter.channel),
+        settled: () => this.runningAdapterSettled(adapter.channel),
+      },
       inputDebounceMs: config.inputDebounceMs,
       pdfAnalysisEnabled: () =>
         this.messagingAdmissionPolicySnapshot.pdfAnalysisEnabled,
@@ -1768,6 +1812,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return cancelled ? "cancelled" : "failed";
     }
 
+    this.markAdapterLive(adapter);
     const unsubscribeRuntimeError = adapter.onRuntimeError?.((reason) => {
       messagingLog.warn(`${adapter.channel}: adapter runtime error`, {
         channel: adapter.channel,
@@ -1862,10 +1907,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         || error instanceof AdapterStartTimeoutError
       ) {
         // Cancellation settles the admission race, not adapter.start itself.
-        // Both late success and rejection still own cleanup of this adapter.
-        void startPromise.then(
-          async () => this.stopAdapterAfterLateStart(adapter),
-          async () => this.stopAdapterAfterLateStart(adapter),
+        // Both late success and rejection still own cleanup of this adapter,
+        // and the platform stays closed to new adapters until it is done.
+        this.trackAdapterTeardown(
+          adapter.channel,
+          startPromise.then(
+            async () => this.stopAdapterAfterLateStart(adapter),
+            async () => this.stopAdapterAfterLateStart(adapter),
+          ),
         );
       }
       throw error;
@@ -1877,12 +1926,209 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
+  private markAdapterLive(adapter: DesktopMessagingAdapter): void {
+    this.liveAdapters.set(adapter.channel, adapter);
+    const waiters = this.liveAdapterWaiters.get(adapter.channel);
+    this.liveAdapterWaiters.delete(adapter.channel);
+    for (const wake of waiters ?? []) wake();
+  }
+
+  /** The adapter running for a channel now, for a replaced controller's work. */
+  private runningAdapterNow(
+    channel: MessagingChannelKind,
+  ): DesktopMessagingAdapter | undefined {
+    return this.liveAdapters.get(channel);
+  }
+
+  /**
+   * Like `runningAdapterNow`, once a restart in progress has produced the
+   * replacement or finished without one. The wait also stops at the adapter
+   * start deadline.
+   */
+  private async runningAdapterSettled(
+    channel: MessagingChannelKind,
+  ): Promise<DesktopMessagingAdapter | undefined> {
+    const live = this.liveAdapters.get(channel);
+    if (live) return live;
+    let wake!: () => void;
+    const appeared = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    let waiters = this.liveAdapterWaiters.get(channel);
+    if (!waiters) {
+      waiters = new Set();
+      this.liveAdapterWaiters.set(channel, waiters);
+    }
+    waiters.add(wake);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(
+        resolve,
+        this.options.adapterStartTimeoutMs ?? DEFAULT_ADAPTER_START_TIMEOUT_MS,
+      );
+      if (timer.unref) timer.unref();
+    });
+    try {
+      await Promise.race([
+        this.lifecycleQueue.catch(() => undefined),
+        appeared,
+        deadline,
+      ]);
+    } finally {
+      clearTimeout(timer);
+      waiters.delete(wake);
+    }
+    return this.liveAdapters.get(channel);
+  }
+
+  private trackAdapterTeardown(
+    channel: MessagingChannelKind,
+    teardown: Promise<unknown>,
+  ): void {
+    const previous = this.adapterTeardowns.get(channel);
+    const all: Promise<void> = Promise.all([previous, teardown]).then(
+      () => undefined,
+      () => undefined,
+    );
+    this.adapterTeardowns.set(channel, all);
+    void all.then(() => {
+      if (this.adapterTeardowns.get(channel) === all) {
+        this.adapterTeardowns.delete(channel);
+      }
+    });
+  }
+
+  /**
+   * Whether every earlier adapter for the platform has finished starting and
+   * been stopped. Waits a short while; when that is not enough, reports the
+   * platform errored, starts it once the earlier adapter is down, and
+   * answers false. A start that never settles keeps the platform closed.
+   */
+  private async previousAdapterIsDown(
+    channel: MessagingChannelKind,
+  ): Promise<boolean> {
+    const teardown = this.adapterTeardowns.get(channel);
+    if (!teardown) return true;
+    // A start is already set to run once the earlier adapter is down; another
+    // wait here would only stall the lifecycle queue.
+    const waited = this.startsAwaitingTeardown.has(channel)
+      ? false
+      : await this.waitForTeardown(teardown);
+    if (waited && !this.adapterTeardowns.has(channel)) return true;
+    const reason =
+      "Waiting for the previous connection to shut down before connecting again.";
+    messagingLog.warn(`${channel}: earlier adapter still starting; not connecting a second one`, {
+      channel,
+    });
+    this.setPlatformHealth(channel, "errored", { reason });
+    this.startAfterTeardown(channel);
+    return false;
+  }
+
+  private async waitForTeardown(teardown: Promise<void>): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        teardown.then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), PREVIOUS_ADAPTER_TEARDOWN_WAIT_MS);
+          if (timer.unref) timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private startAfterTeardown(channel: MessagingChannelKind): void {
+    const teardown = this.adapterTeardowns.get(channel);
+    if (!teardown || this.startsAwaitingTeardown.has(channel)) return;
+    this.startsAwaitingTeardown.add(channel);
+    void teardown.then(async () => {
+      this.startsAwaitingTeardown.delete(channel);
+      if (!this.started) return;
+      await this.enqueueLifecycle(async () => {
+        if (!this.started || this.runningAdapters.has(channel)) return;
+        const config = await this.loadConfigForLifecycle();
+        await this.applyConfigWithFailureStatus(config);
+      });
+    }).catch((error: unknown) => {
+      messagingLog.warn(`${channel}: start after the previous adapter shut down failed`, {
+        channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private deliveryLaneFor(channel: MessagingChannelKind): MessagingDeliveryLane {
+    let lane = this.deliveryLanes.get(channel);
+    if (!lane) {
+      lane = new MessagingDeliveryLane();
+      this.deliveryLanes.set(channel, lane);
+    }
+    return lane;
+  }
+
+  private deliveryBudgetFor(channel: MessagingChannelKind): MessagingDeliveryBudget {
+    let budget = this.deliveryBudgets.get(channel);
+    if (!budget) {
+      budget = new MessagingDeliveryBudget();
+      this.deliveryBudgets.set(channel, budget);
+    }
+    return budget;
+  }
+
+  private restoreRateLimitCarryover(adapter: DesktopMessagingAdapter): void {
+    const carryover = this.rateLimitCarryovers.get(adapter.channel);
+    if (!carryover || carryover.blocks.length === 0) return;
+    try {
+      adapter.restoreRateLimitCarryover?.(carryover);
+    } catch (error) {
+      messagingLog.warn(`${adapter.channel}: rate-limit carryover restore threw`, {
+        channel: adapter.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Read an adapter's unexpired provider blocks before it stops. */
+  private captureRateLimitCarryover(adapter: DesktopMessagingAdapter): void {
+    let exported: MessagingRateLimitCarryover | undefined;
+    try {
+      exported = adapter.exportRateLimitCarryover?.();
+    } catch (error) {
+      messagingLog.warn(`${adapter.channel}: rate-limit carryover export threw`, {
+        channel: adapter.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (!exported) return;
+    const now = Date.now();
+    const merged = new Map<string, number>();
+    const previous = this.rateLimitCarryovers.get(adapter.channel)?.blocks ?? [];
+    for (const block of [...previous, ...exported.blocks]) {
+      if (!(block.blockedUntil > now)) continue;
+      merged.set(block.id, Math.max(merged.get(block.id) ?? 0, block.blockedUntil));
+    }
+    if (merged.size === 0) {
+      this.rateLimitCarryovers.delete(adapter.channel);
+      return;
+    }
+    this.rateLimitCarryovers.set(adapter.channel, {
+      blocks: [...merged].map(([id, blockedUntil]) => ({ id, blockedUntil })),
+    });
+  }
+
   private async stopAdapterAfterFailedStart(
     adapter: DesktopMessagingAdapter,
   ): Promise<void> {
+    this.captureRateLimitCarryover(adapter);
+    const stopping = Promise.resolve().then(async () => adapter.stop?.());
+    // The wait below is bounded; the platform still waits for the stop itself.
+    this.trackAdapterTeardown(adapter.channel, stopping);
     try {
       await promiseWithTimeout(
-        Promise.resolve().then(async () => adapter.stop?.()),
+        stopping,
         FAILED_START_STOP_TIMEOUT_MS,
         `${adapter.channel} adapter cleanup after failed startup`,
       );
@@ -1897,6 +2143,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async stopAdapterAfterLateStart(
     adapter: DesktopMessagingAdapter,
   ): Promise<void> {
+    this.captureRateLimitCarryover(adapter);
     try {
       await adapter.stop?.();
       messagingLog.info(`${adapter.channel}: stopped adapter after late startup`, {
@@ -1978,6 +2225,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private async stopRunningAdapter(running: RunningMessagingAdapter): Promise<void> {
+    if (this.liveAdapters.get(running.adapter.channel) === running.adapter) {
+      this.liveAdapters.delete(running.adapter.channel);
+    }
     try {
       running.unsubscribeDiagnostic?.();
     } catch (error) {
@@ -2021,6 +2271,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       });
     }
     running.controller.dispose();
+    this.captureRateLimitCarryover(running.adapter);
     await running.adapter.stop?.();
   }
 

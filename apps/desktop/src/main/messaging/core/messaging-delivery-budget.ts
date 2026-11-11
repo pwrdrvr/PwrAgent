@@ -64,6 +64,13 @@ const DEFERABLE_PRIORITIES = new Set<MessagingDeliveryPriority>([
   "user_command",
 ]);
 
+/** Priorities the budget defers instead of dropping when it holds them back. */
+export function isDeferrableDeliveryPriority(
+  priority: MessagingDeliveryPriority,
+): boolean {
+  return DEFERABLE_PRIORITIES.has(priority);
+}
+
 export class MessagingDeliveryBudget {
   private readonly now: () => number;
   private readonly scopes = new Map<string, ScopeState>();

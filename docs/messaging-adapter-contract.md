@@ -551,6 +551,53 @@ configured this way, `direct` when calls go straight to the platform without a
 hidden retry queue, or `sdk-managed` only as a temporary diagnostic state. Do
 not ship a new provider with `sdk-managed`; fix or wrap the client first.
 
+Rate-limit state survives an adapter restart. A config change or a messaging
+stop and start replaces the adapter and its controller, but the provider is
+still limiting the bot. The runtime therefore keeps one delivery budget per
+platform for its own lifetime, so Cool Off, Slow Mode and the sliding window
+carry over. An adapter that throttles on its own (a `MessagingRateLimitGate`,
+or a per-chat stream block) implements `exportRateLimitCarryover()` and
+`restoreRateLimitCarryover(carryover)`. The runtime reads the unexpired blocks
+before it stops the adapter and gives them to the replacement before that one
+starts. The carryover is memory only: it does not survive an app quit. A
+provider that keys a bucket by a fallback id before it learns the real one
+(Slack's `configured-workspace`) moves the block to the real id with
+`MessagingRateLimitGate.moveBucket` once it is known.
+
+A stopped adapter is never called again. A controller whose adapter was
+replaced keeps its in-progress work, but every adapter call it still makes
+goes to the adapter now running for the platform. A send waits for a restart
+that is still in progress; with no replacement, the send is discarded and
+other calls see an adapter with no optional methods. Only one adapter
+instance per platform talks to the provider at a time.
+
+The runtime never starts an adapter while an earlier adapter for the same
+platform may still be connected. Many providers allow one connection per bot
+(Telegram polling, Slack Socket Mode, a Discord gateway), and a second one
+makes them drop each other in a loop. When the runtime gives up on a start
+(its deadline passed, or messaging stopped), that start keeps running, so
+the platform stays closed until the start has settled and the adapter has
+been stopped again. A new start waits a few seconds for that; if it is not
+enough, the platform reports errored ("Waiting for the previous connection
+to shut down") and starts by itself once the earlier adapter is down. A
+start that never settles keeps the platform closed.
+
+So every adapter must:
+
+- check after each await in `start()` whether `stop()` ran meanwhile, and
+  tear down whatever it opened (the providers use a lifecycle generation
+  counter);
+- let `start()` settle, resolved or rejected, after `stop()`. A start left
+  pending forever keeps its platform closed until the app restarts.
+
+Deliveries the budget holds back keep their order. A deferrable delivery
+(final answers, user command replies, critical interactive prompts) that is
+deferred, or that arrives while its scope already has deferred deliveries,
+waits in a first-in, first-out line for that scope. Only the head of the line
+is admitted and sent, and it keeps its place until its provider call
+returns. The runtime keeps the line beside the budget, so a delivery keeps
+its place when its adapter restarts.
+
 The controller budgets all outbound intent kinds against the resolved scope:
 final assistant messages, user prompts, command replies, status updates, tool
 updates, and stream updates. Slow Mode is local: it starts when the shared

@@ -79,6 +79,29 @@ describe("computeMattermostContextHmac", () => {
 });
 
 describe("MattermostCallbackServer", () => {
+  it("settles start when stop closes the server before it begins listening", async () => {
+    const server = createMattermostCallbackServer({
+      port: nextPort++,
+      hmacSecret: "test-secret",
+      handler: vi.fn(),
+      logger: silentLogger,
+    });
+    // stop() in the same microtask drain as listen(): Node then drops the
+    // listening callback, which used to leave start() pending forever.
+    const starting = server.start();
+    const stopping = Promise.resolve().then(async () => server.stop());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      starting.then(() => "listened", () => "rejected"),
+      new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve("still pending"), 1_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    await stopping;
+    expect(outcome).not.toBe("still pending");
+  });
+
   it("dispatches valid callbacks to the handler", async () => {
     const port = nextPort++;
     const handler = vi.fn();

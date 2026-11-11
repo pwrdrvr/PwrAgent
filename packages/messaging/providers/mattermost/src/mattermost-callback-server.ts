@@ -450,15 +450,25 @@ export function createMattermostCallbackServer(
       server = current;
       await new Promise<void>((resolve, reject) => {
         const errorHandler = (error: Error): void => {
+          current.off("close", closeHandler);
           config.logger.error("mattermost callback listener failed to bind", {
             error: error.message,
             port: config.port,
           });
           reject(error);
         };
+        // A stop() that closes the server in the same microtask drain as
+        // listen() makes Node drop the listening callback. Settle anyway, so
+        // the adapter's start cannot hang and keep the platform closed.
+        const closeHandler = (): void => {
+          current.off("error", errorHandler);
+          reject(new Error("mattermost callback listener closed before it began listening"));
+        };
         current.once("error", errorHandler);
+        current.once("close", closeHandler);
         current.listen(config.port, "127.0.0.1", () => {
           current.off("error", errorHandler);
+          current.off("close", closeHandler);
           config.logger.info?.("mattermost callback listener bound", {
             port: config.port,
             host: "127.0.0.1",
