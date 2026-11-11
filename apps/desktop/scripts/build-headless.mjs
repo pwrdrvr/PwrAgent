@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(desktop, "package.json"));
 export const headlessEntries = {
+  "outpost-runtime-policy": "src/main/owner-runtime-policy.ts",
   index: "src/main/headless/index.ts",
   "storage-maintenance-worker": "src/main/state/storage-maintenance-worker.ts",
   "claude-session-reader-worker": "src/main/claude/claude-session-reader-worker.ts",

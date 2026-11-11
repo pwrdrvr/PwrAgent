@@ -7981,7 +7981,8 @@ export class CodexAppServerClient {
     this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
       if (!PASSIVE_CODEX_REQUESTS.has(method)) this.options.assertOwnerAdmission?.();
       try {
-        const result = await requestBeforeSubscriptionTracking(method, params, timeoutMs, diagnostics);
+        const effectiveParams = this.host.applyExecutionPolicy ? this.host.applyExecutionPolicy(method, params) : params;
+        const result = await requestBeforeSubscriptionTracking(method, effectiveParams, timeoutMs, diagnostics);
         this.observeThreadSubscription(method, params, result);
         return result;
       } catch (error) {

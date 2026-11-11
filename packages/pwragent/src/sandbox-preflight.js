@@ -1,16 +1,16 @@
 import { spawn } from "node:child_process";
+import { createOutpostRuntimePolicy, ownerCodexIsolationArgs } from "../dist/outpost-runtime-policy.js";
 
 // Use Codex's native sandbox entry point, without a model turn or access to
-// Codex-owned files. The policy matches the Outpost's workspace-write turns.
+// Codex-owned files. An unsupported permissions runtime fails closed.
 export function checkCodexSandbox({ command, home, workspace, timeout = 10000, signal }) {
   const checkedAt = new Date().toISOString();
   const probe = process.platform === "darwin" ? "/usr/bin/true" : "/bin/true";
   return new Promise((resolve) => {
-    const child = spawn(command, ["sandbox", "-c", "sandbox_mode=\"workspace-write\"",
-      "-c", "approval_policy=\"never\"", "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([workspace])}`,
-      "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-      "-c", "sandbox_workspace_write.exclude_slash_tmp=true", "--", probe], {
-      cwd: workspace, env: { ...process.env, CODEX_HOME: home },
+    const env = { ...process.env, CODEX_HOME: home, PWRAGENT_CODEX_HOME: home };
+    const child = spawn(command, ["sandbox", ...ownerCodexIsolationArgs(createOutpostRuntimePolicy(env), env),
+      "-P", "pwragent-workspace-write", "--", probe], {
+      cwd: workspace, env,
       stdio: ["ignore", "ignore", "pipe"], detached: true,
     });
     let stderr = "";

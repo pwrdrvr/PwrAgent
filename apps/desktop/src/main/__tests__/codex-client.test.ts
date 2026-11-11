@@ -1854,6 +1854,31 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("keeps the Outpost read-isolation profile on every thread execution route", async () => {
+    const { getOwnerHostServices, installOwnerHostServices } = await import("../owner-host");
+    const { createOutpostRuntimePolicy } = await import("../owner-runtime-policy");
+    const originalHost = getOwnerHostServices();
+    installOwnerHostServices({ ...originalHost, runtimePolicy: createOutpostRuntimePolicy({ PWRAGENT_HOME: "/private/owner", CODEX_HOME: "/private/codex" }) });
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const permissions = { approvalPolicy: "never", sandbox: "workspace-write" };
+      await client.startThread(permissions);
+      await client.forkThread({ threadId: "thread-2", ...permissions });
+      await client.startTurn({ threadId: "thread-2", input: [{ type: "text", text: "Inspect the project" }], ...permissions });
+      const requests = MockTransport.instances.flatMap(transport => transport.sentMessages.map(message => JSON.parse(message)));
+      for (const method of ["thread/start", "thread/fork", "thread/resume", "turn/start"]) {
+        const params = requests.find(request => request.method === method)?.params;
+        expect(params, method).toMatchObject({ permissions: "pwragent-workspace-write" });
+        expect(params.sandbox, method).toBeUndefined();
+        expect(params.sandboxPolicy, method).toBeUndefined();
+      }
+    } finally {
+      await client.close();
+      installOwnerHostServices(originalHost);
+    }
+  });
+
   it("selects Auto before a new thread has a rollout", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });

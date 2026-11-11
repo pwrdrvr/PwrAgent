@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import { expect, it } from "vitest";
-import { assertOwnerExecutionPolicy, createOutpostRuntimePolicy, type OwnerRuntimePolicy } from "../owner-runtime-policy";
+import { applyOwnerCodexExecutionPolicy, buildOwnerCodexIsolationConfig, assertOwnerExecutionPolicy, createOutpostRuntimePolicy, type OwnerRuntimePolicy } from "../owner-runtime-policy";
 
 const policy: OwnerRuntimePolicy = {
   enabledBackends: ["codex"], approvalPolicy: "never", executionModes: ["default", "auto"],
@@ -47,4 +47,41 @@ it("the App Server launch configuration cannot grant approvals or tool network a
     expect(values.get("sandbox_workspace_write.exclude_tmpdir_env_var")).toBe("true");
     expect(values.get("sandbox_workspace_write.exclude_slash_tmp")).toBe("true");
   }));
+});
+
+it("every execution route selects a read-restricted profile and removes legacy sandbox overrides", () => {
+  fc.assert(fc.property(
+    fc.constantFrom("thread/start", "thread/resume", "thread/fork", "turn/start", "thread/settings/update", "command/exec"),
+    fc.constantFrom("read-only", "workspace-write"),
+    (method, sandbox) => {
+      const actual = applyOwnerCodexExecutionPolicy(policy, method, {
+        sandbox, sandboxPolicy: { type: "dangerFullAccess" },
+        config: { permissions: { escape: {} }, "shell_environment_policy.set.TOKEN": "secret", features: { shell_snapshot: true, other: true } },
+      }) as Record<string, unknown>;
+      expect(actual.sandbox).toBeUndefined();
+      expect(actual.sandboxPolicy).toBeUndefined();
+      expect(actual[method === "command/exec" ? "permissionProfile" : "permissions"]).toBe(`pwragent-${sandbox}`);
+      if (["thread/start", "thread/resume", "thread/fork"].includes(method)) {
+        expect(actual.config).toEqual({ features: { other: true } });
+      }
+    },
+  ));
+});
+
+it("provider credentials with arbitrary names never enter the command environment", () => {
+  fc.assert(fc.property(fc.stringMatching(/^[A-Z][A-Z_]{1,24}$/).filter(key => !["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TMP", "TEMP"].includes(key)), key => {
+    const config = buildOwnerCodexIsolationConfig({ ...policy, privateRoots: ["/private/owner", "/private/codex"] }, { [key]: "provider-secret", PATH: "/bin" });
+    expect(config["shell_environment_policy.inherit"]).toBe("none");
+    expect(config["shell_environment_policy.set"]).toEqual({ PATH: "/bin" });
+    for (const name of ["read-only", "workspace-write"]) {
+      expect(config[`permissions.pwragent-${name}.filesystem`]).toMatchObject({ "/private/owner": "deny", "/private/codex": "deny" });
+    }
+    const params = applyOwnerCodexExecutionPolicy(policy, "command/exec", { env: { [key]: "provider-secret", LANG: "C" } }) as Record<string, unknown>;
+    expect(params.env).toEqual({ LANG: "C" });
+  }));
+});
+
+it("a metadata-only settings update preserves the selected execution profile", () => {
+  const params = { threadId: "thread", model: "model", reasoningEffort: "high" };
+  expect(applyOwnerCodexExecutionPolicy(policy, "thread/settings/update", params)).toEqual(params);
 });

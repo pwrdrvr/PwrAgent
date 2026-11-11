@@ -298,6 +298,11 @@ jobs:
         timeout-minutes: 2
         run: pnpm --filter pwragent test
 
+      - name: Verify Outpost credential isolation in the real Linux sandbox
+        if: matrix.lane == 1
+        timeout-minutes: 3
+        run: node apps/desktop/scripts/run-outpost-isolation-oracle.mjs --docker
+
   test-result:
     # Preserve the required `Test` status-check context while the work runs
     # as matrix lanes. `always()` is required so a failed lane reaches this

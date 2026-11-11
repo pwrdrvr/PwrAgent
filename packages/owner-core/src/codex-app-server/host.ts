@@ -58,6 +58,7 @@ export type CodexClientHost = {
   signInRequiredMessage: string;
   buildShellEnvironment: (env: NodeJS.ProcessEnv, bundledToolsDirectory?: string) => NodeJS.ProcessEnv;
   buildSandboxPolicy?: (sandbox?: string, cwd?: string) => SandboxPolicy | undefined;
+  applyExecutionPolicy?: (method: string, params: unknown) => unknown;
   enrichThreadDirectory: (projectKey?: string, caller?: DirectoryEnrichmentCaller) => Promise<ThreadDirectoryEnrichment>;
   sampleAppServerProcessTree: (process: CodexAppServerProcessInfo) => Promise<{
     childProcessCount?: number;

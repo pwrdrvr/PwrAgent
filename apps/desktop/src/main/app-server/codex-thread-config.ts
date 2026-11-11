@@ -1,4 +1,5 @@
 import type { OwnerRuntimePolicy } from "../owner-runtime-policy";
+import { ownerCodexIsolationArgs } from "../owner-runtime-policy";
 import { MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY } from "@pwragent/shared";
 import { PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
 import {
@@ -78,6 +79,7 @@ export function buildCodexClientArgs(
   // Last, so no operator override can hand a provider key to model commands.
   args.push(...buildCodexModelProviderShellEnvOverrides(providerIdsWithKeys)
     .flatMap((override) => ["-c", override]));
+  if (policy) args.push(...ownerCodexIsolationArgs(policy, env ?? process.env));
   return args;
 }
 

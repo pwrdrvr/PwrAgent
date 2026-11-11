@@ -1,4 +1,5 @@
 import { getOwnerHostServices } from "../owner-host";
+import { applyOwnerCodexExecutionPolicy } from "../owner-runtime-policy";
 import type { SandboxPolicy } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   CodexAppServerClient as OwnerCodexAppServerClient,
@@ -31,6 +32,7 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
         args: options.args ?? [],
         ...callbacks,
       }),
+      ...(runtimePolicy ? { applyExecutionPolicy: (method: string, params: unknown) => applyOwnerCodexExecutionPolicy(runtimePolicy, method, params) } : {}),
       ...(runtimePolicy ? { buildSandboxPolicy: (sandbox?: string, cwd?: string): SandboxPolicy | undefined => {
         if (sandbox === undefined) return undefined;
         if (sandbox === "read-only") return { type: "readOnly", networkAccess: false };
