@@ -27,6 +27,25 @@ export function buildClaudeSessionPrimer(
     ? [`${entry.role === "user" ? "Operator" : "Claude"}: ${clip(entry.text.trim())}`]
     : []);
   const budget = maxChars - PRIMER_HEADER.length - PRIMER_FOOTER.length - 8;
+  let kept = newestWithin(messages, budget);
+  // Leaving messages out adds the omission line, so it needs room too.
+  // The note for every message is at least as long as the one written.
+  if (kept.length < messages.length) {
+    kept = newestWithin(messages, budget - omissionNote(messages.length).length - 1);
+  }
+  if (!kept.length) return undefined;
+  const omitted = messages.length - kept.length;
+  return [
+    PRIMER_HEADER,
+    ...(omitted ? [omissionNote(omitted)] : []),
+    "",
+    kept.join("\n\n"),
+    "",
+    PRIMER_FOOTER,
+  ].join("\n");
+}
+
+function newestWithin(messages: readonly string[], budget: number): string[] {
   const kept: string[] = [];
   let used = 0;
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -35,16 +54,11 @@ export function buildClaudeSessionPrimer(
     kept.unshift(message);
     used += message.length + 2;
   }
-  if (!kept.length) return undefined;
-  const omitted = messages.length - kept.length;
-  return [
-    PRIMER_HEADER,
-    ...(omitted ? [`(${omitted} earlier ${omitted === 1 ? "message is" : "messages are"} not included.)`] : []),
-    "",
-    kept.join("\n\n"),
-    "",
-    PRIMER_FOOTER,
-  ].join("\n");
+  return kept;
+}
+
+function omissionNote(omitted: number): string {
+  return `(${omitted} earlier ${omitted === 1 ? "message is" : "messages are"} not included.)`;
 }
 
 function clip(text: string): string {

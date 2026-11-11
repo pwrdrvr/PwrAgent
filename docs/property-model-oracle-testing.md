@@ -159,6 +159,15 @@ against the pre-fix code:
 - **Narrow, don't weaken.** A counterexample may be a case the code handles
   on purpose. If so, restrict the generator or add `fc.pre(...)`, with a
   comment saying why. Don't loosen the assertion until it passes.
+- **Make sure the generator reaches the bound.** `maxLength` is a clamp,
+  not a target. Without a `size` option, fast-check 4 generates at most
+  `2 × minLength + 10` items, so `fc.array(x, { maxLength: 40 })` never
+  goes past 10. The same holds for `fc.uniqueArray`, `fc.string` and
+  `fc.commands` (`maxCommands`). In PR #3613 a
+  cap of 20 was never reached, and the test passed against broken code.
+  When the rule is a cap, budget, window, attempt limit, page size or
+  queue depth, add `size: "max"` or a `minLength` so runs cross the
+  bound. Then mutate the bound by one and check that the test fails.
 - **Budget the runs.** The default test timeout is 5 s on Linux and macOS and 30 s on
   Windows. CI runs unit tests on all three, and Windows desktop-main run time
   can vary by more than 2× between runs.

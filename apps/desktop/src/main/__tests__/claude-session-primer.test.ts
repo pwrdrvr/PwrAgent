@@ -6,9 +6,17 @@ import { buildClaudeSessionPrimer } from "../claude/claude-session-primer";
 const message = (role: "user" | "assistant", text: string, id: string): AppServerThreadEntry =>
   ({ type: "message", id, role, text }) as AppServerThreadEntry;
 
+// Repeated units reach the 8,000-character clip and the primer budget
+// cheaply; plain strings stay short under fast-check's default size.
+const text = fc.oneof(
+  fc.string({ maxLength: 12_000 }),
+  fc.tuple(fc.string({ minLength: 1, maxLength: 8 }), fc.integer({ min: 1, max: 12_000 }))
+    .map(([unit, length]) => unit.repeat(Math.ceil(length / unit.length)).slice(0, length)),
+);
+
 const entries = fc.array(
-  fc.tuple(fc.constantFrom("user" as const, "assistant" as const), fc.string({ maxLength: 12_000 })),
-  { maxLength: 40 },
+  fc.tuple(fc.constantFrom("user" as const, "assistant" as const), text),
+  { maxLength: 40, size: "max" },
 ).map((rows) => rows.map(([role, text], index) => message(role, text, `m${index}`)));
 
 describe("Claude session primer", () => {
@@ -31,6 +39,18 @@ describe("Claude session primer", () => {
         expect(primer.endsWith(line.slice(1) + " The operator's new message follows.") || primer.includes(line)).toBe(true);
       }
     }));
+  });
+
+  it("counts the omission line against the bound", () => {
+    // The newest message fills the budget from below; the older one is
+    // left out, so the primer adds a line saying so.
+    for (let length = 1_000; length <= 2_000; length++) {
+      const primer = buildClaudeSessionPrimer([
+        message("user", "older", "a"),
+        message("user", "x".repeat(length), "b"),
+      ], 2_000);
+      if (primer) expect(primer.length).toBeLessThanOrEqual(2_000);
+    }
   });
 
   it("labels who said what, notes what it leaves out, and carries nothing from an empty thread", () => {

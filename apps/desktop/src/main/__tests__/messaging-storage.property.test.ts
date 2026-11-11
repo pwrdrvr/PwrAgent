@@ -52,6 +52,25 @@ it("orders activity by insertion while platform summaries retain the greatest ob
   }), { numRuns: 50 });
 });
 
+// A list pages at most 500 rows, and 100 when no limit is given, from either cursor.
+it("pages activity through the 100-row default and the [1, 500] limit clamp", async () => {
+  await fc.assert(fc.asyncProperty(fc.oneof(fc.integer({ min: 95, max: 115 }), fc.integer({ min: 495, max: 515 })), fc.option(fc.nat({ max: 12 }), { nil: undefined }),
+    fc.constantFrom(undefined, -1, 0, 99, 100, 101, 499, 500, 501, 10_000), async (count, since, limit) => {
+    const db = openInMemoryStateDb();
+    const storage: MessagingActivityStorage = new MessagingActivityLog(db);
+    try {
+      const rows: MessagingActivityEntry[] = [];
+      db.raw.transaction(() => { for (let index = 0; index < count; index++) {
+        rows.push(storage.record({ platform: "slack", kind: "outbound", createdAt: index, summary: `Fixture ${index}` }));
+      } })();
+      const newest = rows.filter(row => row.id > (since ?? 0)).reverse();
+      for (const each of [limit, undefined, 10_000]) {
+        expect(storage.list({ sinceId: since, limit: each })).toEqual(newest.slice(0, Math.min(Math.max(each ?? 100, 1), 500)));
+      }
+    } finally { db.close(); }
+  }), { numRuns: 15 });
+});
+
 it("retains observed pairing cards and deduplicated approvals until resolution or expiry", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const operation = fc.record({

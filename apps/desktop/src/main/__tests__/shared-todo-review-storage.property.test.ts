@@ -166,7 +166,7 @@ it("matches dispatch preferences and shared recents without changing commit coun
   await fc.assert(fc.asyncProperty(fc.array(fc.record({
     model: fc.integer({ min: 0, max: 14 }), high: fc.boolean(), host: fc.integer({ min: 0, max: 1 }),
     identity: fc.integer({ min: 0, max: 2 }), defaultPick: fc.boolean(),
-  }), { minLength: 1, maxLength: 35 }), async commands => {
+  }), { minLength: 1, maxLength: 35, size: "max" }), async commands => {
     const fixture = createTempStateDb("shared-dispatch-model-");
     const connections = todoBindings.map(() => StateDb.open(fixture.dbPath));
     const stores = connections.map((db, i) => new todoBindings[i]!(db));

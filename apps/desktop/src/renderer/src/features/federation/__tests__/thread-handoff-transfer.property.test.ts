@@ -2,6 +2,8 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { ThreadHandoffProgress } from "@pwragent/shared";
 import {
+  ETA_MIN_SAMPLE_MS,
+  RATE_WINDOW_MS,
   reduceThreadHandoffTransfers,
   THREAD_HANDOFF_PHASE_ORDER,
   threadHandoffPercent,
@@ -128,6 +130,85 @@ describe("thread handoff transfer", () => {
       }),
       { numRuns: 500 },
     );
+  });
+
+  // The property above draws byte counts at random, so they mostly fall and
+  // no estimate ever forms. Here the send runs the way main reports it:
+  // acknowledged bytes climb in steps (some repeating the last count), the
+  // link sometimes drops, and a reconnect can give back unsaved bytes.
+  it("estimates time left from two seconds of connected, climbing byte counts", () => {
+    const SEND_TOTAL = 200_000;
+    type Step = { gapMs: number; kind: "climb" | "wait" | "lose"; bytes: number; lagMs: number };
+    const stepArb: fc.Arbitrary<Step> = fc.record({
+      gapMs: fc.integer({ min: 1, max: 8 }).map((n) => n * 50),
+      kind: fc.oneof(
+        { weight: 12, arbitrary: fc.constant("climb" as const) },
+        { weight: 1, arbitrary: fc.constant("wait" as const) },
+        { weight: 1, arbitrary: fc.constant("lose" as const) },
+      ),
+      bytes: fc.oneof(fc.constant(0), fc.integer({ min: 1, max: 2_000 })),
+      lagMs: fc.oneof(fc.constant(0), fc.integer({ min: 0, max: 60 }).map((n) => n * 100)),
+    });
+    let runsWithEstimate = 0;
+    fc.assert(
+      fc.property(fc.array(stepArb, { minLength: 20, maxLength: 60 }), (steps) => {
+        let state = reduceThreadHandoffTransfers({}, started);
+        // Model: counts since the link last dropped or bytes were lost.
+        let run: { at: number; bytes: number }[] = [];
+        let bytes = 0;
+        let sentBefore: number | undefined;
+        let at = 0;
+        let sawEstimate = false;
+        for (const step of steps) {
+          at += step.gapMs;
+          if (step.kind === "climb") bytes += step.bytes;
+          if (step.kind === "lose") bytes = Math.max(0, bytes - step.bytes);
+          const link = step.kind === "wait" ? "waiting" as const : "connected" as const;
+          state = reduceThreadHandoffTransfers(state, {
+            type: "progress",
+            at,
+            progress: {
+              handoffId: HANDOFF,
+              sourceThreadId: "thread-1",
+              phase: "send",
+              bytesSent: bytes,
+              bytesTotal: SEND_TOTAL,
+              link,
+              cancelable: true,
+              transport: "resumable",
+            },
+          });
+          if (link === "waiting" || (sentBefore !== undefined && bytes < sentBefore)) {
+            run = [];
+          } else if (bytes !== sentBefore) {
+            run = [...run, { at, bytes }];
+          }
+          sentBefore = bytes;
+
+          for (const now of [at, at + step.lagMs]) {
+            const recent = run.filter((sample) => now - sample.at <= RATE_WINDOW_MS);
+            const first = recent[0];
+            const last = recent[recent.length - 1];
+            let expected: number | undefined;
+            if (
+              link === "connected"
+              && first
+              && last
+              && last.at - first.at >= ETA_MIN_SAMPLE_MS
+              && last.bytes > first.bytes
+            ) {
+              const perSecond = ((last.bytes - first.bytes) * 1000) / (last.at - first.at);
+              expected = Math.max(0, Math.ceil((SEND_TOTAL - bytes) / perSecond));
+            }
+            expect(threadHandoffSecondsLeft(state[HANDOFF]!, now)).toBe(expected);
+            if (expected !== undefined) sawEstimate = true;
+          }
+        }
+        if (sawEstimate) runsWithEstimate += 1;
+      }),
+    );
+    // Guard against a generator that stops reaching the rule.
+    expect(runsWithEstimate).toBeGreaterThan(40);
   });
 
   it("estimates time left only after two seconds of byte counts", () => {
