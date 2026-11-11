@@ -267,6 +267,9 @@ export class MainProcessHeapMonitor {
     const filename = createSnapshotFilename(snapshotIndex);
     const filePath = path.join(this.session.directoryPath, filename);
     this.snapshotInFlight = true;
+    // The cooldown starts with the attempt: a failed write still stalled the
+    // process, and retrying it every sample is the storm the cooldown bounds.
+    this.lastSnapshotAtMs = nowMs;
     this.snapshotPromise = this.captureSnapshot({
       capturedAt: sample.capturedAt,
       deltaBytes,
@@ -300,7 +303,6 @@ export class MainProcessHeapMonitor {
       const writtenPath = await Promise.resolve(this.writeSnapshot(options.filePath));
       const writtenFilename = path.basename(writtenPath);
       this.snapshotCount += 1;
-      this.lastSnapshotAtMs = Date.parse(options.capturedAt);
       await this.session.registerSnapshotFile(writtenFilename);
       await this.appendEvent({
         source: "main",
