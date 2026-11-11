@@ -162,8 +162,8 @@ against the pre-fix code:
 - **Make sure the generator reaches the bound.** `maxLength` is a clamp,
   not a target. Without a `size` option, fast-check 4 generates at most
   `2 × minLength + 10` items, so `fc.array(x, { maxLength: 40 })` never
-  goes past 10. The same holds for `fc.uniqueArray`, `fc.string`,
-  `fc.shuffledSubarray` and `fc.commands` (`maxCommands`). In PR #3613 a
+  goes past 10. The same holds for `fc.uniqueArray`, `fc.string` and
+  `fc.commands` (`maxCommands`). In PR #3613 a
   cap of 20 was never reached, and the test passed against broken code.
   When the rule is a cap, budget, window, attempt limit, page size or
   queue depth, add `size: "max"` or a `minLength` so runs cross the
