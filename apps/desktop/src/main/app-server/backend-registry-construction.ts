@@ -1,3 +1,6 @@
+import type { ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
+import type { RegistryHandlers } from "./backend-registry-handlers";
+import type { RegistryContext } from "./registry-context";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -9,8 +12,25 @@ import type { CodexModelProviderSettings } from "@pwragent/shared";
 import type { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import type { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import type { RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
-import type { CreateScheduledThreadActionRequest, DesktopProviderModelDefaults, DesktopProviderThreadModelMigration, DesktopSpendAlertPolicy, DesktopToolOutputAlertPolicy, LinkedDirectorySummary, ScheduledThreadActionMutationResponse, DesktopHelperModelSettings, DesktopTaskMonitorModelChoice } from "@pwragent/shared";
-import type { AcpBackendAdapter, AcpBackendAdapterOptions, AcpClientFactory, AcpSessionStoreLike, AcpTransportFactory, LocalAcpDiscovery } from "./acp-backend-adapter";
+import type {
+  CreateScheduledThreadActionRequest,
+  DesktopProviderModelDefaults,
+  DesktopProviderThreadModelMigration,
+  DesktopSpendAlertPolicy,
+  DesktopToolOutputAlertPolicy,
+  LinkedDirectorySummary,
+  ScheduledThreadActionMutationResponse,
+  DesktopHelperModelSettings,
+  DesktopTaskMonitorModelChoice,
+} from "@pwragent/shared";
+import type {
+  AcpBackendAdapter,
+  AcpBackendAdapterOptions,
+  AcpClientFactory,
+  AcpSessionStoreLike,
+  AcpTransportFactory,
+  LocalAcpDiscovery,
+} from "./acp-backend-adapter";
 import type { CodexAppServerRecycleSettings } from "../codex-app-server/app-server-recycle-policy";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
@@ -41,9 +61,19 @@ import type { CodexEnvironmentCommandRunner } from "./codex-environment-runtime"
 import type { CodexEnvironmentHydrationStoreLike } from "../storage/codex-environment-hydration-store";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import type { QueuedMessageTitler } from "./queued-message-title";
-import type { BackendClient, BackendRegistryMcpConnectionService, BackendRegistryOverlayStoreLike, MessagingArchiveCleaner, MessagingArchiveCleanupStore, ProjectHeldWakeupStoreLike, RestartContinuationStoreLike, ThreadTitleService } from "./backend-registry-types";
+import type {
+  BackendClient,
+  BackendRegistryMcpConnectionService,
+  BackendRegistryOverlayStoreLike,
+  MessagingArchiveCleaner,
+  MessagingArchiveCleanupStore,
+  ProjectHeldWakeupStoreLike,
+  RestartContinuationStoreLike,
+  ThreadTitleService,
+} from "./backend-registry-types";
 
 export type DesktopBackendRegistryOptions = {
+  handlers?: RegistryHandlers;
   ownerAdmission?: ThreadOwnerAdmission;
   getThreadArchivePolicy?: () => DesktopThreadArchivePolicy;
   getCheckoutHibernationPolicy?: () => DesktopCheckoutHibernationPolicy;
@@ -168,6 +198,9 @@ export type DesktopBackendRegistryOptions = {
   };
 
 export interface RegistryDependencies {
+  handlers: RegistryHandlers;
+  context: RegistryContext;
+  threadMaintenanceToolScans?: ThreadMaintenanceToolScans;
   ownerAdmission?: ThreadOwnerAdmission;
   managedMaintenanceRoots: () => Promise<string[]>;
   readThreadArchivePolicy: () => DesktopThreadArchivePolicy;

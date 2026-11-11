@@ -1,3 +1,5 @@
+import { ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
+import type { RegistryContext } from "./registry-context";
 import { getMainLogger } from "../log";
 import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
@@ -17,11 +19,30 @@ import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
-import { findLiveProfileRuntimeMarkers, getProcessRuntimeIdentity, resolveActiveProfileName, resolveActiveProfilePath } from "../profile";
-import { createAcpAvailableCommandsStorage, createArchiveCleanupCheckpointStorage, createProjectHeldWakeupStorage, createProviderThreadSnapshotStorage, createRetainedOwnerThreadStorage, createRestartContinuationStorage, createTokenMiserStorage } from "../storage/desktop-runtime-storage";
+import {
+  findLiveProfileRuntimeMarkers,
+  getProcessRuntimeIdentity,
+  resolveActiveProfileName,
+  resolveActiveProfilePath,
+} from "../profile";
+import {
+  createAcpAvailableCommandsStorage,
+  createArchiveCleanupCheckpointStorage,
+  createProjectHeldWakeupStorage,
+  createProviderThreadSnapshotStorage,
+  createRetainedOwnerThreadStorage,
+  createRestartContinuationStorage,
+  createTokenMiserStorage,
+} from "../storage/desktop-runtime-storage";
 import { getAppStateMode, isAppStateInitialized } from "../storage/desktop-runtime-storage";
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
-import { buildThreadIdentityKey, isAcpBackendId, DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS, DESKTOP_SPEND_ALERT_POLICY_DEFAULT, DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  isAcpBackendId,
+  DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
+} from "@pwragent/shared";
 import { AcpBackendAdapter, createLocalAcpAgentDiscovery, noLocalAcpAgentDiscovery } from "./acp-backend-adapter";
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS } from "../codex-app-server/app-server-recycle-policy";
@@ -56,12 +77,22 @@ import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";
 import { getDesktopConfigStore, getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveSpendAlertPolicy, resolveToolOutputAlertPolicy } from "../settings/config-store/config-domains";
-import { acpProviderEnabledFromSnapshot, providerProjectionForRegistryId } from "../settings/config-store/provider-runtime-config";
+import {
+  acpProviderEnabledFromSnapshot,
+  providerProjectionForRegistryId,
+} from "../settings/config-store/provider-runtime-config";
 import { ONBOARDING_CODEX_GATE_ENABLED } from "../settings/desktop-settings-service";
 import { BackendModelCatalog } from "./backend-model-catalog";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { QueuedMessageTitler } from "./queued-message-title";
-import { ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS, ACP_SESSION_IDLE_CLOSE_MS, CODEX_THREAD_IDLE_UNSUBSCRIBE_MS, RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS, createReplayClientsFromEnv, readProviderRuntimeFingerprints } from "./backend-registry-runtime-helpers";
+import {
+  ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS,
+  ACP_SESSION_IDLE_CLOSE_MS,
+  CODEX_THREAD_IDLE_UNSUBSCRIBE_MS,
+  RUNNING_TURN_SHUTDOWN_STOP_TIMEOUT_MS,
+  createReplayClientsFromEnv,
+  readProviderRuntimeFingerprints,
+} from "./backend-registry-runtime-helpers";
 import { buildPendingRequestKey } from "./thread-turn-keys";
 import { GROK_TITLE_HELPER_SESSION_POLICY, createReplayThreadTitleService } from "./thread-transcript-helpers";
 import { buildCodexClientArgs, withTokenMiserBridgeDescriptorEnv } from "./codex-thread-config";
@@ -1226,7 +1257,59 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     });
   const isBootstrapModeFn =
     options?.isBootstrapMode ?? (() => getAppStateMode() === "bootstrap");
+  const maintenanceHandler = options?.handlers?.threadMaintenanceToolHandler;
+  const threadMaintenanceToolScans = maintenanceHandler ? new ThreadMaintenanceToolScans({
+    scan: async (request) => await maintenanceHandler.scan(request),
+    getScan: (scanId) => maintenanceHandler.getScan(scanId),
+  }) : undefined;
+  const context: RegistryContext = {
+    stores: {
+      threads: {
+        getThreadOverlayState: (...args) => overlayStore.getThreadOverlayState(...args),
+        getThreadOverlayStates: (...args) => overlayStore.getThreadOverlayStates(...args),
+        getThreadMetadata: overlayStore.getThreadMetadata?.bind(overlayStore),
+        updateThreadMetadata: overlayStore.updateThreadMetadata?.bind(overlayStore),
+      },
+      usage: {
+        upsertThreadUsageLines: overlayStore.upsertThreadUsageLines?.bind(overlayStore),
+        readThreadPricing: (...args) => overlayStore.readThreadPricing(...args),
+        completeThreadUsageTurn: overlayStore.completeThreadUsageTurn?.bind(overlayStore),
+        completeThreadUsageTurns: overlayStore.completeThreadUsageTurns?.bind(overlayStore),
+        readThreadUsageActivities: overlayStore.readThreadUsageActivities?.bind(overlayStore),
+        readThreadUsageActivityForTurn: overlayStore.readThreadUsageActivityForTurn?.bind(overlayStore),
+      },
+      subAgents: {
+        upsertThreadSubAgents: overlayStore.upsertThreadSubAgents?.bind(overlayStore),
+        reconcileOrphanedThreadSubAgents: overlayStore.reconcileOrphanedThreadSubAgents?.bind(overlayStore),
+        moveLegacyThreadSubAgents: overlayStore.moveLegacyThreadSubAgents?.bind(overlayStore),
+      },
+      workspaces: {
+        readThreadGitWorkingStateCache: overlayStore.readThreadGitWorkingStateCache?.bind(overlayStore),
+        writeThreadGitWorkingStateCacheEntry: overlayStore.writeThreadGitWorkingStateCacheEntry?.bind(overlayStore),
+        acknowledgeThreadEnvironmentFailure: overlayStore.acknowledgeThreadEnvironmentFailure?.bind(overlayStore),
+      },
+      toolAccounting: {
+        readThreadToolAccounting: (...args) => overlayStore.readThreadToolAccounting(...args),
+        persistThreadToolInvocationBoundary: overlayStore.persistThreadToolInvocationBoundary?.bind(overlayStore),
+        markThreadToolInvocationsNoisy: overlayStore.markThreadToolInvocationsNoisy?.bind(overlayStore),
+        setThreadSpendAlertPending: overlayStore.setThreadSpendAlertPending?.bind(overlayStore),
+      },
+    },
+    providers: { codex: codexClient, claude: claudeBackend, acp: acpBackend },
+    lifecycle: { get closed() { return ports.closed; } },
+    emit: (event) => ports.emit(event),
+  };
+
   return new DesktopBackendRegistry({
+    context,
+    threadMaintenanceToolScans,
+    handlers: {
+      messagingArchiveCleaner,
+      appManagementHandler,
+      starMapHandler,
+      createScheduledThreadActionFn,
+      ...options?.handlers,
+    },
     ownerAdmission,
     managedMaintenanceRoots,
     readThreadArchivePolicy,

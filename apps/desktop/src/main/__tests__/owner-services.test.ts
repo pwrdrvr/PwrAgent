@@ -4,7 +4,8 @@ import { getDesktopConfigStore } from "../settings/config-store/desktop-config-s
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, expectTypeOf, it } from "vitest";
+import type { RegistryContext } from "../app-server/registry-context";
 import { getOwnerHostServices } from "../owner-host";
 import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, prepareOwnerShutdown } from "../owner-services";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -29,12 +30,25 @@ it("returns the root's instances through every owner getter", async () => {
   expect(getMcpConnectionGatewayService()).toBe(services.mcpGateway);
   expect(getScheduledThreadActionService()).toBe(services.scheduledActions);
   expect(getDesktopAutomationService()).toBe(services.automations);
+  const context = services.registry.context;
+  expect(context.lifecycle.closed).toBe(false);
+  expect(context.providers.codex).toBeDefined();
+  expect(context.providers.claude).toBeDefined();
+  expect(context.providers.acp).toBeDefined();
+  expectTypeOf<RegistryContext["stores"]["usage"]>().not.toHaveProperty("setThreadExecutionMode");
+  expectTypeOf<RegistryContext["stores"]["threads"]>().not.toHaveProperty("upsertThreadUsageLines");
+  expectTypeOf<RegistryContext["stores"]["workspaces"]>().not.toHaveProperty("getThreadOverlayState");
+  for (const port of Object.values(context.stores)) {
+    expect(port).not.toHaveProperty("setThreadExecutionMode");
+  }
   expect(() => startOwnerServices(getOwnerHostServices(), { bootMode: "bootstrap", startedAt: 1 })).toThrow(/already/);
 });
 
 afterAll(async () => {
+  const context = getDesktopBackendRegistry().context;
   prepareOwnerShutdown();
   await disposeOwnerServices("test");
+  expect(context.lifecycle.closed).toBe(true);
   disposeOwnerServicesSync();
   disposeAppState();
 });

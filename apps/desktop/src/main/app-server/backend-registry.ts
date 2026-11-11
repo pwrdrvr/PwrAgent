@@ -1,3 +1,4 @@
+import type { RegistryContext } from "./registry-context";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy } from "../owner-runtime-policy";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
@@ -1443,6 +1444,7 @@ async function refuseResolvedWorkMode(params: {
 }
 
 export class DesktopBackendRegistry {
+  readonly context: RegistryContext;
   private readonly launchpadCreationOperations = new LaunchpadCreationOperations();
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
@@ -2295,6 +2297,7 @@ export class DesktopBackendRegistry {
   private forgeReadHandler?: ForgeReadHandler;
   private localForgeReadHandler?: ForgeReadHandler;
 
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeReadHandlers(local: ForgeReadHandler, routed: ForgeReadHandler): void {
     this.localForgeReadHandler = local;
     this.forgeReadHandler = routed;
@@ -2313,21 +2316,25 @@ export class DesktopBackendRegistry {
    * call would otherwise infer (a pull request's head), and fails a bad call
    * before asking.
    */
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgePrToolHandler(handler: ForgePrToolHandler, preflight?: ForgePrToolPreflight): void {
     this.forgePrToolHandler = handler;
     this.forgePrToolPreflight = preflight;
   }
 
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
     this.forgeToolPolicyResolver = resolve;
   }
 
   /** Saves the project rule an approval card's "Always allow" option chose. */
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolRuleWriter(write: ForgeToolRuleWriter): void {
     this.forgeToolRuleWriter = write;
   }
 
   /** Names a repository's project as the Directories lens does. */
+  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeProjectLabelResolver(resolve: (repository: string) => Promise<string | undefined>): void {
     this.forgeProjectLabelResolver = resolve;
   }
@@ -3084,6 +3091,7 @@ export class DesktopBackendRegistry {
     dependencies: RegistryDependencies,
     connect: (ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>) => void,
   ) {
+    this.context = dependencies.context;
     this.ownerAdmission = dependencies.ownerAdmission;
     this.managedMaintenanceRoots = dependencies.managedMaintenanceRoots;
     this.readThreadArchivePolicy = dependencies.readThreadArchivePolicy;
@@ -3160,13 +3168,13 @@ export class DesktopBackendRegistry {
     this.acpBackend = dependencies.acpBackend;
     this.providerRuntimeFingerprints = dependencies.providerRuntimeFingerprints;
     this.messagingStore = dependencies.messagingStore;
-    this.messagingArchiveCleaner = dependencies.messagingArchiveCleaner;
-    this.appManagementHandler = dependencies.appManagementHandler;
-    this.starMapHandler = dependencies.starMapHandler;
+    this.messagingArchiveCleaner = dependencies.handlers.messagingArchiveCleaner;
+    this.appManagementHandler = dependencies.handlers.appManagementHandler;
+    this.starMapHandler = dependencies.handlers.starMapHandler;
     this.gitWorkspaceHandoffService = dependencies.gitWorkspaceHandoffService;
     this.resolveAcpHelperWorkspace = dependencies.resolveAcpHelperWorkspace;
     this.createScratchProjectDirectory = dependencies.createScratchProjectDirectory;
-    this.createScheduledThreadActionFn = dependencies.createScheduledThreadActionFn;
+    this.createScheduledThreadActionFn = dependencies.handlers.createScheduledThreadActionFn;
     this.threadTitleGenerationService = dependencies.threadTitleGenerationService;
     this.threadInspectionSearchService = dependencies.threadInspectionSearchService;
     this.codexModelProviderCatalog = dependencies.codexModelProviderCatalog;
@@ -3177,6 +3185,41 @@ export class DesktopBackendRegistry {
     this.isBootstrapModeFn = dependencies.isBootstrapModeFn;
     this.planLimits = dependencies.planLimits;
     this.captureStores = dependencies.captureStores;
+    this.localForgeReadHandler = dependencies.handlers.localForgeReadHandler;
+    this.forgeReadHandler = dependencies.handlers.forgeReadHandler;
+    this.forgePrToolHandler = dependencies.handlers.forgePrToolHandler;
+    this.forgePrToolPreflight = dependencies.handlers.forgePrToolPreflight;
+    this.forgeToolPolicyResolver = dependencies.handlers.forgeToolPolicyResolver;
+    this.forgeToolRuleWriter = dependencies.handlers.forgeToolRuleWriter;
+    this.forgeProjectLabelResolver = dependencies.handlers.forgeProjectLabelResolver;
+    this.messagingAgentToolService = dependencies.handlers.messagingAgentToolService;
+    this.automationInspectionHandler = dependencies.handlers.automationInspectionHandler;
+    this.federationHandler = dependencies.handlers.federationHandler;
+    this.starMapIntakeFederationHandlerFactory = dependencies.handlers.starMapIntakeFederationHandlerFactory;
+    this.agentThreadActions = dependencies.handlers.agentThreadActions;
+    this.threadTodoHandler = dependencies.handlers.threadTodoHandler;
+    this.federatedThreadMessageHandler = dependencies.handlers.federatedThreadMessageHandler;
+    this.federatedThreadInspectionHandler = dependencies.handlers.federatedThreadInspectionHandler;
+    this.federatedThreadMutationHandler = dependencies.handlers.federatedThreadMutationHandler;
+    this.federatedThreadControlHandler = dependencies.handlers.federatedThreadControlHandler;
+    this.threadPullRequestStatusToolHandler = dependencies.handlers.threadPullRequestStatusToolHandler;
+    this.threadPullRequestCanonicalizer = dependencies.handlers.threadPullRequestCanonicalizer;
+    this.pullRequestReferenceResolver = dependencies.handlers.pullRequestReferenceResolver;
+    this.threadProjectRepositoryResolver = dependencies.handlers.threadProjectRepositoryResolver;
+    this.threadPrimaryGitRepositoryReader = dependencies.handlers.threadPrimaryGitRepositoryReader;
+    this.localPullRequestAuthorityResolver = dependencies.handlers.localPullRequestAuthorityResolver;
+    this.threadPullRequestWatchToolHandler = dependencies.handlers.threadPullRequestWatchToolHandler;
+    this.threadMaintenanceToolHandler = dependencies.handlers.threadMaintenanceToolHandler;
+    this.threadMaintenanceToolScans = dependencies.threadMaintenanceToolScans;
+    this.threadDependencyToolHandler = dependencies.handlers.threadDependencyToolHandler;
+    this.directoryGitStatusWriter = dependencies.handlers.directoryGitStatusWriter;
+    this.threadPrAutoDispatchHandler = dependencies.handlers.threadPrAutoDispatchHandler;
+    this.threadPullRequestDetachHandler = dependencies.handlers.threadPullRequestDetachHandler;
+    this.threadDependenciesPeerHandler = dependencies.handlers.threadDependenciesPeerHandler;
+    this.threadPrWatchesPeerHandler = dependencies.handlers.threadPrWatchesPeerHandler;
+    this.projectForgeAutomationHandler = dependencies.handlers.projectForgeAutomationHandler;
+    this.threadPullRequestRefreshHandler = dependencies.handlers.threadPullRequestRefreshHandler;
+    this.threadGitWorkingStateRefreshHandler = dependencies.handlers.threadGitWorkingStateRefreshHandler;
     // Providers call back into the registry; bind only after every dependency is assigned.
     connect(this.constructionPorts());
 
@@ -3352,7 +3395,7 @@ export class DesktopBackendRegistry {
     };
   }
 
-
+  // Scheduled actions need the registry before they can supply their creator.
   setScheduledThreadActionCreator(
     creator:
       | ((
@@ -3864,30 +3907,35 @@ export class DesktopBackendRegistry {
     return await this.codexProtocolCaptureSession?.stop();
   }
 
+  // Messaging needs the registry bridge before it can supply these bindings.
   setMessagingArchiveCleaner(
     cleaner: MessagingArchiveCleaner | null | undefined,
   ): void {
     this.messagingArchiveCleaner = cleaner;
   }
 
+  // Messaging needs the registry bridge before it can supply these bindings.
   setMessagingAgentToolService(
     service: MessagingAgentToolService | null | undefined,
   ): void {
     this.messagingAgentToolService = service ?? undefined;
   }
 
+  // Automations need the registry before they can supply their inspection binding.
   setAutomationInspectionHandler(
     handler: AutomationInspectionHandler | null | undefined,
   ): void {
     this.automationInspectionHandler = handler ?? undefined;
   }
 
+  // App management diagnostics resolve the published owner registry.
   setPwrAgentAppManagementHandler(
     handler: PwrAgentAppManagementHandler | null | undefined,
   ): void {
     this.appManagementHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setPwrAgentFederationHandler(
     handler: PwrAgentFederationHandler | null | undefined,
   ): void {
@@ -3901,6 +3949,7 @@ export class DesktopBackendRegistry {
    * attachments belong to it — so one instance built at startup could not
    * carry either.
    */
+  // Federation needs the registry before it can supply routed owner bindings.
   setStarMapIntakeFederationHandlerFactory(
     factory:
       | ((attachments: AppServerTurnInputItem[]) => PwrAgentFederationHandler)
@@ -3918,16 +3967,19 @@ export class DesktopBackendRegistry {
    * reach, and the pin and seen paths publish the events every window
    * redraws from.
    */
+  // The app-server service needs the registry before it can supply this owner binding.
   setAgentThreadActions(actions: AgentThreadActions | null | undefined): void {
     this.agentThreadActions = actions ?? undefined;
   }
 
+  // The owner installs host view bindings after publishing its registry.
   setPwrAgentStarMapHandler(
     handler: PwrAgentStarMapHandler | null | undefined,
   ): void {
     this.starMapHandler = handler ?? undefined;
   }
 
+  // The to-do owner needs the registry before it can supply its handler.
   setPwrAgentThreadTodoHandler(
     handler: PwrAgentThreadTodoHandler | null | undefined,
   ): void {
@@ -4032,42 +4084,49 @@ export class DesktopBackendRegistry {
     return thread?.linkedDirectories?.[0];
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadMessageHandler(
     handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
   ): void {
     this.federatedThreadMessageHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadInspectionHandler(
     handler: PwrAgentFederatedThreadInspectionHandler | null | undefined,
   ): void {
     this.federatedThreadInspectionHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadMutationHandler(
     handler: PwrAgentFederatedThreadMutationHandler | null | undefined,
   ): void {
     this.federatedThreadMutationHandler = handler ?? undefined;
   }
 
+  // Federation needs the registry before it can supply routed owner bindings.
   setFederatedThreadControlHandler(
     handler: PwrAgentFederatedThreadControlHandler | null | undefined,
   ): void {
     this.federatedThreadControlHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestStatusToolHandler(
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestCanonicalizer(
     canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
   ): void {
     this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setPullRequestReferenceResolver(
     resolver: PullRequestReferenceResolver | null | undefined,
   ): void {
@@ -4078,18 +4137,21 @@ export class DesktopBackendRegistry {
   private threadProjectRepositoryResolver?: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>;
 
   /** Reads a thread's primary repository when the navigation cache has none yet. */
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadProjectRepositoryResolver(
     resolver: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>,
   ): void {
     this.threadProjectRepositoryResolver = resolver;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrimaryGitRepositoryReader(
     reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
   ): void {
     this.threadPrimaryGitRepositoryReader = reader;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setLocalPullRequestAuthorityResolver(
     resolver: LocalPullRequestAuthorityResolver | null | undefined,
   ): void {
@@ -4109,12 +4171,14 @@ export class DesktopBackendRegistry {
     return this.localPullRequestAuthorityResolver?.(prKey) ?? false;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestWatchToolHandler(
     handler: ThreadPullRequestWatchToolHandler | null | undefined,
   ): void {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadMaintenanceToolHandler(handler: ThreadMaintenanceToolHandler | undefined): void {
     this.threadMaintenanceToolHandler = handler;
     this.threadMaintenanceToolScans = handler ? new ThreadMaintenanceToolScans({
@@ -4123,24 +4187,28 @@ export class DesktopBackendRegistry {
     }) : undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadDependencyToolHandler(
     handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
   ): void {
     this.threadDependencyToolHandler = handler;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setDirectoryGitStatusWriter(
     writer: DirectoryGitStatusWriter | null | undefined,
   ): void {
     this.directoryGitStatusWriter = writer ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrAutoDispatchHandler(
     handler: ThreadPrAutoDispatchHandler | null | undefined,
   ): void {
     this.threadPrAutoDispatchHandler = handler ?? undefined;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestDetachHandler(
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
@@ -4152,6 +4220,7 @@ export class DesktopBackendRegistry {
     requesterInstanceId: string | undefined,
   ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadDependenciesPeerHandler(handler: typeof this.threadDependenciesPeerHandler): void {
     this.threadDependenciesPeerHandler = handler;
   }
@@ -4165,6 +4234,7 @@ export class DesktopBackendRegistry {
     return await this.threadDependenciesPeerHandler(request, requesterInstanceId);
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrWatchesPeerHandler(
     handler: ThreadPrWatchesPeerHandler | null | undefined,
   ): void {
@@ -4185,6 +4255,7 @@ export class DesktopBackendRegistry {
     return await handler(request);
   }
 
+  // The app-server service needs the registry before it can supply these forge bindings.
   setProjectForgeAutomationHandler(
     handler: ProjectForgeAutomationHandler | null | undefined,
   ): void {
@@ -4205,6 +4276,7 @@ export class DesktopBackendRegistry {
     return handler;
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestRefreshHandler(
     handler: ThreadPullRequestRefreshHandler | null | undefined,
   ): void {
@@ -4225,6 +4297,7 @@ export class DesktopBackendRegistry {
     return await handler(request);
   }
 
+  // The app-server service needs the registry before it can supply this owner binding.
   setThreadGitWorkingStateRefreshHandler(
     handler: ThreadGitWorkingStateRefreshHandler | null | undefined,
   ): void {
