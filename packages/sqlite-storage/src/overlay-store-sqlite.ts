@@ -155,6 +155,7 @@ import {
   resolveDefaultLaunchpadExecutionMode,
   resolveTokenUsagePriceUnavailableReason,
 } from "@pwragent/shared";
+import type BetterSqlite3 from "better-sqlite3";
 import type { StateDb } from "./state-db.js";
 import type {
   RemoteThreadTarget,
@@ -828,6 +829,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
+  // Compiling this upsert costs about 0.3 ms, because SQLite compiles the
+  // triggers on `threads` into it, so every overlay write reuses one copy.
+  private putThreadStatement?: BetterSqlite3.Statement;
   private readonly subAgentTable: ThreadSubAgentTable;
   private readonly usageActivityTable: ThreadUsageActivityTable;
   /**
@@ -10826,7 +10830,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // the row, rewriting indexes and freelist pages even for one watermark.
     // The conflict UPDATE also avoids an existence-check race with another
     // profile writer, and a failed UPDATE statement on each new thread.
-    this.stateDb.raw.prepare(
+    this.putThreadStatement ??= this.stateDb.raw.prepare(
       `INSERT INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(thread_id) DO UPDATE SET
@@ -10835,7 +10839,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
          dismissed_at = excluded.dismissed_at,
          snoozed_until = excluded.snoozed_until,
          payload = excluded.payload`,
-    ).run(
+    );
+    this.putThreadStatement.run(
       storageKey,
       (persistable as Record<string, unknown>).directoryPath as string ?? null,
       persistable.lastSeenAt ?? null,

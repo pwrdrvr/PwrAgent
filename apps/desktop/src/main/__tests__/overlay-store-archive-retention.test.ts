@@ -83,27 +83,33 @@ describe("archive retention persistence", () => {
       fc.array(fc.record({ backend: fc.constantFrom(...backends), threadId: fc.constantFrom(...ids, "missing") }), { maxLength: 3 }),
       fc.array(fc.constantFrom(...refs), { maxLength: 3 }),
       async (rows, victims, wanted) => {
-        db.raw.prepare("DELETE FROM threads").run();
-        for (const item of rows) {
-          const thread = { backend: item.backend, threadId: item.threadId };
-          if (item.retained) await store.observeArchivedThreads([thread], 1000);
-          if (item.pinned) await store.setThreadPin({ ...thread, pinned: true });
-          for (const [index, snapshot] of item.snapshots.entries()) await store.upsertWorktreeSnapshot({ ...thread, snapshot: {
-            id: `${index}`, backend: item.backend, threadId: item.threadId, worktreePath: `${snapshot.repo}/${index}`,
-            repositoryPath: snapshot.repo, snapshotRef: snapshot.ref, snapshotCommit: "abc", createdAt: 1, state: "archived",
-            ignoredFilesExcluded: true } });
-          // SQLite rewrites some payloads in place, in its own JSON spelling.
-          if (item.rewritten) db.raw.prepare("UPDATE threads SET payload = json_remove(payload, '$.absent')").run();
+        // One transaction per run, rolled back: the store's own transactions
+        // become savepoints, so a run costs no commits and leaves no rows.
+        db.raw.exec("BEGIN");
+        try {
+          for (const item of rows) {
+            const thread = { backend: item.backend, threadId: item.threadId };
+            if (item.retained) await store.observeArchivedThreads([thread], 1000);
+            if (item.pinned) await store.setThreadPin({ ...thread, pinned: true });
+            for (const [index, snapshot] of item.snapshots.entries()) await store.upsertWorktreeSnapshot({ ...thread, snapshot: {
+              id: `${index}`, backend: item.backend, threadId: item.threadId, worktreePath: `${snapshot.repo}/${index}`,
+              repositoryPath: snapshot.repo, snapshotRef: snapshot.ref, snapshotCommit: "abc", createdAt: 1, state: "archived",
+              ignoredFilesExcluded: true } });
+            // SQLite rewrites some payloads in place, in its own JSON spelling.
+            if (item.rewritten) db.raw.prepare("UPDATE threads SET payload = json_remove(payload, '$.absent')").run();
+          }
+          const all = await store.listThreadArchiveStates();
+          const keys = new Set(victims.map(identity));
+          const expected = all.filter((state: ThreadOverlayState) => keys.has(identity(state))
+            || (state.worktreeSnapshots ?? []).some((snapshot) => wanted.includes(snapshot.snapshotRef)));
+          const actual = await store.listThreadArchiveStatesFor(victims, wanted);
+          const byIdentity = new Map(actual.map((state) => [identity(state), state]));
+          for (const state of expected) expect(byIdentity.get(identity(state))).toEqual(state);
+          const listed = new Map(all.map((state) => [identity(state), state]));
+          for (const state of actual) expect(listed.get(identity(state))).toEqual(state);
+        } finally {
+          db.raw.exec("ROLLBACK");
         }
-        const all = await store.listThreadArchiveStates();
-        const keys = new Set(victims.map(identity));
-        const expected = all.filter((state: ThreadOverlayState) => keys.has(identity(state))
-          || (state.worktreeSnapshots ?? []).some((snapshot) => wanted.includes(snapshot.snapshotRef)));
-        const actual = await store.listThreadArchiveStatesFor(victims, wanted);
-        const byIdentity = new Map(actual.map((state) => [identity(state), state]));
-        for (const state of expected) expect(byIdentity.get(identity(state))).toEqual(state);
-        const listed = new Map(all.map((state) => [identity(state), state]));
-        for (const state of actual) expect(listed.get(identity(state))).toEqual(state);
       },
     ), { numRuns: 300 });
   });
