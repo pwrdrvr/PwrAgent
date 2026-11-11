@@ -9,6 +9,21 @@ export type MessagingRateLimitAdmission =
   | { admitted: true }
   | { admitted: false; retryAt: number };
 
+/** A provider-recorded Retry-After that has not yet expired. */
+export type MessagingRateLimitBlock = {
+  id: string;
+  blockedUntil: number;
+};
+
+/**
+ * Provider throttle state an adapter hands to the adapter that replaces it.
+ * The runtime keeps this in memory across an adapter restart, so a provider
+ * that is still limiting the bot is not sent to early by the new instance.
+ */
+export type MessagingRateLimitCarryover = {
+  blocks: readonly MessagingRateLimitBlock[];
+};
+
 type MessagingRateLimitBucketState = {
   blockedUntil: number;
   timestamps: number[];
@@ -49,6 +64,45 @@ export class MessagingRateLimitGate {
       state.blockedUntil,
       this.now() + Math.max(0, retryAfterMs),
     );
+  }
+
+  /** Every Retry-After block that has not yet expired. */
+  activeBlocks(): MessagingRateLimitBlock[] {
+    const now = this.now();
+    const blocks: MessagingRateLimitBlock[] = [];
+    for (const [id, state] of this.states) {
+      if (state.blockedUntil > now) {
+        blocks.push({ id, blockedUntil: state.blockedUntil });
+      }
+    }
+    return blocks;
+  }
+
+  /**
+   * Adopt blocks from an earlier gate. A restored block never shortens a
+   * longer one this gate already holds.
+   */
+  restoreBlocks(blocks: readonly MessagingRateLimitBlock[]): void {
+    for (const block of blocks) {
+      if (!Number.isFinite(block.blockedUntil)) continue;
+      const state = this.stateFor(block.id);
+      state.blockedUntil = Math.max(state.blockedUntil, block.blockedUntil);
+    }
+  }
+
+  /**
+   * Fold one bucket into another, keeping the later block and every admitted
+   * timestamp. Used when a provider learns the real id of a bucket it had to
+   * key by a fallback.
+   */
+  moveBucket(fromId: string, toId: string): void {
+    if (fromId === toId) return;
+    const from = this.states.get(fromId);
+    if (!from) return;
+    this.states.delete(fromId);
+    const to = this.stateFor(toId);
+    to.blockedUntil = Math.max(to.blockedUntil, from.blockedUntil);
+    to.timestamps = [...to.timestamps, ...from.timestamps].sort((a, b) => a - b);
   }
 
   clear(bucketId?: string): void {

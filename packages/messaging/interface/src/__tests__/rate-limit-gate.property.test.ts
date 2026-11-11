@@ -186,4 +186,64 @@ describe("MessagingRateLimitGate model", () => {
       ),
     );
   });
+
+  // Rule: a block survives the gate. An adapter restart replaces the gate,
+  // carrying `activeBlocks()` into the new one; a provider that learns a
+  // bucket's real id folds the fallback bucket into it with `moveBucket`.
+  // Neither may admit the limited bucket (under whichever id it now has)
+  // before the recorded Retry-After expires.
+  it("carries a block across gate replacements and a fallback-id move", () => {
+    const fallback: MessagingRateLimitBucket = {
+      ...BUCKETS[0]!,
+      id: "slack:workspace:configured-workspace:chat.startStream",
+    };
+    const real: MessagingRateLimitBucket = {
+      ...BUCKETS[0]!,
+      id: "slack:workspace:T1:chat.startStream",
+    };
+    const ops = fc.array(
+      fc.oneof(
+        fc.integer({ min: 0, max: 4_000 }).map((ms) => ({ kind: "advance" as const, ms })),
+        fc.constant({ kind: "admit" as const }),
+        fc.constant({ kind: "replace-gate" as const }),
+        fc.constant({ kind: "learn-real-id" as const }),
+        fc.integer({ min: 0, max: 20_000 }).map((ms) => ({ kind: "429" as const, ms })),
+      ),
+      { maxLength: 60 },
+    );
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 30_000 }), ops, (retryAfterMs, steps) => {
+        let now = 50_000;
+        let gate = new MessagingRateLimitGate(() => now);
+        let bucket = fallback;
+        gate.recordRateLimit(bucket.id, retryAfterMs);
+        let blockedUntil = now + retryAfterMs;
+        for (const step of steps) {
+          if (step.kind === "advance") {
+            now += step.ms;
+          } else if (step.kind === "replace-gate") {
+            const blocks = gate.activeBlocks();
+            gate = new MessagingRateLimitGate(() => now);
+            gate.restoreBlocks(blocks);
+          } else if (step.kind === "learn-real-id") {
+            gate.moveBucket(fallback.id, real.id);
+            bucket = real;
+          } else if (step.kind === "429") {
+            gate.recordRateLimit(bucket.id, step.ms);
+            blockedUntil = Math.max(blockedUntil, now + step.ms);
+          } else {
+            const admission = gate.admit(bucket);
+            if (now < blockedUntil) {
+              // Spacing can push retryAt later than the block, never earlier.
+              expect(admission.admitted).toBe(false);
+              if (!admission.admitted) {
+                expect(admission.retryAt).toBeGreaterThanOrEqual(blockedUntil);
+              }
+            }
+          }
+        }
+        expect(gate.activeBlocks().every((block) => block.blockedUntil > now)).toBe(true);
+      }),
+    );
+  });
 });

@@ -65,6 +65,7 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingPrivateConversationResolveRequest,
   MessagingPrivateConversationResolveResult,
+  MessagingRateLimitCarryover,
   MessagingRateLimitInfo,
   MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
@@ -160,6 +161,13 @@ export type DesktopMessagingAdapter = {
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  /**
+   * Provider throttle blocks (Retry-After) that have not expired. The runtime
+   * reads them before stopping the adapter and hands them to its replacement
+   * through `restoreRateLimitCarryover`, before that adapter starts.
+   */
+  exportRateLimitCarryover?(): MessagingRateLimitCarryover;
+  restoreRateLimitCarryover?(carryover: MessagingRateLimitCarryover): void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   onInboundChannelMetadata?(listener: MessagingInboundChannelMetadataListener): () => void;
@@ -477,6 +485,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     ReturnType<typeof setTimeout>
   >();
   private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
+  // Rate-limit state outlives the adapter. A config change or a messaging
+  // stop/start replaces the adapter and its controller, but the provider is
+  // still limiting the bot, so the cool-off, slow mode and provider blocks
+  // must hold for the replacement. Memory only: Retry-After windows are
+  // short, and persisting them would add a commit per 429.
+  private readonly deliveryBudgets = new Map<MessagingChannelKind, MessagingDeliveryBudget>();
+  private readonly rateLimitCarryovers = new Map<
+    MessagingChannelKind,
+    MessagingRateLimitCarryover
+  >();
   private readonly rejectedRouteAgentNameCache = new Map<
     string,
     { expiresAt: number; value: Promise<string | undefined> }
@@ -1543,7 +1561,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       actorIds: authorizedActorIds,
       actorIdSet: new Set(authorizedActorIds),
     };
-    const deliveryBudget = new MessagingDeliveryBudget();
+    const deliveryBudget = this.deliveryBudgetFor(adapter.channel);
+    this.restoreRateLimitCarryover(adapter);
     if (adapter.clientRateLimitStrategy === "sdk-managed") {
       messagingLog.warn(`${adapter.channel}: SDK-managed rate-limit retries are enabled`, {
         channel: adapter.channel,
@@ -1877,9 +1896,60 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
+  private deliveryBudgetFor(channel: MessagingChannelKind): MessagingDeliveryBudget {
+    let budget = this.deliveryBudgets.get(channel);
+    if (!budget) {
+      budget = new MessagingDeliveryBudget();
+      this.deliveryBudgets.set(channel, budget);
+    }
+    return budget;
+  }
+
+  private restoreRateLimitCarryover(adapter: DesktopMessagingAdapter): void {
+    const carryover = this.rateLimitCarryovers.get(adapter.channel);
+    if (!carryover || carryover.blocks.length === 0) return;
+    try {
+      adapter.restoreRateLimitCarryover?.(carryover);
+    } catch (error) {
+      messagingLog.warn(`${adapter.channel}: rate-limit carryover restore threw`, {
+        channel: adapter.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Read an adapter's unexpired provider blocks before it stops. */
+  private captureRateLimitCarryover(adapter: DesktopMessagingAdapter): void {
+    let exported: MessagingRateLimitCarryover | undefined;
+    try {
+      exported = adapter.exportRateLimitCarryover?.();
+    } catch (error) {
+      messagingLog.warn(`${adapter.channel}: rate-limit carryover export threw`, {
+        channel: adapter.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (!exported) return;
+    const now = Date.now();
+    const merged = new Map<string, number>();
+    const previous = this.rateLimitCarryovers.get(adapter.channel)?.blocks ?? [];
+    for (const block of [...previous, ...exported.blocks]) {
+      if (!(block.blockedUntil > now)) continue;
+      merged.set(block.id, Math.max(merged.get(block.id) ?? 0, block.blockedUntil));
+    }
+    if (merged.size === 0) {
+      this.rateLimitCarryovers.delete(adapter.channel);
+      return;
+    }
+    this.rateLimitCarryovers.set(adapter.channel, {
+      blocks: [...merged].map(([id, blockedUntil]) => ({ id, blockedUntil })),
+    });
+  }
+
   private async stopAdapterAfterFailedStart(
     adapter: DesktopMessagingAdapter,
   ): Promise<void> {
+    this.captureRateLimitCarryover(adapter);
     try {
       await promiseWithTimeout(
         Promise.resolve().then(async () => adapter.stop?.()),
@@ -1897,6 +1967,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async stopAdapterAfterLateStart(
     adapter: DesktopMessagingAdapter,
   ): Promise<void> {
+    this.captureRateLimitCarryover(adapter);
     try {
       await adapter.stop?.();
       messagingLog.info(`${adapter.channel}: stopped adapter after late startup`, {
@@ -2021,6 +2092,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       });
     }
     running.controller.dispose();
+    this.captureRateLimitCarryover(running.adapter);
     await running.adapter.stop?.();
   }
 

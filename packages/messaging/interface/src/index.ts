@@ -33,7 +33,9 @@ export { evictStaleStreamAnchors } from "./stream-anchors";
 export {
   MessagingRateLimitGate,
   type MessagingRateLimitAdmission,
+  type MessagingRateLimitBlock,
   type MessagingRateLimitBucket,
+  type MessagingRateLimitCarryover,
 } from "./rate-limit-gate";
 export {
   MESSAGING_COMMAND_CATALOG,

@@ -25,6 +25,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
   MessagingCapabilityProfile,
+  MessagingRateLimitCarryover,
   MessagingDirectoryActor,
   MessagingDirectorySearchRequest,
   MessagingDirectorySearchResult,
@@ -120,6 +121,9 @@ const SLACK_WORKING_CARD_BUCKETS = {
   append: { method: "chat.appendStream", limit: 100 },
   stop: { method: "chat.stopStream", limit: 20 },
 } as const;
+
+// The bucket workspace used before `auth.test` names the real workspace.
+const SLACK_FALLBACK_WORKSPACE_ID = "configured-workspace";
 
 export type SlackProviderLogger = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
@@ -344,6 +348,8 @@ export type SlackProviderAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  exportRateLimitCarryover?(): MessagingRateLimitCarryover;
+  restoreRateLimitCarryover?(carryover: MessagingRateLimitCarryover): void;
   updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
@@ -748,6 +754,16 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
+  /** Slack's unexpired Retry-After blocks, for the adapter that replaces this one. */
+  exportRateLimitCarryover(): MessagingRateLimitCarryover {
+    return { blocks: this.workingCardRateLimits.activeBlocks() };
+  }
+
+  restoreRateLimitCarryover(carryover: MessagingRateLimitCarryover): void {
+    this.workingCardRateLimits.restoreBlocks(carryover.blocks);
+    this.adoptFallbackWorkspaceBuckets();
+  }
+
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     if (intent.kind === "working_card") {
       const target = this.resolveTarget(intent);
@@ -808,6 +824,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.botAccount = auth.user ?? auth.user_id;
     this.botAccountDetail = auth.team ?? hostFromUrl(auth.url) ?? auth.team_id;
     this.workspaceId = auth.team_id;
+    this.adoptFallbackWorkspaceBuckets();
 
     if (this.config.inboundMode === "events") {
       throw new Error("Slack Events API mode is not implemented yet; use Socket Mode");
@@ -2689,13 +2706,29 @@ export class SlackAdapter implements SlackProviderAdapter {
       this.workspaceId
       ?? target.channelRef.conversation.workspaceId
       ?? this.botAccountDetail
-      ?? "configured-workspace";
+      ?? SLACK_FALLBACK_WORKSPACE_ID;
     return {
-      id: `slack:workspace:${workspaceId}:${definition.method}`,
+      id: slackWorkspaceBucketId(workspaceId, definition.method),
       intervalMs: 60_000,
       limit: definition.limit,
       minIntervalMs: 1_000,
     };
+  }
+
+  /**
+   * A 429 recorded before the workspace was known is keyed by the fallback
+   * workspace. Once the real id is known, fold those buckets into it, so the
+   * block still holds for the sends that now resolve to the real id.
+   */
+  private adoptFallbackWorkspaceBuckets(): void {
+    const workspaceId = this.workspaceId ?? this.botAccountDetail;
+    if (!workspaceId || workspaceId === SLACK_FALLBACK_WORKSPACE_ID) return;
+    for (const { method } of Object.values(SLACK_WORKING_CARD_BUCKETS)) {
+      this.workingCardRateLimits.moveBucket(
+        slackWorkspaceBucketId(SLACK_FALLBACK_WORKSPACE_ID, method),
+        slackWorkspaceBucketId(workspaceId, method),
+      );
+    }
   }
 
   private emitWorkingCardRateLimit(
@@ -5119,4 +5152,8 @@ function safeEqual(left: string, right: string): boolean {
   const rightBuffer = Buffer.from(right);
   return leftBuffer.byteLength === rightBuffer.byteLength
     && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function slackWorkspaceBucketId(workspaceId: string, method: string): string {
+  return `slack:workspace:${workspaceId}:${method}`;
 }

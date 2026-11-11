@@ -551,6 +551,19 @@ configured this way, `direct` when calls go straight to the platform without a
 hidden retry queue, or `sdk-managed` only as a temporary diagnostic state. Do
 not ship a new provider with `sdk-managed`; fix or wrap the client first.
 
+Rate-limit state survives an adapter restart. A config change or a messaging
+stop and start replaces the adapter and its controller, but the provider is
+still limiting the bot. The runtime therefore keeps one delivery budget per
+platform for its own lifetime, so Cool Off, Slow Mode and the sliding window
+carry over. An adapter that throttles on its own (a `MessagingRateLimitGate`,
+or a per-chat stream block) implements `exportRateLimitCarryover()` and
+`restoreRateLimitCarryover(carryover)`. The runtime reads the unexpired blocks
+before it stops the adapter and gives them to the replacement before that one
+starts. The carryover is memory only: it does not survive an app quit. A
+provider that keys a bucket by a fallback id before it learns the real one
+(Slack's `configured-workspace`) moves the block to the real id with
+`MessagingRateLimitGate.moveBucket` once it is known.
+
 The controller budgets all outbound intent kinds against the resolved scope:
 final assistant messages, user prompts, command replies, status updates, tool
 updates, and stream updates. Slow Mode is local: it starts when the shared
