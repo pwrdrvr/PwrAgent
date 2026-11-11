@@ -108,7 +108,8 @@ describe("archive retention persistence", () => {
           const listed = new Map(all.map((state) => [identity(state), state]));
           for (const state of actual) expect(listed.get(identity(state))).toEqual(state);
         } finally {
-          db.raw.exec("ROLLBACK");
+          // SQLite may already have ended it; keep the run's own error.
+          if (db.raw.inTransaction) db.raw.exec("ROLLBACK");
         }
       },
     ), { numRuns: 300 });
