@@ -2305,7 +2305,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         info.message ?? `Cool Off active for ${formatDurationForStatus(retryAfterMs)}.`,
       ),
       scope: sanitizeDeliveryScope(scope),
-      retryAfterMs,
+      // The wait that is left, which can be longer than this 429's own.
+      retryAfterMs: Math.max(0, expiresAt - observedAt - RATE_LIMIT_HEALTH_BUFFER_MS),
       startedAt,
       expiresAt,
     });

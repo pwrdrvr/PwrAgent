@@ -2747,6 +2747,8 @@ describe("DesktopMessagingRuntime", () => {
         expect.objectContaining({
           expiresAt: 1000 + 10_000 + 2_000,
           kind: "rate-limited",
+          // The wait left, not the shorter second 429's own.
+          retryAfterMs: 10_000,
           scope: expect.objectContaining({
             bucketId: "telegram:bot",
             label: "all conversations",
@@ -2774,6 +2776,21 @@ describe("DesktopMessagingRuntime", () => {
 
       await vi.advanceTimersByTimeAsync(8_000);
       expect(reasons()).toEqual([]);
+
+      // A 429 after the reason expired starts a new one; nothing carries over.
+      fireRateLimit?.({
+        appliesTo: "bucket",
+        observedAt: Date.now(),
+        retryAfterMs: 1_000,
+        scope: conversation("-100123"),
+      });
+      expect(reasons()).toEqual([
+        expect.objectContaining({
+          expiresAt: Date.now() + 1_000 + 2_000,
+          retryAfterMs: 1_000,
+          startedAt: Date.now(),
+        }),
+      ]);
     } finally {
       vi.useRealTimers();
       await runtime.stop();

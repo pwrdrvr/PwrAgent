@@ -859,15 +859,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private emitRuntimeError(reason: string): void {
-    for (const listener of this.runtimeErrorListeners) {
-      try {
-        listener(reason);
-      } catch (error) {
-        this.options.logger?.warn?.("telegram runtime-error listener threw", {
-          error: errorMessage(error),
-        });
-      }
-    }
+    notifyEachListener(this.runtimeErrorListeners, reason, (error) => {
+      this.options.logger?.warn?.("telegram runtime-error listener threw", {
+        error: errorMessage(error),
+      });
+    });
   }
 
   async stop(): Promise<void> {

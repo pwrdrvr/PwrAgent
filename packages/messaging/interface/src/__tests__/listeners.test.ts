@@ -13,8 +13,15 @@ describe("notifyEachListener", () => {
           if (shouldThrow) throw new Error(`listener ${index}`);
         });
 
-        expect(() => notifyEachListener(listeners, "info")).not.toThrow();
+        const errors: unknown[] = [];
+        expect(() => notifyEachListener(listeners, "info", (error) => {
+          errors.push(error);
+          throw new Error("logger failed");
+        })).not.toThrow();
         expect(called).toEqual(throws.map((_, index) => index));
+        expect(errors.map((error) => (error as Error).message)).toEqual(
+          throws.flatMap((shouldThrow, index) => (shouldThrow ? [`listener ${index}`] : [])),
+        );
       }),
     );
   });
