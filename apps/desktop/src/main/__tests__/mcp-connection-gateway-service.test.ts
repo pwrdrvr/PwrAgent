@@ -12,6 +12,21 @@ import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-
 import { PwrGitConnectionService } from "../mcp-connections/pwrgit-connection-service";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import { RelaySessionPool } from "../mcp-connections/mcp-relay-session-pool";
+
+/**
+ * A PwrSnap or PwrGit connection's shared sessions, opening `clients` in
+ * order. The last one is reused once the list runs out.
+ */
+function sharedRelaySessions(connectionId: string, ...clients: object[]) {
+  const queue = [...clients];
+  const pool = new RelaySessionPool<object>({
+    max: 8,
+    open: async () => queue.shift() ?? clients[clients.length - 1]!,
+    close: async () => undefined,
+  });
+  return { pool, relayPools: new Map([[connectionId, { identity: "fixture", pool }]]) };
+}
 
 function createSettings(initial?: string) {
   let credential = initial;
@@ -140,7 +155,8 @@ describe("McpConnectionGatewayService", () => {
     // other server's would be untrusted text the agent is told to follow.
     expect(first.some((tool) => tool.serverInstructions)).toBe(false);
     expect(first[0].schemaRevision).not.toEqual(other[0].schemaRevision);
-    expect(connectUpstreamClient).toHaveBeenCalledTimes(2);
+    // Both threads share one PwrSnap session.
+    expect(connectUpstreamClient).toHaveBeenCalledTimes(1);
     const invocation = { ...first[0], arguments: { id: "fixture" } };
     await service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation });
     expect(callTool).toHaveBeenCalledOnce();
@@ -236,12 +252,15 @@ describe("McpConnectionGatewayService", () => {
     const close = vi.fn(async () => undefined);
     Object.assign(service, { connectUpstreamClient: async () => { opened(); await gate; return { client: { close }, transport: { close } }; } });
     const read = service.requestGatewayToolOperation({ connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "fixture"]), operation: "gateway/tools/list", signal: new AbortController().signal });
-    const rejected = expect(read).rejects.toThrow("request cancelled");
+    const rejected = expect(read).rejects.toThrow("changed while its session was opening");
     await opening;
     await service.setConnectionEnabled("pwrsnap", false);
     await service.setConnectionEnabled("pwrsnap", true);
     release();
     await rejected;
+    // The opening finishes after its waiter left, and closes what it opened.
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(close).toHaveBeenCalledOnce();
   });
 
@@ -421,12 +440,7 @@ describe("McpConnectionGatewayService", () => {
     });
     services.push(service);
     const token = "test-token";
-    Object.assign(service, {
-      upstreamSessions: new Map([[token, {
-        client: { callTool, close: vi.fn(async () => undefined) },
-        transport: { close: vi.fn(async () => undefined) },
-      }]]),
-    });
+    Object.assign(service, sharedRelaySessions("pwrsnap", { callTool, close: vi.fn(async () => undefined) }));
 
     const bridge = service as unknown as {
       dispatchBridgeOperation: (
@@ -496,6 +510,7 @@ describe("McpConnectionGatewayService", () => {
         client: { callTool, close: vi.fn(async () => undefined) },
         transport: { close: vi.fn(async () => undefined) },
       }]]),
+      ...sharedRelaySessions("pwrsnap", { callTool, close: vi.fn(async () => undefined) }),
     });
     const bridge = service as unknown as {
       dispatchBridgeOperation: (
@@ -565,13 +580,14 @@ describe("McpConnectionGatewayService", () => {
       resolveInstallPaths: () => [pwrSnapInstall()],
     });
     services.push(service);
-    const session = (): object => ({
-      client: { callTool, readResource, close: vi.fn(async () => undefined) },
-      transport: { close: vi.fn(async () => undefined) },
-    });
+    const listTools = vi.fn(async () => ({ tools: [] }));
+    const client = (): object => ({ callTool, readResource, listTools, close: vi.fn(async () => undefined) });
+    const first = client();
+    const replacement = client();
+    const shared = sharedRelaySessions("pwrsnap", first, replacement);
+    Object.assign(service, { relayPools: shared.relayPools });
     const internals = service as unknown as {
       grants: Map<string, { connectionId: string; threadId?: string; backend?: string }>;
-      upstreamSessions: Map<string, object>;
       dispatchBridgeOperation: (
         token: string,
         grant: { connectionId: string; threadId?: string },
@@ -579,13 +595,17 @@ describe("McpConnectionGatewayService", () => {
         params: unknown,
       ) => Promise<unknown>;
       closeThreadSessions: (threadId: string, connectionIds: readonly string[]) => Promise<void>;
+      bridgeAttachments: Map<string, Set<unknown>>;
     };
     const grant: { connectionId: string; threadId: string; backend?: string } = {
       connectionId: "pwrsnap",
       threadId: "thread-1",
     };
+    const other = { connectionId: "pwrsnap", threadId: "thread-2" };
     internals.grants.set("snap-1", grant);
-    internals.upstreamSessions.set("snap-1", session());
+    internals.grants.set("snap-2", other);
+    // Thread 2's agent is running, so its bridge holds an attach socket.
+    internals.bridgeAttachments.set("snap-2", new Set([{}]));
     await internals.dispatchBridgeOperation("snap-1", grant, "tools/call", {
       name: "pwrsnap_capture_resource",
       arguments: {},
@@ -595,7 +615,8 @@ describe("McpConnectionGatewayService", () => {
       .resolves.toEqual({ ok: true, mimeType: "image/png", dataBase64: "AQID" });
     expect(readResource).toHaveBeenCalledWith({ uri }, expect.anything());
 
-    // Another thread, or a link the session never returned, is not read.
+    // Another thread, though it shares the session, or a link the session
+    // never returned, is not read.
     readResource.mockClear();
     await expect(service.readPwrSnapMediaResource({ threadId: "thread-2", uri }))
       .resolves.toEqual({ ok: false, reason: "session-ended" });
@@ -627,12 +648,16 @@ describe("McpConnectionGatewayService", () => {
     expect(readResource).toHaveBeenCalledTimes(1);
     readResource.mockClear();
 
-    // A session reopened on the same grant did not return the link.
-    internals.upstreamSessions.set("snap-1", session());
+    // The session that returned the link ended; its replacement did not
+    // return it, so it is not read there.
+    shared.pool.remove(first);
+    await internals.dispatchBridgeOperation("snap-1", grant, "tools/list", {});
+    expect(shared.pool.list()).toEqual([replacement]);
     await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri }))
       .resolves.toEqual({ ok: false, reason: "session-ended" });
 
-    // Once the thread's session closes, nothing is read and no session opens.
+    // Once the thread stops using PwrSnap, nothing is read, though the
+    // shared session stays open for other threads.
     await internals.dispatchBridgeOperation("snap-1", grant, "tools/call", {
       name: "pwrsnap_capture_resource",
       arguments: {},
@@ -641,7 +666,12 @@ describe("McpConnectionGatewayService", () => {
     await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri }))
       .resolves.toEqual({ ok: false, reason: "session-ended" });
     expect(readResource).not.toHaveBeenCalled();
-    expect(internals.upstreamSessions.size).toBe(0);
+    expect(shared.pool.size).toBe(1);
+
+    // When the last thread using PwrSnap stops, the shared session closes.
+    internals.bridgeAttachments.delete("snap-2");
+    await internals.closeThreadSessions("thread-2", ["pwrsnap"]);
+    expect(shared.pool.size).toBe(0);
   });
 
   /**

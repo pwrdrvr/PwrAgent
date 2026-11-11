@@ -131,6 +131,7 @@ import {
 } from "./pwrsuite-relay";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
 import { PwrSnapMediaLinks, readPwrSnapImageContents, type PwrSnapMediaRead } from "./pwrsnap-media-links";
+import { RelaySessionPool } from "./mcp-relay-session-pool";
 import { createMcpIpcTransport, normalizeMcpIpcBearerToken } from "./mcp-ipc-http";
 import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
@@ -370,29 +371,35 @@ function isPwrSuiteRelayKind(kind: McpConnectionRecord["kind"]): kind is PwrSuit
   return kind === "pwrsnap" || kind === "pwrgit";
 }
 
+/**
+ * Most PwrSnap or PwrGit sessions one connection opens. A tool call holds a
+ * session to itself, so this many tool calls run at once; the next waits.
+ */
+const MAX_RELAY_SESSIONS = 8;
+
 const ENDED_LOCAL_SESSION_ERROR =
   "The MCP desktop connection ended. Ask the operator to open its desktop app independently if needed, then Reconnect in the thread MCP access panel (or turn this connection off and on). Search tools again and reread relevant skills/resources. Never replay a write or reuse its approval.";
 
 /**
- * What a thread's request may do once its session's process has ended.
+ * What a request may do once a local session's process has ended.
  *
  * An operator's command that exits is never started again for the thread:
  * it may exit on every start. A PwrSnap or PwrGit relay ends whenever its
- * app quits, an update relaunch included, so it starts again once the app
- * answers on its socket or pipe. Only a thread's own tool call restarts one,
- * because the new session opens the app's approval window: a listing, a
- * read, a request an agent client makes on its own, or a delegated Job
- * Monitor's call with no operator watching must never raise it.
+ * app quits, an update relaunch included. Every thread shares one pool of
+ * relay sessions, so the pool opens again for any thread's own request once
+ * the app answers on its socket or pipe: a new thread's tool discovery must
+ * work after an update. The app grants the role on the relay's command line
+ * without asking. An app that predates that still asks, so a delegated Job
+ * Monitor, with no operator watching, never reopens it.
  */
 export async function endedLocalSessionRestart(input: {
   kind: McpConnectionRecord["kind"];
   operation: unknown;
   delegated: boolean;
-  /** Asked only for a relay's own tool call. */
+  /** Asked only for a relay request that may reopen it. */
   isAppListening: () => Promise<boolean>;
 }): Promise<"restart" | "ended" | "app_closed"> {
   if (!isPwrSuiteRelayKind(input.kind) || input.delegated) return "ended";
-  if (input.operation !== "tools/call" && input.operation !== "gateway/tools/call") return "ended";
   return await input.isAppListening() ? "restart" : "app_closed";
 }
 
@@ -400,7 +407,7 @@ function endedRelaySessionError(app: PwrSuiteRelayApp, outcome: "ended" | "app_c
   const name = app === "pwrsnap" ? "PwrSnap" : "PwrGit";
   return outcome === "app_closed"
     ? `${name} is not open, or its Local Agent Access is off, so this thread's ${name} session cannot start. Ask the operator to open ${name}, then call the tool again. Never replay a write or reuse its approval.`
-    : `${name} closed, so this thread's ${name} session ended. Call a ${name} tool to start a new session once ${name} is open; ${name} asks the operator to approve it. Search tools again and reread relevant skills/resources. Never replay a write or reuse its approval.`;
+    : `${name} closed, so its session ended. A Job Monitor cannot reopen it; the thread's own next ${name} request does once ${name} is open. Search tools again and reread relevant skills/resources. Never replay a write or reuse its approval.`;
 }
 
 
@@ -668,6 +675,19 @@ export class McpConnectionGatewayService {
   }>();
   private readonly discoveryHealth = new Map<string, NonNullable<McpConnectionStatus["discovery"]>>();
   private readonly upstreamSessions = new Map<string, UpstreamSession>();
+  /**
+   * PwrSnap and PwrGit sessions, shared by every thread, per connection.
+   * Each connection's relay names one role, and neither app keeps state per
+   * thread, so threads do not hold sessions of their own. `identity` changes
+   * when the pool is replaced, which retires catalog revisions read from it.
+   */
+  private readonly relayPools = new Map<string, { pool: RelaySessionPool<Client>; identity: string }>();
+  private readonly relaySessions = new WeakMap<Client, UpstreamSession>();
+  /**
+   * Changes when a thread's grant stops using the shared sessions, so a
+   * catalog revision it read before cannot call a tool after it reselects.
+   */
+  private readonly relayGrantEpochs = new Map<string, string>();
   /** The PwrSnap image links each live session returned to its thread. */
   private readonly pwrSnapMediaLinks = new PwrSnapMediaLinks();
   /**
@@ -1906,6 +1926,7 @@ export class McpConnectionGatewayService {
     const socketPath = this.bridgeSocketPath;
     if (!socketPath) {
       this.grants.delete(token);
+      this.relayGrantEpochs.delete(token);
       throw new Error("The PwrAgent MCP bridge is unavailable.");
     }
     const server = this.buildBridgeServer(connectionId, token, socketPath);
@@ -1986,6 +2007,7 @@ export class McpConnectionGatewayService {
       },
       revoke: () => {
         this.grants.delete(token);
+        this.relayGrantEpochs.delete(token);
         void this.closeUpstreamSession(token);
         if (currentRegistrationKey && this.threadRegistrations.get(currentRegistrationKey)?.token === token) {
           this.threadRegistrations.delete(currentRegistrationKey);
@@ -1996,6 +2018,7 @@ export class McpConnectionGatewayService {
 
   async close(): Promise<void> {
     this.grants.clear();
+    this.relayGrantEpochs.clear();
     this.threadRegistrations.clear();
     for (const sockets of this.bridgeAttachments.values()) {
       for (const socket of sockets) socket.destroy();
@@ -2005,11 +2028,12 @@ export class McpConnectionGatewayService {
     await Promise.all([...this.stdioTestTransports].map(async (transport) =>
       await transport.close().catch(() => undefined)));
     this.stdioTestTransports.clear();
-    await Promise.all(
-      [...new Set([...this.upstreamSessions.keys(), ...this.upstreamStarts.keys()])].map(async (token) =>
+    await Promise.all([
+      ...[...new Set([...this.upstreamSessions.keys(), ...this.upstreamStarts.keys()])].map(async (token) =>
         await this.closeUpstreamSession(token),
       ),
-    );
+      ...[...this.relayPools.keys()].map(async (connectionId) => await this.closeRelayPool(connectionId)),
+    ]);
     const server = this.bridgeServer;
     this.bridgeServer = undefined;
     this.bridgeSocketPath = undefined;
@@ -2678,29 +2702,16 @@ export class McpConnectionGatewayService {
     token: string,
     grant: BridgeGrant,
     discovery: McpDiscovery,
-    request: { operation: unknown; delegated: boolean },
-  ): Promise<Client> {
+    request: { operation: unknown; delegated: boolean; uri?: string },
+  ): Promise<{ client: Client; release?: () => void }> {
     const connection = this.requireAvailableConnection(grant.connectionId);
     discovery.remaining();
-    const existing = this.upstreamSessions.get(token);
-    if (existing) return existing.client;
-    if (this.disconnectedStdioGrants.has(token)) {
-      const kind = connection.kind;
-      if (!isPwrSuiteRelayKind(kind)) throw new Error(ENDED_LOCAL_SESSION_ERROR);
-      const outcome = await endedLocalSessionRestart({
-        kind,
-        ...request,
-        isAppListening: async () => await this.isRelayAppListening(kind),
-      });
-      if (outcome !== "restart") throw new Error(endedRelaySessionError(kind, outcome));
-      discovery.remaining();
-      // Another request may have restarted it while this one probed.
-      const restarted = this.upstreamSessions.get(token);
-      if (restarted) return restarted.client;
-      // The grant stays marked until the new session is live: a start that
-      // fails (the app closed again, or the operator turned the approval
-      // down) must leave only a tool call able to try once more.
+    if (isPwrSuiteRelayKind(connection.kind)) {
+      return await this.acquireRelaySession(token, connection, connection.kind, discovery, request);
     }
+    const existing = this.upstreamSessions.get(token);
+    if (existing) return { client: existing.client };
+    if (this.disconnectedStdioGrants.has(token)) throw new Error(ENDED_LOCAL_SESSION_ERROR);
     let pending = this.upstreamStarts.get(token);
     if (!pending) {
       const controller = new AbortController();
@@ -2732,7 +2743,7 @@ export class McpConnectionGatewayService {
       // A live session is not an ended one. A session that closed already
       // has marked the grant again, and is no longer registered here.
       if (this.upstreamSessions.get(token)?.client === client) this.disconnectedStdioGrants.delete(token);
-      return client;
+      return { client };
     } finally {
       start.waiters -= 1;
       if (start.waiters === 0 && this.upstreamStarts.get(token) === start) {
@@ -2740,6 +2751,149 @@ export class McpConnectionGatewayService {
         start.controller.abort(new DOMException("All MCP initialization waiters left.", "AbortError"));
       }
     }
+  }
+
+  /**
+   * A PwrSnap or PwrGit session from the connection's shared pool.
+   *
+   * A tool call holds its session until `release`, so a question the server
+   * asks mid-call has exactly one caller to go to. A second concurrent tool
+   * call opens another session. Anything else shares any open session, except
+   * a read of a PwrSnap image link, which only the session that returned it
+   * can serve.
+   */
+  private async acquireRelaySession(
+    token: string,
+    connection: McpConnectionRecord,
+    kind: PwrSuiteRelayApp,
+    discovery: McpDiscovery,
+    request: { operation: unknown; delegated: boolean; uri?: string },
+  ): Promise<{ client: Client; release?: () => void }> {
+    const entry = this.relayPoolFor(connection);
+    if (request.uri !== undefined) {
+      const owner = this.pwrSnapMediaLinks.resolve(grantThreadId(this.grants.get(token)!) ?? "", request.uri, {
+        isLive: (candidate, session) => candidate === token && entry.pool.has(session as Client),
+        threadOf: (candidate) => candidate === token ? grantThreadId(this.grants.get(token)!) ?? "" : undefined,
+      });
+      if (owner) return { client: owner.session as Client };
+    }
+    if (entry.pool.ended && entry.pool.size === 0 && !entry.pool.isOpening) {
+      const outcome = await endedLocalSessionRestart({
+        kind,
+        operation: request.operation,
+        delegated: request.delegated,
+        isAppListening: async () => await this.isRelayAppListening(kind),
+      });
+      if (outcome !== "restart") throw new Error(endedRelaySessionError(kind, outcome));
+      discovery.remaining();
+    }
+    const toolCall = request.operation === "tools/call" || request.operation === "gateway/tools/call";
+    return await discovery.phase("initialize", async () => {
+      if (!toolCall) return { client: await entry.pool.shared(discovery.signal) };
+      const lease = await entry.pool.exclusive(token, discovery.signal);
+      return { client: lease.session, release: lease.release };
+    });
+  }
+
+  private relayPoolFor(connection: McpConnectionRecord): { pool: RelaySessionPool<Client>; identity: string } {
+    const existing = this.relayPools.get(connection.id);
+    if (existing) return existing;
+    const pool: RelaySessionPool<Client> = new RelaySessionPool<Client>({
+      max: MAX_RELAY_SESSIONS,
+      open: async (signal): Promise<Client> => await this.openRelaySession(connection, pool, signal),
+      close: async (client) => await this.closeRelayClient(client),
+    });
+    const entry = { identity: randomUUID(), pool };
+    this.relayPools.set(connection.id, entry);
+    return entry;
+  }
+
+  private async openRelaySession(
+    connection: McpConnectionRecord,
+    pool: RelaySessionPool<Client>,
+    signal: AbortSignal,
+  ): Promise<Client> {
+    const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
+    const discovery = new McpDiscovery(connection.id, Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, signal);
+    try {
+      // Awaited directly, not abandoned on abort: a session that finishes
+      // opening after the pool closed is closed below, never leaked.
+      const session = await this.connectUpstreamClient(connection, {
+        clientName: `pwragent-${connection.id}-proxy`,
+        discovery,
+        threadSession: true,
+        handlers: {
+          // A server asks only on behalf of the tool call holding the session.
+          onElicit: async (client, request, signal) => {
+            const holder = pool.holderOf(client);
+            if (!holder) {
+              throw elicitationUnavailable("No PwrAgent tool call is waiting on this MCP session, so no one can answer its form.");
+            }
+            return await this.routeUpstreamElicitation(holder, client, request, signal);
+          },
+          onElicitationComplete: (client, elicitationId) => {
+            const opener = this.openedUrlElicitations.get(client)?.get(elicitationId);
+            if (opener) this.completeUpstreamUrlElicitation(opener, client, elicitationId);
+          },
+        },
+        onClose: (client) => {
+          if (!pool.has(client)) return;
+          pool.remove(client);
+          this.pwrSnapMediaLinks.forgetSession(client);
+          this.evictConnectionToolInventory(connection.id);
+        },
+      });
+      if (signal.aborted
+        || generation !== (this.toolInventoryGenerations.get(connection.id) ?? 0)
+        || !this.gatewayEnabled()
+        || !this.registry.get(connection.id)?.enabled) {
+        await session.client.close();
+        throw new Error("The MCP connection changed while its session was opening. Retry discovery.");
+      }
+      this.relaySessions.set(session.client, session);
+      return session.client;
+    } finally {
+      discovery.close();
+    }
+  }
+
+  private async closeRelayClient(client: Client): Promise<void> {
+    this.pwrSnapMediaLinks.forgetSession(client);
+    const session = this.relaySessions.get(client);
+    await client.close().catch(async () => {
+      await session?.transport.close().catch(() => undefined);
+    });
+  }
+
+  /** Close a connection's shared sessions; the next request builds a new pool. */
+  private async closeRelayPool(connectionId: string): Promise<void> {
+    const entry = this.relayPools.get(connectionId);
+    if (!entry) return;
+    this.relayPools.delete(connectionId);
+    await entry.pool.close();
+  }
+
+  /** What a catalog revision read through `client` for `token` is tied to. */
+  private sessionRevisionKey(token: string, connectionId: string, client: Client): unknown {
+    const entry = this.relayPools.get(connectionId);
+    if (!entry?.pool.has(client)) return this.sessionIdentities.get(client);
+    return [entry.identity, this.relayGrantEpochs.get(token) ?? ""];
+  }
+
+  /** Whether a thread's bridge other than `except`'s still uses a connection. */
+  private relayHasAttachedUser(connectionId: string, except: string): boolean {
+    for (const [token, sockets] of this.bridgeAttachments) {
+      if (token !== except && sockets.size > 0 && this.grants.get(token)?.connectionId === connectionId) return true;
+    }
+    return false;
+  }
+
+  /** Whether `client` is the session `token` is using now. */
+  private isCurrentUpstream(token: string, client: Client): boolean {
+    const grant = this.grants.get(token);
+    if (!grant) return false;
+    if (this.relayPools.get(grant.connectionId)?.pool.has(client)) return true;
+    return this.upstreamSessions.get(token)?.client === client;
   }
 
   private sendBridgeEvent(token: string, event: { method: string; params?: unknown }): void {
@@ -2761,6 +2915,13 @@ export class McpConnectionGatewayService {
         : caps?.resources?.subscribe;
       if (!supported) return;
       if (method === "notifications/tools/list_changed") this.invalidateConnectionTools(connection.id);
+      if (this.relayPools.get(connection.id)?.pool.has(client)) {
+        // A shared session serves every thread granted the connection.
+        for (const [token, grant] of this.grants) {
+          if (grant.connectionId === connection.id) this.sendBridgeEvent(token, notification);
+        }
+        return;
+      }
       for (const [token, session] of this.upstreamSessions) {
         if (session.client === client) this.sendBridgeEvent(token, notification);
       }
@@ -3035,7 +3196,7 @@ export class McpConnectionGatewayService {
     if (!grant) throw elicitationUnavailable("This MCP session is no longer granted to a thread.");
     const gatewayScoped = grant.threadId?.startsWith("[\"gateway\"") === true;
     const stillCurrent = async (): Promise<void> => {
-      if (this.grants.get(token) !== grant || this.upstreamSessions.get(token)?.client !== client) {
+      if (this.grants.get(token) !== grant || !this.isCurrentUpstream(token, client)) {
         throw new Error("This MCP session has been replaced.");
       }
       this.requireAvailableConnection(grant.connectionId);
@@ -3118,7 +3279,7 @@ export class McpConnectionGatewayService {
     const opened = this.openedUrlElicitations.get(client);
     if (opened?.get(elicitationId) !== token) return;
     opened.delete(elicitationId);
-    if (this.upstreamSessions.get(token)?.client !== client) return;
+    if (!this.isCurrentUpstream(token, client)) return;
     this.sendBridgeEvent(token, {
       method: "notifications/elicitation/complete",
       params: { elicitationId },
@@ -3291,6 +3452,13 @@ export class McpConnectionGatewayService {
     }
     const state = (token: string | undefined): McpThreadSessionState => {
       if (!token) return "not_started";
+      const pool = this.relayPools.get(this.grants.get(token)?.connectionId ?? "")?.pool;
+      if (pool) {
+        // Shared sessions: the thread's state is the pool's.
+        if (pool.size > 0) return "ready";
+        if (pool.isOpening) return "connecting";
+        return pool.ended ? "ended" : "not_started";
+      }
       if (this.disconnectedStdioGrants.has(token)) return "ended";
       if (this.upstreamSessions.has(token)) return "ready";
       if (this.upstreamStarts.has(token)) return "connecting";
@@ -3331,6 +3499,7 @@ export class McpConnectionGatewayService {
       }
       if (!matches) continue;
       this.grants.delete(token);
+      this.relayGrantEpochs.delete(token);
       this.sendBridgeEvent(token, { method: "connection/closed" });
       tokens.push(token);
     }
@@ -3363,8 +3532,8 @@ export class McpConnectionGatewayService {
         MAX_PWRSNAP_MEDIA_RESPONSE_BYTES,
       );
     }
-    const token = this.pwrSnapMediaLinks.resolve(request.threadId, request.uri, {
-      liveSession: (candidate) => this.upstreamSessions.get(candidate)?.client,
+    const owner = this.pwrSnapMediaLinks.resolve(request.threadId, request.uri, {
+      isLive: (candidate, session) => this.isCurrentUpstream(candidate, session as Client),
       threadOf: (candidate) => {
         const grant = this.grants.get(candidate);
         if (!grant) return undefined;
@@ -3373,7 +3542,7 @@ export class McpConnectionGatewayService {
         return grantThreadId(grant);
       },
     });
-    const client = token ? this.upstreamSessions.get(token)?.client : undefined;
+    const client = owner?.session as Client | undefined;
     if (!client) return { ok: false, reason: "session-ended" };
     let failed = this.failedPwrSnapMediaReads.get(client);
     if (failed?.has(request.uri)) return { ok: false, reason: "failed" };
@@ -3402,6 +3571,13 @@ export class McpConnectionGatewayService {
 
   private async closeUpstreamSession(token: string, resetDisconnected = true): Promise<void> {
     if (resetDisconnected) this.disconnectedStdioGrants.delete(token);
+    const connectionId = this.grants.get(token)?.connectionId;
+    if (connectionId !== undefined && this.relayPools.has(connectionId)) {
+      // This grant's use of the shared sessions ends. They stay open while
+      // another thread's bridge is attached, and close with the last one.
+      this.relayGrantEpochs.set(token, randomUUID());
+      if (!this.relayHasAttachedUser(connectionId, token)) await this.closeRelayPool(connectionId);
+    }
     const start = this.upstreamStarts.get(token);
     this.upstreamStarts.delete(token);
     start?.controller.abort(new DOMException("MCP session closed.", "AbortError"));
@@ -3428,21 +3604,23 @@ export class McpConnectionGatewayService {
     for (const connectionId of new Set([...this.grants.values()].map((grant) => grant.connectionId))) {
       this.invalidateConnectionTools(connectionId);
     }
-    await Promise.all(
-      [...new Set([...this.upstreamSessions.keys(), ...this.upstreamStarts.keys()])].map(
+    await Promise.all([
+      ...[...new Set([...this.upstreamSessions.keys(), ...this.upstreamStarts.keys()])].map(
         async (token) => await this.closeUpstreamSession(token),
       ),
-    );
+      ...[...this.relayPools.keys()].map(async (connectionId) => await this.closeRelayPool(connectionId)),
+    ]);
   }
 
   private async closeConnectionSessions(connectionId: string): Promise<void> {
     // Invalidate before awaiting close, including sessions still opening.
     this.invalidateConnectionTools(connectionId);
-    await Promise.all(
-      [...this.grants.entries()]
+    await Promise.all([
+      ...[...this.grants.entries()]
         .filter(([, grant]) => grant.connectionId === connectionId)
         .map(async ([token]) => await this.closeUpstreamSession(token)),
-    );
+      this.closeRelayPool(connectionId),
+    ]);
   }
 
   private async startBridgeServer(): Promise<void> {
@@ -3970,6 +4148,7 @@ export class McpConnectionGatewayService {
         throw new Error("Invalid MCP bridge revoke request.");
       }
       this.grants.delete(values.token);
+      this.relayGrantEpochs.delete(values.token);
       for (const [key, registration] of this.threadRegistrations) {
         if (registration.token === values.token) {
           this.threadRegistrations.delete(key);
@@ -4048,7 +4227,7 @@ export class McpConnectionGatewayService {
           connectionId: connection.id,
           serverName: connection.displayName,
           toolName: definition.name,
-          schemaRevision: gatewayToolRevision(JSON.stringify([token, this.sessionIdentities.get(client)]), generation, definition),
+          schemaRevision: gatewayToolRevision(JSON.stringify([token, this.sessionRevisionKey(token, connection.id, client)]), generation, definition),
           consentRevision: gatewayToolRevision(JSON.stringify([this.consentEpoch, connection.id, consentEpoch]), generation, definition),
           definition,
         });
@@ -4065,7 +4244,7 @@ export class McpConnectionGatewayService {
     this.requireAvailableConnection(grant.connectionId);
     if (this.grants.get(token) !== grant
       || generation !== (this.toolInventoryGenerations.get(connection.id) ?? 0)
-      || this.upstreamSessions.get(token)?.client !== client) {
+      || !this.isCurrentUpstream(token, client)) {
       throw new Error("The MCP connection changed during discovery. Search again.");
     }
     this.recordDiscoverySuccess(connection.id);
@@ -4109,6 +4288,7 @@ export class McpConnectionGatewayService {
         threadId: grant.threadId, operation: typeof operation === "string" ? operation : undefined, parentDiscoveryId,
       });
       let releaseRoute: (() => void) | undefined;
+      let releaseSession: (() => void) | undefined;
       try {
         if (operation === "gateway/tools/list" || operation === "gateway/tools/call") {
           await this.requireGatewaySelection(grant);
@@ -4118,10 +4298,17 @@ export class McpConnectionGatewayService {
         if (delegated && operation !== "gateway/tools/list" && operation !== "gateway/tools/call") {
           throw new Error("Delegated MCP access requires the read-only gateway.");
         }
-        const client = await this.ensureUpstreamClient(token, grant, discovery, {
+        const readUri = operation === "resources/read" && params && typeof params === "object"
+          && typeof (params as { uri?: unknown }).uri === "string"
+          ? (params as { uri: string }).uri
+          : undefined;
+        const upstream = await this.ensureUpstreamClient(token, grant, discovery, {
           operation,
           delegated: Boolean(delegated),
+          ...(readUri !== undefined ? { uri: readUri } : {}),
         });
+        releaseSession = upstream.release;
+        const client = upstream.client;
         // Every request on the session is counted, so a form is never handed
         // to one caller while another may be the one it is for. Only a tool
         // call from a caller that can show it gets a route. A Job Monitor's
@@ -4249,6 +4436,7 @@ export class McpConnectionGatewayService {
         throw error;
       } finally {
         releaseRoute?.();
+        releaseSession?.();
         discovery.close();
       }
     });

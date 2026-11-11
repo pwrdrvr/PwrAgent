@@ -19,20 +19,21 @@ const OPERATIONS: unknown[] = [
 ];
 
 /**
- * Oracle, written from the rule rather than the code. Restarting a relay
- * opens its app's approval window, so it may happen only when all of these
- * hold: the session is a PwrSnap or PwrGit relay (an operator's command that
- * exited may exit again on every start), the request is the thread's own
- * tool call (nothing else may raise a window), and the app answers.
+ * Oracle, written from the rule rather than the code. Every thread shares one
+ * pool of PwrSnap or PwrGit sessions, so once the app is back any thread's
+ * own request reopens it: a new thread's discovery has to work after an
+ * update. It reopens only when all of these hold: the session is a PwrSnap
+ * or PwrGit relay (an operator's command that exited may exit again on every
+ * start), the request is not a delegated Job Monitor's (an app that predates
+ * prompt-free relays still asks, and nobody is watching), and the app answers.
  */
-function expected(kind: McpConnectionKind, operation: unknown, delegated: boolean, listening: boolean) {
+function expected(kind: McpConnectionKind, _operation: unknown, delegated: boolean, listening: boolean) {
   const relay = kind === "pwrsnap" || kind === "pwrgit";
-  const ownToolCall = !delegated && (operation === "tools/call" || operation === "gateway/tools/call");
-  if (!relay || !ownToolCall) return { outcome: "ended", probes: 0 };
+  if (!relay || delegated) return { outcome: "ended", probes: 0 };
   return { outcome: listening ? "restart" : "app_closed", probes: 1 };
 }
 
-describe("restarting a thread's ended local session", () => {
+describe("reopening an ended local session", () => {
   const cases = KINDS.flatMap((kind) => OPERATIONS.flatMap((operation) =>
     [false, true].flatMap((delegated) => [false, true].map((listening) => ({ kind, operation, delegated, listening })))));
 
