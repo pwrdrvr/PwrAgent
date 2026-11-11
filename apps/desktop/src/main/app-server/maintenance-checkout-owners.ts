@@ -35,25 +35,43 @@ function pathKey(value: string): string {
 }
 
 /** The caller can supply canonical paths from its existing ownership read.
- * A thread with unknown cwd is never attributed to an arbitrary checkout. */
+ * A thread with unknown cwd is never attributed to an arbitrary checkout.
+ *
+ * `forPath` answers from an index of each recorded directory's ancestors, so
+ * a scan asking about every kept checkout no longer compares every recorded
+ * directory per checkout. Same answer as walking the recorded directories in
+ * the order they were first added and keeping those equal to the checkout or
+ * starting with it and a separator. */
 export class MaintenanceCheckoutOwners {
   private readonly paths = new Map<string, Set<string>>();
   private readonly threads = new Map<string, ThreadMaintenanceKeptThread>();
+  /** A recorded directory, or any prefix of one ending right before a
+   * separator, to the owner sets of those directories in the order added. */
+  private readonly within = new Map<string, Set<string>[]>();
 
   add(target: string, thread: ThreadMaintenanceKeptThread): void {
     const key = pathKey(target);
     let owners = this.paths.get(key);
-    if (!owners) this.paths.set(key, owners = new Set());
+    if (!owners) {
+      this.paths.set(key, owners = new Set());
+      const file = (prefix: string) => {
+        const list = this.within.get(prefix);
+        if (list) list.push(owners!);
+        else this.within.set(prefix, [owners!]);
+      };
+      file(key);
+      // `key.startsWith(target + sep)` holds exactly when `target` is the part
+      // of `key` before one of its separators.
+      for (let at = key.indexOf(path.sep); at !== -1; at = key.indexOf(path.sep, at + 1)) file(key.slice(0, at));
+    }
     const identity = JSON.stringify([thread.backend, thread.threadId]);
     owners.add(identity);
     this.threads.set(identity, thread);
   }
 
   forPath(target: string): ThreadMaintenanceKeptThread[] {
-    const key = pathKey(target);
     const owners = new Map<string, ThreadMaintenanceKeptThread>();
-    for (const [cwd, rows] of this.paths) {
-      if (cwd !== key && !cwd.startsWith(key + path.sep)) continue;
+    for (const rows of this.within.get(pathKey(target)) ?? []) {
       for (const identity of rows) owners.set(identity, this.threads.get(identity)!);
     }
     return [...owners.values()];

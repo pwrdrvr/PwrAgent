@@ -54,3 +54,88 @@ describe("maintenance checkout owner display", () => {
     }));
   });
 });
+
+/**
+ * Oracle test. `OwnersByScan` is `MaintenanceCheckoutOwners` before its
+ * ancestor index: `forPath` walked every recorded directory and kept those
+ * equal to the checkout or inside it. The index must return the same thread
+ * objects in the same order, for any order of adds and lookups.
+ */
+class OwnersByScan {
+  private readonly paths = new Map<string, Set<string>>();
+  private readonly threads = new Map<string, ThreadMaintenanceKeptThread>();
+  private key(value: string) {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
+  add(target: string, thread: ThreadMaintenanceKeptThread) {
+    const key = this.key(target);
+    let owners = this.paths.get(key);
+    if (!owners) this.paths.set(key, owners = new Set());
+    const identity = JSON.stringify([thread.backend, thread.threadId]);
+    owners.add(identity);
+    this.threads.set(identity, thread);
+  }
+  forPath(target: string) {
+    const key = this.key(target);
+    const owners = new Map<string, ThreadMaintenanceKeptThread>();
+    for (const [cwd, rows] of this.paths) {
+      if (cwd !== key && !cwd.startsWith(key + path.sep)) continue;
+      for (const identity of rows) owners.set(identity, this.threads.get(identity)!);
+    }
+    return [...owners.values()];
+  }
+}
+
+// Sibling-prefix traps, nesting, a trailing separator, spellings that
+// resolve the same, relative paths, mixed case and the filesystem root.
+// Each also appears with the platform's own separator, so a Windows run
+// compares backslash paths too.
+const native = (value: string) => value.split("/").join(path.sep);
+const POSIX_PATHS = [
+  "/w/repo", "/w/repo2", "/w/re", "/w/repo/sub", "/w/repo/sub/deep", "/w/repo2/sub", "/w/repo/",
+  "/w/./repo/sub", "/w/x/../repo", "//w//repo", "/w", "/", "w/repo", "/W/Repo/Sub",
+];
+const PATHS = [...new Set(POSIX_PATHS.flatMap((value) => [value, native(value)]))];
+
+const step = fc.oneof(
+  fc.record({
+    kind: fc.constant("add" as const), target: fc.constantFrom(...PATHS),
+    backend: fc.constantFrom("codex", "claude"), threadId: fc.constantFrom("t1", "t2", "t3", "t4"),
+  }),
+  fc.record({ kind: fc.constant("forPath" as const), target: fc.constantFrom(...PATHS, "/x", "/w/repo/sub/") }),
+);
+
+describe("maintenance checkout owner index", () => {
+  it("returns exactly what walking every recorded directory returned", () => {
+    fc.assert(fc.property(fc.array(step, { maxLength: 30 }), (steps) => {
+      const indexed = new MaintenanceCheckoutOwners();
+      const scanned = new OwnersByScan();
+      for (const [position, item] of steps.entries()) {
+        if (item.kind === "add") {
+          // A later add for the same thread replaces its display row.
+          const thread = { backend: item.backend, threadId: item.threadId, title: `${item.threadId}@${position}` } as ThreadMaintenanceKeptThread;
+          indexed.add(item.target, thread);
+          scanned.add(item.target, thread);
+          continue;
+        }
+        const expected = scanned.forPath(item.target);
+        const actual = indexed.forPath(item.target);
+        expect(actual).toHaveLength(expected.length);
+        actual.forEach((thread, index) => expect(thread).toBe(expected[index]));
+      }
+    }), { numRuns: 3000 });
+  });
+
+  it("keeps a sibling with a shared name prefix out, and a nested directory in", () => {
+    const at = (...segments: string[]) => path.join(path.sep, ...segments);
+    const thread = (threadId: string) => ({ backend: "codex", threadId, title: threadId }) as ThreadMaintenanceKeptThread;
+    const owners = new MaintenanceCheckoutOwners();
+    owners.add(at("w", "repo"), thread("repo"));
+    owners.add(at("w", "repo2"), thread("sibling"));
+    owners.add(at("w", "repo", "sub"), thread("nested"));
+    expect(owners.forPath(at("w", "repo")).map((row) => row.threadId)).toEqual(["repo", "nested"]);
+    expect(owners.forPath(at("w", "repo2")).map((row) => row.threadId)).toEqual(["sibling"]);
+    expect(owners.forPath(at("w", "re"))).toEqual([]);
+  });
+});
