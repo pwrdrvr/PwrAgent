@@ -782,10 +782,10 @@ import {
   checkoutHibernationLastActivity,
   hibernationTarget,
   isArchivedCheckoutCandidate,
-  otherThreadsUsingPath,
   type HibernationContext,
 } from "./checkout-hibernation";
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "./checkout-hibernation-workspace";
+import { CheckoutPathOwners } from "./checkout-path-owners";
 import { hasWorktreeTerminalsOpenIn } from "../terminal/worktree-terminals";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
@@ -9055,7 +9055,8 @@ export class DesktopBackendRegistry {
       listCandidates: async () => await this.listAutoArchiveCandidates(),
       hibernation: {
         getPolicy: () => this.readCheckoutHibernationPolicy(),
-        keepReason: (candidate, candidates, policy, now) => this.checkoutHibernationKeepReason(candidate, candidates, policy, now),
+        keepReason: (candidate, candidates, policy, now, owners) =>
+          this.checkoutHibernationKeepReason(candidate, candidates, policy, now, owners),
         inspectWorkspace: async (worktreePath, policy, signal) => (await inspectHibernationWorkspace(worktreePath, {
           signal, limitBytes: policy.maxSnapshotMb * 1024 * 1024, removeRebuildableOutput: policy.removeRebuildableOutput,
         })).keep,
@@ -9257,17 +9258,23 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private checkoutHibernationContext(
-    candidate: ThreadArchiveCandidate,
-    candidates: readonly ThreadArchiveCandidate[],
-  ): HibernationContext {
-    const runtime = candidate.overlay?.codexEnvironmentRuntime ?? candidate.thread.codexEnvironmentRuntime;
-    const target = hibernationTarget(candidate);
-    return {
-      busy: this.autoArchiveCandidateIsBusy(candidate)
+  /** Computed on read: `hibernationKeepReason` asks only once every rule
+   * the thread row decides has passed, and most candidates stop earlier.
+   * `owners` indexes the same candidate list the caller holds. */
+  private checkoutHibernationContext(candidate: ThreadArchiveCandidate, owners: CheckoutPathOwners): HibernationContext {
+    const busy = () => {
+      const runtime = candidate.overlay?.codexEnvironmentRuntime ?? candidate.thread.codexEnvironmentRuntime;
+      return this.autoArchiveCandidateIsBusy(candidate)
         || runtime?.actionStatus === "started"
-        || runtime?.actionRuns?.some((run) => run.status === "started") === true,
-      sharedPath: "keep" in target ? false : otherThreadsUsingPath(candidate, target.worktreePath, candidates) > 0,
+        || runtime?.actionRuns?.some((run) => run.status === "started") === true;
+    };
+    const sharedPath = () => {
+      const target = hibernationTarget(candidate);
+      return "keep" in target ? false : owners.sharedWithAnotherThread(candidate, target.worktreePath);
+    };
+    return {
+      get busy() { return busy(); },
+      get sharedPath() { return sharedPath(); },
     };
   }
 
@@ -9333,6 +9340,9 @@ export class DesktopBackendRegistry {
                 : await this.listAutoArchiveCandidates();
               current.managedWorktreePath = await this.managedMaintenanceCheckout(current.thread,
                 inventory ?? this.maintenanceOwnershipInventory(all, current));
+              // Indexed from the list just read, never the pass that chose
+              // this candidate: sharing is decided again here.
+              const owners = new CheckoutPathOwners(all);
               const assertCurrent = () => {
                 options.context?.assertCurrent();
                 // A reviewed run uses the policy it was reviewed under, so a
@@ -9341,7 +9351,7 @@ export class DesktopBackendRegistry {
                   || (!options.reviewed && JSON.stringify(this.readCheckoutHibernationPolicy()) !== policyKey)) {
                   throw new AutomaticArchiveCancelledError();
                 }
-                const reason = hibernationKeepReason(current, Date.now(), policy, this.checkoutHibernationContext(current, all));
+                const reason = hibernationKeepReason(current, Date.now(), policy, this.checkoutHibernationContext(current, owners));
                 if (reason) throw new CheckoutHibernationKeptError(reason);
                 if (checkoutHibernationLastActivity(current) > checkoutHibernationLastActivity(candidate)) {
                   throw new CheckoutHibernationKeptError(HIBERNATION_KEEP_REASONS.recentlyActive);
@@ -32073,17 +32083,20 @@ export class DesktopBackendRegistry {
     return this.readCheckoutHibernationPolicy();
   }
 
-  /** The sweep's thread-level rules for one candidate, as the review shows them. */
+  /** The sweep's thread-level rules for one candidate, as the review shows
+   * them. A pass over many candidates passes one `owners` built from
+   * `candidates`; without it, this call indexes `candidates` itself. */
   checkoutHibernationKeepReason(
     candidate: ThreadArchiveCandidate,
     candidates: readonly ThreadArchiveCandidate[],
     policy: DesktopCheckoutHibernationPolicy,
     now: number,
+    owners: CheckoutPathOwners = new CheckoutPathOwners(candidates),
   ): { target?: string; keep?: string } {
     const target = hibernationTarget(candidate);
     if ("keep" in target) return { target: primaryThreadWorktree(candidate.thread)?.worktreePath, keep: target.keep };
     return { target: target.worktreePath,
-      keep: hibernationKeepReason(candidate, now, policy, this.checkoutHibernationContext(candidate, candidates)) };
+      keep: hibernationKeepReason(candidate, now, policy, this.checkoutHibernationContext(candidate, owners)) };
   }
 
   /** Hibernate one reviewed checkout, with every check run again first. */

@@ -46,6 +46,7 @@ import {
 import { inspectMaintenanceWorkspace, type MaintenanceWorkspaceInspection } from "./thread-maintenance-workspace";
 import { inspectHibernationWorkspace, type HibernationWorkspaceInspection } from "./checkout-hibernation-workspace";
 import { HIBERNATION_KEEP_REASONS, hibernatedSnapshotFor, checkoutHibernationLastActivity } from "./checkout-hibernation";
+import { CheckoutPathOwners, eventLoopPacer } from "./checkout-path-owners";
 import { missingWorktreeRepository } from "./worktree-archive-service";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import type { CargoBuildOutputCandidate, scanCargoBuildOutputs, removeCargoBuildOutput } from "./maintenance-cargo-output";
@@ -133,7 +134,7 @@ export type CheckoutHibernationReviewDeps = {
   /** The candidate's checkout, and why the rules keep it, from thread state.
    * No target: the thread has no checkout hibernation could remove. */
   keepReason: (candidate: ThreadArchiveCandidate, candidates: readonly ThreadArchiveCandidate[],
-    policy: DesktopCheckoutHibernationPolicy, now: number) => { target?: string; keep?: string };
+    policy: DesktopCheckoutHibernationPolicy, now: number, owners: CheckoutPathOwners) => { target?: string; keep?: string };
   inspect: (worktreePath: string, policy: DesktopCheckoutHibernationPolicy, signal: AbortSignal) => Promise<HibernationWorkspaceInspection>;
   /** Re-checks everything, then hibernates. True when hibernated, false when
    * cancelled, or the reason it was kept. */
@@ -153,7 +154,8 @@ export type CheckoutHibernationReviewHost = {
 export function checkoutHibernationReviewDeps(host: () => CheckoutHibernationReviewHost): CheckoutHibernationReviewDeps {
   return {
     getPolicy: () => host().getCheckoutHibernationPolicy(),
-    keepReason: (candidate, candidates, policy, now) => host().checkoutHibernationKeepReason(candidate, candidates, policy, now),
+    keepReason: (candidate, candidates, policy, now, owners) =>
+      host().checkoutHibernationKeepReason(candidate, candidates, policy, now, owners),
     inspect: async (worktreePath, policy, signal) => await inspectHibernationWorkspace(worktreePath, {
       signal, limitBytes: policy.maxSnapshotMb * 1024 * 1024, removeRebuildableOutput: policy.removeRebuildableOutput,
     }),
@@ -477,7 +479,15 @@ export class ThreadMaintenanceService {
       excluded.set(reason, item);
     };
     progress.check("hibernate", roots.length);
+    // One owner index for this scan's list; the apply re-checks sharing
+    // against a fresh list before each removal.
+    const owners = new CheckoutPathOwners(candidates);
+    // A candidate kept on thread state awaits nothing, so a long run of
+    // them would hold the event loop through promise continuations alone.
+    const pace = eventLoopPacer();
     const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.thread.title, async (candidate) => {
+      if (this.abort.signal.aborted) return undefined;
+      await pace();
       if (this.abort.signal.aborted) return undefined;
       try {
         if (projectFilter) {
@@ -485,7 +495,7 @@ export class ThreadMaintenanceService {
           const project = retained.projects.has(key) ? retained.projects.get(key) : await this.deps.resolveProject(candidate);
           if (!project || path.resolve(project) !== path.resolve(projectFilter)) return undefined;
         }
-        const listed = deps.keepReason(candidate, candidates, policy, now);
+        const listed = deps.keepReason(candidate, candidates, policy, now, owners);
         if (!listed.target) { exclude(listed.keep ?? "No linked worktree checkout"); return undefined; }
         if (hibernatedSnapshotFor(candidate) || listed.keep === HIBERNATION_KEEP_REASONS.alreadyHibernated) {
           exclude(HIBERNATION_KEEP_REASONS.alreadyHibernated);

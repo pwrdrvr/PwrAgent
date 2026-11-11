@@ -44,7 +44,10 @@ export const HIBERNATION_KEEP_REASONS = {
   shared: "Shared with another thread",
 } as const;
 
-/** What the registry knows about a candidate that the thread row does not say. */
+/** What the registry knows about a candidate that the thread row does not
+ * say. `hibernationKeepReason` reads these last, after every rule the thread
+ * row decides, so a provider may compute them on read (getters): most
+ * candidates are kept before either is needed. */
 export type HibernationContext = {
   /** A turn, queued message, pending request, lifecycle mutation or running
    * environment action. */
@@ -135,17 +138,4 @@ export function hibernationKeepReason(
   if (context.busy) return HIBERNATION_KEEP_REASONS.busy;
   if (context.sharedPath) return HIBERNATION_KEEP_REASONS.shared;
   return undefined;
-}
-
-/** Non-archived threads other than `candidate` that list its checkout. */
-export function otherThreadsUsingPath(
-  candidate: Pick<ThreadArchiveCandidate, "thread">,
-  worktreePath: string,
-  candidates: readonly Pick<ThreadArchiveCandidate, "thread" | "overlay">[],
-): number {
-  return candidates.filter(({ thread, overlay }) =>
-    !(thread.source === candidate.thread.source && thread.id === candidate.thread.id)
-    && thread.archivedAt === undefined && overlay?.archiveTombstonedAt === undefined
-    && [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
-      .some((directory) => samePath(directory.worktreePath ?? directory.path, worktreePath))).length;
 }
