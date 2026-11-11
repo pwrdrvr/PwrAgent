@@ -573,6 +573,21 @@ The `rateLimit.scope` must be the scope `resolveDeliveryScope(intent)` returns
 for the same intent. The budget keys each cool-off by scope id, so a 429
 reported on any other id leaves the original scope open.
 
+When the platform limits the whole bot or app rather than one conversation,
+give every delivery scope the same `bucketId` and report the 429 with
+`rateLimit.appliesTo: "bucket"`. The budget then cools off every scope with
+that platform and `bucketId`. Each scope keeps its own sliding-window budget.
+Use `bucket` only when the platform says the limit is shared:
+
+| Provider | 429 applies to |
+|---|---|
+| Mattermost | The bot. The server limiter counts per token or IP. |
+| LINE | The bot. Rate limits and the monthly quota belong to the LINE channel. |
+| Discord | The bot when `RateLimitError.global` is set; otherwise the channel's route. |
+| Telegram | The chat. A 429 carries only `retry_after`, not which limit was hit. |
+| Slack | The channel. A 429 does not say whether a per-channel or workspace method limit was hit. |
+| Feishu | The chat. The adapter reads only `retryAfter`, which does not say which limit was hit. |
+
 Read the wait with `retryAfterMsFromHttpHeaders` from
 `@pwragent/messaging-interface`. It accepts `Retry-After` as delta-seconds or
 an HTTP-date, then any provider-documented reset header, then the adapter's

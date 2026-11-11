@@ -14,6 +14,8 @@ import {
 
 // Property: once a provider answers HTTP 429 with a Retry-After, the
 // delivery budget admits no send to that scope until the wait has passed.
+// Both providers limit the whole bot, so the same holds for every other
+// conversation the bot is in.
 //
 // The real adapters and the real budget are wired the way the runtime and
 // controller wire them: `onRateLimit` and `result.rateLimit` both feed
@@ -38,6 +40,8 @@ type Harness = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   intent: MessagingSurfaceIntent;
   scope: MessagingDeliveryScope | undefined;
+  /** Another conversation of the same bot, which never sent anything. */
+  otherScope: MessagingDeliveryScope | undefined;
 };
 
 type RetryAfterForm = "seconds" | "http-date";
@@ -80,22 +84,26 @@ function lineHarness(clock: () => number, retryAfter: () => string, budget: Mess
   // Optional, as on the runtime's adapter type. The property must also hold
   // through `result.rateLimit` alone.
   adapter.onRateLimit?.((info) => budget.recordRateLimit(info));
-  const intent = {
+  const intentFor = (conversationId: string, kind: "dm" | "group") => ({
     id: "intent-line",
     kind: "message",
     role: "assistant",
     parts: [{ type: "text", text: "hello" }],
     audit: {
       actor: { platformUserId: userId },
-      channel: { channel: "line", conversation: { id: userId, kind: "dm" } },
+      channel: { channel: "line", conversation: { id: conversationId, kind } },
       occurredAt: 0,
     },
     createdAt: 0,
-  } as unknown as MessagingSurfaceIntent;
+  } as unknown as MessagingSurfaceIntent);
+  const intent = intentFor(userId, "dm");
   return {
     deliver: (value) => adapter.deliver(value),
     intent,
     scope: adapter.resolveDeliveryScope(intent),
+    otherScope: adapter.resolveDeliveryScope(
+      intentFor("C0123456789abcdef0123456789abcdef", "group"),
+    ),
   };
 }
 
@@ -135,7 +143,7 @@ function mattermostHarness(clock: () => number, retryAfter: () => string, budget
   // Optional, as on the runtime's adapter type. The property must also hold
   // through `result.rateLimit` alone.
   adapter.onRateLimit?.((info) => budget.recordRateLimit(info));
-  const intent = {
+  const intentFor = (channelId: string) => ({
     id: "intent-mattermost",
     kind: "message",
     role: "assistant",
@@ -144,16 +152,18 @@ function mattermostHarness(clock: () => number, retryAfter: () => string, budget
       actor: { platformUserId: "user-1" },
       channel: {
         channel: "mattermost",
-        conversation: { id: "abcdefghijklmnopqrstuvwxyz", kind: "channel" },
+        conversation: { id: channelId, kind: "channel" },
       },
       occurredAt: 0,
     },
     createdAt: 0,
-  } as unknown as MessagingSurfaceIntent;
+  } as unknown as MessagingSurfaceIntent);
+  const intent = intentFor("abcdefghijklmnopqrstuvwxyz");
   return {
     deliver: (value) => adapter.deliver(value),
     intent,
     scope: adapter.resolveDeliveryScope(intent),
+    otherScope: adapter.resolveDeliveryScope(intentFor("zyxwvutsrqponmlkjihgfedcba")),
   };
 }
 
@@ -165,7 +175,10 @@ describe.each([
   ["LINE", lineHarness],
   ["Mattermost", mattermostHarness],
 ] as const)("%s 429 cool-off", (_name, createHarness) => {
-  it("admits no send to the scope before Retry-After expires", async () => {
+  it.each([
+    ["the rate-limited conversation", "scope"],
+    ["another conversation of the same bot", "otherScope"],
+  ] as const)("admits no send to %s before Retry-After expires", async (_label, probed) => {
     await fc.assert(
       fc.asyncProperty(
         fc.integer({ min: 1, max: 3_600 }),
@@ -186,7 +199,11 @@ describe.each([
             () => retryAfterHeader(form, retryAfterSeconds, startMs),
             budget,
           );
-          expect(harness.scope).toBeDefined();
+          const probedScope = harness[probed];
+          expect(probedScope).toBeDefined();
+          if (probed === "otherScope") {
+            expect(probedScope?.id).not.toBe(harness.scope?.id);
+          }
           expect(budget.admit({ priority: "final_turn", scope: harness.scope })).toMatchObject({
             outcome: "admitted",
           });
@@ -198,7 +215,7 @@ describe.each([
           const retryAfterMs = retryAfterSeconds * 1000;
           for (const fraction of probeFractions) {
             now = startMs + Math.floor(fraction * retryAfterMs);
-            const admission = budget.admit({ priority, scope: harness.scope });
+            const admission = budget.admit({ priority, scope: probedScope });
             expect(admission.outcome).not.toBe("admitted");
             if (admission.outcome === "deferred") {
               expect(admission.retryAt).toBeGreaterThanOrEqual(startMs + retryAfterMs);
@@ -207,7 +224,7 @@ describe.each([
 
           // The cool-off ends: a final answer goes out again.
           now = startMs + retryAfterMs + SAFETY_BUFFER_MS;
-          expect(budget.admit({ priority: "final_turn", scope: harness.scope })).toMatchObject({
+          expect(budget.admit({ priority: "final_turn", scope: probedScope })).toMatchObject({
             outcome: "admitted",
           });
           vi.unstubAllGlobals();

@@ -115,6 +115,13 @@ export const MATTERMOST_RATE_LIMIT_DEFAULT_RETRY_AFTER_MS = 5_000;
  */
 const MATTERMOST_RATE_LIMIT_RESET_HEADERS = ["x-ratelimit-reset"] as const;
 
+/**
+ * Mattermost's server limiter counts requests per bot token (or client IP),
+ * across every channel. Every delivery scope shares this bucket, so one 429
+ * cools off all of the bot's conversations.
+ */
+export const MATTERMOST_RATE_LIMIT_BUCKET_ID = "mattermost:bot";
+
 /** A Mattermost HTTP 429, with the wait the server asked for. */
 export class MattermostRateLimitError extends Error {
   readonly status = 429;
@@ -806,7 +813,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         id: "mattermost:server",
         kind: "server",
         label: "Mattermost server",
+        bucketId: MATTERMOST_RATE_LIMIT_BUCKET_ID,
       },
+      appliesTo: "bucket",
       retryAfterMs: error.retryAfterMs,
       message: error.message,
       observedAt: this.now(),
@@ -931,6 +940,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       kind: rootId ? "thread" : "channel",
       label: rootId ? "Mattermost thread" : "Mattermost channel",
       ...(rootId ? { parentId: channelId } : {}),
+      bucketId: MATTERMOST_RATE_LIMIT_BUCKET_ID,
       // Budget deliveries per channel/thread over a sliding minute so a single
       // agent turn's normal burst is admitted instead of tripping slow mode on
       // the 2nd send. Mirrors Discord/Slack channels (30/min, 5 reserved for

@@ -251,6 +251,13 @@ function isAsciiWhitespace(charCode: number): boolean {
 export type MessagingRateLimitInfo = {
   retryAfterMs?: number;
   scope: MessagingDeliveryScope;
+  /**
+   * What the provider limit covers. `scope`, the default, cools off only
+   * `scope`. `bucket` also cools off every scope that shares
+   * `scope.bucketId`, for a limit on the whole bot or app rather than one
+   * conversation. Without a `scope.bucketId`, `bucket` acts as `scope`.
+   */
+  appliesTo?: "scope" | "bucket";
   message?: string;
   observedAt?: number;
   /**

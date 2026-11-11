@@ -9,7 +9,9 @@ import {
   type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
+import { RateLimitError } from "discord.js";
 import {
+  DISCORD_GLOBAL_RATE_LIMIT_BUCKET_ID,
   DiscordAdapter,
   DiscordJsGatewayConnection,
   stripDiscordBotMention,
@@ -429,6 +431,55 @@ describe("discord adapter", () => {
         }),
       }),
     ]);
+  });
+
+  it("cools off every channel only for Discord's global limit", async () => {
+    // `@discordjs/rest` rejects with this error when `rejectOnRateLimit`
+    // is set, as `DiscordRestApi` does.
+    const rateLimitError = (scope: "global" | "shared" | "user") =>
+      new RateLimitError({
+        global: scope === "global",
+        hash: "hash",
+        limit: 1,
+        majorParameter: "channel-1",
+        method: "POST",
+        retryAfter: 500,
+        route: "/channels/:id/messages",
+        scope,
+        sublimitTimeout: 0,
+        timeToReset: 500,
+        url: "https://discord.com/api/v10/channels/channel-1/messages",
+      });
+    const deliver = async (error: Error) => {
+      const adapter = new DiscordAdapter({
+        api: createApi({ createMessage: vi.fn().mockRejectedValue(error) }),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        now: () => 1234,
+      });
+      return await adapter.deliver({
+        audit: discordAudit(),
+        createdAt: 1234,
+        id: "message-1",
+        kind: "message",
+        role: "assistant",
+        parts: [{ type: "text", text: "Final answer" }],
+      });
+    };
+
+    const global = await deliver(rateLimitError("global"));
+    expect(global.rateLimit).toMatchObject({
+      appliesTo: "bucket",
+      scope: { bucketId: DISCORD_GLOBAL_RATE_LIMIT_BUCKET_ID },
+    });
+    for (const scope of ["shared", "user"] as const) {
+      const routeLimited = await deliver(rateLimitError(scope));
+      expect(routeLimited.rateLimit?.retryAfterMs).toBe(500);
+      expect(routeLimited.rateLimit?.appliesTo).toBeUndefined();
+    }
   });
 
   it("converts Discord API retry_after seconds without scaling REST retryAfter milliseconds", async () => {

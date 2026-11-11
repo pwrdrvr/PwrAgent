@@ -67,6 +67,9 @@ export const LINE_RATE_LIMIT_DEFAULT_RETRY_AFTER_MS = 5_000;
 // replay the attempt: it would fail the same way.
 export const LINE_MONTHLY_QUOTA_RETRY_AFTER_MS = 15 * 60_000;
 const LINE_MONTHLY_QUOTA_MESSAGE = "monthly limit";
+// LINE's API rate limits and monthly quota belong to the LINE channel (the
+// bot), not to one chat. Every delivery scope shares this bucket.
+export const LINE_RATE_LIMIT_BUCKET_ID = "line:bot";
 const LINE_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
 
 export type LineProviderLogger = {
@@ -624,6 +627,7 @@ export class LineAdapter implements LineProviderAdapter {
     if (!rateLimited) return undefined;
     const info: MessagingRateLimitInfo = {
       scope: lineDeliveryScope(channelRef),
+      appliesTo: "bucket",
       retryAfterMs: rateLimited.retryAfterMs,
       message: error instanceof Error ? error.message : String(error),
       observedAt: this.now(),
@@ -1303,6 +1307,7 @@ function lineDeliveryScope(channel: MessagingChannelRef): MessagingDeliveryScope
     id: channel.conversation.id,
     kind: channel.conversation.kind === "dm" ? "dm" : "group",
     label: channel.conversation.title,
+    bucketId: LINE_RATE_LIMIT_BUCKET_ID,
   };
 }
 
