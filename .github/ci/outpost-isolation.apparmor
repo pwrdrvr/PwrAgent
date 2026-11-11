@@ -1,0 +1,8 @@
+abi <abi/4.0>,
+
+# Only the disposable synthetic-credential oracle selects this profile.
+# Ubuntu's unprivileged-userns restriction otherwise removes the namespace
+# capabilities bubblewrap needs to construct its actual command sandbox.
+profile pwragent-isolation-oracle flags=(unconfined) {
+  userns,
+}

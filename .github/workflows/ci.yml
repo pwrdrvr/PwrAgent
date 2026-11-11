@@ -301,7 +301,10 @@ jobs:
       - name: Verify Outpost credential isolation in the real Linux sandbox
         if: matrix.lane == 1
         timeout-minutes: 3
-        run: node apps/desktop/scripts/run-outpost-isolation-oracle.mjs --docker
+        run: |
+          sudo apparmor_parser --replace .github/ci/outpost-isolation.apparmor
+          trap 'sudo apparmor_parser --remove .github/ci/outpost-isolation.apparmor' EXIT
+          node apps/desktop/scripts/run-outpost-isolation-oracle.mjs --docker --apparmor pwragent-isolation-oracle
 
   test-result:
     # Preserve the required `Test` status-check context while the work runs

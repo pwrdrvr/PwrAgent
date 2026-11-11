@@ -21,6 +21,10 @@ async function probe(): Promise<void> {
   // A second, root-owned login fixture models the live read-only auth mount.
   const mountedAuth = process.argv[3];
   if (mountedAuth) {
+    assert.equal(process.getuid?.(), 501, "The Docker oracle must run as the Outpost's unprivileged UID");
+    const status = await readFile("/proc/self/status", "utf8");
+    assert.match(status, /^CapEff:\s+0+$/m, "The Docker oracle must have no effective capabilities");
+    assert.match(status, /^NoNewPrivs:\s+1$/m, "The Docker oracle must disallow privilege elevation");
     assert.equal(await readFile(mountedAuth, "utf8"), '{"OPENAI_API_KEY":"oracle-canary"}');
     secrets.push(mountedAuth);
   }

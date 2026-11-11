@@ -36,7 +36,14 @@ ENTRYPOINT ["node", "/opt/probe.cjs", "/opt/codex/node_modules/.bin/codex", "/ru
       const seccompIndex = process.argv.indexOf("--seccomp");
       const seccomp = seccompIndex === -1 ? "unconfined" : process.argv[seccompIndex + 1];
       if (!seccomp) throw new Error("--seccomp requires a profile path");
-      run("docker", ["run", "--rm", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--security-opt", `seccomp=${seccomp}`, tag]);
+      const apparmorIndex = process.argv.indexOf("--apparmor");
+      const apparmor = apparmorIndex === -1 ? "unconfined" : process.argv[apparmorIndex + 1];
+      if (!apparmor) throw new Error("--apparmor requires a loaded profile name");
+      // Ubuntu CI supplies a profile that permits nested user namespaces.
+      // This only enables bubblewrap's setup; the oracle checks Codex's own
+      // sandbox with no capabilities and no-new-privileges still enforced.
+      run("docker", ["run", "--rm", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--security-opt", `apparmor=${apparmor}`, "--security-opt", `seccomp=${seccomp}`, tag]);
     } finally { run("docker", ["image", "rm", tag]); }
   } else {
     run(process.execPath, [bundle, process.argv[2] ?? "codex"]);
