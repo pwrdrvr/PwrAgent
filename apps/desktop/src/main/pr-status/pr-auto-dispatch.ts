@@ -8,6 +8,7 @@ import type {
   PrSummary,
   PrActivityEvent,
   PrActivityTone,
+  SetThreadPrAutoDispatchRequest,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
@@ -30,13 +31,11 @@ const PR_AUTO_DISPATCH_LEASE_HEARTBEAT_MS = 20_000;
 const PR_AUTO_DISPATCH_RESUME_RETRY_MS = 15_000;
 
 /** An Auto-fix preference write, with the value it replaced. */
-export type ThreadPrAutoDispatchPreferenceChange = {
-  backend: AppServerBackendKind;
-  threadId: string;
-  enabled: boolean;
-  /** Whether Auto-fix was on before this write. */
-  previouslyEnabled: boolean;
-};
+export type ThreadPrAutoDispatchPreferenceChange =
+  Omit<SetThreadPrAutoDispatchRequest, "federationTarget"> & {
+    /** Whether Auto-fix was on before this write. */
+    previouslyEnabled: boolean;
+  };
 
 /**
  * Only an off -> on change is the operator asking for a fresh start. A

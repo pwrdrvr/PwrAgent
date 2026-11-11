@@ -8056,11 +8056,16 @@ class DesktopAppServerService {
       const attachment = this.attachedPrsByThreadKey.get(
         buildThreadIdentityKey(request.backend, request.threadId),
       );
-      previouslyEligiblePrs.push(
-        ...(attachment?.prs ?? []).filter((pr) =>
-          this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
-        ),
-      );
+      // Only a thread that was on hands its PRs to the next eligible thread.
+      // A repeated `enabled: false` must not re-arm a repair the operator
+      // cancelled there.
+      if (request.previouslyEnabled) {
+        previouslyEligiblePrs.push(
+          ...(attachment?.prs ?? []).filter((pr) =>
+            this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey),
+          ),
+        );
+      }
       await coordinator.cancelAllPendingForThread(request);
       await this.syncThreadPrAutoDispatchCandidates(request);
     }
