@@ -804,6 +804,7 @@ export type ThreadViewProps = {
     text: string,
     imageParts?: AppServerThreadImagePart[]
   ) => string;
+  bindOptimisticUserMessageToTurn?: (id: string, turnId: string) => void;
   backendError?: string;
   backends: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
@@ -4136,6 +4137,7 @@ export function ThreadView(props: ThreadViewProps) {
           activeTurnId: props.activeTurnId,
           addOptimisticReviewEntry: props.addOptimisticReviewEntry,
           addOptimisticUserMessage: props.addOptimisticUserMessage,
+          bindOptimisticUserMessageToTurn: props.bindOptimisticUserMessageToTurn,
           onForkThread: props.onForkThread,
           onCreateSubthread: props.onCreateSubthread,
           readThreadWorktreeAvailability: props.readThreadWorktreeAvailability,

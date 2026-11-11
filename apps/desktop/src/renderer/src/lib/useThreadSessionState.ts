@@ -1412,14 +1412,14 @@ function mergeImagePartsFromSources<
 
   const exact = sources.find((candidate) => candidate.id === message.id);
   const optimistic = sources.filter((candidate) => candidate.id.startsWith("optimistic-launchpad-")
-    && messageTextMatchesOptimisticEntry(message, candidate)
+    && messageEchoesOptimisticEntry(message, candidate)
     && candidate.createdAt !== undefined && message.createdAt !== undefined
     && message.createdAt >= candidate.createdAt);
   // Text alone is not identity: repeated captions (including empty captions)
   // can belong to entirely different attachments. Only an unambiguous send
   // echo may bridge the optimistic and provider message IDs.
   const source = exact ?? (optimistic.length === 1
-    && targets.filter((target) => messageTextMatchesOptimisticEntry(target, optimistic[0])).length === 1
+    && targets.filter((target) => messageEchoesOptimisticEntry(target, optimistic[0])).length === 1
     ? optimistic[0] : undefined);
   if (!source?.parts || source.parts.filter((part) => part.type === "image").length
     <= (message.parts ?? []).filter((part) => part.type === "image").length) {
@@ -1606,11 +1606,17 @@ function pruneOptimisticEntries(
             )
         );
       }
+      // `replay.messages` carries no turn, so a send bound to its turn is
+      // matched against the renderable entries.
       return !response.replay.messages.some((message) =>
         message.id !== reconciledLaunchpadMessageId
         && messageMatchesOptimisticEntry(message, entry, {
           allowImageUrlMismatch: true,
         })
+      ) && !response.replay.entries.some((candidate) =>
+        candidate.type === "message"
+        && candidate.id !== reconciledLaunchpadMessageId
+        && messageEchoesSentTurn(candidate, entry)
       );
     }
 
@@ -1804,6 +1810,7 @@ function transcriptEntriesMatch(
         text: candidate.text,
         parts: candidate.parts,
         createdAt: candidate.createdAt,
+        turn: candidate.turn,
       },
       existingEntry,
       { allowImageUrlMismatch: true }
@@ -3809,11 +3816,11 @@ function appendLiveCommandOutputDelta(
 }
 
 function messageMatchesOptimisticEntry(
-  message: AppServerThreadMessage,
+  message: AppServerThreadMessage & { turn?: AppServerThreadTurnMetadata },
   entry: AppServerThreadMessageEntry,
   options: { allowImageUrlMismatch?: boolean } = {}
 ): boolean {
-  if (!messageTextMatchesOptimisticEntry(message, entry)) {
+  if (!messageEchoesOptimisticEntry(message, entry)) {
     return false;
   }
 
@@ -3836,19 +3843,51 @@ function messageMatchesOptimisticEntry(
   );
 }
 
-function messageTextMatchesOptimisticEntry(
-  message: AppServerThreadMessage,
+function messageEchoesOptimisticEntry(
+  message: AppServerThreadMessage & { turn?: AppServerThreadTurnMetadata },
   entry: AppServerThreadMessageEntry
 ): boolean {
-  if (
-    message.role !== entry.role ||
-    normalizeComposerFileReferenceText(message.text) !==
-      normalizeComposerFileReferenceText(entry.text)
-  ) {
+  if (message.role !== entry.role) {
     return false;
   }
 
-  return true;
+  return (
+    normalizeComposerFileReferenceText(message.text) ===
+      normalizeComposerFileReferenceText(entry.text)
+    || messageEchoesSentTurn(message, entry)
+  );
+}
+
+/**
+ * The turn an optimistic user message opened, as the owner's `startTurn`
+ * response named it. Renderer-local: it lives only on the pending copy and
+ * never reaches the owner.
+ */
+type SentTurnBinding = { sentTurnId?: string };
+
+function readSentTurnId(entry: AppServerThreadMessageEntry): string | undefined {
+  return (entry as AppServerThreadMessageEntry & SentTurnBinding).sentTurnId;
+}
+
+/**
+ * Text is not the identity of a sent message. The send path may rewrite it
+ * before the owner records it: a federation viewer names itself on every bare
+ * thread link (`qualifyThreadLinks`). The turn the send started survives
+ * that, and only the sent message opens it. A steer is never bound, so a
+ * later user message in the same turn cannot claim the pending copy.
+ */
+function messageEchoesSentTurn(
+  message: AppServerThreadMessage & { turn?: AppServerThreadTurnMetadata },
+  entry: AppServerThreadMessageEntry,
+): boolean {
+  const sentTurnId = readSentTurnId(entry);
+  return Boolean(
+    sentTurnId
+    && message.role === "user"
+    && message.id !== entry.id
+    && !message.id.startsWith("optimistic-")
+    && message.turn?.id === sentTurnId
+  );
 }
 
 type LaunchpadMessageCandidate = {
@@ -3863,20 +3902,25 @@ function buildLaunchpadMessageCandidate(params: {
   >;
   threadKey: string;
 }): LaunchpadMessageCandidate {
+  const entry: AppServerThreadMessageEntry & SentTurnBinding = {
+    type: "message",
+    id: `optimistic-launchpad-${params.threadKey}`,
+    role: "user",
+    text: params.optimisticUserMessage.text,
+    parts: [
+      ...(params.optimisticUserMessage.text
+        ? [{ type: "text" as const, text: params.optimisticUserMessage.text }]
+        : []),
+      ...(params.optimisticUserMessage.imageParts ?? []),
+    ],
+    createdAt: params.optimisticUserMessage.createdAt ?? Date.now(),
+    // The launchpad prompt opened this turn on the owner.
+    ...(params.optimisticActiveTurnId
+      ? { sentTurnId: params.optimisticActiveTurnId }
+      : {}),
+  };
   return {
-    entry: {
-      type: "message",
-      id: `optimistic-launchpad-${params.threadKey}`,
-      role: "user",
-      text: params.optimisticUserMessage.text,
-      parts: [
-        ...(params.optimisticUserMessage.text
-          ? [{ type: "text" as const, text: params.optimisticUserMessage.text }]
-          : []),
-        ...(params.optimisticUserMessage.imageParts ?? []),
-      ],
-      createdAt: params.optimisticUserMessage.createdAt ?? Date.now(),
-    },
+    entry,
     turnId: params.optimisticActiveTurnId,
   };
 }
@@ -3955,7 +3999,7 @@ function mergeCompletedUserMessageWithOptimisticEntry(
     (entry): entry is AppServerThreadMessageEntry =>
       entry.type === "message" &&
       message.role === "user" &&
-      messageTextMatchesOptimisticEntry(message, entry)
+      messageEchoesOptimisticEntry(message, entry)
   );
   if (!optimisticEntry) {
     return message;
@@ -3997,7 +4041,7 @@ function findPromotedOptimisticUserMessageEntry(
   return response?.replay.entries.find(
     (entry): entry is AppServerThreadMessageEntry =>
       isOptimisticUserMessageEntry(entry) &&
-      messageTextMatchesOptimisticEntry(message, entry)
+      messageEchoesOptimisticEntry(message, entry)
   );
 }
 
@@ -5123,6 +5167,11 @@ export function useThreadSessionState(params: {
     turnId?: string,
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
+  /**
+   * Names the turn a pending user message started, from the owner's
+   * `startTurn` response. Call it only for a send that opened that turn.
+   */
+  bindOptimisticUserMessageToTurn: (id: string, turnId: string) => void;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   entries: AppServerThreadEntry[];
   error?: string;
@@ -5884,7 +5933,7 @@ export function useThreadSessionState(params: {
             persistedMessage.id;
         }
         const persistedTextMessageExists = current.response?.replay.messages.some(
-          (message) => messageTextMatchesOptimisticEntry(message, optimisticEntry)
+          (message) => messageEchoesOptimisticEntry(message, optimisticEntry)
         );
         const optimisticMessageExists = optimisticMessageEntries(
           current.optimisticEntries
@@ -6514,7 +6563,7 @@ export function useThreadSessionState(params: {
                       (entry) =>
                         entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
                         || entry.type !== "message"
-                        || !messageTextMatchesOptimisticEntry(
+                        || !messageEchoesOptimisticEntry(
                           authoritativeUserMessageEntry,
                           entry,
                         )
@@ -7908,6 +7957,67 @@ export function useThreadSessionState(params: {
     [threadKey, updateSession]
   );
 
+  const bindOptimisticUserMessageToTurn = useCallback(
+    (id: string, turnId: string): void => {
+      if (!thread || !threadKey) {
+        return;
+      }
+
+      updateSession(threadKey, (current) => {
+        const pending = current.optimisticEntries.find(
+          (entry): entry is AppServerThreadMessageEntry =>
+            entry.id === id && entry.type === "message"
+        );
+        if (!pending || readSentTurnId(pending) === turnId) {
+          return current;
+        }
+
+        const bound: AppServerThreadMessageEntry & SentTurnBinding = {
+          ...pending,
+          sentTurnId: turnId,
+        };
+        // The owner can publish its copy before startTurn resolves. A
+        // rewritten text did not match it then, so both copies are showing.
+        const authoritativeEntry =
+          findAuthoritativeUserMessageForOptimisticEntry({
+            entry: bound,
+            response: current.response,
+            turnId,
+          });
+        if (!authoritativeEntry) {
+          return {
+            ...current,
+            optimisticEntries: current.optimisticEntries.map((entry) =>
+              entry.id === id ? bound : entry
+            ),
+          };
+        }
+
+        return {
+          ...current,
+          lastTouchedAt: Date.now(),
+          optimisticEntries: current.optimisticEntries.filter(
+            (entry) => entry.id !== id
+          ),
+          response: appendMessageEntries(
+            current.response,
+            {
+              backend: thread.source,
+              threadId: thread.id,
+            },
+            [
+              mergeCompletedUserMessageWithOptimisticEntry(
+                authoritativeEntry,
+                [bound],
+              ),
+            ],
+          ),
+        };
+      });
+    },
+    [thread, threadKey, updateSession]
+  );
+
   const addOptimisticReviewEntry = useCallback(
     (displayText: string): string => {
       if (!thread || !threadKey) {
@@ -8514,6 +8624,7 @@ export function useThreadSessionState(params: {
     activeTurnStartedAt: selectedSession?.activeTurnStartedAt,
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
+    bindOptimisticUserMessageToTurn,
     clearPendingRequest,
     entries: displayEntries,
     error: selectedSession?.error,

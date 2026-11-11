@@ -1292,6 +1292,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         }
         if (response.queueStatus !== "queued") {
           queuedOptimisticIdsRef.current.delete(queuedProjection.id);
+          // The started turn, not the text, identifies the owner's copy.
+          sessionRef.current.bindOptimisticUserMessageToTurn(
+            optimisticId,
+            response.turnId,
+          );
         }
         reportAcceptedReply();
         return true;

@@ -359,6 +359,11 @@ export type ComposerProps = {
     imageParts?: AppServerThreadImagePart[],
     turnId?: string,
   ) => string;
+  /**
+   * Names the turn this composer's send opened, so the pending message
+   * reconciles with the owner's copy even when the send path rewrote its text.
+   */
+  bindOptimisticUserMessageToTurn?: (id: string, turnId: string) => void;
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
   codexFastAllowed?: boolean;
@@ -7915,6 +7920,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             );
             setActiveOptimisticMessageId(optimisticMessageId);
           }
+        }
+        // This send opened the turn. Its id, not its text, identifies the
+        // owner's copy: a federated send rewrites thread links on the way.
+        if (optimisticMessageId) {
+          props.bindOptimisticUserMessageToTurn?.(
+            optimisticMessageId,
+            response.turnId,
+          );
         }
         if (!backendQueueSubmission || submittedScopeIsVisible()) {
           if (updateActiveTurnId(response.turnId)) {
