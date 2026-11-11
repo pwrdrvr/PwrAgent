@@ -73,12 +73,15 @@ const operation = fc.record({
   // the rarer cross-instance interleaving.
   ownerId: fc.constantFrom("first", "first", "first", "second"),
   // Short gaps keep the 3-token budget below capacity long enough for a
-  // spend or a refund to show; long ones cover refill to the cap.
+  // spend or a refund to show; long ones cover refill to the cap. Gaps are
+  // whole 3,750 ms steps (1/16 token), so every balance is exact in binary:
+  // the reader saves refill at each status read and the oracle adds it in
+  // one step, and float rounding must not flip an admission between them.
   advance: fc.oneof(
     { arbitrary: fc.constant(0), weight: 2 },
-    { arbitrary: fc.integer({ min: 0, max: 20_000 }), weight: 2 },
-    { arbitrary: fc.integer({ min: 0, max: 200_000 }), weight: 1 },
-  ),
+    { arbitrary: fc.integer({ min: 0, max: 5 }), weight: 2 },
+    { arbitrary: fc.integer({ min: 0, max: 53 }), weight: 1 },
+  ).map((steps) => steps * 3_750),
   // Where the coordinator stops: after begin when the gate closes, or after
   // the reservation when submission returns.
   stopAfterBegin: fc.boolean(),

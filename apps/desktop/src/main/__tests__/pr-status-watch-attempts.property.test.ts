@@ -40,6 +40,34 @@ const operation = fc.record({
 });
 type Operation = typeof operation extends fc.Arbitrary<infer T> ? T : never;
 
+function step(fields: Partial<Operation> & Pick<Operation, "kind">): Operation {
+  return {
+    watch: 0,
+    ownerId: "first",
+    outcome: "failure",
+    spendAttempt: false,
+    advance: 0,
+    reads: [],
+    ...fields,
+  };
+}
+
+/*
+ * A release that gives back more than the one attempt it held. Two claims
+ * (the second after the first lease expires), one non-spending release, then
+ * claims until the limit: with a correct refund the watch stops at MAX; an
+ * over-refund lets one more claim through. Random sequences reach this shape
+ * only about half the time.
+ */
+const OVER_REFUND: Operation[] = [
+  step({ kind: "claim" }),
+  step({ kind: "claim", ownerId: "second", advance: 61_000 }),
+  step({ kind: "release", ownerId: "second" }),
+  step({ kind: "claim", advance: 61_000 }),
+  step({ kind: "claim", advance: 61_000 }),
+  step({ kind: "claim", advance: 61_000 }),
+];
+
 async function runWrite(store: SqliteOverlayStore, op: Operation, now: number): Promise<unknown> {
   const watchId = WATCHES[op.watch]!;
   switch (op.kind) {
@@ -111,6 +139,6 @@ describe("PR watch dispatch attempts (model, oracle: the same writes without rea
           }
         }
       } finally { readDb.close(); oracleDb.close(); }
-    }), { numRuns: 60 });
+    }), { numRuns: 60, examples: [[OVER_REFUND]] });
   });
 });

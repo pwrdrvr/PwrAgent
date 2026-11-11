@@ -116,8 +116,13 @@ describe("PR status token bucket (model)", () => {
     // Replay the trace with every refused take replaced by a read: the
     // admitted takes must still be admitted, and each refused one must still
     // find no whole token, so a refusal neither spent nor earned anything.
+    // The two buckets add refill in different steps, so the clock moves in
+    // 750 ms steps (a quarter token): every balance is then exact in binary,
+    // and float rounding cannot put one bucket a hair under a whole token
+    // while the other is on it.
+    const deltaMs = fc.integer({ min: 0, max: 8 }).map((quarters) => quarters * (MS_PER_TOKEN / 4));
     fc.assert(fc.property(
-      fc.array(fc.record({ deltaMs: fc.integer({ min: 0, max: 6_000 }), takes: fc.integer({ min: 0, max: 25 }) }), { maxLength: 60 }),
+      fc.array(fc.record({ deltaMs, takes: fc.integer({ min: 0, max: 25 }) }), { maxLength: 60 }),
       (steps) => {
         const full = bucketAt(START);
         const trace: Array<{ now: number; admitted: boolean }> = [];
