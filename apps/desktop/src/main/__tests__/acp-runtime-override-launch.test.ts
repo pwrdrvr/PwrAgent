@@ -1,4 +1,4 @@
-import type { AcpPathExecutableLister } from "@pwrdrvr/agent-acp";
+import type { AcpPathExecutableLister } from "@pwrdrvr/agent-acp/discovery";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
