@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const registry = "https://registry.npmjs.org";
-const nativeRuntimeDependencies = { "better-sqlite3": "13.0.3", "node-pty": "1.2.0-beta.15", "@napi-rs/canvas": "1.1.0", "electron-log": "5.4.3" };
+const nativeRuntimeDependencies = { "better-sqlite3": "13.0.3", "node-pty": "1.2.0-beta.15", "@napi-rs/canvas": "1.1.0", "electron-log": "5.4.3", "pdfjs-dist": "6.5.438" };
 
 export function releaseMetadata(pkg, { tag, desktopVersion } = {}) {
   assert.equal(pkg.name, "pwragent");

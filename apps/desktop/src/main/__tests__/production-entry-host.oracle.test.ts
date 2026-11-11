@@ -138,7 +138,8 @@ for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts")
 it("the packaged installer cannot reach an owner getter", async () => {
   const packageRoot = path.resolve(desktop, "../../packages/pwragent");
   const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-  expect(metadata.scripts.postinstall).toBe("node scripts/install.mjs");
+  expect(metadata.scripts.postinstall).toContain("dist/runtime.json");
+  expect(metadata.scripts.postinstall).toContain("./scripts/install.mjs");
   expect(await bundle("", `import ${JSON.stringify(path.join(packageRoot, "scripts/install.mjs"))};`)).not.toContain(accessMarker);
 });
 

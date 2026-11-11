@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const [cli, fixture, temporary] = process.argv.slice(2);
 const directory = name => { const value = path.join(temporary, name); fs.mkdirSync(value); return value; };
@@ -25,6 +26,26 @@ assert.equal(relay.stdout, "\x01");
 const database = new (installed("better-sqlite3"))(":memory:");
 assert.equal(database.prepare("SELECT 42 AS n").get().n, 42); database.close();
 assert.ok(installed("@napi-rs/canvas").createCanvas(1, 1).toBuffer("image/png").length > 0);
+fs.accessSync(installed.resolve("pdfjs-dist/wasm/openjpeg.wasm"));
+const pdfjs = await import(pathToFileURL(installed.resolve("pdfjs-dist/legacy/build/pdf.mjs")).href);
+const drawing = "0 0 100 100 re 0.2 0.4 0.6 rg f\n";
+const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+  "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << >> >>",
+  `<< /Length ${Buffer.byteLength(drawing)} >>\nstream\n${drawing}endstream`];
+let pdf = "%PDF-1.4\n";
+const offsets = [0];
+for (const [index, object] of objects.entries()) { offsets.push(Buffer.byteLength(pdf)); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; }
+const xref = Buffer.byteLength(pdf);
+pdf += `xref\n0 5\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+const loading = pdfjs.getDocument({ data: new Uint8Array(Buffer.from(pdf)),
+  wasmUrl: pathToFileURL(path.dirname(installed.resolve("pdfjs-dist/wasm/openjpeg.wasm")) + path.sep).href });
+const document = await loading.promise;
+try {
+  const page = await document.getPage(1), viewport = page.getViewport({ scale: 1 });
+  const canvas = installed("@napi-rs/canvas").createCanvas(viewport.width, viewport.height);
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  assert.ok(canvas.toBuffer("image/png").length > 0);
+} finally { await loading.destroy(); }
 assert.throws(() => installed.resolve("electron"), /Cannot find module/);
 const terminal = installed("node-pty").spawn("/bin/sh", ["-c", "exit 0"], { cwd: workspace });
 await new Promise(resolve => terminal.onExit(event => { assert.equal(event.exitCode, 0); resolve(); }));

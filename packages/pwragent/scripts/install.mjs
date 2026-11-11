@@ -4,13 +4,10 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-// A fresh workspace install precedes the build which copies the approved host
-// tools. Packed installations always contain the runtime manifest.
-if (!existsSync(path.join(root, "dist/runtime.json"))) {
-  if (!existsSync(path.join(root, "../../apps/desktop/scripts/build-headless.mjs"))) {
-    throw new Error("The Outpost package is incomplete: runtime.json is missing.");
-  }
-} else {
+// package.json gates dependency-only workspace installs on this local marker.
+// A packed install and the package builder both supply it before calling here.
+if (!existsSync(path.join(root, "dist/runtime.json"))) throw new Error("The Outpost package is incomplete: runtime.json is missing.");
+{
   if (!["linux", "darwin"].includes(process.platform)) throw new Error("Outpost supports Linux and macOS.");
   const { buildMcpIpcRelay } = await import("./build-mcp-ipc-relay.mjs");
   const { stageRuntime } = await import("./stage-runtime.mjs");
