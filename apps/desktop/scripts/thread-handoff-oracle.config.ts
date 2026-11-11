@@ -7,6 +7,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["apps/desktop/scripts/thread-handoff.oracle.ts"],
+    setupFiles: ["apps/desktop/src/main/__tests__/setup/owner-host-fixture.ts"],
     environment: "node",
     pool: "forks",
     testTimeout: 30_000,
