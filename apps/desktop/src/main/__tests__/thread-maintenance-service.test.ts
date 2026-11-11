@@ -469,6 +469,51 @@ describe("ThreadMaintenanceService.scan", () => {
     expect(measureAllocation).not.toHaveBeenCalled();
   });
 
+  // Model: the idle-checkout step counts and checks exactly the threads whose
+  // checkout is on disk, however many other threads (archived or not) the
+  // provider list holds. Archived checkouts are the next step's own
+  // inventory, so a thread this step leaves out is still offered there.
+  it("checks and counts only checkouts on disk, leaving archived checkouts to their own step", async () => {
+    const kinds = ["noCheckout", "missing", "hibernated", "onDisk"] as const;
+    await fc.assert(fc.asyncProperty(fc.array(fc.record({ kind: fc.constantFrom(...kinds), archived: fc.boolean() }), { maxLength: 30 }),
+      async (specs) => {
+        const rows = specs.map((spec, index) => {
+          const row = candidate(String(index), spec.kind === "noCheckout" ? {} : { cwd: `/${spec.kind}/${index}` });
+          if (spec.archived) row.thread.archivedAt = NOW - 10 * DAY;
+          return row;
+        });
+        const kindOf = (target: string) => target.split("/")[1];
+        const inspect = vi.fn(async (_target: string) => ({ files: 0, bytes: 0 }));
+        const measureAllocation = vi.fn(async () => ({ allocatedBytes: 4096 }));
+        const zombies = rows.filter((row) => row.thread.archivedAt !== undefined)
+          .map((row) => ({ backend: "codex" as const, threadId: row.thread.id, worktreePath: `/zombie/${row.thread.id}` }));
+        const { service } = harness(rows, {
+          isCheckoutOnDisk: async (target) => kindOf(target) !== "missing",
+          measureAllocation,
+          auditArchivedCheckouts: async () => ({ candidates: zombies, kept: {}, emptyFolders: 0 }),
+          hibernation: {
+            getPolicy: () => ({ enabled: true, idleDays: 1, maxSnapshotMb: 100, removeRebuildableOutput: true, restoreOn: "send" }),
+            keepReason: (row) => {
+              const target = row.thread.linkedDirectories[0]?.worktreePath;
+              return target && kindOf(target) === "hibernated" ? { target, keep: "Already hibernated" } : { target };
+            },
+            inspect,
+            hibernate: async () => true,
+          },
+        });
+        const progress: ScanProgressSnapshot[] = [];
+        const scan = await service.scan({ steps: ["hibernate", "checkouts"] }, { onProgress: (next) => progress.push(next) });
+        const onDisk = rows.filter((_, index) => specs[index]!.kind === "onDisk").map((row) => row.thread.linkedDirectories[0]!.worktreePath!);
+        const checking = progress.filter((item) => item.step === "hibernate" && item.stage === "checking");
+        expect(checking.every((item) => item.total === onDisk.length)).toBe(true);
+        expect(checking.at(-1)?.processed).toBe(onDisk.length);
+        expect(vi.mocked(inspect).mock.calls.map(([target]) => target).sort()).toEqual([...onDisk].sort());
+        expect(scan.hibernate?.items.map((row) => row.worktreePath).sort()).toEqual([...onDisk].sort());
+        expect(scan.hibernate?.alreadyHibernated).toBe(specs.filter((spec) => spec.kind === "hibernated").length);
+        expect(scan.checkouts.items.map((item) => item.worktreePath).sort()).toEqual(zombies.map((item) => item.worktreePath).sort());
+      }), { numRuns: 25 });
+  });
+
   it("publishes provider discovery while the archived audit is still pending", async () => {
     await fc.assert(fc.asyncProperty(fc.nat({ max: 5000 }), async (found) => {
       let release!: () => void;

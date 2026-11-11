@@ -478,7 +478,6 @@ export class ThreadMaintenanceService {
       if (target) item.paths.add(target);
       excluded.set(reason, item);
     };
-    progress.check("hibernate", roots.length);
     // One owner index for this scan's list; the apply re-checks sharing
     // against a fresh list before each removal.
     const owners = new CheckoutPathOwners(candidates);
@@ -488,7 +487,15 @@ export class ThreadMaintenanceService {
     // A candidate kept on thread state awaits nothing, so a long run of
     // them would hold the event loop through promise continuations alone.
     const pace = eventLoopPacer();
-    const evaluated = await mapLimit(roots, INSPECT_CONCURRENCY, progress.track((candidate) => candidate.thread.title, async (candidate) => {
+    // The list holds every thread, archived ones included, because sharing
+    // is decided against all of them. Only a thread whose checkout is on
+    // disk is checked and counted; the rest are settled here on thread
+    // state and one stat. The archived-checkout step reads its own
+    // inventory, so a thread left out here is still offered there.
+    progress.list("hibernate");
+    let found = 0;
+    type OnDisk = { candidate: ThreadArchiveCandidate; listed: { target: string; keep?: string } };
+    const listedRoots = await mapLimit(roots, INSPECT_CONCURRENCY, async (candidate): Promise<OnDisk | { keep: string; hibernated: true } | undefined> => {
       if (this.abort.signal.aborted) return undefined;
       await pace();
       if (this.abort.signal.aborted) return undefined;
@@ -508,6 +515,19 @@ export class ThreadMaintenanceService {
           exclude("Checkout missing");
           return undefined;
         }
+        progress.discovery({ detail: "Finding idle checkouts on disk", found: ++found });
+        return { candidate, listed: { target: listed.target, ...(listed.keep ? { keep: listed.keep } : {}) } };
+      } catch (error) {
+        fail("hibernate", error, { threadId: candidate.thread.id });
+        return undefined;
+      }
+    });
+    const onDisk = listedRoots.filter((item): item is OnDisk => !!item && "candidate" in item);
+    const settled = listedRoots.filter((item): item is { keep: string; hibernated: true } => !!item && !("candidate" in item));
+    progress.check("hibernate", onDisk.length);
+    const evaluated = [...settled, ...await mapLimit(onDisk, INSPECT_CONCURRENCY, progress.track(({ candidate }) => candidate.thread.title, async ({ candidate, listed }) => {
+      if (this.abort.signal.aborted) return undefined;
+      try {
         const space = await this.ownedCheckoutSpace(listed.target, checkoutOwners.owners(listed.target), retained, progress);
         measuredPaths.set(listed.target, space);
         // A hibernated checkout has nothing on disk, whichever reason keeps it.
@@ -534,7 +554,7 @@ export class ThreadMaintenanceService {
         fail("hibernate", error, { threadId: candidate.thread.id });
         return undefined;
       }
-    }));
+    }))];
     let notIdleYet = 0;
     let alreadyHibernated = 0;
     for (const item of evaluated) {
