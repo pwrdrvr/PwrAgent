@@ -346,6 +346,7 @@ function inputSchemaForOperation(
                 backend: { type: "string", minLength: 1 },
                 threadId: { type: "string", minLength: 1 },
                 worktreePath: { type: "string", minLength: 1 },
+                snapshotAll: { type: "boolean", description: "Only for a checkout over the snapshot limit: snapshot every change, then remove it. The operator chooses." },
               },
             },
           },

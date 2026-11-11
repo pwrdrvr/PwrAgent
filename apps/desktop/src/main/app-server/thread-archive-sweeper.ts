@@ -35,6 +35,9 @@ export type ThreadArchiveCandidate = {
   mergeHeld?: boolean;
   /** Its overlay or sub-agent state could not be read; fail closed. */
   unreadable?: boolean;
+  /** A PwrAgent monitor worker whose every card has ended. It ran in its
+   * parent's checkout and no longer uses it, so it shares no checkout. */
+  finishedMonitorWorker?: boolean;
 };
 
 /** Card statuses that keep housekeeping away from a thread. */

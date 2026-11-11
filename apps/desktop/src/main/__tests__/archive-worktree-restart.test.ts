@@ -1,5 +1,6 @@
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -19,6 +20,7 @@ import { AcpAgentStore } from "../storage/acp-agent-store";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import { AcpAgentClient } from "../acp/acp-client";
 import type { AcpTransportFactory } from "../app-server/acp-backend-adapter";
 import type { AppServerThreadSummary, PwrAgentThreadOrchestrationRequest, PwrAgentThreadOrchestrationResponse } from "@pwragent/shared";
 import type { ArchiveCleanupContext } from "../app-server/archive-cleanup-queue";
@@ -73,7 +75,7 @@ async function createFixture(managed: boolean | "claude" = false) {
   roots.push(tempDir);
   const claudeStore = new ClaudeSessionStore(path.join(root, "claude"));
   const reopen = (workspace = directory, checkpoint = false, createAcpTransport?: AcpTransportFactory,
-    extraWorkspaces: Array<typeof directory> = []) => {
+    extraWorkspaces: Array<typeof directory> = [], extra: { worktreeArchiveService?: WorktreeArchiveService } = {}) => {
     const db = StateDb.open(dbPath);
     databases.push(db);
     const store = new SqliteOverlayStore(db);
@@ -87,7 +89,7 @@ async function createFixture(managed: boolean | "claude" = false) {
       claudeBackendOptions: { store: claudeStore },
       acpAgentStore, acpSessionStore, createAcpTransport, discoverLocalAcpAgents: async () => [],
       acpWorktreeRepositoryResolver: async (cwd) => cwd === worktree ? directory : undefined,
-      managedWorktreeRoots: async () => [path.join(root, ".pwragent", "worktrees")] });
+      managedWorktreeRoots: async () => [path.join(root, ".pwragent", "worktrees")], ...extra });
     registries.push(registry);
     return { db, store, client, registry, acpAgentStore, acpSessionStore };
   };
@@ -1493,4 +1495,226 @@ describe("archive worktrees across a desktop restart", () => {
     expect(result.cleanup[0]?.skippedReason).toContain("Unsupported safety source filter");
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
   });
+});
+
+describe("archive cleanup and finished helper threads", () => {
+  function installFixtureAgent(instance: ReturnType<Awaited<ReturnType<typeof createFixture>>["reopen"]>, cwd: string) {
+    instance.acpAgentStore.upsertInstalledAgent({ backendId: acpOwner.backend, registryId: "fixture", name: "Fixture ACP",
+      distributionKind: "local", distributionSource: "fixture", installStatus: "installed", authStatus: "not-required",
+      verificationStatus: "not-applicable", allowlistRuleId: "fixture", installedAt: 1, updatedAt: 1,
+      launchDescriptor: { backendId: acpOwner.backend, registryId: "fixture", distributionKind: "local", command: process.execPath, args: [], env: {}, cwd },
+      runtimeCapabilities: { schemaVersion: 1, status: "discovered", checkedAt: 1, agentCapabilities: { loadSession: true } } });
+  }
+
+  function seedHiddenHelper(instance: ReturnType<Awaited<ReturnType<typeof createFixture>>["reopen"]>, cwd: string, sessionId: string) {
+    instance.acpSessionStore.upsertSession({ backendId: acpOwner.backend, sessionId, agentSessionId: `${sessionId}-provider`,
+      title: "Name this thread", titleSource: "explicit", cwd, createdAt: 1, updatedAt: 1, executionMode: "default",
+      approvalPolicy: "deny-all", status: "idle", hidden: true });
+  }
+
+  // Rule: a hidden ACP helper (thread naming, command discovery, a managed
+  // review) uses its parent's checkout only while it runs. Stored and idle,
+  // it must not keep an archived thread's checkout.
+  it("keeps a checkout for a visible ACP session but never for an idle hidden helper", async () => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 3 }), fc.boolean(), async (helpers, visibleUser) => {
+      const fixture = await createFixture();
+      ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli" }];
+      const instance = fixture.reopen();
+      if (visibleUser) seedAcpOwner(instance, fixture.worktree);
+      else installFixtureAgent(instance, fixture.worktree);
+      for (let index = 0; index < helpers; index += 1) seedHiddenHelper(instance, fixture.worktree, `helper-${index}`);
+
+      const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+      expect(result.cleanup[0]?.removedWorktree).toBe(!visibleUser);
+      expect((result.cleanup[0]?.blockingThreads ?? []).map((thread) => thread.threadId))
+        .toEqual(visibleUser ? [acpOwner.threadId] : []);
+    }), { numRuns: 8 });
+  }, 120_000);
+
+  it("keeps a checkout while a hidden helper's process is running a turn", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli" }];
+    const transport = new ArchiveAcpTransport();
+    const instance = fixture.reopen(fixture.directory, false, () => transport);
+    installFixtureAgent(instance, fixture.worktree);
+    seedHiddenHelper(instance, fixture.worktree, "helper-live");
+    await instance.registry.readThread({ backend: acpOwner.backend, threadId: "helper-live" });
+    const busy = vi.spyOn(AcpAgentClient.prototype, "hasActiveTurns").mockReturnValue(true);
+    try {
+      const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+      expect(result.cleanup[0]).toMatchObject({ removedWorktree: false,
+        blockingThreads: [expect.objectContaining({ threadId: "helper-live" })] });
+      expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+    } finally {
+      busy.mockRestore();
+    }
+  }, 30_000);
+
+  // Rule: a PwrAgent monitor worker runs in its parent's checkout. Once every
+  // card that names it has ended, it no longer uses that checkout. A running
+  // card, or a provider-native sub-agent (the provider's own thread), still does.
+  it("releases a checkout from a monitor worker only when all of its cards are finished monitor cards", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({ native: fc.boolean(), finished: fc.boolean() }), { maxLength: 3 }),
+      async (cards) => {
+        const fixture = await createFixture();
+        ArchiveWorktreeTransport.threads = [
+          { id: "old-target", cwd: fixture.worktree, source: "cli" },
+          { id: "worker", cwd: fixture.worktree, source: "cli" },
+        ];
+        const instance = fixture.reopen();
+        await instance.store.upsertThreadSubAgents({ backend: "codex", threadId: "old-target", subAgents: cards.map((card, index) => ({
+          monitorId: card.native ? `codex-native:call-${index}` : `monitor-${index}`, task: "Watch CI",
+          status: card.finished ? "success" : "running", createdAt: 1, updatedAt: 1, backend: "codex", monitorThreadId: "worker",
+          ...(card.finished ? { completedAt: 2 } : {}),
+        })) });
+
+        const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+        const released = cards.length > 0 && cards.every((card) => !card.native && card.finished);
+        expect(result.cleanup[0]?.removedWorktree).toBe(released);
+        expect((result.cleanup[0]?.blockingThreads ?? []).map((thread) => thread.threadId)).toEqual(released ? [] : ["worker"]);
+      },
+    ), { numRuns: 10, examples: [[[{ native: false, finished: true }]], [[{ native: false, finished: true }, { native: true, finished: true }]]] });
+  }, 120_000);
+
+  // Rule: Thread maintenance decides sharing from the same candidate list.
+  // A finished monitor worker must be marked there, or it keeps its parent's
+  // checkout from hibernating.
+  it("marks a maintenance candidate a finished monitor worker only when all of its cards are finished monitor cards", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({ native: fc.boolean(), finished: fc.boolean() }), { maxLength: 3 }),
+      async (cards) => {
+        const fixture = await createFixture();
+        ArchiveWorktreeTransport.threads = [
+          { id: "parent", cwd: fixture.worktree, source: "cli" },
+          { id: "worker", cwd: fixture.worktree, source: "cli" },
+        ];
+        const instance = fixture.reopen();
+        await instance.store.upsertThreadSubAgents({ backend: "codex", threadId: "parent", subAgents: cards.map((card, index) => ({
+          monitorId: card.native ? `codex-native:call-${index}` : `monitor-${index}`, task: "Watch CI",
+          status: card.finished ? "success" : "running", createdAt: 1, updatedAt: 1, backend: "codex", monitorThreadId: "worker",
+          ...(card.finished ? { completedAt: 2 } : {}),
+        })) });
+
+        const candidates = await instance.registry.listAutoArchiveCandidates();
+
+        const finished = cards.length > 0 && cards.every((card) => !card.native && card.finished);
+        const flag = (id: string) => candidates.find((candidate) => candidate.thread.id === id)?.finishedMonitorWorker === true;
+        expect(flag("worker")).toBe(finished);
+        expect(flag("parent")).toBe(false);
+      },
+    ), { numRuns: 8, examples: [[[{ native: false, finished: true }]]] });
+  }, 120_000);
+
+  // Rule: Thread maintenance can remove an archived checkout over the
+  // snapshot limit only with the operator's reviewed approval for it.
+  it.each([true, false])("removes an oversized archived checkout only with a reviewed snapshot approval (approved: %s)", async (approved) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true }];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "changes larger than the tiny limit\n");
+    const instance = fixture.reopen(fixture.directory, false, undefined, [],
+      { worktreeArchiveService: new WorktreeArchiveService({ maxSnapshotBytes: 1 }) });
+
+    const result = await instance.registry.removeArchivedCheckouts({ worktreePaths: [fixture.worktree], emptyFolders: false,
+      ...(approved ? { snapshotLimits: [{ worktreePath: fixture.worktree, bytes: 1_000_000 }] } : {}) });
+
+    if (approved) {
+      expect(result.removed).toEqual([{ worktreePath: fixture.worktree }]);
+      await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(result.removed).toEqual([]);
+      expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("changes larger than the tiny limit\n");
+    }
+  }, 30_000);
+
+  // Rule: an approval covers its own checkout's removal only. Removals of a
+  // thread's checkouts run concurrently, so one must neither use nor clear an
+  // approval held for another checkout of the same thread.
+  it("keeps a checkout's snapshot approval separate from the thread's other approvals", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true }];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "changes larger than the tiny limit\n");
+    const service = new WorktreeArchiveService({ maxSnapshotBytes: 1 });
+    const archive = vi.spyOn(service, "archive");
+    const instance = fixture.reopen(fixture.directory, false, undefined, [], { worktreeArchiveService: service });
+    // A sibling checkout's removal holds this thread-wide approval meanwhile.
+    instance.registry.approveReviewedSnapshotLimit("codex", "archived-owner", 7);
+
+    const result = await instance.registry.removeArchivedCheckouts({ worktreePaths: [fixture.worktree], emptyFolders: false,
+      snapshotLimits: [{ worktreePath: fixture.worktree, bytes: 1_000_000 }] });
+
+    expect(result.removed).toEqual([{ worktreePath: fixture.worktree }]);
+    expect(archive.mock.calls.map(([options]) => options.maxSnapshotBytes)).toEqual([1_000_000]);
+    const held = (instance.registry as unknown as { reviewedSnapshotLimits: Map<string, { bytes: number }> }).reviewedSnapshotLimits;
+    expect([...held.values()].map((approval) => approval.bytes)).toEqual([7]);
+  }, 30_000);
+
+  // Rule: the background report names the archived thread. Its window rarely
+  // has it loaded, so the owner must say what it was called.
+  it("names the archived thread on its background cleanup completion", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "named", cwd: fixture.worktree, source: "cli", name: "Compare to the fixture" }];
+    const instance = fixture.reopen();
+    const completed = new Promise<Record<string, unknown>>((resolve) => instance.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed") resolve(event.notification.params);
+    }));
+
+    await instance.registry.archiveThread({ backend: "codex", threadId: "named", backgroundCleanup: true });
+
+    expect(await completed).toMatchObject({ threadId: "named", threadTitle: "Compare to the fixture" });
+  }, 30_000);
+
+  // Rule: nothing changes an oversized checkout on its own, so the next
+  // launch must not try it again (and report it again).
+  it("does not retry an oversized checkout at the next launch", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli", archived: false }];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "changes larger than the tiny limit\n");
+    const first = fixture.reopen(fixture.directory, true, undefined, [],
+      { worktreeArchiveService: new WorktreeArchiveService({ maxSnapshotBytes: 1 }) });
+
+    const result = await first.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: false,
+      skippedReason: expect.stringContaining("will not be retried") })]);
+    expect(result.cleanup[0]?.error).toBeUndefined();
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    // The next launch has room for the snapshot. A retained row would retry
+    // and remove the checkout now.
+    const second = fixture.reopen(fixture.directory, true);
+    await second.registry.resumeArchiveCleanupsAtStartup();
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("changes larger than the tiny limit\n");
+  }, 30_000);
+
+  // Rule: a retry held by exactly the threads that held it last time is not
+  // news; one held by a different set is.
+  it.each([true, false])("marks a launch retry unchanged only when the same threads hold the checkout (same: %s)", async (same) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [
+      { id: "old-target", cwd: fixture.worktree, source: "cli", archived: false },
+      { id: "real-user", cwd: fixture.worktree, source: "cli" },
+    ];
+    const first = fixture.reopen(fixture.directory, true);
+    const kept = await first.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+    expect(kept.cleanup[0]).toMatchObject({ removedWorktree: false, blockingThreads: [expect.objectContaining({ threadId: "real-user" })] });
+    expect(kept.cleanup[0]?.unchanged).toBeUndefined();
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    if (!same) ArchiveWorktreeTransport.threads.push({ id: "second-user", cwd: fixture.worktree, source: "cli" });
+
+    const second = fixture.reopen(fixture.directory, true);
+    const completed = new Promise<Record<string, unknown>>((resolve) => second.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed") resolve(event.notification.params);
+    }));
+    await second.registry.resumeArchiveCleanupsAtStartup();
+    const retry = (await completed).cleanup as Array<{ unchanged?: boolean; removedWorktree: boolean }>;
+
+    expect(retry).toEqual([expect.objectContaining({ removedWorktree: false })]);
+    expect(retry[0]?.unchanged).toBe(same ? true : undefined);
+  }, 30_000);
 });

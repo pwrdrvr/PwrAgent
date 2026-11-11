@@ -4279,6 +4279,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /**
+   * Thread identity keys that are finished PwrAgent monitor workers. A worker
+   * runs in its parent's checkout; once its every card has ended it no longer
+   * uses that checkout. A card the legacy move has not reached yet is not
+   * read, so its worker stays a checkout user, the safe direction.
+   */
+  async listFinishedMonitorWorkerThreadKeys(threadKeys: readonly string[]): Promise<string[]> {
+    return [...this.subAgentTable.finishedMonitorWorkerThreadKeys(threadKeys)];
+  }
+
+  /**
    * Every card on the thread, newest first. Prefer `getThreadSubAgent` or
    * `listActiveThreadSubAgents`; this one grows with the thread's history.
    */

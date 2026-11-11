@@ -1130,13 +1130,24 @@ function CheckoutsReview(props: {
           <ul className="thread-maintenance__rows">
             {removable.map((item) => {
               const lead = item.workspace ? workspaceLead(item.workspace) : undefined;
+              const overLimit = item.workspace?.kind === "overLimit" ? item.workspace : undefined;
               return (
-                <li key={item.worktreePath} className="thread-maintenance__row">
+                <li key={item.worktreePath} className={`thread-maintenance__row${overLimit ? " needs-decision" : ""}`}>
                   <Checkbox checked={selection.checkouts.has(item.worktreePath)} label={`Remove ${item.worktreePath}`} onChange={() => toggle(item)} />
                   <div className="thread-maintenance__row-body">
                     <p className="thread-maintenance__row-title">{item.title ?? item.worktreePath}</p>
-                    {lead ? <p className="thread-maintenance__row-meta"><span className={`thread-maintenance__lead-text is-${lead.tone}`}>{lead.text}</span></p> : null}
+                    {lead ? (
+                      <p className="thread-maintenance__row-meta">
+                        <span className={`thread-maintenance__lead-text is-${lead.tone}`}>{lead.text}</span>
+                        {overLimit?.largest[0] ? ` · largest: ${overLimit.largest[0].path} ${formatBytes(overLimit.largest[0].bytes)}` : ""}
+                      </p>
+                    ) : null}
                     <p className="thread-maintenance__path">{item.worktreePath}</p>
+                    {overLimit && selection.checkouts.has(item.worktreePath) ? (
+                      <p className="thread-maintenance__hint">
+                        Saved as a Git snapshot in its repository, which grows by about {formatBytes(overLimit.bytes)} until the archive is deleted.
+                      </p>
+                    ) : null}
                   </div>
                   <SizeCell space={item.space} />
                 </li>

@@ -602,6 +602,42 @@ export class ThreadSubAgentTable {
   }
 
   /**
+   * The requested thread keys that are PwrAgent monitor workers whose every
+   * card has ended. A key also named by an unfinished card, or by any other
+   * kind of card (a provider-native sub-agent is the provider's own thread),
+   * is not returned.
+   */
+  finishedMonitorWorkerThreadKeys(threadKeys: readonly string[]): Set<string> {
+    const wanted = new Set(threadKeys);
+    const ids = [...new Set(threadKeys.flatMap((key) => {
+      const threadId = parseThreadIdentityKey(key)?.threadId;
+      return threadId ? [threadId] : [];
+    }))];
+    if (ids.length === 0) return new Set();
+    const rows = this.db.prepare(`SELECT thread_id, monitor_id, backend, monitor_thread_id, completed_at
+      FROM thread_sub_agents
+      WHERE monitor_thread_id IS NOT NULL AND monitor_thread_id IN (SELECT value FROM json_each(?))`)
+      .all(JSON.stringify(ids)) as Array<{
+        thread_id: string;
+        monitor_id: string;
+        backend: string | null;
+        monitor_thread_id: string;
+        completed_at: number | null;
+      }>;
+    const finished = new Set<string>();
+    const unfinished = new Set<string>();
+    for (const row of rows) {
+      const key = managedChildKeyFromCard(row.thread_id, row.backend, row.monitor_thread_id);
+      if (!key || !wanted.has(key)) continue;
+      const monitorWorker = row.monitor_id.startsWith("monitor-");
+      if (monitorWorker && row.completed_at !== null) finished.add(key);
+      else unfinished.add(key);
+    }
+    for (const key of unfinished) finished.delete(key);
+    return finished;
+  }
+
+  /**
    * The thread's stored gate totals. A thread that predates the columns has
    * its totals summed from its gate cards once, on this first read.
    */

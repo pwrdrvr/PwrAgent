@@ -94,6 +94,9 @@ export function summarizeThreadMaintenanceScan(
       removable: removable.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
         backend: item.backend, threadId: item.threadId, worktreePath: item.worktreePath,
         ...(item.workspace ? { workspace: item.workspace.kind } : {}),
+        // What the operator approves when choosing snapshotAll.
+        ...(item.workspace && "files" in item.workspace
+          ? { changedFiles: item.workspace.files, changedBytes: item.workspace.bytes } : {}),
         ...(item.space ? { space: item.space } : {}),
       })),
       repositoryGone: gone.slice(0, THREAD_MAINTENANCE_TOOL_CHECKOUT_LIMIT).map((item) => ({
@@ -221,9 +224,19 @@ export function planThreadMaintenanceApply(
     }
   }
   for (const item of removeCheckouts) {
-    if (!item || typeof item.worktreePath !== "string" || checkouts.get(item.worktreePath)?.kind !== "removable") {
+    const checkout = item && typeof item.worktreePath === "string" ? checkouts.get(item.worktreePath) : undefined;
+    if (!item || checkout?.kind !== "removable") {
       return { error: `Checkout ${item?.worktreePath ?? "?"} is not a removable archived checkout in this scan.` };
     }
+    if (item.snapshotAll !== undefined && typeof item.snapshotAll !== "boolean") return { error: "snapshotAll must be true or omitted." };
+    const overLimit = checkout.workspace?.kind === "overLimit" ? checkout.workspace : undefined;
+    if (item.snapshotAll && !overLimit) {
+      return { error: `Checkout ${item.worktreePath} is under the snapshot limit. Omit snapshotAll for it.` };
+    }
+    if (overLimit && !item.snapshotAll) {
+      return { error: `Checkout ${item.worktreePath} has changes over the snapshot limit. Ask the operator, then pass snapshotAll true, or leave it out.` };
+    }
+    if (overLimit) snapshotApprovals.push({ threadId: checkout.threadId, title: checkout.title ?? checkout.worktreePath, bytes: overLimit.bytes });
   }
   for (const item of trashCheckouts) {
     if (!item || typeof item.worktreePath !== "string" || checkouts.get(item.worktreePath)?.kind !== "repositoryGone") {
@@ -237,7 +250,8 @@ export function planThreadMaintenanceApply(
         ...(item.overLimit ? { overLimit: item.overLimit } : {}) })),
       removeCheckouts: removeCheckouts.map((item) => {
         const checkout = checkouts.get(item.worktreePath) as ThreadMaintenanceOwnedCheckout;
-        return { backend: checkout.backend, threadId: checkout.threadId, worktreePath: checkout.worktreePath };
+        return { backend: checkout.backend, threadId: checkout.threadId, worktreePath: checkout.worktreePath,
+          ...(item.snapshotAll ? { snapshotAll: true } : {}) };
       }),
       trashCheckouts: trashCheckouts.map((item) => ({ worktreePath: item.worktreePath })),
       removeEmptyFolders,

@@ -1227,6 +1227,7 @@ export type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<Ow
     | "getVoiceManagerThread"
     | "getArchiveCleanupOverlayStates"
     | "readArchiveCleanupChangeToken"
+    | "listFinishedMonitorWorkerThreadKeys"
   >
 >;
 

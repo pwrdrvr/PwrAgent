@@ -5,6 +5,8 @@ import type { AppServerThreadSummary, ThreadOverlayState } from "@pwragent/share
 export type CheckoutOwnerCandidate = {
   thread: Pick<AppServerThreadSummary, "id" | "source" | "archivedAt" | "linkedDirectories">;
   overlay?: Pick<ThreadOverlayState, "archiveTombstonedAt" | "extraLinkedDirectories">;
+  /** A finished PwrAgent monitor worker uses no checkout. */
+  finishedMonitorWorker?: boolean;
 };
 
 /**
@@ -49,7 +51,7 @@ export class CheckoutPathOwners {
     if (this.owners) return this.owners;
     const owners = new Map<string, Map<string, Set<string>>>();
     for (const candidate of this.candidates) {
-      if (isArchivedCheckoutOwner(candidate)) continue;
+      if (isArchivedCheckoutOwner(candidate) || candidate.finishedMonitorWorker) continue;
       const { thread, overlay } = candidate;
       for (const directory of [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]) {
         const key = path.resolve(directory.worktreePath ?? directory.path);

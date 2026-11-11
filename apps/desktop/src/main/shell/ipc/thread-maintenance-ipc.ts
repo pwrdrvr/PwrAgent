@@ -128,7 +128,8 @@ function readApplyRequest(value: unknown): ThreadMaintenanceApplyRequest {
         ...(item.overLimit === "keepCheckout" || item.overLimit === "snapshotAll" ? { overLimit: item.overLimit } : {}) })),
     removeCheckouts: list("removeCheckouts")
       .filter((item) => typeof item.backend === "string" && typeof item.threadId === "string" && typeof item.worktreePath === "string")
-      .map((item) => ({ backend: item.backend as string, threadId: item.threadId as string, worktreePath: item.worktreePath as string })),
+      .map((item) => ({ backend: item.backend as string, threadId: item.threadId as string, worktreePath: item.worktreePath as string,
+        ...(item.snapshotAll === true ? { snapshotAll: true } : {}) })),
     trashCheckouts: list("trashCheckouts").filter((item) => typeof item.worktreePath === "string")
       .map((item) => ({ worktreePath: item.worktreePath as string })),
     removeUnreferenced: list("removeUnreferenced").filter((item) => typeof item.worktreePath === "string")

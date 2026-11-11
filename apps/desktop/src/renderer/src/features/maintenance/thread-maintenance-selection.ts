@@ -77,17 +77,24 @@ export function needsDecision(row: ThreadMaintenanceIdleThread): boolean {
   return row.workspace.kind === "overLimit";
 }
 
+/** An archived checkout whose changes are over the snapshot limit. Choosing
+ * it is the operator's approval to snapshot them all. */
+export function checkoutNeedsDecision(item: ThreadMaintenanceArchivedCheckout): boolean {
+  return item.kind === "removable" && item.workspace?.kind === "overLimit";
+}
+
 export function allIdleThreads(scan: ThreadMaintenanceScan): ThreadMaintenanceIdleThread[] {
   return scan.threads.projects.flatMap((project) => project.idle);
 }
 
-/** Everything that needs no decision starts selected. A thread over the
- * snapshot limit and a checkout whose repository is gone never do. */
+/** Everything that needs no decision starts selected. A thread or checkout
+ * over the snapshot limit and a checkout whose repository is gone never do. */
 export function defaultSelection(scan: ThreadMaintenanceScan): ThreadMaintenanceSelection {
   return {
     threads: new Set(allIdleThreads(scan).filter((row) => !needsDecision(row)).map(idleThreadKey)),
     overLimit: new Map(),
-    checkouts: new Set(scan.checkouts.items.filter((item) => item.kind === "removable").map((item) => item.worktreePath)),
+    checkouts: new Set(scan.checkouts.items.filter((item) => item.kind === "removable" && !checkoutNeedsDecision(item))
+      .map((item) => item.worktreePath)),
     emptyFolders: scan.checkouts.emptyFolders > 0,
     // Every row already passed the snapshot limit and the other checks.
     hibernate: new Set(hibernateItems(scan).map(idleThreadKey)),
@@ -178,7 +185,8 @@ export function buildApplyRequest(
     scanId: scan.scanId,
     archive,
     removeCheckouts: owned.filter((item) => item.kind === "removable" && chosen(item))
-      .map(({ backend, threadId, worktreePath }) => ({ backend, threadId, worktreePath })),
+      .map((item) => ({ backend: item.backend, threadId: item.threadId, worktreePath: item.worktreePath,
+        ...(checkoutNeedsDecision(item) ? { snapshotAll: true } : {}) })),
     trashCheckouts: owned.filter((item) => item.kind === "repositoryGone" && chosen(item))
       .map(({ worktreePath }) => ({ worktreePath })),
     removeEmptyFolders: runCheckouts && selection.emptyFolders,

@@ -101,9 +101,9 @@ it("matches independent session/privacy and keyset-page models across WAL hosts,
                 const nextCursor = rawPage.length === op.pageSize ? rawPage.at(-1)?.sessionId : undefined;
                 expect(store.listArchiveCleanupSessionsPage(backend, { archived, after, limit: op.pageSize }))
                   .toEqual({ sessions: rawPage.filter(row => Boolean(row.archivedAt) === archived).map(row => ({
-                    backendId: backend, sessionId: row.sessionId, title: "", cwd: row.cwd,
+                    backendId: backend, sessionId: row.sessionId, title: row.title, cwd: row.cwd,
                     createdAt: row.createdAt, updatedAt: row.updatedAt, executionMode: "default",
-                    status: row.status, archivedAt: row.archivedAt ?? null,
+                    status: row.status, archivedAt: row.archivedAt ?? null, hidden: row.hidden === true,
                   })), nextCursor });
                 if (!nextCursor) break;
                 after = nextCursor;

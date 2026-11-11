@@ -64348,6 +64348,7 @@ script = "printf setup"
           deletedBranch: false,
         },
       ],
+      threadTitle: "Archive me",
     });
 
     await registry.close();
@@ -66846,6 +66847,7 @@ script = "printf setup"
       threadId: "thread-missing-rollout",
       archivedAt: expect.any(Number),
       cleanup: [],
+      threadTitle: "Stale thread",
     });
     await expect(
       overlayStore.getThreadOverlayState({

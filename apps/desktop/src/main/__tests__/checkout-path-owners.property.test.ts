@@ -9,6 +9,8 @@ import { CheckoutPathOwners, eventLoopPacer, type CheckoutOwnerCandidate } from 
  * applied it before the index: scan every candidate, skip the asking
  * thread's own backend and id, skip archived and tombstoned threads, and
  * compare each linked or extra directory with `path.resolve` on both sides.
+ * A finished PwrAgent monitor worker ran in its parent's checkout and no
+ * longer uses it, so it shares nothing either.
  * The index must give the same answer for every list, candidate and path.
  */
 function sharedByScan(
@@ -16,9 +18,9 @@ function sharedByScan(
   worktreePath: string,
   candidates: readonly CheckoutOwnerCandidate[],
 ): boolean {
-  return candidates.filter(({ thread, overlay }) =>
+  return candidates.filter(({ thread, overlay, finishedMonitorWorker }) =>
     !(thread.source === candidate.thread.source && thread.id === candidate.thread.id)
-    && thread.archivedAt === undefined && overlay?.archiveTombstonedAt === undefined
+    && thread.archivedAt === undefined && overlay?.archiveTombstonedAt === undefined && !finishedMonitorWorker
     && [...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []]
       .some((directory) => path.resolve(directory.worktreePath ?? directory.path) === path.resolve(worktreePath))).length > 0;
 }
@@ -44,6 +46,7 @@ const owner = fc.record({
   archived: fc.constantFrom("no", "no", "provider", "tombstone", "retention"),
   linked: fc.array(directory, { maxLength: 3 }),
   extra: fc.option(fc.array(directory, { maxLength: 2 }), { nil: undefined }),
+  finishedWorker: fc.boolean(),
 });
 
 function build(row: typeof owner extends fc.Arbitrary<infer T> ? T : never): CheckoutOwnerCandidate {
@@ -52,6 +55,7 @@ function build(row: typeof owner extends fc.Arbitrary<infer T> ? T : never): Che
     ...(item.worktreePath ? { worktreePath: item.worktreePath } : {}),
   }));
   return {
+    ...(row.finishedWorker ? { finishedMonitorWorker: true } : {}),
     thread: {
       id: row.id, source: row.source as AppServerThreadSummary["source"], linkedDirectories: linked(row.linked),
       ...(row.archived === "provider" ? { archivedAt: 1 } : {}),
@@ -91,6 +95,7 @@ describe("CheckoutPathOwners", () => {
     const candidates = Array.from({ length: 50 }, (_, index) => build({
       source: "codex", id: `t${index}`, archived: "no",
       linked: [{ path: `/w/${index}`, worktreePath: `/w/${index}/repo` }], extra: [{ path: `/w/${index}/x`, worktreePath: undefined }],
+      finishedWorker: false,
     }));
     const owners = new CheckoutPathOwners(candidates);
     let resolved = 0;
@@ -110,7 +115,7 @@ describe("CheckoutPathOwners", () => {
     let resolved = 0;
     path.resolve = ((...segments: string[]) => { resolved += 1; return resolve(...segments); }) as typeof path.resolve;
     try {
-      new CheckoutPathOwners([build({ source: "codex", id: "t1", archived: "no", linked: [{ path: "/w/a", worktreePath: undefined }], extra: undefined })]);
+      new CheckoutPathOwners([build({ source: "codex", id: "t1", archived: "no", linked: [{ path: "/w/a", worktreePath: undefined }], extra: undefined, finishedWorker: false })]);
     } finally {
       path.resolve = resolve;
     }
