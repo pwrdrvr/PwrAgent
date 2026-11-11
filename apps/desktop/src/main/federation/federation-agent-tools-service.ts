@@ -3,6 +3,7 @@ import path from "node:path";
 import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+  BackendModelOption,
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
   CreatedThreadEnvironmentReport,
@@ -617,6 +618,7 @@ async function createInstanceThread(
   const projectBackend = args.backend
     ?? config.launchpad?.backend
     ?? config.defaults.backend;
+  let modelOption: BackendModelOption | undefined;
   if (args.model) {
     // Match a model named the way a person says it ("Refuseless / GLM-5.3
     // abliterated") to the owner's exact id. Anything unmatched passes
@@ -633,6 +635,7 @@ async function createInstanceThread(
     if (reference.id && reference.id !== args.model) {
       args = { ...args, model: reference.id };
     }
+    modelOption = options.find((option) => option.id === args.model);
   }
   if (args.tokenMiserEnabled !== undefined && projectBackend !== "codex") {
     return failure(
@@ -670,7 +673,7 @@ async function createInstanceThread(
   const environment = await resolveCreatedThreadEnvironment({
     args,
     directory,
-    draft: buildLaunchpadDraft({ config, directory, args }),
+    draft: buildLaunchpadDraft({ config, directory, args, modelOption }),
     isLocal: instance.isLocal,
     readCallerDetail,
   });
@@ -1083,12 +1086,14 @@ function resolveGroupingParent(
   };
 }
 
-function buildLaunchpadDraft(params: {
+export function buildLaunchpadDraft(params: {
   config: NavigationLaunchpadConfigResponse;
   directory: NavigationDirectoryRow;
   args: CreateInstanceThreadToolArgs;
+  /** The owner's option for `args.model`, when the caller named one. */
+  modelOption?: BackendModelOption;
 }): NavigationLaunchpadDraft {
-  const { config, directory, args } = params;
+  const { config, directory, args, modelOption } = params;
   const defaults = config.defaults!;
   const stored = config.launchpad;
   // Inherit only the project's *settings* presets from a stored launchpad.
@@ -1146,12 +1151,43 @@ function buildLaunchpadDraft(params: {
   // Switch providers before applying overrides. The shared projection clears
   // source-only fields and restores the destination's saved settings, while
   // keeping explicit overrides in sync with its providerSettings entry.
-  return applyNavigationLaunchpadProviderSettingsPatch(draft, {
+  const patched = applyNavigationLaunchpadProviderSettingsPatch(draft, {
     ...(args.backend !== undefined ? { backend: args.backend } : {}),
     ...(args.model !== undefined ? { model: args.model } : {}),
     ...(args.reasoningEffort !== undefined ? { reasoningEffort: args.reasoningEffort } : {}),
     ...(args.executionMode !== undefined ? { executionMode: args.executionMode } : {}),
     ...(args.fastMode !== undefined ? { fastMode: args.fastMode } : {}),
+  });
+  return dropInheritedSettingsTheModelRefuses(patched, args, modelOption);
+}
+
+/**
+ * A named model replaces the launchpad's model, but the launchpad's reasoning
+ * effort and Fast setting were chosen for the old one. The owner admits every
+ * launchpad setting as a request, so carrying one the new model refuses fails
+ * the whole creation (a Refuseless model has no reasoning, and the project's
+ * inherited "medium" made it impossible to start). Drop only what the owner's
+ * own option says the model refuses; the owner then applies its default.
+ * Settings the caller passed explicitly still go to admission unchanged.
+ */
+function dropInheritedSettingsTheModelRefuses(
+  draft: NavigationLaunchpadDraft,
+  args: CreateInstanceThreadToolArgs,
+  modelOption: BackendModelOption | undefined,
+): NavigationLaunchpadDraft {
+  if (!modelOption) return draft;
+  const effort = draft.reasoningEffort;
+  const refusesEffort = args.reasoningEffort === undefined
+    && effort !== undefined
+    && (modelOption.supportsReasoning === false
+      || (modelOption.reasoningEfforts !== undefined && !modelOption.reasoningEfforts.includes(effort)));
+  const refusesFast = args.fastMode === undefined
+    && draft.fastMode === true
+    && modelOption.supportsFast === false;
+  if (!refusesEffort && !refusesFast) return draft;
+  return applyNavigationLaunchpadProviderSettingsPatch(draft, {
+    ...(refusesEffort ? { reasoningEffort: undefined } : {}),
+    ...(refusesFast ? { fastMode: undefined } : {}),
   });
 }
 
