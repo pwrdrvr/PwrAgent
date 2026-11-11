@@ -56,10 +56,10 @@ describe("RelaySessionPool", () => {
           await settle();
         } else if (step.kind === "list") {
           const session = await pool.shared();
-          // A listing reuses an open session; it opens one only for an empty pool.
+          // A listing opens a session only for an empty pool, and always uses
+          // the first, so a subscription and its undoing reach one session.
           expect(pool.size).toBe(before === 0 ? 1 : before);
-          expect(pool.has(session)).toBe(true);
-          if (idleBefore > 0) expect(pool.holderOf(session)).toBeUndefined();
+          expect(session).toBe(pool.list()[0]);
         } else if (step.kind === "end" && pool.size > 0) {
           // The app ended one session; the call that held it has failed.
           const session = pool.list()[step.pick % pool.size]!;

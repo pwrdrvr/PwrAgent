@@ -2006,9 +2006,10 @@ export class McpConnectionGatewayService {
         this.noteRootThread(threadId, grant.backend ?? backend);
       },
       revoke: () => {
+        const connectionId = this.grants.get(token)?.connectionId;
         this.grants.delete(token);
         this.relayGrantEpochs.delete(token);
-        void this.closeUpstreamSession(token);
+        void this.closeUpstreamSession(token, true, connectionId);
         if (currentRegistrationKey && this.threadRegistrations.get(currentRegistrationKey)?.token === token) {
           this.threadRegistrations.delete(currentRegistrationKey);
         }
@@ -2707,7 +2708,7 @@ export class McpConnectionGatewayService {
     const connection = this.requireAvailableConnection(grant.connectionId);
     discovery.remaining();
     if (isPwrSuiteRelayKind(connection.kind)) {
-      return await this.acquireRelaySession(token, connection, connection.kind, discovery, request);
+      return await this.acquireRelaySession(token, grant, connection, connection.kind, discovery, request);
     }
     const existing = this.upstreamSessions.get(token);
     if (existing) return { client: existing.client };
@@ -2764,6 +2765,7 @@ export class McpConnectionGatewayService {
    */
   private async acquireRelaySession(
     token: string,
+    grant: BridgeGrant,
     connection: McpConnectionRecord,
     kind: PwrSuiteRelayApp,
     discovery: McpDiscovery,
@@ -2771,9 +2773,10 @@ export class McpConnectionGatewayService {
   ): Promise<{ client: Client; release?: () => void }> {
     const entry = this.relayPoolFor(connection);
     if (request.uri !== undefined) {
-      const owner = this.pwrSnapMediaLinks.resolve(grantThreadId(this.grants.get(token)!) ?? "", request.uri, {
+      const threadId = grantThreadId(grant) ?? "";
+      const owner = this.pwrSnapMediaLinks.resolve(threadId, request.uri, {
         isLive: (candidate, session) => candidate === token && entry.pool.has(session as Client),
-        threadOf: (candidate) => candidate === token ? grantThreadId(this.grants.get(token)!) ?? "" : undefined,
+        threadOf: (candidate) => candidate === token ? threadId : undefined,
       });
       if (owner) return { client: owner.session as Client };
     }
@@ -2840,7 +2843,8 @@ export class McpConnectionGatewayService {
           if (!pool.has(client)) return;
           pool.remove(client);
           this.pwrSnapMediaLinks.forgetSession(client);
-          this.evictConnectionToolInventory(connection.id);
+          // Another open session still serves the same catalog.
+          if (pool.size === 0) this.evictConnectionToolInventory(connection.id);
         },
       });
       if (signal.aborted
@@ -2880,10 +2884,16 @@ export class McpConnectionGatewayService {
     return [entry.identity, this.relayGrantEpochs.get(token) ?? ""];
   }
 
-  /** Whether a thread's bridge other than `except`'s still uses a connection. */
-  private relayHasAttachedUser(connectionId: string, except: string): boolean {
-    for (const [token, sockets] of this.bridgeAttachments) {
-      if (token !== except && sockets.size > 0 && this.grants.get(token)?.connectionId === connectionId) return true;
+  /**
+   * Whether a grant other than `except` still uses a connection's shared
+   * sessions: a thread whose bridge is attached, or PwrAgent's own gateway,
+   * whose grants call through no bridge.
+   */
+  private relayHasOtherUser(connectionId: string, except: string): boolean {
+    for (const [token, grant] of this.grants) {
+      if (token === except || grant.connectionId !== connectionId) continue;
+      if (grant.threadId?.startsWith("[\"gateway\"")) return true;
+      if ((this.bridgeAttachments.get(token)?.size ?? 0) > 0) return true;
     }
     return false;
   }
@@ -2915,7 +2925,11 @@ export class McpConnectionGatewayService {
         : caps?.resources?.subscribe;
       if (!supported) return;
       if (method === "notifications/tools/list_changed") this.invalidateConnectionTools(connection.id);
-      if (this.relayPools.get(connection.id)?.pool.has(client)) {
+      const pool = this.relayPools.get(connection.id)?.pool;
+      if (pool?.has(client)) {
+        // Every session announces the same app's changes, and requests that
+        // share a session go to the first one, so only its notices count.
+        if (pool.list()[0] !== client) return;
         // A shared session serves every thread granted the connection.
         for (const [token, grant] of this.grants) {
           if (grant.connectionId === connection.id) this.sendBridgeEvent(token, notification);
@@ -3569,14 +3583,21 @@ export class McpConnectionGatewayService {
     return read;
   }
 
-  private async closeUpstreamSession(token: string, resetDisconnected = true): Promise<void> {
+  /**
+   * `connectionId` names the grant's connection when a revoke has already
+   * deleted the grant.
+   */
+  private async closeUpstreamSession(
+    token: string,
+    resetDisconnected = true,
+    connectionId = this.grants.get(token)?.connectionId,
+  ): Promise<void> {
     if (resetDisconnected) this.disconnectedStdioGrants.delete(token);
-    const connectionId = this.grants.get(token)?.connectionId;
     if (connectionId !== undefined && this.relayPools.has(connectionId)) {
       // This grant's use of the shared sessions ends. They stay open while
-      // another thread's bridge is attached, and close with the last one.
-      this.relayGrantEpochs.set(token, randomUUID());
-      if (!this.relayHasAttachedUser(connectionId, token)) await this.closeRelayPool(connectionId);
+      // another grant still uses them, and close with the last one.
+      if (this.grants.has(token)) this.relayGrantEpochs.set(token, randomUUID());
+      if (!this.relayHasOtherUser(connectionId, token)) await this.closeRelayPool(connectionId);
     }
     const start = this.upstreamStarts.get(token);
     this.upstreamStarts.delete(token);
@@ -4147,6 +4168,7 @@ export class McpConnectionGatewayService {
       if (typeof values.token !== "string") {
         throw new Error("Invalid MCP bridge revoke request.");
       }
+      const connectionId = this.grants.get(values.token)?.connectionId;
       this.grants.delete(values.token);
       this.relayGrantEpochs.delete(values.token);
       for (const [key, registration] of this.threadRegistrations) {
@@ -4154,7 +4176,7 @@ export class McpConnectionGatewayService {
           this.threadRegistrations.delete(key);
         }
       }
-      await this.closeUpstreamSession(values.token);
+      await this.closeUpstreamSession(values.token, true, connectionId);
       return true;
     }
     throw new Error("Unsupported MCP owner broker operation.");

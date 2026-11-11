@@ -3,11 +3,12 @@
  *
  * Each connection names one role on its relay's command line, and the app
  * keeps no per-thread state, so threads need not hold sessions of their own.
- * Any request may use any session in the pool, except a tool call: a tool
- * call takes a session to itself while it runs, because the server may ask
- * a question mid-call and MCP gives no way to tell which caller it is for.
- * A tool call that finds every session busy opens another, up to `max`, and
- * otherwise waits for one to come free.
+ * A tool call takes a session to itself while it runs, because the server
+ * may ask a question mid-call and MCP gives no way to tell which caller it
+ * is for. A tool call that finds every session busy opens another, up to
+ * `max`, and otherwise waits for one to come free. Every other request uses
+ * the first session, so a request that leaves state on a session, such as a
+ * resource subscription, and the one that undoes it reach the same session.
  *
  * Sessions stay open once opened. A PwrSnap image link is readable only
  * through the session that returned it, so closing an idle session would
@@ -41,11 +42,12 @@ export class RelaySessionPool<S> {
     },
   ) {}
 
-  /** A session for a request that asks no questions: any open one will do. */
+  /**
+   * A session for a request that asks no questions: always the first, which
+   * may also be serving a tool call. Only that call's caller gets its forms.
+   */
   async shared(signal?: AbortSignal): Promise<S> {
     this.assertOpen();
-    const idle = this.sessions.find((session) => !this.holders.has(session));
-    if (idle !== undefined) return idle;
     if (this.sessions.length > 0) return this.sessions[0]!;
     return await this.openOne(signal, true);
   }

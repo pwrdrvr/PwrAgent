@@ -604,6 +604,44 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     expect((await service.listConnections()).find((entry) => entry.id === id)?.localProcesses).toBe(3);
   });
 
+  it.each([
+    { id: "pwrsnap" as const, installs: "resolveInstallPaths" as const, probe: "isPwrSnapListening" as const },
+    { id: "pwrgit" as const, installs: "resolvePwrGitInstallPaths" as const, probe: "isPwrGitListening" as const },
+  ])("stops the shared $id relay when its last user is revoked, not while PwrAgent's gateway uses it", async ({ id, installs, probe }) => {
+    const fixture = makeFixture();
+    const app = pwrSuiteInstall(id);
+    const relay = pwrSuiteRelayPath(id, app)!;
+    fs.copyFileSync(fixture.command, relay);
+    fs.chmodSync(relay, 0o755);
+    fs.rmSync(fixture.command);
+    const { service } = createService(fixture, {
+      [installs]: () => [app],
+      [probe]: async () => true,
+      readGatewaySelection: async () => [id],
+    });
+
+    // A thread's agent session ends: its registration is revoked, not detached.
+    const registration = await service.registerBridge(id, `${id}-revoked`);
+    const env = registration.server.env;
+    const rpc = new ConnectionRpcClient(env.PWRAGENT_MCP_CONNECTION_SOCKET, env.PWRAGENT_MCP_CONNECTION_TOKEN);
+    const first = await whoami(rpc);
+    registration.revoke();
+    await waitFor(() => !alive(first.pid), `the ${id} relay to stop after the last revoke`);
+
+    // PwrAgent's own gateway calls through no bridge, so a thread whose
+    // bridge detaches must not close the sessions under it.
+    const scopeKey = JSON.stringify(["gateway", "codex", `${id}-gateway-thread`]);
+    await service.requestGatewayToolOperation({
+      connectionId: id, scopeKey, operation: "gateway/tools/list", signal: new AbortController().signal,
+    });
+    const thread = await bridgeFor(service, id, `${id}-attached`);
+    const lease = await attach(thread.socketPath, thread.token);
+    const shared = await whoami(thread.rpc);
+    lease.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(alive(shared.pid)).toBe(true);
+  });
+
   it("never starts an operator's command again for a thread once it has exited", async () => {
     const fixture = makeFixture();
     const { service } = createService(fixture, {
