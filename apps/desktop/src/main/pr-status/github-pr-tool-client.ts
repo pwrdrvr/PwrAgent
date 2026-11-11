@@ -10,15 +10,11 @@ import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
 import { describeMergeQueueRemoval, describeMergeQueueState, type PrMergeQueueStatus } from "@pwragent/shared";
 import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
 import {
-  GITHUB_ENABLE_AUTO_MERGE_MUTATION,
-  GITHUB_ENQUEUE_MUTATION,
   GITHUB_MERGE_QUEUE_GATE_QUERY,
   githubGateWithoutQueue,
-  githubQueueAction,
   isMergeQueueSchemaUnsupported,
-  parseGithubAutoMergeResult,
-  parseGithubEnqueueResult,
   parseGithubMergeQueueGate,
+  runGithubQueueMerge,
   type GithubMergeQueueGate,
 } from "./github-merge-queue";
 import type { ForgeAttachment, ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
@@ -146,7 +142,7 @@ export class GithubPrToolClient {
         graphql: true, path: "", body: { query: GITHUB_MERGE_QUEUE_GATE_QUERY, variables: { owner: r.owner, repo: r.repo, number } },
       }, signal);
     } catch (error) {
-      if (error instanceof ForgeReadError && isMergeQueueSchemaUnsupported(error.message)) return githubGateWithoutQueue();
+      if (error instanceof ForgeReadError && isMergeQueueSchemaUnsupported(r.host, error.message)) return githubGateWithoutQueue();
       throw error;
     }
     return parseGithubMergeQueueGate(object(response).data);
@@ -292,16 +288,22 @@ export class GithubPrToolClient {
 
     switch (operation) {
       case "get_pull_request": {
-        const pr = withoutNode(await readPullRequest(await resolvePullRequestNumber(), true));
-        // A queue changes what merging means, so the read says where it stands.
+        // A queue changes what merging means, so the read says where it
+        // stands. The gate read runs beside the PR read and never fails it.
+        const number = await resolvePullRequestNumber();
         providerRequests++;
-        const gate = await this.mergeQueueGate(r, pr.number, ctx.signal).catch(() => undefined);
+        const [raw, gate] = await Promise.all([
+          readPullRequest(number, true),
+          this.mergeQueueGate(r, number, ctx.signal).catch(() => undefined),
+        ]);
+        const pr = withoutNode(raw);
+        const removedDetail = describeMergeQueueRemoval(gate?.status);
         const mergeQueue = gate?.required || gate?.status ? {
           required: gate.required,
           state: gate.status?.state ?? "not_queued",
           ...(gate.status?.position ? { position: gate.status.position } : {}),
           ...(gate.status?.removedReason ? { removedReason: gate.status.removedReason } : {}),
-          ...(describeMergeQueueRemoval(gate.status) ? { removedDetail: describeMergeQueueRemoval(gate.status) } : {}),
+          ...(removedDetail ? { removedDetail } : {}),
         } : undefined;
         return done({ pullRequest: { ...pr, ...(mergeQueue ? { mergeQueue } : {}) }, trust: "untrusted", warning: UNTRUSTED });
       }
@@ -503,17 +505,14 @@ export class GithubPrToolClient {
             ...extra,
             url, nextStep: QUEUE_NEXT_STEP,
           });
-          const action = githubQueueAction(gate);
-          if (action === "already_queued") {
-            return queued(gate.status, { alreadyQueued: true, note: `The PR is already in the merge queue (${describeMergeQueueState(gate.status) ?? "queued"}). Nothing was changed.` });
+          const result = await runGithubQueueMerge(gate, graphql, args.expectedHeadSha);
+          if (result.action === "already_queued") {
+            return queued(result.status, { alreadyQueued: true, note: `The PR is already in the merge queue (${describeMergeQueueState(result.status) ?? "queued"}). Nothing was changed.` });
           }
-          const variables = { id: gate.pullRequestId, head: args.expectedHeadSha ?? null };
-          if (action === "auto_merge") {
-            const enabled = parseGithubAutoMergeResult(await graphql(GITHUB_ENABLE_AUTO_MERGE_MUTATION, variables));
-            return queued({ kind: "merge_queue", state: "not_queued" }, { queued: false, autoMergeEnabled: enabled, note: queuedNote(gate.baseRef, true) });
+          if (result.action === "auto_merge") {
+            return queued({ kind: "merge_queue", state: "not_queued" }, { queued: false, autoMergeEnabled: true, note: queuedNote(gate.baseRef, true) });
           }
-          const status = parseGithubEnqueueResult(await graphql(GITHUB_ENQUEUE_MUTATION, variables));
-          return queued(status, { note: queuedNote(gate.baseRef, false) });
+          return queued(result.status, { note: queuedNote(gate.baseRef, false) });
         }
         const method = args.method ?? ctx.defaultMergeMethod();
         let result: Payload;

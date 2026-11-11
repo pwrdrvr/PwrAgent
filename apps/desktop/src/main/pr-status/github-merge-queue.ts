@@ -57,9 +57,13 @@ function entryObservation(entry: Payload) {
  * GitHub Enterprise Server before 3.8 rejects the whole document over
  * `isMergeQueueEnabled`, `mergeQueueEntry` or the queue timeline items. Such a
  * server has no merge queue, so the gate reads as not required. PwrGit
- * (pwrdrvr/PwrGit#586) found the same.
+ * (pwrdrvr/PwrGit#586) found the same. Only an Enterprise Server host can
+ * lack it.
  */
-export function isMergeQueueSchemaUnsupported(message: string): boolean {
+export function isMergeQueueSchemaUnsupported(host: string, message: string): boolean {
+  // github.com always has the schema: a refusal there is never "no queue",
+  // so it can never turn into a direct merge past one.
+  if (host.toLowerCase() === "github.com") return false;
   return /isMergeQueueEnabled|mergeQueueEntry|MergeQueue|MERGE_QUEUE/.test(message)
     && /doesn't exist|does not exist|undefined|invalid value|not a valid|Expected/i.test(message);
 }
@@ -132,4 +136,33 @@ export function parseGithubEnqueueResult(data: unknown): PrMergeQueueStatus | un
 /** Whether an `enablePullRequestAutoMerge` answer shows auto-merge on. */
 export function parseGithubAutoMergeResult(data: unknown): boolean {
   return Boolean(object(object(object(data).enablePullRequestAutoMerge).pullRequest).autoMergeRequest);
+}
+
+export type GithubQueueMergeResult =
+  | { action: "already_queued"; status?: PrMergeQueueStatus }
+  | { action: "auto_merge" }
+  | { action: "enqueue"; status?: PrMergeQueueStatus };
+
+/**
+ * Take the queue action a gate calls for, through whichever GraphQL
+ * transport the caller has (the CI client, or the operator's `gh`). Both
+ * merge paths run this one decision, so neither can drift into a direct
+ * merge. An auto-merge GitHub did not confirm is an error, never a success.
+ */
+export async function runGithubQueueMerge(
+  gate: GithubMergeQueueGate,
+  graphql: (query: string, variables: { id: string; head: string | null }) => Promise<unknown>,
+  head?: string,
+): Promise<GithubQueueMergeResult> {
+  const action = githubQueueAction(gate);
+  if (action === "already_queued") return { action, ...(gate.status ? { status: gate.status } : {}) };
+  const variables = { id: gate.pullRequestId, head: head ?? null };
+  if (action === "auto_merge") {
+    if (!parseGithubAutoMergeResult(await graphql(GITHUB_ENABLE_AUTO_MERGE_MUTATION, variables))) {
+      throw new ForgeReadError("rejected", "GitHub did not turn on auto-merge for the pull request.");
+    }
+    return { action };
+  }
+  const status = parseGithubEnqueueResult(await graphql(GITHUB_ENQUEUE_MUTATION, variables));
+  return { action, ...(status ? { status } : {}) };
 }
