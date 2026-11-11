@@ -5,7 +5,11 @@
 // come from a real provider's profile declaration, not from a permissive
 // catch-all that bypasses capability discovery.
 
-import type { MessagingCapabilityProfile } from "./index.js";
+import type {
+  MessagingCapabilityProfile,
+  MessagingInboundRejectedListener,
+  MessagingRejectedInboundEvent,
+} from "./index.js";
 
 /**
  * A capability profile that advertises generous limits and full feature
@@ -44,3 +48,49 @@ export const PERMISSIVE_CAPABILITY_PROFILE: MessagingCapabilityProfile = {
     supportsRemoteImageUrl: true,
   },
 };
+
+/**
+ * Inbound-rejected listeners that fail in both ways an adapter must survive,
+ * followed by one that records what it receives. Register them in order, call
+ * `watch()` before the rejection is triggered, and `settle()` after it.
+ *
+ * `received` holds the events the healthy listener saw. `unhandled` holds any
+ * promise rejection that escaped the adapter. `errors` holds what the throwing
+ * and rejecting listeners raised, so a test can check the adapter logged them.
+ */
+export function failingInboundRejectedListeners() {
+  const received: MessagingRejectedInboundEvent[] = [];
+  const unhandled: unknown[] = [];
+  const errors = [
+    new Error("inbound-rejected listener threw"),
+    new Error("inbound-rejected listener rejected"),
+  ];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  const listeners: MessagingInboundRejectedListener[] = [
+    () => {
+      throw errors[0];
+    },
+    async () => {
+      throw errors[1];
+    },
+    (event) => {
+      received.push(event);
+    },
+  ];
+  return {
+    errors,
+    listeners,
+    received,
+    unhandled,
+    watch(): void {
+      process.on("unhandledRejection", onUnhandled);
+    },
+    async settle(): Promise<void> {
+      // Node reports an unhandled rejection after the microtask queue drains.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      process.off("unhandledRejection", onUnhandled);
+    },
+  };
+}

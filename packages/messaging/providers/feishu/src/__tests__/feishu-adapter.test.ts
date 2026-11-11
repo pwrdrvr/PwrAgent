@@ -16,6 +16,7 @@ import type {
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import { failingInboundRejectedListeners } from "@pwragent/messaging-interface/testing";
 
 const baseConfig = {
   appId: "cli_test",
@@ -1984,5 +1985,63 @@ describe("observed group chats", () => {
     expect(rejected).toEqual([
       expect.objectContaining({ reason: "unauthorized-actor" }),
     ]);
+  });
+});
+
+describe("FeishuAdapter inbound-rejected listeners", () => {
+  it("keeps notifying after a listener throws or rejects, and logs both", async () => {
+    const warn = vi.fn();
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      logger: { warn },
+      now: () => 1_700_000_000_000,
+    });
+    const probe = failingInboundRejectedListeners();
+    for (const listener of probe.listeners) adapter.onInboundRejected(listener);
+    await adapter.start(async () => {});
+    probe.watch();
+
+    // A failing listener must not fail the webhook either.
+    await adapter.handleWebhookPayload({
+      header: {
+        event_id: "evt_listener_failure",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_new_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "p2p",
+          content: JSON.stringify({ text: "/status" }),
+          message_id: "om_listener_failure",
+          message_type: "text",
+        },
+      },
+    });
+    // Feishu waits for its listeners, so the event has arrived by now.
+    expect(probe.received).toEqual([
+      expect.objectContaining({ reason: "unauthorized-actor" }),
+    ]);
+    await probe.settle();
+    await adapter.stop();
+
+    expect(probe.unhandled).toEqual([]);
+    for (const error of probe.errors) {
+      expect(warn).toHaveBeenCalledWith("feishu inbound-rejected listener failed", {
+        error: error.message,
+        kind: "command",
+        reason: "unauthorized-actor",
+      });
+    }
   });
 });

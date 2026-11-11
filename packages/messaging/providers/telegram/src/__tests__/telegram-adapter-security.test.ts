@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { TelegramAdapter, type TelegramBotLike, type TelegramChatMember } from "../telegram-adapter.ts";
 import type { MessagingRejectedInboundEvent } from "@pwragent/messaging-interface";
+import { failingInboundRejectedListeners } from "@pwragent/messaging-interface/testing";
 
 describe("TelegramAdapter inbound security boundary", () => {
   it.each([
@@ -478,3 +479,47 @@ function fakeBot(): TelegramBotLike & {
     },
   };
 }
+
+describe("TelegramAdapter inbound-rejected listeners", () => {
+  it("keeps notifying after a listener throws or rejects, and logs both", async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new TelegramAdapter({
+      bot: fakeBot(),
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-1001234567890", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      logger,
+      pollOnStart: false,
+    });
+    const probe = failingInboundRejectedListeners();
+    for (const listener of probe.listeners) adapter.onInboundRejected(listener);
+    await adapter.start(vi.fn());
+    probe.watch();
+
+    await adapter.handleUpdate({
+      update_id: 100,
+      message: {
+        chat: { id: -1009999999999, title: "Untrusted", type: "supergroup" },
+        from: { id: 42, first_name: "Harold" },
+        message_id: 200,
+        text: "/status",
+      },
+    });
+    await probe.settle();
+
+    expect(probe.received).toEqual([
+      expect.objectContaining({ reason: "unauthorized-conversation" }),
+    ]);
+    expect(probe.unhandled).toEqual([]);
+    for (const error of probe.errors) {
+      expect(logger.warn).toHaveBeenCalledWith("telegram inbound-rejected listener failed", {
+        error: error.message,
+        kind: "command",
+        reason: "unauthorized-conversation",
+      });
+    }
+  });
+});

@@ -8,6 +8,7 @@ import {
   type MessagingRejectedInboundEvent,
   type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
+import { failingInboundRejectedListeners } from "@pwragent/messaging-interface/testing";
 import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "discord.js";
 import {
@@ -3244,6 +3245,48 @@ describe("observed channels", () => {
     });
 
     expect(events).toEqual([]);
+    await adapter.stop();
+  });
+});
+
+describe("DiscordAdapter inbound-rejected listeners", () => {
+  it("keeps notifying after a listener throws or rejects, and logs both", async () => {
+    const gateway = new TestDiscordGateway();
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new DiscordAdapter({
+      api: createApi(),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+      logger,
+      now: () => 1234,
+    });
+    await adapter.start(async () => {});
+    const probe = failingInboundRejectedListeners();
+    for (const listener of probe.listeners) adapter.onInboundRejected(listener);
+    probe.watch();
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: false, content: "/status", id: "listener-failure-msg" }),
+    });
+    await probe.settle();
+
+    expect(probe.received).toEqual([
+      expect.objectContaining({ reason: "unauthorized-conversation" }),
+    ]);
+    expect(probe.unhandled).toEqual([]);
+    for (const error of probe.errors) {
+      expect(logger.warn).toHaveBeenCalledWith("discord inbound-rejected listener failed", {
+        error: error.message,
+        kind: "command",
+        reason: "unauthorized-conversation",
+      });
+    }
     await adapter.stop();
   });
 });

@@ -45,6 +45,7 @@ import {
   MESSAGING_COMMAND_CATALOG,
   messagingInlineImageBytes,
   notifyEachListener,
+  notifyEachListenerAsync,
 } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
@@ -2942,9 +2943,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private emitInboundRejected(event: MessagingRejectedInboundEvent): void {
-    for (const listener of this.inboundRejectedListeners) {
-      void listener(event);
-    }
+    // Log only the event kind and reason, never the actor or conversation ids.
+    void notifyEachListenerAsync(this.inboundRejectedListeners, event, (error) => {
+      this.options.logger?.warn?.("telegram inbound-rejected listener failed", {
+        error: error instanceof Error ? error.message : String(error),
+        kind: event.kind,
+        reason: event.reason,
+      });
+    });
   }
 
   private isOwnBotUser(user: TelegramMessage["from"]): boolean {

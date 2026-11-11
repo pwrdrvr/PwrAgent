@@ -9,6 +9,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import type { Client4, WebSocketClient } from "@mattermost/client";
+import { failingInboundRejectedListeners } from "@pwragent/messaging-interface/testing";
 
 const fakeStore: MessagingCallbackHandleStore = {
   resolveCallbackHandle: async () => undefined,
@@ -1733,5 +1734,60 @@ describe("observed channels", () => {
     expect(events[0]).toMatchObject({ text: "control" });
     expect(rejected).toEqual([]);
     await adapter.stop();
+  });
+});
+
+describe("MattermostAdapter — inbound-rejected listeners", () => {
+  it("keeps notifying after a listener throws or rejects, and logs both", async () => {
+    const wsHooks: WebSocketHooks = { fireMessage: () => {}, fireClose: () => {} };
+    const warn = vi.fn();
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4({ createdPosts: [], patchedPosts: [] }),
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{ id: "haroldabcdefghijklmnopqr12", displayName: "" }],
+      },
+      logger: { ...silentLogger, warn },
+      websocketClient: fakeWebSocketClient(undefined, wsHooks),
+      callbackServer: {
+        start: async () => {},
+        stop: async () => {},
+        signContext: () => ({ hmac: "x", issuedAt: 0 }),
+      } as never,
+      now: () => 1_700_000_000_000,
+    });
+    const probe = failingInboundRejectedListeners();
+    for (const listener of probe.listeners) adapter.onInboundRejected(listener);
+    await adapter.start(async () => {});
+    probe.watch();
+
+    wsHooks.fireMessage({
+      event: "posted",
+      data: {
+        channel_type: "O",
+        channel_display_name: "Development",
+        sender_name: "mallory",
+        post: JSON.stringify({
+          id: "postpostabcdefghijklmn1234",
+          channel_id: "channelabcdefghijklmn12345",
+          user_id: "otheruserabcdefghijklmn123",
+          message: "/status",
+        }),
+      },
+    });
+    await probe.settle();
+
+    expect(probe.received).toEqual([
+      expect.objectContaining({ reason: "unauthorized-actor" }),
+    ]);
+    expect(probe.unhandled).toEqual([]);
+    for (const error of probe.errors) {
+      expect(warn).toHaveBeenCalledWith("mattermost inbound-rejected listener failed", {
+        error: error.message,
+        kind: "command",
+        reason: "unauthorized-actor",
+      });
+    }
   });
 });
