@@ -578,6 +578,8 @@ describe("McpConnectionGatewayService", () => {
       registry,
       leaseManager: null,
       resolveInstallPaths: () => [pwrSnapInstall()],
+      // PwrSnap is running, so an ended session reopens; never probe the real app.
+      isPwrSnapListening: async () => true,
     });
     services.push(service);
     const listTools = vi.fn(async () => ({ tools: [] }));
@@ -605,7 +607,7 @@ describe("McpConnectionGatewayService", () => {
     internals.grants.set("snap-1", grant);
     internals.grants.set("snap-2", other);
     // Thread 2's agent is running, so its bridge holds an attach socket.
-    internals.bridgeAttachments.set("snap-2", new Set([{}]));
+    internals.bridgeAttachments.set("snap-2", new Set([{ destroy: () => undefined }]));
     await internals.dispatchBridgeOperation("snap-1", grant, "tools/call", {
       name: "pwrsnap_capture_resource",
       arguments: {},
