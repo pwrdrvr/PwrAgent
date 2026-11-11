@@ -1,6 +1,7 @@
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import { currentMessagingModels, messagingModelCatalog, otherMessagingModels } from "./fixtures/messaging-model-catalog";
+import { appendFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1127,10 +1128,25 @@ describe("MessagingController", () => {
   });
 
   it("preserves the Auto-fix choice under any sequence of toggles and picker navigation", async () => {
+    const probe = { started: performance.now(), examples: 0, actions: 0, readData: { calls: 0, ms: 0 }, writeData: { calls: 0, ms: 0 }, settleMs: 0 };
+    const prototype = MessagingStore.prototype as unknown as Record<"readData" | "writeData", (...args: unknown[]) => Promise<unknown>>;
+    const spies = (["readData", "writeData"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(async function (this: MessagingStore, ...args: unknown[]) {
+        const started = performance.now();
+        probe[method].calls++;
+        try {
+          if (process.env.PICKER_IO_DELAY_MS) await new Promise((resolve) => setTimeout(resolve, Number(process.env.PICKER_IO_DELAY_MS)));
+          return await original.apply(this, args);
+        } finally { probe[method].ms += performance.now() - started; }
+      });
+    });
+    try {
     // Model: new reviews fix by default; only a toggle changes that choice.
     await fc.assert(fc.asyncProperty(
       fc.array(fc.constantFrom("toggle", "scope", "mode", "reviewer"), { maxLength: 6 }),
       async (steps) => {
+        probe.examples++;
         const harness = await createHarness({ listBackends: async () => ({
           fetchedAt: 1000, backends: [
             buildBackendSummary({ capabilities: {
@@ -1151,6 +1167,7 @@ describe("MessagingController", () => {
               : step === "mode" ? ["review:summary:mode", "review:mode:pwragent-sub-agent"]
                 : ["review:summary:reviewer", "review:reviewer:provider:1", "review:reviewer:model:default"];
           for (const actionId of actions) {
+            probe.actions++;
             await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId }));
           }
           if (step === "toggle") autoFix = !autoFix;
@@ -1163,9 +1180,15 @@ describe("MessagingController", () => {
         expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({
           afterReview: autoFix ? "auto-fix" : "wait",
         }));
+        const settleStarted = performance.now();
         await settleHarnessWork();
+        probe.settleMs += performance.now() - settleStarted;
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 25, seed: 20261110 });
+    } finally {
+      appendFileSync("/private/tmp/pwragent-picker-probe.jsonl", JSON.stringify({ ...probe, elapsedMs: performance.now() - probe.started, ioDelayMs: process.env.PICKER_IO_DELAY_MS ?? "0" }) + "\n");
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   it("keeps Auto-fix off in a restored pending review and resets it for the next review", async () => {
