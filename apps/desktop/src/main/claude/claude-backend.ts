@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  getSessionInfo, getSessionMessages, query, type AccountInfo, type McpServerStatus, type Options, type Query, type SDKMessage,
+  getSessionInfo, getSessionMessages, getSubagentMessages, query, type AccountInfo, type McpServerStatus, type Options, type Query, type SDKMessage,
   type SDKResultMessage, type SDKUserMessage, type SlashCommand, type UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -37,6 +37,7 @@ import {
 } from "./claude-usage";
 import { PlanLimitStore } from "../app-server/plan-limit-store";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
+import { claudeSubAgentTranscriptEntries } from "./claude-subagent-transcript";
 import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeSessionWakeTracker, claudeSessionWakeHooks } from "./claude-session-wakes";
@@ -66,6 +67,7 @@ export type ClaudeBackendOptions = {
   query?: typeof query;
   getSessionInfo?: typeof getSessionInfo;
   getSessionMessages?: typeof getSessionMessages;
+  getSubagentMessages?: typeof getSubagentMessages;
   /** Session reads for a Claude launched under another CLAUDE_CONFIG_DIR. */
   openSessionReader?: (env: NodeJS.ProcessEnv) => ClaudeSessionReader;
   inspectInstallation?: typeof inspectClaudeInstallation;
@@ -117,6 +119,20 @@ const claudeBackendLog = getMainLogger("pwragent:claude-backend");
 const MAX_TURN_STDERR_LENGTH = 4_096;
 
 /** Error subtypes are authoritative even when the producer leaves is_error false. */
+/** A Claude transcript's replay, with its messages and the last of each. */
+function claudeReplay(
+  entries: AppServerThreadEntry[], threadStatus: "active" | "idle",
+): AppServerThreadReplay {
+  const messages = entries.filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message");
+  return {
+    entries, messages,
+    lastUserMessage: messages.findLast((entry) => entry.role === "user")?.text,
+    lastAssistantMessage: messages.findLast((entry) => entry.role === "assistant")?.text,
+    pagination: { supportsPagination: false, hasPreviousPage: false },
+    threadStatus,
+  };
+}
+
 function claudeResultFailure(message: SDKResultMessage): string | undefined {
   if (message.stop_reason === "refusal") {
     return message.subtype === "success" && message.result.trim()
@@ -550,6 +566,8 @@ class ClaudeInputStream {
 export class ClaudeBackend {
   private readonly store: ClaudeSessionStore;
   private readonly sessions = new Map<string, LiveSession>();
+  /** Where each sub-agent transcript was last found, by thread and task. */
+  private readonly subAgentTranscriptSources = new Map<string, { sessionId: string; dir?: string }>();
   /** Threads whose first turn is reading its session, before a query exists. */
   private readonly starting = new Map<string, AbortController>();
   /** Turn starts can still read the store before they enter sessions. */
@@ -856,16 +874,52 @@ export class ClaudeBackend {
     for (const entry of live?.turn?.entries.values() ?? []) entries.set(entry.id, entry);
     // A task row that outlived its turn changes after that turn was saved.
     for (const { entry } of live?.toolRows.values() ?? []) entries.set(entry.id, entry);
-    const ordered = groupClaudeActivities([...entries.values()]);
-    const messages = ordered.filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message");
     return {
-      entries: ordered, messages,
+      ...claudeReplay(groupClaudeActivities([...entries.values()]), live?.turn ? "active" : "idle"),
       contextWindow: live?.contextWindow ?? session.contextWindow,
-      lastUserMessage: messages.findLast((entry) => entry.role === "user")?.text,
-      lastAssistantMessage: messages.findLast((entry) => entry.role === "assistant")?.text,
-      pagination: { supportsPagination: false, hasPreviousPage: false },
-      threadStatus: live?.turn ? "active" : "idle",
     };
+  }
+
+  /**
+   * One sub-agent's transcript. Claude Code saves each sub-agent's
+   * conversation beside its parent's session, under the task's id, and the
+   * parent's live stream carries none of it, so it is read back from there.
+   */
+  async readSubAgentTranscript(threadId: string, taskId: string): Promise<AppServerThreadReplay> {
+    const session = await this.store.read(threadId);
+    // A sub-agent from before the thread continued in a new session, or
+    // before a fork, lives under that earlier session.
+    const sessionIds = [...new Set([
+      session.sdkSessionId,
+      ...(session.sessionRestarts ?? []).map((restart) => restart.previousSdkSessionId).reverse(),
+      session.forkFromSdkSessionId,
+    ].filter((id): id is string => Boolean(id)))];
+    const dir = session.sdkSessionDir ?? session.cwd;
+    // A running transcript is read again every few seconds. Read straight
+    // from where it was found, rather than searching again.
+    const key = `${threadId}:${taskId}`;
+    const known = this.subAgentTranscriptSources.get(key);
+    const candidates = known && sessionIds.includes(known.sessionId)
+      ? [known]
+      : sessionIds.flatMap((sessionId) => [{ sessionId, dir }, { sessionId, dir: undefined }]);
+    const messages = await this.withSessionReader(async (reader) => {
+      for (const candidate of candidates) {
+        // A session written before a move sits under another project folder.
+        const found = await reader.getSubagentMessages(candidate.sessionId, taskId,
+          candidate.dir ? { dir: candidate.dir } : undefined);
+        if (found.length > 0) {
+          this.subAgentTranscriptSources.set(key, candidate);
+          return found;
+        }
+      }
+      return [];
+    });
+    if (messages.length === 0) {
+      this.subAgentTranscriptSources.delete(key);
+      throw new Error("Claude Code has no saved conversation for this sub-agent.");
+    }
+    const running = this.runsTask(threadId, taskId);
+    return claudeReplay(claudeSubAgentTranscriptEntries(messages, { running }), running ? "active" : "idle");
   }
 
   async renameThread(threadId: string, name: string): Promise<{ threadId: string }> {
@@ -3043,6 +3097,7 @@ export class ClaudeBackend {
       ? {
         getSessionMessages: this.options.getSessionMessages ?? getSessionMessages,
         getSessionInfo: this.options.getSessionInfo ?? getSessionInfo,
+        getSubagentMessages: this.options.getSubagentMessages ?? getSubagentMessages,
         close: () => {},
       }
       : this.openSessionReader(env);

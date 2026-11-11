@@ -273,6 +273,7 @@ import {
   CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
   type AppServerBackgroundTask,
   isClaudeNativeSubAgent,
+  parseClaudeSubAgentTranscriptThreadId,
   isCodexNativeSubAgentVisibleInNavigation,
   isToolManagedWorktreePath,
   normalizeRenamedTitleSource,
@@ -11041,6 +11042,15 @@ export class DesktopBackendRegistry {
     const readStartedAt = performance.now();
     const backend = request.backend ?? "codex";
     if (backend === "claude") {
+      const subAgent = parseClaudeSubAgentTranscriptThreadId(request.threadId);
+      if (subAgent) {
+        // A sub-agent's transcript is read-only: no reviews, origins or requests.
+        const replay = pageNormalizedReplay(
+          await this.claudeBackend.readSubAgentTranscript(subAgent.parentThreadId, subAgent.taskId),
+          { ...request, backend },
+        );
+        return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, threadStatus: replay.threadStatus };
+      }
       const storedReplay = await this.claudeBackend.readThread(request.threadId);
       // Every review imports, not only the requested page's, so a review
       // older than the newest page still reaches To-dos. An older-page read

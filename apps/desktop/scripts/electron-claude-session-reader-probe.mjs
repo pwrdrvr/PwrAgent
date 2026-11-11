@@ -9,9 +9,10 @@
 // directory's sessions through the Agent SDK. Re-run it after an Agent SDK
 // or Electron upgrade. It exits non-zero on any mismatch.
 //
-// The probe writes its own two-message session into temporary config
-// directories, the account the reader must see and the one this process
-// sees. It shows no window and takes no focus.
+// The probe writes its own two-message session, and one sub-agent's
+// conversation beside it, into temporary config directories, the account
+// the reader must see and the one this process sees. It shows no window and
+// takes no focus.
 
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +24,7 @@ import { app } from "electron";
 const worker = fileURLToPath(new URL("../out/main/claude-session-reader-worker.js", import.meta.url));
 const root = realpathSync(mkdtempSync(join(tmpdir(), "pwragent-claude-reader-probe-")));
 const SESSION = "5a85c1ad-85c1-4930-ae19-50f721ad13dd";
+const AGENT = "a31059e54553b4031";
 const PROJECT = join(root, "project");
 app.setPath("userData", join(root, "user-data"));
 
@@ -58,7 +60,7 @@ async function probe() {
   const closed = new Promise((resolve) => child.once("close", resolve));
   const replies = new Map();
   child.on("message", (reply) => replies.get(reply.id)?.(reply));
-  const read = (id, method, options) => new Promise((resolve, reject) => {
+  const read = (id, method, options, agentId) => new Promise((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timer);
       replies.delete(id);
@@ -71,13 +73,15 @@ async function probe() {
     replies.set(id, (reply) => { cleanup(); resolve(reply); });
     child.once("error", failed);
     child.once("exit", exited);
-    child.send({ id, method, sessionId: SESSION, ...(options ? { options } : {}) }, (error) => { if (error) failed(error); });
+    child.send({ id, method, sessionId: SESSION, ...(agentId ? { agentId } : {}), ...(options ? { options } : {}) },
+      (error) => { if (error) failed(error); });
   });
   try {
     const results = {
       inProject: await read(1, "getSessionMessages", { dir: PROJECT }),
       everyProject: await read(2, "getSessionMessages"),
       info: await read(3, "getSessionInfo"),
+      subAgent: await read(4, "getSubagentMessages", { dir: PROJECT }, AGENT),
     };
     const checks = [
       ["messages in the project folder", results.inProject.result?.map((message) => message.uuid)],
@@ -92,6 +96,10 @@ async function probe() {
     const infoOk = results.info.result?.sessionId === SESSION;
     console.log(`${infoOk ? "ok  " : "FAIL"} session info: ${JSON.stringify(results.info.result ?? results.info)}`);
     if (!infoOk) failed += 1;
+    const subAgentUuids = results.subAgent.result?.map((message) => message.uuid);
+    const subAgentOk = JSON.stringify(subAgentUuids) === JSON.stringify(["33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"]);
+    console.log(`${subAgentOk ? "ok  " : "FAIL"} sub-agent messages: ${JSON.stringify(subAgentUuids ?? results.subAgent)}`);
+    if (!subAgentOk) failed += 1;
     console.log(failed === 0 ? "the reader read the launch environment's sessions" : `${failed} check(s) failed`);
     return failed === 0 ? 0 : 1;
   } finally {
@@ -116,4 +124,20 @@ function writeSession(configDir, prompt) {
     },
   ];
   writeFileSync(join(folder, `${SESSION}.jsonl`), `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  // Claude Code saves each sub-agent's conversation beside its parent's.
+  const subAgents = join(folder, SESSION, "subagents");
+  mkdirSync(subAgents, { recursive: true });
+  const sidechain = { ...base, isSidechain: true, agentId: AGENT };
+  const subAgentLines = [
+    {
+      ...sidechain, type: "user", uuid: "33333333-3333-4333-8333-333333333333", parentUuid: null,
+      timestamp: "2026-11-05T00:00:02.000Z", message: { role: "user", content: "Sub-agent prompt" },
+    },
+    {
+      ...sidechain, type: "assistant", uuid: "44444444-4444-4444-8444-444444444444", parentUuid: "33333333-3333-4333-8333-333333333333",
+      timestamp: "2026-11-05T00:00:03.000Z",
+      message: { id: "msg_probe_agent", role: "assistant", type: "message", model: "claude-probe", content: [{ type: "text", text: "Report" }] },
+    },
+  ];
+  writeFileSync(join(subAgents, `agent-${AGENT}.jsonl`), `${subAgentLines.map((line) => JSON.stringify(line)).join("\n")}\n`);
 }

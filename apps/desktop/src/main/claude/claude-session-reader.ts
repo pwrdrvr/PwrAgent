@@ -65,7 +65,9 @@ export function openClaudeSessionReader(
   });
   // A failed start rejects each read; it must not also go unhandled here.
   started.catch(() => {});
-  const request = async (method: ClaudeSessionReadRequest["method"], sessionId: string, readOptions?: { dir?: string }) => {
+  const request = async (
+    method: ClaudeSessionReadRequest["method"], sessionId: string, readOptions?: { dir?: string }, agentId?: string,
+  ) => {
     if (ended) throw ended;
     const forked = await started;
     if (ended) throw ended;
@@ -73,7 +75,10 @@ export function openClaudeSessionReader(
     return await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => end(new ClaudeSessionReaderError("Claude's conversation could not be read in time.")), timeoutMs);
       pending.set(id, { resolve, reject, timer });
-      forked.postMessage({ id, method, sessionId, ...(readOptions?.dir ? { options: { dir: readOptions.dir } } : {}) });
+      forked.postMessage({
+        id, method, sessionId, ...(agentId ? { agentId } : {}),
+        ...(readOptions?.dir ? { options: { dir: readOptions.dir } } : {}),
+      });
     });
   };
   return {
@@ -81,6 +86,8 @@ export function openClaudeSessionReader(
       await request("getSessionMessages", sessionId, readOptions) as SessionMessage[],
     getSessionInfo: async (sessionId, readOptions) =>
       await request("getSessionInfo", sessionId, readOptions) as SDKSessionInfo | undefined,
+    getSubagentMessages: async (sessionId, agentId, readOptions) =>
+      await request("getSubagentMessages", sessionId, readOptions, agentId) as SessionMessage[],
     close: () => end(new ClaudeSessionReaderError("Claude's session reader was closed.")),
   };
 }
@@ -91,9 +98,15 @@ export async function answerClaudeSessionRead(
   reads: ClaudeSessionReads,
 ): Promise<ClaudeSessionReadReply> {
   try {
-    const result = request.method === "getSessionMessages"
-      ? await reads.getSessionMessages(request.sessionId, request.options)
-      : await reads.getSessionInfo(request.sessionId, request.options);
+    let result: unknown;
+    if (request.method === "getSessionMessages") {
+      result = await reads.getSessionMessages(request.sessionId, request.options);
+    } else if (request.method === "getSubagentMessages") {
+      if (!request.agentId) throw new Error("A sub-agent read needs the agent's id.");
+      result = await reads.getSubagentMessages(request.sessionId, request.agentId, request.options);
+    } else {
+      result = await reads.getSessionInfo(request.sessionId, request.options);
+    }
     return { id: request.id, result };
   } catch (error) {
     return { id: request.id, error: error instanceof Error ? error.message : String(error) };

@@ -5633,6 +5633,35 @@ describe("DesktopBackendRegistry", () => {
     await assertAcceptedAcpTurnSurvivesFinalizationFailure("acp:kimi" as AcpBackendId, "accepted", "review");
   });
 
+  it("reads a Claude sub-agent's transcript id from its parent session, and an ordinary id as a thread", async () => {
+    const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(), pdfToolMcpServer: null, agentToolMcpServer: null });
+    const internal = registry as unknown as {
+      claudeBackend: {
+        readThread: (threadId: string) => Promise<AppServerThreadReplay>;
+        readSubAgentTranscript: (threadId: string, taskId: string) => Promise<AppServerThreadReplay>;
+      };
+    };
+    const replay = (text: string): AppServerThreadReplay => ({
+      entries: [{ type: "message", id: text, role: "user", text }],
+      messages: [{ id: text, role: "user", text }],
+      pagination: { supportsPagination: false, hasPreviousPage: false },
+      threadStatus: "idle",
+    });
+    const subAgent = vi.spyOn(internal.claudeBackend, "readSubAgentTranscript").mockResolvedValue(replay("sub-agent prompt"));
+    const thread = vi.spyOn(internal.claudeBackend, "readThread").mockResolvedValue(replay("parent prompt"));
+
+    const read = await registry.readThread({ backend: "claude", threadId: "claude-subagent:parent-thread:a1b2" });
+    expect(subAgent).toHaveBeenCalledWith("parent-thread", "a1b2");
+    expect(thread).not.toHaveBeenCalled();
+    expect(read).toMatchObject({ backend: "claude", threadId: "claude-subagent:parent-thread:a1b2" });
+    expect(read.replay.messages.map((message) => message.text)).toEqual(["sub-agent prompt"]);
+
+    await registry.readThread({ backend: "claude", threadId: "parent-thread" });
+    expect(thread).toHaveBeenCalledWith("parent-thread");
+    expect(subAgent).toHaveBeenCalledTimes(1);
+  });
+
   async function assertClaudeStartOutcome(threadId: string, failure: "bind" | "persist" | "dispose" | "begin") {
     const revoke = vi.fn();
     const registration = { server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} },

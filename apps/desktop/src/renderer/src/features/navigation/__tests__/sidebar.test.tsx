@@ -1948,7 +1948,7 @@ describe("Sidebar", () => {
     delete (window as Window & { pwragent?: unknown }).pwragent;
   });
 
-  it("lists Claude's own sub-agents in the same disclosure, without a transcript to open", () => {
+  it("names Claude's own sub-agents by their task and opens each one's transcript", () => {
     const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
     Object.defineProperty(window, "pwragent", {
       configurable: true,
@@ -1969,7 +1969,7 @@ describe("Sidebar", () => {
         {
           threadId: "claude-native:agent-2",
           title: "Cluster: browser launch",
-          agentNickname: "general-purpose",
+          agentNickname: "Explore",
           threadStatus: "idle",
         },
       ],
@@ -1996,9 +1996,20 @@ describe("Sidebar", () => {
     expect(within(workerList).getAllByRole("listitem")).toHaveLength(2);
     expect(container.querySelectorAll(".native-subagents__agent")).toHaveLength(2);
     expect(screen.getByText("1 working")).toBeInTheDocument();
-    // A Claude sub-agent is a task in the parent's session, not a thread.
-    expect(screen.queryByRole("button", { name: /^Open transcript for/ })).not.toBeInTheDocument();
-    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
+    // Claude's agent type is the same for most sub-agents, so a row names its
+    // task, and shows the type only when it tells the row apart.
+    expect(within(workerList).queryByText("general-purpose")).not.toBeInTheDocument();
+    expect(within(workerList).getByText("Explore")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open transcript for Cluster: rules & matching" }));
+    // A Claude sub-agent is a task in the parent's session, so its transcript
+    // is read by the parent thread and the task id.
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "claude",
+      federationTarget: undefined,
+      threadId: "claude-subagent:thread-claude-parent:agent-1",
+      title: "Cluster: rules & matching",
+    });
+    expect(screen.getByRole("button", { name: "Open transcript for Cluster: browser launch" })).toBeInTheDocument();
 
     delete (window as Window & { pwragent?: unknown }).pwragent;
   });
