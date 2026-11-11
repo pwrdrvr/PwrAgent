@@ -51,7 +51,7 @@ import { missingWorktreeRepository } from "./worktree-archive-service";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import type { CargoBuildOutputCandidate, scanCargoBuildOutputs, removeCargoBuildOutput } from "./maintenance-cargo-output";
 import { MaintenanceCheckoutOwners, maintenanceKeptThread } from "./maintenance-checkout-owners";
-import { candidateCheckoutDirectories } from "./thread-owned-checkouts";
+import { CheckoutDirectoryOwners, candidateCheckoutDirectories } from "./thread-owned-checkouts";
 import { runMaintenanceItems } from "./maintenance-runner";
 
 /** Failures kept on a scan or run; the rest are counted, not listed. */
@@ -482,6 +482,9 @@ export class ThreadMaintenanceService {
     // One owner index for this scan's list; the apply re-checks sharing
     // against a fresh list before each removal.
     const owners = new CheckoutPathOwners(candidates);
+    // Who uses each checkout or a directory inside it, read once for this
+    // scan's list. Removing a build output re-reads its owners fresh.
+    const checkoutOwners = new CheckoutDirectoryOwners(candidates);
     // A candidate kept on thread state awaits nothing, so a long run of
     // them would hold the event loop through promise continuations alone.
     const pace = eventLoopPacer();
@@ -505,8 +508,7 @@ export class ThreadMaintenanceService {
           exclude("Checkout missing");
           return undefined;
         }
-        const space = await this.ownedCheckoutSpace(listed.target, candidates.filter((owner) =>
-          candidateCheckoutDirectories(owner).some((cwd) => cwd === listed.target || cwd.startsWith(listed.target! + path.sep))), retained, progress);
+        const space = await this.ownedCheckoutSpace(listed.target, checkoutOwners.owners(listed.target), retained, progress);
         measuredPaths.set(listed.target, space);
         // A hibernated checkout has nothing on disk, whichever reason keeps it.
         if (listed.keep) { exclude(listed.keep, listed.target); return { keep: listed.keep, hibernated: !!hibernatedSnapshotFor(candidate) }; }

@@ -14,6 +14,49 @@ export function candidateCheckoutDirectories(candidate: ThreadArchiveCandidate):
   return [...new Set(values.filter((value): value is string => !!value && path.isAbsolute(value)).map((value) => path.normalize(value)))];
 }
 
+/**
+ * The candidates that use a checkout or a directory inside it, for one scan
+ * over one candidate list. Filtering every candidate's directories for each
+ * checkout made a scan quadratic in the thread count; here each candidate's
+ * directories are read once, the first time any checkout is asked about.
+ *
+ * Same answer as `candidates.filter((owner) => candidateCheckoutDirectories(owner)
+ * .some((cwd) => cwd === target || cwd.startsWith(target + path.sep)))`: the
+ * same candidate objects, in list order, with the same plain string match and
+ * no further normalization. Build one per scan and drop it with the list.
+ */
+export class CheckoutDirectoryOwners {
+  /** A directory, or any prefix of one that ends right before a separator,
+   * to the list positions of the candidates using it, ascending. */
+  private positions?: Map<string, number[]>;
+
+  constructor(private readonly candidates: readonly ThreadArchiveCandidate[]) {}
+
+  owners(target: string): ThreadArchiveCandidate[] {
+    return (this.index().get(target) ?? []).map((position) => this.candidates[position]!);
+  }
+
+  private index(): Map<string, number[]> {
+    if (this.positions) return this.positions;
+    const positions = new Map<string, number[]>();
+    const add = (key: string, position: number) => {
+      const list = positions.get(key);
+      if (!list) positions.set(key, [position]);
+      // Positions arrive in order, so a repeat is always the last entry.
+      else if (list[list.length - 1] !== position) list.push(position);
+    };
+    this.candidates.forEach((candidate, position) => {
+      for (const cwd of candidateCheckoutDirectories(candidate)) {
+        add(cwd, position);
+        // `cwd.startsWith(target + sep)` holds exactly when `target` is the
+        // part of `cwd` before one of its separators.
+        for (let at = cwd.indexOf(path.sep); at !== -1; at = cwd.indexOf(path.sep, at + 1)) add(cwd.slice(0, at), position);
+      }
+    });
+    return this.positions = positions;
+  }
+}
+
 async function checkoutRoot(cwd: string): Promise<string | undefined> {
   try {
     if (!(await stat(cwd)).isDirectory()) return undefined;
