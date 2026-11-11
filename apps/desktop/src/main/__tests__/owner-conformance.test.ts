@@ -1624,17 +1624,21 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
   it("the enrolled Outpost enforces durable feature and nested messaging grants before receipt admission", async () => {
-    for (const feature of [false, true]) {
-      const outpost = await startConformanceDaemon({ capabilities: ["turn_control", "environment_actions", "thread_detail", ...(feature ? ["durable_turn_requests_v1" as const] : [])] });
-      try {
-        const identity = await outpost.client.startThread({ backend: "codex", cwd: outpost.workspace });
-        const value: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" }, request: { ...identity,
-          input: [{ type: "text", text: "Must not be admitted" }], ...(feature ? { messageOrigin: { kind: "messaging", causalMessagingSource: { ownerId: "owner", requestId: "request" } } as const } : {}) } };
-        value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(outpost.ownerInstanceId, value)).digest("hex");
-        await expect(outpost.client.submitTurnRequest(value)).rejects.toThrow(/capability|grant|forbidden|allowed/i);
-        if (feature) expect(await outpost.client.getTurnRequest({ ...identity, id: value.clientRequest.id })).toBeNull();
-      } finally { await outpost.close(); }
-    }
+    // One daemon; each case enrolls its own viewer, as in "steering grant admission".
+    const outpost = await startConformanceDaemon();
+    try {
+      for (const feature of [false, true]) {
+        const viewer = await outpost.enrollViewer(["turn_control", "environment_actions", "thread_detail", ...(feature ? ["durable_turn_requests_v1" as const] : [])]);
+        try {
+          const identity = await viewer.client.startThread({ backend: "codex", cwd: outpost.workspace });
+          const value: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" }, request: { ...identity,
+            input: [{ type: "text", text: "Must not be admitted" }], ...(feature ? { messageOrigin: { kind: "messaging", causalMessagingSource: { ownerId: "owner", requestId: "request" } } as const } : {}) } };
+          value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(outpost.ownerInstanceId, value)).digest("hex");
+          await expect(viewer.client.submitTurnRequest(value)).rejects.toThrow(/capability|grant|forbidden|allowed/i);
+          if (feature) expect(await viewer.client.getTurnRequest({ ...identity, id: value.clientRequest.id })).toBeNull();
+        } finally { await viewer.close(); }
+      }
+    } finally { await outpost.close(); }
   });
 
   it("generated desktop sender replacement retires immutable queue identities before admitting changed input", async () => {
