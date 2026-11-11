@@ -12,6 +12,7 @@
     "statements": 1
   },
   "federation-directory-pin-actions": {"commits": 3, "note": "Pin, move and unpin use three owner commits; 100 actions/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes", "observedWalBytes": 24720, "rowsChanged": 3, "statements": 3},
+  "headless-owner-lifecycle-idle-hour": {"commits": 378, "note": "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. Idle timer statements change zero rows and grow the WAL by zero bytes.", "observedWalBytes": 189552, "rowsChanged": 18, "statements": 410},
   "hourly-sweep-idle-day": {
     "commits": 0,
     "note": "24 hourly sweeps over a stale Codex thread and a stale ACP session with nothing to hibernate or delete. The sweep archives nothing, so it commits nothing.",

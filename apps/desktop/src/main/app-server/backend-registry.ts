@@ -19469,6 +19469,14 @@ export class DesktopBackendRegistry {
     input: AppServerTurnInputItem[],
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<PreparedCodexSteer> {
+    // A contained Outpost must refuse an unavailable workspace before the
+    // provider claims guidance; the queue can then hold and retry that input.
+    if (getOwnerHostServices().runtimePolicy?.exclusiveProfileOwner) {
+      const cwd = await this.resolveThreadWorkspaceCwd(params.backend, params.threadId);
+      if (cwd && !await stat(cwd).then(entry => entry.isDirectory(), () => false)) {
+        throw new Error(`Thread workspace is unavailable: ${cwd}`);
+      }
+    }
     const pendingMessageContextId = await this.registerPendingThreadMessageContext({
       backend: params.backend,
       input,

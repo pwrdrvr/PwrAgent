@@ -5,7 +5,7 @@ import { buildHeadless } from "../../../../scripts/build-headless.mjs";
 
 /** Fresh process and module graph, real composition root; only UI and provider
  * boundaries are fixtures. This never launches Electron or an installed agent. */
-export async function buildOwnerFixture(directory: string, kind: "desktop" | "headless" = "headless"): Promise<string> {
+export async function buildOwnerFixture(directory: string, kind: "desktop" | "headless" = "headless", extraExports = ""): Promise<string> {
   const main = path.resolve(import.meta.dirname, "../..");
   const fixture = path.join(main, "__tests__/fixtures/owner-conformance-codex-transport.ts");
   const packageRoot = path.resolve(main, "../../../../packages/pwragent");
@@ -41,7 +41,7 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
           'import { createDesktopOwnerHostServices } from "../shell/owner-host-services"; import { createOutpostRuntimePolicy } from "../owner-runtime-policy";');
         source = source.replace('createHeadlessOwnerHostServices({ runtime, profileDirectory, onQuit: () => signal("owner-request") })', "({ ...createDesktopOwnerHostServices(), runtimePolicy: createOutpostRuntimePolicy() })");
       }
-      return { contents: source, loader: "ts" };
+      return { contents: source + "\n" + extraExports, loader: "ts" };
     });
     builder.onLoad({ filter: /codex-discovery-coordinator\.ts$/ }, args => ({
       contents: fs.readFileSync(args.path, "utf8").replace("export class CodexDiscoveryCoordinator", "class FixtureCoordinatorBase") + `

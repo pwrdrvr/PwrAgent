@@ -4,7 +4,7 @@ import { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -1458,6 +1458,43 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await outpost?.close(); await desktop.close(); }
   });
 
+  it("the enrolled Outpost retries an unclaimed workspace refusal without replacing its native owner", async () => {
+    const host = await startOutpostDaemon({ capabilities: [...VIEWER_CAPABILITIES, "turn_queue_pause"] });
+    const displaced = `${host.workspace}-unavailable`;
+    try {
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const request = (id: string, text: string) => ({ ...identity, queueEntryId: id, input: [{ type: "text" as const, text }],
+        messageOrigin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "invented-sender", instanceId: "forged" } } });
+      await host.client.startTurn(request("ack-gate", "hold-steer-ack"));
+      await vi.waitFor(() => expect(existsSync(path.join(host.env.PWRAGENT_TEST_DATA!, "steer.ready"))).toBe(true));
+      const guidance = request("held-guidance", "Invented recoverable workspace guidance");
+      const accepted = await host.client.startTurn(guidance);
+      await host.client.setQueuedTurnPaused({ queueEntryId: accepted.queueEntryId!, paused: true });
+      await rename(host.workspace, displaced);
+      await writeFile(path.join(host.env.PWRAGENT_TEST_DATA!, "steer.release"), "release");
+      await host.client.setQueuedTurnPaused({ queueEntryId: accepted.queueEntryId!, paused: false });
+      const projection = { protocol: 2 as const, ref: identity };
+      await vi.waitFor(async () => expect((await host.client.getNavigationQueueProjection(projection)).entries[0]?.manualReleaseRequired).toBe(true));
+      const held = await host.client.getNavigationQueueProjection(projection);
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: accepted.queueEntryId! })).toMatchObject({ disposition: "blocked" });
+      expect(await host.client.getNavigationQueueProjection(projection)).toEqual(held);
+      await rename(displaced, host.workspace);
+      expect(await host.client.releaseQueuedTurn({ queueEntryId: accepted.queueEntryId! })).toMatchObject({ disposition: "started", turnId: active.turnId });
+      expect((await host.client.startTurn(guidance)).queueEntryId).toBe(accepted.queueEntryId);
+      expect((await host.client.resolveThreadAdmissionState(identity)).activeTurn?.turnId).toBe(active.turnId);
+      expect((await host.client.getNavigationQueueProjection(projection)).entries).toEqual([]);
+      const calls = readFileSync(path.join(host.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(calls.filter(call => call.method === "turn/steer" && call.params.input[0].text === guidance.input[0]!.text)).toHaveLength(1);
+      expect(calls.filter(call => call.method === "turn/start" && call.params.input[0].text === guidance.input[0]!.text)).toHaveLength(0);
+      await host.client.interruptTurn(active);
+    } finally {
+      if (existsSync(displaced)) await rename(displaced, host.workspace);
+      await host.close();
+    }
+  });
+
   it("the existing durable steering caller delivers once to the active turn on both registered owners and leaves waiting input intact", async () => {
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
@@ -2847,7 +2884,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         writeFileSync(BASELINE_PATH, JSON.stringify(measured, null, 2) + "\n");
         return;
       }
-      expect(measured.sharedMethods.length).toBeGreaterThan(0);
+      const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as OwnerConformanceBaseline;
+      expect(measured.sharedMethods).toEqual(baseline.sharedMethods);
 
     } finally {
       await outpost?.close();
