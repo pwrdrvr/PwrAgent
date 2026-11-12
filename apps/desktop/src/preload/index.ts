@@ -31,7 +31,11 @@ import {
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
-import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import {
+  USAGE_ACTIVITY_OPEN_THREAD_CHANNEL,
+  USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL,
+  WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL,
+} from "../shared/ipc";
 import { createUsageActivityFocusSubscription } from "./usage-activity-focus";
 import type {
   ListThreadTodoProjectsResponse,
@@ -2351,6 +2355,8 @@ const desktopApi = Object.freeze({
   onUsageActivityFocusProvider: subscribeToUsageActivityFocus,
   openUsageThreadInMainWindow: async (request: WindowShowThreadRequest): Promise<void> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, request),
+  openThreadInMainWindow: async (request: WindowShowThreadRequest): Promise<void> =>
+    await ipcRenderer.invoke(WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL, request),
   inspectTokenMiserOutput: async (
     request: InspectTokenMiserOutputRequest,
   ): Promise<InspectTokenMiserOutputResponse> =>

@@ -1096,6 +1096,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onUsageActivityFocusProvider?: (callback: (provider: string) => void) => () => void;
   /** From the Usage Activity window: focus the main window and open a thread there. */
   openUsageThreadInMainWindow?: (request: WindowShowThreadRequest) => Promise<void>;
+  /** From a window serving a peer: focus the main window and open one of this machine's threads. */
+  openThreadInMainWindow?: (request: WindowShowThreadRequest) => Promise<void>;
   inspectTokenMiserOutput?: (
     request: InspectTokenMiserOutputRequest,
   ) => Promise<InspectTokenMiserOutputResponse>;

@@ -33,6 +33,7 @@ import {
   codexCatalogModels,
   codexCatalogWithChoiceArbitrary,
 } from "../../../test/model-catalog";
+import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { StarMapChatCard } from "../StarMapChatCard";
 import {
   useComposerDraftStore,
@@ -790,6 +791,46 @@ describe("StarMapChatCard sub-agents", () => {
 });
 
 describe("StarMapChatCard federation routing", () => {
+  // The thread view reads a peer transcript's bare links on that peer. The
+  // card renders the same transcript, so it must read them the same way,
+  // and a link naming this viewer still opens locally.
+  it("reads the transcript's thread links in the owning peer's frame", async () => {
+    const linkedId = "019f5d79-a595-73f2-84d9-a0976762c303";
+    const desktopApi = buildApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        fetchedAt: 1,
+        threadId: "t-remote",
+        replay: {
+          entries: [
+            { type: "message", id: "owner-bare", role: "assistant", createdAt: 1,
+              text: `See [Peer fixture](pwragent://thread/${linkedId}?backend=codex)` },
+            { type: "message", id: "owner-viewer", role: "user", createdAt: 2,
+              text: `[Viewer fixture](pwragent://thread/${linkedId}?backend=claude&instanceId=pwr_viewer) try that one` },
+          ],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })) as unknown as DesktopApi["readThread"],
+    });
+    const onShowThread = vi.fn();
+    render(
+      <ThreadLinkProvider localInstanceId="pwr_viewer" onShowThread={onShowThread} threads={[]}>
+        {card({ desktopApi, thread: remoteThread() })}
+      </ThreadLinkProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open thread Peer fixture" }));
+    expect(onShowThread).toHaveBeenLastCalledWith({
+      backend: "codex", instanceId: "pwr_peer", threadId: linkedId,
+    });
+    expect(screen.getAllByRole("button", { name: "Open remote viewer for pwr_peer" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread Viewer fixture" }));
+    expect(onShowThread).toHaveBeenLastCalledWith({ backend: "claude", threadId: linkedId });
+    expect(screen.getAllByRole("button", { name: /^Open remote viewer/ })).toHaveLength(1);
+  });
+
   it("hydrates a peer's thread against that peer", async () => {
     const desktopApi = buildApi();
     renderCard({ desktopApi, thread: remoteThread() });

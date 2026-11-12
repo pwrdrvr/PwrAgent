@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { PopoutIcon, ThreadIcon } from "../../icons";
 import {
+  threadLinkNamesThisMachine,
   useLiveThreadLink,
   useThreadLinkHoverSource,
   useThreadLinks,
@@ -59,7 +60,11 @@ export function ThreadChip(props: ThreadChipProps) {
   useEffect(() => {
     if (tooltipVisible) updateTooltip(latestCardRef.current);
   }, [threadInfo.info, label, tooltipVisible, updateTooltip]);
-  const remoteInstanceLabel = link.instanceLabel ?? link.instanceId;
+  // A window serving a peer keeps this machine's id on its links; the chip
+  // itself opens those in the main window, so there is no remote viewer.
+  const remoteInstanceLabel = threadLinkNamesThisMachine(link, threadLinks?.localInstanceId)
+    ? undefined
+    : link.instanceLabel ?? link.instanceId;
   const remoteViewerTooltip = remoteInstanceLabel
     ? `Open this thread in the remote viewer window for ${remoteInstanceLabel}`
     : undefined;

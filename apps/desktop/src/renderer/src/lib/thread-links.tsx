@@ -23,6 +23,7 @@ import {
 } from "react";
 import { getDesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
+import { isPendingEntryId } from "./pending-entry-id";
 import { observeThreadLinkRows, readThreadLinkRow, type ThreadLinkRow } from "./thread-link-rows";
 
 export type ResolvedThreadLink = {
@@ -43,7 +44,65 @@ export type ResolvedThreadLink = {
 export type ThreadLinkSource = {
   backend: AppServerBackendKind;
   instanceId: FederationInstanceId;
+  /**
+   * The operator wrote this text on this machine. Its bare links name
+   * `instanceId` but keep their own backend, or none, rather than taking
+   * the transcript's.
+   */
+  authoredHere?: true;
 };
+
+/**
+ * The frame a pending entry's links are read in. A pending entry is text the
+ * operator wrote here and the owner has not recorded yet. Its bare links name
+ * this machine's threads, as the federation bridge reads them when it sends
+ * the text; the owner's copy names this machine explicitly. Without a known
+ * machine id they stay bare, which the main window reads as this machine too.
+ */
+export function pendingEntryLinkSource(
+  source: ThreadLinkSource | undefined,
+  localInstanceId: FederationInstanceId | undefined,
+): ThreadLinkSource | undefined {
+  return source && localInstanceId
+    ? { backend: source.backend, instanceId: localInstanceId, authoredHere: true }
+    : undefined;
+}
+
+/** The frame one transcript entry's links are read in. */
+export function transcriptEntryLinkSource(
+  entryId: string,
+  source: ThreadLinkSource | undefined,
+  pendingSource: ThreadLinkSource | undefined,
+): ThreadLinkSource | undefined {
+  return isPendingEntryId(entryId) ? pendingSource : source;
+}
+
+/**
+ * Whether a link names this machine while this window serves another
+ * instance. Only a window scoped to a peer keeps this machine's id on a
+ * link; the main window reads it as a bare local link.
+ */
+export function threadLinkNamesThisMachine(
+  link: Pick<ResolvedThreadLink, "instanceId">,
+  localInstanceId: FederationInstanceId | undefined,
+): boolean {
+  return Boolean(link.instanceId) && link.instanceId === localInstanceId;
+}
+
+/**
+ * The link and window target a read about a linked thread goes through.
+ * Readers send a link with an owner to that owner and a bare link to the
+ * window's instance, so a link naming this machine is read as bare with no
+ * window target: on this machine, never on the peer a window serves.
+ */
+export function threadLinkReadScope<T extends Pick<ResolvedThreadLink, "instanceId">>(
+  link: T,
+  localInstanceId: FederationInstanceId | undefined,
+): { link: T; windowTarget: ReturnType<typeof readRendererFederationTarget> } {
+  return threadLinkNamesThisMachine(link, localInstanceId)
+    ? { link: { ...link, instanceId: undefined }, windowTarget: undefined }
+    : { link, windowTarget: readRendererFederationTarget() };
+}
 
 export type ThreadLinkContextValue = {
   /**
@@ -74,6 +133,8 @@ export type ThreadLinkContextValue = {
   ) => NavigationThreadSummary | undefined;
   /** Every loaded navigation row, read when it is called, as `readSummary` is. */
   readLoadedThreads?: () => readonly NavigationThreadSummary[];
+  /** This machine's federation instance id, once federation health reports it. */
+  localInstanceId?: FederationInstanceId;
 };
 
 export type ThreadLinkHoverTarget = Pick<
@@ -368,6 +429,17 @@ class ThreadLinkMetadataStore {
  */
 const ThreadLinkContext = createContext<ThreadLinkContextValue | undefined>(undefined);
 
+/**
+ * This machine's federation instance id, apart from the link context: that
+ * value rebuilds on every membership change, and a transcript that needs
+ * only the id must not re-render with it.
+ */
+const ThreadLinkLocalInstanceContext = createContext<FederationInstanceId | undefined>(undefined);
+
+export function useThreadLinkLocalInstanceId(): FederationInstanceId | undefined {
+  return useContext(ThreadLinkLocalInstanceContext);
+}
+
 export function useThreadLinks(): ThreadLinkContextValue | undefined {
   return useContext(ThreadLinkContext);
 }
@@ -561,7 +633,11 @@ export function useThreadLinkHoverSource(
 
 export function ThreadLinkProvider(props: {
   children: ReactNode;
-  /** The instance represented by unqualified local navigation in this window. */
+  /**
+   * This machine's federation instance id. The main window reads a link
+   * naming it as a bare local link; a window serving a peer keeps the id,
+   * and the thread opens in the main window.
+   */
   localInstanceId?: FederationInstanceId;
   onOpenRemoteViewer?: (request: {
     backend: AppServerBackendKind;
@@ -665,7 +741,13 @@ export function ThreadLinkProvider(props: {
         // A remote transcript can link back to this viewer. Canonicalize its
         // explicit owner before metadata lookup and fallback construction so
         // title updates, hover targets and navigation all use the local key.
-        if (ref.instanceId && ref.instanceId === localInstanceId) {
+        // A window serving a peer reads a bare link on that peer, so there
+        // the link keeps naming this machine.
+        if (
+          ref.instanceId
+          && ref.instanceId === localInstanceId
+          && !readRendererFederationTarget()
+        ) {
           ref = { ...ref, instanceId: undefined };
         }
         let resolved: ResolvedThreadLink | undefined;
@@ -708,6 +790,20 @@ export function ThreadLinkProvider(props: {
           : liveResolved;
       },
       show(link) {
+        if (threadLinkNamesThisMachine(link, localInstanceId)) {
+          // A window serving a peer reads a bare link on that peer, so this
+          // machine's thread opens in the main window. The main window shows
+          // it itself, as the bare local link it is.
+          if (readRendererFederationTarget()) {
+            void getDesktopApi()?.openThreadInMainWindow?.({
+              backend: link.backend,
+              ...(link.messageId ? { messageId: link.messageId } : {}),
+              threadId: link.threadId,
+            });
+            return;
+          }
+          link = { ...link, instanceId: undefined };
+        }
         onShowThreadRef.current({
           backend: link.backend,
           ...(link.instanceId ? { instanceId: link.instanceId } : {}),
@@ -726,7 +822,8 @@ export function ThreadLinkProvider(props: {
       async hydrate(link) {
         const api = getDesktopApi();
         if (!api?.getNavigationQueryPage) return;
-        await metadataStore.hydrate(link, () => readThreadLinkRow(api, link, readRendererFederationTarget()));
+        const scope = threadLinkReadScope(link, localInstanceId);
+        await metadataStore.hydrate(link, () => readThreadLinkRow(api, scope.link, scope.windowTarget));
       },
       hoverTarget: hoverStore,
       readSummary(link) {
@@ -737,13 +834,20 @@ export function ThreadLinkProvider(props: {
       readLoadedThreads() {
         return threadsRef.current;
       },
+      ...(localInstanceId ? { localInstanceId } : {}),
     };
     // Rebuild when membership or the viewer identity changes; refs carry
     // fresh metadata and callbacks without invalidating the whole transcript.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hoverStore, localInstanceId, membershipKey, metadataStore]);
 
-  return <ThreadLinkContext.Provider value={value}>{props.children}</ThreadLinkContext.Provider>;
+  return (
+    <ThreadLinkContext.Provider value={value}>
+      <ThreadLinkLocalInstanceContext.Provider value={localInstanceId}>
+        {props.children}
+      </ThreadLinkLocalInstanceContext.Provider>
+    </ThreadLinkContext.Provider>
+  );
 }
 
 /**
@@ -795,9 +899,10 @@ function qualifyThreadLinkRef(
     return ref;
   }
 
+  const backend = ref.backend ?? (source.authoredHere ? undefined : source.backend);
   return {
     ...ref,
-    backend: ref.backend ?? source.backend,
+    ...(backend ? { backend } : {}),
     instanceId: source.instanceId,
   };
 }

@@ -6,7 +6,12 @@ import { getDesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { useFederationInstanceNameLookup } from "../../lib/federation-display-label";
 import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
-import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import {
+  threadLinkNamesThisMachine,
+  threadLinkReadScope,
+  useThreadLinks,
+  type ResolvedThreadLink,
+} from "../../lib/thread-links";
 import { formatRelativeTime } from "../navigation/thread-time";
 import {
   readThreadInfoCost,
@@ -50,9 +55,11 @@ export function useThreadInfo(link: ResolvedThreadLink): {
 
   const load = useCallback(() => {
     const current = ++generation.current;
-    const target = linkRef.current;
+    const { link: target, windowTarget } = threadLinkReadScope(
+      linkRef.current,
+      threadLinks?.localInstanceId,
+    );
     const api = getDesktopApi();
-    const windowTarget = readRendererFederationTarget();
     const loaded = threadLinks?.readSummary?.(target);
     const settle = (patch: Partial<ThreadInfo>) => {
       if (current === generation.current) setInfo((previous) => ({ ...previous, ...patch }));
@@ -66,7 +73,7 @@ export function useThreadInfo(link: ResolvedThreadLink): {
     if (!loaded && api?.getNavigationQueryPage) {
       readThreadInfoRow(api, target, windowTarget).then(
         (row) => {
-          if (row) void threadLinks?.hydrate?.(target).catch(() => {});
+          if (row) void threadLinks?.hydrate?.(linkRef.current).catch(() => {});
           settle(row ? { facts: threadInfoFacts(row), factsState: "ready" } : { factsState: "missing" });
         },
         () => settle({ factsState: "ready" }),
@@ -97,7 +104,10 @@ export function ThreadInfoCard(props: {
   const { link, info } = props;
   const now = props.now ?? Date.now();
   const instanceNames = useFederationInstanceNameLookup();
-  const machine = link.instanceId
+  const localInstanceId = useThreadLinks()?.localInstanceId;
+  const machine = threadLinkNamesThisMachine(link, localInstanceId)
+    ? "This machine"
+    : link.instanceId
     ? instanceNames(link.instanceId, link.instanceLabel ?? link.instanceId).label
     : readRendererFederationTarget() ? readRendererFederationLabel() : "This machine";
   const facts = info.facts;
