@@ -2,7 +2,7 @@ import path from "node:path";
 import fc from "fast-check";
 import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import { expect, it } from "vitest";
-import { assertOwnerExecutionPolicy, createOutpostRuntimePolicy, type OwnerRuntimePolicy } from "../owner-runtime-policy";
+import { assertOwnerExecutionPolicy, createOutpostRuntimePolicy, ownerSandboxForMode, type OwnerRuntimePolicy } from "../owner-runtime-policy";
 
 const policy: OwnerRuntimePolicy = {
   enabledBackends: ["codex"], approvalPolicy: "never", executionModes: ["default", "auto"],
@@ -20,11 +20,30 @@ it("rejects every unsafe explicit provider, mode, approval or sandbox combinatio
     fc.constantFrom(undefined, "never", "on-request", "untrusted"), fc.constantFrom(undefined, "read-only", "workspace-write", "danger-full-access"),
     (backend, executionMode, approvalPolicy, sandbox) => {
       const request = { backend, executionMode, approvalPolicy, sandbox };
+      // The mode chooses the sandbox. A caller may restate it, never change it,
+      // and a sandbox without a mode is refused before any queue accepts it.
+      const modeSandbox = executionMode ? policy.sandboxByMode[executionMode] : undefined;
       const allowed = backend === "codex" && executionMode !== "full-access"
-        && (approvalPolicy === undefined || approvalPolicy === "never") && sandbox !== "danger-full-access";
+        && (approvalPolicy === undefined || approvalPolicy === "never") && sandbox !== "danger-full-access"
+        && (sandbox === undefined || sandbox === modeSandbox);
       if (allowed) expect(() => assertOwnerExecutionPolicy(policy, request)).not.toThrow();
       else expect(() => assertOwnerExecutionPolicy(policy, request)).toThrow();
       expect(() => assertOwnerExecutionPolicy(undefined, request)).not.toThrow();
+    },
+  ));
+});
+it("the execution mode, not the caller, chooses the sandbox at every provider call site", () => {
+  fc.assert(fc.property(
+    fc.constantFrom("default", "auto", "full-access"), fc.option(fc.constantFrom("read-only", "workspace-write", "danger-full-access", "anything"), { nil: undefined }),
+    (mode, requested) => {
+      const expected = policy.sandboxByMode[mode];
+      if (!expected || (requested !== undefined && requested !== expected)) {
+        expect(() => ownerSandboxForMode(policy, mode, requested, "workspace-write")).toThrow();
+      } else {
+        expect(ownerSandboxForMode(policy, mode, requested, "workspace-write")).toBe(expected);
+      }
+      // Desktop has no policy: the caller's sandbox still wins there.
+      expect(ownerSandboxForMode(undefined, mode, requested, "workspace-write")).toBe(requested ?? "workspace-write");
     },
   ));
 });

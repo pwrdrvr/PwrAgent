@@ -1,6 +1,6 @@
 import type { RegistryContext } from "./registry-context";
 import type { RegistryDependencies } from "./backend-registry-construction";
-import { assertOwnerExecutionPolicy } from "../owner-runtime-policy";
+import { assertOwnerExecutionPolicy, ownerSandboxForMode } from "../owner-runtime-policy";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
@@ -12628,7 +12628,7 @@ export class DesktopBackendRegistry {
             cwd,
             approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
             approvalsReviewer: modeSettings.approvalsReviewer,
-            sandbox: request.sandbox ?? modeSettings.sandbox,
+            sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, effectiveExecutionMode, request.sandbox, modeSettings.sandbox),
             codexEnvironmentRuntime,
             ...(backend === "codex"
               ? {
@@ -13090,7 +13090,7 @@ export class DesktopBackendRegistry {
           ...modelSettings,
           approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
           approvalsReviewer: modeSettings.approvalsReviewer,
-          sandbox: request.sandbox ?? modeSettings.sandbox,
+          sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, executionMode, request.sandbox, modeSettings.sandbox),
           codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
           ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
         }));
@@ -15774,7 +15774,7 @@ export class DesktopBackendRegistry {
             ...turnParams,
             approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
             approvalsReviewer: modeSettings.approvalsReviewer,
-            sandbox: params.sandbox ?? modeSettings.sandbox,
+            sandbox: ownerSandboxForMode(getOwnerHostServices().runtimePolicy, effectiveMode, params.sandbox, modeSettings.sandbox),
             ...(overlay?.codexEnvironmentRuntime
               ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
               : {}),
