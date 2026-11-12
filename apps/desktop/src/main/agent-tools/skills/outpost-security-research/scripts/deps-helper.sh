@@ -52,7 +52,10 @@ git -C "$repo" archive --format=tar "$ref" | docker run -i --rm --name "$contain
     trap "rm -rf \"$stage\"" EXIT
     tar -x -C "$stage" -f -
     cd "$stage"
-    if [ ! -e /usr/local/bin/pnpm ]; then
+    if [ -e /usr/local/bin/pnpm ]; then
+      # Shims an earlier run left on the volume would come first on PATH in the Outpost.
+      rm -f "$HOME/.local/bin/pnpm" "$HOME/.local/bin/pnpx"
+    else
       mkdir -p "$HOME/.local/bin"
       corepack enable --install-directory "$HOME/.local/bin"
       export PATH="$HOME/.local/bin:$PATH"

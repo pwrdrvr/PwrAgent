@@ -167,7 +167,8 @@ readable only by you.
 On Linux, use systemd user units in `~/.config/systemd/user/`: one runs `node
 <dir>/tcp-relay.mjs <bridge-gateway> 47833 <gateway-host> <gateway-port>`, the
 other `/bin/sh <dir>/run-model-key-proxy.sh <env-file>`, both with absolute
-paths, `Restart=always` and `RestartSec=15`. Enable them with `systemctl --user
+paths, `Restart=always` and `RestartSec=15`. The wrapper runs `node` and `op`
+from `PATH`, so give the proxy unit `Environment=PATH=<node-dir>:<op-dir>:/usr/bin:/bin`. Enable them with `systemctl --user
 enable --now <unit>`, and run `loginctl enable-linger` so they outlive your
 login. There is no Keychain source there; an `op://` source needs the 1Password
 app unlocked in your session, so the proxy retries until it is.

@@ -116,7 +116,8 @@ case "${1:-}" in
     [ "$#" -eq 2 ] || die "usage: install-launch-agents.sh proxy <env-file>"
     env_file="$(abs_file "$2")"
     label="$(env_label "$env_file")"
-    mode="$(stat -f %Lp "$env_file")"
+    # GNU stat first (coreutils' gnubin may lead PATH): its -f prints file system status.
+    mode="$(stat -c %a "$env_file" 2>/dev/null || stat -f %Lp "$env_file")"
     case "$mode" in 600|400) ;; *) die "$env_file must be mode 600; it is $mode";; esac
     find_node
     path_value="$base_path"

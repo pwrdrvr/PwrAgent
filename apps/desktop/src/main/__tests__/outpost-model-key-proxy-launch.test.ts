@@ -93,14 +93,18 @@ async function runWith(name: string, lines: string[], mode: number): Promise<Run
     void exited.then(() => resolve(false));
   });
   if (!(await listening)) return { exitCode: await exited, output };
-  const status = await new Promise<number>((resolve, reject) => {
-    http.get({ host: "127.0.0.1", port, path: `/${PLACEHOLDER}/v1/models`, agent: false }, (res) => {
-      res.resume();
-      res.on("end", () => resolve(res.statusCode ?? 0));
-    }).on("error", reject);
-  });
-  child.kill("SIGTERM");
-  return { exitCode: await exited, output, status };
+  try {
+    const status = await new Promise<number>((resolve, reject) => {
+      http.get({ host: "127.0.0.1", port, path: `/${PLACEHOLDER}/v1/models`, agent: false }, (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode ?? 0));
+      }).on("error", reject);
+    });
+    return { exitCode: null, output, status };
+  } finally {
+    child.kill("SIGTERM");
+    await exited;
+  }
 }
 
 describe.skipIf(process.platform === "win32")("run-model-key-proxy.sh", () => {
