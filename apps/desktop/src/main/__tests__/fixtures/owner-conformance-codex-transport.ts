@@ -1,5 +1,5 @@
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
-import { readFileSync, writeFileSync, watch } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync, watch } from "node:fs";
 import path from "node:path";
 
 type FixtureTurn = { id: string; status: string; items: unknown[]; error: { message: string } | null };
@@ -37,6 +37,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   static recordsFile: string | undefined;
   static helperTitle: string | undefined;
   private static heldCompletions = new Map<string, () => void>();
+  private static approvalAnswers = new Map<string, (answer: unknown) => void>();
 
   /** A protocol-fixture barrier: completion follows the oracle's overlap check. */
   static completeHeldTurn(threadId: string): void {
@@ -65,6 +66,7 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
     OwnerConformanceCodexTransport.recordsFile = undefined;
     OwnerConformanceCodexTransport.helperTitle = undefined;
     OwnerConformanceCodexTransport.heldCompletions.clear();
+    OwnerConformanceCodexTransport.approvalAnswers.clear();
     OwnerConformanceCodexTransport.activeTurns.clear();
   }
 
@@ -86,8 +88,13 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
   }
 
   send(message: string): void {
-    const request = JSON.parse(message) as { id?: number; method: string; params?: Record<string, unknown> };
+    const request = JSON.parse(message) as { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown };
     if (request.id === undefined) return;
+    if (request.method === undefined) {
+      // The owner's answer to an approval this fixture asked for.
+      OwnerConformanceCodexTransport.approvalAnswers.get(String(request.id))?.(request.result);
+      return;
+    }
     const params = request.params ?? {};
     OwnerConformanceCodexTransport.requests.push({ method: request.method, params });
     const recordsFile = OwnerConformanceCodexTransport.recordsFile;
@@ -177,7 +184,30 @@ export class OwnerConformanceCodexTransport implements JsonRpcTransport {
       if (thread && !thread.preview) thread.preview = prompt;
       const turnId = `turn-${++OwnerConformanceCodexTransport.sequence}`;
       result = { turn: { id: turnId, status: "inProgress", items: [], error: null } };
-      if (thread && prompt === "slow") {
+      if (thread && prompt === "approval" && params.approvalPolicy !== "never") {
+        // Codex asks the operator before a command outside the sandbox, and
+        // the turn continues once the answer arrives. Under `never` it asks
+        // nobody: the command fails and the turn ends like any other.
+        const requestId = `approval-${turnId}`;
+        const turn: FixtureTurn = { id: turnId, status: "inProgress", items: [], error: null };
+        this.activeTurns.set(thread.id, turn);
+        this.ownedActiveTurns.add(thread.id);
+        thread.turns.push(turn);
+        OwnerConformanceCodexTransport.approvalAnswers.set(requestId, (answer) => {
+          OwnerConformanceCodexTransport.approvalAnswers.delete(requestId);
+          if (recordsFile) appendFileSync(path.join(path.dirname(recordsFile), "approval-answers.jsonl"), JSON.stringify(answer) + "\n");
+          this.activeTurns.delete(thread.id);
+          turn.status = "completed";
+          turn.items = [{ type: "agentMessage", text: "Fixture result" }];
+          const current = OwnerConformanceCodexTransport.threads.get(thread.id)!;
+          current.turns = current.turns.map(value => value.id === turn.id ? turn : value);
+          if (recordsFile) writeFileSync(recordsFile, JSON.stringify(Object.fromEntries(OwnerConformanceCodexTransport.threads)));
+          this.notify("turn/completed", { threadId: thread.id, turn });
+        });
+        followUp = { method: "turn/started", params: { threadId: thread.id, turn } };
+        this.schedule(() => this.handler(JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "item/commandExecution/requestApproval",
+          params: { threadId: thread.id, turnId, itemId: `command-${turnId}`, command: "touch ../outside-workspace", cwd: thread.cwd } })), 10);
+      } else if (thread && prompt === "slow") {
         // Match the Outpost fixture's held turn, released by turn/interrupt.
         const turn: FixtureTurn = { id: turnId, status: "inProgress", items: [], error: null };
         this.activeTurns.set(thread.id, turn);

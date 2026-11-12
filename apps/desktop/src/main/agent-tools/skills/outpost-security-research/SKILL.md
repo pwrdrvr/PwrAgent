@@ -145,6 +145,15 @@ What `compose.yaml` sets up:
   pick (`default` is read-only, `auto` is workspace-write, `full-access` is
   never right for research). `PWRAGENT_OUTPOST_AGENT_NETWORK=off` keeps the
   Codex sandbox's own network off as a second layer.
+  `PWRAGENT_OUTPOST_FEDERATION_ROLE=contained` keeps an untrusted model from
+  calling into your federation: the Outpost refuses every request it would
+  originate, and its models get only read-only PwrAgent tools. Contained is
+  the default, but it is set explicitly so a later default can never widen a
+  research Outpost. With `PWRAGENT_OUTPOST_APPROVALS=ask`, a command that
+  needs approval waits in Attention for a person on a viewer with the
+  `pending_request_control` grant, even in Auto: a contained Outpost never
+  lets the model review its own escalation. Use `never` to have such commands
+  fail instead. Unknown values stop startup.
 - The egress container is on both networks and relays exactly `:47833` to the
   gateway and `:8787` to `key-proxy`. Nothing else crosses. `key-proxy` is not
   on the internal network, so the Outpost reaches it only through that relay.
@@ -287,10 +296,13 @@ docker compose start outpost
 
 - In Default and Auto, Codex's permission profiles deny agent commands the
   profile folder, which holds the secret store key, the state database and the
-  local control socket, and the Codex home's credentials (`auth.json`,
-  `.credentials.json`, `secrets/`). Full Access has no sandbox: never allow it
-  on a research Outpost.
-- Everything else on the volume is readable, including the rest of the Codex
-  home and every pushed repository.
-- The Outpost's federation role is contained: peers refuse requests it
-  originates. Viewers can still start, read and steer its threads.
+  local control socket. In the Codex home they deny the credentials
+  (`auth.json`, `.credentials.json`, `secrets/`) and the files only Codex
+  reads (`config.toml`, `sessions/`, `archived_sessions/`, `history.jsonl`,
+  `session_index.jsonl`, `log/`), and leave the rest read-only. Full Access
+  has no sandbox: never allow it on a research Outpost.
+- Everything else on the volume is readable, including every pushed
+  repository.
+- The Outpost's federation role is contained: it refuses requests it would
+  originate, and peers refuse them too. Viewers can still start, read and
+  steer its threads, and answer its approval requests.

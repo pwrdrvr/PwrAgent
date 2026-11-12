@@ -1,4 +1,4 @@
-import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchiveConfig, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
+import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchiveConfig, FederationPeerRole, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
 import {
   FORGE_AGENT_TOOL_GROUPS,
   FORGE_AGENT_TOOL_RULE_GROUPS,
@@ -220,6 +220,12 @@ export type DesktopSettingsConfig = {
   };
   federation?: {
     mode?: DesktopFederationMode;
+    /**
+     * This instance's own containment (member-containment.ts). Contained
+     * refuses its own outbound federation requests and limits its models'
+     * agent tools. Absent means full.
+     */
+    memberRole?: FederationPeerRole;
     instanceLabel?: string;
     instanceNotes?: string;
     listenHost?: string;
@@ -2423,6 +2429,7 @@ function normalizeDesktopConfig(
     },
     federation: {
       mode: readFederationMode(federation?.mode),
+      memberRole: readFederationMemberRole(federation?.member_role),
       instanceLabel: readString(federation?.instance_label),
       instanceNotes: readString(federation?.instance_notes),
       listenHost: readString(federation?.listen_host),
@@ -3428,6 +3435,17 @@ function legacyGatewayUrlComment(): string {
     `used_through=${LEGACY_FEDERATION_GATEWAY_URL_LAST_VERSION}`,
     "kept_for_older_clients",
   ].join(" ");
+}
+
+/**
+ * Containment fails closed: a value the operator wrote but this build does
+ * not recognize, such as `"trusted"` or `true`, contains the instance.
+ */
+export function readFederationMemberRole(
+  value: TomlScalar | undefined,
+): FederationPeerRole | undefined {
+  if (value === undefined || value === "") return undefined;
+  return typeof value === "string" && value.trim().toLowerCase() === "full" ? "full" : "contained";
 }
 
 function readFederationMode(

@@ -10,10 +10,10 @@ import {
   isAgentToolCallAllowed,
   qualifiedAgentToolName,
 } from "../headless/outpost-agent-tools";
-import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
+import { agentToolAllowlistForRole } from "../member-containment";
 
-// Rule: an untrusted model on the Outpost sees and can call only the agent
-// tools the Outpost policy names. A dynamic tool runs in the owner, outside
+// Rule: an untrusted model on a contained member sees and can call only the
+// agent tools the allowlist names. A dynamic tool runs in the owner, outside
 // the Codex sandbox, so the allowlist is the whole grant: a tool added to any
 // catalog later is refused until someone lists it.
 
@@ -38,12 +38,12 @@ function names(specs: readonly unknown[]): string[] {
 }
 
 const catalogNames = names(fullCatalog());
-const allowlist = createOutpostRuntimePolicy({ PWRAGENT_HOME: "/srv/pwragent" }).agentToolAllowlist;
+const allowlist = agentToolAllowlistForRole("contained")!;
 const toolName = fc.oneof(fc.constantFrom(...catalogNames.map((name) => name.split("/").at(-1)!)), fc.string({ minLength: 1 }));
 const namespaceName = fc.oneof(fc.constant(PWRAGENT_TOOL_NAMESPACE), fc.string({ minLength: 1 }));
 
 describe("Outpost agent tool allowlist", () => {
-  it("is the policy every Outpost runs, and names only tools the catalogs define", () => {
+  it("is the grant every contained member runs, and names only tools the catalogs define", () => {
     expect(allowlist).toEqual(OUTPOST_AGENT_TOOL_ALLOWLIST);
     // A renamed tool would otherwise silently drop out of the grant.
     for (const name of allowlist) expect(catalogNames).toContain(name);
@@ -52,7 +52,7 @@ describe("Outpost agent tool allowlist", () => {
   });
 
   it("advertises exactly the allowed subset of any tool list, on every outbound request", () => {
-    const rewrite = createOutpostAgentToolMessageRewriter(allowlist);
+    const rewrite = createOutpostAgentToolMessageRewriter(() => allowlist);
     const flatTool = fc.record({ type: fc.constant("function"), name: toolName, description: fc.string() });
     const namespaceTool = fc.record({
       type: fc.constant("namespace"), name: namespaceName, description: fc.string(),
@@ -74,7 +74,7 @@ describe("Outpost agent tool allowlist", () => {
   });
 
   it("strips the whole Outpost catalog down to the grant", () => {
-    const rewrite = createOutpostAgentToolMessageRewriter(allowlist);
+    const rewrite = createOutpostAgentToolMessageRewriter(() => allowlist);
     const sent = JSON.parse(rewrite(JSON.stringify({ id: 1, method: "thread/start", params: { dynamicTools: fullCatalog() } })));
     expect(new Set(names(sent.params.dynamicTools))).toEqual(new Set(allowlist));
   });

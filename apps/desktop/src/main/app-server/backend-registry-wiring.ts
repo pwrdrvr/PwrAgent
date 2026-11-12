@@ -14,7 +14,7 @@ import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attrib
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
-import { codexModelProviderApiKeyEnv, type CodexModelProviderSettings } from "@pwragent/shared";
+import { codexModelProviderApiKeyEnv, PWRAGENT_TOOL_NAMESPACE, type CodexModelProviderSettings } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -101,6 +101,14 @@ import { DesktopBackendRegistry } from "./backend-registry";
 import { ForgeToolBridge } from "./forge-tool-bridge";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
+import { isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
+import { localAgentToolAllowlist } from "../member-containment";
+
+// A contained member's MCP clients see only its allowed PwrAgent tools.
+function isMcpToolAdvertised(name: string): boolean {
+  const allowlist = localAgentToolAllowlist();
+  return !allowlist || isAgentToolCallAllowed(allowlist, { namespace: PWRAGENT_TOOL_NAMESPACE, tool: name });
+}
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
@@ -883,6 +891,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
             }, { taskMonitorRole: "all" }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
+          isToolAdvertised: isMcpToolAdvertised,
           resolveToolResultReminder: (context) =>
             ports.takeAcpMonitorJobSuggestion(context),
         });

@@ -6,9 +6,9 @@ import { expect, it } from "vitest";
 import { assertOwnerExecutionPolicy, createOutpostRuntimePolicy, ownerSandboxForMode, type OwnerRuntimePolicy } from "../owner-runtime-policy";
 
 const policy: OwnerRuntimePolicy = {
-  enabledBackends: ["codex"], approvalPolicy: "never", executionModes: ["default", "auto"],
-  sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained",
-  codexProtectedRoots: [path.resolve("/srv/pwragent/profiles")], codexReadOnlyRoots: [path.resolve("/srv/codex-home")], agentToolAllowlist: [],
+  enabledBackends: ["codex"], approvals: "never", executionModes: ["default", "auto"],
+  sandboxByMode: { default: "read-only", auto: "workspace-write" }, memberRole: "contained",
+  codexProtectedRoots: [path.resolve("/srv/pwragent/profiles")], codexReadOnlyRoots: [path.resolve("/srv/codex-home")],
 };
 it("the Outpost host enables Codex only, independent of inherited provider environment", () => {
   fc.assert(fc.property(fc.constantFrom("claude", "acp:gemini", "codex,claude"), value => {
@@ -17,18 +17,21 @@ it("the Outpost host enables Codex only, independent of inherited provider envir
 });
 it("rejects every unsafe explicit provider, mode, approval or sandbox combination before admission", () => {
   fc.assert(fc.property(
-    fc.constantFrom("codex", "claude"), fc.constantFrom(undefined, "default", "auto", "full-access"),
+    fc.constantFrom("ask", "never"), fc.constantFrom("codex", "claude"), fc.constantFrom(undefined, "default", "auto", "full-access"),
     fc.constantFrom(undefined, "never", "on-request", "untrusted"), fc.constantFrom(undefined, "read-only", "workspace-write", "danger-full-access"),
-    (backend, executionMode, approvalPolicy, sandbox) => {
+    (approvals, backend, executionMode, approvalPolicy, sandbox) => {
       const request = { backend, executionMode, approvalPolicy, sandbox };
+      const host = { ...policy, approvals } as const;
       // The mode chooses the sandbox. A caller may restate it, never change it,
       // and a sandbox without a mode is refused before any queue accepts it.
       const modeSandbox = executionMode ? policy.sandboxByMode[executionMode] : undefined;
+      // Only an operator who turned approvals off pins the approval policy.
       const allowed = backend === "codex" && executionMode !== "full-access"
-        && (approvalPolicy === undefined || approvalPolicy === "never") && sandbox !== "danger-full-access"
+        && (approvals === "ask" || approvalPolicy === undefined || approvalPolicy === "never")
+        && sandbox !== "danger-full-access"
         && (sandbox === undefined || sandbox === modeSandbox);
-      if (allowed) expect(() => assertOwnerExecutionPolicy(policy, request)).not.toThrow();
-      else expect(() => assertOwnerExecutionPolicy(policy, request)).toThrow();
+      if (allowed) expect(() => assertOwnerExecutionPolicy(host, request)).not.toThrow();
+      else expect(() => assertOwnerExecutionPolicy(host, request)).toThrow();
       expect(() => assertOwnerExecutionPolicy(undefined, request)).not.toThrow();
     },
   ));
@@ -53,9 +56,9 @@ it("uses the operator's enabled backends without relaxing unattended execution",
   expect(() => assertOwnerExecutionPolicy({ ...policy, enabledBackends: ["codex", "claude"] }, { backend: "claude", executionMode: "full-access" })).toThrow();
 });
 
-it("the App Server launch configuration cannot grant approvals or tool network access", () => {
-  fc.assert(fc.property(fc.string(), path => {
-    const args = buildCodexClientArgs({ PATH: path }, [], [], policy);
+it("the App Server launch configuration follows the operator's approvals and never grants tool network access", () => {
+  fc.assert(fc.property(fc.string(), fc.constantFrom("ask", "never"), (path, approvals) => {
+    const args = buildCodexClientArgs({ PATH: path }, [], [], { ...policy, approvals });
     const values = new Map<string, string>();
     for (let index = 0; index < args.length; index++) {
       if (args[index] !== "-c") continue;
@@ -63,7 +66,7 @@ it("the App Server launch configuration cannot grant approvals or tool network a
       const separator = override.indexOf("=");
       values.set(override.slice(0, separator), override.slice(separator + 1));
     }
-    expect(values.get("approval_policy")).toBe('"never"');
+    expect(values.get("approval_policy")).toBe(approvals === "never" ? '"never"' : '"on-request"');
     // Sandbox profiles and their deny entries: outpost-codex-sandbox.property.test.ts.
     expect(values.get("default_permissions")).toBe('"pwragent-outpost-read-only"');
     expect(values.get("permissions.pwragent-outpost-read-only.network.enabled")).toBe("false");
@@ -92,7 +95,9 @@ it("with no operator settings the Outpost keeps the locked-down policy", () => {
   expect(created.executionModes).toEqual(["default", "auto"]);
   expect(created.sandboxByMode).toEqual({ default: "read-only", auto: "workspace-write" });
   expect(created.agentNetwork).toBe(false);
-  expect(created.federationEgressRole).toBe("contained");
+  // A person approves escalations, and the member cannot call into the federation.
+  expect(created.approvals).toBe("ask");
+  expect(created.memberRole).toBe("contained");
   expect(profileNetwork(buildCodexClientArgs({}, [], [], created))).toEqual(["false", "false"]);
 });
 
@@ -105,8 +110,8 @@ it("operator execution modes and agent network are independent, and admission fo
       const created = createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_EXECUTION_MODES: modes.join(" , "), PWRAGENT_OUTPOST_AGENT_NETWORK: network });
       expect(created.executionModes).toEqual(allModes.filter(mode => modes.includes(mode)));
       expect(created.agentNetwork).toBe(network?.trim().toLowerCase() === "on");
-      expect(created.approvalPolicy).toBe("never");
-      expect(created.federationEgressRole).toBe("contained");
+      expect(created.approvals).toBe("ask");
+      expect(created.memberRole).toBe("contained");
       // Both Outpost permission profiles carry the operator's network choice,
       // and no legacy sandbox setting reaches Codex.
       const args = buildCodexClientArgs({}, [], [], created);
@@ -130,4 +135,21 @@ it("rejects unknown operator settings instead of falling back", () => {
   fc.assert(fc.property(fc.constantFrom("true", "1", "yes", "enabled"), value => {
     expect(() => createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_AGENT_NETWORK: value })).toThrow();
   }));
+  fc.assert(fc.property(fc.constantFrom("on-request", "off", "yes", "untrusted"), value => {
+    expect(() => createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_APPROVALS: value })).toThrow();
+  }));
+  fc.assert(fc.property(fc.constantFrom("viewer", "trusted", "none", "contained,full"), value => {
+    expect(() => createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_FEDERATION_ROLE: value })).toThrow();
+  }));
+});
+
+it("the operator's approvals and federation role are read exactly, defaulting to ask and contained", () => {
+  fc.assert(fc.property(
+    fc.constantFrom(undefined, "", "ask", " ASK ", "never", "Never"), fc.constantFrom(undefined, "", "contained", " Full ", "full"),
+    (approvals, role) => {
+      const created = createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_APPROVALS: approvals, PWRAGENT_OUTPOST_FEDERATION_ROLE: role });
+      expect(created.approvals).toBe(approvals?.trim().toLowerCase() === "never" ? "never" : "ask");
+      expect(created.memberRole).toBe(role?.trim().toLowerCase() === "full" ? "full" : "contained");
+    },
+  ));
 });

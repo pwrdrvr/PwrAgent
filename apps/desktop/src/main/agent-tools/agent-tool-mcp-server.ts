@@ -148,6 +148,11 @@ export type AgentToolMcpServerOptions = {
   authorizeToolCall?: (
     params: AgentToolMcpAuthorization,
   ) => string | null | undefined | Promise<string | null | undefined>;
+  /**
+   * Whether a client may see a tool. A contained member lists only its
+   * allowed tools; `authorizeToolCall` still refuses the rest per call.
+   */
+  isToolAdvertised?: (name: string) => boolean;
   resolveToolResultReminder?: (
     context: ResolvedAgentToolMcpCallContext,
   ) => Promise<string | undefined>;
@@ -551,6 +556,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const toolsByName = new Map<string, AgentMcpTool>();
     for (const catalog of this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
+        if (this.options.isToolAdvertised && !this.options.isToolAdvertised(tool.name)) continue;
         if (toolsByName.has(tool.name)) {
           throw new Error(`Duplicate PwrAgent MCP tool name: ${tool.name}`);
         }

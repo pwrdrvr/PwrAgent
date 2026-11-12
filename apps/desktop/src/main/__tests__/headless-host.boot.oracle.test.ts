@@ -106,7 +106,7 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
   expect(pdfServerWired).toBe(true);
   expect(pdfServerOffered).toBe(false);
   const refusedByPolicy = (response: (typeof responses)[number]) =>
-    !response.success && response.contentItems.some((item) => item.text?.includes("This Outpost does not allow this PwrAgent tool."));
+    !response.success && response.contentItems.some((item) => item.text?.includes("This contained member does not allow this PwrAgent tool."));
   calls.forEach((call, index) => {
     const namespace = call.namespace === null ? PWRAGENT_TOOL_NAMESPACE : call.namespace;
     const listed = OUTPOST_AGENT_TOOL_ALLOWLIST.includes(`${namespace}/${call.tool}`);

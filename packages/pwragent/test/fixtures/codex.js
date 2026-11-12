@@ -23,7 +23,19 @@ if (process.argv[2] === "sandbox") {
 log({ startup: process.argv.slice(2) });
 const launch = process.argv.slice(2);
 assert.equal(launch.shift(), "app-server");
-while (launch[0] === "-c") { launch.shift(); const override = launch.shift(); if (override.startsWith("approval_policy=")) assert.equal(override, 'approval_policy="never"'); }
+// The owner launches with the operator's approval setting. With approvals
+// off nothing may ask; otherwise each request carries its mode's policy.
+let launchApprovalPolicy;
+while (launch[0] === "-c") {
+  launch.shift();
+  const override = launch.shift();
+  if (override.startsWith("approval_policy=")) launchApprovalPolicy = JSON.parse(override.slice("approval_policy=".length));
+}
+assert.ok(launchApprovalPolicy === undefined || ["never", "on-request"].includes(launchApprovalPolicy));
+const assertApprovalPolicy = (value) => {
+  if (launchApprovalPolicy === "never") assert.equal(value, "never");
+  else assert.ok(["never", "on-request"].includes(value));
+};
 assert.ok(launch.length === 0 || JSON.stringify(launch) === JSON.stringify(["--listen", "stdio://"]));
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 // An Outpost selects its own permission profiles; desktop sends a legacy sandbox.
@@ -71,6 +83,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   log(message);
   const { method, id, params } = message;
   if (!method) {
+    // An answered approval lets the held turn finish, as Codex continues it.
+    if (id === "server-request" && active) {
+      appendFileSync(path.join(directory, "server-request-results.jsonl"), JSON.stringify(message.result) + "\n");
+      complete("completed");
+      continue;
+    }
     if (String(id).startsWith("fixture-tool-")) {
       appendFileSync(path.join(directory, "tool-results.jsonl"), JSON.stringify(message.result) + "\n");
       complete("completed");
@@ -121,7 +139,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, hidden: false,
         supportedReasoningEfforts: [], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
     } else if (method === "thread/start" || method === "thread/resume") {
-      if (params.approvalPolicy !== undefined) assert.equal(params.approvalPolicy, "never");
+      if (params.approvalPolicy !== undefined) assertApprovalPolicy(params.approvalPolicy);
       if (assertSandbox(params, "sandbox", ["read-only", "workspace-write"]) && params.sandbox !== undefined) {
         assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
       }
@@ -138,7 +156,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       persist();
       reply({ thread: threads[threadId] });
     } else if (method === "turn/start") {
-      assert.equal(params.approvalPolicy, "never");
+      assertApprovalPolicy(params.approvalPolicy);
       if (assertSandbox(params, "sandboxPolicy", ["read-only", "workspace-write"])) assert.equal(params.sandboxPolicy.networkAccess, false);
       assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const prompt = params.input[0].text;
@@ -177,8 +195,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         writeFileSync(path.join(directory, "descendant.pid"), String(child.pid));
       }
       if (prompt === "approval" || prompt === "question") {
+        // Only a policy that asks can produce an approval request.
+        if (prompt === "approval") assert.equal(params.approvalPolicy, "on-request");
         send({ id: "server-request", method: prompt === "approval" ? "item/commandExecution/requestApproval" : "item/tool/requestUserInput",
-          params: { threadId: params.threadId, turnId: active.id } });
+          params: { threadId: params.threadId, turnId: active.id, itemId: `command-${active.id}`, command: "touch outside-workspace" } });
       }
       active.timer = setTimeout(() => {
         writeFileSync(path.join(params.cwd, "fixture-result.txt"), prompt);

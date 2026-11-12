@@ -3,8 +3,9 @@ import { appendFederationRefusalAudit } from "@pwragent/federation/federation-re
 import { containedFederationNotificationAllowed } from "@pwragent/federation/federation-backend-methods";
 import { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
 import type { FederationPeerRole } from "@pwragent/shared";
-import { applicationHost as app, getOwnerHostServices } from "../owner-host";
+import { applicationHost as app } from "../owner-host";
 import { installOwnerEgressPolicy } from "./owner-egress-policy";
+import { localMemberRole } from "../member-containment";
 import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
@@ -5026,8 +5027,9 @@ export class DesktopFederationRuntime {
   }
 
   private installEgressPolicy(connection: FederationGatewayConnection | FederationClientWebSocketClient): void {
-    const role = getOwnerHostServices().runtimePolicy?.federationEgressRole;
-    if (!role) return;
+    // A contained member refuses its own outbound requests, on any host.
+    const role = localMemberRole();
+    if (role !== "contained") return;
     installOwnerEgressPolicy(connection, role, this.ensureLocalInstanceId(),
       event => appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), event));
   }
@@ -5559,7 +5561,7 @@ export class DesktopFederationRuntime {
   }
 
   private canOriginateNotification(method: string): boolean {
-    return getOwnerHostServices().runtimePolicy?.federationEgressRole !== "contained" || containedFederationNotificationAllowed(method);
+    return localMemberRole() !== "contained" || containedFederationNotificationAllowed(method);
   }
 
   private broadcastPeerDirectory(): void {

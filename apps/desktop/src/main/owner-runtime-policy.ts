@@ -2,10 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AppServerBackendKind, FederationPeerRole, ThreadExecutionMode } from "@pwragent/shared";
 import { resolveOutpostCodexHome, resolveOutpostProtectedRoots } from "./headless/outpost-codex-sandbox";
-import { OUTPOST_AGENT_TOOL_ALLOWLIST } from "./headless/outpost-agent-tools";
 import { resolvePwragentRoot } from "./profile";
 
 export type OwnerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+/** `ask`: each execution mode asks as it does on a desktop. `never`: nothing asks. */
+export type OwnerApprovals = "ask" | "never";
 
 /** Host configuration; desktop leaves this unset. */
 export interface OwnerRuntimePolicy {
@@ -15,21 +16,17 @@ export interface OwnerRuntimePolicy {
   /** Runtime instances the host proved gone; their profile leases are reclaimed at once. */
   exitedRuntimeInstanceIds?: readonly string[];
   enabledBackends: readonly AppServerBackendKind[];
-  approvalPolicy: "never";
+  approvals: OwnerApprovals;
   executionModes: readonly ThreadExecutionMode[];
   sandboxByMode: Readonly<Partial<Record<ThreadExecutionMode, OwnerSandboxMode>>>;
   /** Network for agent commands inside the sandbox. Absent means off. */
   agentNetwork?: boolean;
-  federationEgressRole: FederationPeerRole;
+  /** This member's containment; see member-containment.ts. */
+  memberRole: FederationPeerRole;
   /** Paths every Codex permission profile denies, including Codex credentials; see outpost-codex-sandbox.ts. */
   codexProtectedRoots: readonly string[];
   /** Paths agent commands may read but never write: the Codex home. */
   codexReadOnlyRoots: readonly string[];
-  /**
-   * Qualified `namespace/tool` names of the PwrAgent agent tools a model may
-   * see and call; every other tool is refused. See outpost-agent-tools.ts.
-   */
-  agentToolAllowlist: readonly string[];
 }
 export interface OwnerExecutionRequest {
   backend: AppServerBackendKind;
@@ -41,7 +38,9 @@ export function assertOwnerExecutionPolicy(policy: OwnerRuntimePolicy | undefine
   if (!policy) return;
   if (!policy.enabledBackends.includes(request.backend)) throw new Error(`Backend ${request.backend} is disabled by this host's configuration.`);
   if (request.executionMode && !policy.executionModes.includes(request.executionMode)) throw new Error(executionModeUnavailableMessage(request.executionMode));
-  if (request.approvalPolicy !== undefined && request.approvalPolicy !== policy.approvalPolicy) throw new Error("This unattended Outpost requires approvalPolicy never.");
+  if (policy.approvals === "never" && request.approvalPolicy !== undefined && request.approvalPolicy !== "never") {
+    throw new Error("This Outpost's operator turned approvals off, so it requires approvalPolicy never.");
+  }
   if (request.sandbox !== undefined && !allowedSandboxes(policy).includes(request.sandbox)) throw new Error(`This Outpost does not allow the ${request.sandbox} sandbox.`);
   // The mode chooses the sandbox, so a sandbox is checked against a named mode.
   // Without one the mode comes from the thread, which admission cannot see, and
@@ -113,15 +112,43 @@ export function parseOutpostAgentNetwork(value: string | undefined): boolean {
   throw new Error(`PWRAGENT_OUTPOST_AGENT_NETWORK must be on or off, not "${value}".`);
 }
 
+/**
+ * PWRAGENT_OUTPOST_APPROVALS: `ask` (default) lets each execution mode ask for
+ * approval as it does on a desktop, answered from any viewer. `never` is for
+ * an Outpost nobody watches: nothing asks, and a command that needs approval
+ * fails.
+ */
+export function parseOutpostApprovals(value: string | undefined): OwnerApprovals {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === undefined || normalized === "" || normalized === "ask") return "ask";
+  if (normalized === "never") return "never";
+  throw new Error(`PWRAGENT_OUTPOST_APPROVALS must be ask or never, not "${value}".`);
+}
+
+/**
+ * PWRAGENT_OUTPOST_FEDERATION_ROLE: `contained` (default) or `full`. A
+ * contained Outpost cannot call back into the federation, and its models get
+ * only the agent tool allowlist; a full one is a member like a desktop.
+ * Contained is the default so an upgrade never widens what an existing
+ * Outpost may do.
+ */
+export function parseOutpostFederationRole(value: string | undefined): FederationPeerRole {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === undefined || normalized === "" || normalized === "contained") return "contained";
+  if (normalized === "full") return "full";
+  throw new Error(`PWRAGENT_OUTPOST_FEDERATION_ROLE must be contained or full, not "${value}".`);
+}
+
 export function createOutpostRuntimePolicy(env: NodeJS.ProcessEnv = process.env): OwnerRuntimePolicy {
   const executionModes = parseOutpostExecutionModes(env.PWRAGENT_OUTPOST_EXECUTION_MODES);
   const sandboxByMode = Object.fromEntries(executionModes.map(mode => [mode, OUTPOST_SANDBOX_BY_MODE[mode]]));
   // The Codex home whose credentials agent commands must not read: the
   // daemon's `--codex-home`, else the one Codex itself would use.
   const codexHome = env.PWRAGENT_CODEX_HOME?.trim() || env.CODEX_HOME?.trim() || path.join(env.HOME?.trim() || os.homedir(), ".codex");
-  return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, codexHome: env.PWRAGENT_CODEX_HOME, enabledBackends: ["codex"], approvalPolicy: "never",
-    executionModes, sandboxByMode, agentNetwork: parseOutpostAgentNetwork(env.PWRAGENT_OUTPOST_AGENT_NETWORK), federationEgressRole: "contained",
+  return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, codexHome: env.PWRAGENT_CODEX_HOME, enabledBackends: ["codex"],
+    approvals: parseOutpostApprovals(env.PWRAGENT_OUTPOST_APPROVALS),
+    executionModes, sandboxByMode, agentNetwork: parseOutpostAgentNetwork(env.PWRAGENT_OUTPOST_AGENT_NETWORK),
+    memberRole: parseOutpostFederationRole(env.PWRAGENT_OUTPOST_FEDERATION_ROLE),
     codexProtectedRoots: resolveOutpostProtectedRoots(env.PWRAGENT_HOME?.trim() || resolvePwragentRoot({ env }), codexHome),
-    codexReadOnlyRoots: [resolveOutpostCodexHome(codexHome)],
-    agentToolAllowlist: OUTPOST_AGENT_TOOL_ALLOWLIST };
+    codexReadOnlyRoots: [resolveOutpostCodexHome(codexHome)] };
 }

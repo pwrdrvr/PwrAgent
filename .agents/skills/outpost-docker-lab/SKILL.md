@@ -115,6 +115,13 @@ docker logs --tail 40 <container>
 stops startup with its diagnostic and never retries with broader
 permissions. Read the log before you trust the container.
 
+The operator's policy is set here, with `-e`, and only here. With no
+variables the Outpost asks for approval in each mode, as a desktop does, and
+is a contained federation member. Pass the variables the operator chose, for
+example `-e PWRAGENT_OUTPOST_APPROVALS=never` for an Outpost nobody watches or
+`-e PWRAGENT_OUTPOST_FEDERATION_ROLE=full` for one whose models the operator
+trusts with the federation. The package README lists every variable.
+
 Put Codex credentials in `/home/outpost/codex` once, with the Codex CLI in
 the container or by copying an auth file you own. Never bake credentials
 into the image.
@@ -208,7 +215,11 @@ before you start a thread. The workspace root is always listed, as
    docker rename <container> <container>-before-<change>-<date>
    ```
 
-4. Run the new image with the same name, options, and volume.
+4. Run the new image with the same name, options, environment, and volume.
+   Read the old container's `-e` settings with
+   `docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' <container>-before-<change>-<date>`
+   and carry each `PWRAGENT_OUTPOST_*` one over. Images from before approvals
+   existed never asked; ask the operator before an upgrade starts asking.
 5. Verify: the log shows a passed sandbox check, `federation-status` reports
    the same instance id and a connected gateway, and a short `auto` turn
    creates a file in a project.
@@ -219,11 +230,14 @@ before you start a thread. The workspace root is always listed, as
 
 ## Current Limits
 
-- Viewers cannot see or change the Outpost policy. Approval is always
-  `never`, and the Outpost is a contained federation peer. The operator picks
-  the execution modes viewers may use and whether agent commands get network
-  with `PWRAGENT_OUTPOST_EXECUTION_MODES` and `PWRAGENT_OUTPOST_AGENT_NETWORK`
-  at `docker run`; see the package README.
+- Viewers cannot see or change the Outpost policy. The operator picks it at
+  `docker run`: the execution modes viewers may use, whether agent commands
+  get network, whether modes ask for approval, and whether the Outpost is a
+  contained or full federation member (`PWRAGENT_OUTPOST_EXECUTION_MODES`,
+  `PWRAGENT_OUTPOST_AGENT_NETWORK`, `PWRAGENT_OUTPOST_APPROVALS`,
+  `PWRAGENT_OUTPOST_FEDERATION_ROLE`); see the package README.
+- A viewer answers an Outpost's approval requests only with the
+  `pending_request_control` grant.
 - In Default and Auto, the Outpost's Codex permission profiles deny agent
   commands `$PWRAGENT_HOME/profiles`, which holds the secret store key, and
   the Codex home's credential files. They can still read the rest of the
