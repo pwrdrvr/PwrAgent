@@ -456,9 +456,9 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox with operat
         const profiles = [permissions, permissionProfile].filter((value) => value !== undefined && value !== null);
         if (selections.every(isFull) && profiles.length === 0) {
           // Every selection asked for full access: the request goes as sent,
-          // less any null selection.
+          // less a null legacy selection, which the rewriter always drops.
           const expected = Object.fromEntries(Object.entries(params)
-            .filter(([key, value]) => !(["sandbox", "sandboxPolicy", "permissions", "permissionProfile"].includes(key) && value === null)));
+            .filter(([key, value]) => !(["sandbox", "sandboxPolicy"].includes(key) && value === null)));
           expect(out).toEqual(expected);
         } else {
           // A narrower selection wins, through an Outpost profile.

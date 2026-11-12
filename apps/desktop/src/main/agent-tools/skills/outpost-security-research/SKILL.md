@@ -45,9 +45,9 @@ reads the rest from that container.
   federation invites, `federation.json`, `headless-secret.key`, or any
   `auth.json`.
 - Put no credentials in a research Outpost: no Codex login, no forge token, no
-  provider key. Codex's Linux sandbox limits writes, not reads, so an agent
-  can read anything on the volume, including the Outpost's own secret store
-  key, and can send it out inside a model request.
+  provider key. In Default and Auto, agent commands can read the whole volume
+  except `$PWRAGENT_HOME/profiles`, and can send what they read out inside a
+  model request.
 - Only the operator moves code. Review every branch you pull out before you
   merge it.
 
@@ -257,10 +257,11 @@ Then restart the in-container relay from step 4.
 
 ## Known Limits
 
-- Agents can read the volume, including the Outpost's secret store key and
-  state database. A model could send them out inside a request; a holder could
-  connect as the Outpost, still contained, and replace its live session.
-- Agents run as the same user as the Outpost. Whether they can reach its local
-  control socket, which the `pwragent` CLI uses, is not yet verified.
+- In Default and Auto, Codex's permission profiles deny agent commands the
+  profile folder, which holds the secret store key, the state database and the
+  local control socket. Full Access has no sandbox: never allow it on a
+  research Outpost.
+- Everything else on the volume is readable, including the Codex home and
+  every pushed repository.
 - The Outpost's federation role is contained: peers refuse requests it
   originates. Viewers can still start, read and steer its threads.
