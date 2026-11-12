@@ -795,7 +795,17 @@ export function buildLiveToolDetails(
       : itemType === "dynamictoolcall"
         ? summarizeDynamicToolResult(item)
       : summarizeToolOutput(readToolOutputText(item));
-  const images = retainedImages ?? readToolResultImages(item, itemType, toolName);
+  const sourceImages = readToolResultImages(item, itemType, toolName);
+  const replacedLinks = new Set(pwrSnapToolImageParts(item).map((image) => image.url));
+  const seenImages = new Set<string>();
+  const images = (retainedImages === undefined ? sourceImages : [
+    ...retainedImages,
+    ...sourceImages.filter((image) => !replacedLinks.has(image.url)),
+  ]).filter((image) => {
+    if (seenImages.has(image.url)) return false;
+    seenImages.add(image.url);
+    return true;
+  });
   const elapsedMs = readElapsedMs(item);
   const command =
     itemType === "commandexecution"

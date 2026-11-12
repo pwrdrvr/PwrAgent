@@ -10,7 +10,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import { ConnectionRpcClient } from "../mcp-connections/mcp-connection-rpc-client";
 import { readPwrSnapImageContents, readPwrSnapImageLinks } from "../mcp-connections/pwrsnap-media-links";
-import { materializeTranscriptImageEventForRenderer } from "../transcript-images";
+import { materializeTranscriptImageEventForRenderer, materializeTranscriptMessageImagesForMessaging } from "../transcript-images";
+import { findAssistantMessageForText } from "../messaging/find-assistant-reply-message";
 import { buildLiveToolDetails } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
@@ -221,4 +222,57 @@ it("rejects text-clipped binary resources rather than caching plausible corrupt 
     const clipped = blob.slice(0, offset) + " … " + blob.slice(offset + 10);
     expect(readPwrSnapImageContents({ contents: [{ uri, mimeType: "image/png", blob: clipped }] }, uri).ok).toBe(false);
   }), { numRuns: 10 });
+});
+
+it("keeps ordinary inline images beside retained resource previews for native and gateway activity", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 3 }), async (gateway, copies) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "pa-mixed-"));
+    directories.push(dir);
+    const image = png(71);
+    const inlineUrl = `data:image/png;base64,${image.bytes.toString("base64")}`;
+    const result = { content: [...Array(copies).fill(link), { type: "image", mimeType: "image/png", data: image.bytes.toString("base64") }] };
+    const item = gateway
+      ? { type: "dynamicToolCall", id: "mixed", tool: "call_mcp_tool", contentItems: [
+          { type: "inputText", text: JSON.stringify({ source: { connectionId: "pwrsnap" }, result: { content: [link] } }) },
+          { type: "inputImage", imageUrl: inlineUrl },
+        ] }
+      : { type: "mcpToolCall", id: "mixed", tool: "capture_resource", result };
+    const event: AgentEvent = { backend: "codex", notification: { method: "item/completed", params: {
+      threadId: "synthetic-thread", turnId: "turn", item,
+    } } };
+    const materialized = await materializeTranscriptImageEventForRenderer(event, {
+      resolveRoot: () => dir,
+      readPwrSnapMedia: async () => ({ ok: true, mimeType: "image/png", dataBase64: image.bytes.toString("base64") }),
+    });
+    const displayed = buildLiveToolDetails(item, materialized.rendererImageParts)[0]?.images ?? [];
+    expect(displayed.map((part) => part.url)).toContain(inlineUrl);
+    expect(displayed.filter((part) => part.url.startsWith("pwragent-image:"))).toHaveLength(1);
+    expect(displayed).toHaveLength(2);
+  }), { numRuns: 6 });
+});
+
+it("delivers an activity-owned PwrSnap capture as a messaging attachment without changing desktop replay", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pa-message-"));
+  directories.push(dir);
+  const image = png(91);
+  const reply = { id: "final", role: "assistant" as const, text: "Capture ready." };
+  const replay = {
+    entries: [
+      { type: "activity" as const, id: "capture", summary: "Capture", status: "completed" as const, turn: { id: "turn" },
+        details: [{ id: "capture", kind: "command" as const, label: "Capture", images: [{ type: "image" as const, url: uri }] }] },
+      { ...reply, type: "message" as const, turn: { id: "turn" } },
+    ],
+    messages: [reply], pagination: { supportsPagination: false, hasPreviousPage: false },
+  };
+  const before = JSON.stringify(replay);
+  const selected = findAssistantMessageForText(replay, reply.text, reply.id, "turn")!;
+  const readPwrSnapMedia = vi.fn(async () => ({ ok: true as const, mimeType: "image/png", dataBase64: image.bytes.toString("base64") }));
+  const attachments = await materializeTranscriptMessageImagesForMessaging({ backend: "codex", threadId: "synthetic-thread" }, selected, {
+    readPwrSnapMedia, resolveRoot: () => dir,
+  }, { approvedLocalImageRoots: [dir] });
+  expect(attachments).toHaveLength(1);
+  expect(attachments[0]!.url.startsWith("data:image/png;base64,")).toBe(true);
+  assertPng(Buffer.from(attachments[0]!.url.split(",")[1]!, "base64"), image);
+  expect(readPwrSnapMedia).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "synthetic-thread", uri });
+  expect(JSON.stringify(replay)).toBe(before);
 });
