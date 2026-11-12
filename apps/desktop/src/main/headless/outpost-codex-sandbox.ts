@@ -10,7 +10,8 @@ import path from "node:path";
  * file-key secret (`state/headless-secret.key`), the state database and the
  * federation identity it encrypts. Codex's legacy `sandboxPolicy` grants read
  * access to the whole filesystem, so a read-only or workspace-write command
- * could read that key and decrypt every stored secret.
+ * could read that key and decrypt every stored secret. The same commands
+ * could read the Codex home's credentials.
  *
  * Named Codex permission profiles can deny a path. Every profile this module
  * generates denies the protected roots, and the message rewriter converts
@@ -71,22 +72,45 @@ export function canonicalOutpostPath(value: string): string {
 }
 
 /**
- * The PwrAgent paths agent commands must not read. Every profile lives under
- * `<root>/profiles`; the root itself also holds worktrees, so it stays
- * readable. Only the canonical path is denied: the sandbox masks the real
- * location, and bubblewrap aborts every command when a deny entry names a
- * symlink.
+ * The Codex home entries that hold credentials: the login (`auth.json`, the
+ * Codex credential or the model key proxy's), the MCP OAuth fallback store
+ * (`.credentials.json`), and Codex's encrypted secret files (`secrets/`).
+ * The rest of the Codex home stays readable, because the model reads skills,
+ * plugin skills and memories there by path. Codex 0.159.2 and 0.164.0 left
+ * those readable with these entries denied, in a disposable Outpost
+ * container. Names only: PwrAgent never opens these files.
  */
-export function resolveOutpostProtectedRoots(pwragentRoot: string): string[] {
+export const OUTPOST_CODEX_CREDENTIAL_ENTRIES = ["auth.json", ".credentials.json", "secrets"] as const;
+
+/**
+ * The paths agent commands must not read. Every PwrAgent profile lives under
+ * `<root>/profiles`; the root itself also holds worktrees, so it stays
+ * readable. With a Codex home, its credential entries are denied as well.
+ *
+ * Only canonical paths are denied: the sandbox masks the real location, and
+ * bubblewrap aborts every command when a deny entry names a symlink. A
+ * credential file that is a symlink is therefore denied at its target, and
+ * one that does not exist yet is denied at its own path, so Codex can still
+ * create it and a later command still cannot read it.
+ */
+export function resolveOutpostProtectedRoots(pwragentRoot: string, codexHome?: string): string[] {
   if (!path.isAbsolute(pwragentRoot)) throw new Error("The Outpost requires an absolute PWRAGENT_HOME.");
-  return [canonicalOutpostPath(path.join(pwragentRoot, "profiles"))];
+  const roots = [canonicalOutpostPath(path.join(pwragentRoot, "profiles"))];
+  if (codexHome !== undefined) {
+    if (!path.isAbsolute(codexHome)) throw new Error("The Outpost requires an absolute Codex home.");
+    for (const entry of OUTPOST_CODEX_CREDENTIAL_ENTRIES) {
+      const denied = canonicalOutpostPath(path.join(codexHome, entry));
+      if (!roots.includes(denied)) roots.push(denied);
+    }
+  }
+  return roots;
 }
 
 function assertProtectedRoots(protectedRoots: readonly string[]): void {
   if (protectedRoots.length === 0) throw new Error("The Outpost sandbox requires at least one protected root.");
   for (const root of protectedRoots) {
     if (!path.isAbsolute(root) || path.resolve(root) !== root || root === path.parse(root).root) {
-      throw new Error("Outpost protected roots must be normalized absolute directories below the filesystem root.");
+      throw new Error("Outpost protected paths must be normalized absolute paths below the filesystem root.");
     }
   }
 }
