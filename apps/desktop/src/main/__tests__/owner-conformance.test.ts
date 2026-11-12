@@ -1,4 +1,3 @@
-import type { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
@@ -37,7 +36,7 @@ import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thr
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 import { OwnerConformanceCodexTransport } from "./fixtures/owner-conformance-codex-transport";
-import { startDesktopOwnerFixture } from "./helpers/desktop-owner-fixture";
+import { startDesktopOwnerFixture, type DesktopOwnerFixtureOptions } from "./helpers/desktop-owner-fixture";
 import {
   compareStep,
   type OwnerConformanceBaseline,
@@ -111,9 +110,9 @@ type OwnerHost = {
  * the shared capability table. Provider subprocesses use protocol fixtures.
  */
 async function startDesktopOwner(
-  threadTitleGenerationService: NonNullable<Parameters<typeof createDesktopBackendRegistry>[0]>["threadTitleGenerationService"] = null,
+  threadTitleGenerationService: DesktopOwnerFixtureOptions["threadTitleGenerationService"] = null,
   prepareAcp?: (db: StateDb, workspace: string) => Promise<void>,
-  claudeOptions?: (workspace: string) => NonNullable<Parameters<typeof createDesktopBackendRegistry>[0]>["claudeBackendOptions"],
+  claudeOptions?: DesktopOwnerFixtureOptions["claudeOptions"],
   profileRoot?: string,
   protocolHelperTitle?: string,
 ): Promise<OwnerHost> {

@@ -48,9 +48,12 @@ export type DesktopOwnerFixture = {
   overlayStore: SqliteOverlayStore;
   db: StateDb;
   workspace: string;
-  /** Holds the state database and config.toml. */
+  /** Holds config.toml, and the state database unless `profileRoot` is set. */
   tempDir: string;
-  /** Closes the registry, its client and stores, then removes temp directories. */
+  /**
+   * Closes the registry, its client and stores. Removes the temp directories
+   * unless `profileRoot` is set, whose contents survive for the next owner.
+   */
   close(): Promise<void>;
 };
 
@@ -76,39 +79,50 @@ export async function startDesktopOwnerFixture(options: DesktopOwnerFixtureOptio
   const db = StateDb.open(dbPath, profileRoot ? { profileName: "t" } : undefined);
   const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
   const overlayStore = new SqliteOverlayStore(db);
-  await prepareAcp?.(db, workspace);
-  setDesktopOverlayStoreForTests(overlayStore);
-  // Desktop lists Codex once discovery has selected an executable. The
-  // transport fixture stands in for that executable.
-  const configPath = path.join(tempDir, "config.toml");
-  await writeFile(configPath, "");
-  const configStore = new DesktopConfigStore({ configPath });
-  configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
-  const providerThreadSnapshots = options.providerThreadSnapshots ?? Boolean(profileRoot);
-  const retainedOwnerThreads = options.retainedOwnerThreads ?? Boolean(profileRoot);
-  const retainedRoot = profileRoot ? path.join(profileRoot, "profiles/t/state/headless") : path.join(tempDir, "headless");
-  const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
-    ...(providerThreadSnapshots ? { providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db) } : {}),
-    ...(retainedOwnerThreads ? { retainedOwnerThreadStorage: new RetainedOwnerThreadStore(db, retainedRoot) } : {}),
-    ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
-    ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
-    threadTitleGenerationService: protocolHelperTitle
-      ? new ThreadTitleGenerationService({ generators: { codex: codexClient } })
-      : options.threadTitleGenerationService ?? null,
-    pdfToolMcpServer: null, runtimeInstanceId: options.runtimeInstanceId,
-    resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
-  return {
-    registry, codexClient, overlayStore, db, workspace, tempDir,
-    close: async () => {
-      await registry.close();
-      await codexClient.close();
-      resetDesktopOverlayStoreForTests();
-      configStore.dispose();
-      db.close();
-      if (!profileRoot) {
-        await rm(workspace, { recursive: true, force: true });
-        await rm(tempDir, { recursive: true, force: true });
-      }
-    },
+  let configStore: DesktopConfigStore | undefined;
+  const releaseStores = async () => {
+    await codexClient.close();
+    resetDesktopOverlayStoreForTests();
+    configStore?.dispose();
+    db.close();
+    if (!profileRoot) {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(tempDir, { recursive: true, force: true });
+    }
   };
+  try {
+    await prepareAcp?.(db, workspace);
+    setDesktopOverlayStoreForTests(overlayStore);
+    // Desktop lists Codex once discovery has selected an executable. The
+    // transport fixture stands in for that executable.
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(configPath, "");
+    configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
+    const providerThreadSnapshots = options.providerThreadSnapshots ?? Boolean(profileRoot);
+    const retainedOwnerThreads = options.retainedOwnerThreads ?? Boolean(profileRoot);
+    const retainedRoot = profileRoot ? path.join(profileRoot, "profiles/t/state/headless") : path.join(tempDir, "headless");
+    const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
+      ...(providerThreadSnapshots ? { providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db) } : {}),
+      ...(retainedOwnerThreads ? { retainedOwnerThreadStorage: new RetainedOwnerThreadStore(db, retainedRoot) } : {}),
+      ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
+      ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
+      threadTitleGenerationService: protocolHelperTitle
+        ? new ThreadTitleGenerationService({ generators: { codex: codexClient } })
+        : options.threadTitleGenerationService ?? null,
+      pdfToolMcpServer: null, runtimeInstanceId: options.runtimeInstanceId,
+      resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
+    return {
+      registry, codexClient, overlayStore, db, workspace, tempDir,
+      close: async () => {
+        await registry.close();
+        await releaseStores();
+      },
+    };
+  } catch (error) {
+    // A failed start returns no close(); release what it opened so the
+    // global overlay store and the temp directories do not reach the next test.
+    await releaseStores();
+    throw error;
+  }
 }
