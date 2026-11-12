@@ -117,6 +117,11 @@ export function createModelKeyProxy({ upstream, apiKey, placeholder, log = defau
     const path = mapUpstreamPath(req.url, placeholder, upstreamBase);
     if (!path) {
       log("rejected", { reason: "bad_placeholder_or_path", method: "UPGRADE", path: redact(req.url), from: req.socket.remoteAddress });
+      // Drop what the client sent after the request, so its FIN arrives and
+      // the socket closes. Unread, a rejected socket is held for good.
+      socket.on("error", () => socket.destroy());
+      socket.setTimeout(10_000, () => socket.destroy());
+      socket.resume();
       socket.end("HTTP/1.1 403 Forbidden\r\nconnection: close\r\n\r\n");
       return;
     }
