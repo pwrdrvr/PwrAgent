@@ -202,6 +202,11 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
+  /**
+   * The live transcript version when the read behind `response` was issued.
+   * Live items observed after it cannot be in that read.
+   */
+  liveCaptureVersion?: number;
   loadedHistory?: LoadedTranscriptHistory;
   /**
    * Counts restarts of older-page history. An older page requested before a
@@ -1024,6 +1029,93 @@ function withoutTranscriptTurns(
   };
 }
 
+// A tail row can outlive the newest pages as a row seen only on the live
+// stream, under its optimistic or live id: a sent message whose turn no newest
+// page held. When an older page returns that turn, the page row is the same
+// item under its provider id. Adopt that id in place, so the history page
+// drops its copy by id instead of rendering the item twice.
+function adoptOlderPageIdentities(
+  tail: AppServerReadThreadResponse,
+  page: AppServerReadThreadResponse,
+  providerPageTurnIds: ReadonlySet<string> | undefined,
+  hasLoadedHistory: boolean,
+): AppServerReadThreadResponse {
+  const tailIds = new Set(tail.replay.entries.map((entry) => entry.id));
+  const pageIds = new Set(page.replay.entries.map((entry) => entry.id));
+  // Only rows no provider page delivered can carry a non-provider id. Rows of
+  // provider turns keep their ids: two of them may repeat the same text. A
+  // sent message is bound to its turn by the send, not by turn metadata.
+  // A send never bound to its turn has no turn to match, only its text, and
+  // an older turn may repeat that text. Its turn began after every turn shown
+  // above it and before the provider turns below it. So it can be on an older
+  // page only while no provider row or history page precedes it, and then
+  // only as the newest turn of the first older page.
+  const firstProviderRow = tail.replay.entries.findIndex((entry) => {
+    const turnId = transcriptEntryTurnId(entry);
+    return turnId !== undefined && providerPageTurnIds?.has(turnId) === true;
+  });
+  const newestPageTurnId = page.replay.entries.findLast((entry) => entry.turn?.id)?.turn?.id;
+  const candidates = tail.replay.entries.filter((entry, index) => {
+    if (pageIds.has(entry.id)) {
+      return false;
+    }
+    const turnId = transcriptEntryTurnId(entry);
+    // A send not yet bound to its turn has no turn at all, but its
+    // optimistic id already says no provider page delivered it.
+    return turnId === undefined
+      ? entry.id.startsWith("optimistic-") && !hasLoadedHistory && index < firstProviderRow
+      : !providerPageTurnIds?.has(turnId);
+  });
+  if (candidates.length === 0) {
+    return tail;
+  }
+  const matchIndex = createLogicalTranscriptMatchIndex(candidates);
+  const matched = new Set<AppServerThreadEntry>();
+  const pageEntryByTailEntry = new Map<AppServerThreadEntry, AppServerThreadEntry>();
+  for (const pageEntry of page.replay.entries) {
+    if (tailIds.has(pageEntry.id) || !pageEntry.turn?.id) {
+      continue;
+    }
+    // The send's turn, not its text, identifies a sent message: the send
+    // path may rewrite the text before the owner records it.
+    const sentEcho = pageEntry.type === "message"
+      ? candidates.find((candidate) =>
+          !matched.has(candidate)
+          && candidate.type === "message"
+          && messageEchoesSentTurn(pageEntry, candidate))
+      : undefined;
+    const tailEntry = sentEcho ?? findUniqueLogicalTranscriptRefreshMatch(pageEntry, matchIndex, matched);
+    if (
+      tailEntry
+      && (transcriptEntryTurnId(tailEntry) !== undefined || pageEntry.turn.id === newestPageTurnId)
+    ) {
+      matched.add(tailEntry);
+      pageEntryByTailEntry.set(tailEntry, pageEntry);
+    }
+  }
+  if (pageEntryByTailEntry.size === 0) {
+    return tail;
+  }
+  // Keep the tail row's live order: a later newest read places a row it does
+  // not hold by its renderer sequence.
+  const entries = tail.replay.entries.map((entry) => {
+    const pageEntry = pageEntryByTailEntry.get(entry);
+    if (!pageEntry) {
+      return entry;
+    }
+    const sequence = readRendererSequence(entry);
+    return sequence === undefined ? pageEntry : withRendererSequence(pageEntry, sequence);
+  });
+  return {
+    ...tail,
+    replay: {
+      ...tail.replay,
+      entries,
+      messages: transcriptMessagesForEntries(entries, page.replay.messages, tail.replay.messages),
+    },
+  };
+}
+
 function preserveRetainedTranscriptTail(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
@@ -1117,6 +1209,41 @@ function reconcileRetainedTranscriptTail(
   let pendingRetainedEntries: AppServerThreadEntry[] = [];
   let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
   const freshTurnIds = new Set(freshEntries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
+  const freshIndexByEntry = new Map(freshEntries.map((entry, index) => [entry, index] as const));
+  // Unmatched retained rows go above the next matched row, but not below a
+  // fresh row the live stream observed after them. A send whose echo was
+  // missed belongs above a tool-only turn that started after it, though the
+  // tool row was never in the retained tail to say so.
+  const attachBeforeFresh = (rows: AppServerThreadEntry[], target: AppServerThreadEntry) => {
+    const targetIndex = freshIndexByEntry.get(target) ?? 0;
+    let floor = Math.min(
+      lastMatchedFreshEntry ? (freshIndexByEntry.get(lastMatchedFreshEntry) ?? -1) + 1 : 0,
+      targetIndex,
+    );
+    // Each row resumes the scan where the previous row was placed, so one
+    // call walks the span between matches once, not once per row.
+    for (const row of rows) {
+      const sequence = readRendererSequence(row);
+      let at = targetIndex;
+      if (sequence !== undefined) {
+        for (let index = floor; index < targetIndex; index += 1) {
+          const freshSequence = readRendererSequence(freshEntries[index]);
+          if (freshSequence !== undefined && freshSequence > sequence) {
+            at = index;
+            break;
+          }
+        }
+      }
+      floor = at;
+      const anchor = freshEntries[at]!;
+      const anchored = retainedEntriesBeforeFresh.get(anchor);
+      if (anchored) {
+        anchored.push(row);
+      } else {
+        retainedEntriesBeforeFresh.set(anchor, [row]);
+      }
+    }
+  };
 
   for (const retainedEntry of retainedEntries) {
     const freshEntry = freshEntryByRetainedEntry.get(retainedEntry);
@@ -1138,9 +1265,7 @@ function reconcileRetainedTranscriptTail(
       }
     }
     if (pendingRetainedEntries.length > 0) {
-      retainedEntriesBeforeFresh.set(freshEntry, [
-        ...(retainedEntriesBeforeFresh.get(freshEntry) ?? []), ...pendingRetainedEntries,
-      ]);
+      attachBeforeFresh(pendingRetainedEntries, freshEntry);
       pendingRetainedEntries = [];
     }
     lastMatchedFreshEntry = freshEntry;
@@ -1304,32 +1429,49 @@ function findUniqueLogicalTranscriptRefreshMatch(
   retainedMatchIndex: LogicalTranscriptMatchIndex,
   matchedRetainedEntries: ReadonlySet<AppServerThreadEntry>,
 ): AppServerThreadEntry | undefined {
-  return findOnlyTranscriptMatch(
-    logicalTranscriptMatchCandidates(freshEntry, retainedMatchIndex),
-    (retainedEntry) => {
-      if (matchedRetainedEntries.has(retainedEntry)) {
-        return false;
-      }
-      if (
-        freshEntry.turn?.id &&
-        retainedEntry.turn?.id &&
-        freshEntry.turn.id !== retainedEntry.turn.id
-      ) {
-        return false;
-      }
-      if (
-        freshEntry.type === "message" &&
-        retainedEntry.type === "message" &&
-        freshEntry.phase &&
-        retainedEntry.phase &&
-        freshEntry.phase !== retainedEntry.phase
-      ) {
-        return false;
-      }
+  const freshTurnId = transcriptEntryTurnId(freshEntry);
+  const candidates = logicalTranscriptMatchCandidates(freshEntry, retainedMatchIndex);
+  const matches = (retainedEntry: AppServerThreadEntry) => {
+    if (matchedRetainedEntries.has(retainedEntry)) {
+      return false;
+    }
+    const retainedTurnId = transcriptEntryTurnId(retainedEntry);
+    if (freshTurnId && retainedTurnId && freshTurnId !== retainedTurnId) {
+      return false;
+    }
+    if (
+      freshEntry.type === "message" &&
+      retainedEntry.type === "message" &&
+      freshEntry.phase &&
+      retainedEntry.phase &&
+      freshEntry.phase !== retainedEntry.phase
+    ) {
+      return false;
+    }
 
-      return transcriptEntriesMatch(freshEntry, retainedEntry);
-    },
-  );
+    return transcriptEntriesMatch(freshEntry, retainedEntry);
+  };
+  return findOnlyTurnAwareMatch(freshTurnId, candidates, matches);
+}
+
+// A row of the same turn outranks a turnless row with the same text: a
+// repeated send is told apart by its turn alone.
+function findOnlyTurnAwareMatch(
+  turnId: string | undefined,
+  candidates: AppServerThreadEntry[],
+  matches: (candidate: AppServerThreadEntry) => boolean,
+): AppServerThreadEntry | undefined {
+  const sameTurnMatch = turnId
+    ? findOnlyTranscriptMatch(candidates, (candidate) =>
+        transcriptEntryTurnId(candidate) === turnId && matches(candidate))
+    : undefined;
+  return sameTurnMatch ?? findOnlyTranscriptMatch(candidates, matches);
+}
+
+// A sent message carries the turn it opened as sentTurnId until the owner's
+// copy, which carries turn metadata, replaces it.
+function transcriptEntryTurnId(entry: AppServerThreadEntry): string | undefined {
+  return entry.turn?.id ?? (entry.type === "message" ? readSentTurnId(entry) : undefined);
 }
 
 function isCodexImageBoundaryText(value: string): boolean {
@@ -1641,7 +1783,10 @@ function pruneOptimisticEntries(
   response: AppServerReadThreadResponse | undefined,
   reconciledLaunchpadMessageId?: string,
   launchpadMessageCandidate?: LaunchpadMessageCandidate,
-  options: { retainInProgressReviews?: boolean } = {},
+  options: {
+    retainInProgressReviews?: boolean;
+    seenAfterCapture?: (entry: AppServerThreadActivityEntry) => boolean;
+  } = {},
 ): AppServerThreadEntry[] {
   if (!response) {
     return optimisticEntries;
@@ -1715,7 +1860,13 @@ function pruneOptimisticEntries(
       if (entry.id.startsWith("live-tools-") && entry.details.length === 0) {
         return false;
       }
+      // Both inferences below read the response as a snapshot taken after
+      // this row. A row observed after its read was issued cannot be in that
+      // read, however complete its turn now looks: turn/completed restamps
+      // the stored rows. Only an exact replay match settles such a row.
+      const seenAfterCapture = options.seenAfterCapture?.(entry) ?? false;
       if (
+        !seenAfterCapture &&
         latestResponseTurnId &&
         entry.turn?.id !== latestResponseTurnId &&
         isCompletedTurnMetadata(entry.turn) &&
@@ -1724,7 +1875,7 @@ function pruneOptimisticEntries(
         return false;
       }
 
-      if (isLiveToolRowSettledByReplay(response.replay.entries, entry)) {
+      if (!seenAfterCapture && isLiveToolRowSettledByReplay(response.replay.entries, entry)) {
         return false;
       }
 
@@ -1774,6 +1925,23 @@ const replaySettledToolTurnIds = new WeakMap<AppServerThreadEntry[], Set<string>
  * for 3) until the next turn started and the older-turn rule above dropped
  * them.
  */
+function liveNotificationItemId(notification: { params?: unknown }): string | undefined {
+  const params = notification.params as { item?: { id?: unknown }; itemId?: unknown } | undefined;
+  const id = params?.item?.id ?? params?.itemId;
+  return typeof id === "string" ? id : undefined;
+}
+
+function liveRowsSeenAfterCapture(
+  observedVersions: ReadonlyMap<string, number> | undefined,
+  captureVersion: number | undefined,
+): ((entry: AppServerThreadActivityEntry) => boolean) | undefined {
+  if (!observedVersions?.size) {
+    return undefined;
+  }
+  const capture = captureVersion ?? 0;
+  return (entry) => entry.details.some((detail) => (observedVersions.get(detail.id) ?? 0) > capture);
+}
+
 function isLiveToolRowSettledByReplay(
   entries: AppServerThreadEntry[],
   entry: AppServerThreadActivityEntry,
@@ -2020,7 +2188,8 @@ function findUniqueTranscriptOrderSource(
   // A row matched by content alone must come from the same turn. The same
   // command or reply in another turn is a different row, and taking its time
   // or place moves this row into that turn.
-  return findOnlyTranscriptMatch(
+  return findOnlyTurnAwareMatch(
+    transcriptEntryTurnId(entry),
     logicalTranscriptMatchCandidates(entry, logicalSourceIndex),
     (source) =>
       typeof source.createdAt === "number" &&
@@ -2036,8 +2205,8 @@ function sameTurnOrUnknown(
   entry: AppServerThreadEntry,
   source: AppServerThreadEntry,
 ): boolean {
-  const entryTurnId = entry.turn?.id;
-  const sourceTurnId = source.turn?.id;
+  const entryTurnId = transcriptEntryTurnId(entry);
+  const sourceTurnId = transcriptEntryTurnId(source);
   return !entryTurnId || !sourceTurnId || entryTurnId === sourceTurnId;
 }
 
@@ -3926,10 +4095,30 @@ function messageEchoesOptimisticEntry(
   message: AppServerThreadMessage & { turn?: AppServerThreadTurnMetadata },
   entry: AppServerThreadMessageEntry
 ): boolean {
+  // A send bound to its turn is echoed only by a message of that turn. A
+  // later send may repeat its text.
+  const sentTurnId = readSentTurnId(entry);
+  if (sentTurnId && message.turn?.id && message.turn.id !== sentTurnId) {
+    return false;
+  }
   return (
     messageTextMatchesEntry(message, entry)
     || (message.role === entry.role && messageEchoesSentTurn(message, entry))
   );
+}
+
+// The pending copy a message echoes. The send's turn, when bound, outranks a
+// pending copy that only repeats its text.
+function findOptimisticEcho<T extends AppServerThreadEntry>(
+  message: AppServerThreadMessageEntry,
+  entries: T[],
+): (T & AppServerThreadMessageEntry) | undefined {
+  const echoes = (entry: T): entry is T & AppServerThreadMessageEntry =>
+    entry.type === "message" && message.role === entry.role;
+  return entries.find((entry): entry is T & AppServerThreadMessageEntry =>
+    echoes(entry) && messageEchoesSentTurn(message, entry))
+    ?? entries.find((entry): entry is T & AppServerThreadMessageEntry =>
+      echoes(entry) && messageEchoesOptimisticEntry(message, entry));
 }
 
 function messageTextMatchesEntry(
@@ -4080,12 +4269,9 @@ function mergeCompletedUserMessageWithOptimisticEntry(
   message: AppServerThreadMessageEntry,
   optimisticEntries: AppServerThreadEntry[]
 ): AppServerThreadMessageEntry {
-  const optimisticEntry = optimisticEntries.find(
-    (entry): entry is AppServerThreadMessageEntry =>
-      entry.type === "message" &&
-      message.role === "user" &&
-      messageEchoesOptimisticEntry(message, entry)
-  );
+  const optimisticEntry = message.role === "user"
+    ? findOptimisticEcho(message, optimisticEntries)
+    : undefined;
   if (!optimisticEntry) {
     return message;
   }
@@ -4134,10 +4320,9 @@ function findPromotedOptimisticUserMessageEntry(
   response: AppServerReadThreadResponse | undefined,
   message: AppServerThreadMessageEntry
 ): AppServerThreadMessageEntry | undefined {
-  return response?.replay.entries.find(
-    (entry): entry is AppServerThreadMessageEntry =>
-      isOptimisticUserMessageEntry(entry) &&
-      messageEchoesOptimisticEntry(message, entry)
+  return findOptimisticEcho(
+    message,
+    response?.replay.entries.filter(isOptimisticUserMessageEntry) ?? [],
   );
 }
 
@@ -5340,6 +5525,9 @@ export function useThreadSessionState(params: {
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
   const liveTranscriptVersionsRef = useRef(new Map<string, number>());
+  // The live transcript version at which each item was first observed. Only
+  // items not yet covered by an adopted read are kept.
+  const liveItemVersionsRef = useRef(new Map<string, Map<string, number>>());
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const launchpadMessageCandidateRef = useRef<{
     candidate: LaunchpadMessageCandidate;
@@ -5403,6 +5591,9 @@ export function useThreadSessionState(params: {
     }
     for (const key of liveTranscriptVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveTranscriptVersionsRef.current.delete(key);
+    }
+    for (const key of liveItemVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) liveItemVersionsRef.current.delete(key);
     }
     for (const key of conditionalReadsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) conditionalReadsRef.current.delete(key);
@@ -5819,9 +6010,14 @@ export function useThreadSessionState(params: {
           const shouldAdoptHydratedTurn =
             trailingInProgressTurn !== undefined
             && shouldAdoptStartedTurn(current, trailingInProgressTurn.id);
+          const liveItemVersions = liveItemVersionsRef.current.get(targetThreadKey);
+          const seenAfterCapture = liveRowsSeenAfterCapture(liveItemVersions, liveTranscriptVersion);
           const nextRetainedLiveEntries = pruneOptimisticEntries(
             retainedLiveEntries,
             responseWithRetainedTail,
+            undefined,
+            undefined,
+            { seenAfterCapture },
           );
           const didPruneRetainedLiveEntries =
             nextRetainedLiveEntries.length !== retainedLiveEntries.length;
@@ -5833,6 +6029,14 @@ export function useThreadSessionState(params: {
               for (const entry of nextRetainedLiveEntries) {
                 retainedLiveEntryStore.set(entry.id, entry);
               }
+            }
+          }
+          // This read becomes the capture. Items it covers can no longer
+          // count as seen after it, so only newer ones stay in the map.
+          if (liveItemVersions) {
+            const capture = liveTranscriptVersion ?? 0;
+            for (const [itemId, version] of liveItemVersions) {
+              if (version <= capture) liveItemVersions.delete(itemId);
             }
           }
 
@@ -5892,8 +6096,9 @@ export function useThreadSessionState(params: {
               launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
                 ? launchpadMessageCandidateRef.current.candidate
                 : undefined,
-              { retainInProgressReviews: true },
+              { retainInProgressReviews: true, seenAfterCapture },
             ),
+            liveCaptureVersion: liveTranscriptVersion ?? 0,
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
@@ -6521,10 +6726,17 @@ export function useThreadSessionState(params: {
       }
 
       if (isThreadLocalTranscriptNotification(event.notification)) {
-        liveTranscriptVersionsRef.current.set(
-          targetThreadKey,
-          (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1,
-        );
+        const liveTranscriptVersion = (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
+        liveTranscriptVersionsRef.current.set(targetThreadKey, liveTranscriptVersion);
+        const itemId = liveNotificationItemId(event.notification);
+        if (itemId) {
+          let itemVersions = liveItemVersionsRef.current.get(targetThreadKey);
+          if (!itemVersions) {
+            itemVersions = new Map();
+            liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
+          }
+          if (!itemVersions.has(itemId)) itemVersions.set(itemId, liveTranscriptVersion);
+        }
       }
 
       if (event.notification.method === "thread/status/changed"
@@ -7972,6 +8184,12 @@ export function useThreadSessionState(params: {
           };
         }
 
+        const tail = adoptOlderPageIdentities(
+          current.response,
+          reconciledOlderResponse,
+          current.providerPageTurnIds,
+          (current.loadedHistory?.entryCount ?? 0) > 0,
+        );
         if (!didAppendHistory || appendedHistorySource !== current.loadedHistory) {
           didAppendHistory = true;
           appendedHistorySource = current.loadedHistory;
@@ -7979,7 +8197,7 @@ export function useThreadSessionState(params: {
             history: current.loadedHistory,
             index: historyIndex,
             page: reconciledOlderResponse,
-            tailEntries: current.response.replay.entries,
+            tailEntries: tail.replay.entries,
           });
         }
         return {
@@ -7987,6 +8205,7 @@ export function useThreadSessionState(params: {
           lastTouchedAt: Date.now(),
           loadedHistory: appendedHistory,
           loadingMore: false,
+          response: tail,
         };
       });
     } catch (error) {
@@ -8478,12 +8697,20 @@ export function useThreadSessionState(params: {
       selectedSession?.response,
       selectedReconciledLaunchpadMessageId,
       selectedLaunchpadMessageCandidate,
+      {
+        seenAfterCapture: liveRowsSeenAfterCapture(
+          threadKey ? liveItemVersionsRef.current.get(threadKey) : undefined,
+          selectedSession?.liveCaptureVersion,
+        ),
+      },
     ),
     [
+      selectedSession?.liveCaptureVersion,
       selectedSession?.optimisticEntries,
       selectedSession?.response,
       selectedLaunchpadMessageCandidate,
       selectedReconciledLaunchpadMessageId,
+      threadKey,
     ],
   );
   const visibleOptimisticEntries = useMemo(
