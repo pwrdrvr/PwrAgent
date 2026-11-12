@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4.1 - 2026-11-12
+
+- Outpost Permissions - Let the operator enable Full Access and agent network access when starting an Outpost. Default remains read-only, Auto remains workspace-write, and network access stays off unless explicitly enabled. Agents cannot widen the owner's configured execution modes or sandbox policy.
+- Outpost Containment - Protect the owner's profile, RPC credentials, and Codex credentials from sandboxed agent commands, keep the Codex home private and read-only, and reject tool-access escalation. Model-facing PwrAgent tools are now limited to discovery and retrieval of the calling thread's captured output; owner-side forge, messaging, MCP gateway, and cross-thread control tools are not available to Outpost models.
+- Outpost Recovery and Remote Safety - Let a replacement container take over a dead owner, report provider refresh readiness during startup, and validate remote archive requests against the owning instance's thread membership.
+- PwrSnap and PwrGit Connections - Share local relay sessions across threads instead of opening a separate session for every thread. Recover ended connections through operator reconnect, and show PwrSnap resource links in tool activity.
+- Thread Maintenance - Stop finished helper threads from keeping worktrees alive. Offer explicit snapshot-all approval for checkouts whose changes exceed the usual snapshot limit, count only checkouts still on disk, and recognize archived Codex threads correctly.
+- Transcript Continuity - Keep live tool rows visible until a newer history read includes them, preserve observed event order, and recover missing transcript tails. Reconcile sent messages with their owner copies by turn identity instead of matching text.
+- Tool Activity and Thread Links - Keep grouped tool calls together and web searches recognizable after replay. Resolve links to this machine's threads from peer transcripts and other windows.
+- Responsiveness - Load application icons and heavier SDK, image, and schema libraries only when needed instead of during startup and discovery.
+- Messaging - Verify Feishu signatures on encrypted webhook callbacks and prevent failing asynchronous rejection listeners from disrupting other adapter listeners. Avoid duplicate onboarding-completed entries and repair existing duplicates.
+
+Outpost security: Full Access is opt-in and runs without the Codex sandbox. The container becomes the only boundary, and the agent can read everything inside it, including the Outpost's own keys. Enable it only for models you trust. Node 24+ and enabled npm install scripts remain required.
+
 ## v1.4.0 - 2026-11-11
 
 - Outpost Rebuilt - Run the desktop's owner services under plain Node without Electron or a display server. Outpost now shares the desktop registry, inbox, queue, federation handlers, and shutdown lifecycle. Run turns in separate threads concurrently and create new threads while other work is running.
