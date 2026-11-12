@@ -241,8 +241,8 @@ it("leaves an unbound pending copy alone when a different turn's user message ar
     };
     real.emit("item/completed", { turnId: "turn-other", item });
   });
-  expect(sentCopies(real.result.current.entries).map((row) => row.text)).toEqual(
-    expect.arrayContaining([`${CHIP} try that one`]),
-  );
+  const texts = sentCopies(real.result.current.entries).map((row) => row.text);
+  expect(texts.filter((text) => text === `${CHIP} try that one`)).toHaveLength(1);
+  expect(texts).toContain("a message from another surface");
   real.unmount();
 });
