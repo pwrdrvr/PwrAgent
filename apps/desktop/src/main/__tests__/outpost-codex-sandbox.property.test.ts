@@ -5,6 +5,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import {
+  OUTPOST_CODEX_CREDENTIAL_ENTRIES,
   OUTPOST_MANAGED_CONFIG_KEYS,
   OUTPOST_PERMISSION_PROFILE_IDS,
   createOutpostCodexMessageRewriter,
@@ -12,10 +13,13 @@ import {
 import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 
 // Rule: no Codex sandbox an Outpost generates lets an agent command reach the
-// Outpost's control channel or the secret beside it. Agent commands run as the
-// Outpost's own Unix user, so only the sandbox can keep them out of
-// `<root>/profiles/<profile>/state`, which holds `headless/rpc.sock`,
-// `headless-secret.key` and the state database it unlocks.
+// Outpost's control channel, the secret beside it, or the Codex credentials.
+// Agent commands run as the Outpost's own Unix user, so only the sandbox can
+// keep them out of `<root>/profiles/<profile>/state`, which holds
+// `headless/rpc.sock`, `headless-secret.key` and the state database it
+// unlocks, and out of the Codex home's `auth.json`, `.credentials.json` and
+// `secrets/`. The rest of the Codex home (skills, plugin skills, memories,
+// AGENTS.md) stays readable: the model reads skills there by path.
 //
 // `effectiveAccess` models how Codex resolves a profile's filesystem entries:
 // the most specific matching entry wins; at equal specificity deny beats write
@@ -117,9 +121,36 @@ function controlPaths(root: string, profile: string): string[] {
   ];
 }
 
-const policyFor = (root: string) => createOutpostRuntimePolicy({ PWRAGENT_HOME: root });
+// Codex credential files, by the names Codex 0.164.0 writes them under.
+function credentialPaths(codexHome: string): string[] {
+  return [
+    path.posix.join(codexHome, "auth.json"),
+    path.posix.join(codexHome, ".credentials.json"),
+    path.posix.join(codexHome, "secrets", "codex_auth.age"),
+    path.posix.join(codexHome, "secrets", "mcp_oauth.age"),
+    path.posix.join(codexHome, "secrets", "local.age"),
+  ];
+}
+
+// What the model reads in the Codex home by path. Denying these breaks skills.
+function modelReadablePaths(codexHome: string): string[] {
+  return [
+    path.posix.join(codexHome, "skills", "demo", "SKILL.md"),
+    path.posix.join(codexHome, "skills", ".system", "demo", "SKILL.md"),
+    path.posix.join(codexHome, "plugins", "cache", "p", "skills", "s", "SKILL.md"),
+    path.posix.join(codexHome, "memories", "notes.md"),
+    path.posix.join(codexHome, "AGENTS.md"),
+  ];
+}
+
+const DEFAULT_CODEX_HOME = "/srv/codex-home";
+const policyFor = (root: string, codexHome = DEFAULT_CODEX_HOME) =>
+  createOutpostRuntimePolicy({ PWRAGENT_HOME: root, PWRAGENT_CODEX_HOME: codexHome });
 // Codex sees real paths; a generated root may name a symlink such as /tmp.
 const canonicalRoot = (root: string) => path.posix.dirname(policyFor(root).codexProtectedRoots[0]!);
+const canonicalCodexHome = (root: string, codexHome: string) =>
+  path.posix.dirname(policyFor(root, codexHome).codexProtectedRoots.find((entry) => entry.endsWith("/auth.json"))!);
+const withinAny = (target: string, roots: readonly string[]) => roots.some((root) => within(target, root));
 
 function profilesFrom(args: readonly string[]): Map<string, { filesystem: Record<string, Toml>; network: Toml | undefined }> {
   const values = launchOverrides(args);
@@ -138,20 +169,27 @@ function profilesFrom(args: readonly string[]): Map<string, { filesystem: Record
 // Codex's POSIX path resolution. Windows still builds the policy for the
 // desktop suites that boot the headless owner on a native root.
 describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
-  it("every launch profile denies the control channel and secret from any workspace outside them", () => {
-    fc.assert(fc.property(absolutePath, profileName, fc.string(), absolutePath, (root, profile, pathValue, cwd) => {
-      const args = buildCodexClientArgs({ PATH: pathValue }, [], [], policyFor(root));
+  it("every launch profile denies the control channel, its secret and the Codex credentials from any workspace outside them", () => {
+    fc.assert(fc.property(absolutePath, profileName, fc.string(), absolutePath, absolutePath, (root, profile, pathValue, cwd, codexHome) => {
+      fc.pre(!within(codexHome, root) && !within(root, codexHome));
+      const policy = policyFor(root, codexHome);
+      const args = buildCodexClientArgs({ PATH: pathValue }, [], [], policy);
       const values = launchOverrides(args);
       // A legacy sandbox key would take precedence over the profiles.
       for (const key of values.keys()) {
         expect(key === "sandbox_mode" || key.startsWith("sandbox_workspace_write")).toBe(false);
       }
       expect(Object.values(OUTPOST_PERMISSION_PROFILE_IDS)).toContain(JSON.parse(values.get("default_permissions")!));
-      fc.pre(!within(cwd, path.posix.join(root, "profiles")));
+      // A workspace inside a protected path is refused before Codex sees it.
+      fc.pre(!withinAny(cwd, policy.codexProtectedRoots));
+      const home = canonicalCodexHome(root, codexHome);
       for (const [id, { filesystem, network }] of profilesFrom(args)) {
         expect(network, id).toBe(false);
-        for (const target of controlPaths(canonicalRoot(root), profile)) {
+        for (const target of [...controlPaths(canonicalRoot(root), profile), ...credentialPaths(home)]) {
           expect(effectiveAccess(filesystem, target, [cwd]), `${id} ${target}`).toBe("deny");
+        }
+        for (const target of modelReadablePaths(home)) {
+          expect(effectiveAccess(filesystem, target, [cwd]), `${id} ${target}`).not.toBe("deny");
         }
       }
     }));
@@ -173,11 +211,13 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
       absolutePath, profileName,
       fc.constantFrom("thread/start", "thread/resume", "thread/fork", "turn/start", "thread/settings/update", "command/exec", "thread/read"),
       sandboxValue, sandboxValue, profileValue, profileValue,
-      fc.option(fc.oneof(absolutePath, fc.constant("inside")), { nil: undefined }),
+      fc.option(fc.oneof(absolutePath, fc.constantFrom("inside", "inside-codex-secrets")), { nil: undefined }),
       fc.option(fc.dictionary(configKey, fc.constant(true)), { nil: undefined }),
       (root, profile, method, sandbox, sandboxPolicy, permissions, permissionProfile, cwdChoice, config) => {
         const protectedProfiles = path.posix.join(root, "profiles");
-        const cwd = cwdChoice === "inside" ? path.posix.join(protectedProfiles, profile, "state") : cwdChoice;
+        const cwd = cwdChoice === "inside" ? path.posix.join(protectedProfiles, profile, "state")
+          : cwdChoice === "inside-codex-secrets" ? path.posix.join(DEFAULT_CODEX_HOME, "secrets", profile)
+          : cwdChoice;
         const params: Record<string, unknown> = { threadId: "t" };
         for (const [key, value] of Object.entries({ sandbox, sandboxPolicy, permissions, permissionProfile, cwd, config })) {
           if (value !== undefined) params[key] = value;
@@ -206,10 +246,11 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
 
         // The profile Codex will apply, from where Codex will run.
         const workspace = typeof out.cwd === "string" ? out.cwd : "/";
-        expect(within(workspace, path.posix.join(canonicalRoot(root), "profiles"))).toBe(false);
+        expect(withinAny(workspace, policyFor(root).codexProtectedRoots)).toBe(false);
         const { filesystem } = profilesFrom(buildCodexClientArgs({}, [], [], policyFor(root))).get(
           typeof selected === "string" ? selected : OUTPOST_PERMISSION_PROFILE_IDS["read-only"])!;
-        for (const target of controlPaths(canonicalRoot(root), profile)) {
+        const home = canonicalCodexHome(root, DEFAULT_CODEX_HOME);
+        for (const target of [...controlPaths(canonicalRoot(root), profile), ...credentialPaths(home)]) {
           expect(effectiveAccess(filesystem, target, [workspace]), target).toBe("deny");
         }
       },
@@ -236,7 +277,7 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
       const link = path.join(base, "link");
       fs.symlinkSync(real, link);
       const protectedRoots = policyFor(link).codexProtectedRoots;
-      expect(protectedRoots).toEqual([path.join(real, "profiles")]);
+      expect(protectedRoots[0]).toBe(path.join(real, "profiles"));
       expect(buildCodexClientArgs({}, [], [], policyFor(link)).join(" ")).not.toContain(link);
       const rewrite = createOutpostCodexMessageRewriter(protectedRoots);
       const cwds = [
@@ -251,6 +292,32 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
           .toThrow(/inside its own state/);
       }
       expect(() => rewrite(JSON.stringify({ id: 1, method: "thread/start", params: { cwd: base } }))).not.toThrow();
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+
+  // An operator may link a credential to a mounted secret. Codex 0.159.2 and
+  // 0.164.0 then fail every command if the deny entry names the link, and a
+  // deny at the link alone would leave the target readable.
+  it("denies a linked Codex credential at its target and names no symlink", () => {
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "outpost-codex-home-")));
+    try {
+      const home = path.join(base, "codex");
+      const mounted = path.join(base, "mounted");
+      fs.mkdirSync(home);
+      fs.mkdirSync(mounted);
+      fs.mkdirSync(path.join(base, "state", "profiles"), { recursive: true });
+      fs.symlinkSync(path.join(mounted, "auth"), path.join(home, "auth.json"));
+      fs.writeFileSync(path.join(mounted, "auth"), "");
+      fs.symlinkSync(home, path.join(base, "home-link"));
+      const policy = policyFor(path.join(base, "state"), path.join(base, "home-link"));
+      expect(policy.codexProtectedRoots).toEqual([
+        path.join(base, "state", "profiles"),
+        path.join(mounted, "auth"),
+        ...OUTPOST_CODEX_CREDENTIAL_ENTRIES.slice(1).map((entry) => path.join(home, entry)),
+      ]);
+      for (const entry of policy.codexProtectedRoots) {
+        expect(fs.realpathSync.native(path.dirname(entry)), entry).toBe(path.dirname(entry));
+      }
     } finally { fs.rmSync(base, { recursive: true, force: true }); }
   });
 });
