@@ -95,7 +95,8 @@ try {
   assert.equal(JSON.parse(await command("show", thread)).threadId, thread.threadId);
   await command("list");
   const launch = fs.readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse).find(row => row.startup)?.startup;
-  assert.ok(launch.includes('approval_policy="never"'));
+  // With no PWRAGENT_OUTPOST_APPROVALS the Outpost asks, as a desktop does.
+  assert.ok(launch.includes('approval_policy="on-request"'));
   assert.ok(launch.includes('default_permissions="pwragent-outpost-read-only"'));
   assert.ok(launch.includes("permissions.pwragent-outpost-workspace-write.network.enabled=false"));
   assert.ok(!launch.some((value) => value.startsWith("sandbox_mode=")));
