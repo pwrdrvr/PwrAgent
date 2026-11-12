@@ -779,11 +779,12 @@ export function buildLiveToolDetails(
     ? "completed"
     : normalizeItemStatus(item.status);
   const title = readToolArgument(item, "title");
+  // Native Codex puts a web search's query on the item itself. Read it
+  // first, as the replay does, so both show the same query.
   const query =
-    readToolArgument(item, "query")
-    ?? readToolArgument(item, "q")
-    // Native Codex puts a web search's query on the item itself.
-    ?? (itemType === "websearch" ? readString(item, "query") : undefined);
+    (itemType === "websearch" ? readString(item, "query") : undefined)
+    ?? readToolArgument(item, "query")
+    ?? readToolArgument(item, "q");
   const preview =
     itemType === "mcptoolcall"
       ? undefined

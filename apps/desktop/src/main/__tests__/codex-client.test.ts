@@ -9853,7 +9853,7 @@ describe("CodexAppServerClient", () => {
         // it as an argument beside a search_web tool name.
         query: fc.option(fc.stringMatching(/^[a-z][a-z0-9 ]{0,20}[a-z0-9]$/), { nil: undefined }),
         toolName: fc.constantFrom(undefined, "search_web"),
-        status: fc.constantFrom(undefined, "completed", "failed"),
+        status: fc.constantFrom(undefined, "inProgress", "completed", "failed"),
         sources: fc.boolean(),
       },
       { requiredKeys: ["toolName", "status", "sources"] },

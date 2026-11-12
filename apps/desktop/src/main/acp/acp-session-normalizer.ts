@@ -10,6 +10,7 @@ import type {
   AppServerThreadTurnStatus,
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
+import { formatWebSearchLabel } from "@pwragent/shared";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import {
   isGenericShellToolTitle,
@@ -1534,7 +1535,7 @@ function toolActivity(
   const webSearch = readAcpWebSearch(update.update);
   if (webSearch) {
     const status = normalizeToolActivityStatus(readString(update.update, "status"));
-    const summary = status === "in_progress" ? "Searching Web" : "Searched Web";
+    const summary = formatWebSearchLabel(status === "in_progress");
     const detailLabel = webSearch.query
       ? `${summary}: ${webSearch.query}`
       : summary;
