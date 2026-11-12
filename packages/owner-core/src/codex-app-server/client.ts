@@ -43,6 +43,7 @@ import {
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
+  formatWebSearchLabel,
   isToolManagedWorktreePath,
   navigationQueryEventRequiresRefresh,
   normalizeCodexAsyncQuestions,
@@ -4947,11 +4948,16 @@ function summarizeActivityItems(
       normalizedItemType === "imageview" ||
       normalizedItemType === "imagegeneration"
     ) {
-      toolCalls += 1;
+      // A web search explores, as its live row does: it counts as a search,
+      // not a tool, so the header reads the same after the turn is read back.
+      if (normalizedItemType === "websearch") {
+        searches += 1;
+      } else {
+        toolCalls += 1;
+      }
       const toolName =
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
-        (normalizedItemType === "websearch" ? "web search"
-          : normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
+        (normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
       const args = parseToolArguments(item);
       const query =
         pickString(item, ["query"]) ??
@@ -4974,7 +4980,9 @@ function summarizeActivityItems(
             ? [{ type: "image" as const, url: pathToFileURL(item.path).toString(), sourceUrl: pathToFileURL(item.path).toString(), alt: path.basename(item.path) }]
           : [];
       const label =
-        (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
+        normalizedItemType === "websearch"
+        ? formatWebSearchLabel(itemStatus === "in_progress")
+        : (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
         && explicitTitle
         ? formatToolActivityTitle(explicitTitle)
         : normalizedItemType === "mcptoolcall" && toolName

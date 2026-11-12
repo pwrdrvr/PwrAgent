@@ -1,4 +1,5 @@
 import path from "node:path";
+import { formatWebSearchLabel } from "@pwragent/shared";
 import type {
   AppServerThreadCommandDetail,
   AppServerSource,
@@ -176,7 +177,7 @@ function formatSearchToolName(
   status: AppServerThreadActivityStatus | "completed" | undefined,
 ): string {
   if (toolName === "search_web") {
-    return status === "in_progress" ? "Searching Web" : "Searched Web";
+    return formatWebSearchLabel(status === "in_progress");
   }
   return status === "in_progress" ? "Searching X" : "Searched X";
 }

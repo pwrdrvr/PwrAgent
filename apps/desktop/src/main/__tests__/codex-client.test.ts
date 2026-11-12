@@ -19,6 +19,10 @@ import gitBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
 import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
 import { buildAutomationMcpConsent } from "../mcp-connections/mcp-approval-consent";
+import {
+  buildLiveToolDetails,
+  summarizeLiveActivity,
+} from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
 import type {
   ConfigWriteResponse,
@@ -9831,6 +9835,111 @@ describe("CodexAppServerClient", () => {
       // The live summary of the same group; see live-transcript-activity.
       expect(replay.entries.find((entry) => entry.type === "activity")).toMatchObject({
         summary: "Sent input to 1 agent",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  // Rule: a web search reads the same before and after the turn is read
+  // back. The live transcript is the oracle: its header and rows for the
+  // same items must equal the replay's. Replay once counted a web search
+  // as a tool ("Used 1 tool") while live explored it.
+  it("summarizes web searches the same live and replayed", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const webSearch = fc.record(
+      {
+        // Native Codex sends the query on the item; Grok's ACP mapping sends
+        // it as an argument beside a search_web tool name.
+        query: fc.option(fc.stringMatching(/^[a-z][a-z0-9 ]{0,20}[a-z0-9]$/), { nil: undefined }),
+        toolName: fc.constantFrom(undefined, "search_web"),
+        status: fc.constantFrom(undefined, "inProgress", "completed", "failed"),
+        sources: fc.boolean(),
+      },
+      { requiredKeys: ["toolName", "status", "sources"] },
+    );
+    let run = 0;
+
+    await fc.assert(
+      fc.asyncProperty(fc.array(webSearch, { minLength: 1, maxLength: 3 }), async (searches) => {
+        run += 1;
+        const threadId = `thread-web-search-${run}`;
+        const items = searches.map((search, index) => ({
+          type: "webSearch",
+          id: `web-search-${index}`,
+          ...(search.status ? { status: search.status } : {}),
+          ...(search.toolName
+            ? {
+                toolName: search.toolName,
+                ...(search.query ? { arguments: { query: search.query } } : {}),
+              }
+            : search.query ? { query: search.query } : {}),
+          ...(search.sources
+            ? { sources: [{ title: "Result", url: `https://example.com/${index}` }] }
+            : {}),
+        }));
+        MockTransport.readThreadResultByThreadId.set(threadId, {
+          thread: { turns: [{ id: "turn-1", status: "completed", items }] },
+        });
+
+        const liveDetails = items.flatMap((item) =>
+          buildLiveToolDetails(item, undefined, "item/completed"),
+        );
+        // Replay keeps one row per label, as it does for a file read twice.
+        const seenLabels = new Set<string>();
+        const liveRows = liveDetails
+          .filter((detail) => !detail.id.includes("-source-"))
+          .filter((detail) => !seenLabels.has(detail.label) && Boolean(seenLabels.add(detail.label)))
+          .map(({ id, kind, label }) => ({ id, kind, label }));
+
+        const client = new CodexAppServerClient({
+          command: "codex",
+          directoryResolver: async () => [],
+        });
+        try {
+          const replay = await client.readThread({ threadId });
+          const activities = replay.entries.filter((entry) => entry.type === "activity");
+          expect(activities).toHaveLength(1);
+          const activity = activities[0]!;
+          expect(activity.type === "activity" && activity.summary)
+            .toBe(summarizeLiveActivity(liveDetails));
+          expect(activity.type === "activity"
+            ? activity.details.map(({ id, kind, label }) => ({ id, kind, label }))
+            : []).toEqual(liveRows);
+        } finally {
+          await client.close();
+        }
+      }),
+      { numRuns: 60 },
+    );
+  });
+
+  it("keeps web searches in the exploration part beside tool calls", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    MockTransport.readThreadResultByThreadId.set("thread-web-search-mixed", {
+      thread: {
+        turns: [{
+          id: "turn-mixed",
+          status: "completed",
+          items: [
+            { type: "webSearch", id: "search-1", query: "vitest fake timers" },
+            { type: "webSearch", id: "search-2", query: "vitest workspace" },
+            { type: "mcpToolCall", id: "mcp-1", server: "pwragent", tool: "read_thread",
+              arguments: {}, status: "completed" },
+            { type: "dynamicToolCall", id: "dynamic-1", tool: "fetch_page",
+              arguments: {}, status: "completed" },
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    try {
+      const replay = await client.readThread({ threadId: "thread-web-search-mixed" });
+      expect(replay.entries.find((entry) => entry.type === "activity")).toMatchObject({
+        summary: "Explored 2 searches · Used 2 tools",
       });
     } finally {
       await client.close();
