@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
+import fc from "fast-check";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
 import { expect, it, onTestFinished } from "vitest";
 import { buildHeadless } from "../../../scripts/build-headless.mjs";
 import { ensureNamedProfileExists } from "../profile";
@@ -11,6 +13,16 @@ import { DesktopConfigStore } from "../settings/config-store/desktop-config-stor
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import { tagSecretEncryption } from "../settings/secret-encryption-envelope";
+import { OUTPOST_AGENT_TOOL_ALLOWLIST } from "../headless/outpost-agent-tools";
+
+// Tools whose effect on an Outpost would be the worst: owner control, other
+// threads, egress, MCP connections, and monitor-only calls never advertised.
+const REFUSED_PROBES = [
+  "manage_pwragent", "handoff_task", "steer_thread", "stop_thread", "send_message_to_thread",
+  "add_todo", "send_private_response", "send_messaging_file", "manage_mcp_connections",
+  "call_mcp_tool", "create_instance_thread", "push_instance_file", "read_thread",
+  "create_monitor_delegation", "inject_progress", "complete_monitoring", "merge_pull_request",
+];
 
 it("boots and shuts down the real Node owners while preserving desktop-encrypted federation keys", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "headless-host-boot-"));
@@ -48,11 +60,29 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
   const ciphertext = desktop.encryptString("invented desktop-owned key material");
   for (const name of ["federationInstancePrivateKey", "federationNoiseStaticPrivateKey"] as const) database.setSecret(name, ciphertext);
   database.close();
+  // Calls a model could send for any name, listed or not, in any namespace
+  // form Codex uses. The booted owner must refuse every unlisted one itself.
+  const calls = [
+    ...REFUSED_PROBES.map((tool) => ({ namespace: PWRAGENT_TOOL_NAMESPACE, tool })),
+    ...OUTPOST_AGENT_TOOL_ALLOWLIST.map((name) => ({ namespace: PWRAGENT_TOOL_NAMESPACE, tool: name.split("/")[1]! })),
+    ...fc.sample(fc.record({
+      namespace: fc.oneof(fc.constant(PWRAGENT_TOOL_NAMESPACE), fc.constant(null), fc.string()),
+      tool: fc.oneof(fc.constantFrom(...REFUSED_PROBES), fc.string({ minLength: 1 })),
+    }), { numRuns: 40, seed: 3650 }),
+  ];
   const driver = path.join(root, "driver.cjs");
   fs.writeFileSync(driver, `const app = require(${JSON.stringify(path.join(outputDirectory, "index.js"))});
+    const names = specs => specs.flatMap(s => s.type === "namespace" ? s.tools.map(t => s.name + "/" + t.name) : [s.name]);
     app.startHeadlessHost().then(async services => {
       process.once("message", () => { process.disconnect(); process.emit("SIGTERM", "SIGTERM"); });
-      process.send({ ready: true, errors: await services.settings.readFederationKeyAccessErrors(), leaseHeld: services.leaseManager.snapshot("federation").leaseHeld, messagingHeld: services.leaseManager.snapshot("messaging").leaseHeld });
+      const registry = services.registry;
+      const advertised = [...new Set([true, false].flatMap(tokenMiser => [true, false].flatMap(discovery => names(registry.buildCodexParentDynamicTools(tokenMiser, discovery)))))];
+      const responses = [];
+      for (const [index, call] of ${JSON.stringify(calls)}.entries()) {
+        responses.push(await registry.handleServerRequest("codex", { method: "item/tool/call", params: { threadId: "fixture-thread", turnId: "fixture-turn", requestId: "r" + index, callId: "c" + index, arguments: {}, ...call } }));
+      }
+      const pdfServer = await registry.registerPdfMcpClient({});
+      process.send({ ready: true, advertised, responses, pdfServerOffered: pdfServer !== undefined, pdfServerWired: Boolean(registry.pdfToolMcpServer), errors: await services.settings.readFederationKeyAccessErrors(), leaseHeld: services.leaseManager.snapshot("federation").leaseHeld, messagingHeld: services.leaseManager.snapshot("messaging").leaseHeld });
     }).catch(error => { console.error(error.stack); process.exitCode = 1; });`);
   const child = fork(driver, [], { env, execArgv: ["--require", guard], stdio: ["ignore", "pipe", "pipe", "ipc"] });
   let output = "";
@@ -65,6 +95,23 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
     { name: "federationInstancePrivateKey", reason: expect.stringContaining("desktop OS keychain") },
     { name: "federationNoiseStaticPrivateKey", reason: expect.stringContaining("desktop OS keychain") },
   ] });
+  // The booted Outpost advertises its grant and nothing else, and refuses in
+  // the owner every call outside it, advertised or not.
+  const { advertised, responses, pdfServerOffered, pdfServerWired } = ready as {
+    advertised: string[]; pdfServerOffered: boolean; pdfServerWired: boolean;
+    responses: Array<{ success: boolean; contentItems: Array<{ text?: string }> }>;
+  };
+  expect(new Set(advertised)).toEqual(new Set(OUTPOST_AGENT_TOOL_ALLOWLIST));
+  // The owner-side PDF MCP server serves messaging PDF tools outside the grant.
+  expect(pdfServerWired).toBe(true);
+  expect(pdfServerOffered).toBe(false);
+  const refusedByPolicy = (response: (typeof responses)[number]) =>
+    !response.success && response.contentItems.some((item) => item.text?.includes("This Outpost does not allow this PwrAgent tool."));
+  calls.forEach((call, index) => {
+    const namespace = call.namespace === null ? PWRAGENT_TOOL_NAMESPACE : call.namespace;
+    const listed = OUTPOST_AGENT_TOOL_ALLOWLIST.includes(`${namespace}/${call.tool}`);
+    expect(refusedByPolicy(responses[index]!), JSON.stringify(call)).toBe(!listed);
+  });
   child.send({ stop: true });
   expect((await exited)[0], output).toBe(0);
   const startupLog = fs.readFileSync(path.join(profile.profileDir, "logs/profile-fixture.main.log"), "utf8");

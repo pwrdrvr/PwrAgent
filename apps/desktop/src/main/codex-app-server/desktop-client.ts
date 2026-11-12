@@ -12,6 +12,7 @@ import { enrichThreadDirectory } from "../app-server/thread-directory-enricher";
 import { collectDescendants, countOpenFileDescriptors, readProcessTable } from "../process-descendants";
 import { StdioJsonRpcTransport, type StdioJsonRpcTransportOptions } from "./stdio-transport";
 import { createOutpostCodexMessageRewriter } from "../headless/outpost-codex-sandbox";
+import { createOutpostAgentToolMessageRewriter } from "../headless/outpost-agent-tools";
 import { isCodexInvalidResponseMessageIdError, repairCodexInvalidResponseMessageIds } from "./invalid-response-message-id-recovery";
 
 export * from "@pwragent/owner-core/codex-app-server/client";
@@ -33,11 +34,13 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
           ...callbacks,
         });
         // Every outbound request is the one place no Outpost path can skip:
-        // a legacy sandbox would let model commands read the Outpost's state.
+        // a legacy sandbox would let model commands read the Outpost's state,
+        // and an unlisted agent tool runs in the owner, outside that sandbox.
         if (runtimePolicy) {
-          const rewrite = createOutpostCodexMessageRewriter(runtimePolicy.codexProtectedRoots);
+          const sandbox = createOutpostCodexMessageRewriter(runtimePolicy.codexProtectedRoots);
+          const agentTools = createOutpostAgentToolMessageRewriter(runtimePolicy.agentToolAllowlist);
           const send = transport.send.bind(transport);
-          transport.send = (message) => send(rewrite(message));
+          transport.send = (message) => send(agentTools(sandbox(message)));
         }
         return transport;
       },
