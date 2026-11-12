@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
+import { DESKTOP_ONBOARDING_COMPLETED_SOURCES } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyDesktopSettingsPatch,
@@ -92,6 +93,20 @@ describe("onboarding completed writes", () => {
     ].join("\n"));
   });
 
+  it("repairs an existing duplicate on an unrelated settings write", () => {
+    fs.writeFileSync(
+      configPath,
+      "[onboarding]\ncompleted = false\ncompleted = true\n",
+      "utf8",
+    );
+
+    applyDesktopSettingsPatch(configPath, { general: { developerMode: true } });
+
+    const text = fs.readFileSync(configPath, "utf8");
+    expect(countOnboardingKey(text, "completed")).toBe(1);
+    expect(readDesktopSettingsConfig(configPath).onboarding?.completed).toBe(true);
+  });
+
   it("keeps an explicit false marker distinct from an absent key", () => {
     fs.writeFileSync(configPath, "[onboarding]\ncompleted = true\n", "utf8");
 
@@ -121,7 +136,7 @@ function renderInitial(config: InitialConfig): string {
 const onboardingPatch = fc.record(
   {
     completed: fc.boolean(),
-    completedSource: fc.constantFrom("wizard", "migrated"),
+    completedSource: fc.constantFrom(...DESKTOP_ONBOARDING_COMPLETED_SOURCES),
   },
   { requiredKeys: [] },
 );
@@ -137,9 +152,7 @@ describe("onboarding writes (property)", () => {
           fs.writeFileSync(configPath, source, "utf8");
           let lastCompleted: boolean | undefined;
           for (const patch of patches) {
-            applyDesktopSettingsPatch(configPath, {
-              onboarding: patch as { completed?: boolean; completedSource?: "wizard" | "migrated" },
-            });
+            applyDesktopSettingsPatch(configPath, { onboarding: patch });
             if (patch.completed !== undefined) lastCompleted = patch.completed;
           }
           const text = fs.readFileSync(configPath, "utf8");

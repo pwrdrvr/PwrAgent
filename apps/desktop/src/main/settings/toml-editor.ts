@@ -120,8 +120,8 @@ const FLOAT_LITERAL = /^-?(?:\d+\.\d+(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+)$/;
  *
  * Duplicate keys in one table are invalid TOML, but older builds wrote them
  * (`[onboarding] completed`). They are tolerated: the last occurrence wins,
- * with a warning, and the editor removes the extras when it next writes that
- * key.
+ * with a warning, and `applyTomlEdits` removes the earlier copies on the next
+ * write.
  */
 export function parseTomlTables(
   source: string,
@@ -236,6 +236,7 @@ export function applyTomlEdits(
 
   const model = parseSource(source);
   const plan = planEdits(model, collapseKeyEdits(edits));
+  removeDuplicateKeys(model, plan.lineOps);
   if (
     plan.lineOps.length === 0
     && plan.newSections.length === 0
@@ -390,7 +391,7 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
 
     if (edit.op === "ensureCommentBefore") {
       if (!section) continue;
-      const key = section.keys.find((k) => k.name === keyName);
+      const key = findKey(section, keyName);
       if (!key || markerPrecedesKey(model.lines, key, edit.marker)) {
         continue;
       }
@@ -404,9 +405,8 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
 
     if (edit.op === "delete") {
       if (!section) continue;
-      const key = section.keys.find((k) => k.name === keyName);
+      const key = findKey(section, keyName);
       if (!key) continue;
-      removeDuplicateKeys(lineOps, section, key);
       lineOps.push({
         kind: "replace",
         startLine: key.startLine,
@@ -428,9 +428,8 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
       continue;
     }
 
-    const existingKey = section.keys.find((k) => k.name === keyName);
+    const existingKey = findKey(section, keyName);
     if (existingKey) {
-      removeDuplicateKeys(lineOps, section, existingKey);
       const existingValue = parseExistingValue(model.lines, existingKey);
       if (existingValue && valuesEqual(existingValue, edit.value)) {
         continue; // no-op set
@@ -478,22 +477,31 @@ function collapseKeyEdits(edits: readonly TomlEdit[]): readonly TomlEdit[] {
 }
 
 /**
- * Lazy repair: a key repeated in one table is invalid TOML. Edits target the
- * first occurrence, so drop every later one while that key is being written.
+ * The copy of a key that edits target. A repeated key is invalid TOML; the
+ * reader keeps the last copy, so the editor edits that one too.
  */
-function removeDuplicateKeys(
-  lineOps: LineOp[],
+function findKey(
   section: SectionLocation,
-  first: KeyLocation,
-): void {
-  for (const key of section.keys) {
-    if (key === first || key.name !== first.name) continue;
-    lineOps.push({
-      kind: "replace",
-      startLine: key.startLine,
-      endLine: key.endLine,
-      newLines: [],
-    });
+  keyName: string,
+): KeyLocation | undefined {
+  return section.keys.findLast((k) => k.name === keyName);
+}
+
+/**
+ * Lazy repair: drop every copy of a repeated key except the last, the one the
+ * reader uses, on any write. Only those lines change.
+ */
+function removeDuplicateKeys(model: SourceModel, lineOps: LineOp[]): void {
+  for (const section of model.sections) {
+    for (const key of section.keys) {
+      if (findKey(section, key.name) === key) continue;
+      lineOps.push({
+        kind: "replace",
+        startLine: key.startLine,
+        endLine: key.endLine,
+        newLines: [],
+      });
+    }
   }
 }
 

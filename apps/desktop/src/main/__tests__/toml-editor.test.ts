@@ -783,12 +783,20 @@ describe("applyTomlEdits — repeated keys", () => {
     expect(result).toBe("[onboarding]\ncompleted = true\n");
   });
 
-  it("removes later copies of a key when it is written, even as a no-op", () => {
-    const source = "[onboarding]\ncompleted = true # first\ncompleted = true\nother = 1\n";
+  it("lets the last of two edits for an absent key win", () => {
+    const result = applyTomlEdits("[onboarding]\nother = 1\n", [
+      { op: "set", path: ["onboarding", "completed"], value: true },
+      { op: "delete", path: ["onboarding", "completed"] },
+    ]);
+    expect(result).toBe("[onboarding]\nother = 1\n");
+  });
+
+  it("keeps the last copy of a repeated key, the one the reader uses", () => {
+    const source = "[onboarding]\ncompleted = false\ncompleted = true # last\nother = 1\n";
     const result = applyTomlEdits(source, [
       { op: "set", path: ["onboarding", "completed"], value: true },
     ]);
-    expect(result).toBe("[onboarding]\ncompleted = true # first\nother = 1\n");
+    expect(result).toBe("[onboarding]\ncompleted = true # last\nother = 1\n");
   });
 
   it("deletes every copy of a deleted key", () => {
@@ -797,10 +805,16 @@ describe("applyTomlEdits — repeated keys", () => {
       .toBe("[s]\n");
   });
 
-  it("leaves a repeated key alone when no edit names it", () => {
-    const source = "[s]\nk = 1\nk = 2\nother = 1\n";
+  it("repairs a repeated key on a write of another key, keeping its read value", () => {
+    const source = "# note\n[s]\nk = 1\nk = 2\nother = 1\n";
     expect(applyTomlEdits(source, [{ op: "set", path: ["s", "other"], value: 2 }]))
-      .toBe("[s]\nk = 1\nk = 2\nother = 2\n");
+      .toBe("# note\n[s]\nk = 2\nother = 2\n");
+  });
+
+  it("repairs a repeated key even when every edit is a no-op", () => {
+    const source = "[s]\nk = 1\nk = 1\nother = 1\n";
+    expect(applyTomlEdits(source, [{ op: "set", path: ["s", "other"], value: 1 }]))
+      .toBe("[s]\nk = 1\nother = 1\n");
   });
 });
 
