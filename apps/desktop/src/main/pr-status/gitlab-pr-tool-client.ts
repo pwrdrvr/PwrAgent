@@ -103,7 +103,8 @@ function noteSummary(r: ForgeRepository, p: Payload, fallback: string) {
  */
 export class GitlabPrToolClient {
   constructor(private readonly options: {
-    gitlab: Pick<GitLabPrFetcher, "readApi" | "writeApi" | "uploadProjectFile">;
+    gitlab: Pick<GitLabPrFetcher, "readApi" | "writeApi" | "uploadProjectFile">
+      & Partial<Pick<GitLabPrFetcher, "mergeTrainsEnabled">>;
     tempRoots?: string[];
   }) {}
 
@@ -120,13 +121,20 @@ export class GitlabPrToolClient {
 
   /** Whether the project merges through merge trains (GitLab Premium). */
   async mergeQueueRequirement(r: ForgeRepository, number: number, signal?: AbortSignal): Promise<{ kind: "merge_train"; baseRef?: string } | undefined> {
-    if (r.provider !== "gitlab") return undefined;
+    if (r.provider !== "gitlab" || await this.mergeTrainsEnabled(r) !== true) return undefined;
     const base = `projects/${encodeURIComponent(`${r.owner}/${r.repo}`)}`;
-    const project = object(await this.options.gitlab.readApi<unknown>(r.host, base, signal));
-    if (project.merge_trains_enabled !== true) return undefined;
     const mr = object(await this.options.gitlab.readApi<unknown>(r.host, `${base}/merge_requests/${number}`, signal));
     const baseRef = str(mr.target_branch, 255);
     return { kind: "merge_train", ...(baseRef ? { baseRef } : {}) };
+  }
+
+  /**
+   * The project's merge trains setting, read once per project and shared
+   * with the status poll. Unknown reads as no train, so a project that has
+   * none merges exactly as before.
+   */
+  private async mergeTrainsEnabled(r: ForgeRepository): Promise<boolean | undefined> {
+    return await this.options.gitlab.mergeTrainsEnabled?.(r.host, `${r.owner}/${r.repo}`).catch(() => undefined);
   }
 
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> {
@@ -436,12 +444,8 @@ export class GitlabPrToolClient {
         ctx.assertCanMerge?.(r, args.number!);
         // A project with merge trains takes no direct merge: the MR joins
         // the train, which merges it with the project's method. A project
-        // read that fails never blocks the merge: it merges as before.
-        const project = await get("").catch((error: unknown) => {
-          if (ctx.signal?.aborted) throw error;
-          return undefined;
-        });
-        if (project && object(project).merge_trains_enabled === true) {
+        // whose setting cannot be read merges as before.
+        if (await this.mergeTrainsEnabled(r) === true) {
           const mr = await readMergeRequest(args.number!);
           if (mr.state !== "opened") throw new ForgeReadError("invalid_arguments", `Merge request !${args.number} is not open.`);
           if (args.expectedHeadSha && str(mr.sha, 64) !== args.expectedHeadSha) {

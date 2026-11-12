@@ -15,8 +15,6 @@ import { gitlabMergeTrainStatus } from "./pr-merge-queue";
 const execFileAsync = promisify(execFile);
 /** Concurrent `glab` subprocesses admitted at once. */
 const API_CONCURRENCY = 3;
-/** How long a project's merge trains setting is trusted before it is read again. */
-const MERGE_TRAINS_SETTING_TTL_MS = 10 * 60_000;
 export class GitLabReadError extends Error {
   /** `reason` is GitLab's own explanation from a JSON error body, never raw CLI output. */
   constructor(readonly status: number, readonly retryAt?: number, readonly reason?: string) {
@@ -168,7 +166,7 @@ export class GitLabPrFetcher {
   private requestSequence = 0;
   private activeWrites = 0;
   private readonly tokens = new Map<string, { at: number; token: string }>();
-  private readonly mergeTrains = new Map<string, { at: number; value: boolean }>();
+  private readonly mergeTrains = new Map<string, boolean>();
   private readonly options: GitLabPrFetcherOptions;
 
   constructor(options: GitLabPrFetcherOptions = {}) {
@@ -418,25 +416,26 @@ export class GitLabPrFetcher {
 
   /**
    * Whether the project merges through merge trains. A project setting
-   * (GitLab Premium), so it is read once per project and kept. GitLab's free
-   * tier has no setting, which reads as no. The read is charged to the PR
-   * status budget; when it cannot run (the budget is spent, or GitLab fails)
-   * the last answer stands, and with none the answer is unknown, so a paid
-   * MR read still succeeds.
+   * (GitLab Premium), so it is read once per project and kept for the life
+   * of the process; the status poll and the merge tool share the answer.
+   * GitLab's free tier has no setting, which reads as no. The read is charged
+   * to the PR status budget; when it cannot run (the budget is spent, or
+   * GitLab fails) the answer is unknown, nothing is kept, and the caller
+   * treats the project as having no train.
    */
   async mergeTrainsEnabled(host: string, project: string): Promise<boolean | undefined> {
     const key = `${host}\u0000${project}`;
     const cached = this.mergeTrains.get(key);
-    if (cached && Date.now() - cached.at < MERGE_TRAINS_SETTING_TTL_MS) return cached.value;
+    if (cached !== undefined) return cached;
     try {
       const payload = await this.api<{ merge_trains_enabled?: boolean }>(
         host, `projects/${encodeURIComponent(project)}`, true, false, undefined, false, true,
       );
       const value = payload?.merge_trains_enabled === true;
-      this.mergeTrains.set(key, { at: Date.now(), value });
+      this.mergeTrains.set(key, value);
       return value;
     } catch {
-      return cached?.value;
+      return undefined;
     }
   }
 
