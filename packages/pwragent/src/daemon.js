@@ -76,7 +76,9 @@ export async function serve({ directory, workspace, home, command, profile }) {
     const policy = await import("../dist/outpost-codex-sandbox.js");
     const sandbox = await checkCodexSandbox({ command, home, workspace, signal: preflight.signal,
       permissionOverrides: policy.buildOutpostCodexPermissionOverrides(policy.resolveOutpostProtectedRoots(process.env.PWRAGENT_HOME)),
-      profile: policy.OUTPOST_PERMISSION_PROFILE_IDS["workspace-write"], protectedFile: lockPath });
+      // The owner lock's marker file sits in the profile state directory the
+      // sandbox must deny, and holds no secret.
+      profile: policy.OUTPOST_PERMISSION_PROFILE_IDS["workspace-write"], protectedFile: path.join(directory, "owner.lock") });
     if (shutdown) return await done;
     if (sandbox.status !== "ready") throw new Error(sandbox.error);
     opened = true;
