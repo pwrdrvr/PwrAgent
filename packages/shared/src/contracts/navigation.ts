@@ -30,7 +30,7 @@ import type {
   MessagingToolUpdateMode,
 } from "./messaging";
 import type { DesktopGhDiscoverySnapshot, DesktopProviderModelDefaults } from "./settings";
-import type { BackendAcpSessionRuntimeState } from "./backend";
+import type { BackendAcpSessionRuntimeState, StartupProviderRefreshStatus } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
 import type { CelestialIconId } from "./celestial";
 import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
@@ -1908,10 +1908,7 @@ export type NavigationSnapshot = {
   directories: NavigationDirectorySummary[];
   launchpadDefaults: NavigationLaunchpadDefaults;
   /** Background provider hydration after a durable startup publication. */
-  providerRefresh?: {
-    state: "checking" | "degraded" | "ready";
-    failedProviders?: number;
-  };
+  providerRefresh?: StartupProviderRefreshStatus;
 };
 
 /** Normalize thread-key fields received from pre-v48 stores or older peers. */
