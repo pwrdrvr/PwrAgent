@@ -16,7 +16,8 @@ here="$(cd "$(dirname "$0")" && pwd)"
 : "${1:?usage: run-model-key-proxy.sh <env-file>}"
 # Absolute, so `.` never searches PATH for it.
 env_file="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-mode="$(stat -f %Lp "$env_file" 2>/dev/null || stat -c %a "$env_file")"
+# GNU stat first: its -f prints file system status instead of failing.
+mode="$(stat -c %a "$env_file" 2>/dev/null || stat -f %Lp "$env_file")"
 case "$mode" in 600|400) ;; *) echo "$env_file must be mode 600; it is $mode" >&2; exit 1;; esac
 set -a
 # shellcheck disable=SC1090 # the operator's own env file.

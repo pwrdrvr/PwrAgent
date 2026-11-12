@@ -9,7 +9,8 @@
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 env_file="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-mode="$(stat -f %Lp "$env_file" 2>/dev/null || stat -c %a "$env_file")"
+# GNU stat first: its -f prints file system status instead of failing.
+mode="$(stat -c %a "$env_file" 2>/dev/null || stat -f %Lp "$env_file")"
 case "$mode" in 600|400) ;; *) echo "$env_file must be mode 600; it is $mode" >&2; exit 1;; esac
 pid_file="$env_file.pid"
 if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
