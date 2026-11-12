@@ -2281,6 +2281,38 @@ describe("FeishuAdapter webhook authentication", () => {
     });
   });
 
+  it("refuses unsigned challenge-typed bodies that are not a bare challenge", async () => {
+    await withWebhookAdapter({ encryptKey, verificationToken: "verify-token" }, async ({
+      events,
+      post,
+    }) => {
+      const event = messageEvent("riding along");
+      const noChallenge = await post(JSON.stringify({
+        encrypt: encryptFeishuPayload({ ...event, type: "url_verification" }, encryptKey),
+      }));
+      expect(noChallenge.status).toBe(401);
+
+      const withChallenge = await post(JSON.stringify({
+        encrypt: encryptFeishuPayload({
+          ...messageEvent("riding along again"),
+          challenge: "challenge-2",
+          token: "verify-token",
+          type: "url_verification",
+        }, encryptKey),
+      }));
+      expect(withChallenge.status).toBe(200);
+      await expect(withChallenge.json()).resolves.toEqual({ challenge: "challenge-2" });
+
+      // A ciphertext that does not decrypt answers exactly like a missing
+      // signature, so unsigned input learns nothing about the decryption.
+      const garbage = await post(JSON.stringify({
+        encrypt: Buffer.alloc(48, 7).toString("base64"),
+      }));
+      expect(garbage.status).toBe(401);
+      expect(events).toEqual([]);
+    });
+  });
+
   it("keeps the in-body token check when only a verification token is configured", async () => {
     await withWebhookAdapter({ verificationToken: "verify-token" }, async ({ events, post }) => {
       const event = messageEvent("token only", "om_token_only");

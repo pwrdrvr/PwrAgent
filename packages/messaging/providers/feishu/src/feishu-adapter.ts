@@ -2636,7 +2636,10 @@ class FeishuWebhookAuthError extends Error {}
  * The one exception is the request-URL challenge, which only echoes its
  * `challenge` value back and starts nothing. It is admitted unsigned only when
  * it carries no signature headers and its decrypted body is a
- * `url_verification`.
+ * `url_verification` with a string `challenge`. Only the challenge fields are
+ * returned, so no event can ride along. Every unsigned failure, including a
+ * ciphertext that does not decrypt, answers the same way, so unsigned input
+ * learns nothing about the decryption.
  *
  * Without a key, Feishu sends plaintext callbacks with no signature, and the
  * in-body token check in `handleWebhookPayload` remains the only check.
@@ -2661,26 +2664,46 @@ function parseFeishuWebhookPayload(
     );
   }
 
-  const signature = verifyFeishuWebhookSignature({ body, encryptKey, headers });
+  const signature = verifyFeishuWebhookSignature({ body, encryptKey, headers, parsed });
   if (signature === "invalid") {
     throw new FeishuWebhookAuthError("Feishu webhook signature is invalid.");
   }
-  const decrypted = JSON.parse(
-    decryptFeishuEncryptedPayload(encryptedPayload, encryptKey),
-  ) as unknown;
-  const decryptedEnvelope = objectRecord(decrypted);
   if (signature === "missing") {
-    if (decryptedEnvelope.type !== "url_verification") {
-      throw new FeishuWebhookAuthError("Feishu webhook signature is missing.");
-    }
-    return decryptedEnvelope as FeishuEventEnvelope;
+    return parseUnsignedFeishuChallenge(encryptedPayload, encryptKey);
   }
+  const decryptedEnvelope = objectRecord(JSON.parse(
+    decryptFeishuEncryptedPayload(encryptedPayload, encryptKey),
+  ) as unknown);
   const passthrough = { ...envelope };
   delete passthrough.encrypt;
   return {
     ...decryptedEnvelope,
     ...passthrough,
   } as FeishuEventEnvelope;
+}
+
+function parseUnsignedFeishuChallenge(
+  encryptedPayload: string,
+  encryptKey: string,
+): FeishuEventEnvelope {
+  let decrypted: Record<string, unknown>;
+  try {
+    decrypted = objectRecord(JSON.parse(
+      decryptFeishuEncryptedPayload(encryptedPayload, encryptKey),
+    ) as unknown);
+  } catch {
+    decrypted = {};
+  }
+  const challenge = stringField(decrypted.challenge);
+  if (decrypted.type !== "url_verification" || challenge === undefined) {
+    throw new FeishuWebhookAuthError("Feishu webhook signature is missing.");
+  }
+  const token = stringField(decrypted.token);
+  return {
+    challenge,
+    type: "url_verification",
+    ...(token !== undefined ? { token } : {}),
+  };
 }
 
 /**
@@ -2699,6 +2722,7 @@ function verifyFeishuWebhookSignature(params: {
   body: Buffer;
   encryptKey: string;
   headers: IncomingHttpHeaders;
+  parsed: unknown;
 }): "invalid" | "missing" | "valid" {
   const rawTimestamp = params.headers["x-lark-request-timestamp"];
   const rawNonce = params.headers["x-lark-request-nonce"];
@@ -2714,22 +2738,15 @@ function verifyFeishuWebhookSignature(params: {
     return "invalid";
   }
   const signature = rawSignature.toLowerCase();
-  const rawBody = params.body.toString("utf8");
-  const candidates = [rawBody];
-  try {
-    const normalized = JSON.stringify(JSON.parse(rawBody));
-    if (normalized !== rawBody) candidates.push(normalized);
-  } catch {
-    return "invalid";
-  }
-  let valid = false;
-  for (const candidate of candidates) {
-    const expected = createHash("sha256")
+  const candidates = [params.body.toString("utf8"), JSON.stringify(params.parsed)];
+  return candidates.some((candidate) => safeEqual(
+    createHash("sha256")
       .update(rawTimestamp + rawNonce + params.encryptKey + candidate)
-      .digest("hex");
-    if (safeEqual(expected, signature)) valid = true;
-  }
-  return valid ? "valid" : "invalid";
+      .digest("hex"),
+    signature,
+  ))
+    ? "valid"
+    : "invalid";
 }
 
 function decryptFeishuEncryptedPayload(
