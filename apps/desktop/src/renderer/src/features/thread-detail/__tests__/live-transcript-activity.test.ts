@@ -450,7 +450,7 @@ describe("buildLiveToolDetails", () => {
       arguments: { query: "Sample protocol notes" },
     });
     expect(details[0]?.command).toBeDefined();
-    expect(summarizeLiveActivity(details)).toBe("Explored 1 item");
+    expect(summarizeLiveActivity(details)).toBe("Explored 1 search");
   });
 
   it("uses dynamic tool titles while preserving expandable tool identity", () => {

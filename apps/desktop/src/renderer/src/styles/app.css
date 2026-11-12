@@ -35148,6 +35148,11 @@ div.composer-error-row__toggle {
   list-style: none;
 }
 
+/* A run of one-call activities has no header above its rows. */
+.transcript-activity--run .transcript-activity__details {
+  margin-top: 0;
+}
+
 .transcript-activity__detail {
   display: flex;
   flex-direction: column;

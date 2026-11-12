@@ -37,6 +37,7 @@ import {
   isPwrSnapResourceUri,
   readCodexNativeSubAgentName,
   estimateTokenUsageCost,
+  formatExplorationSummary,
   formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
   formatTokenUsageStandardRateSuffix,
@@ -4700,7 +4701,9 @@ function summarizeActivityItems(
 
   const details: AppServerThreadActivityDetail[] = [];
   const detailsByKey = new Map<string, AppServerThreadActivityDetail>();
-  let inspectedFiles = 0;
+  const readPaths = new Set<string>();
+  let searches = 0;
+  let listings = 0;
   let commandsRun = 0;
   let changedFiles = 0;
   let changedFileAdditions = 0;
@@ -4765,7 +4768,7 @@ function summarizeActivityItems(
         const detailId = `${itemId}-${index + 1}`;
 
         if (actionType === "read" && actionPath) {
-          inspectedFiles += 1;
+          readPaths.add(actionPath);
           pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
@@ -4780,7 +4783,7 @@ function summarizeActivityItems(
         }
 
         if (actionType === "search") {
-          inspectedFiles += 1;
+          searches += 1;
           pushActivityDetail(details, detailsByKey, {
             id: detailId,
             kind: "read",
@@ -4798,7 +4801,7 @@ function summarizeActivityItems(
         }
 
         if (actionType === "listFiles") {
-          inspectedFiles += 1;
+          listings += 1;
           const label = actionPath
             ? `Listed ${path.basename(actionPath) || actionPath}`
             : "Listed files";
@@ -4997,10 +5000,13 @@ function summarizeActivityItems(
   }
 
   const summaryParts: string[] = [];
-  if (inspectedFiles > 0) {
-    summaryParts.push(
-      `Explored ${inspectedFiles} file${inspectedFiles === 1 ? "" : "s"}`
-    );
+  const exploration = formatExplorationSummary({
+    files: readPaths.size,
+    searches,
+    lists: listings,
+  });
+  if (exploration) {
+    summaryParts.push(exploration);
   }
   if (commandsRun > 0) {
     summaryParts.push(`Ran ${commandsRun} command${commandsRun === 1 ? "" : "s"}`);
@@ -5415,7 +5421,9 @@ function extractThreadEntries(
       const itemType = pickString(item, ["type"]);
       const role = normalizeConversationRole(itemType);
       if (role) {
-        flushActivityItems();
+        // Only a message that renders ends the activity group. Models that
+        // answer each tool call with an empty assistant message would
+        // otherwise split their exploration into one activity per call.
         if (shouldSuppressConversationMessage(item, suppressedAssistantTexts, nativeReviewTurn)) {
           continue;
         }
@@ -5423,6 +5431,7 @@ function extractThreadEntries(
         if (!content.text && !content.parts?.length) {
           continue;
         }
+        flushActivityItems();
         const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
         // Turn start is a prompt boundary, not the send time of every
         // assistant message in a potentially hours-long turn. Leave unknown

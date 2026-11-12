@@ -67,9 +67,8 @@ test("transcript preserves temporal order across live activity and hydration", a
     ]);
     expect(transcriptText).not.toContain("I am going to close that gap in renderBindingStatus.");
 
+    // Its one-call activities are rows of the group, with no header to open.
     await transcript.getByRole("button", { name: /Worked for 1m 10s/ }).click();
-    await transcript.getByRole("button", { name: /Explored 1 item/ }).first().click();
-    await transcript.getByRole("button", { name: /Explored 1 item/ }).last().click();
 
     await expect(transcript.getByText("Read useThreadSessionState.ts")).toBeVisible();
     await expect(transcript.getByText("Searched thread-detail")).toBeVisible();

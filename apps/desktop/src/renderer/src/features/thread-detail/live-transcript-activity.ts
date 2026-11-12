@@ -11,6 +11,8 @@ import {
 } from "@pwragent/shared";
 export { buildTokenUsageActivityEntry, buildTurnUsageActivityEntryFromLine } from "@pwragent/shared";
 import {
+  classifyExplorationLabel,
+  formatExplorationSummary,
   formatSearchCommandActionLabel,
   type AppServerSource,
   type AppServerThreadActivityDetail,
@@ -893,6 +895,35 @@ function commandSummaryName(label: string): string | undefined {
   return trimmed.split(":")[0]?.split(" - ")[0]?.trim() || undefined;
 }
 
+// Counts read rows by what they did, as the replay summarizer does from the
+// command actions: distinct files read, searches, listings, and anything
+// else (a fetched page) as an item.
+function summarizeExploration(
+  details: AppServerThreadActivityDetail[],
+): string | undefined {
+  const files = new Set<string>();
+  let searches = 0;
+  let lists = 0;
+  let items = 0;
+  for (const detail of details) {
+    const kind = classifyExplorationLabel(detail.label);
+    if (kind === "file") {
+      files.add(detail.path ?? stripElapsedSuffix(detail.label));
+    } else if (kind === "search") {
+      searches += 1;
+    } else if (kind === "list") {
+      lists += 1;
+    } else {
+      items += 1;
+    }
+  }
+  return formatExplorationSummary({ files: files.size, searches, lists, items });
+}
+
+function stripElapsedSuffix(label: string): string {
+  return label.replace(/\s+\([\d.]+m?s\)$/, "").trim();
+}
+
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
   // Worker reports summarize in the replay's words, not as tool names, so the
   // header reads the same before and after the turn is read back.
@@ -916,7 +947,9 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   ) {
     return directDetail.label;
   }
-  const readCount = primaryDetails.filter((detail) => detail.kind === "read").length;
+  const exploration = summarizeExploration(
+    primaryDetails.filter((detail) => detail.kind === "read"),
+  );
   const commandLabels = [
     ...new Set(
       primaryDetails
@@ -927,8 +960,8 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   ];
   const parts: string[] = [];
 
-  if (readCount > 0) {
-    parts.push(`Explored ${readCount} item${readCount === 1 ? "" : "s"}`);
+  if (exploration) {
+    parts.push(exploration);
   }
   if (commandLabels.length === 1 && commandLabels[0]) {
     parts.push(commandLabels[0]);

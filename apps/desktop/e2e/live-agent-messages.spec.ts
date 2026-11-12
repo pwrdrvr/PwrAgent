@@ -67,7 +67,7 @@ test("preserves live assistant commentary messages, exploration activity, and fi
 
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "tool-search-started-1" });
-    await expect(transcript).toContainText("Explored 1 item");
+    await expect(transcript).toContainText("Explored 1 search");
     await expectAtTranscriptBottom(list);
 
     await app.advance({ stepId: "assistant-message-1a" });
@@ -142,7 +142,8 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeVisible();
     await expect(transcript.getByText("The broad search was too noisy")).toBeVisible();
     await expect(transcript.getByText("The existing product direction is thread-first")).toBeVisible();
-    await expect(transcript.getByRole("button", { name: /Explored 1 item/i })).toBeVisible();
+    // The search returned a source row too, so it keeps its own header.
+    await expect(transcript.getByRole("button", { name: /Explored 1 search/i })).toBeVisible();
     await expect(
       transcript.getByRole("button", {
         name: /rg -n "Telegram\|telegram\|webhook" docs apps packages/i
@@ -164,7 +165,7 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeHidden();
     await expect(transcript.getByText("The broad search was too noisy")).toBeHidden();
     await expect(transcript.getByText("The existing product direction is thread-first")).toBeHidden();
-    await expect(transcript.getByRole("button", { name: /Explored 1 item/i })).toBeHidden();
+    await expect(transcript.getByRole("button", { name: /Explored 1 search/i })).toBeHidden();
   } finally {
     await app.close();
   }
