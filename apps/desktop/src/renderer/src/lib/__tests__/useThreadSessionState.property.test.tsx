@@ -530,6 +530,30 @@ it("keeps a lagging page of finished tool turns between older and newer retained
   } finally { clock.mockRestore(); }
 });
 
+// fast-check seed -2084235983, path "2926:0:0:4:17:7:21:23:25:25:26:27:27:27:27:28:28".
+it("keeps a pruned live tool turn reachable when a newest page skips past it", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("start"), new LedgerCommand("read"), new LedgerCommand("item", 0, true),
+      new LedgerCommand("complete"), new LedgerCommand("start"), new LedgerCommand("item"),
+      new LedgerCommand("complete"), new LedgerCommand("start"), new LedgerCommand("older"),
+    ]);
+  } finally { clock.mockRestore(); }
+});
+
+// fast-check seed 1573059296, path "4505:0:9:11:15:29:30:27:25:25:31:31:31:33:33".
+it("keeps a pruned live tool turn reachable across an acknowledged send and a newest page", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+      new LedgerCommand("start"), new LedgerCommand("item"), new LedgerCommand("complete"),
+      new LedgerCommand("send"), new LedgerCommand("start"), new LedgerCommand("read"), new LedgerCommand("older"),
+    ]);
+  } finally { clock.mockRestore(); }
+});
+
 it("renders a subsequence of the provider ledger after every command and the whole ledger at quiescence", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   try {

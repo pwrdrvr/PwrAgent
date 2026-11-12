@@ -845,7 +845,7 @@ describe("useThreadSessionState", () => {
     }));
   });
 
-  it("keeps an omitted completed turn before a disjoint newer tail", async () => {
+  it("restarts history at a newest page that shares no turn with the loaded tail", async () => {
     const initialTail = readThreadResponse({
       entries: [
         {
@@ -892,11 +892,45 @@ describe("useThreadSessionState", () => {
       hasPreviousPage: true,
       previousCursor: "new-turn",
     });
+    // The page before the refreshed tail's cursor. It overlaps the old tail,
+    // and carries the turn that neither the old tail nor the new page held.
+    const gapPage = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "completed-old-turn",
+            text: "Completed old turn",
+            createdAt: 200,
+          }),
+          turn: {
+            id: "old-turn",
+            status: "completed" as const,
+            completedAt: 200,
+          },
+        },
+        {
+          ...messageEntry({
+            id: "omitted-turn",
+            text: "Omitted turn",
+            createdAt: 250,
+          }),
+          turn: {
+            id: "omitted-turn",
+            status: "completed" as const,
+            completedAt: 250,
+          },
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "completed-old-turn",
+    });
     const readThread = vi
       .fn()
       .mockResolvedValueOnce(initialTail)
       .mockResolvedValueOnce(olderPage)
-      .mockResolvedValueOnce(refreshedTail);
+      .mockResolvedValueOnce(refreshedTail)
+      .mockResolvedValueOnce(gapPage)
+      .mockResolvedValueOnce(olderPage);
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,
       readThread,
@@ -917,13 +951,32 @@ describe("useThreadSessionState", () => {
     });
     rerender({ updatedAt: 2_000 });
 
+    // Turns between the old tail and the new page are covered by no loaded
+    // page. Keeping the old rows above the new page would hide that gap.
     await waitFor(() => {
       expect(result.current.response?.replay.entries.map((entry) => entry.id)).toEqual([
-        "older-history",
-        "completed-old-turn",
         "new-turn",
       ]);
     });
+    expect(result.current.response?.replay.pagination).toMatchObject({
+      hasPreviousPage: true,
+      previousCursor: "new-turn",
+    });
+
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(readThread).toHaveBeenLastCalledWith(expect.objectContaining({ before: "new-turn" }));
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(readThread).toHaveBeenLastCalledWith(expect.objectContaining({ before: "completed-old-turn" }));
+    expect(result.current.response?.replay.entries.map((entry) => entry.id)).toEqual([
+      "older-history",
+      "completed-old-turn",
+      "omitted-turn",
+      "new-turn",
+    ]);
   });
 
   it("keeps an omitted completed turn between refreshed anchors", async () => {
