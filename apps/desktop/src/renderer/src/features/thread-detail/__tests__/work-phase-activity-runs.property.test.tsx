@@ -180,6 +180,8 @@ describe("activities that keep their header", () => {
     };
     expect(isRunnableToolActivity(base)).toBe(true);
     expect(isRunnableToolActivity({ ...base, tone: "warning" })).toBe(false);
+    // A live bucket that holds one call now gains more as the turn runs.
+    expect(isRunnableToolActivity({ ...base, id: "live-tools-turn-1-0" })).toBe(false);
     expect(isRunnableToolActivity({
       ...base,
       detailsRef: {

@@ -58,6 +58,10 @@ export function isRunnableToolActivity(
     || entry.details.length !== 1
     || entry.detailsRef
     || entry.tone
+    // A live bucket gains calls as the turn runs. Drawn as a row at one
+    // call, it would turn into a collapsed header at the second and hide
+    // the row being read.
+    || entry.id.startsWith("live-tools-")
   ) {
     return false;
   }
