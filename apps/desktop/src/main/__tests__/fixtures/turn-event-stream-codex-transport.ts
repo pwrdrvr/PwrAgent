@@ -11,7 +11,7 @@ export class ScriptedCodexTransport implements JsonRpcTransport {
   private static sequence = 0;
   private static serverRequestSequence = 0;
   private static readonly owners = new Map<string, ScriptedCodexTransport>();
-  private static readonly pendingServerRequests = new Map<string, (result: unknown) => void>();
+  private static readonly pendingServerRequests = new Map<string, { resolve(result: unknown): void; reject(error: Error): void }>();
 
   static reset(): void {
     OwnerConformanceCodexTransport.reset();
@@ -33,13 +33,9 @@ export class ScriptedCodexTransport implements JsonRpcTransport {
     const connection = this.owners.get(threadId);
     if (!connection) throw new Error(`No Codex connection has addressed ${threadId}`);
     const id = `server-${++this.serverRequestSequence}`;
-    const answered = new Promise<unknown>((resolve) => this.pendingServerRequests.set(id, resolve));
+    const answered = new Promise<unknown>((resolve, reject) => this.pendingServerRequests.set(id, { resolve, reject }));
     connection.handler(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     return answered;
-  }
-
-  static requests(method: string): Array<Record<string, unknown>> {
-    return OwnerConformanceCodexTransport.requests.filter((request) => request.method === method).map((request) => request.params);
   }
 
   private readonly inner = new OwnerConformanceCodexTransport();
@@ -54,11 +50,18 @@ export class ScriptedCodexTransport implements JsonRpcTransport {
   }
 
   send(message: string): void {
-    const request = JSON.parse(message) as { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown };
+    const request = JSON.parse(message) as {
+      id?: number | string;
+      method?: string;
+      params?: Record<string, unknown>;
+      result?: unknown;
+      error?: { message?: string };
+    };
     if (request.method === undefined && request.id !== undefined) {
       const answer = ScriptedCodexTransport.pendingServerRequests.get(String(request.id));
       ScriptedCodexTransport.pendingServerRequests.delete(String(request.id));
-      answer?.(request.result);
+      if (request.error) answer?.reject(new Error(`Server request ${String(request.id)} failed: ${request.error.message ?? "unknown error"}`));
+      else answer?.resolve(request.result);
       return;
     }
     const params = request.params ?? {};
@@ -66,10 +69,11 @@ export class ScriptedCodexTransport implements JsonRpcTransport {
     if (threadId) ScriptedCodexTransport.owners.set(threadId, this);
     // A task monitor runs on an ephemeral helper thread; its turns are scripted too.
     const known = threadId !== undefined && (OwnerConformanceCodexTransport.threads.has(threadId) || threadId.startsWith("helper-"));
-    const scripted = request.method === "model/list" || request.method === "config/read" || request.id !== undefined && known
+    const scriptedTurn = request.id !== undefined && known
       && (request.method === "turn/start" || request.method === "review/start" || request.method === "turn/interrupt")
       // The conformance fixture answers a refused submission itself.
       && !(request.method === "turn/start" && OwnerConformanceCodexTransport.refusedStarts > 0);
+    const scripted = request.method === "model/list" || request.method === "config/read" || scriptedTurn;
     if (!scripted) {
       this.inner.send(message);
       const started = /"method":"thread\/start"/.test(message);

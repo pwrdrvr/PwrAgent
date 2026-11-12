@@ -64,13 +64,13 @@ const UPDATE = process.env.UPDATE_TURN_EVENT_STREAM === "1";
 type HubEntry = { event: string; hooks: string[] };
 type HookContext = { entry: HubEntry; depth: number };
 
+type Members = Record<string, unknown>;
+
 /**
  * The hub's direct calls. Each entry names the hook as the fixture records it
  * and says where it lives. When the split moves a hook, change `owner` here,
  * never the recorded name.
  */
-type Members = Record<string, unknown>;
-
 const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | undefined; method?: string }> = [
   ...[
     "forwardManagedReviewActivity",
@@ -151,14 +151,25 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
 /** Collaborators the test's owner leaves unset; their hooks cannot be called. */
 const OPTIONAL_OWNERS = new Set(["providerThreadSnapshotStore", "mcpGatewayTools"]);
 
+type HubRecorder = { entries: HubEntry[]; inFlight(): number };
+
 /**
  * Records every hub run and the hooks it calls itself. A hook runs in a deeper
  * context, so calls it makes are not recorded, while an event a hook emits
- * enters the hub again and is recorded as its own run.
+ * enters the hub again and is recorded as its own run. It also counts the hub
+ * runs and hook calls at any depth that are still pending, including work the
+ * hub started without awaiting, so a scenario can wait for all of it.
  */
-function instrumentHub(registry: DesktopBackendRegistry): HubEntry[] {
+function instrumentHub(registry: DesktopBackendRegistry): HubRecorder {
   const target = registry as unknown as Members;
   const entries: HubEntry[] = [];
+  let pending = 0;
+  const track = (result: unknown): unknown => {
+    if (!(result instanceof Promise)) return result;
+    pending += 1;
+    void result.finally(() => { pending -= 1; }).catch(() => undefined);
+    return result;
+  };
   const context = new AsyncLocalStorage<HookContext>();
   const hub = "emitAfterLiveThreadUsageRegistration";
   if (typeof target[hub] !== "function") throw new Error(`The hub ${hub} is not a registry method; point instrumentHub at its new owner.`);
@@ -167,7 +178,7 @@ function instrumentHub(registry: DesktopBackendRegistry): HubEntry[] {
     const event = args[0] as AgentEvent;
     const entry: HubEntry = { event: `${event.backend} ${event.notification.method}`, hooks: [] };
     entries.push(entry);
-    return context.run({ entry, depth: 0 }, () => runHub.apply(this, args));
+    return track(context.run({ entry, depth: 0 }, () => runHub.apply(this, args)));
   };
   for (const hook of HUB_HOOKS) {
     const ownerObject = hook.owner(target);
@@ -182,17 +193,18 @@ function instrumentHub(registry: DesktopBackendRegistry): HubEntry[] {
       const current = context.getStore();
       if (!current) return original.apply(this, args);
       if (current.depth === 0) current.entry.hooks.push(hook.name);
-      return context.run({ entry: current.entry, depth: current.depth + 1 }, () => original.apply(this, args));
+      return track(context.run({ entry: current.entry, depth: current.depth + 1 }, () => original.apply(this, args)));
     };
   }
-  return entries;
+  return { entries, inFlight: () => pending };
 }
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
 /** Epoch milliseconds inside a string, such as an id built from Date.now(). */
 const EPOCH_MS = /(?<!\d)1\d{12}(?!\d)/g;
-const TIME_KEY = /(?:At|Ms|Time|time|timestamp|Timestamp|duration|Duration|Seconds)$/;
+/** Keys whose numbers are clocks or measured durations. Configured intervals stay recorded. */
+const TIME_KEY = /(?:At|Ms|Timestamp|timestamp|Duration|duration)$/;
 
 /** Replaces ids, clocks and paths with stable placeholders, in first-seen order. */
 function createNormalizer(paths: Array<[string, string]>) {
@@ -225,6 +237,7 @@ type Owner = {
   registry: DesktopBackendRegistry;
   events: AgentEvent[];
   hub: HubEntry[];
+  inFlight(): number;
   workspace: string;
   record(): ScenarioRecord;
   close(): Promise<void>;
@@ -247,11 +260,11 @@ async function startOwner(): Promise<Owner> {
     threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "turn-stream-desktop",
     resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
   owner.registry = registry;
-  const hub = instrumentHub(registry);
+  const { entries: hub, inFlight } = instrumentHub(registry);
   const events: AgentEvent[] = [];
   const stopEvents = registry.onEvent((event) => { events.push(event); });
   return {
-    registry, events, hub, workspace,
+    registry, events, hub, inFlight, workspace,
     record() {
       const normalize = createNormalizer([[workspace, "<workspace>"], [tempDir, "<state>"], [os.tmpdir(), "<tmp>"], [path.basename(workspace), "<workspace-name>"]]);
       return {
@@ -273,13 +286,19 @@ async function startOwner(): Promise<Owner> {
   };
 }
 
-/** Waits until the owner has gone quiet: no new event or hub run for a while. */
+/**
+ * Waits until the owner has gone quiet: no hub run or hook call it started is
+ * still pending, and no new event, hub run or hook arrived for a while. The
+ * quiet window covers work started from a timer rather than a hook.
+ */
 async function settle(current: Owner): Promise<void> {
   let seen = -1;
   let quiet = 0;
+  const deadline = Date.now() + 10_000;
   while (quiet < 4) {
+    if (Date.now() > deadline) throw new Error(`The owner did not settle: ${current.inFlight()} hub calls still pending.`);
     const now = current.events.length + current.hub.length * 1000 + current.hub.reduce((sum, entry) => sum + entry.hooks.length, 0);
-    quiet = now === seen ? quiet + 1 : 0;
+    quiet = now === seen && current.inFlight() === 0 ? quiet + 1 : 0;
     seen = now;
     await delay(25);
   }
@@ -461,6 +480,11 @@ function serialize(recording: Recording): string {
 describe("BackendRegistry turn-event stream", () => {
   const measured: Record<string, ScenarioRecord> = {};
   let current: Owner | undefined;
+  let loaded: Recording | undefined;
+  const recording = (): Recording => {
+    loaded ??= JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Recording;
+    return loaded;
+  };
 
   afterEach(async () => {
     await current?.close();
@@ -469,8 +493,7 @@ describe("BackendRegistry turn-event stream", () => {
 
   it("records exactly these scenarios", () => {
     if (UPDATE) return;
-    const recording = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Recording;
-    expect(Object.keys(recording.scenarios)).toEqual(SCENARIOS.map((scenario) => scenario.name));
+    expect(Object.keys(recording().scenarios)).toEqual(SCENARIOS.map((scenario) => scenario.name));
   });
 
   for (const scenario of SCENARIOS) {
@@ -480,9 +503,7 @@ describe("BackendRegistry turn-event stream", () => {
       const record = current.record();
       measured[scenario.name] = record;
       if (UPDATE) return;
-      const recorded = existsSync(FIXTURE_PATH)
-        ? (JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Recording).scenarios[scenario.name]
-        : undefined;
+      const recorded = existsSync(FIXTURE_PATH) ? recording().scenarios[scenario.name] : undefined;
       expect(recorded, `No recording for "${scenario.name}". Record it with UPDATE_TURN_EVENT_STREAM=1.`).toBeDefined();
       // Soft, so one failure shows both what listeners saw and what the hub ran.
       expect.soft(record.events, `Event order changed for "${scenario.name}". ${CHANGE_POLICY}`).toEqual(recorded!.events);
@@ -491,7 +512,12 @@ describe("BackendRegistry turn-event stream", () => {
   }
 
   afterAll(() => {
-    if (!UPDATE || Object.keys(measured).length !== SCENARIOS.length) return;
+    if (!UPDATE) return;
+    const missing = SCENARIOS.map((scenario) => scenario.name).filter((name) => !(name in measured));
+    if (missing.length) {
+      // A partial recording would drop scenarios, so nothing is written.
+      throw new Error(`Not re-recorded: every scenario must run and pass. Missing: ${missing.join(", ")}`);
+    }
     writeFileSync(FIXTURE_PATH, serialize({ description: DESCRIPTION, scenarios: measured }));
   });
 });
