@@ -1034,6 +1034,8 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  // Write the literal value. An absent key reads as a migrated profile, so a
+  // `false` marker has to stay on disk rather than be deleted.
   if (patch.onboarding?.completed !== undefined) {
     set(["onboarding", "completed"], patch.onboarding.completed);
   }
@@ -1118,16 +1120,6 @@ export function desktopSettingsPatchToEdits(
         ["general", "messaging_acknowledgment", "providers"],
         ack.providers,
       );
-    }
-  }
-
-  if (patch.onboarding?.completed !== undefined) {
-    // `false` is the default for fresh profiles; only persist when the
-    // operator has actively cleared the first-run prompt.
-    if (patch.onboarding.completed === false) {
-      edits.push({ op: "delete", path: ["onboarding", "completed"] });
-    } else {
-      set(["onboarding", "completed"], patch.onboarding.completed);
     }
   }
 

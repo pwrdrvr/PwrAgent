@@ -117,6 +117,11 @@ const FLOAT_LITERAL = /^-?(?:\d+\.\d+(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+)$/;
  *
  * Duplicate section headers: first occurrence wins. Subsequent occurrences
  * log a warning and their keys are ignored.
+ *
+ * Duplicate keys in one table are invalid TOML, but older builds wrote them
+ * (`[onboarding] completed`). They are tolerated: the last occurrence wins,
+ * with a warning, and `applyTomlEdits` removes the earlier copies on the next
+ * write.
  */
 export function parseTomlTables(
   source: string,
@@ -203,6 +208,12 @@ export function parseTomlTables(
       continue;
     }
 
+    const target = currentTarget ?? tables[currentTable];
+    if (target && Object.hasOwn(target, key)) {
+      console.warn(
+        `Duplicate key '${key}' on line ${i + 1} in ${filePath} — using the last occurrence.`,
+      );
+    }
     if (currentTarget) {
       currentTarget[key] = parsed.value;
     } else {
@@ -224,7 +235,8 @@ export function applyTomlEdits(
   }
 
   const model = parseSource(source);
-  const plan = planEdits(model, edits);
+  const plan = planEdits(model, collapseKeyEdits(edits));
+  removeDuplicateKeys(model, plan.lineOps);
   if (
     plan.lineOps.length === 0
     && plan.newSections.length === 0
@@ -379,7 +391,7 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
 
     if (edit.op === "ensureCommentBefore") {
       if (!section) continue;
-      const key = section.keys.find((k) => k.name === keyName);
+      const key = findKey(section, keyName);
       if (!key || markerPrecedesKey(model.lines, key, edit.marker)) {
         continue;
       }
@@ -393,7 +405,7 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
 
     if (edit.op === "delete") {
       if (!section) continue;
-      const key = section.keys.find((k) => k.name === keyName);
+      const key = findKey(section, keyName);
       if (!key) continue;
       lineOps.push({
         kind: "replace",
@@ -416,7 +428,7 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
       continue;
     }
 
-    const existingKey = section.keys.find((k) => k.name === keyName);
+    const existingKey = findKey(section, keyName);
     if (existingKey) {
       const existingValue = parseExistingValue(model.lines, existingKey);
       if (existingValue && valuesEqual(existingValue, edit.value)) {
@@ -444,6 +456,53 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
   }
 
   return { lineOps, newSections: newSectionPlans, newTableArrays };
+}
+
+/**
+ * Keep only the last `set` or `delete` for each key path. Two edits for one
+ * absent key would each plan an insertion and write the key twice, which is
+ * invalid TOML. The last edit is the one the caller meant to win.
+ */
+function collapseKeyEdits(edits: readonly TomlEdit[]): readonly TomlEdit[] {
+  const lastIndexByPath = new Map<string, number>();
+  edits.forEach((edit, index) => {
+    if (edit.op === "set" || edit.op === "delete") {
+      lastIndexByPath.set(JSON.stringify(edit.path), index);
+    }
+  });
+  return edits.filter((edit, index) =>
+    (edit.op !== "set" && edit.op !== "delete")
+    || lastIndexByPath.get(JSON.stringify(edit.path)) === index,
+  );
+}
+
+/**
+ * The copy of a key that edits target. A repeated key is invalid TOML; the
+ * reader keeps the last copy, so the editor edits that one too.
+ */
+function findKey(
+  section: SectionLocation,
+  keyName: string,
+): KeyLocation | undefined {
+  return section.keys.findLast((k) => k.name === keyName);
+}
+
+/**
+ * Lazy repair: drop every copy of a repeated key except the last, the one the
+ * reader uses, on any write. Only those lines change.
+ */
+function removeDuplicateKeys(model: SourceModel, lineOps: LineOp[]): void {
+  for (const section of model.sections) {
+    for (const key of section.keys) {
+      if (findKey(section, key.name) === key) continue;
+      lineOps.push({
+        kind: "replace",
+        startLine: key.startLine,
+        endLine: key.endLine,
+        newLines: [],
+      });
+    }
+  }
 }
 
 function executePlan(model: SourceModel, plan: EditPlan): string[] {

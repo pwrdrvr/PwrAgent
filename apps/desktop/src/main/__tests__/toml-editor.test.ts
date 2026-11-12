@@ -773,3 +773,60 @@ describe("applyTomlEdits with duplicate sections", () => {
     expect(result).toContain("[s]\ny = 2");
   });
 });
+
+describe("applyTomlEdits — repeated keys", () => {
+  it("writes an absent key once when two edits name it", () => {
+    const result = applyTomlEdits("[onboarding]\n", [
+      { op: "set", path: ["onboarding", "completed"], value: false },
+      { op: "set", path: ["onboarding", "completed"], value: true },
+    ]);
+    expect(result).toBe("[onboarding]\ncompleted = true\n");
+  });
+
+  it("lets the last of two edits for an absent key win", () => {
+    const result = applyTomlEdits("[onboarding]\nother = 1\n", [
+      { op: "set", path: ["onboarding", "completed"], value: true },
+      { op: "delete", path: ["onboarding", "completed"] },
+    ]);
+    expect(result).toBe("[onboarding]\nother = 1\n");
+  });
+
+  it("keeps the last copy of a repeated key, the one the reader uses", () => {
+    const source = "[onboarding]\ncompleted = false\ncompleted = true # last\nother = 1\n";
+    const result = applyTomlEdits(source, [
+      { op: "set", path: ["onboarding", "completed"], value: true },
+    ]);
+    expect(result).toBe("[onboarding]\ncompleted = true # last\nother = 1\n");
+  });
+
+  it("deletes every copy of a deleted key", () => {
+    const source = "[s]\nk = 1\nk = 2\n";
+    expect(applyTomlEdits(source, [{ op: "delete", path: ["s", "k"] }]))
+      .toBe("[s]\n");
+  });
+
+  it("repairs a repeated key on a write of another key, keeping its read value", () => {
+    const source = "# note\n[s]\nk = 1\nk = 2\nother = 1\n";
+    expect(applyTomlEdits(source, [{ op: "set", path: ["s", "other"], value: 2 }]))
+      .toBe("# note\n[s]\nk = 2\nother = 2\n");
+  });
+
+  it("repairs a repeated key even when every edit is a no-op", () => {
+    const source = "[s]\nk = 1\nk = 1\nother = 1\n";
+    expect(applyTomlEdits(source, [{ op: "set", path: ["s", "other"], value: 1 }]))
+      .toBe("[s]\nk = 1\nother = 1\n");
+  });
+});
+
+describe("parseTomlTables — repeated keys", () => {
+  it("reads the last copy and warns instead of throwing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(parseTomlTables("[s]\nk = 1\nk = 2\n", "config.toml"))
+        .toEqual({ s: { k: 2 } });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Duplicate key 'k'"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
