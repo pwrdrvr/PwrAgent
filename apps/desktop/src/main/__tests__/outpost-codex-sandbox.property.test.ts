@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
@@ -116,6 +118,8 @@ function controlPaths(root: string, profile: string): string[] {
 }
 
 const policyFor = (root: string) => createOutpostRuntimePolicy({ PWRAGENT_HOME: root });
+// Codex sees real paths; a generated root may name a symlink such as /tmp.
+const canonicalRoot = (root: string) => path.posix.dirname(policyFor(root).codexProtectedRoots[0]!);
 
 function profilesFrom(args: readonly string[]): Map<string, { filesystem: Record<string, Toml>; network: Toml | undefined }> {
   const values = launchOverrides(args);
@@ -143,7 +147,7 @@ describe("Outpost Codex sandbox", () => {
       fc.pre(!within(cwd, path.posix.join(root, "profiles")));
       for (const [id, { filesystem, network }] of profilesFrom(args)) {
         expect(network, id).toBe(false);
-        for (const target of controlPaths(root, profile)) {
+        for (const target of controlPaths(canonicalRoot(root), profile)) {
           expect(effectiveAccess(filesystem, target, [cwd]), `${id} ${target}`).toBe("deny");
         }
       }
@@ -199,10 +203,10 @@ describe("Outpost Codex sandbox", () => {
 
         // The profile Codex will apply, from where Codex will run.
         const workspace = typeof out.cwd === "string" ? out.cwd : "/";
-        expect(within(workspace, protectedProfiles)).toBe(false);
+        expect(within(workspace, path.posix.join(canonicalRoot(root), "profiles"))).toBe(false);
         const { filesystem } = profilesFrom(buildCodexClientArgs({}, [], [], policyFor(root))).get(
           typeof selected === "string" ? selected : OUTPOST_PERMISSION_PROFILE_IDS["read-only"])!;
-        for (const target of controlPaths(root, profile)) {
+        for (const target of controlPaths(canonicalRoot(root), profile)) {
           expect(effectiveAccess(filesystem, target, [workspace]), target).toBe("deny");
         }
       },
@@ -217,5 +221,33 @@ describe("Outpost Codex sandbox", () => {
         expect(() => buildCodexClientArgs({}, [`${key}${suffix}=true`], [], policyFor("/srv/pwragent"))).toThrow();
       },
     ));
+  });
+
+  // bubblewrap aborts every command when a deny entry names a symlink, and a
+  // case-insensitive volume reaches one directory by many spellings.
+  it.skipIf(process.platform === "win32")("denies one canonical root and refuses every spelling of a directory inside it", () => {
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "outpost-sandbox-")));
+    try {
+      const real = path.join(base, "real");
+      fs.mkdirSync(path.join(real, "profiles", "p", "state"), { recursive: true });
+      const link = path.join(base, "link");
+      fs.symlinkSync(real, link);
+      const protectedRoots = policyFor(link).codexProtectedRoots;
+      expect(protectedRoots).toEqual([path.join(real, "profiles")]);
+      expect(buildCodexClientArgs({}, [], [], policyFor(link)).join(" ")).not.toContain(link);
+      const rewrite = createOutpostCodexMessageRewriter(protectedRoots);
+      const cwds = [
+        path.join(link, "profiles", "p", "state"),
+        path.join(link, "profiles", "p", "not-yet-created", "deeper"),
+        path.join(real, "profiles"),
+      ];
+      const caseInsensitive = fs.existsSync(path.join(base, "REAL"));
+      if (caseInsensitive) cwds.push(path.join(base, "REAL", "PROFILES", "p"));
+      for (const cwd of cwds) {
+        expect(() => rewrite(JSON.stringify({ id: 1, method: "thread/start", params: { cwd } })), cwd)
+          .toThrow(/inside its own state/);
+      }
+      expect(() => rewrite(JSON.stringify({ id: 1, method: "thread/start", params: { cwd: base } }))).not.toThrow();
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
   });
 });

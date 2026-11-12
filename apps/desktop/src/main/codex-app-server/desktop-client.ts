@@ -1,5 +1,4 @@
 import { getOwnerHostServices } from "../owner-host";
-import type { SandboxPolicy } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   CodexAppServerClient as OwnerCodexAppServerClient,
   type CodexClientOptions,
@@ -42,12 +41,6 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
         }
         return transport;
       },
-      ...(runtimePolicy ? { buildSandboxPolicy: (sandbox?: string, cwd?: string): SandboxPolicy | undefined => {
-        if (sandbox === undefined) return undefined;
-        if (sandbox === "read-only") return { type: "readOnly", networkAccess: false };
-        if (sandbox !== "workspace-write") throw new Error("This Outpost requires a read-only or workspace-write sandbox.");
-        return { type: "workspaceWrite", writableRoots: [cwd ?? process.cwd()], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true };
-      } } : {}),
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
       logger: getMainLogger("pwragent:codex-client"),
       rpcLogger: getMainLogger("pwragent:json-rpc"),

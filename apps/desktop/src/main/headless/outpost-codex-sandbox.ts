@@ -52,21 +52,36 @@ export const OUTPOST_MANAGED_CONFIG_KEYS = [
 const PROFILE_REQUIRED_METHODS = new Set(["thread/start", "thread/resume", "thread/fork", "command/exec"]);
 
 /**
+ * The canonical path the sandbox and the working-directory guard compare:
+ * the real path of the nearest existing ancestor, with letter case as the
+ * filesystem stores it (macOS volumes are case-insensitive), plus any
+ * missing tail. Windows never hosts an Outpost and keeps the POSIX path.
+ */
+export function canonicalOutpostPath(value: string): string {
+  let existing = path.resolve(value);
+  const missing: string[] = [];
+  if (process.platform === "win32") return existing;
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(existing), ...missing.reverse()); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code !== "ENOENT" && code !== "ENOTDIR") || existing === path.parse(existing).root) throw error;
+      missing.push(path.basename(existing));
+      existing = path.dirname(existing);
+    }
+  }
+}
+
+/**
  * The PwrAgent paths agent commands must not read. Every profile lives under
  * `<root>/profiles`; the root itself also holds worktrees, so it stays
- * readable. The real path is used because the sandbox masks the real inode
- * location.
+ * readable. Only the canonical path is denied: the sandbox masks the real
+ * location, and bubblewrap aborts every command when a deny entry names a
+ * symlink.
  */
 export function resolveOutpostProtectedRoots(pwragentRoot: string): string[] {
   if (!path.isAbsolute(pwragentRoot)) throw new Error("The Outpost requires an absolute PWRAGENT_HOME.");
-  const profiles = path.join(pwragentRoot, "profiles");
-  let real: string;
-  try { real = fs.realpathSync(profiles); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    real = path.resolve(profiles);
-  }
-  return real === profiles ? [profiles] : [profiles, real];
+  return [canonicalOutpostPath(path.join(pwragentRoot, "profiles"))];
 }
 
 function assertProtectedRoots(protectedRoots: readonly string[]): void {
@@ -119,11 +134,6 @@ function narrower(left: OutpostSandboxMode | undefined, right: OutpostSandboxMod
   return left === "read-only" || right === "read-only" ? "read-only" : "workspace-write";
 }
 
-function realPathOrResolved(value: string): string {
-  try { return fs.realpathSync(value); }
-  catch { return path.resolve(value); }
-}
-
 function isWithin(child: string, parent: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
 }
@@ -134,8 +144,8 @@ function assertWorkspaceOutsideProtectedRoots(params: Record<string, unknown>, p
   const roots = [params.cwd, ...(Array.isArray(params.runtimeWorkspaceRoots) ? params.runtimeWorkspaceRoots : [])];
   for (const root of roots) {
     if (typeof root !== "string" || !root.trim()) continue;
-    const candidates = [path.resolve(root.trim()), realPathOrResolved(root.trim())];
-    if (candidates.some((candidate) => protectedRoots.some((protectedRoot) => isWithin(candidate, protectedRoot)))) {
+    const candidate = canonicalOutpostPath(root.trim());
+    if (protectedRoots.some((protectedRoot) => isWithin(candidate, protectedRoot))) {
       throw new Error("This Outpost refuses a working directory inside its own state.");
     }
   }
