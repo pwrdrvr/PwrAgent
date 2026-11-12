@@ -5,7 +5,7 @@ import fc from "fast-check";
 import { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -105,6 +105,8 @@ type OwnerHost = {
   events: AgentEvent[];
   workspace: string;
   providerSteerCount(): number;
+  /** The owner's PwrAgent root, for hosts the suite started as a process. */
+  pwragentHome?: string;
   local?: LocalOwnerNavigationTransport;
   scheduler?: ScheduledThreadActionService;
   close(): Promise<void>;
@@ -237,7 +239,7 @@ async function startOutpostOwner(hostKind: "desktop" | "headless" = "headless"):
   return { name: hostKind === "desktop" ? "desktop" : "outpost", ownerInstanceId: outpost.ownerInstanceId, client: outpost.client, methods: new Set(Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES)),
     providerSteerCount: () => readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")
       .trim().split("\n").map(line => JSON.parse(line)).filter(item => item.method === "turn/steer").length,
-    events: outpost.events, workspace: outpost.workspace, close: outpost.close };
+    events: outpost.events, workspace: outpost.workspace, pwragentHome: outpost.env.PWRAGENT_HOME, close: outpost.close };
 }
 
 /**
@@ -251,6 +253,26 @@ async function settle(host: OwnerHost): Promise<void> {
     seen = host.events.length;
     await delay(400);
   }
+}
+
+/**
+ * Waits until an owner process has finished the provider refresh it starts at
+ * boot, then for its events to go quiet. Both hosts end that refresh with one
+ * `navigation/providerThreads/refreshed`, and whether it lands before the
+ * viewer subscribes or inside the first step depends on load, not on either
+ * owner. No federation method reports the refresh, so read the owner's log.
+ */
+async function awaitStartupProviderRefresh(host: OwnerHost): Promise<void> {
+  const logs = path.join(host.pwragentHome!, "profiles/t/logs");
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const names = existsSync(logs) ? readdirSync(logs) : [];
+    if (names.some(name => readFileSync(path.join(logs, name), "utf8").includes("startup provider thread refresh completed"))) {
+      await settle(host);
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error(`${host.name} never logged the end of its startup provider refresh in ${logs}.`);
 }
 
 type Step = {
@@ -2908,6 +2930,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       }
       // The Outpost implements a subset of desktop's owner methods, never one desktop lacks.
       expect([...outpost.methods].filter((method) => !desktop.methods.has(method)), "outpost-only owner methods").toEqual([]);
+      for (const host of [desktop, outpost]) await awaitStartupProviderRefresh(host);
       const desktopRecords = await runScenario(desktop, FIRST_PROMPT_SCENARIO);
       const outpostRecords = await runScenario(outpost, FIRST_PROMPT_SCENARIO);
       const measured: OwnerConformanceBaseline = {
