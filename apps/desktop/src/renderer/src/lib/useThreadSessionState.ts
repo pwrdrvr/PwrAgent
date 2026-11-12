@@ -680,6 +680,29 @@ function mergeTranscriptEntries(
         ? optimisticEntry.createdAt
         : undefined;
     const optimisticSequence = readRendererSequence(optimisticEntry);
+    // A live row whose turn has no row here cannot be placed inside its turn.
+    // Renderer sequences come from one session counter, so a row observed
+    // after it, in another turn, bounds where it goes. Timestamps cannot: a
+    // compaction can leave a finished turn's tools live while the next send
+    // is promoted, and the two can carry the same stamp.
+    const laterObservedIndex =
+      optimisticTurnId
+      && !mergedTurnIds.has(optimisticTurnId)
+      && typeof optimisticSequence === "number"
+      && !isTokenUsageActivityEntry(optimisticEntry)
+      && !isMonitorUsageActivityEntry(optimisticEntry)
+        ? merged.findIndex((entry) => {
+            const entrySequence = readRendererSequence(entry);
+            return entry.turn?.id !== optimisticTurnId
+              && typeof entrySequence === "number"
+              && entrySequence > optimisticSequence;
+          })
+        : -1;
+    if (laterObservedIndex !== -1) {
+      merged.splice(laterObservedIndex, 0, optimisticEntry);
+      rebuildAppendIndexes();
+      continue;
+    }
     const canAppendInKnownOrder =
       !isTokenUsageActivityEntry(optimisticEntry)
       && !isMonitorUsageActivityEntry(optimisticEntry)
@@ -1185,8 +1208,20 @@ function mergeRetainedTranscriptSuffix(
       ];
     }
 
+    const retainedSequence = readRendererSequence(retainedEntry);
     while (freshIndex < freshSuffix.length) {
       const freshEntry = freshSuffix[freshIndex]!;
+      // Two rows the renderer observed live keep that order. Stamps tie at a
+      // second's resolution, and a tie put a lagging page above older turns.
+      const freshSequence = readRendererSequence(freshEntry);
+      if (typeof freshSequence === "number" && typeof retainedSequence === "number") {
+        if (freshSequence > retainedSequence) {
+          break;
+        }
+        mergedSuffix.push(freshEntry);
+        freshIndex += 1;
+        continue;
+      }
       const freshTimestamp = transcriptRefreshOrderTimestamp(freshEntry);
       if (
         typeof freshTimestamp === "number"
@@ -7846,7 +7881,7 @@ export function useThreadSessionState(params: {
         ...(text ? [{ type: "text" as const, text }] : []),
         ...imageParts,
       ];
-      const optimisticEntry: AppServerThreadMessageEntry = {
+      const unsequencedEntry: AppServerThreadMessageEntry = {
         type: "message",
         id,
         role: "user",
@@ -7855,6 +7890,12 @@ export function useThreadSessionState(params: {
         createdAt,
       };
       updateSession(threadKey, (current) => {
+        // The send takes its place in the observed live order, so rows of an
+        // earlier turn that are still live stay above it once it is promoted.
+        const optimisticEntry = withRendererSequence(
+          unsequencedEntry,
+          current.nextLiveEntrySequence,
+        );
         const authoritativeEntry =
           findAuthoritativeUserMessageForOptimisticEntry({
             entry: optimisticEntry,
@@ -7882,6 +7923,9 @@ export function useThreadSessionState(params: {
           expectOwnUpdate: true,
           interacted: true,
           lastTouchedAt: Date.now(),
+          nextLiveEntrySequence: authoritativeEntry
+            ? current.nextLiveEntrySequence
+            : current.nextLiveEntrySequence + 1,
           optimisticEntries: authoritativeEntry
             ? current.optimisticEntries
             : [...current.optimisticEntries, optimisticEntry],

@@ -463,6 +463,73 @@ it("keeps the observed ledger through arbitrary same-turn hydration permutations
   } finally { clock.mockRestore(); }
 });
 
+async function runToQuiescence(time: number, reverse: boolean, commands: Iterable<fc.AsyncCommand<Model, Real>>) {
+  const model = initialModel();
+  const real = await mount(model);
+  try {
+    assertLedger(model, real);
+    // Every run visits the live/read race; random commands then explore
+    // other interleavings. This also keeps coverage useful at 25 runs.
+    await fc.asyncModelRun(() => ({ model, real }), openingCommands(time, reverse));
+    await fc.asyncModelRun(() => ({ model, real }), commands);
+    // A send is acknowledged before starting the next provider turn.
+    if (model.optimistic) {
+      await new LedgerCommand("start").run(model, real);
+    }
+    if (model.active !== undefined) {
+      await new LedgerCommand("item", time).run(model, real);
+      await new LedgerCommand("complete").run(model, real);
+    }
+    await drain(model, real);
+    await new LedgerCommand("read").run(model, real);
+    await drain(model, real);
+    for (let page = 0; real.result.current.response?.replay.pagination.hasPreviousPage; page++) {
+      expect(page).toBeLessThan(20);
+      await new LedgerCommand("older").run(model, real);
+      await drain(model, real);
+    }
+    assertLedger(model, real);
+    expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
+  } finally {
+    real.unmount();
+  }
+}
+
+// fast-check seed -1865083612, path "1:0:7:6:15:13:12:12:14:14:14:17".
+it("keeps retained older turns above a newest page that matches none of their rows", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("read"),
+    ]);
+  } finally { clock.mockRestore(); }
+});
+
+// fast-check seed 1712167680, path "768:4:3:11:14:16:18:14:14:18:19:19:19".
+it("keeps a compacted tool turn above the next acknowledged send", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+      new LedgerCommand("compact"), new LedgerCommand("send"), new LedgerCommand("start"),
+      new LedgerCommand("complete"),
+    ]);
+  } finally { clock.mockRestore(); }
+});
+
+// fast-check seed -1395544634, path "3114:0:21:17:18:20:20:20:24".
+it("keeps a lagging page of finished tool turns between older and newer retained turns", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+      new LedgerCommand("read"), new LedgerCommand("start"),
+    ]);
+  } finally { clock.mockRestore(); }
+});
+
 it("renders a subsequence of the provider ledger after every command and the whole ledger at quiescence", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   try {
@@ -470,36 +537,7 @@ it("renders a subsequence of the provider ledger after every command and the who
       "start", "item", "item", "redeliver", "complete", "send", "read", "resolve", "older", "compact", "synthetic",
     ), fc.integer({ min: 0, max: 2 }), fc.boolean()).map(([op, time, reverse]) => new LedgerCommand(op, time, reverse));
     await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 2 }), fc.boolean(),
-      fc.commands([command], { maxCommands: 24, size: "+2" }), async (time, reverse, commands) => {
-      const model = initialModel();
-      const real = await mount(model);
-      try {
-        assertLedger(model, real);
-        // Every run visits the live/read race; random commands then explore
-        // other interleavings. This also keeps coverage useful at 25 runs.
-        await fc.asyncModelRun(() => ({ model, real }), openingCommands(time, reverse));
-        await fc.asyncModelRun(() => ({ model, real }), commands);
-        // A send is acknowledged before starting the next provider turn.
-        if (model.optimistic) {
-          await new LedgerCommand("start").run(model, real);
-        }
-        if (model.active !== undefined) {
-          await new LedgerCommand("item", time).run(model, real);
-          await new LedgerCommand("complete").run(model, real);
-        }
-        await drain(model, real);
-        await new LedgerCommand("read").run(model, real);
-        await drain(model, real);
-        for (let page = 0; real.result.current.response?.replay.pagination.hasPreviousPage; page++) {
-          expect(page).toBeLessThan(20);
-          await new LedgerCommand("older").run(model, real);
-          await drain(model, real);
-        }
-        assertLedger(model, real);
-        expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
-      } finally {
-        real.unmount();
-      }
-    }), { numRuns: 25 });
+      fc.commands([command], { maxCommands: 24, size: "+2" }),
+      (time, reverse, commands) => runToQuiescence(time, reverse, commands)), { numRuns: 25 });
   } finally { clock.mockRestore(); }
 });
