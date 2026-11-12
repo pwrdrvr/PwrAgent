@@ -160,19 +160,26 @@ clean way to simulate a lost connection.
 
 A desktop viewer cannot browse the Outpost's file system. Create the project
 directory from the Docker host. `docker exec` runs outside the agent
-sandbox, so `git clone` has network access there:
+sandbox, so on an Outpost with network `git clone` works there:
 
 ```sh
 docker exec <container> git clone <public-repo-url> \
   /home/outpost/workspace/<project>
+docker exec -i <container> sh -c 'cat > /tmp/register.json' <<'EOF'
+{"path":"/home/outpost/workspace/<project>"}
+EOF
+docker exec <container> /opt/outpost-tools/node_modules/.bin/pwragent \
+  register-directory --params-file /tmp/register.json
 ```
+
+An Outpost on an internal network cannot clone. Push the repository in from
+the host with `push-repo.sh` from the bundled `outpost-security-research`
+skill; it also registers the project.
 
 Its project key is `directory:/home/outpost/workspace/<project>`. A bare
 path is not a project key. Confirm the project with `list_instance_projects`
 before you start a thread. The workspace root is always listed, as
-`directory:/home/outpost/workspace`. If the new directory is missing, start
-one thread locally with `start-thread` and a `cwd` in that directory; see the
-README's local commands.
+`directory:/home/outpost/workspace`.
 
 ## Drive It From a Desktop
 
@@ -212,10 +219,17 @@ README's local commands.
 
 ## Current Limits
 
-- The Outpost policy is fixed in code: approval `never`, no full access,
-  no network for agent commands, and federation containment. It cannot be
-  viewed or changed remotely yet.
-- Codex's Linux sandbox restricts writes, not reads. Until per-host policy
-  ships, agent commands can read the Codex home and the secret store key in
-  the same volume. Do not run untrusted prompts on an Outpost whose
-  credentials matter.
+- Viewers cannot see or change the Outpost policy. Approval is always
+  `never`, and the Outpost is a contained federation peer. The operator picks
+  the execution modes viewers may use and whether agent commands get network
+  with `PWRAGENT_OUTPOST_EXECUTION_MODES` and `PWRAGENT_OUTPOST_AGENT_NETWORK`
+  at `docker run`; see the package README.
+- Codex's Linux sandbox restricts writes, not reads. Agent commands can read
+  the Codex home and the secret store key in the same volume. Do not run
+  untrusted prompts on an Outpost whose credentials matter.
+- For research with an untrusted model and no network, use the bundled
+  `outpost-security-research` skill
+  (`apps/desktop/src/main/agent-tools/skills/outpost-security-research/`). It
+  adds an internal Docker network, a model key proxy on the host, and scripts
+  that move repositories and dependencies in without giving the container a
+  route out.

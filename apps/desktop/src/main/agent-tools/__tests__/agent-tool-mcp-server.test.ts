@@ -133,38 +133,67 @@ describe("AgentToolMcpServer", () => {
       expect(listed.skills).toEqual([
         expect.objectContaining({ uri: "skill://waiting-on-work/SKILL.md" }),
         expect.objectContaining({ uri: "skill://tool-guide/SKILL.md" }),
+        expect.objectContaining({ uri: "skill://outpost-security-research/SKILL.md" }),
       ]);
       const { resources } = await client.listResources();
-      expect(resources.map((resource) => resource.uri)).toEqual([
-        "skill://waiting-on-work/SKILL.md", "skill://tool-guide/SKILL.md",
-      ]);
+      // Every file a skill names is listed, and nothing else.
+      expect(resources.map((resource) => resource.uri)).toEqual(
+        (listed.skills as { resources: { uri: string }[] }[]).flatMap((skill) =>
+          skill.resources.map((entry) => entry.uri)),
+      );
+      expect(resources.map((resource) => resource.uri)).toEqual(expect.arrayContaining([
+        "skill://outpost-security-research/Dockerfile",
+        "skill://outpost-security-research/scripts/model-key-proxy.mjs",
+        "skill://outpost-security-research/scripts/push-repo.sh",
+      ]));
+      const digests = new Map<string, string>();
       for (const resource of resources) {
+        const { contents } = await client.readResource({ uri: resource.uri });
+        expect(contents).toHaveLength(1);
+        const content = contents[0];
+        expect(content).toMatchObject({ uri: resource.uri, mimeType: resource.mimeType });
+        if (!("text" in content)) {
+          throw new Error("Expected a text skill resource.");
+        }
+        expect(Buffer.byteLength(content.text, "utf8")).toBe(resource.size);
+        digests.set(resource.uri, `sha256:${createHash("sha256").update(content.text, "utf8").digest("hex")}`);
+      }
+      const skillFiles = resources.filter((resource) => resource.uri.endsWith("/SKILL.md"));
+      expect(skillFiles).toHaveLength(3);
+      for (const resource of skillFiles) {
         const result = await client.request({
           method: "skills/get", params: { uri: resource.uri },
         }, ResultSchema);
         const { contents } = await client.readResource({ uri: resource.uri });
-        expect(contents).toHaveLength(1);
         const content = contents[0];
-        expect(content).toMatchObject({ uri: resource.uri, mimeType: "text/markdown" });
         if (!("text" in content)) {
           throw new Error("Expected a text skill resource.");
         }
+        expect(content.mimeType).toBe("text/markdown");
         expect(content.text).toContain(`name: ${resource.name}\n`);
         expect(content.text).toContain(`description: ${resource.description}\n`);
-        expect(Buffer.byteLength(content.text, "utf8")).toBe(resource.size);
+        const folder = resource.uri.slice(0, -"SKILL.md".length);
         const manifest = {
           uri: resource.uri,
           frontmatter: { name: resource.name, description: resource.description },
-          resources: [{
-            uri: resource.uri,
-            digest: `sha256:${createHash("sha256").update(content.text, "utf8").digest("hex")}`,
-            size: resource.size,
-          }],
+          resources: resources
+            .filter((candidate) => candidate.uri.startsWith(folder))
+            .map((candidate) => ({
+              uri: candidate.uri,
+              digest: digests.get(candidate.uri),
+              size: candidate.size,
+            })),
         };
         expect(result.skill).toEqual(manifest);
         expect(listed.skills).toContainEqual(manifest);
-        // The compatibility facade uses the same authored workflow bodies.
-        expect(PWRAGENT_TOOL_GUIDE).toContain(content.text.split("\n---\n")[1].trim());
+        const body = content.text.split("\n---\n")[1].trim();
+        // The compatibility facade uses the same authored workflow bodies,
+        // and never the operator setup skill.
+        if (resource.name === "outpost-security-research") {
+          expect(PWRAGENT_TOOL_GUIDE).not.toContain(body);
+        } else {
+          expect(PWRAGENT_TOOL_GUIDE).toContain(body);
+        }
       }
       await expect(client.listResourceTemplates()).resolves.toEqual({ resourceTemplates: [] });
       await expect(client.listTools()).resolves.toEqual(toolsBefore);

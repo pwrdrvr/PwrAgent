@@ -353,6 +353,12 @@ export type CodexClientOptions = {
   resolveUsageAccountKey?: () => Promise<string | undefined>;
   /** Ids of the model providers PwrAgent configured, read per message. */
   resolveModelProviderIds?: () => ReadonlySet<string>;
+  /**
+   * Absolute folders of skills the host ships, registered with Codex through
+   * `skills/extraRoots/set` after each handshake. A Codex without the method
+   * starts anyway, without them.
+   */
+  resolveSkillExtraRoots?: () => Promise<readonly string[]> | readonly string[];
   env?: NodeJS.ProcessEnv;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   bundledToolsDirectory?: string;
@@ -12357,6 +12363,8 @@ export class CodexAppServerClient {
       assertNotClosed();
       await this.rawConnection.notify("initialized", {});
       assertNotClosed();
+      await this.registerSkillExtraRoots();
+      assertNotClosed();
       this.initialized = true;
       this.restartPolicy.recordStarted();
       this.host.logger.info("app-server initialized", {
@@ -12372,6 +12380,20 @@ export class CodexAppServerClient {
       if (!this.initialized && this.initializationPromise === initialization) {
         this.initializationPromise = null;
       }
+    }
+  }
+
+  private async registerSkillExtraRoots(): Promise<void> {
+    const resolve = this.options.resolveSkillExtraRoots;
+    if (!resolve) return;
+    try {
+      const extraRoots = [...await resolve()];
+      if (extraRoots.length === 0) return;
+      await this.rawConnection.request("skills/extraRoots/set", { extraRoots });
+    } catch (error) {
+      this.host.logger.warn("codex skill roots not registered", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }
