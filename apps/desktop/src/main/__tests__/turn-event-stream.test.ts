@@ -209,9 +209,14 @@ const TIME_KEY = /(?:At|Ms|Timestamp|timestamp|Duration|duration)$/;
 /** Replaces ids, clocks and paths with stable placeholders, in first-seen order. */
 function createNormalizer(paths: Array<[string, string]>) {
   const uuids = new Map<string, string>();
+  // Windows paths reach events in either separator, D:\a\_temp or D:/a/_temp.
+  const spellings = paths.flatMap(([from, to]): Array<[string, string]> => {
+    const forward = from.split("\\").join("/");
+    return forward === from ? [[from, to]] : [[from, to], [forward, to]];
+  });
   const text = (value: string) => {
     let result = value;
-    for (const [from, to] of paths) result = result.split(from).join(to);
+    for (const [from, to] of spellings) result = result.split(from).join(to);
     result = result.replace(UUID, (match) => {
       const key = match.toLowerCase();
       if (!uuids.has(key)) uuids.set(key, `<uuid-${uuids.size + 1}>`);
