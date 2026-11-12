@@ -28174,28 +28174,49 @@ script = "printf setup-output"
   });
 
   it.each(["feature/metadata", "HEAD"])("initializes same-worktree thread metadata from Git branch %s", async (branch) => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
+    const phases: Array<{ phase: string; milliseconds: number }> = [];
+    let activePhase = "starting";
+    let phaseStarted = performance.now();
+    const measure = async <T>(phase: string, run: () => Promise<T>): Promise<T> => {
+      activePhase = phase;
+      phaseStarted = performance.now();
+      try {
+        return await run();
+      } finally {
+        phases.push({ phase, milliseconds: Math.round(performance.now() - phaseStarted) });
+        activePhase = "between phases";
+      }
+    };
+    onTestFinished(() => {
+      console.info("same-worktree metadata phases", JSON.stringify({
+        branch,
+        phases,
+        activePhase,
+        activeMilliseconds: Math.round(performance.now() - phaseStarted),
+      }));
+    });
+    const root = await measure("mkdtemp", () => mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-")));
     const repo = path.join(root, "app");
     const worktree = path.join(root, "worktree", "app");
-    await mkdir(repo, { recursive: true });
-    await git(repo, ["init", "-b", "main"]);
-    await git(repo, ["commit", "--allow-empty", "-m", "init"]);
+    await measure("mkdir", () => mkdir(repo, { recursive: true }));
+    await measure("git init", () => git(repo, ["init", "-b", "main"]));
+    await measure("git commit", () => git(repo, ["commit", "--allow-empty", "-m", "init"]));
     // Both checkouts point at the same commit; only their symbolic HEAD differs.
-    await git(repo, branch === "HEAD"
+    await measure("git worktree add", () => git(repo, branch === "HEAD"
       ? ["worktree", "add", "--detach", worktree, "main"]
-      : ["worktree", "add", "-b", branch, worktree, "main"]);
+      : ["worktree", "add", "-b", branch, worktree, "main"]));
     const overlayStore = createOverlayStoreMock();
 
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/metadata/update"] },
     });
-    const registry = createDesktopBackendRegistry({
+    const registry = await measure("registry construction", async () => createDesktopBackendRegistry({
       codexClient,
       overlayStore,
-    });
+    }));
 
     try {
-      await registry.materializeDirectoryLaunchpad({
+      await measure("materialize", () => registry.materializeDirectoryLaunchpad({
         directoryKey: "subthread:codex:thread-parent:same-worktree",
         launchpad: {
           directoryKey: "subthread:codex:thread-parent:same-worktree",
@@ -28213,7 +28234,7 @@ script = "printf setup-output"
           createdAt: 1_000,
           updatedAt: 2_000,
         },
-      });
+      }));
 
       expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
         threadId: "thread-1",
@@ -28221,22 +28242,22 @@ script = "printf setup-output"
           branch,
         },
       });
-      expect(await registry.checkThreadBranchDrift({
+      expect(await measure("branch drift", () => registry.checkThreadBranchDrift({
         backend: "codex",
         threadId: "thread-1",
         expectedBranch: branch,
-      })).toMatchObject({
+      }))).toMatchObject({
         expectedBranch: branch,
         observedBranch: branch,
         drifted: false,
       });
-      expect(await overlayStore.getThreadOverlayState({
+      expect(await measure("overlay read", () => overlayStore.getThreadOverlayState({
         backend: "codex",
         threadId: "thread-1",
-      })).toMatchObject({ observedGitBranch: branch });
+      }))).toMatchObject({ observedGitBranch: branch });
     } finally {
-      await registry.close();
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await measure("registry close", () => registry.close());
+      await measure("fixture removal", () => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
     }
   });
 
