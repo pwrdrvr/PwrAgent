@@ -52,27 +52,6 @@ function entryObservation(entry: Payload) {
   };
 }
 
-/**
- * Whether a GraphQL refusal is the server not knowing the merge queue schema.
- * GitHub Enterprise Server before 3.8 rejects the whole document over
- * `isMergeQueueEnabled`, `mergeQueueEntry` or the queue timeline items. Such a
- * server has no merge queue, so the gate reads as not required. PwrGit
- * (pwrdrvr/PwrGit#586) found the same. Only an Enterprise Server host can
- * lack it.
- */
-export function isMergeQueueSchemaUnsupported(host: string, message: string): boolean {
-  // github.com always has the schema: a refusal there is never "no queue",
-  // so it can never turn into a direct merge past one.
-  if (host.toLowerCase() === "github.com") return false;
-  return /isMergeQueueEnabled|mergeQueueEntry|MergeQueue|MERGE_QUEUE/.test(message)
-    && /doesn't exist|does not exist|undefined|invalid value|not a valid|Expected/i.test(message);
-}
-
-/** The gate for a server with no merge queue at all. */
-export function githubGateWithoutQueue(): GithubMergeQueueGate {
-  return { required: false, pullRequestId: "", open: true };
-}
-
 /** Read the gate query's `data`. */
 export function parseGithubMergeQueueGate(data: unknown): GithubMergeQueueGate {
   const pr = object(object(object(data).repository).pullRequest);

@@ -11,8 +11,6 @@ import { describeMergeQueueRemoval, describeMergeQueueState, type PrMergeQueueSt
 import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
 import {
   GITHUB_MERGE_QUEUE_GATE_QUERY,
-  githubGateWithoutQueue,
-  isMergeQueueSchemaUnsupported,
   parseGithubMergeQueueGate,
   runGithubQueueMerge,
   type GithubMergeQueueGate,
@@ -134,17 +132,13 @@ export class GithubPrToolClient {
    * Whether the PR's base branch requires GitHub's merge queue, and where the
    * PR stands in it. Read before every merge: a queue never takes a direct
    * merge, and with bypass rights a direct merge would skip its checks.
+   * Throws when it cannot tell; every caller then treats the branch as
+   * having no queue, so a repository without one merges exactly as before.
    */
   async mergeQueueGate(r: ForgeRepository, number: number, signal?: AbortSignal): Promise<GithubMergeQueueGate> {
-    let response: unknown;
-    try {
-      response = await this.options.ci.requestGithub(r, {
-        graphql: true, path: "", body: { query: GITHUB_MERGE_QUEUE_GATE_QUERY, variables: { owner: r.owner, repo: r.repo, number } },
-      }, signal);
-    } catch (error) {
-      if (error instanceof ForgeReadError && isMergeQueueSchemaUnsupported(r.host, error.message)) return githubGateWithoutQueue();
-      throw error;
-    }
+    const response = await this.options.ci.requestGithub(r, {
+      graphql: true, path: "", body: { query: GITHUB_MERGE_QUEUE_GATE_QUERY, variables: { owner: r.owner, repo: r.repo, number } },
+    }, signal);
     return parseGithubMergeQueueGate(object(response).data);
   }
 
@@ -486,8 +480,14 @@ export class GithubPrToolClient {
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
         providerRequests++;
-        const gate = await this.mergeQueueGate(r, args.number!, ctx.signal);
-        if (gate.required) {
+        // A queue read that fails (an Enterprise Server without the queue
+        // schema, a GraphQL outage) never blocks a merge: it merges as it
+        // always has, and GitHub itself refuses a direct merge past a queue.
+        const gate = await this.mergeQueueGate(r, args.number!, ctx.signal).catch((error: unknown) => {
+          if (ctx.signal?.aborted) throw error;
+          return undefined;
+        });
+        if (gate?.required) {
           // Never a direct merge here, with or without bypass rights.
           if (!gate.open) throw new ForgeReadError("invalid_arguments", `Pull request #${args.number} is not open.`);
           if (gate.headSha && args.expectedHeadSha && gate.headSha !== args.expectedHeadSha) {

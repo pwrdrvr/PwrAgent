@@ -435,8 +435,13 @@ export class GitlabPrToolClient {
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
         // A project with merge trains takes no direct merge: the MR joins
-        // the train, which merges it with the project's method.
-        if (object(await get("")).merge_trains_enabled === true) {
+        // the train, which merges it with the project's method. A project
+        // read that fails never blocks the merge: it merges as before.
+        const project = await get("").catch((error: unknown) => {
+          if (ctx.signal?.aborted) throw error;
+          return undefined;
+        });
+        if (project && object(project).merge_trains_enabled === true) {
           const mr = await readMergeRequest(args.number!);
           if (mr.state !== "opened") throw new ForgeReadError("invalid_arguments", `Merge request !${args.number} is not open.`);
           if (args.expectedHeadSha && str(mr.sha, 64) !== args.expectedHeadSha) {

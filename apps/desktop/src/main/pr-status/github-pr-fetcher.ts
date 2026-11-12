@@ -2,7 +2,6 @@ import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from 
 import { describeMergeQueueState } from "@pwragent/shared";
 import {
   GITHUB_MERGE_QUEUE_GATE_QUERY,
-  isMergeQueueSchemaUnsupported,
   parseGithubMergeQueueGate,
   runGithubQueueMerge,
 } from "./github-merge-queue";
@@ -297,9 +296,14 @@ export class GithubPrFetcher {
         "-f", `owner=${reference.org}`, "-f", `repo=${reference.repo}`, "-F", `number=${reference.number}`,
       ]));
     } catch (error) {
-      // An Enterprise Server without merge queues refuses the fields.
-      if (error instanceof Error && isMergeQueueSchemaUnsupported(reference.provider, error.message)) return undefined;
-      throw error;
+      // A queue read that fails (an Enterprise Server without the queue
+      // schema, a GraphQL outage) never blocks the merge: `gh pr merge` runs
+      // as it always has, and it adds the PR to a queue itself when needed.
+      fetcherLog.warn("could not read the merge queue before merging; merging with gh", {
+        pullRequest: reference.url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
     }
     if (!gate.required) return undefined;
     const result = await runGithubQueueMerge(gate, async (query, variables) => await graphql(query, [
