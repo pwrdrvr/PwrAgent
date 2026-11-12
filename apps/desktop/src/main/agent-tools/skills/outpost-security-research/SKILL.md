@@ -1,39 +1,44 @@
 ---
 name: outpost-security-research
-description: Set up and operate a contained PwrAgent Outpost in Docker for security research with models you do not trust. The container has no network; its Codex reaches only one model through a host-side key proxy, repositories move in and out by docker exec, and dependencies install offline. Use when asked to run research or abliterated models against code without network access, to add a model provider behind a key proxy, or to push a repository into an Outpost.
+description: Set up and operate a contained PwrAgent Outpost in Docker for security research with models you do not trust. The container has no network; its Codex reaches only one model through a key proxy container, Docker Compose keeps it running, repositories move in and out by docker exec, and dependencies install offline. Use when asked to run research or abliterated models against code without network access, to add a model provider behind a key proxy, or to push a repository into an Outpost.
 ---
 
 # Outpost Security Research
 
 Run a model you do not trust against your own code, from your normal PwrAgent
 window, in a container that can reach nothing except that model. Every limit
-is enforced outside the container.
+is enforced outside the Outpost container.
 
 ```
-viewer (desktop) ── gateway ── host relay :47833 ─┐
-model provider ── key proxy :8787 (real key) ─────┤  host
-                                                  │
-              egress container (bridge + internal) relays only :47833 and :8787
-                                                  │
-              --internal network, no route out:  Outpost (Codex, sandbox, volume)
+viewer (desktop) ── gateway ◄─────────────────────────┐
+model provider ◄── key-proxy (real key) ◄─────────────┤  egress network
+                                                      │
+          egress container relays only :47833 (gateway) and :8787 (key-proxy)
+                                                      │
+          internal network, no route out:  Outpost (Codex, sandbox, volume)
 ```
+
+One `compose.yaml` runs all three containers, and Docker restarts each of them
+after a crash or a reboot. No long-running process runs on the host outside
+Docker; the `.sh` scripts are one-shot commands.
 
 ## Files
 
-The scripts sit in `scripts/` beside this file, with the image's `Dockerfile`.
-An MCP client reads them as `skill://outpost-security-research/scripts/<file>`
-resources; save each one locally and mark the `.sh` files executable. Every script takes the Outpost
+The files sit beside this file. An MCP client reads them as
+`skill://outpost-security-research/<path>` resources. Save them all into one
+folder that stays where it is, such as `~/.config/outpost/stack`, keeping
+`scripts/`, and mark the `.sh` files executable. The containers mount the two
+`.mjs` scripts from that folder. Every `.sh` script takes the Outpost
 container's name from `OUTPOST_CONTAINER` (default `pwragent-outpost`) and
 reads the rest from that container.
 
-| Script | Runs on | Does |
+| File | Runs in | Does |
 | --- | --- | --- |
-| `tcp-relay.mjs` | host, egress, Outpost | Forwards one TCP port. |
-| `model-key-proxy.mjs` | host | Checks the placeholder, adds the real key, forwards to one upstream. |
-| `run-model-key-proxy.sh` | host | Reads the key, then runs the proxy in the foreground. |
-| `start-model-key-proxy.sh` | host | Starts the proxy in the background until logout. |
-| `install-launch-agents.sh` | host (macOS) | Keeps the relay and the proxy running under launchd. |
-| `setup-network.sh` | host | Creates the internal network and the egress container. |
+| `Dockerfile` | build | The Outpost image. |
+| `compose.yaml` | Docker Compose | Runs the Outpost, the egress relay and the key proxy. |
+| `compose.env.example` | Docker Compose | Settings for `compose.yaml`; copy it to `.env`. |
+| `tcp-relay.mjs` | egress, Outpost | Forwards one TCP port. |
+| `model-key-proxy.mjs` | key-proxy | Checks the placeholder, adds the real key, forwards to one upstream. |
 | `push-repo.sh` | host | Moves a repository in and registers it as a project. |
 | `pull-branch.sh` | host | Brings an agent's branch out as `outpost/<branch>`. |
 | `deps-helper.sh` | host | Installs dependencies from an agent-free helper with network. |
@@ -79,131 +84,77 @@ UID, change `USER` in your copy.
 Codex runs bubblewrap, which needs namespace syscalls that Docker's default
 seccomp profile denies. Without them every command in a turn fails while the
 turn still reports `completed`. Save Docker's default seccomp profile for your
-engine as `docker-default.json` and add one rule:
+engine as `docker-default.json` and add one rule, saving the result beside
+`compose.yaml`:
 
 ```sh
 jq '.syscalls += [{"names":["clone","unshare","setns","mount","umount2","pivot_root"],"action":"SCMP_ACT_ALLOW","args":[]}]' \
   docker-default.json > seccomp-outpost.json
 ```
 
-## 2. Start the Host Side
+## 2. Configure the Stack
 
-The model key proxy holds the real key. It reads the key from 1Password or
-the macOS Keychain each time it starts, so no file holds it. For the Keychain,
-store the key once; `security` prompts for it, so it stays out of your shell
-history:
+In the folder that holds `compose.yaml`:
 
 ```sh
-security add-generic-password -a "$USER" -s outpost-model-<provider> -w
+cp compose.env.example .env
+chmod 600 .env
+node -e 'console.log("MODEL_PROXY_PLACEHOLDER=ph_" + require("crypto").randomBytes(16).toString("hex"))' >> .env
 ```
 
-Make a private env file outside any repository. It names where the key is, not
-the key:
+Then edit `.env`. The placeholder line you just appended replaces the empty
+one in the example.
 
-```sh
-umask 077
-mkdir -p ~/.config/outpost
-PH="ph_$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')"
-cat > ~/.config/outpost/<provider>.env <<EOF
-MODEL_PROXY_UPSTREAM=https://<provider-host>/v1
-MODEL_PROXY_PLACEHOLDER=$PH
-MODEL_PROXY_LISTEN=127.0.0.1:8787
-MODEL_PROXY_API_KEY_SOURCE=keychain:outpost-model-<provider>
-EOF
-```
+- `GATEWAY_HOST` and `GATEWAY_PORT`: the federation gateway, as a container
+  reaches it. On Docker Desktop, `host.docker.internal` reaches a gateway
+  listening on the host's loopback. On Linux it is the bridge gateway, so the
+  gateway must listen on that address, or name an address containers can
+  reach.
+- `MODEL_PROXY_UPSTREAM`: it must serve the OpenAI Responses API
+  (`/v1/responses`) and should serve `/v1/models`. A model served on the Docker
+  host is `http://host.docker.internal:<port>/v1`. The proxy forwards WebSocket
+  upgrades too.
 
-For 1Password, use `MODEL_PROXY_API_KEY_SOURCE=op://<vault>/<item>/<field>`
-instead. `run-model-key-proxy.sh` refuses an env file that is not mode 600, or
-one that holds a `MODEL_PROXY_API_KEY` line as well as a source.
+`.env` holds no key. Keep it out of every repository: it holds the
+placeholder.
 
-The upstream must serve the OpenAI Responses API (`/v1/responses`) and should
-serve `/v1/models`. The proxy forwards WebSocket upgrades too.
-
-The host side is two processes: the proxy, and a relay from the host port the
-egress uses to the federation gateway. To try them out, start both in this
-session; they stop when you log out:
-
-```sh
-scripts/start-model-key-proxy.sh ~/.config/outpost/<provider>.env
-node scripts/tcp-relay.mjs 127.0.0.1 47833 <gateway-host> <gateway-port>
-```
-
-On Docker Desktop, `host.docker.internal` reaches host loopback listeners. On
-Linux it reaches the bridge gateway, so bind both host listeners to that
-address instead of `127.0.0.1`.
-
-### Keep the Host Side Running
-
-On macOS, install both as launchd user agents. They start at login and restart
-within 15 seconds whenever they exit:
-
-```sh
-scripts/install-launch-agents.sh relay <gateway-host> <gateway-port>
-scripts/install-launch-agents.sh proxy ~/.config/outpost/<provider>.env
-```
-
-The script copies the relay, the proxy and `run-model-key-proxy.sh` to
-`~/.config/outpost/bin`, writes `ai.pwragent.outpost.relay` and
-`ai.pwragent.outpost.proxy.<provider>` to `~/Library/LaunchAgents`, and loads
-them. A plist holds script paths, hosts, ports and `PATH`: never the key, never
-the placeholder. It stops a proxy that `start-model-key-proxy.sh` started from
-the same env file. Logs go to `~/Library/Logs/pwragent-outpost/<label>.log`,
-readable only by you.
-
-- A Keychain key loads without a prompt once you are logged in. `op read`
-  needs the 1Password app unlocked and may ask you to approve each start; while
-  it fails, launchd retries every 15 seconds. Use the Keychain for unattended
-  restarts.
-- After editing the env file, or replacing the key (`security
-  add-generic-password -U ...`, or in 1Password), restart the proxy with
-  `launchctl kickstart -k gui/$(id -u)/ai.pwragent.outpost.proxy.<provider>`.
-- The agents run the `node` and `op` that were on `PATH` at install. Run the
-  install again after you change either, or after you save newer scripts.
-- Check an agent with `launchctl print gui/$(id -u)/<label>`. Remove one with
-  `install-launch-agents.sh remove relay` or `remove proxy <env-file>`.
-- launchd keeps only the host side up. After a reboot, start the egress and
-  Outpost containers, then the in-container relay from step 4.
-
-On Linux, use systemd user units in `~/.config/systemd/user/`: one runs `node
-<dir>/tcp-relay.mjs <bridge-gateway> 47833 <gateway-host> <gateway-port>`, the
-other `/bin/sh <dir>/run-model-key-proxy.sh <env-file>`, both with absolute
-paths, `Restart=always` and `RestartSec=15`. The wrapper runs `node` and `op`
-from `PATH`, so give the proxy unit `Environment=PATH=<node-dir>:<op-dir>:/usr/bin:/bin`. Enable them with `systemctl --user
-enable --now <unit>`, and run `loginctl enable-linger` so they outlive your
-login. There is no Keychain source there; an `op://` source needs the 1Password
-app unlocked in your session, so the proxy retries until it is.
-
-## 3. Create the Network
-
-```sh
-scripts/setup-network.sh
-```
-
-It creates `pwragent-outpost-internal` with `--internal`, and an egress
-container on both networks that relays exactly `:47833` and `:8787` to the
-host. Nothing else crosses.
-
-## 4. Run the Outpost
+## 3. Start the Stack
 
 ```sh
 docker volume create pwragent-outpost-home
-docker run -d --name pwragent-outpost \
-  --network pwragent-outpost-internal \
-  --cap-drop ALL --security-opt no-new-privileges \
-  --security-opt seccomp=<absolute-path>/seccomp-outpost.json \
-  -e PWRAGENT_OUTPOST_EXECUTION_MODES=default,auto \
-  -e PWRAGENT_OUTPOST_AGENT_NETWORK=off \
-  -v pwragent-outpost-home:/home/outpost \
-  pwragent-outpost:research
-docker logs --tail 40 pwragent-outpost
+MODEL_PROXY_API_KEY="$(op read 'op://<vault>/<item>/<field>')" docker compose up -d
+docker compose logs --tail 40 outpost
 ```
 
-`PWRAGENT_OUTPOST_EXECUTION_MODES` lists the modes viewers may pick (`default`
-is read-only, `auto` is workspace-write, `full-access` is never right for
-research). `PWRAGENT_OUTPOST_AGENT_NETWORK=off` keeps the Codex sandbox's own
-network off as a second layer. Unknown values stop startup.
+On macOS, `"$(security find-generic-password -a "$USER" -s <service> -w)"`
+reads the key from the Keychain instead.
 
-Join the federation with an invite passed in a file, never on a command line:
+Compose passes the key to the `key-proxy` container alone, as a secret: it
+copies the key to `/run/secrets/model_api_key` inside that container, readable
+only by the proxy's user. The key is not in `.env`, on the host disk, or in
+`docker inspect`. Compose needs it again only when it recreates `key-proxy`,
+for example after you change that service or run `docker compose down`;
+without it Compose refuses and says so. `restart`, `logs`, and `up -d` with
+nothing changed do not need it.
+
+What `compose.yaml` sets up:
+
+- The Outpost is on an `--internal` network with no route out, with every
+  capability dropped, `no-new-privileges`, and your seccomp profile.
+  `PWRAGENT_OUTPOST_EXECUTION_MODES=default,auto` lists the modes viewers may
+  pick (`default` is read-only, `auto` is workspace-write, `full-access` is
+  never right for research). `PWRAGENT_OUTPOST_AGENT_NETWORK=off` keeps the
+  Codex sandbox's own network off as a second layer.
+- The egress container is on both networks and relays exactly `:47833` to the
+  gateway and `:8787` to `key-proxy`. Nothing else crosses. `key-proxy` is not
+  on the internal network, so the Outpost reaches it only through that relay.
+- Every service has `restart: unless-stopped`. Make sure Docker itself starts
+  at login or boot: Docker Desktop's "Start Docker Desktop when you sign in",
+  or the `docker` service on Linux.
+
+## 4. Join the Federation
+
+Join with an invite passed in a file, never on a command line:
 
 ```sh
 docker exec -i pwragent-outpost sh -c 'umask 077; cat > /tmp/join.json' < join.json   # {"invite":"<invite>"}
@@ -212,22 +163,18 @@ docker exec pwragent-outpost rm /tmp/join.json
 ```
 
 The Outpost dials the gateway endpoint saved at enrollment, which the internal
-network cannot reach. Relay it inside the container to the egress, after
-every container start:
-
-```sh
-docker cp scripts/tcp-relay.mjs pwragent-outpost:/tmp/tcp-relay.mjs
-docker exec -d pwragent-outpost node /tmp/tcp-relay.mjs 127.0.0.1 <endpoint-port> pwragent-outpost-egress 47833
-```
-
-If the saved endpoint names a host rather than `127.0.0.1`, also pass
-`--add-host <endpoint-host>:127.0.0.1` to `docker run`. Check with
-`pwragent federation-status`: the gateway should be connected.
+network cannot reach. Its entrypoint relays `127.0.0.1:<GATEWAY_PORT>` inside
+the container to the egress at every start. If `pwragent federation-status`
+shows a saved endpoint with another port, or a host rather than `127.0.0.1`,
+set `OUTPOST_ENDPOINT_PORT` or `OUTPOST_ENDPOINT_HOST` in `.env` and run
+`docker compose up -d`. Then check `federation-status` again: the gateway
+should be connected.
 
 ## 5. Add the Model Provider
 
 Append a Codex provider whose base URL is the egress, the placeholder and
-`/v1`. `PH` is the env file's `MODEL_PROXY_PLACEHOLDER`. The container's shell
+`/v1`. `PH` is `.env`'s `MODEL_PROXY_PLACEHOLDER`; load it with
+`PH="$(sed -n 's/^MODEL_PROXY_PLACEHOLDER=//p' .env)"`. The container's shell
 expands it, so it is never printed:
 
 ```sh
@@ -238,11 +185,11 @@ id = "<provider>"
 name = "<Provider> (key proxy)"
 base_url = "http://pwragent-outpost-egress:8787/$PH/v1"
 EOF'
-docker restart pwragent-outpost
+docker compose restart outpost
 ```
 
-Restart the in-container relay from step 4 after the restart. If model
-discovery misses a model, add `models = ["<model-id>"]` to the entry.
+The egress is `<OUTPOST_CONTAINER>-egress`. If model discovery misses a model,
+add `models = ["<model-id>"]` to the entry.
 
 Verify from inside the container, again without printing the token:
 
@@ -256,7 +203,22 @@ await show("internet", fetch("https://example.com", { signal: AbortSignal.timeou
 ```
 
 Expect `models 200`, `wrong token 403`, and an `internet` error such as
-`EAI_AGAIN`. The proxy log records the rejection with the token redacted.
+`EAI_AGAIN`. `docker compose logs key-proxy` records the rejection with the
+token redacted.
+
+## Move an Existing Outpost to Compose
+
+An Outpost started with `docker run` and `setup-network.sh` moves over with its
+volume, so it keeps its enrollment, projects and threads. Ask the operator
+first, and back up the volume.
+
+1. Stop and remove the old containers, not the volume:
+   `docker rm -f pwragent-outpost pwragent-outpost-egress`, then
+   `docker network rm pwragent-outpost-internal`.
+2. Stop the host relay and the host key proxy that served them.
+3. Follow steps 2 and 3, with `OUTPOST_VOLUME` naming the existing volume.
+   Skip step 4: the enrollment is on the volume.
+4. Check `federation-status`, then run the step 5 verification.
 
 ## 6. Move Code In
 
@@ -313,12 +275,11 @@ runtime", and no other container uses the volume, remove both from a root
 helper and start again:
 
 ```sh
+docker compose stop outpost
 docker run --rm --user 0:0 --entrypoint sh -v pwragent-outpost-home:/v node:24-bookworm -c \
   'rm -f /v/state/profiles/docker/state/runtime-instances/*.json /v/state/profiles/docker/state/headless/owner.lock'
-docker start pwragent-outpost
+docker compose start outpost
 ```
-
-Then restart the in-container relay from step 4.
 
 ## Known Limits
 

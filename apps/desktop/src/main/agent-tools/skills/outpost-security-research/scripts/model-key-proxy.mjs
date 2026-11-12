@@ -6,10 +6,13 @@
 // HTTP bodies and WebSocket frames are piped as raw bytes, never re-encoded.
 //
 // Config comes from the environment. Keep the real key out of any repository:
-//   MODEL_PROXY_UPSTREAM     e.g. https://api.example.com/v1   (required)
-//   MODEL_PROXY_API_KEY      the real provider key             (required)
-//   MODEL_PROXY_PLACEHOLDER  the token the Outpost uses        (required)
-//   MODEL_PROXY_LISTEN       host:port, default 127.0.0.1:8787
+//   MODEL_PROXY_UPSTREAM      e.g. https://api.example.com/v1   (required)
+//   MODEL_PROXY_API_KEY_FILE  a file holding the real provider key, such as a
+//                             Compose secret under /run/secrets
+//   MODEL_PROXY_API_KEY       the key itself, when there is no file
+//   MODEL_PROXY_PLACEHOLDER   the token the Outpost uses        (required)
+//   MODEL_PROXY_LISTEN        host:port, default 127.0.0.1:8787
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -153,20 +156,37 @@ function defaultLog(event, fields) {
   console.log(JSON.stringify({ at: new Date().toISOString(), event, ...fields }));
 }
 
+function fail(message) {
+  console.error(`model-key-proxy: ${message}`);
+  process.exit(2);
+}
+
 function required(name) {
   const value = process.env[name]?.trim();
-  if (!value) {
-    console.error(`model-key-proxy: ${name} is required`);
-    process.exit(2);
-  }
+  if (!value) fail(`${name} is required`);
   return value;
+}
+
+// The key is read once, at start. Its value never reaches a log line.
+function apiKey() {
+  const file = process.env.MODEL_PROXY_API_KEY_FILE?.trim();
+  if (!file) return required("MODEL_PROXY_API_KEY");
+  if (process.env.MODEL_PROXY_API_KEY?.trim()) fail("set MODEL_PROXY_API_KEY_FILE or MODEL_PROXY_API_KEY, not both");
+  let key;
+  try {
+    key = readFileSync(file, "utf8").trim();
+  } catch (error) {
+    fail(`cannot read MODEL_PROXY_API_KEY_FILE (${error.code || error.message})`);
+  }
+  if (!key) fail("MODEL_PROXY_API_KEY_FILE is empty");
+  return key;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [listenHost, listenPort] = (process.env.MODEL_PROXY_LISTEN || "127.0.0.1:8787").split(":");
   const { server, upstreamBase, origin } = createModelKeyProxy({
     upstream: required("MODEL_PROXY_UPSTREAM"),
-    apiKey: required("MODEL_PROXY_API_KEY"),
+    apiKey: apiKey(),
     placeholder: required("MODEL_PROXY_PLACEHOLDER"),
   });
   server.listen(Number(listenPort), listenHost, () => {

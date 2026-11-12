@@ -18,3 +18,13 @@ declare module "*/Dockerfile?raw" {
   const value: string;
   export default value;
 }
+
+declare module "*.yaml?raw" {
+  const value: string;
+  export default value;
+}
+
+declare module "*.example?raw" {
+  const value: string;
+  export default value;
+}

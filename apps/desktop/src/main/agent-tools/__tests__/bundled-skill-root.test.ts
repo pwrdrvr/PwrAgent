@@ -123,6 +123,26 @@ describe("bundled skill root", () => {
     ).replace(/\r\n/gu, "\n"));
   });
 
+  // compose.yaml overrides the Outpost's entrypoint to start its relay, which
+  // clears the image's CMD. It must run exactly what the Dockerfile runs.
+  it("starts the Outpost in compose.yaml with the Dockerfile's entrypoint and command", () => {
+    const dockerfile = bundledText("Dockerfile");
+    const compose = bundledText("compose.yaml");
+    const dockerArray = (instruction: string) => {
+      const match = new RegExp(`^${instruction} (\\[.*\\])$`, "mu").exec(dockerfile);
+      if (!match) throw new Error(`The Dockerfile has no exec-form ${instruction}.`);
+      return JSON.parse(match[1]) as string[];
+    };
+    const outpost = /^ {2}outpost:\n([\s\S]*?)(?=^ {2}\S)/mu.exec(compose)?.[1] ?? "";
+    const command = /^ {4}command: (\[.*\])$/mu.exec(outpost)?.[1];
+    expect(command, "the outpost service's command, as a one-line JSON array").toBeDefined();
+    expect(JSON.parse(command ?? "[]")).toEqual(dockerArray("CMD"));
+    const entrypointBlock = /^ {4}entrypoint:\n((?: {6}- .+\n)+)/mu.exec(outpost)?.[1] ?? "";
+    const entrypoint = [...entrypointBlock.matchAll(/^ {6}- (.+)$/gmu)].map((match) => match[1]);
+    expect(entrypoint.at(-1)).toBe(dockerArray("ENTRYPOINT")[0]);
+    expect(entrypoint.find((line) => line.includes("exec \"$$@\""))).toBeDefined();
+  });
+
   it("names every script the skill ships, and ships every script it names", () => {
     const body = bundledText("SKILL.md");
     const shipped = OUTPOST_SKILL?.files.map((file) => file.path).filter((file) => file.startsWith("scripts/")) ?? [];
