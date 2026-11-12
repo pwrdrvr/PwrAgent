@@ -22,6 +22,7 @@ import {
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
+import { getOwnerHostServices } from "../owner-host";
 import { normalizeProfileName } from "../profile";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -711,7 +712,7 @@ export class ThreadMigrationService {
         resolveCommand,
       }) ??
       new CodexAppServerClient({
-        args: buildCodexClientArgs(env),
+        args: buildCodexClientArgs(env, [], [], getOwnerHostServices().runtimePolicy),
         command,
         env,
         resolveCommand,

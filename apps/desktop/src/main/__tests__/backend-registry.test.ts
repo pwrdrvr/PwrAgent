@@ -1,5 +1,6 @@
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
+import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
 import { traceUnbornWorkspace } from "./helpers/unborn-workspace-trace";
 import { isolatedGitKeys, isolateProcessGitEnvironment } from "./helpers/isolated-git";
@@ -8117,6 +8118,51 @@ describe("DesktopBackendRegistry", () => {
     } finally {
       await registry.close();
     }
+  });
+
+  // On an Outpost the operator's execution mode chooses the sandbox. Agent
+  // tools pass a free-form sandbox, and admission sees no mode when a turn
+  // inherits it from the thread, so `default` + `workspace-write` once reached
+  // Codex as writes under Default Access.
+  it("never lets a caller's sandbox outrank the Outpost execution mode", async () => {
+    const policy = createOutpostRuntimePolicy({});
+    const previous = getOwnerHostServices();
+    installOwnerHostServices({ ...previous, runtimePolicy: policy });
+    onTestFinished(() => installOwnerHostServices(previous));
+    const modes = ["default", "auto"] as const;
+    const sandboxes = [undefined, "read-only", "workspace-write"] as const;
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom(...modes), fc.constantFrom(...sandboxes),
+      fc.constantFrom(undefined, ...modes), fc.constantFrom(...sandboxes),
+      async (threadMode, threadSandbox, turnMode, turnSandbox) => {
+        const codexClient = new MockBackendClient({ threads: [] });
+        const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+        try {
+          const threadExpected = policy.sandboxByMode[threadMode];
+          const thread = registry.startThread({ backend: "codex", cwd: process.cwd(), executionMode: threadMode,
+            approvalPolicy: "never", sandbox: threadSandbox });
+          if (threadSandbox !== undefined && threadSandbox !== threadExpected) {
+            await expect(thread).rejects.toThrow();
+            expect(codexClient.lastStartThreadParams).toBeUndefined();
+            return;
+          }
+          const { threadId } = await thread;
+          expect(codexClient.lastStartThreadParams?.sandbox).toBe(threadExpected);
+          const turnExpected = policy.sandboxByMode[turnMode ?? threadMode];
+          const turn = registry.startTurn({ backend: "codex", threadId, executionMode: turnMode,
+            sandbox: turnSandbox, input: [{ type: "text", text: "Invented request." }] });
+          if (turnSandbox !== undefined && turnSandbox !== turnExpected) {
+            await expect(turn).rejects.toThrow();
+            expect(codexClient.startTurnCalls).toEqual([]);
+            return;
+          }
+          await turn;
+          expect(codexClient.lastStartTurnParams?.sandbox).toBe(turnExpected);
+        } finally {
+          await registry.close();
+        }
+      },
+    ), { numRuns: 40 });
   });
 
   it("passes the Codex default-mode question toggle to new and resumed threads", async () => {
