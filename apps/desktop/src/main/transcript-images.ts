@@ -2,6 +2,7 @@ import {
   isLegacyPwrSnapMediaUrl,
   isPwrSnapResourceUri,
   MAX_TRANSCRIPT_IMAGE_BYTES,
+  pwrSnapToolImageParts,
 } from "@pwragent/shared";
 import type {
   AgentEvent,
@@ -511,7 +512,8 @@ export async function materializeTranscriptImageEventForRenderer(
   if (typeof record.id !== "string") return event;
   const isMessage = record.type === "agentMessage" && typeof record.text === "string";
   const isImageView = event.backend === "codex" && record.type === "imageView";
-  if (!isMessage && !isImageView) return event;
+  const resourceImages = pwrSnapToolImageParts(record);
+  if (!isMessage && !isImageView && resourceImages.length === 0) return event;
   const sourcePath = isImageView && typeof record.path === "string" && path.isAbsolute(record.path)
     ? record.path : undefined;
   const sourceUrl = sourcePath ? pathToFileURL(sourcePath).toString() : undefined;
@@ -526,18 +528,19 @@ export async function materializeTranscriptImageEventForRenderer(
     fetchedAt: 0,
     replay: {
       messages: isMessage ? [message] : [],
-      entries: sourceUrl && sourcePath ? [{
-        type: "activity", id: record.id, summary: "View image", status: "completed",
+      entries: resourceImages.length || (sourceUrl && sourcePath) ? [{
+        type: "activity", id: record.id, summary: "Tool images", status: "completed",
         details: [{
-          id: record.id, kind: "command", label: "View image", status: "completed",
-          images: [{ type: "image", url: sourceUrl, sourceUrl, alt: path.basename(sourcePath) }],
+          id: record.id, kind: "command", label: "Tool images", status: "completed",
+          images: resourceImages.length ? resourceImages
+            : [{ type: "image", url: sourceUrl!, sourceUrl, alt: path.basename(sourcePath!) }],
         }],
       }] : [],
       pagination: { supportsPagination: false, hasPreviousPage: false },
     },
   }, dependencies, options);
   const activity = result.replay.entries[0];
-  const images = isImageView
+  const images = isImageView || resourceImages.length
     ? activity?.type === "activity" ? activity.details[0]?.images ?? [] : []
     : result.replay.messages[0]?.parts?.filter(
         (part): part is AppServerThreadImagePart => part.type === "image",

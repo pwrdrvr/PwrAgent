@@ -2,6 +2,7 @@ import {
   isPwrSnapResourceUri,
   MAX_TRANSCRIPT_IMAGE_BYTES,
   PWRSNAP_MCP_CONNECTION_ID,
+  pwrSnapResourceLinkImageParts,
 } from "@pwragent/shared";
 
 /** Links remembered per session. The oldest are forgotten first. */
@@ -91,21 +92,7 @@ export class PwrSnapMediaLinks {
 
 /** The `pwrsnap://` image resource links in an MCP tool result's content. */
 export function readPwrSnapImageLinks(result: unknown): string[] {
-  const content = result && typeof result === "object"
-    ? (result as { content?: unknown }).content
-    : undefined;
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((block): string[] => {
-    if (!block || typeof block !== "object") return [];
-    const { type, uri, mimeType } = block as Record<string, unknown>;
-    return type === "resource_link"
-      && typeof uri === "string"
-      && typeof mimeType === "string"
-      && mimeType.toLowerCase().startsWith("image/")
-      && isPwrSnapResourceUri(uri)
-      ? [uri]
-      : [];
-  });
+  return pwrSnapResourceLinkImageParts(result).map((part) => part.url).filter(isPwrSnapResourceUri);
 }
 
 /**
@@ -130,6 +117,10 @@ export function readPwrSnapImageContents(result: unknown, uri: string): PwrSnapM
     const type = mimeType.split(";", 1)[0]!.trim().toLowerCase();
     if (!type.startsWith("image/")) continue;
     if (blob.length === 0 || blob.length > Math.ceil(MAX_TRANSCRIPT_IMAGE_BYTES / 3) * 4) continue;
+    // A blob is opaque canonical base64, not text to salvage. Node's decoder
+    // silently ignores ellipses/whitespace and would cache corrupt PNG bytes.
+    if (blob.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(blob)) continue;
+    if (Buffer.from(blob, "base64").toString("base64") !== blob) continue;
     return { ok: true, mimeType: type, dataBase64: blob };
   }
   return { ok: false, reason: "failed" };

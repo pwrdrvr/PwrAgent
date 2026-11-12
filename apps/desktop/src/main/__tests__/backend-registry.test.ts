@@ -27,7 +27,7 @@ import { launchpadStorageKey } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { stageTurnInputAttachment } from "../app-server/turn-input-attachment-files";
 import * as turnInputAttachmentFiles from "../app-server/turn-input-attachment-files";
-import * as transcriptImageProtocol from "../shell/transcript-image-protocol";
+import * as transcriptImageProtocol from "../transcript-images";
 import * as gitExecutable from "../app-server/git-executable";
 import * as gitHeadBranch from "../app-server/git-head-branch";
 import { resolveActiveProfilePath } from "../profile";
@@ -3670,6 +3670,36 @@ describe("DesktopBackendRegistry", () => {
       }
     },
   );
+
+  it.each(["mcpToolCall", "dynamicToolCall"])("materializes completed %s images only for the renderer", async (type) => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+    const startTurn = vi.spyOn(codexClient, "startTurn");
+    const internal = registry as unknown as { emit(event: AgentEvent): Promise<void> };
+    const images = [{ type: "image" as const, url: "pwragent-image://file/synthetic" }];
+    const materialize = vi.spyOn(transcriptImageProtocol, "materializeTranscriptImageEventForRenderer")
+      .mockImplementationOnce(async (event) => ({ ...event, rendererImageParts: images }));
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      await emitStartedTurn(registry, "codex", "thread-1", "turn-1");
+      const event: AgentEvent = { backend: "codex", notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { type, id: "synthetic-media", tool: "capture_resource" },
+      } } };
+      await internal.emit(event);
+      expect(materialize).toHaveBeenCalledOnce();
+      expect(events.at(-1)?.rendererImageParts).toEqual(images);
+      expect(events.at(-1)?.notification).toBe(event.notification);
+      expect(startTurn).not.toHaveBeenCalled();
+    } finally {
+      materialize.mockRestore();
+      await emitCompletedTurn(registry, "codex", "thread-1", "turn-1");
+      await registry.close();
+    }
+  });
 
   it("leaves ACP Claude naming to the provider without launching a redundant title helper", async () => {
     const backend = "acp:claude" as const;

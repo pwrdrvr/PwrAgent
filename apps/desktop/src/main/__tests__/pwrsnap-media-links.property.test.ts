@@ -50,7 +50,7 @@ type Command =
   | { kind: "die"; slot: number }
   | { kind: "grant"; token: Token }
   | { kind: "revoke"; token: Token }
-  | { kind: "result"; token: Token; slot: number; blocks: Array<{ type: string; uri: string; mimeType?: string }> }
+  | { kind: "result"; token: Token; slot: number; wrapped: boolean; blocks: Array<{ type: string; uri: string; mimeType?: string }> }
   | { kind: "query"; threadId: string; uri: string };
 
 const tokenArb = fc.constantFrom(...TOKEN_NAMES);
@@ -61,7 +61,7 @@ const commandArb: fc.Arbitrary<Command> = fc.oneof(
   fc.record({ kind: fc.constant("die" as const), slot: slotArb }),
   fc.record({ kind: fc.constant("grant" as const), token: tokenArb }),
   fc.record({ kind: fc.constant("revoke" as const), token: tokenArb }),
-  fc.record({ kind: fc.constant("result" as const), token: tokenArb, slot: slotArb, blocks: fc.array(blockArb, { maxLength: 4 }) }),
+  fc.record({ kind: fc.constant("result" as const), token: tokenArb, slot: slotArb, wrapped: fc.boolean(), blocks: fc.array(blockArb, { maxLength: 4 }) }),
   fc.record({ kind: fc.constant("query" as const), threadId: fc.constantFrom(...THREADS), uri: fc.constantFrom(...URIS) }),
 );
 
@@ -106,7 +106,9 @@ describe("PwrSnap media links", () => {
           case "result": {
             const session = slots[command.slot];
             if (!session || !granted.has(command.token)) break;
-            links.record(command.token, TOKENS[command.token].connectionId, session, { content: command.blocks });
+            const result = { content: command.blocks };
+            links.record(command.token, TOKENS[command.token].connectionId, session,
+              command.wrapped ? { content: [{ type: "text", text: JSON.stringify(result) }] } : result);
             if (TOKENS[command.token].connectionId !== "pwrsnap") break;
             for (const block of command.blocks) {
               if (

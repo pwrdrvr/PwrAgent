@@ -34,7 +34,8 @@ import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
   isLegacyPwrSnapMediaUrl,
-  isPwrSnapResourceUri,
+  pwrSnapResourceLinkImageParts,
+  pwrSnapToolImageParts,
   readCodexNativeSubAgentName,
   estimateTokenUsageCost,
   formatExplorationSummary,
@@ -2502,7 +2503,7 @@ function extractDynamicToolCallImageParts(
     : Array.isArray(item.content_items)
       ? item.content_items
       : [];
-  return contentItems.flatMap((value): AppServerThreadImagePart[] => {
+  return [...pwrSnapToolImageParts(item), ...contentItems.flatMap((value): AppServerThreadImagePart[] => {
     const contentItem = asRecord(value);
     if (normalizeItemType(pickString(contentItem ?? {}, ["type"])) !== "inputimage") {
       return [];
@@ -2511,7 +2512,7 @@ function extractDynamicToolCallImageParts(
       pickString(contentItem ?? {}, ["imageUrl", "image_url"]),
     );
     return image ? [{ ...image, alt: `${toolName} result` }] : [];
-  });
+  })];
 }
 
 function extractImagePartsFromValue(value: unknown): AppServerThreadImagePart[] {
@@ -4275,12 +4276,10 @@ function extractMcpToolResultImagePartsFromReplayItem(
         pickString(candidate, ["tool", "toolName", "tool_name"])
         ?? "Tool";
       const contentImageParts = extractMcpToolResultContentImageParts(candidate, toolName);
-      const resourceLinkImageParts = extractMcpResourceLinkImageParts(result?.content);
       const resourceImageParts = extractMcpResourceImageParts(result?.content);
       return [
         ...structuredImageParts,
         ...contentImageParts,
-        ...resourceLinkImageParts,
         ...(signedImagePart ? [signedImagePart] : []),
         ...resourceImageParts,
       ];
@@ -4377,44 +4376,6 @@ function buildMcpSignedImagePart(
     imagePart.alt = alt;
   }
   return imagePart;
-}
-
-function extractMcpResourceLinkImageParts(content: unknown): AppServerThreadImagePart[] {
-  const contentBlocks = Array.isArray(content) ? content : [content];
-  return dedupeImageParts(
-    contentBlocks.flatMap((contentBlock) => {
-      const resourceLink = asRecord(contentBlock);
-      if (!resourceLink) {
-        return [];
-      }
-      const type = normalizeItemType(
-        pickString(resourceLink, ["type", "contentType", "content_type"]),
-      );
-      const uri = pickString(resourceLink, ["uri", "url"]);
-      const mimeType = pickString(resourceLink, ["mimeType", "mime_type"]);
-      if (
-        type !== "resourcelink"
-        || !uri
-        || !mimeType?.toLowerCase().startsWith("image/")
-        || !(isPwrSnapResourceUri(uri) || isLegacyPwrSnapMediaUrl(uri))
-      ) {
-        return [];
-      }
-
-      // The desktop reads a `pwrsnap://` link's bytes through the MCP session
-      // that returned it, and shows a legacy loopback URL as unavailable.
-      const imagePart: AppServerThreadImagePart = { type: "image", url: uri };
-
-      const alt = pickString(resourceLink, [
-        "name",
-        "title",
-        "alt",
-        "altText",
-        "alt_text",
-      ]);
-      return [{ ...imagePart, ...(alt ? { alt } : {}) }];
-    }),
-  );
 }
 
 function extractMcpResourceImageParts(content: unknown): AppServerThreadImagePart[] {
@@ -4975,7 +4936,10 @@ function summarizeActivityItems(
         normalizedItemType === "dynamictoolcall"
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
-            ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
+            ? dedupeImageParts([
+                ...extractMcpToolResultContentImageParts(item, toolName ?? "Tool"),
+                ...pwrSnapResourceLinkImageParts(item.result),
+              ])
           : normalizedItemType === "imageview" && typeof item.path === "string" && path.isAbsolute(item.path)
             ? [{ type: "image" as const, url: pathToFileURL(item.path).toString(), sourceUrl: pathToFileURL(item.path).toString(), alt: path.basename(item.path) }]
           : [];

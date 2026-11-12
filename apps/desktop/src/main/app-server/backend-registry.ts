@@ -45430,7 +45430,8 @@ export class DesktopBackendRegistry {
     const key = `${event.backend}:${threadId}`;
     const previous = this.transcriptImageWork.get(key);
     const item = notification.method === "item/completed" ? readRecord(notification.params.item) : undefined;
-    const materializeImages = item?.type === "agentMessage" || item?.type === "imageView";
+    const materializeImages = item?.type === "agentMessage" || item?.type === "imageView"
+      || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall";
     // Keep lifecycle bookkeeping (including queue release) and subsequent
     // transcript events behind image work, in arrival order. Extend the chain
     // through delivery, so idle or the next turn cannot overtake a held terminal.

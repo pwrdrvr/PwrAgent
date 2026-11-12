@@ -3,6 +3,7 @@ import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { pwrSuiteInstall, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
@@ -616,6 +617,16 @@ describe("McpConnectionGatewayService", () => {
     await expect(service.readPwrSnapMediaResource({ threadId: "thread-1", uri }))
       .resolves.toEqual({ ok: true, mimeType: "image/png", dataBase64: "AQID" });
     expect(readResource).toHaveBeenCalledWith({ uri }, expect.anything());
+
+    // Live events and history reads can overlap. Every group of simultaneous
+    // requests for the same session-owned URI consumes one upstream read.
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 8 }), async (count) => {
+      readResource.mockClear();
+      const results = await Promise.all(Array.from({ length: count }, () =>
+        service.readPwrSnapMediaResource({ threadId: "thread-1", uri })));
+      expect(results.every((result) => result.ok && result.dataBase64 === "AQID")).toBe(true);
+      expect(readResource).toHaveBeenCalledOnce();
+    }), { numRuns: 20 });
 
     // Another thread, though it shares the session, or a link the session
     // never returned, is not read.
