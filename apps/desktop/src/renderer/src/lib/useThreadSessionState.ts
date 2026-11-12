@@ -508,6 +508,7 @@ function mergeTranscriptEntries(
   let greatestCreatedAt: number | undefined;
   let greatestCreatedAtByTurn = new Map<string, number>();
   let greatestSequenceByTurn = new Map<string, number>();
+  let greatestSequence: number | undefined;
   let terminalTurnIds = new Set<string>();
   // Only the turn of the last row can take another row at the end. An unbound
   // user message is an ordering boundary too, even before its provider id lands.
@@ -519,6 +520,7 @@ function mergeTranscriptEntries(
     greatestCreatedAt = undefined;
     greatestCreatedAtByTurn = new Map();
     greatestSequenceByTurn = new Map();
+    greatestSequence = undefined;
     terminalTurnIds = new Set();
     mergedTurnIds = new Set();
     lastMergedTurnId = undefined;
@@ -552,6 +554,9 @@ function mergeTranscriptEntries(
         terminalTurnIds.add(entry.turn.id);
       }
       const sequence = readRendererSequence(entry);
+      if (typeof sequence === "number") {
+        greatestSequence = Math.max(greatestSequence ?? sequence, sequence);
+      }
       if (entry.turn?.id && typeof sequence === "number") {
         greatestSequenceByTurn.set(
           entry.turn.id,
@@ -594,6 +599,9 @@ function mergeTranscriptEntries(
       terminalTurnIds.add(entry.turn.id);
     }
     const sequence = readRendererSequence(entry);
+    if (typeof sequence === "number") {
+      greatestSequence = Math.max(greatestSequence ?? sequence, sequence);
+    }
     if (entry.turn?.id && typeof sequence === "number") {
       greatestSequenceByTurn.set(
         entry.turn.id,
@@ -630,6 +638,9 @@ function mergeTranscriptEntries(
         terminalTurnIds.add(optimisticEntry.turn.id);
       }
       const replacementSequence = readRendererSequence(optimisticEntry);
+      if (typeof replacementSequence === "number") {
+        greatestSequence = Math.max(greatestSequence ?? replacementSequence, replacementSequence);
+      }
       if (
         optimisticEntry.turn?.id
         && typeof replacementSequence === "number"
@@ -680,6 +691,28 @@ function mergeTranscriptEntries(
         ? optimisticEntry.createdAt
         : undefined;
     const optimisticSequence = readRendererSequence(optimisticEntry);
+    // A live row whose turn has no row here cannot be placed inside its turn.
+    // Renderer sequences come from one session counter, so a row observed
+    // after it, in another turn, bounds where it goes. Timestamps cannot: a
+    // compaction can leave a finished turn's tools live while the next send
+    // is promoted, and the two can carry the same stamp.
+    const laterObservedIndex =
+      optimisticTurnId
+      && !mergedTurnIds.has(optimisticTurnId)
+      && typeof optimisticSequence === "number"
+      // Nothing newer is merged in the common case: a live row of the
+      // turn in progress. Skip the scan then.
+      && (greatestSequence ?? -Infinity) > optimisticSequence
+      && !isTokenUsageActivityEntry(optimisticEntry)
+      && !isMonitorUsageActivityEntry(optimisticEntry)
+        ? merged.findIndex((entry) =>
+            (readRendererSequence(entry) ?? -Infinity) > optimisticSequence)
+        : -1;
+    if (laterObservedIndex !== -1) {
+      merged.splice(laterObservedIndex, 0, optimisticEntry);
+      rebuildAppendIndexes();
+      continue;
+    }
     const canAppendInKnownOrder =
       !isTokenUsageActivityEntry(optimisticEntry)
       && !isMonitorUsageActivityEntry(optimisticEntry)
@@ -1185,8 +1218,20 @@ function mergeRetainedTranscriptSuffix(
       ];
     }
 
+    const retainedSequence = readRendererSequence(retainedEntry);
     while (freshIndex < freshSuffix.length) {
       const freshEntry = freshSuffix[freshIndex]!;
+      // Two rows the renderer observed live keep that order. Stamps tie at a
+      // second's resolution, and a tie put a lagging page above older turns.
+      const freshSequence = readRendererSequence(freshEntry);
+      if (typeof freshSequence === "number" && typeof retainedSequence === "number") {
+        if (freshSequence > retainedSequence) {
+          break;
+        }
+        mergedSuffix.push(freshEntry);
+        freshIndex += 1;
+        continue;
+      }
       const freshTimestamp = transcriptRefreshOrderTimestamp(freshEntry);
       if (
         typeof freshTimestamp === "number"
@@ -4012,7 +4057,18 @@ function mergeCompletedUserMessageWithOptimisticEntry(
   if (!optimisticEntry) {
     return message;
   }
+  // The acknowledged send keeps its place in the observed live order.
+  const merged = mergeCompletedUserMessagePresentation(message, optimisticEntry);
+  const sequence = readRendererSequence(optimisticEntry);
+  return typeof sequence === "number" && readRendererSequence(merged) === undefined
+    ? withRendererSequence(merged, sequence)
+    : merged;
+}
 
+function mergeCompletedUserMessagePresentation(
+  message: AppServerThreadMessageEntry,
+  optimisticEntry: AppServerThreadMessageEntry,
+): AppServerThreadMessageEntry {
   const preservePresentation = shouldPreserveOptimisticMessagePresentation(
     message,
     optimisticEntry,
@@ -7903,7 +7959,7 @@ export function useThreadSessionState(params: {
         ...(text ? [{ type: "text" as const, text }] : []),
         ...imageParts,
       ];
-      const optimisticEntry: AppServerThreadMessageEntry = {
+      const unsequencedEntry: AppServerThreadMessageEntry = {
         type: "message",
         id,
         role: "user",
@@ -7912,6 +7968,12 @@ export function useThreadSessionState(params: {
         createdAt,
       };
       updateSession(threadKey, (current) => {
+        // The send takes its place in the observed live order, so rows of an
+        // earlier turn that are still live stay above it once it is promoted.
+        const optimisticEntry = withRendererSequence(
+          unsequencedEntry,
+          current.nextLiveEntrySequence,
+        );
         const authoritativeEntry =
           findAuthoritativeUserMessageForOptimisticEntry({
             entry: optimisticEntry,
@@ -7939,6 +8001,9 @@ export function useThreadSessionState(params: {
           expectOwnUpdate: true,
           interacted: true,
           lastTouchedAt: Date.now(),
+          nextLiveEntrySequence: authoritativeEntry
+            ? current.nextLiveEntrySequence
+            : current.nextLiveEntrySequence + 1,
           optimisticEntries: authoritativeEntry
             ? current.optimisticEntries
             : [...current.optimisticEntries, optimisticEntry],

@@ -437,7 +437,15 @@ test.describe("federation remote window", () => {
       await expect(transcript.getByRole("heading", { name: "Delivery inspector", exact: true })).toBeVisible();
       await expect(transcript.getByText(workerId, { exact: true })).toBeVisible();
       await expect(transcript.getByText(ownerMessage, { exact: true })).toBeVisible();
-      await transcript.getByRole("button", { name: "Close window", exact: true }).click();
+      // The button calls window.close() inside its click handler, so the
+      // window can be gone before Playwright acknowledges the click. Assert
+      // the close itself; a click that fails with the window still open fails.
+      const transcriptClosed = transcript.waitForEvent("close");
+      await transcript.getByRole("button", { name: "Close window", exact: true }).click()
+        .catch((error: unknown) => {
+          if (!transcript.isClosed()) throw error;
+        });
+      await transcriptClosed;
     } finally {
       await viewer?.close();
       await owner?.close();
