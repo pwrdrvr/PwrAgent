@@ -14,6 +14,7 @@ import {
   classifyExplorationLabel,
   formatExplorationSummary,
   formatSearchCommandActionLabel,
+  formatWebSearchLabel,
   type AppServerSource,
   type AppServerThreadActivityDetail,
   type AppServerThreadActivityEntry,
@@ -470,7 +471,7 @@ function formatLiveToolName(
   status: AppServerThreadActivityDetail["status"]
 ): string {
   if (toolName === "search_web") {
-    return status === "in_progress" ? "Searching Web" : "Searched Web";
+    return formatWebSearchLabel(status === "in_progress");
   }
   if (toolName === "search_x") {
     return status === "in_progress" ? "Searching X" : "Searched X";
@@ -770,13 +771,19 @@ export function buildLiveToolDetails(
     readString(item, "toolName") ??
     readString(item, "tool_name") ??
     readString(item, "name") ??
-    (itemType === "websearch" ? "web search"
+    (itemType === "websearch" ? "search_web"
       : itemType === "imageview" ? `View image: ${readString(item, "path") ?? "unknown image"}` : "tool");
-  const status = itemType === "imageview" && notificationMethod === "item/completed"
+  // Codex's imageView and webSearch items carry no status; completion ends them.
+  const status = notificationMethod === "item/completed"
+    && (itemType === "imageview" || (itemType === "websearch" && item.status === undefined))
     ? "completed"
     : normalizeItemStatus(item.status);
   const title = readToolArgument(item, "title");
-  const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
+  const query =
+    readToolArgument(item, "query")
+    ?? readToolArgument(item, "q")
+    // Native Codex puts a web search's query on the item itself.
+    ?? (itemType === "websearch" ? readString(item, "query") : undefined);
   const preview =
     itemType === "mcptoolcall"
       ? undefined

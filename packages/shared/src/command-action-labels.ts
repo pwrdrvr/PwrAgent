@@ -17,6 +17,14 @@ export function formatSearchCommandActionLabel(params: {
   return pathName ? `Searched ${pathName}` : "Searched";
 }
 
+/**
+ * The label of a web search row, live and replayed. It reads as a search,
+ * so its activity header counts it in the exploration part.
+ */
+export function formatWebSearchLabel(inProgress: boolean): string {
+  return inProgress ? "Searching Web" : "Searched Web";
+}
+
 export type ExplorationCounts = {
   /** Distinct files read. Reading one file twice is one file. */
   files?: number;
