@@ -14,6 +14,34 @@ export function findAssistantMessageForText(
   itemId?: string,
   turnId?: string,
 ): AppServerThreadMessage | undefined {
+  const message = selectAssistantMessage(replay, text, itemId, turnId);
+  if (!message) return undefined;
+  const entry = replay.entries.find((candidate) => candidate.type === "message" && candidate.id === message.id);
+  const selectedTurnId = entry?.turn?.id ?? turnId;
+  if (!selectedTurnId) return message;
+  const seen = new Set(message.parts?.flatMap((part) => part.type === "image" ? [part.url] : []) ?? []);
+  const images = replay.entries.flatMap((candidate) =>
+    candidate.type === "activity" && candidate.turn?.id === selectedTurnId
+      ? candidate.details.flatMap((detail) => detail.images ?? []) : [],
+  ).filter((image) => {
+    if (seen.has(image.url)) return false;
+    seen.add(image.url);
+    return true;
+  });
+  // Messaging includes tool previews from the selected reply's turn. Keep
+  // this copy out of the replay so desktop activity remains the sole preview.
+  return images.length ? {
+    ...message,
+    parts: [...(message.parts ?? [{ type: "text", text: message.text }]), ...images],
+  } : message;
+}
+
+function selectAssistantMessage(
+  replay: AppServerThreadReplay,
+  text: string,
+  itemId?: string,
+  turnId?: string,
+): AppServerThreadMessage | undefined {
   if (itemId) {
     for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
       const message = replay.messages[index];

@@ -5,6 +5,8 @@ import {
   isSubAgentActivityDetail,
   readCodexNativeSubAgentName,
   readSubAgentActivity,
+  pwrSnapResourceLinkImageParts,
+  pwrSnapToolImageParts,
   shortSubAgentThreadId,
   subAgentActivitySummaryParts,
   subAgentTargetLabel,
@@ -115,7 +117,7 @@ function readToolResultImages(
       : Array.isArray(item.content_items)
         ? item.content_items
         : [];
-    return contentItems.flatMap((value): AppServerThreadImagePart[] => {
+    return [...pwrSnapToolImageParts(item), ...contentItems.flatMap((value): AppServerThreadImagePart[] => {
       const contentItem = readRecord(value);
       const imageUrl =
         readString(contentItem, "imageUrl") ?? readString(contentItem, "image_url");
@@ -126,7 +128,7 @@ function readToolResultImages(
         return [];
       }
       return [{ type: "image", url: imageUrl, alt: `${toolName} result` }];
-    });
+    })];
   }
 
   if (itemType !== "mcptoolcall") {
@@ -136,7 +138,7 @@ function readToolResultImages(
   const content = Array.isArray(result?.content) ? result.content : [];
   const serverName = readString(item, "server") ?? readString(item, "serverName");
   const alt = `${serverName ? `${serverName}/` : "MCP "}${toolName} result`;
-  return content.flatMap((value): AppServerThreadImagePart[] => {
+  return [...pwrSnapResourceLinkImageParts(result), ...content.flatMap((value): AppServerThreadImagePart[] => {
     const block = readRecord(value);
     const type = readString(block, "type")?.toLowerCase();
     const mimeType = readString(block, "mimeType") ?? readString(block, "mime_type");
@@ -145,7 +147,7 @@ function readToolResultImages(
       return [];
     }
     return [{ type: "image", url: `data:${mimeType};base64,${data}`, alt }];
-  });
+  })];
 }
 
 function summarizeDynamicToolResult(item: Record<string, unknown>): string | undefined {
@@ -793,7 +795,17 @@ export function buildLiveToolDetails(
       : itemType === "dynamictoolcall"
         ? summarizeDynamicToolResult(item)
       : summarizeToolOutput(readToolOutputText(item));
-  const images = retainedImages ?? readToolResultImages(item, itemType, toolName);
+  const sourceImages = readToolResultImages(item, itemType, toolName);
+  const replacedLinks = new Set(pwrSnapToolImageParts(item).map((image) => image.url));
+  const seenImages = new Set<string>();
+  const images = (retainedImages === undefined ? sourceImages : [
+    ...retainedImages,
+    ...sourceImages.filter((image) => !replacedLinks.has(image.url)),
+  ]).filter((image) => {
+    if (seenImages.has(image.url)) return false;
+    seenImages.add(image.url);
+    return true;
+  });
   const elapsedMs = readElapsedMs(item);
   const command =
     itemType === "commandexecution"

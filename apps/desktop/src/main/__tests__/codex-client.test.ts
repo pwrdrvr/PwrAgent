@@ -7897,7 +7897,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("projects PwrSnap image resource links into transcript image parts", async () => {
+  it.each(["direct", "code-mode", "gateway"])("projects %s PwrSnap resource links once in their activity row", async (shape) => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl = "pwrsnap://capture/example/composite";
     MockTransport.readThreadResultByThreadId.set("thread-mcp-resource-link", {
@@ -7960,6 +7960,21 @@ describe("CodexAppServerClient", () => {
       },
     });
 
+    const fixture = MockTransport.readThreadResultByThreadId.get("thread-mcp-resource-link") as {
+      thread: { turns: Array<{ items: Array<Record<string, unknown>> }> };
+    };
+    const item = fixture.thread.turns[0]!.items[0]!;
+    if (shape === "code-mode") {
+      item.result = { content: [{ type: "text", text: JSON.stringify(item.result) }] };
+    } else if (shape === "gateway") {
+      item.contentItems = [{ type: "inputText", text: JSON.stringify({
+        source: { connectionId: "pwrsnap" }, result: item.result,
+      }) }];
+      item.type = "dynamicToolCall";
+      item.tool = "call_mcp_tool";
+      delete item.result;
+    }
+
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => [],
@@ -7971,31 +7986,14 @@ describe("CodexAppServerClient", () => {
     );
     const finalMessage = replay.messages.find((message) => message.id === "assistant-final");
 
-    expect(finalEntry).toMatchObject({
-      type: "message",
-      role: "assistant",
-      text: "There it is.",
-      parts: [
-        { type: "text", text: "There it is." },
-        {
-          type: "image",
-          url: imageUrl,
-          alt: "composite capture",
-        },
-      ],
-    });
-    expect(finalMessage).toMatchObject({
-      role: "assistant",
-      text: "There it is.",
-      parts: [
-        { type: "text", text: "There it is." },
-        {
-          type: "image",
-          url: imageUrl,
-          alt: "composite capture",
-        },
-      ],
-    });
+    const activity = replay.entries.find((entry) => entry.type === "activity");
+    expect(activity?.type === "activity" ? activity.details.flatMap((detail) => detail.images ?? []) : [])
+      .toEqual([{ type: "image", url: imageUrl, alt: "composite capture" }]);
+    // Reopening a turn preserves the same activity image, without copying it
+    // to the final answer as another inline preview.
+    expect(finalEntry?.type === "message" ? finalEntry.parts?.filter((part) => part.type === "image") ?? [] : [])
+      .toEqual([]);
+    expect(finalMessage?.parts?.filter((part) => part.type === "image") ?? []).toEqual([]);
 
     await client.close();
   });

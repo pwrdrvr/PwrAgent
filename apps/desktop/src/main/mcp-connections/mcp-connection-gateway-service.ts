@@ -696,6 +696,8 @@ export class McpConnectionGatewayService {
    * ask again.
    */
   private readonly failedPwrSnapMediaReads = new WeakMap<Client, Set<string>>();
+  /** Live activity and history may materialize the same link concurrently. */
+  private readonly pendingPwrSnapMediaReads = new WeakMap<Client, Map<string, Promise<PwrSnapMediaRead>>>();
   /**
    * In-flight session opens, keyed by bridge token.
    *
@@ -3558,15 +3560,32 @@ export class McpConnectionGatewayService {
     });
     const client = owner?.session as Client | undefined;
     if (!client) return { ok: false, reason: "session-ended" };
+    let pending = this.pendingPwrSnapMediaReads.get(client);
+    const existing = pending?.get(request.uri);
+    if (existing) return await existing;
+    if (!pending) {
+      pending = new Map();
+      this.pendingPwrSnapMediaReads.set(client, pending);
+    }
+    const read = this.readPwrSnapMediaFromSession(client, request.uri);
+    pending.set(request.uri, read);
+    try {
+      return await read;
+    } finally {
+      pending.delete(request.uri);
+    }
+  }
+
+  private async readPwrSnapMediaFromSession(client: Client, uri: string): Promise<PwrSnapMediaRead> {
     let failed = this.failedPwrSnapMediaReads.get(client);
-    if (failed?.has(request.uri)) return { ok: false, reason: "failed" };
+    if (failed?.has(uri)) return { ok: false, reason: "failed" };
     let read: PwrSnapMediaRead;
     try {
       const result = await client.readResource(
-        { uri: request.uri },
+        { uri },
         { timeout: PWRSNAP_MEDIA_READ_TIMEOUT_MS },
       );
-      read = readPwrSnapImageContents(result, request.uri);
+      read = readPwrSnapImageContents(result, uri);
     } catch (error) {
       connectionLog.warn("PwrSnap media read failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -3578,7 +3597,7 @@ export class McpConnectionGatewayService {
         failed = new Set();
         this.failedPwrSnapMediaReads.set(client, failed);
       }
-      failed.add(request.uri);
+      failed.add(uri);
     }
     return read;
   }
