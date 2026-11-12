@@ -27,22 +27,15 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentEvent } from "@pwragent/shared";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { CodexAppServerClient } from "../codex-app-server/desktop-client";
-import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
-import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
-import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { OwnerConformanceCodexTransport } from "./fixtures/owner-conformance-codex-transport";
 import { ScriptedCodexTransport } from "./fixtures/turn-event-stream-codex-transport";
-import { createTempStateDb } from "./sqlite-test-utils";
+import { startDesktopOwnerFixture } from "./helpers/desktop-owner-fixture";
 
 const owner = vi.hoisted(() => ({ registry: undefined as unknown }));
 vi.mock("../app-server/backend-registry", async (importOriginal) => ({
@@ -248,22 +241,11 @@ type Owner = {
   close(): Promise<void>;
 };
 
-/** Desktop's real owner, built the way the owner conformance suite builds it. */
+/** Desktop's real owner, from the same builder the owner conformance suite uses. */
 async function startOwner(): Promise<Owner> {
   ScriptedCodexTransport.reset();
-  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-turn-stream-")));
-  const { dbPath, tempDir } = createTempStateDb("pwragent-turn-stream-db-");
-  const db = StateDb.open(dbPath);
-  const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
-  const overlayStore = new SqliteOverlayStore(db);
-  setDesktopOverlayStoreForTests(overlayStore);
-  const configPath = path.join(tempDir, "config.toml");
-  await writeFile(configPath, "");
-  const configStore = new DesktopConfigStore({ configPath });
-  configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
-  const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
-    threadTitleGenerationService: null, pdfToolMcpServer: null, runtimeInstanceId: "turn-stream-desktop",
-    resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
+  const fixture = await startDesktopOwnerFixture({ tempPrefix: "pwragent-turn-stream", runtimeInstanceId: "turn-stream-desktop" });
+  const { registry, workspace, tempDir } = fixture;
   owner.registry = registry;
   const { entries: hub, inFlight } = instrumentHub(registry);
   const events: AgentEvent[] = [];
@@ -279,14 +261,8 @@ async function startOwner(): Promise<Owner> {
     },
     async close() {
       stopEvents();
-      await registry.close();
-      await codexClient.close();
+      await fixture.close();
       owner.registry = undefined;
-      resetDesktopOverlayStoreForTests();
-      configStore.dispose();
-      db.close();
-      await rm(workspace, { recursive: true, force: true });
-      await rm(tempDir, { recursive: true, force: true });
     },
   };
 }

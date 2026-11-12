@@ -1,11 +1,10 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import type { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
-import { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +12,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, AppServerBackendKind, FederationCapability } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FederationRemoteBackendClient,
@@ -28,14 +26,10 @@ import {
   projectLocalEventForFederation,
   unsequencedFederationEventPayload,
 } from "../federation/federation-runtime";
-import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
-import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
-import { ProviderThreadSnapshotStore } from "../storage/provider-thread-snapshot-store";
-import { RetainedOwnerThreadStore } from "../storage/retained-owner-thread-store";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -43,6 +37,7 @@ import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thr
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
 import { admitSteerTurn } from "../scheduled-actions/steer-turn-admission";
 import { OwnerConformanceCodexTransport } from "./fixtures/owner-conformance-codex-transport";
+import { startDesktopOwnerFixture } from "./helpers/desktop-owner-fixture";
 import {
   compareStep,
   type OwnerConformanceBaseline,
@@ -50,7 +45,6 @@ import {
   type OwnerStepRecord,
 } from "./helpers/owner-conformance";
 import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpost-daemon";
-import { createTempStateDb } from "./sqlite-test-utils";
 import { createFederatedThreadMessageHandler } from "../federation/federated-thread-message-service";
 import { canonicalDurableSteerRequest, canonicalDurableTurnRequest, type SubmitDurableSteerRequest, type SubmitDurableTurnRequest } from "@pwragent/shared";
 import { DurableTurnRequestService } from "@pwragent/owner-core/durable-turn-request-service";
@@ -123,35 +117,9 @@ async function startDesktopOwner(
   profileRoot?: string,
   protocolHelperTitle?: string,
 ): Promise<OwnerHost> {
-  OwnerConformanceCodexTransport.reset();
-  OwnerConformanceCodexTransport.helperTitle = protocolHelperTitle;
-  const workspace = profileRoot ? path.join(profileRoot, "w") : await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-conformance-")));
-  const { dbPath, tempDir } = profileRoot
-    ? { dbPath: path.join(profileRoot, "profiles/t/state/state.db"), tempDir: path.join(profileRoot, "desktop") }
-    : createTempStateDb("pwragent-conformance-db-");
-  if (profileRoot) {
-    for (const dir of [workspace, tempDir, path.join(profileRoot, "f")]) mkdirSync(dir, { recursive: true });
-    OwnerConformanceCodexTransport.recordsFile = path.join(profileRoot, "f/fixture-threads.json");
-  }
-  const db = StateDb.open(dbPath, profileRoot ? { profileName: "t" } : undefined);
-  const codexClient = new CodexAppServerClient({ directoryResolver: async () => [] });
-  const overlayStore = new SqliteOverlayStore(db);
-  await prepareAcp?.(db, workspace);
-  setDesktopOverlayStoreForTests(overlayStore);
-  // Desktop lists Codex once discovery has selected an executable. The
-  // transport fixture stands in for that executable.
-  const configPath = path.join(tempDir, "config.toml");
-  await writeFile(configPath, "");
-  const configStore = new DesktopConfigStore({ configPath });
-  configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
-  const registry = createDesktopBackendRegistry({ codexClient, configStore, overlayStore, messagingStore: null,
-    ...(profileRoot ? { providerThreadSnapshotStore: new ProviderThreadSnapshotStore(db) } : {}),
-    ...(profileRoot ? { retainedOwnerThreadStorage: new RetainedOwnerThreadStore(db, path.join(profileRoot, "profiles/t/state/headless")) } : {}),
-    ...(prepareAcp ? { acpAgentStore: new AcpAgentStore(db), acpSessionStore: new AcpSessionStore(db) } : {}),
-    ...(claudeOptions ? { claudeBackendOptions: claudeOptions(workspace) } : {}),
-    threadTitleGenerationService: protocolHelperTitle ? new ThreadTitleGenerationService({ generators: { codex: codexClient } }) : threadTitleGenerationService,
-    pdfToolMcpServer: null, runtimeInstanceId: "conformance-desktop",
-    resolveLiveProfileRuntimeInstanceIds: () => [], discoverLocalAcpAgents: async () => [] });
+  const owner = await startDesktopOwnerFixture({ tempPrefix: "pwragent-conformance", runtimeInstanceId: "conformance-desktop",
+    threadTitleGenerationService, prepareAcp, claudeOptions, profileRoot, protocolHelperTitle });
+  const { registry, overlayStore, db, workspace } = owner;
   desktopOwner.registry = registry;
   const scheduler = new ScheduledThreadActionService({ registry, store: new ScheduledThreadActionStore(db) });
   registry.setScheduledThreadActionCreator((request, options) => scheduler.create(request, options));
@@ -216,16 +184,8 @@ async function startDesktopOwner(
     close: async () => {
       stopEvents();
       scheduler.dispose();
-      await registry.close();
-      await codexClient.close();
+      await owner.close();
       desktopOwner.registry = undefined;
-      resetDesktopOverlayStoreForTests();
-      configStore.dispose();
-      db.close();
-      if (!profileRoot) {
-        await rm(workspace, { recursive: true, force: true });
-        await rm(tempDir, { recursive: true, force: true });
-      }
     },
   };
 }
