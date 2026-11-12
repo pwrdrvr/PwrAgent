@@ -9,7 +9,8 @@ import {
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThreadLinkProvider, type ThreadLinkSource } from "../../../lib/thread-links";
+import { ThreadLinkProvider, useThreadLinks, type ThreadLinkSource } from "../../../lib/thread-links";
+import { ThreadChip } from "../ThreadChip";
 import { TranscriptList } from "../TranscriptList";
 
 /**
@@ -296,6 +297,48 @@ describe("thread links that name this machine", () => {
       expect(observed.opened).toEqual({
         machine: PEER, backend: "codex", threadId: LOCAL_THREAD_ID,
       });
+    },
+  );
+
+  // Some surfaces hand a chip a link that never went through resolve(), such
+  // as a queued message's source thread. In the main window it is still a
+  // bare local link, shown by the window itself.
+  it.each<WindowKind>(["main", "peer"])(
+    "opens an unresolved link to this machine where its thread lives (%s window)",
+    async (windowKind) => {
+      const harness = desktopApi("claude");
+      const global = window as FederationWindowGlobal;
+      global.pwragent = harness.api;
+      if (windowKind === "peer") {
+        global.__pwragentFederationTarget = { scope: "remote", instanceId: PEER };
+      }
+      const onShowThread = vi.fn();
+      function UnresolvedChip() {
+        const links = useThreadLinks();
+        return links ? (
+          <ThreadChip
+            link={{ backend: "claude", instanceId: VIEWER, threadId: LOCAL_THREAD_ID, title: "Source thread" }}
+            onOpen={links.show}
+          />
+        ) : null;
+      }
+      render(
+        <ThreadLinkProvider localInstanceId={VIEWER} onShowThread={onShowThread} threads={[]}>
+          <UnresolvedChip />
+        </ThreadLinkProvider>,
+      );
+      await act(async () => {});
+      expect(screen.queryByRole("button", { name: /^Open remote viewer/ })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /^Open thread / }));
+      if (windowKind === "main") {
+        expect(onShowThread).toHaveBeenCalledWith({ backend: "claude", threadId: LOCAL_THREAD_ID });
+        expect(harness.openThreadInMainWindow).not.toHaveBeenCalled();
+      } else {
+        expect(harness.openThreadInMainWindow).toHaveBeenCalledWith({
+          backend: "claude", threadId: LOCAL_THREAD_ID,
+        });
+        expect(onShowThread).not.toHaveBeenCalled();
+      }
     },
   );
 });

@@ -429,6 +429,17 @@ class ThreadLinkMetadataStore {
  */
 const ThreadLinkContext = createContext<ThreadLinkContextValue | undefined>(undefined);
 
+/**
+ * This machine's federation instance id, apart from the link context: that
+ * value rebuilds on every membership change, and a transcript that needs
+ * only the id must not re-render with it.
+ */
+const ThreadLinkLocalInstanceContext = createContext<FederationInstanceId | undefined>(undefined);
+
+export function useThreadLinkLocalInstanceId(): FederationInstanceId | undefined {
+  return useContext(ThreadLinkLocalInstanceContext);
+}
+
 export function useThreadLinks(): ThreadLinkContextValue | undefined {
   return useContext(ThreadLinkContext);
 }
@@ -779,15 +790,19 @@ export function ThreadLinkProvider(props: {
           : liveResolved;
       },
       show(link) {
-        // Only a window serving a peer keeps this machine's id on a link.
-        // The thread lives here, so the main window shows it.
         if (threadLinkNamesThisMachine(link, localInstanceId)) {
-          void getDesktopApi()?.openThreadInMainWindow?.({
-            backend: link.backend,
-            ...(link.messageId ? { messageId: link.messageId } : {}),
-            threadId: link.threadId,
-          });
-          return;
+          // A window serving a peer reads a bare link on that peer, so this
+          // machine's thread opens in the main window. The main window shows
+          // it itself, as the bare local link it is.
+          if (readRendererFederationTarget()) {
+            void getDesktopApi()?.openThreadInMainWindow?.({
+              backend: link.backend,
+              ...(link.messageId ? { messageId: link.messageId } : {}),
+              threadId: link.threadId,
+            });
+            return;
+          }
+          link = { ...link, instanceId: undefined };
         }
         onShowThreadRef.current({
           backend: link.backend,
@@ -826,7 +841,13 @@ export function ThreadLinkProvider(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hoverStore, localInstanceId, membershipKey, metadataStore]);
 
-  return <ThreadLinkContext.Provider value={value}>{props.children}</ThreadLinkContext.Provider>;
+  return (
+    <ThreadLinkContext.Provider value={value}>
+      <ThreadLinkLocalInstanceContext.Provider value={localInstanceId}>
+        {props.children}
+      </ThreadLinkLocalInstanceContext.Provider>
+    </ThreadLinkContext.Provider>
+  );
 }
 
 /**

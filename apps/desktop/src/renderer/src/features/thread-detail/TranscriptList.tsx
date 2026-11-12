@@ -57,7 +57,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import {
   pendingEntryLinkSource,
   transcriptEntryLinkSource,
-  useThreadLinks,
+  useThreadLinkLocalInstanceId,
   type ThreadLinkSource,
 } from "../../lib/thread-links";
 import {
@@ -716,7 +716,7 @@ export function transcriptItemBox(item: Element): Element {
 }
 
 export function TranscriptList(props: TranscriptListProps) {
-  const localInstanceId = useThreadLinks()?.localInstanceId;
+  const localInstanceId = useThreadLinkLocalInstanceId();
   const pendingLinkSource = useMemo(
     () => pendingEntryLinkSource(props.threadLinkSource, localInstanceId),
     [localInstanceId, props.threadLinkSource],

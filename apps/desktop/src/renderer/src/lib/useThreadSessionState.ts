@@ -4082,7 +4082,7 @@ function findAuthoritativeUserMessageForOptimisticEntry(params: {
     (entry): entry is AppServerThreadMessageEntry =>
       entry.type === "message"
       && entry.role === "user"
-      && !entry.id.startsWith("optimistic-")
+      && !isPendingEntryId(entry.id)
       && entry.turn?.id === params.turnId
       && messageMatchesOptimisticEntry(entry, params.entry, {
         allowImageUrlMismatch: true,

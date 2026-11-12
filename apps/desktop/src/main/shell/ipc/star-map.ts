@@ -46,8 +46,10 @@ import {
   type TurnInputAttachmentUpload,
 } from "../../app-server/turn-input-attachment-files";
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
-import { requestShowThread } from "../window-show-thread";
-import { primaryMainWindowWebContents } from "../primary-main-window";
+import {
+  primaryMainWindowWebContents,
+  requestShowThreadInPrimaryMainWindow,
+} from "../primary-main-window";
 import {
   isStarMapWindowWebContents,
   showStarMapWindow,
@@ -162,19 +164,8 @@ export function registerStarMapIpcHandlers(): void {
   );
   ipcMain.handle(
     STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
-    async (_event, request: WindowShowThreadRequest): Promise<void> => {
-      if (
-        typeof request?.backend !== "string"
-        || typeof request?.threadId !== "string"
-      ) {
-        return;
-      }
-      const target = primaryMainWindowWebContents();
-      if (!target) {
-        return;
-      }
-      requestShowThread(request, { preferWebContents: target });
-    },
+    async (_event, request: WindowShowThreadRequest): Promise<void> =>
+      requestShowThreadInPrimaryMainWindow(request),
   );
   ipcMain.handle(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL, async (): Promise<void> => {
     const target = primaryMainWindowWebContents();

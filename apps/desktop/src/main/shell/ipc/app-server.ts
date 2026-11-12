@@ -19,8 +19,7 @@ import {
 } from "../../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
 import { showUsageActivityWindow } from "../usage-activity-window";
-import { primaryMainWindowWebContents } from "../primary-main-window";
-import { requestShowThread } from "../window-show-thread";
+import { requestShowThreadInPrimaryMainWindow } from "../primary-main-window";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, OpenUsageActivityRequest } from "@pwragent/shared";
 import { parseUsageLimitProvider } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
@@ -394,24 +393,16 @@ export function registerAppServerIpcHandlers(): void {
       { provider: parseUsageLimitProvider(request?.provider) });
   });
   ipcMain.removeHandler(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL);
-  ipcMain.handle(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, (_event, request: WindowShowThreadRequest) => {
-    if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") return;
-    const target = primaryMainWindowWebContents();
-    if (target) requestShowThread(request, { preferWebContents: target });
-  });
+  ipcMain.handle(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, (_event, request: WindowShowThreadRequest) =>
+    requestShowThreadInPrimaryMainWindow(request));
   ipcMain.removeHandler(WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL);
   // Only this machine's threads: a peer's thread opens in its own viewer.
-  ipcMain.handle(WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL, (_event, request: WindowShowThreadRequest) => {
-    if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") return;
-    const target = primaryMainWindowWebContents();
-    if (target) {
-      requestShowThread({
-        backend: request.backend,
-        threadId: request.threadId,
-        ...(typeof request.messageId === "string" ? { messageId: request.messageId } : {}),
-      }, { preferWebContents: target });
-    }
-  });
+  ipcMain.handle(WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL, (_event, request: WindowShowThreadRequest) =>
+    requestShowThreadInPrimaryMainWindow(request && {
+      backend: request.backend,
+      threadId: request.threadId,
+      ...(typeof request.messageId === "string" ? { messageId: request.messageId } : {}),
+    }));
   ipcMain.removeHandler(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL);
   ipcMain.handle(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
     async (_event, request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> =>
