@@ -8148,10 +8148,15 @@ describe("DesktopBackendRegistry", () => {
           }
           const { threadId } = await thread;
           expect(codexClient.lastStartThreadParams?.sandbox).toBe(threadExpected);
+          const fork = registry.forkThread({ backend: "codex", sourceThreadId: threadId, executionMode: threadMode,
+            approvalPolicy: "never", sandbox: threadSandbox });
+          await fork;
+          expect(codexClient.lastForkThreadParams?.sandbox).toBe(threadExpected);
           const turnExpected = policy.sandboxByMode[turnMode ?? threadMode];
           const turn = registry.startTurn({ backend: "codex", threadId, executionMode: turnMode,
             sandbox: turnSandbox, input: [{ type: "text", text: "Invented request." }] });
-          if (turnSandbox !== undefined && turnSandbox !== turnExpected) {
+          // A sandbox needs a named mode on an Outpost, and must be that mode's.
+          if (turnSandbox !== undefined && (turnMode === undefined || turnSandbox !== turnExpected)) {
             await expect(turn).rejects.toThrow();
             expect(codexClient.startTurnCalls).toEqual([]);
             return;

@@ -23,6 +23,10 @@ export function assertOwnerExecutionPolicy(policy: OwnerRuntimePolicy | undefine
   if (request.executionMode && !policy.executionModes.includes(request.executionMode)) throw new Error("Full access is unavailable on this Outpost.");
   if (request.approvalPolicy !== undefined && request.approvalPolicy !== policy.approvalPolicy) throw new Error("This unattended Outpost requires approvalPolicy never.");
   if (request.sandbox !== undefined && request.sandbox !== "read-only" && request.sandbox !== "workspace-write") throw new Error("This Outpost requires a read-only or workspace-write sandbox.");
+  // The mode chooses the sandbox, so a sandbox is checked against a named mode.
+  // Without one the mode comes from the thread, which admission cannot see, and
+  // a refusal at the provider call site would come after a queue accepted it.
+  if (request.sandbox !== undefined && !request.executionMode) throw new Error("This Outpost needs an executionMode with a sandbox; the mode chooses the sandbox.");
   if (request.executionMode && request.sandbox !== undefined) ownerSandboxForMode(policy, request.executionMode, request.sandbox);
 }
 

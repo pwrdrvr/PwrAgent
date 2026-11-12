@@ -18,12 +18,12 @@ it("rejects every unsafe explicit provider, mode, approval or sandbox combinatio
     fc.constantFrom(undefined, "never", "on-request", "untrusted"), fc.constantFrom(undefined, "read-only", "workspace-write", "danger-full-access"),
     (backend, executionMode, approvalPolicy, sandbox) => {
       const request = { backend, executionMode, approvalPolicy, sandbox };
-      // The mode chooses the sandbox. A caller may restate it, never change it;
-      // with no mode at admission, the provider call site applies the rule.
+      // The mode chooses the sandbox. A caller may restate it, never change it,
+      // and a sandbox without a mode is refused before any queue accepts it.
       const modeSandbox = executionMode ? policy.sandboxByMode[executionMode] : undefined;
       const allowed = backend === "codex" && executionMode !== "full-access"
         && (approvalPolicy === undefined || approvalPolicy === "never") && sandbox !== "danger-full-access"
-        && (sandbox === undefined || modeSandbox === undefined || sandbox === modeSandbox);
+        && (sandbox === undefined || sandbox === modeSandbox);
       if (allowed) expect(() => assertOwnerExecutionPolicy(policy, request)).not.toThrow();
       else expect(() => assertOwnerExecutionPolicy(policy, request)).toThrow();
       expect(() => assertOwnerExecutionPolicy(undefined, request)).not.toThrow();
