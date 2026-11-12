@@ -6,6 +6,8 @@ import outpostDockerfile from "./skills/outpost-security-research/Dockerfile?raw
 import outpostTcpRelay from "./skills/outpost-security-research/scripts/tcp-relay.mjs?raw";
 import outpostModelKeyProxy from "./skills/outpost-security-research/scripts/model-key-proxy.mjs?raw";
 import outpostStartModelKeyProxy from "./skills/outpost-security-research/scripts/start-model-key-proxy.sh?raw";
+import outpostRunModelKeyProxy from "./skills/outpost-security-research/scripts/run-model-key-proxy.sh?raw";
+import outpostInstallLaunchAgents from "./skills/outpost-security-research/scripts/install-launch-agents.sh?raw";
 import outpostSetupNetwork from "./skills/outpost-security-research/scripts/setup-network.sh?raw";
 import outpostPushRepo from "./skills/outpost-security-research/scripts/push-repo.sh?raw";
 import outpostPullBranch from "./skills/outpost-security-research/scripts/pull-branch.sh?raw";
@@ -94,6 +96,8 @@ const OUTPOST_SECURITY_RESEARCH_SKILL = bundledSkill(outpostSecurityResearch, [
   supportingFile("scripts/tcp-relay.mjs", outpostTcpRelay),
   supportingFile("scripts/model-key-proxy.mjs", outpostModelKeyProxy),
   supportingFile("scripts/start-model-key-proxy.sh", outpostStartModelKeyProxy),
+  supportingFile("scripts/run-model-key-proxy.sh", outpostRunModelKeyProxy),
+  supportingFile("scripts/install-launch-agents.sh", outpostInstallLaunchAgents),
   supportingFile("scripts/setup-network.sh", outpostSetupNetwork),
   supportingFile("scripts/push-repo.sh", outpostPushRepo),
   supportingFile("scripts/pull-branch.sh", outpostPullBranch),
