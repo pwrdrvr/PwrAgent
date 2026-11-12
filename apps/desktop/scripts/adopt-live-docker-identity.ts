@@ -4,6 +4,7 @@ import { publicKeyPemFromPrivateKey } from "@pwragent/federation/federation-iden
 import { noiseKeyPairFromRawPrivate } from "@pwragent/federation/federation-noise";
 import { StateDb } from "../src/main/state/state-db";
 import { createFileKeyEncryption } from "../src/main/headless/file-key-encryption";
+import { acquireHeadlessOwnerLock, type HeadlessOwnerLock } from "../src/main/headless/owner-lock";
 import { DesktopConfigStore } from "../src/main/settings/config-store/desktop-config-store";
 
 const LIVE_INSTANCE = "4f9b407d-2bb9-4893-9b98-28b88952a3de";
@@ -32,10 +33,18 @@ export async function adoptLiveDockerOutpost(source: string, profileDirectory: s
     if (!["ws:", "wss:"].includes(new URL(endpoint).protocol)) throw new Error("Invalid saved gateway endpoint.");
   }
   const stateDirectory = path.join(profileDirectory, "state");
-  if (fs.existsSync(path.join(stateDirectory, "headless/owner.lock"))) throw new Error("Stop the live owner before adopting its identity.");
   fs.mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDirectory, 0o700);
   fs.chmodSync(stateDirectory, 0o700);
+  const headlessDirectory = path.join(stateDirectory, "headless");
+  fs.mkdirSync(headlessDirectory, { recursive: true, mode: 0o700 });
+  // The owner's own lock: free only when no Outpost is running, including one
+  // that crashed and left owner.lock behind. Holding it for the whole adoption
+  // keeps an Outpost from starting halfway through.
+  let lock: HeadlessOwnerLock;
+  try { lock = acquireHeadlessOwnerLock(headlessDirectory); } catch (error) {
+    throw new Error(`Stop the live owner before adopting its identity. ${(error as Error).message}`, { cause: error });
+  }
   const db = StateDb.open(path.join(stateDirectory, "state.db"), { profileName: "docker" });
   try {
     const existing = db.getMeta("federation_instance_id");
@@ -58,5 +67,8 @@ export async function adoptLiveDockerOutpost(source: string, profileDirectory: s
         federation_gateway_noise_public_key: saved.gateway.gatewayNoisePublicKey, profile_name: "docker" })) db.setMeta(key, value);
       if (!db.getMeta("federation_gateway_enrolled_at")) db.setMeta("federation_gateway_enrolled_at", String(Date.now()));
     })();
-  } finally { db.close(); }
+  } finally {
+    try { db.close(); }
+    finally { lock.release(); }
+  }
 }

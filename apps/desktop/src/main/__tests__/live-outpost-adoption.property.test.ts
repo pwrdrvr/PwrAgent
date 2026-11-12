@@ -8,6 +8,7 @@ import { generateFederationNoiseStaticKeyPair } from "@pwragent/federation/feder
 import { adoptLiveDockerOutpost } from "../../../scripts/adopt-live-docker-identity";
 import { StateDb } from "../state/state-db";
 import { createFileKeyEncryption } from "../headless/file-key-encryption";
+import { acquireHeadlessOwnerLock, HEADLESS_OWNER_LOCK_MARKER } from "../headless/owner-lock";
 
 const liveId = "4f9b407d-2bb9-4893-9b98-28b88952a3de";
 const gatewayId = "pwr_3d822fab-1b7c-4f8e-9d5a-c765d818ad97";
@@ -52,4 +53,29 @@ it("adopts only the pinned live identity, retaining its private keys and enrollm
       expect(fs.readFileSync(source, "utf8")).toContain(saved.identity.privateKeyPem.replaceAll("\n", "\\n"));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }), { numRuns: 8 });
+});
+
+it("adopts after a crashed owner and refuses while an owner holds the headless lock", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "live-adoption-lock-"));
+  const profile = path.join(root, "docker");
+  const headless = path.join(profile, "state", "headless");
+  const marker = path.join(headless, HEADLESS_OWNER_LOCK_MARKER);
+  try {
+    const { source } = fixture(root, liveId);
+    fs.mkdirSync(headless, { recursive: true });
+    const live = acquireHeadlessOwnerLock(headless);
+    try {
+      await expect(adoptLiveDockerOutpost(source, profile)).rejects.toThrow(/Stop the live owner.*Another headless owner is running/);
+    } finally { live.release(); }
+
+    // A crash leaves this version's owner.lock but frees the kernel lock.
+    fs.writeFileSync(marker, `${JSON.stringify({ pid: 1, lock: "sqlite-exclusive" })}\n`, { mode: 0o600 });
+    await adoptLiveDockerOutpost(source, profile);
+    expect(fs.existsSync(marker)).toBe(false);
+
+    // An older version's owner.lock may belong to a live owner of that version.
+    fs.writeFileSync(marker, `${JSON.stringify({ pid: 1 })}\n`, { mode: 0o600 });
+    await expect(adoptLiveDockerOutpost(source, profile)).rejects.toThrow(/Stop the live owner.*older PwrAgent/);
+    expect(fs.existsSync(marker)).toBe(true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
