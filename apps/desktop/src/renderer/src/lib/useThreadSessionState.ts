@@ -1084,7 +1084,16 @@ function adoptOlderPageIdentities(
   if (pageEntryByTailEntry.size === 0) {
     return tail;
   }
-  const entries = tail.replay.entries.map((entry) => pageEntryByTailEntry.get(entry) ?? entry);
+  // Keep the tail row's live order: a later newest read places a row it does
+  // not hold by its renderer sequence.
+  const entries = tail.replay.entries.map((entry) => {
+    const pageEntry = pageEntryByTailEntry.get(entry);
+    if (!pageEntry) {
+      return entry;
+    }
+    const sequence = readRendererSequence(entry);
+    return sequence === undefined ? pageEntry : withRendererSequence(pageEntry, sequence);
+  });
   return {
     ...tail,
     replay: {
@@ -5967,6 +5976,14 @@ export function useThreadSessionState(params: {
               for (const entry of nextRetainedLiveEntries) {
                 retainedLiveEntryStore.set(entry.id, entry);
               }
+            }
+          }
+          // This read becomes the capture. Items it covers can no longer
+          // count as seen after it, so only newer ones stay in the map.
+          if (liveItemVersions) {
+            const capture = liveTranscriptVersion ?? 0;
+            for (const [itemId, version] of liveItemVersions) {
+              if (version <= capture) liveItemVersions.delete(itemId);
             }
           }
 
