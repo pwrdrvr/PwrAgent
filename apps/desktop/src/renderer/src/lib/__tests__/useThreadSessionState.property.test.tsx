@@ -21,7 +21,15 @@ type Item = {
   phase?: "commentary" | "final";
 };
 type Model = { ledger: Item[]; turn: number; active?: number; optimistic?: Item };
-type Read = { response: AppServerReadThreadResponse; resolve: (value: AppServerReadThreadResponse) => void };
+type Read = {
+  response: AppServerReadThreadResponse;
+  resolve: (value: AppServerReadThreadResponse) => void;
+  issued: number;
+  newest: boolean;
+};
+// Reads are numbered as they are issued. A row seen on the live stream may
+// leave the transcript only once a newest-page read issued after it settles.
+type Visibility = { issued: number; settled: number; live: Map<string, number> };
 type Real = Awaited<ReturnType<typeof mount>>;
 type Operation = "start" | "item" | "redeliver" | "complete" | "send" | "read" | "resolve" | "older" | "compact" | "synthetic";
 const key = (item: Item) => `turn-${item.turn}/item-${item.sequence}`;
@@ -81,14 +89,22 @@ function response(model: Model, before?: number): AppServerReadThreadResponse {
 
 async function mount(model: Model) {
   const reads: Read[] = [];
+  const visibility: Visibility = { issued: 0, settled: 0, live: new Map() };
   let emit: (event: AgentEvent) => void = () => { throw new Error("missing subscription"); };
   let first = true;
   const desktopApi: DesktopApi = {
     onAgentEvent: (listener) => { emit = listener; return () => undefined; },
     readThread: vi.fn(({ before }) => {
       const snapshot = response(model, before === undefined ? undefined : Number(before));
-      if (first) { first = false; return Promise.resolve(snapshot); }
-      return new Promise<AppServerReadThreadResponse>((resolve) => reads.push({ response: snapshot, resolve }));
+      const issued = ++visibility.issued;
+      if (first) { first = false; visibility.settled = issued; return Promise.resolve(snapshot); }
+      return new Promise<AppServerReadThreadResponse>((resolve) => reads.push({
+        response: snapshot, issued, newest: before === undefined,
+        resolve: (value) => {
+          if (before === undefined) visibility.settled = Math.max(visibility.settled, issued);
+          resolve(value);
+        },
+      }));
     }),
   };
   const thread: NavigationThreadSummary = {
@@ -100,7 +116,7 @@ async function mount(model: Model) {
   // polling or real sleeps: the model supplies every asynchronous boundary.
   await act(async () => {});
   expect(hook.result.current.loading).toBe(false);
-  return { ...hook, reads, trace: [] as string[], emit: (method: string, params: Record<string, unknown>) => emit({
+  return { ...hook, reads, visibility, trace: [] as string[], emit: (method: string, params: Record<string, unknown>) => emit({
     backend: "codex", notification: { method, params: { threadId: "ledger-thread", ...params } } as AgentEvent["notification"],
   }) };
 }
@@ -119,6 +135,19 @@ function assertLedger(model: Model, real: Real, rows = real.result.current.entri
   });
   expect(ranks, real.trace.join(" → ")).toEqual([...ranks].sort((a, b) => a - b));
   expect(real.result.current.activeTurnId).toBe(model.active === undefined ? undefined : `turn-${model.active}`);
+}
+
+function assertLiveRowsVisible(real: Real) {
+  const rendered = new Set(logicalKeys(real.result.current.entries));
+  for (const [id, issuedBefore] of real.visibility.live) {
+    if (real.visibility.settled > issuedBefore) {
+      real.visibility.live.delete(id);
+      continue;
+    }
+    // No read issued after this row was observed has settled, so no page can
+    // have covered its turn. Hiding it now loses it until a later read lands.
+    expect(rendered.has(id), `${id} hidden before a read covered it: ${real.trace.join(" → ")}`).toBe(true);
+  }
 }
 
 function logicalKeys(rows: AppServerThreadEntry[]): string[] {
@@ -170,6 +199,7 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
             tool: this.reverse,
           };
           model.ledger.push(item);
+          real.visibility.live.set(key(item), real.visibility.issued);
           if (item.tool) {
             const tool = { id: key(item), type: "commandExecution", command: `echo ${key(item)}`,
               status: "completed", exitCode: 0 };
@@ -217,11 +247,18 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
           break;
         }
         case "older": { void real.result.current.loadOlder(); break; }
-        case "compact": { real.emit("thread/compacted", {}); break; }
+        case "compact": {
+          // Compaction replaces the transcript as a whole, and shows it again
+          // only once its own read lands. That is not a pruned live row.
+          real.visibility.live.clear();
+          real.emit("thread/compacted", {});
+          break;
+        }
         case "synthetic": break;
       }
     });
     assertLedger(model, real);
+    assertLiveRowsVisible(real);
     if (this.operation === "synthetic") {
       const rows = real.result.current.entries;
       const injected = injectPermissionTransitions(rows, [{
@@ -246,6 +283,7 @@ async function drain(model: Model, real: Real) {
       read.resolve(read.response);
     });
     assertLedger(model, real);
+    assertLiveRowsVisible(real);
   }
 }
 
@@ -552,6 +590,23 @@ it("keeps a pruned live tool turn reachable across an acknowledged send and a ne
       new LedgerCommand("send"), new LedgerCommand("start"), new LedgerCommand("read"), new LedgerCommand("older"),
     ]);
   } finally { clock.mockRestore(); }
+});
+
+it("keeps a completed tool-only turn visible until a read issued after it lands", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  const model = initialModel();
+  const real = await mount(model);
+  try {
+    await fc.asyncModelRun(() => ({ model, real }), openingCommands());
+    // The resolved compaction read predates turn 4, so it cannot settle it.
+    await fc.asyncModelRun(() => ({ model, real }), [
+      new LedgerCommand("compact"), new LedgerCommand("resolve"), new LedgerCommand("start"),
+      new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+    ]);
+    expect(logicalKeys(real.result.current.entries)).toContain("turn-4/item-0");
+    await drain(model, real);
+    expect(logicalKeys(real.result.current.entries)).toContain("turn-4/item-0");
+  } finally { real.unmount(); clock.mockRestore(); }
 });
 
 it("renders a subsequence of the provider ledger after every command and the whole ledger at quiescence", async () => {

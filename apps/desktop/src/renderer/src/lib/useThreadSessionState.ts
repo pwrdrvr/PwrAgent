@@ -202,6 +202,11 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
+  /**
+   * The live transcript version when the read behind `response` was issued.
+   * Live items observed after it cannot be in that read.
+   */
+  liveCaptureVersion?: number;
   loadedHistory?: LoadedTranscriptHistory;
   /**
    * Counts restarts of older-page history. An older page requested before a
@@ -1641,7 +1646,10 @@ function pruneOptimisticEntries(
   response: AppServerReadThreadResponse | undefined,
   reconciledLaunchpadMessageId?: string,
   launchpadMessageCandidate?: LaunchpadMessageCandidate,
-  options: { retainInProgressReviews?: boolean } = {},
+  options: {
+    retainInProgressReviews?: boolean;
+    seenAfterCapture?: (entry: AppServerThreadActivityEntry) => boolean;
+  } = {},
 ): AppServerThreadEntry[] {
   if (!response) {
     return optimisticEntries;
@@ -1715,7 +1723,13 @@ function pruneOptimisticEntries(
       if (entry.id.startsWith("live-tools-") && entry.details.length === 0) {
         return false;
       }
+      // Both inferences below read the response as a snapshot taken after
+      // this row. A row observed after its read was issued cannot be in that
+      // read, however complete its turn now looks: turn/completed restamps
+      // the stored rows. Only an exact replay match settles such a row.
+      const seenAfterCapture = options.seenAfterCapture?.(entry) ?? false;
       if (
+        !seenAfterCapture &&
         latestResponseTurnId &&
         entry.turn?.id !== latestResponseTurnId &&
         isCompletedTurnMetadata(entry.turn) &&
@@ -1724,7 +1738,7 @@ function pruneOptimisticEntries(
         return false;
       }
 
-      if (isLiveToolRowSettledByReplay(response.replay.entries, entry)) {
+      if (!seenAfterCapture && isLiveToolRowSettledByReplay(response.replay.entries, entry)) {
         return false;
       }
 
@@ -1774,6 +1788,23 @@ const replaySettledToolTurnIds = new WeakMap<AppServerThreadEntry[], Set<string>
  * for 3) until the next turn started and the older-turn rule above dropped
  * them.
  */
+function liveNotificationItemId(notification: { params?: unknown }): string | undefined {
+  const params = notification.params as { item?: { id?: unknown }; itemId?: unknown } | undefined;
+  const id = params?.item?.id ?? params?.itemId;
+  return typeof id === "string" ? id : undefined;
+}
+
+function liveRowsSeenAfterCapture(
+  observedVersions: ReadonlyMap<string, number> | undefined,
+  captureVersion: number | undefined,
+): ((entry: AppServerThreadActivityEntry) => boolean) | undefined {
+  if (!observedVersions?.size) {
+    return undefined;
+  }
+  const capture = captureVersion ?? 0;
+  return (entry) => entry.details.some((detail) => (observedVersions.get(detail.id) ?? 0) > capture);
+}
+
 function isLiveToolRowSettledByReplay(
   entries: AppServerThreadEntry[],
   entry: AppServerThreadActivityEntry,
@@ -5340,6 +5371,9 @@ export function useThreadSessionState(params: {
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
   const liveTranscriptVersionsRef = useRef(new Map<string, number>());
+  // The live transcript version at which each item was first observed. Only
+  // items not yet covered by an adopted read are kept.
+  const liveItemVersionsRef = useRef(new Map<string, Map<string, number>>());
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const launchpadMessageCandidateRef = useRef<{
     candidate: LaunchpadMessageCandidate;
@@ -5403,6 +5437,9 @@ export function useThreadSessionState(params: {
     }
     for (const key of liveTranscriptVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveTranscriptVersionsRef.current.delete(key);
+    }
+    for (const key of liveItemVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) liveItemVersionsRef.current.delete(key);
     }
     for (const key of conditionalReadsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) conditionalReadsRef.current.delete(key);
@@ -5819,9 +5856,14 @@ export function useThreadSessionState(params: {
           const shouldAdoptHydratedTurn =
             trailingInProgressTurn !== undefined
             && shouldAdoptStartedTurn(current, trailingInProgressTurn.id);
+          const liveItemVersions = liveItemVersionsRef.current.get(targetThreadKey);
+          const seenAfterCapture = liveRowsSeenAfterCapture(liveItemVersions, liveTranscriptVersion);
           const nextRetainedLiveEntries = pruneOptimisticEntries(
             retainedLiveEntries,
             responseWithRetainedTail,
+            undefined,
+            undefined,
+            { seenAfterCapture },
           );
           const didPruneRetainedLiveEntries =
             nextRetainedLiveEntries.length !== retainedLiveEntries.length;
@@ -5892,8 +5934,9 @@ export function useThreadSessionState(params: {
               launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
                 ? launchpadMessageCandidateRef.current.candidate
                 : undefined,
-              { retainInProgressReviews: true },
+              { retainInProgressReviews: true, seenAfterCapture },
             ),
+            liveCaptureVersion: liveTranscriptVersion ?? 0,
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
@@ -6521,10 +6564,17 @@ export function useThreadSessionState(params: {
       }
 
       if (isThreadLocalTranscriptNotification(event.notification)) {
-        liveTranscriptVersionsRef.current.set(
-          targetThreadKey,
-          (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1,
-        );
+        const liveTranscriptVersion = (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
+        liveTranscriptVersionsRef.current.set(targetThreadKey, liveTranscriptVersion);
+        const itemId = liveNotificationItemId(event.notification);
+        if (itemId) {
+          let itemVersions = liveItemVersionsRef.current.get(targetThreadKey);
+          if (!itemVersions) {
+            itemVersions = new Map();
+            liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
+          }
+          if (!itemVersions.has(itemId)) itemVersions.set(itemId, liveTranscriptVersion);
+        }
       }
 
       if (event.notification.method === "thread/status/changed"
@@ -8478,12 +8528,20 @@ export function useThreadSessionState(params: {
       selectedSession?.response,
       selectedReconciledLaunchpadMessageId,
       selectedLaunchpadMessageCandidate,
+      {
+        seenAfterCapture: liveRowsSeenAfterCapture(
+          threadKey ? liveItemVersionsRef.current.get(threadKey) : undefined,
+          selectedSession?.liveCaptureVersion,
+        ),
+      },
     ),
     [
+      selectedSession?.liveCaptureVersion,
       selectedSession?.optimisticEntries,
       selectedSession?.response,
       selectedLaunchpadMessageCandidate,
       selectedReconciledLaunchpadMessageId,
+      threadKey,
     ],
   );
   const visibleOptimisticEntries = useMemo(
