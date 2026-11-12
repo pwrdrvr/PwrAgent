@@ -372,6 +372,7 @@ import {
   type RemoveCodexMcpServerResponse,
   type StartCodexMcpServerLoginRequest,
   type StartCodexMcpServerLoginResponse,
+  type StartupProviderRefreshStatus,
   type EditGroupCommitInput,
   type EditGroupCommitState,
   type LinkedDirectorySummary,
@@ -2102,10 +2103,7 @@ export class DesktopBackendRegistry {
   private startupProviderRefreshAttempted = false;
   private startupCodexRefreshFailed = false;
   private startupProviderRefreshPromise?: Promise<void>;
-  private startupProviderRefreshStatus?: Readonly<{
-    state: "checking" | "degraded" | "ready";
-    failedProviders?: number;
-  }>;
+  private startupProviderRefreshStatus?: Readonly<StartupProviderRefreshStatus>;
   /**
    * Listings that stand in an empty Codex inventory for a failed provider read.
    * Navigation reads this per listing: the startup refresh status records one
@@ -4946,9 +4944,11 @@ export class DesktopBackendRegistry {
     const enabled = [...summaries, ...acpSummaries].filter(backend => !policy || policy.enabledBackends.includes(backend.kind))
       .map(backend => !policy ? backend : { ...backend, executionModes: backend.executionModes.filter(mode => policy.executionModes.includes(mode.mode)) });
 
+    const providerRefresh = this.startupProviderRefreshStatus;
     return {
       fetchedAt: Date.now(),
       backends: request.includeUnavailable ? enabled : enabled.filter((backend) => backend.available),
+      ...(providerRefresh ? { providerRefresh } : {}),
     };
   }
 
@@ -6100,10 +6100,7 @@ export class DesktopBackendRegistry {
     };
   }
 
-  getStartupProviderRefreshStatus(): Readonly<{
-    state: "checking" | "degraded" | "ready";
-    failedProviders?: number;
-  }> | undefined {
+  getStartupProviderRefreshStatus(): Readonly<StartupProviderRefreshStatus> | undefined {
     return this.startupProviderRefreshStatus;
   }
 

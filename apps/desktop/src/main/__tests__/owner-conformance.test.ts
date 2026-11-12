@@ -253,6 +253,27 @@ async function settle(host: OwnerHost): Promise<void> {
   }
 }
 
+/**
+ * Waits until an owner has finished the provider refresh it starts at boot,
+ * then for its events to go quiet. Both hosts end that refresh with one
+ * `navigation/invalidated` + `navigation/providerThreads/refreshed` pair, and
+ * whether it lands before the viewer subscribes or inside the first step
+ * depends on load, not on either owner. `listBackends` reports the refresh.
+ * The owner records the outcome before it publishes the refreshed threads and
+ * emits, so wait for the pair too, unless it went by before the viewer's
+ * subscription took effect.
+ */
+async function awaitStartupProviderRefresh(host: OwnerHost): Promise<void> {
+  const refreshed = () => host.events.some(event => event.notification.method === "navigation/providerThreads/refreshed");
+  for (const deadline = Date.now() + 30_000; ; await delay(50)) {
+    const state = (await host.client.listBackends({})).providerRefresh?.state;
+    if (state === "ready" || state === "degraded") break;
+    if (Date.now() >= deadline) throw new Error(`${host.name} never finished its startup provider refresh (${state ?? "not started"}).`);
+  }
+  for (const deadline = Date.now() + 5_000; !refreshed() && Date.now() < deadline;) await delay(50);
+  await settle(host);
+}
+
 type Step = {
   name: string;
   method: string;
@@ -2908,6 +2929,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       }
       // The Outpost implements a subset of desktop's owner methods, never one desktop lacks.
       expect([...outpost.methods].filter((method) => !desktop.methods.has(method)), "outpost-only owner methods").toEqual([]);
+      await Promise.all([desktop, outpost].map(awaitStartupProviderRefresh));
       const desktopRecords = await runScenario(desktop, FIRST_PROMPT_SCENARIO);
       const outpostRecords = await runScenario(outpost, FIRST_PROMPT_SCENARIO);
       const measured: OwnerConformanceBaseline = {

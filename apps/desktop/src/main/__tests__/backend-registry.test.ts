@@ -13089,6 +13089,44 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("reports the startup provider refresh through listBackends at every stage and before its refreshed event", async () => {
+    for (const outcome of ["ready", "degraded"] as const) {
+      const providerRefresh = createDeferred<void>();
+      const codexClient = new MockBackendClient({ listThreadsDelay: providerRefresh.promise });
+      const registry = createDesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        discoverLocalAcpAgents: async () => [],
+        providerThreadSnapshotStore: { list: () => [], replace: vi.fn() },
+      });
+      // A viewer re-reads the owner's backends when it hears the refresh end,
+      // so the outcome must already be readable when that event goes out.
+      const atRefreshedEvent: unknown[] = [];
+      const stop = registry.onEvent((event) => {
+        if (event.notification.method === "navigation/providerThreads/refreshed") {
+          atRefreshedEvent.push(registry.listBackends({}).then((response) => response.providerRefresh));
+        }
+      });
+      const observed = async () => (await registry.listBackends({})).providerRefresh;
+      try {
+        expect(await observed()).toBeUndefined();
+        const startupRefresh = registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+        expect(await observed()).toEqual({ state: "checking" });
+        expect(await observed()).toEqual(registry.getStartupProviderRefreshStatus());
+        if (outcome === "ready") providerRefresh.resolve();
+        else providerRefresh.reject(new Error("provider unavailable"));
+        await startupRefresh;
+        const expected = outcome === "ready" ? { state: "ready" } : { state: "degraded", failedProviders: 1 };
+        expect(await observed()).toEqual(expected);
+        expect(await observed()).toEqual(registry.getStartupProviderRefreshStatus());
+        expect(await Promise.all(atRefreshedEvent)).toEqual([expected]);
+      } finally {
+        stop();
+        await registry.close();
+      }
+    }
+  });
+
   it("does not erase durable startup threads when provider refresh fails", async () => {
     const replace = vi.fn();
     const codexClient = new MockBackendClient({
