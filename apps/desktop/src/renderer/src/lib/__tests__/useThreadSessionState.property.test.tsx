@@ -20,7 +20,7 @@ type Item = {
   tool?: boolean;
   phase?: "commentary" | "final";
 };
-type Model = { ledger: Item[]; turn: number; active?: number; optimistic?: Item };
+type Model = { ledger: Item[]; turn: number; active?: number; optimistic?: Item; optimisticId?: string };
 type Read = {
   response: AppServerReadThreadResponse;
   resolve: (value: AppServerReadThreadResponse) => void;
@@ -176,7 +176,7 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
       switch (this.operation) {
         case "send": {
           model.optimistic = { turn: model.turn + 1, sequence: 0, role: "user", time: NOW };
-          real.result.current.addOptimisticUserMessage(key(model.optimistic));
+          model.optimisticId = real.result.current.addOptimisticUserMessage(key(model.optimistic));
           break;
         }
         case "start": {
@@ -186,9 +186,18 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
             const item = model.optimistic;
             model.ledger.push(item);
             model.optimistic = undefined;
-            real.emit("item/completed", { turnId: `turn-${item.turn}`, item: {
-              id: key(item), type: "userMessage", content: [{ type: "inputText", text: key(item) }],
-            } });
+            // startTurn can resolve before the owner echoes the sent message,
+            // which binds the pending copy to the turn it opened.
+            if (this.reverse && model.optimisticId) {
+              real.result.current.bindOptimisticUserMessageToTurn(model.optimisticId, `turn-${item.turn}`);
+            }
+            // The owner's echo of the sent message. A window can miss it, for
+            // example while unfocused, so clock 0 models a missed echo.
+            if (this.clock !== 0) {
+              real.emit("item/completed", { turnId: `turn-${item.turn}`, item: {
+                id: key(item), type: "userMessage", content: [{ type: "text", text: key(item) }],
+              } });
+            }
           }
           break;
         }
@@ -607,6 +616,35 @@ it("keeps a completed tool-only turn visible until a read issued after it lands"
     await drain(model, real);
     expect(logicalKeys(real.result.current.entries)).toContain("turn-4/item-0");
   } finally { real.unmount(); clock.mockRestore(); }
+});
+
+// fast-check seed -1311098151, path "2259:4:3:11:13:22:22:23:23:24:25:25:26:26:27:27:27:27".
+// The bound case binds turn 4's send before its echo, as when startTurn
+// resolves first; the unbound one never binds it.
+it.each([{ bound: false }, { bound: true }])(
+  "keeps one row for a sent message when an older page returns its turn (bound: $bound)",
+  async ({ bound }) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      await runToQuiescence(0, false, [
+        new LedgerCommand("send"), new LedgerCommand("read"), new LedgerCommand("start", 0, bound),
+        new LedgerCommand("complete"), new LedgerCommand("send"), new LedgerCommand("start"),
+        new LedgerCommand("older"), new LedgerCommand("complete"), new LedgerCommand("start"),
+      ]);
+    } finally { clock.mockRestore(); }
+  },
+);
+
+// fast-check seed -1987347380, path "1611:0:10:16:18:7:24:24:22:23:23:24:24:24:25:27:27:27:27:28".
+it("keeps a send whose echo was missed above a tool-only turn it preceded", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("send"), new LedgerCommand("read"), new LedgerCommand("start"), new LedgerCommand("complete"),
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+      new LedgerCommand("start"), new LedgerCommand("older"),
+    ]);
+  } finally { clock.mockRestore(); }
 });
 
 it("renders a subsequence of the provider ledger after every command and the whole ledger at quiescence", async () => {

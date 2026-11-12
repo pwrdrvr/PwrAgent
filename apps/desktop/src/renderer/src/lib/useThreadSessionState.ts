@@ -1029,6 +1029,72 @@ function withoutTranscriptTurns(
   };
 }
 
+// A tail row can outlive the newest pages as a row seen only on the live
+// stream, under its optimistic or live id: a sent message whose turn no newest
+// page held. When an older page returns that turn, the page row is the same
+// item under its provider id. Adopt that id in place, so the history page
+// drops its copy by id instead of rendering the item twice.
+function adoptOlderPageIdentities(
+  tail: AppServerReadThreadResponse,
+  page: AppServerReadThreadResponse,
+  providerPageTurnIds: ReadonlySet<string> | undefined,
+): AppServerReadThreadResponse {
+  const tailIds = new Set(tail.replay.entries.map((entry) => entry.id));
+  const pageIds = new Set(page.replay.entries.map((entry) => entry.id));
+  // Only rows no provider page delivered can carry a non-provider id. Rows of
+  // provider turns keep their ids: two of them may repeat the same text. A
+  // sent message is bound to its turn by the send, not by turn metadata.
+  const rowTurnId = (entry: AppServerThreadEntry) =>
+    entry.turn?.id ?? (entry.type === "message" ? readSentTurnId(entry) : undefined);
+  const candidates = tail.replay.entries.filter((entry) => {
+    if (pageIds.has(entry.id)) {
+      return false;
+    }
+    const turnId = rowTurnId(entry);
+    // A send not yet bound to its turn has no turn at all, but its
+    // optimistic id already says no provider page delivered it.
+    return turnId === undefined
+      ? entry.id.startsWith("optimistic-")
+      : !providerPageTurnIds?.has(turnId);
+  });
+  if (candidates.length === 0) {
+    return tail;
+  }
+  const matchIndex = createLogicalTranscriptMatchIndex(candidates);
+  const matched = new Set<AppServerThreadEntry>();
+  const pageEntryByTailEntry = new Map<AppServerThreadEntry, AppServerThreadEntry>();
+  for (const pageEntry of page.replay.entries) {
+    if (tailIds.has(pageEntry.id) || !pageEntry.turn?.id) {
+      continue;
+    }
+    // The send's turn, not its text, identifies a sent message: the send
+    // path may rewrite the text before the owner records it.
+    const sentEcho = pageEntry.type === "message"
+      ? candidates.find((candidate) =>
+          !matched.has(candidate)
+          && candidate.type === "message"
+          && messageEchoesSentTurn(pageEntry, candidate))
+      : undefined;
+    const tailEntry = sentEcho ?? findUniqueLogicalTranscriptRefreshMatch(pageEntry, matchIndex, matched);
+    if (tailEntry) {
+      matched.add(tailEntry);
+      pageEntryByTailEntry.set(tailEntry, pageEntry);
+    }
+  }
+  if (pageEntryByTailEntry.size === 0) {
+    return tail;
+  }
+  const entries = tail.replay.entries.map((entry) => pageEntryByTailEntry.get(entry) ?? entry);
+  return {
+    ...tail,
+    replay: {
+      ...tail.replay,
+      entries,
+      messages: transcriptMessagesForEntries(entries, page.replay.messages, tail.replay.messages),
+    },
+  };
+}
+
 function preserveRetainedTranscriptTail(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
@@ -1122,6 +1188,34 @@ function reconcileRetainedTranscriptTail(
   let pendingRetainedEntries: AppServerThreadEntry[] = [];
   let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
   const freshTurnIds = new Set(freshEntries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
+  const freshIndexByEntry = new Map(freshEntries.map((entry, index) => [entry, index] as const));
+  // Unmatched retained rows go above the next matched row, but not below a
+  // fresh row the live stream observed after them. A send whose echo was
+  // missed belongs above a tool-only turn that started after it, though the
+  // tool row was never in the retained tail to say so.
+  const attachBeforeFresh = (rows: AppServerThreadEntry[], target: AppServerThreadEntry) => {
+    const targetIndex = freshIndexByEntry.get(target) ?? 0;
+    let floor = Math.min(
+      lastMatchedFreshEntry ? (freshIndexByEntry.get(lastMatchedFreshEntry) ?? -1) + 1 : 0,
+      targetIndex,
+    );
+    for (const row of rows) {
+      const sequence = readRendererSequence(row);
+      let at = targetIndex;
+      if (sequence !== undefined) {
+        for (let index = floor; index < targetIndex; index += 1) {
+          const freshSequence = readRendererSequence(freshEntries[index]);
+          if (freshSequence !== undefined && freshSequence > sequence) {
+            at = index;
+            break;
+          }
+        }
+      }
+      floor = at;
+      const anchor = freshEntries[at]!;
+      retainedEntriesBeforeFresh.set(anchor, [...(retainedEntriesBeforeFresh.get(anchor) ?? []), row]);
+    }
+  };
 
   for (const retainedEntry of retainedEntries) {
     const freshEntry = freshEntryByRetainedEntry.get(retainedEntry);
@@ -1143,9 +1237,7 @@ function reconcileRetainedTranscriptTail(
       }
     }
     if (pendingRetainedEntries.length > 0) {
-      retainedEntriesBeforeFresh.set(freshEntry, [
-        ...(retainedEntriesBeforeFresh.get(freshEntry) ?? []), ...pendingRetainedEntries,
-      ]);
+      attachBeforeFresh(pendingRetainedEntries, freshEntry);
       pendingRetainedEntries = [];
     }
     lastMatchedFreshEntry = freshEntry;
@@ -8022,6 +8114,11 @@ export function useThreadSessionState(params: {
           };
         }
 
+        const tail = adoptOlderPageIdentities(
+          current.response,
+          reconciledOlderResponse,
+          current.providerPageTurnIds,
+        );
         if (!didAppendHistory || appendedHistorySource !== current.loadedHistory) {
           didAppendHistory = true;
           appendedHistorySource = current.loadedHistory;
@@ -8029,7 +8126,7 @@ export function useThreadSessionState(params: {
             history: current.loadedHistory,
             index: historyIndex,
             page: reconciledOlderResponse,
-            tailEntries: current.response.replay.entries,
+            tailEntries: tail.replay.entries,
           });
         }
         return {
@@ -8037,6 +8134,7 @@ export function useThreadSessionState(params: {
           lastTouchedAt: Date.now(),
           loadedHistory: appendedHistory,
           loadingMore: false,
+          response: tail,
         };
       });
     } catch (error) {
