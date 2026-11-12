@@ -98,6 +98,7 @@ import { GROK_TITLE_HELPER_SESSION_POLICY, createReplayThreadTitleService } from
 import { buildCodexClientArgs, withTokenMiserBridgeDescriptorEnv } from "./codex-thread-config";
 import { createDefaultCodexEnvironmentHydrationStore } from "./thread-launchpad-helpers";
 import { DesktopBackendRegistry } from "./backend-registry";
+import { ForgeToolBridge } from "./forge-tool-bridge";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 
@@ -1300,22 +1301,44 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         markThreadToolInvocationsNoisy: overlayStore.markThreadToolInvocationsNoisy?.bind(overlayStore),
         setThreadSpendAlertPending: overlayStore.setThreadSpendAlertPending?.bind(overlayStore),
       },
+      pullRequests: {
+        addThreadPullRequestReference: (...args) => overlayStore.addThreadPullRequestReference(...args),
+      },
     },
     providers: { codex: codexClient, claude: claudeBackend, acp: acpBackend },
     lifecycle: { get closed() { return ports.closed; } },
     emit: (event) => ports.emit(event),
   };
 
+  const handlers: RegistryDependencies["handlers"] = {
+    messagingArchiveCleaner,
+    appManagementHandler,
+    starMapHandler,
+    createScheduledThreadActionFn,
+    ...options?.handlers,
+  };
+  // Registry-owned state the forge tools read, bound once the registry connects its ports.
+  const forgeToolBridge = new ForgeToolBridge(context, handlers, {
+    get pendingServerRequests() { return ports.pendingServerRequests; },
+    get activeCodexTurnCollaborationModes() { return ports.activeCodexTurnCollaborationModes; },
+    get threadTodoHandler() { return ports.threadTodoHandler; },
+    resolveCodexModelProvidersFn: () => ports.resolveCodexModelProvidersFn(),
+    findHeadlessAutomationTurnForRequest: (...args) => ports.findHeadlessAutomationTurnForRequest(...args),
+    getActiveTurnForThread: (...args) => ports.getActiveTurnForThread(...args),
+    isTaskMonitorThread: (...args) => ports.isTaskMonitorThread(...args),
+    taskMonitorForThread: (...args) => ports.taskMonitorForThread(...args),
+    isMcpGatewayFullAccess: (...args) => ports.isMcpGatewayFullAccess(...args),
+    resolveCodexToolCallExecutionMode: (...args) => ports.resolveCodexToolCallExecutionMode(...args),
+    resolveClaudeToolCallExecutionMode: (...args) => ports.resolveClaudeToolCallExecutionMode(...args),
+    readThreadInspectionSummaryForMutation: (...args) => ports.readThreadInspectionSummaryForMutation(...args),
+    publishLocalEvent: (...args) => ports.publishLocalEvent(...args),
+  });
+
   return new DesktopBackendRegistry({
     context,
+    forgeToolBridge,
     threadMaintenanceToolScans,
-    handlers: {
-      messagingArchiveCleaner,
-      appManagementHandler,
-      starMapHandler,
-      createScheduledThreadActionFn,
-      ...options?.handlers,
-    },
+    handlers,
     ownerAdmission,
     managedMaintenanceRoots,
     readThreadArchivePolicy,

@@ -11,6 +11,7 @@ import {
   type ThreadExecutionMode,
 } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { ForgeToolBridge } from "../app-server/forge-tool-bridge";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -31,8 +32,9 @@ describe("backend forge tool dispatch", () => {
   let policy: ForgeAgentToolPolicy;
   let forgeRead: ReturnType<typeof vi.fn<ForgeReadHandler>>;
   let github: ReturnType<typeof vi.fn<ForgePrToolHandler>>;
-  let attach: ReturnType<typeof vi.fn<(args: unknown) => Promise<unknown>>>;
-  let realAttach: (args: unknown) => Promise<unknown>;
+  let attach: ReturnType<typeof vi.fn<ForgeToolBridge["handleAttachThreadPullRequestInspectionRequest"]>>;
+  let realAttach: ForgeToolBridge["handleAttachThreadPullRequestInspectionRequest"];
+  let bridge: ForgeToolBridge;
   let startCodexTurn: ReturnType<typeof vi.fn<(params: { threadId: string }) => Promise<{ threadId: string; turnId: string }>>>;
   let codexNotification: (notification: AppServerNotification) => Promise<void>;
   let lifecycleTurnSequence: number;
@@ -44,9 +46,7 @@ describe("backend forge tool dispatch", () => {
       sessions: Map<string, { config: { permissionMode: "plan" } }>;
       executionMode(threadId: string): Promise<ThreadExecutionMode>;
     };
-    gatedForgePrToolHandler: ForgePrToolHandler;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<DynamicResult>;
-    handleAttachThreadPullRequestInspectionRequest: (args: unknown) => Promise<unknown>;
   };
   const request = (tool: string, args: Record<string, unknown>, callId: string): AppServerPendingRequestNotification => ({
     method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", requestId: callId, callId, namespace: "pwragent", tool, arguments: args },
@@ -78,6 +78,7 @@ describe("backend forge tool dispatch", () => {
       overlayStore, isBootstrapMode: () => false, resolveTokenMiserEnabled: () => false,
     });
     internals = registry as unknown as typeof internals;
+    bridge = registry.forgeToolBridge;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
     internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
     policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
@@ -85,9 +86,9 @@ describe("backend forge tool dispatch", () => {
     github = vi.fn<ForgePrToolHandler>(async (operation) => operation === "create_pull_request"
       ? { created: true, url: "https://github.com/fixture/project/pull/9" }
       : { ok: true });
-    attach = vi.fn<(args: unknown) => Promise<unknown>>(async () => ({ ok: true }));
-    realAttach = internals.handleAttachThreadPullRequestInspectionRequest.bind(registry);
-    internals.handleAttachThreadPullRequestInspectionRequest = attach;
+    attach = vi.fn<ForgeToolBridge["handleAttachThreadPullRequestInspectionRequest"]>(async () => ({ ok: true }) as never);
+    realAttach = bridge.handleAttachThreadPullRequestInspectionRequest.bind(bridge);
+    bridge.handleAttachThreadPullRequestInspectionRequest = attach;
     registry.setForgeReadHandlers(forgeRead, forgeRead);
     registry.setForgePrToolHandler(github);
     registry.setForgeToolPolicyResolver(() => policy);
@@ -238,7 +239,7 @@ describe("backend forge tool dispatch", () => {
 
   it("budgets creating a pull request and attaching it through the real SQLite store", async () => {
     policy.access.pull_requests = "allow";
-    internals.handleAttachThreadPullRequestInspectionRequest = realAttach;
+    bridge.handleAttachThreadPullRequestInspectionRequest = realAttach;
 
     const { result, writes } = await measureSqliteWrites(() => internals.handleServerRequest(
       "codex", request("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true }, "call-pr-budget"),
@@ -472,7 +473,7 @@ describe("backend forge tool dispatch", () => {
         }
       });
       try {
-        await expect(internals.gatedForgePrToolHandler(operation, { ...writeArgs, event }, {
+        await expect(bridge.gatedForgePrToolHandler(operation, { ...writeArgs, event }, {
           backend, threadId: "thread-1", turnId: "turn-1", transport: backend === "codex" ? "codex_dynamic_tool" : "mcp", signal: abort.signal,
         })).rejects.toMatchObject({ code: "plan_mode", message: expect.stringContaining("Put this step in your plan") });
         expect(prompts).not.toHaveBeenCalled();
@@ -505,7 +506,7 @@ describe("backend forge tool dispatch", () => {
           await refusesWrite(operation, event);
         }
       }
-      await internals.gatedForgePrToolHandler("get_pull_request", { number: 9 }, {
+      await bridge.gatedForgePrToolHandler("get_pull_request", { number: 9 }, {
         backend, threadId: "thread-1", turnId: "turn-1", transport: "mcp",
       });
       expect(github).toHaveBeenCalledTimes(1);
@@ -539,7 +540,7 @@ describe("backend forge tool dispatch", () => {
     const writesBefore = github.mock.calls.length;
     const context = { backend: "codex", threadId: "thread-1", turnId, transport: "codex_dynamic_tool" } as const;
     const args = { title: "Fixture fix", head: "fix/fixture" };
-    const refused = () => expect(internals.gatedForgePrToolHandler("create_pull_request", args, context))
+    const refused = () => expect(bridge.gatedForgePrToolHandler("create_pull_request", args, context))
       .rejects.toMatchObject({ code: "plan_mode" });
     startCodexTurn.mockReset();
     startCodexTurn.mockImplementationOnce(async ({ threadId }) => {
@@ -569,7 +570,7 @@ describe("backend forge tool dispatch", () => {
     expect(internals.activeTurnKeys.has("codex:thread-1:pending:thread-1")).toBe(false);
     expect(registry.getActiveTurnForThread(context)?.turnId).toBe(turnId);
     expect(github).toHaveBeenCalledTimes(writesBefore);
-    await internals.gatedForgePrToolHandler("get_pull_request", { number: 9 }, context);
+    await bridge.gatedForgePrToolHandler("get_pull_request", { number: 9 }, context);
     expect(github).toHaveBeenLastCalledWith("get_pull_request", { number: 9 }, context);
     await codexNotification(terminal === "idle"
       ? { method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } }
@@ -577,7 +578,7 @@ describe("backend forge tool dispatch", () => {
     expect(internals.activeCodexTurnCollaborationModes.size).toBe(0);
     startCodexTurn.mockResolvedValueOnce({ threadId: "thread-1", turnId: nextTurnId });
     await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Implement the fix" }] });
-    await internals.gatedForgePrToolHandler("create_pull_request", args, { ...context, turnId: nextTurnId });
+    await bridge.gatedForgePrToolHandler("create_pull_request", args, { ...context, turnId: nextTurnId });
     expect(github).toHaveBeenCalledTimes(writesBefore + 2);
     await codexNotification({
       method: "turn/completed", params: { threadId: "thread-1", turnId: nextTurnId, turn: { id: nextTurnId, status: "completed", output: [] } },
@@ -646,7 +647,7 @@ describe("backend forge tool dispatch", () => {
     let saved: ThreadExecutionMode;
     let prompts: ReturnType<typeof vi.fn<() => void>>;
     const claudeCall = (operation: Parameters<ForgePrToolHandler>[0], args: Parameters<ForgePrToolHandler>[1]) =>
-      (registry as unknown as { gatedForgePrToolHandler: ForgePrToolHandler }).gatedForgePrToolHandler(
+      registry.forgeToolBridge.gatedForgePrToolHandler(
         operation, args, { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" });
     const createPr = () => claudeCall("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true });
     const merge = () => claudeCall("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) });

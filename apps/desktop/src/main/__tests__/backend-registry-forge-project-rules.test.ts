@@ -38,7 +38,6 @@ describe("forge project rules at the write gate", () => {
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     headlessAutomationTurns: Map<string, unknown>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<DynamicResult>;
-    handleAttachThreadPullRequestInspectionRequest: (args: unknown) => Promise<unknown>;
   };
   const request = (tool: string, args: Record<string, unknown>, callId: string): AppServerPendingRequestNotification => ({
     method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-1", requestId: callId, callId, namespace: "pwragent", tool, arguments: args },
@@ -78,7 +77,7 @@ describe("forge project rules at the write gate", () => {
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
     internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
-    internals.handleAttachThreadPullRequestInspectionRequest = async () => ({ ok: true });
+    registry.forgeToolBridge.handleAttachThreadPullRequestInspectionRequest = async () => ({ ok: true }) as never;
   });
 
   afterEach(async () => {

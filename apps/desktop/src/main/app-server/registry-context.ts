@@ -21,6 +21,8 @@ export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
   | "acknowledgeThreadEnvironmentFailure"
 >;
 
+export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike, "addThreadPullRequestReference">;
+
 export type RegistryToolAccountingStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadToolAccounting" | "persistThreadToolInvocationBoundary"
   | "markThreadToolInvocationsNoisy" | "setThreadSpendAlertPending"
@@ -34,6 +36,7 @@ export interface RegistryContext {
     readonly subAgents: RegistrySubAgentStore;
     readonly workspaces: RegistryWorkspaceStore;
     readonly toolAccounting: RegistryToolAccountingStore;
+    readonly pullRequests: RegistryPullRequestStore;
   };
   readonly providers: {
     readonly codex: BackendClient;

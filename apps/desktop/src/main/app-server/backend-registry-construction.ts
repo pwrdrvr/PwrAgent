@@ -1,6 +1,7 @@
 import type { ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import type { RegistryContext } from "./registry-context";
+import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -200,6 +201,7 @@ export type DesktopBackendRegistryOptions = {
 export interface RegistryDependencies {
   handlers: RegistryHandlers;
   context: RegistryContext;
+  forgeToolBridge: ForgeToolBridge;
   threadMaintenanceToolScans?: ThreadMaintenanceToolScans;
   ownerAdmission?: ThreadOwnerAdmission;
   managedMaintenanceRoots: () => Promise<string[]>;
