@@ -78,6 +78,7 @@ try {
   const state = path.join(env.PWRAGENT_HOME, "profiles/t/state/headless");
   assert.doesNotMatch(errors, /Unhandled electron-log error|can't determine the app name/);
   assert.equal(fs.statSync(path.join(state, "owner.lock")).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(state, "owner-lock.db")).mode & 0o777, 0o600);
   assert.equal(fs.statSync(path.join(state, "rpc.sock")).mode & 0o777, 0o600);
   const thread = JSON.parse(await command("start-thread", { backend: "codex", cwd: workspace, executionMode: "auto" }));
   const health = JSON.parse(await command("federation-status"));

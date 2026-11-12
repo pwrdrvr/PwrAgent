@@ -5,6 +5,8 @@ export interface OwnerRuntimePolicy {
   codexCommand?: string;
   codexHome?: string;
   exclusiveProfileOwner?: boolean;
+  /** Runtime instances the host proved gone; their profile leases are reclaimed at once. */
+  exitedRuntimeInstanceIds?: readonly string[];
   enabledBackends: readonly AppServerBackendKind[];
   approvalPolicy: "never";
   executionModes: readonly ThreadExecutionMode[];

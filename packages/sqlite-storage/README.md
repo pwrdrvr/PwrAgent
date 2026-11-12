@@ -16,7 +16,9 @@ The real Outpost daemon also opens the profile database through its
 same runtime lease manager as desktop, and holds both profile-federation and
 messaging leases before starting a provider, recovering jobs or opening a
 listener. Shutdown drains the runtime before releasing leases and closing the
-database. The existing private headless owner lock still guards crash recovery.
+database. The private headless owner lock, an OS lock the kernel releases when its
+holder exits, still guards crash recovery and names the dead owners whose
+leases a replacement may reclaim at once.
 
 Desktop's production registry admits local thread creation, turns, reviews,
 automation and helpers through an owner-core application port, and guards

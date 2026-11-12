@@ -3,6 +3,16 @@ import path from "node:path";
 import { build, type Plugin } from "esbuild";
 import { buildHeadless } from "../../../../scripts/build-headless.mjs";
 
+/** A rewrite that no longer matches its source must fail the build here, not
+ * leave the bundle unchanged to fail later with an unrelated runtime error. */
+function replaceOnce(file: string, source: string, expected: string, replacement: string): string {
+  const count = source.split(expected).length - 1;
+  if (count !== 1) {
+    throw new Error(`built-owner-fixture: expected exactly one ${JSON.stringify(expected)} in ${file}, found ${count}. Update the fixture rewrite to match the source.`);
+  }
+  return source.replace(expected, () => replacement);
+}
+
 /** Fresh process and module graph, real composition root; only UI and provider
  * boundaries are fixtures. This never launches Electron or an installed agent. */
 export async function buildOwnerFixture(directory: string, kind: "desktop" | "headless" = "headless", extraExports = "", transport: "in-process" | "stdio" = "in-process"): Promise<string> {
@@ -37,14 +47,14 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
     builder.onLoad({ filter: /headless[\\/]index\.ts$/ }, args => {
       let source = fs.readFileSync(args.path, "utf8");
       if (kind === "desktop") {
-        source = source.replace('import { createHeadlessOwnerHostServices } from "./owner-host-services";',
-          'import { createDesktopOwnerHostServices } from "../shell/owner-host-services"; import { createOutpostRuntimePolicy } from "../owner-runtime-policy";');
-        source = source.replace('createHeadlessOwnerHostServices({ runtime, profileDirectory, onQuit: () => signal("owner-request") })', "({ ...createDesktopOwnerHostServices(), runtimePolicy: createOutpostRuntimePolicy() })");
+        source = replaceOnce(args.path, source, 'import { createHeadlessOwnerHostServices } from "./owner-host-services";',
+          'import { createDesktopOwnerHostServices } from "../shell/owner-host-services";');
+        source = replaceOnce(args.path, source, 'createHeadlessOwnerHostServices({ runtime, profileDirectory, onQuit: () => signal("owner-request"), runtimePolicy })', "({ ...createDesktopOwnerHostServices(), runtimePolicy })");
       }
       return { contents: source + "\n" + extraExports, loader: "ts" };
     });
     builder.onLoad({ filter: /codex-discovery-coordinator\.ts$/ }, args => ({
-      contents: fs.readFileSync(args.path, "utf8").replace("export class CodexDiscoveryCoordinator", "class FixtureCoordinatorBase") + `
+      contents: replaceOnce(args.path, fs.readFileSync(args.path, "utf8"), "export class CodexDiscoveryCoordinator", "class FixtureCoordinatorBase") + `
         export class CodexDiscoveryCoordinator extends FixtureCoordinatorBase {
           constructor(options) { super({ ...options, discover: async params => {
             const command = params.configuredCommand ?? process.env.PWRAGENT_CODEX_COMMAND;

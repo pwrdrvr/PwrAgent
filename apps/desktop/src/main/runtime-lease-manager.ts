@@ -38,6 +38,7 @@ export class RuntimeLeaseManager extends OwnerRuntimeLeaseManager {
       now,
       store: options.store ?? getDesktopRuntimeLeaseStorage(),
       systemBootedAt: options.systemBootedAt ?? now() - os.uptime() * 1_000,
+      exitedInstanceIds: options.exitedInstanceIds,
       runtimeIdentityIsAlive: options.runtimeIdentityIsAlive
         ?? (options.processIsAlive
           ? owner => options.processIsAlive!(owner.processId)
@@ -51,9 +52,11 @@ export class RuntimeLeaseManager extends OwnerRuntimeLeaseManager {
 
 let manager: RuntimeLeaseManager | null = null;
 
-export function initializeRuntimeLeaseManager(): RuntimeLeaseManager {
+export function initializeRuntimeLeaseManager(
+  options?: Pick<RuntimeLeaseManagerOptions, "exitedInstanceIds">,
+): RuntimeLeaseManager {
   if (!manager) {
-    manager = new RuntimeLeaseManager();
+    manager = new RuntimeLeaseManager(options);
   }
   return manager;
 }

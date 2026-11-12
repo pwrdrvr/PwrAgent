@@ -370,7 +370,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   const bootMode = options.bootMode;
   const state = initializeDesktopState(bootMode);
   options.onStateInitialized?.(state);
-  const leaseManager = initializeRuntimeLeaseManager();
+  const leaseManager = initializeRuntimeLeaseManager({ exitedInstanceIds: host.runtimePolicy?.exitedRuntimeInstanceIds });
   if (host.runtimePolicy?.exclusiveProfileOwner) {
     for (const kind of ["federation", "messaging"] as const) {
       const result = leaseManager.acquire(kind, "thread_owner");
