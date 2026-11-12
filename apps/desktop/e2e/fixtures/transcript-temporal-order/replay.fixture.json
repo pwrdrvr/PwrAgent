@@ -257,7 +257,7 @@
             "details": [
               {
                 "id": "tool-search-1",
-                "kind": "search",
+                "kind": "read",
                 "label": "Searched thread-detail",
                 "path": "apps/desktop/src/renderer/src/features/thread-detail",
                 "status": "completed"
