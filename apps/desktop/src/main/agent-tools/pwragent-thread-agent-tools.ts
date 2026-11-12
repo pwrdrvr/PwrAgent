@@ -749,7 +749,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: ["default", "auto", "full-access"],
             description:
-              "Thread execution/permission mode. Active turns may queue this until the next safe boundary.",
+              "Thread execution/permission mode. Active turns may queue this until the next safe boundary. Cannot exceed the calling thread's mode.",
           },
           projectPath: {
             type: "string",

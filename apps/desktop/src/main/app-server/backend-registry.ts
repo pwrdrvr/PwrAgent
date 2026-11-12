@@ -26,6 +26,7 @@ import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse, ThreadTodoMessageTarget, ThreadWorktreeRegistration } from "@pwragent/shared";
 import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
+import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-tools/agent-access-ceiling";
 
 
 import { claudePlanTurnRefusal } from "../claude/claude-permissions";
@@ -56,6 +57,8 @@ import {
 import {
   addTokenMiserGateAccountingTotals,
   findAcpPermissionModeConfigOption,
+  isThreadExecutionMode,
+  lowerThreadExecutionMode,
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
   PWRAGENT_TOOL_NAMESPACE,
   TASK_MONITOR_TOOL_NAMESPACE,
@@ -1307,7 +1310,6 @@ import {
   dedupeThreadInspectionThreadSummaries,
   federatedThreadInspectionFailure,
   filterThreadInspectionSummaries,
-  isThreadMutationExecutionMode,
   nonEmptyStringArray,
   normalizeThreadInspectionSearchRanks,
   parseThreadInspectionQuery,
@@ -4074,6 +4076,71 @@ export class DesktopBackendRegistry {
           ? this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default"
           : "default")
     );
+  }
+
+  /**
+   * The most access an agent tool call may ask for: the calling thread's
+   * effective mode (its live Codex turn's mode first, as handoffs inherit),
+   * or a lower mode the operator has queued for it. See
+   * `checkAgentAccessRequest`.
+   */
+  async resolveAgentCallerExecutionMode(context: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId?: string;
+    overlay?: ThreadOverlayState;
+  }): Promise<ThreadExecutionMode> {
+    const overlay = context.overlay
+      ?? await this.overlayStore.getThreadOverlayState({
+        backend: context.backend,
+        threadId: context.threadId,
+      });
+    const effective = await this.resolveHandoffSourceExecutionMode({
+      backend: context.backend,
+      threadId: context.threadId,
+      turnId: context.turnId?.trim() || undefined,
+      overlay,
+    });
+    const queued = this.getQueuedExecutionModeForThread(context)?.mode;
+    return queued ? lowerThreadExecutionMode(effective, queued) : effective;
+  }
+
+  /**
+   * Throws when an agent's message would run its turn above the target
+   * thread's own mode. A per-turn override is neither persisted nor shown,
+   * so it may keep or lower the thread's access, never raise it; raising a
+   * thread's stored mode stays with mutate_thread. Runs on the thread's
+   * owner, for local and federated sends alike, as the turn is submitted:
+   * a queued turn is checked now, not when it is released. The caller's own
+   * ceiling is checked on its instance before the send. Operator,
+   * messaging-app, PwrAgent and operator-approved to-do deliveries pass.
+   */
+  private async assertAgentMessageWithinThreadAccess(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): Promise<void> {
+    if (params.messageOrigin?.kind !== "agent" || params.messageOrigin.operatorApproved) return;
+    if (
+      params.executionMode === undefined
+      && params.approvalPolicy === undefined
+      && params.sandbox === undefined
+    ) {
+      return;
+    }
+    const refusal = checkAgentAccessRequest(
+      await this.resolveAgentCallerExecutionMode({
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: this.getActiveTurnForThread(params)?.turnId,
+      }),
+      params,
+      "target",
+    );
+    if (refusal) throw new Error(refusal.message);
   }
 
   /**
@@ -13313,6 +13380,7 @@ export class DesktopBackendRegistry {
     delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    await this.assertAgentMessageWithinThreadAccess(params);
     await this.assertRequestedThreadModelAvailable(params);
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
@@ -13375,6 +13443,7 @@ export class DesktopBackendRegistry {
     title?: string;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    await this.assertAgentMessageWithinThreadAccess(params);
     // No lock check: a held entry starts nothing until it is released, and
     // the release is refused while the thread is locked. Holding is how a
     // lock pauses a delivery, such as a monitor's result, without losing it.
@@ -38251,6 +38320,26 @@ export class DesktopBackendRegistry {
     }
     const refusal = this.agentMessageProjectRefusal(request.args);
     if (refusal) return threadOrchestrationFailure(PROJECT_PAUSED_ERROR_CODE, refusal);
+    // An agent's send is checked here, on the caller's instance, before a
+    // local or federated send: a peer only sees a mode, not that an agent
+    // asked for it. The operator's to-do dispatch delivers without it.
+    if (
+      request.args.executionMode !== undefined
+      || request.args.approvalPolicy !== undefined
+      || request.args.sandbox !== undefined
+    ) {
+      const accessRefusal = checkAgentAccessRequest(
+        await this.resolveAgentCallerExecutionMode({
+          backend: request.context.backend,
+          threadId: request.context.threadId,
+          turnId: sourceTurnId,
+        }),
+        request.args,
+      );
+      if (accessRefusal) {
+        return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
+      }
+    }
     return await this.deliverMessageToThread(request);
   }
 
@@ -38565,11 +38654,14 @@ export class DesktopBackendRegistry {
         // A peer's paused project refuses through its startTurn error text.
         isProjectPausedThreadMessageRefusal(message)
           ? PROJECT_PAUSED_ERROR_CODE
-          : error instanceof PwrAgentFederatedThreadMessageError
-            ? error.code
-            : /not found/i.test(message)
-              ? "not_found"
-              : "turn_start_failed",
+          // The target's own ceiling refuses on its owner, a peer included.
+          : isAgentAccessRefusalMessage(message)
+            ? "forbidden"
+            : error instanceof PwrAgentFederatedThreadMessageError
+              ? error.code
+              : /not found/i.test(message)
+                ? "not_found"
+                : "turn_start_failed",
         message,
       );
     }
@@ -39101,6 +39193,19 @@ export class DesktopBackendRegistry {
       );
     }
 
+    // The child starts at the caller's access or less; only the operator
+    // raises it. Omitted, it inherits this mode below.
+    const callerExecutionMode = await this.resolveAgentCallerExecutionMode({
+      backend: sourceBackend,
+      threadId: sourceThreadId,
+      turnId: sourceTurnId,
+      overlay: sourceOverlay,
+    });
+    const accessRefusal = checkAgentAccessRequest(callerExecutionMode, request.args);
+    if (accessRefusal) {
+      return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
+    }
+
     const seedMode: HandoffTaskSeedMode = request.args.seedMode ?? "clean";
     const requestedGroupingMode: HandoffTaskGroupingMode =
       request.args.groupingMode ?? "subthread";
@@ -39173,14 +39278,10 @@ export class DesktopBackendRegistry {
       linkedDirectory: sourceLinkedDirectory,
       mode: "same_workspace",
     });
+    // Inheriting takes the same ceiling as asking, so a lower mode the
+    // operator queued for this thread is not passed over by omission.
     const requestedOrInheritedExecutionMode =
-      request.args.executionMode ??
-      await this.resolveHandoffSourceExecutionMode({
-        backend: sourceBackend,
-        threadId: sourceThreadId,
-        turnId: sourceTurnId,
-        overlay: sourceOverlay,
-      });
+      request.args.executionMode ?? callerExecutionMode;
     // Auto review belongs to Codex. An implicit cross-provider handoff keeps
     // approvals enabled using ACP's default mode; explicit Auto remains invalid.
     const executionMode =
@@ -43354,7 +43455,7 @@ export class DesktopBackendRegistry {
 
     let executionMode: ThreadExecutionMode | undefined;
     if (Object.hasOwn(args, "executionMode")) {
-      if (!isThreadMutationExecutionMode(args.executionMode)) {
+      if (!isThreadExecutionMode(args.executionMode)) {
         return {
           ok: false,
           error: {
@@ -43364,6 +43465,18 @@ export class DesktopBackendRegistry {
         };
       }
       executionMode = args.executionMode;
+      // The same ceiling for the caller's own thread, another local thread,
+      // and a peer's: checked here, before the owner is resolved. Without a
+      // calling thread there is no access to keep, so nothing above Default.
+      const accessRefusal = checkAgentAccessRequest(
+        context
+          ? await this.resolveAgentCallerExecutionMode(context)
+          : "default",
+        { executionMode },
+      );
+      if (accessRefusal) {
+        return threadInspectionFailure(accessRefusal.code, accessRefusal.message);
+      }
     }
 
     let projectPath: string | undefined;

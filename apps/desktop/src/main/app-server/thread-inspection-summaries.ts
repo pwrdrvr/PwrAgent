@@ -19,7 +19,6 @@ import {
   type ThreadInspectionSummary,
   type ThreadSearchFilters,
   type ThreadSearchResult,
-  type ThreadExecutionMode,
   type ThreadOverlayState,
   buildThreadIdentityKey,
   isAppServerBackendKind,
@@ -261,12 +260,6 @@ export function buildThreadMessageLinks(
       title,
     }),
   };
-}
-
-export function isThreadMutationExecutionMode(
-  value: unknown,
-): value is ThreadExecutionMode {
-  return value === "default" || value === "auto" || value === "full-access";
 }
 
 export function readThreadMutationModelSettings(
