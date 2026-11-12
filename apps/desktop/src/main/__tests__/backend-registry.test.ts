@@ -28174,16 +28174,35 @@ script = "printf setup-output"
   });
 
   it.each(["feature/metadata", "HEAD"])("initializes same-worktree thread metadata from Git branch %s", async (branch) => {
+    // This oracle needs real Git, but not the host's PATH launcher. The first
+    // /usr/bin/git launch on macOS can spend the case's budget in toolchain
+    // startup before Git runs. Use the same owned runner as the branch reader.
+    const fixtureGit = async (cwd: string, args: string[]): Promise<string> => {
+      const result = await gitExecutable.runGitCommand(cwd, args, {
+        env: gitTestEnv,
+        ownProcessTree: true,
+      });
+      return result.stdout.trim();
+    };
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
     const repo = path.join(root, "app");
     const worktree = path.join(root, "worktree", "app");
     await mkdir(repo, { recursive: true });
-    await git(repo, ["init", "-b", "main"]);
-    await git(repo, ["commit", "--allow-empty", "-m", "init"]);
+    await fixtureGit(repo, ["init", "-b", "main"]);
+    await fixtureGit(repo, ["commit", "--allow-empty", "-m", "init"]);
     // Both checkouts point at the same commit; only their symbolic HEAD differs.
-    await git(repo, branch === "HEAD"
+    await fixtureGit(repo, branch === "HEAD"
       ? ["worktree", "add", "--detach", worktree, "main"]
       : ["worktree", "add", "-b", branch, worktree, "main"]);
+    // Git owns the expected branch and commit identity, including detached
+    // HEAD. Equal commit IDs must not make the primary checkout's main win.
+    const [expectedBranch, primaryCommit, worktreeCommit] = await Promise.all([
+      fixtureGit(worktree, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      fixtureGit(repo, ["rev-parse", "HEAD"]),
+      fixtureGit(worktree, ["rev-parse", "HEAD"]),
+    ]);
+    expect(expectedBranch).toBe(branch);
+    expect(worktreeCommit).toBe(primaryCommit);
     const overlayStore = createOverlayStoreMock();
 
     const codexClient = new MockBackendClient({
@@ -28218,22 +28237,22 @@ script = "printf setup-output"
       expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
         threadId: "thread-1",
         gitInfo: {
-          branch,
+          branch: expectedBranch,
         },
       });
       expect(await registry.checkThreadBranchDrift({
         backend: "codex",
         threadId: "thread-1",
-        expectedBranch: branch,
+        expectedBranch,
       })).toMatchObject({
-        expectedBranch: branch,
-        observedBranch: branch,
+        expectedBranch,
+        observedBranch: expectedBranch,
         drifted: false,
       });
       expect(await overlayStore.getThreadOverlayState({
         backend: "codex",
         threadId: "thread-1",
-      })).toMatchObject({ observedGitBranch: branch });
+      })).toMatchObject({ observedGitBranch: expectedBranch });
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
