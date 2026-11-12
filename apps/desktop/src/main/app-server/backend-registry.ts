@@ -1,6 +1,8 @@
 import type { RegistryContext } from "./registry-context";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy, ownerSandboxForMode } from "../owner-runtime-policy";
+import { filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
+import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { buildTurnStartEvent, buildTurnStartFailureEvent, ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
@@ -15047,6 +15049,15 @@ export class DesktopBackendRegistry {
     if (!this.pdfToolMcpServer) {
       return undefined;
     }
+    // The PDF server's tools run in the owner like dynamic tools, and it has
+    // no per-call host gate, so a host that restricts agent tools offers it
+    // only when the grant covers every one of them.
+    const agentToolAllowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    if (agentToolAllowlist) {
+      const pdfTools = buildPwrAgentMessagingPdfToolRouter(this.messagingHandler).buildDynamicToolSpecs();
+      const allowed = filterAdvertisedAgentTools(agentToolAllowlist, pdfTools);
+      if (JSON.stringify(allowed) !== JSON.stringify(pdfTools)) return undefined;
+    }
     try {
       return await this.pdfToolMcpServer.registerClient({
         backend: "codex",
@@ -23681,7 +23692,7 @@ export class DesktopBackendRegistry {
     discoveryEnabled = this.resolveCodexToolDiscoveryFn(),
     eagerTools?: ReadonlySet<string>,
   ): CodexDynamicToolSpec[] {
-    return withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
+    const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
         appManagementHandler: this.appManagementHandler,
         automationInspectionHandler: this.automationInspectionHandler,
@@ -23702,6 +23713,9 @@ export class DesktopBackendRegistry {
         threadTodoHandler: this.threadTodoHandler,
       }),
     ), discoveryEnabled, eagerTools);
+    // Tool search reads this catalog too, so it must not name refused tools.
+    const allowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    return allowlist ? filterAdvertisedAgentTools(allowlist, tools) : tools;
   }
 
   private async buildSupportedCodexDynamicToolsRefresh(params: {
@@ -35425,6 +35439,30 @@ export class DesktopBackendRegistry {
     request: AppServerPendingRequestNotification,
     signal?: AbortSignal,
   ): Promise<unknown> {
+    // A host that restricts agent tools refuses every other tool here, before
+    // any route, so a call the model makes up without an advertisement fails
+    // the same way as one for a tool that was never wired.
+    const agentToolAllowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    if (
+      agentToolAllowlist
+      && request.method === "item/tool/call"
+      && !isAgentToolCallAllowed(agentToolAllowlist, {
+        namespace: request.params.namespace,
+        tool: request.params.tool,
+      })
+    ) {
+      backendRegistryLog.warn("refusing agent tool outside the host allowlist", {
+        backend,
+        namespace: typeof request.params.namespace === "string" ? request.params.namespace : null,
+        threadId: request.params.threadId,
+        tool: typeof request.params.tool === "string" ? request.params.tool : null,
+      });
+      return toDynamicToolResponse({
+        ok: false,
+        code: "forbidden",
+        message: "This Outpost does not allow this PwrAgent tool.",
+      });
+    }
     if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
       const session = this.acpBackend.getSession(backend, request.params.threadId);
       const runtimeCapabilities =
@@ -36668,6 +36706,13 @@ export class DesktopBackendRegistry {
     turnId: string;
     arguments?: unknown;
   }): Promise<string | null> {
+    const agentToolAllowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    if (agentToolAllowlist && !isAgentToolCallAllowed(agentToolAllowlist, {
+      namespace: PWRAGENT_TOOL_NAMESPACE,
+      tool: params.tool,
+    })) {
+      return "this Outpost does not allow this PwrAgent tool";
+    }
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;
