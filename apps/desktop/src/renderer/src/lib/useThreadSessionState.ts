@@ -883,7 +883,7 @@ function mergeTranscriptEntries(
   for (const entry of merged) {
     (retainedReviewIds.has(entry.id) ? retainedReviews : authoritativeEntries).push(entry);
   }
-  return reconcileRetainedTranscriptTail(authoritativeEntries, retainedReviews, new Map());
+  return reconcileRetainedTranscriptTail(authoritativeEntries, retainedReviews, new Map(), false);
 }
 
 function mergeTranscriptMessages(
@@ -1021,6 +1021,7 @@ function preserveRetainedTranscriptTail(
     response.replay.entries,
     retainedResponse.replay.entries,
     freshEntryByRetainedEntry,
+    true,
   );
 
   return {
@@ -1044,6 +1045,9 @@ function reconcileRetainedTranscriptTail(
     AppServerThreadEntry,
     AppServerThreadEntry
   >,
+  // True when the fresh entries are a newest-turns page, so every turn they
+  // omit is either older than all of them or newer than all of them.
+  freshIsNewestWindow: boolean,
 ): AppServerThreadEntry[] {
   const retainedEntriesBeforeFresh = new Map<
     AppServerThreadEntry,
@@ -1052,18 +1056,22 @@ function reconcileRetainedTranscriptTail(
   let pendingRetainedEntries: AppServerThreadEntry[] = [];
   let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
   const freshTurnIds = new Set(freshEntries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
-  // The page is a contiguous run of the newest turns. A retained row whose
-  // turn is off the page, observed ahead of a row whose turn is on it, is
-  // therefore older than the whole page.
-  const moveRetainedPrefixAboveFreshPage = (pendingRunEndsOnPage: boolean): void => {
-    if (pendingRetainedEntries.length === 0 || !freshEntries[0]) {
+  // A retained row whose turn is off the page, observed ahead of a row whose
+  // turn is on it, is older than the whole page. The caller states that a
+  // later row is on the page, or this finds one; a row with no turn proves
+  // nothing.
+  const moveRetainedPrefixAboveFreshPage = (laterRowIsOnPage: boolean): void => {
+    if (
+      pendingRetainedEntries.length === 0
+      || !freshEntries[0]
+      || (!laterRowIsOnPage && !pendingRetainedEntries.some((entry) =>
+        entry.turn?.id && freshTurnIds.has(entry.turn.id)))
+    ) {
       return;
     }
     const firstSharedTurn = pendingRetainedEntries.findIndex((entry) =>
       !entry.turn?.id || freshTurnIds.has(entry.turn.id));
-    const prefixLength = firstSharedTurn !== -1
-      ? firstSharedTurn
-      : pendingRunEndsOnPage ? pendingRetainedEntries.length : 0;
+    const prefixLength = firstSharedTurn === -1 ? pendingRetainedEntries.length : firstSharedTurn;
     if (prefixLength > 0) {
       retainedEntriesBeforeFresh.set(freshEntries[0], pendingRetainedEntries.slice(0, prefixLength));
       pendingRetainedEntries = pendingRetainedEntries.slice(prefixLength);
@@ -1093,7 +1101,7 @@ function reconcileRetainedTranscriptTail(
     }
     lastMatchedFreshEntry = freshEntry;
   }
-  if (!lastMatchedFreshEntry) {
+  if (!lastMatchedFreshEntry && freshIsNewestWindow) {
     // Without a matched row, the time merge below would place the older
     // turns. A timestamp tie with the page then put the page above them.
     // Only a later retained row on the page proves the prefix is older.

@@ -518,3 +518,25 @@ it("keeps an earlier turn ahead of two later tool-only turns read while the last
     ]);
   } finally { clock.mockRestore(); }
 });
+
+it("places a live review whose turn is off the transcript by time, not above all history", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  const model = initialModel();
+  const real = await mount(model);
+  try {
+    // The merged transcript is every loaded turn, not a newest window, so a
+    // review observed before another turn's review is not older than it all.
+    await act(async () => {
+      real.result.current.upsertLiveTranscriptEntry({
+        type: "review", id: "review-detached", review: "detached", createdAt: NOW,
+        turn: { id: "turn-review", status: "completed" },
+      });
+      real.result.current.upsertLiveTranscriptEntry({
+        type: "review", id: "review-turn-2", review: "turn 2", createdAt: NOW + 1,
+        turn: { id: "turn-2", status: "completed" },
+      });
+    });
+    const ids = Array.from(real.result.current.entries, (row) => row.id);
+    expect(ids.indexOf("review-detached"), ids.join(",")).toBeGreaterThan(ids.indexOf("turn-2/item-1"));
+  } finally { real.unmount(); clock.mockRestore(); }
+});
