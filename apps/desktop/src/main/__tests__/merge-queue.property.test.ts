@@ -308,38 +308,47 @@ describe("merge_pull_request on a branch that requires a merge queue", () => {
     }), { numRuns: 120 });
   });
 
-  it("merges directly on an Enterprise Server that has no merge queue schema", async () => {
-    const calls: string[] = [];
-    const fetcher = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      calls.push(init?.method ?? "GET");
-      if (init?.method === "PUT") return json({ merged: true, sha: "c".repeat(40) });
-      return json({ errors: [{ message: "Field 'isMergeQueueEnabled' doesn't exist on type 'PullRequest'" }] });
-    }) as unknown as typeof fetch;
-    const ci = new ForgeCiClient({ fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
-    const client = new GithubPrToolClient({ ci, tempRoots: [os.tmpdir()] });
-    const ghes = { ...ctx(), repository: { ...repo, host: "ghe.example.com" } };
-    await expect(client.execute("merge_pull_request", { number: 3631, expectedHeadSha: head }, ghes)).resolves.toMatchObject({ merged: true });
-    expect(calls).toEqual(["POST", "PUT"]);
-    // Any other refusal is not read as "no queue": the merge stops.
-    const refusing = new GithubPrToolClient({ ci: new ForgeCiClient({
-      fetch: (async () => json({ errors: [{ message: "Something went wrong" }] })) as unknown as typeof fetch,
-      githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
-    }), tempRoots: [os.tmpdir()] });
-    await expect(refusing.execute("merge_pull_request", { number: 3631, expectedHeadSha: head }, ctx())).rejects.toMatchObject({ code: "rejected" });
+  // A repository without a queue must merge exactly as it did before the
+  // queue existed, whatever happens to the queue read: an Enterprise Server
+  // without the schema, a GraphQL refusal or outage, an unreadable answer.
+  it("merges directly, as before, whenever the queue read fails", async () => {
+    const failure = fc.constantFrom(
+      () => json({ errors: [{ message: "Field 'isMergeQueueEnabled' doesn't exist on type 'PullRequest'" }] }),
+      () => json({ errors: [{ message: "Something went wrong" }] }),
+      () => json({ message: "Server Error" }, 502),
+      () => json({ data: { repository: null } }),
+    );
+    await fc.assert(fc.asyncProperty(failure, fc.constantFrom("github.com", "ghe.example.com"), async (gateResponse, host) => {
+      const calls: string[] = [];
+      const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+        calls.push(init?.method ?? "GET");
+        if (init?.method === "PUT") return json({ merged: true, sha: "c".repeat(40) });
+        return gateResponse();
+      }) as unknown as typeof fetch;
+      const client = new GithubPrToolClient({ ci: new ForgeCiClient({
+        fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+      }), tempRoots: [os.tmpdir()] });
+      const context = { ...ctx(), repository: { ...repo, host } };
+      await expect(client.execute("merge_pull_request", { number: 3631, expectedHeadSha: head, method: "squash" }, context))
+        .resolves.toMatchObject({ merged: true, method: "squash" });
+      expect(calls.filter((method) => method === "PUT")).toHaveLength(1);
+    }), { numRuns: 16 });
   });
 
-  it("never reads a github.com refusal as a server without the queue schema", async () => {
-    const calls: string[] = [];
-    const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
-      calls.push(init?.method ?? "GET");
-      if (init?.method === "PUT") return json({ merged: true, sha: "c".repeat(40) });
-      return json({ errors: [{ message: "Field 'isMergeQueueEnabled' doesn't exist on type 'PullRequest'" }] });
-    }) as unknown as typeof fetch;
-    const client = new GithubPrToolClient({ ci: new ForgeCiClient({
-      fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
-    }), tempRoots: [os.tmpdir()] });
-    await expect(client.execute("merge_pull_request", { number: 3631, expectedHeadSha: head }, ctx())).rejects.toMatchObject({ code: "rejected" });
-    expect(calls).not.toContain("PUT");
+  it("merges with gh, as before, when a to-do card's queue read fails", async () => {
+    const ran: string[][] = [];
+    const fetcher = new GithubPrFetcher({
+      graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+      discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+      runGhCommand: async (_command, args) => {
+        ran.push(args);
+        if (args[0] === "pr" && args[1] === "view") return { stdout: "https://github.com/fixture/project/pull/3631\n" };
+        if (args[0] === "api") throw Object.assign(new Error("exit 1"), { stderr: "HTTP 502: Bad Gateway" });
+        return { stdout: "" };
+      },
+    });
+    await expect(fetcher.mergePullRequest({ pullRequest: "3631", method: "squash" })).resolves.toMatchObject({ summary: "Squash-merged #3631" });
+    expect(ran.at(-1)).toEqual(["pr", "merge", "3631", "--squash"]);
   });
 
   it("fails rather than reports auto-merge on when GitHub did not turn it on", async () => {
