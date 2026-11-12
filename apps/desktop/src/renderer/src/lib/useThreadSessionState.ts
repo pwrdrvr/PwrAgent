@@ -1052,6 +1052,23 @@ function reconcileRetainedTranscriptTail(
   let pendingRetainedEntries: AppServerThreadEntry[] = [];
   let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
   const freshTurnIds = new Set(freshEntries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
+  // The page is a contiguous run of the newest turns. A retained row whose
+  // turn is off the page, observed ahead of a row whose turn is on it, is
+  // therefore older than the whole page.
+  const moveRetainedPrefixAboveFreshPage = (pendingRunEndsOnPage: boolean): void => {
+    if (pendingRetainedEntries.length === 0 || !freshEntries[0]) {
+      return;
+    }
+    const firstSharedTurn = pendingRetainedEntries.findIndex((entry) =>
+      !entry.turn?.id || freshTurnIds.has(entry.turn.id));
+    const prefixLength = firstSharedTurn !== -1
+      ? firstSharedTurn
+      : pendingRunEndsOnPage ? pendingRetainedEntries.length : 0;
+    if (prefixLength > 0) {
+      retainedEntriesBeforeFresh.set(freshEntries[0], pendingRetainedEntries.slice(0, prefixLength));
+      pendingRetainedEntries = pendingRetainedEntries.slice(prefixLength);
+    }
+  };
 
   for (const retainedEntry of retainedEntries) {
     const freshEntry = freshEntryByRetainedEntry.get(retainedEntry);
@@ -1060,17 +1077,13 @@ function reconcileRetainedTranscriptTail(
       continue;
     }
 
-    if (pendingRetainedEntries.length > 0 && !lastMatchedFreshEntry && freshEntries[0]) {
+    if (!lastMatchedFreshEntry) {
       // The newest window can advance past whole retained turns while an
       // older page is in flight. Keep that prefix above the new window,
       // rather than immediately above a later matching turn inside it.
-      const firstSharedTurn = pendingRetainedEntries.findIndex((entry) =>
-        !entry.turn?.id || freshTurnIds.has(entry.turn.id));
-      const prefixLength = firstSharedTurn === -1 ? pendingRetainedEntries.length : firstSharedTurn;
-      if (prefixLength > 0) {
-        retainedEntriesBeforeFresh.set(freshEntries[0], pendingRetainedEntries.slice(0, prefixLength));
-        pendingRetainedEntries = pendingRetainedEntries.slice(prefixLength);
-      }
+      // The matched entry is itself on the page, so the whole pending run
+      // may be that prefix.
+      moveRetainedPrefixAboveFreshPage(true);
     }
     if (pendingRetainedEntries.length > 0) {
       retainedEntriesBeforeFresh.set(freshEntry, [
@@ -1080,11 +1093,22 @@ function reconcileRetainedTranscriptTail(
     }
     lastMatchedFreshEntry = freshEntry;
   }
+  if (!lastMatchedFreshEntry) {
+    // Without a matched row, the time merge below would place the older
+    // turns. A timestamp tie with the page then put the page above them.
+    // Only a later retained row on the page proves the prefix is older.
+    moveRetainedPrefixAboveFreshPage(false);
+  }
 
   const entries: AppServerThreadEntry[] = [];
   let trailingInsertionFloor = 0;
   for (const freshEntry of freshEntries) {
     entries.push(...(retainedEntriesBeforeFresh.get(freshEntry) ?? []));
+    if (freshEntry === freshEntries[0]) {
+      // Rows proven older than the page are settled; the suffix merge must
+      // not interleave a later retained row among them.
+      trailingInsertionFloor = entries.length;
+    }
     entries.push(freshEntry);
     if (freshEntry === lastMatchedFreshEntry) {
       trailingInsertionFloor = entries.length;

@@ -463,6 +463,41 @@ it("keeps the observed ledger through arbitrary same-turn hydration permutations
   } finally { clock.mockRestore(); }
 });
 
+// Runs one generated history to quiescence. After every command the transcript
+// must be an ordered subsequence of the provider ledger; once every read has
+// landed and every older page is loaded, it must be the whole ledger.
+async function runToQuiescence(time: number, reverse: boolean, commands: Iterable<fc.AsyncCommand<Model, Real>>) {
+  const model = initialModel();
+  const real = await mount(model);
+  try {
+    assertLedger(model, real);
+    // Every run visits the live/read race; random commands then explore
+    // other interleavings. This also keeps coverage useful at 25 runs.
+    await fc.asyncModelRun(() => ({ model, real }), openingCommands(time, reverse));
+    await fc.asyncModelRun(() => ({ model, real }), commands);
+    // A send is acknowledged before starting the next provider turn.
+    if (model.optimistic) {
+      await new LedgerCommand("start").run(model, real);
+    }
+    if (model.active !== undefined) {
+      await new LedgerCommand("item", time).run(model, real);
+      await new LedgerCommand("complete").run(model, real);
+    }
+    await drain(model, real);
+    await new LedgerCommand("read").run(model, real);
+    await drain(model, real);
+    for (let page = 0; real.result.current.response?.replay.pagination.hasPreviousPage; page++) {
+      expect(page).toBeLessThan(20);
+      await new LedgerCommand("older").run(model, real);
+      await drain(model, real);
+    }
+    assertLedger(model, real);
+    expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
+  } finally {
+    real.unmount();
+  }
+}
+
 it("renders a subsequence of the provider ledger after every command and the whole ledger at quiescence", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   try {
@@ -470,36 +505,16 @@ it("renders a subsequence of the provider ledger after every command and the who
       "start", "item", "item", "redeliver", "complete", "send", "read", "resolve", "older", "compact", "synthetic",
     ), fc.integer({ min: 0, max: 2 }), fc.boolean()).map(([op, time, reverse]) => new LedgerCommand(op, time, reverse));
     await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 2 }), fc.boolean(),
-      fc.commands([command], { maxCommands: 24, size: "+2" }), async (time, reverse, commands) => {
-      const model = initialModel();
-      const real = await mount(model);
-      try {
-        assertLedger(model, real);
-        // Every run visits the live/read race; random commands then explore
-        // other interleavings. This also keeps coverage useful at 25 runs.
-        await fc.asyncModelRun(() => ({ model, real }), openingCommands(time, reverse));
-        await fc.asyncModelRun(() => ({ model, real }), commands);
-        // A send is acknowledged before starting the next provider turn.
-        if (model.optimistic) {
-          await new LedgerCommand("start").run(model, real);
-        }
-        if (model.active !== undefined) {
-          await new LedgerCommand("item", time).run(model, real);
-          await new LedgerCommand("complete").run(model, real);
-        }
-        await drain(model, real);
-        await new LedgerCommand("read").run(model, real);
-        await drain(model, real);
-        for (let page = 0; real.result.current.response?.replay.pagination.hasPreviousPage; page++) {
-          expect(page).toBeLessThan(20);
-          await new LedgerCommand("older").run(model, real);
-          await drain(model, real);
-        }
-        assertLedger(model, real);
-        expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
-      } finally {
-        real.unmount();
-      }
-    }), { numRuns: 25 });
+      fc.commands([command], { maxCommands: 24, size: "+2" }), runToQuiescence), { numRuns: 25 });
+  } finally { clock.mockRestore(); }
+});
+
+it("keeps an earlier turn ahead of two later tool-only turns read while the last is live", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
+      new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("read"),
+    ]);
   } finally { clock.mockRestore(); }
 });
