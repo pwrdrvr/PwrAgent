@@ -3,7 +3,7 @@ import type {
   AcpAgentInstance,
   AcpRejectedAgentInstance,
 } from "@pwragent/shared";
-import type { LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp";
+import type { LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp/discovery";
 import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
 import {
   discoverAcpAgentInstances,

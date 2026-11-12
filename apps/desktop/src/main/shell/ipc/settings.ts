@@ -168,7 +168,7 @@ import {
 import { isSafeExternalOpenUrl, isSlackAppDeepLink } from "../../external-url-policy";
 import { getMainLogger } from "../../log";
 import { timeStartupProfileOperation } from "../../diagnostics/startup-profile-events";
-import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
+import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
 import { AcpAgentService } from "../../acp/acp-agent-service";
 import { isBannedAcpRegistryId } from "../../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../../acp/acp-instance-discovery";

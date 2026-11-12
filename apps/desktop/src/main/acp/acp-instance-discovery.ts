@@ -9,14 +9,16 @@
 // via the shared instance resolver.
 
 import {
-  BUILT_IN_ACP_STRATEGIES,
   discoverLocalAcpAgentInstances,
-  strategyById,
-  type AcpAgentStrategy,
   type AcpPathExecutableLister,
   type DiscoveredAcpAgentGroup,
   type LocalAcpDiscoveryOptions,
-} from "@pwrdrvr/agent-acp";
+} from "@pwrdrvr/agent-acp/discovery";
+import {
+  BUILT_IN_ACP_STRATEGIES,
+  strategyById,
+  type AcpAgentStrategy,
+} from "@pwrdrvr/agent-acp/strategies";
 import { execFile as execFileCallback } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
