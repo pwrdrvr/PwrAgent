@@ -134,7 +134,10 @@ function profilesFrom(args: readonly string[]): Map<string, { filesystem: Record
   return profiles;
 }
 
-describe("Outpost Codex sandbox", () => {
+// The Outpost refuses to start outside Linux and macOS, and this model is
+// Codex's POSIX path resolution. Windows still builds the policy for the
+// desktop suites that boot the headless owner on a native root.
+describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
   it("every launch profile denies the control channel and secret from any workspace outside them", () => {
     fc.assert(fc.property(absolutePath, profileName, fc.string(), absolutePath, (root, profile, pathValue, cwd) => {
       const args = buildCodexClientArgs({ PATH: pathValue }, [], [], policyFor(root));
@@ -225,7 +228,7 @@ describe("Outpost Codex sandbox", () => {
 
   // bubblewrap aborts every command when a deny entry names a symlink, and a
   // case-insensitive volume reaches one directory by many spellings.
-  it.skipIf(process.platform === "win32")("denies one canonical root and refuses every spelling of a directory inside it", () => {
+  it("denies one canonical root and refuses every spelling of a directory inside it", () => {
     const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "outpost-sandbox-")));
     try {
       const real = path.join(base, "real");

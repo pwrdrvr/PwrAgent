@@ -1,3 +1,4 @@
+import path from "node:path";
 import fc from "fast-check";
 import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import { expect, it } from "vitest";
@@ -6,7 +7,7 @@ import { assertOwnerExecutionPolicy, createOutpostRuntimePolicy, type OwnerRunti
 const policy: OwnerRuntimePolicy = {
   enabledBackends: ["codex"], approvalPolicy: "never", executionModes: ["default", "auto"],
   sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained",
-  codexProtectedRoots: ["/srv/pwragent/profiles"],
+  codexProtectedRoots: [path.resolve("/srv/pwragent/profiles")],
 };
 it("the Outpost host enables Codex only, independent of inherited provider environment", () => {
   fc.assert(fc.property(fc.constantFrom("claude", "acp:gemini", "codex,claude"), value => {
