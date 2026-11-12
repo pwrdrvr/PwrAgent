@@ -3690,13 +3690,13 @@ Implementation notes remain in a readable bubble.`;
 
     fireEvent.click(screen.getByRole("button", { name: "Previous work" }));
 
+    // A one-call activity in a group is a row of the group, not a header.
     await waitFor(() => {
       expect(
-        screen.getByRole("button", {
-          name: "Read `apps/desktop/src/renderer/App.tsx`",
-        }),
+        screen.getByText("Read `apps/desktop/src/renderer/App.tsx`"),
       ).toBeVisible();
     });
+    expect(screen.queryByText(absolutePath, { exact: false })).toBeNull();
   });
 
   it("anchors a freshly loaded transcript to the newest entry", () => {

@@ -10,12 +10,13 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
-import { TranscriptActivity } from "./TranscriptActivity";
+import { TranscriptActivity, TranscriptActivityRun } from "./TranscriptActivity";
 import { TranscriptImageTile, TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 import { formatElapsedMs } from "./transcript-render-items";
 import { collectThreadImageGallery } from "./thread-image-gallery";
+import { buildWorkPhaseDisplayItems } from "./work-phase-display-items";
 
 type TranscriptWorkPhaseGroupProps = {
   activeStartedAt?: number;
@@ -49,6 +50,10 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
   const shouldRenderContent = !props.collapsible || props.expanded;
   const images = useMemo(
     () => shouldRenderContent ? [] : collectThreadImageGallery(props.entries),
+    [props.entries, shouldRenderContent],
+  );
+  const displayItems = useMemo(
+    () => shouldRenderContent ? buildWorkPhaseDisplayItems(props.entries) : [],
     [props.entries, shouldRenderContent],
   );
 
@@ -85,12 +90,23 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
       )}
       {shouldRenderContent ? (
         <div id={hiddenRegionId} className="transcript-work-phase-group__content">
-          {props.entries.map((entry) =>
+          {displayItems.map((item) => item.type === "activityRun" ? (
+            <TranscriptActivityRun
+              key={item.id}
+              applications={props.applications}
+              directoryPaths={props.directoryPaths}
+              desktopApi={props.desktopApi}
+              entries={item.entries}
+              fileViewerContext={props.fileViewerContext}
+              skills={props.skills}
+              threadLinkSource={props.threadLinkSource}
+            />
+          ) : (
             renderEntry({
               applications: props.applications,
               directoryPaths: props.directoryPaths,
               desktopApi: props.desktopApi,
-              entry,
+              entry: item.entry,
               expandedActivityIds: props.expandedActivityIds,
               fileViewerContext: props.fileViewerContext,
               onActivityExpandedChange: props.onActivityExpandedChange,
@@ -101,7 +117,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               subAgents: props.subAgents,
               threadLinkSource: props.threadLinkSource,
             })
-          )}
+          ))}
         </div>
       ) : images.length > 0 ? (
         <div className="transcript-work-phase-group__images" role="group" aria-label="Images from previous work">

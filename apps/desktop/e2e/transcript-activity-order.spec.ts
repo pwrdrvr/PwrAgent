@@ -41,13 +41,13 @@ test("tool activity stays in protocol order when transcript work is collapsed", 
     expect(secondActivityIndex).toBeGreaterThan(interimIndex);
     expect(finalIndex).toBeGreaterThan(secondActivityIndex);
 
+    // A one-call activity is a row of its group, with no header to open.
     await app.window.getByRole("button", { name: /Worked for 1m 10s/ }).first().click();
-    await app.window.getByRole("button", { name: /Explored 1 file/ }).first().click();
     await expect(app.window.getByText("Read a.ts (1.2s)")).toBeVisible();
     await expect(app.window.getByText("Read b.ts (2.5s)")).toBeHidden();
+    await expect(app.window.getByRole("button", { name: /Explored 1 file/ })).toHaveCount(0);
 
     await app.window.getByRole("button", { name: /More work/ }).click();
-    await app.window.getByRole("button", { name: /Explored 1 file/ }).last().click();
     await expect(app.window.getByText("Read b.ts (2.5s)")).toBeVisible();
   } finally {
     await app.close();

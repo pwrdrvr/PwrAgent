@@ -3,6 +3,7 @@ import { useTranscriptActivityDetails } from "../../lib/useTranscriptActivityDet
 import { transcriptImageUnavailableReason } from "@pwragent/shared";
 import type {
   AppServerSkillSummary,
+  AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
   DesktopApplicationsSnapshot,
@@ -45,7 +46,6 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
   const isExpanded = props.expanded ?? uncontrolledExpanded;
   const details = useTranscriptActivityDetails({ entry: props.entry, expanded: isExpanded, desktopApi: props.desktopApi, instanceId: props.threadLinkSource?.instanceId });
   const entry = details.entry;
-  const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
   const hasDetails = Boolean(entry.detailsRef)
     || (entry.details.length > 0 && !hasOnlyRepeatedLabel(entry));
   const directDetail = singleDirectDetail(entry);
@@ -223,118 +223,172 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
         </div>
       ) : hasDetails && isExpanded ? (
         <ul id={detailsId} className="transcript-activity__details">
-          {entry.details.map((detail) => {
-            const nestedId = `${detailsId}-${detail.id}`;
-            const hasNestedDetails = Boolean(detail.fileDiff || detail.command);
-            const isDetailExpanded = expandedDetailIds.has(detail.id);
-            const markdown = detail.markdown?.trim();
-            const displayLabel = formatActivityText(
-              detail.label,
-              [detail],
-              props.directoryPaths,
-            );
-            const markdownContent =
-              markdown && !hasNestedDetails ? (
-                <ThreadMarkdown
-                  applications={props.applications}
-                  className="transcript-activity__detail-markdown"
-                  desktopApi={props.desktopApi}
-                  fileViewerContext={props.fileViewerContext}
-                  skills={props.skills}
-                  text={markdown}
-                  threadLinkSource={props.threadLinkSource}
-                  variant="summary"
-                />
-              ) : null;
-            const label = detail.url && !hasNestedDetails ? (
-              <a
-                className="transcript-activity__detail-label"
-                href={detail.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {displayLabel}
-              </a>
-            ) : (
-              <span className="transcript-activity__detail-label">{displayLabel}</span>
-            );
-
-            return (
-              <li key={detail.id} className="transcript-activity__detail">
-                {markdownContent && !detail.fileDiff && !detail.status ? (
-                  markdownContent
-                ) : (
-                  <div className="transcript-activity__detail-row">
-                    {hasNestedDetails ? (
-                      <button
-                        type="button"
-                        className="transcript-activity__detail-toggle"
-                        aria-controls={nestedId}
-                        aria-expanded={isDetailExpanded}
-                        onClick={() => {
-                          setExpandedDetailIds((current) => {
-                            const next = new Set(current);
-                            if (next.has(detail.id)) {
-                              next.delete(detail.id);
-                            } else {
-                              next.add(detail.id);
-                            }
-                            return next;
-                          });
-                        }}
-                      >
-                        <span className="transcript-activity__chevron" aria-hidden="true" />
-                        {label}
-                      </button>
-                    ) : (
-                      markdownContent ?? label
-                    )}
-                    {detail.fileDiff ? (
-                      <span className="transcript-activity__detail-stats" aria-label="File diff summary">
-                        <span className="transcript-activity__detail-stat transcript-activity__detail-stat--removed">
-                          -{detail.fileDiff.removals.toLocaleString()}
-                        </span>
-                        <span className="transcript-activity__detail-stat transcript-activity__detail-stat--added">
-                          +{detail.fileDiff.additions.toLocaleString()}
-                        </span>
-                      </span>
-                    ) : null}
-                    {detail.status ? (
-                      <span
-                        className={[
-                          "transcript-activity__detail-status",
-                          `transcript-activity__detail-status--${detail.status}`
-                        ].join(" ")}
-                      >
-                        {formatActivityDetailStatus(detail.status)}
-                      </span>
-                    ) : null}
-                  </div>
-                )}
-                {hasNestedDetails && isDetailExpanded ? (
-                  <div id={nestedId} className="transcript-activity__detail-body">
-                    {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
-                    {detail.command ? (
-                      <TranscriptCommandOutput
-                        applications={props.applications}
-                        desktopApi={props.desktopApi}
-                        detail={detail}
-                        directoryPaths={props.directoryPaths}
-                        fileViewerContext={props.fileViewerContext}
-                        skills={props.skills}
-                        threadLinkSource={props.threadLinkSource}
-                      />
-                    ) : null}
-                  </div>
-                ) : null}
-              </li>
-            );
-          })}
+          {entry.details.map((detail) => (
+            <TranscriptActivityDetailRow
+              key={detail.id}
+              applications={props.applications}
+              desktopApi={props.desktopApi}
+              detail={detail}
+              directoryPaths={props.directoryPaths}
+              fileViewerContext={props.fileViewerContext}
+              skills={props.skills}
+              threadLinkSource={props.threadLinkSource}
+            />
+          ))}
         </ul>
       ) : null}
     </aside>
   );
 });
+
+type TranscriptActivityRunProps = Omit<
+  TranscriptActivityProps,
+  "entry" | "expanded" | "onExpandedChange" | "onOpenImage"
+> & {
+  entries: AppServerThreadActivityEntry[];
+};
+
+/**
+ * A run of one-call activities inside a work group, drawn as the rows of one
+ * batched activity. A model that makes one tool call per step otherwise
+ * stacks a collapsible header per call, each hiding a single row, under a
+ * group toggle that already folds them all.
+ */
+export const TranscriptActivityRun = memo(function TranscriptActivityRun(
+  props: TranscriptActivityRunProps,
+) {
+  return (
+    <aside className="transcript-activity transcript-activity--run">
+      <ul className="transcript-activity__details">
+        {props.entries.flatMap((entry) =>
+          entry.details.map((detail) => (
+            <TranscriptActivityDetailRow
+              key={`${entry.id}:${detail.id}`}
+              applications={props.applications}
+              desktopApi={props.desktopApi}
+              detail={detail}
+              directoryPaths={props.directoryPaths}
+              fileViewerContext={props.fileViewerContext}
+              skills={props.skills}
+              threadLinkSource={props.threadLinkSource}
+            />
+          ))
+        )}
+      </ul>
+    </aside>
+  );
+});
+
+TranscriptActivityRun.displayName = "TranscriptActivityRun";
+
+function TranscriptActivityDetailRow(props: {
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: TranscriptActivityProps["desktopApi"];
+  detail: AppServerThreadActivityDetail;
+  directoryPaths?: string[];
+  fileViewerContext?: MarkdownFileViewerContext;
+  skills?: AppServerSkillSummary[];
+  threadLinkSource?: ThreadLinkSource;
+}) {
+  const nestedId = useId();
+  const [isDetailExpanded, setDetailExpanded] = useState(false);
+  const detail = props.detail;
+  const hasNestedDetails = Boolean(detail.fileDiff || detail.command);
+  const markdown = detail.markdown?.trim();
+  const displayLabel = formatActivityText(
+    detail.label,
+    [detail],
+    props.directoryPaths,
+  );
+  const markdownContent =
+    markdown && !hasNestedDetails ? (
+      <ThreadMarkdown
+        applications={props.applications}
+        className="transcript-activity__detail-markdown"
+        desktopApi={props.desktopApi}
+        fileViewerContext={props.fileViewerContext}
+        skills={props.skills}
+        text={markdown}
+        threadLinkSource={props.threadLinkSource}
+        variant="summary"
+      />
+    ) : null;
+  const label = detail.url && !hasNestedDetails ? (
+    <a
+      className="transcript-activity__detail-label"
+      href={detail.url}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {displayLabel}
+    </a>
+  ) : (
+    <span className="transcript-activity__detail-label">{displayLabel}</span>
+  );
+
+  return (
+    <li className="transcript-activity__detail">
+      {markdownContent && !detail.fileDiff && !detail.status ? (
+        markdownContent
+      ) : (
+        <div className="transcript-activity__detail-row">
+          {hasNestedDetails ? (
+            <button
+              type="button"
+              className="transcript-activity__detail-toggle"
+              aria-controls={nestedId}
+              aria-expanded={isDetailExpanded}
+              onClick={() => {
+                setDetailExpanded((current) => !current);
+              }}
+            >
+              <span className="transcript-activity__chevron" aria-hidden="true" />
+              {label}
+            </button>
+          ) : (
+            markdownContent ?? label
+          )}
+          {detail.fileDiff ? (
+            <span className="transcript-activity__detail-stats" aria-label="File diff summary">
+              <span className="transcript-activity__detail-stat transcript-activity__detail-stat--removed">
+                -{detail.fileDiff.removals.toLocaleString()}
+              </span>
+              <span className="transcript-activity__detail-stat transcript-activity__detail-stat--added">
+                +{detail.fileDiff.additions.toLocaleString()}
+              </span>
+            </span>
+          ) : null}
+          {detail.status ? (
+            <span
+              className={[
+                "transcript-activity__detail-status",
+                `transcript-activity__detail-status--${detail.status}`
+              ].join(" ")}
+            >
+              {formatActivityDetailStatus(detail.status)}
+            </span>
+          ) : null}
+        </div>
+      )}
+      {hasNestedDetails && isDetailExpanded ? (
+        <div id={nestedId} className="transcript-activity__detail-body">
+          {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
+          {detail.command ? (
+            <TranscriptCommandOutput
+              applications={props.applications}
+              desktopApi={props.desktopApi}
+              detail={detail}
+              directoryPaths={props.directoryPaths}
+              fileViewerContext={props.fileViewerContext}
+              skills={props.skills}
+              threadLinkSource={props.threadLinkSource}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
 
 function hasOnlyRepeatedLabel(entry: AppServerThreadActivityEntry): boolean {
   const detail = entry.details.length === 1 ? entry.details[0] : undefined;

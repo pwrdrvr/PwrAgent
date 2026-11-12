@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fc from "fast-check";
 import { installTestOwnerHost } from "../shell/testing/owner-host-fixture";
 import os from "node:os";
 import path from "node:path";
@@ -6637,8 +6638,123 @@ describe("CodexAppServerClient", () => {
     expect(replay.entries).toMatchObject([
       {
         type: "activity",
-        summary: "Explored 1 file",
+        // A search over a directory is a search, not a file.
+        summary: "Explored 1 search",
         details: [{ label: 'Searched "grok"' }],
+      },
+    ]);
+
+    await client.close();
+  });
+
+  // Rule: an activity group ends only at a message that renders. Models that
+  // answer each tool call with an empty assistant message used to split their
+  // exploration into one single-row activity per call.
+  it("splits tool activities only at assistant messages that render", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    type Step = "tool" | "emptyMessage" | "message";
+    const step = fc.constantFrom<Step>("tool", "tool", "emptyMessage", "message");
+    let run = 0;
+
+    await fc.assert(
+      fc.asyncProperty(fc.array(step, { maxLength: 12 }), async (steps) => {
+        run += 1;
+        const threadId = `thread-invisible-boundaries-${run}`;
+        const items = steps.map((kind, index) =>
+          kind === "tool"
+            ? {
+                type: "commandExecution",
+                id: `cmd-${index}`,
+                status: "completed",
+                command: `cat f${index}.ts`,
+                commandActions: [{ type: "read", path: `/repo/f${index}.ts` }],
+              }
+            : {
+                type: "agentMessage",
+                id: `msg-${index}`,
+                phase: "commentary",
+                text: kind === "message" ? `Note ${index}` : "",
+              });
+        MockTransport.readThreadResultByThreadId.set(threadId, {
+          thread: { turns: [{ id: "turn-1", status: "completed", items }] },
+        });
+
+        // The model: tool calls between two rendered messages are one group.
+        const expectedGroups: string[][] = [];
+        let current: string[] = [];
+        steps.forEach((kind, index) => {
+          if (kind === "tool") {
+            current.push(`cmd-${index}-1`);
+          } else if (kind === "message") {
+            if (current.length > 0) expectedGroups.push(current);
+            current = [];
+          }
+        });
+        if (current.length > 0) expectedGroups.push(current);
+
+        const client = new CodexAppServerClient({
+          command: "codex",
+          directoryResolver: async () => [],
+        });
+        try {
+          const replay = await client.readThread({ threadId });
+          const groups = replay.entries.flatMap((entry) =>
+            entry.type === "activity"
+              ? [entry.details.map((detail) => detail.id)]
+              : []);
+          expect(groups).toEqual(expectedGroups);
+          expect(replay.entries.filter((entry) => entry.type === "message"))
+            .toHaveLength(steps.filter((kind) => kind === "message").length);
+        } finally {
+          MockTransport.readThreadResultByThreadId.delete(threadId);
+          await client.close();
+        }
+      }),
+      { numRuns: 40 },
+    );
+  });
+
+  it("counts distinct files read, searches and listings in an exploration summary", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    MockTransport.readThreadResultByThreadId.set("thread-exploration-nouns", {
+      thread: {
+        turns: [
+          {
+            id: "turn-explore",
+            status: "completed",
+            items: [
+              {
+                type: "commandExecution",
+                id: "cmd-explore",
+                status: "completed",
+                command: "/bin/zsh -lc 'explore'",
+                commandActions: [
+                  { type: "read", path: "/repo/src/a.ts" },
+                  { type: "search", query: "spawnTerminalPty", path: "shell" },
+                  { type: "read", path: "/repo/src/a.ts" },
+                  { type: "read", path: "/repo/src/b.ts" },
+                  { type: "listFiles", path: "/repo/src" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-exploration-nouns",
+    });
+
+    expect(replay.entries).toMatchObject([
+      {
+        type: "activity",
+        summary: "Explored 2 files, 1 search, 1 list",
       },
     ]);
 
