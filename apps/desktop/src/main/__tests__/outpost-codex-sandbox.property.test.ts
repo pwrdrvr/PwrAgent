@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import {
   OUTPOST_CODEX_CREDENTIAL_ENTRIES,
+  OUTPOST_CODEX_PRIVATE_ENTRIES,
+  OUTPOST_CODEX_PRIVATE_GLOBS,
   OUTPOST_MANAGED_CONFIG_KEYS,
   OUTPOST_PERMISSION_PROFILE_IDS,
   createOutpostCodexMessageRewriter,
@@ -17,19 +19,23 @@ import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 // Agent commands run as the Outpost's own Unix user, so only the sandbox can
 // keep them out of `<root>/profiles/<profile>/state`, which holds
 // `headless/rpc.sock`, `headless-secret.key` and the state database it
-// unlocks, and out of the Codex home's `auth.json`, `.credentials.json` and
-// `secrets/`. The rest of the Codex home (skills, plugin skills, memories,
-// AGENTS.md) stays readable: the model reads skills there by path.
+// unlocks, and out of the Codex home's credentials, configuration,
+// transcripts, logs and SQLite state. The rest of the Codex home (skills,
+// plugin skills, memories, generated images, shell snapshots, the
+// `apply_patch` helper) stays readable: the model and every command use it.
+// No agent command may write the Codex home, from any workspace the rewriter
+// lets through: a planted skill, hook or AGENTS.md would steer Codex itself.
 //
 // `effectiveAccess` models how Codex resolves a profile's filesystem entries:
 // the most specific matching entry wins; at equal specificity deny beats write
-// beats read. Codex 0.159.2 and 0.164.0 behaved this way in a disposable
+// beats read. Codex expands a glob entry to the files it matches when each
+// command starts, so a match is as specific as the file itself. Codex 0.159.2 and 0.164.0 behaved this way in a disposable
 // Outpost container, including a workspace root inside a denied directory
 // regaining write access, which is why the rewriter refuses one.
 
-type Toml = string | boolean | { [key: string]: Toml };
+type Toml = string | boolean | number | { [key: string]: Toml };
 
-/** Parses the inline-table subset the Outpost emits: basic strings, booleans, tables. */
+/** Parses the inline-table subset the Outpost emits: basic strings, bare keys, integers, booleans, tables. */
 function parseToml(source: string): Toml {
   let index = 0;
   const skip = () => { while (source[index] === " ") index++; };
@@ -43,13 +49,16 @@ function parseToml(source: string): Toml {
     if (source[index] === "\"") return string();
     if (source.startsWith("true", index)) { index += 4; return true; }
     if (source.startsWith("false", index)) { index += 5; return false; }
+    const integer = /^\d+/.exec(source.slice(index));
+    if (integer) { index += integer[0].length; return Number(integer[0]); }
     if (source[index] !== "{") throw new Error(`Unexpected TOML at ${index}: ${source}`);
     index++;
     const table: Record<string, Toml> = {};
     skip();
     while (source[index] !== "}") {
       skip();
-      const key = string();
+      const bare = /^[A-Za-z0-9_-]+/.exec(source.slice(index));
+      const key = bare ? (index += bare[0].length, bare[0]) : string();
       skip();
       if (source[index++] !== "=") throw new Error(`Expected = in ${source}`);
       table[key] = value();
@@ -84,15 +93,26 @@ function within(target: string, root: string): boolean {
 }
 
 function effectiveAccess(filesystem: Record<string, Toml>, target: string, workspaceRoots: readonly string[]): Access | undefined {
+  // Uncapped, Linux expands a glob into every subdirectory, including ones
+  // the profile masks, which aborts every command.
+  if (Object.keys(filesystem).some((key) => key.includes("*"))) expect(filesystem.glob_scan_max_depth).toBe(1);
   const entries: Array<[string, Access]> = [];
   for (const [key, access] of Object.entries(filesystem)) {
+    if (key === "glob_scan_max_depth") {
+      // `*` below never crosses a slash, which is what a depth of 1 gives.
+      expect(access).toBe(1);
+      continue;
+    }
     if (key === ":workspace_roots") {
       for (const [sub, nested] of Object.entries(access as Record<string, Toml>)) {
         for (const root of workspaceRoots) entries.push([path.posix.join(root, sub), nested as Access]);
       }
     } else if (key === ":root") entries.push(["/", access as Access]);
     else if (key.startsWith(":")) throw new Error(`Unmodelled special path ${key}`);
-    else entries.push([key, access as Access]);
+    else if (key.includes("*")) {
+      const pattern = new RegExp(`^${key.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*")}$`);
+      if (pattern.test(target)) entries.push([target, access as Access]);
+    } else entries.push([key, access as Access]);
   }
   let best: [number, Access] | undefined;
   for (const [root, access] of entries) {
@@ -132,16 +152,51 @@ function credentialPaths(codexHome: string): string[] {
   ];
 }
 
-// What the model reads in the Codex home by path. Denying these breaks skills.
+// What only Codex itself reads: configuration, transcripts, logs and its
+// SQLite state, including a versioned file a later Codex release adds.
+function privatePaths(codexHome: string): string[] {
+  return [
+    path.posix.join(codexHome, "config.toml"),
+    path.posix.join(codexHome, "sessions", "2026", "11", "12", "rollout-x.jsonl"),
+    path.posix.join(codexHome, "archived_sessions", "rollout-y.jsonl"),
+    path.posix.join(codexHome, "history.jsonl"),
+    path.posix.join(codexHome, "session_index.jsonl"),
+    path.posix.join(codexHome, "log", "codex-tui.log"),
+    path.posix.join(codexHome, "state_5.sqlite"),
+    path.posix.join(codexHome, "logs_2.sqlite-wal"),
+    path.posix.join(codexHome, "state_9.sqlite-shm"),
+  ];
+}
+
+// What the model and every command read in the Codex home. Denying these
+// breaks skills, image output, the shell environment or apply_patch.
 function modelReadablePaths(codexHome: string): string[] {
   return [
     path.posix.join(codexHome, "skills", "demo", "SKILL.md"),
     path.posix.join(codexHome, "skills", ".system", "demo", "SKILL.md"),
+    path.posix.join(codexHome, "skills", "demo", "fixtures", "data.sqlite"),
     path.posix.join(codexHome, "plugins", "cache", "p", "skills", "s", "SKILL.md"),
     path.posix.join(codexHome, "memories", "notes.md"),
     path.posix.join(codexHome, "AGENTS.md"),
+    path.posix.join(codexHome, "generated_images", "image.png"),
+    path.posix.join(codexHome, "shell_snapshots", "snapshot.sh"),
+    path.posix.join(codexHome, "tmp", "arg0", "codex-arg0x", "apply_patch"),
   ];
 }
+
+// Codex home paths a command could use to steer Codex itself if it could
+// write them. `name` varies so a workspace inside the home covers one.
+function steeringPaths(codexHome: string, name: string): string[] {
+  return [
+    path.posix.join(codexHome, "skills", name, "SKILL.md"),
+    path.posix.join(codexHome, "hooks.json"),
+    path.posix.join(codexHome, "AGENTS.md"),
+    path.posix.join(codexHome, "rules", "default.rules"),
+  ];
+}
+
+// The Codex home's own path is the stem of glob entries.
+const hasGlobSyntax = (value: string) => /[*?[\]]/.test(value);
 
 const DEFAULT_CODEX_HOME = "/srv/codex-home";
 const policyFor = (root: string, codexHome = DEFAULT_CODEX_HOME) =>
@@ -169,9 +224,16 @@ function profilesFrom(args: readonly string[]): Map<string, { filesystem: Record
 // Codex's POSIX path resolution. Windows still builds the policy for the
 // desktop suites that boot the headless owner on a native root.
 describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
-  it("every launch profile denies the control channel, its secret and the Codex credentials from any workspace outside them", () => {
-    fc.assert(fc.property(absolutePath, profileName, fc.string(), absolutePath, absolutePath, (root, profile, pathValue, cwd, codexHome) => {
-      fc.pre(!within(codexHome, root) && !within(root, codexHome));
+  it("every launch profile denies the Outpost state and Codex private files, and keeps the Codex home read-only, from any workspace the rewriter admits", () => {
+    const workspaceFor = (codexHome: string) => fc.oneof(
+      absolutePath,
+      // A workspace above the Codex home must not make it writable.
+      fc.constant("/"), fc.constant(path.posix.dirname(codexHome)),
+    );
+    const scenario = fc.tuple(absolutePath, absolutePath).chain(([root, codexHome]) =>
+      fc.tuple(fc.constant(root), fc.constant(codexHome), workspaceFor(codexHome)));
+    fc.assert(fc.property(scenario, profileName, fc.string(), ([root, codexHome, cwd], profile, pathValue) => {
+      fc.pre(!within(codexHome, root) && !within(root, codexHome) && !hasGlobSyntax(codexHome));
       const policy = policyFor(root, codexHome);
       const args = buildCodexClientArgs({ PATH: pathValue }, [], [], policy);
       const values = launchOverrides(args);
@@ -180,16 +242,17 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
         expect(key === "sandbox_mode" || key.startsWith("sandbox_workspace_write")).toBe(false);
       }
       expect(Object.values(OUTPOST_PERMISSION_PROFILE_IDS)).toContain(JSON.parse(values.get("default_permissions")!));
-      // A workspace inside a protected path is refused before Codex sees it.
-      fc.pre(!withinAny(cwd, policy.codexProtectedRoots));
+      // A workspace inside a protected path or the Codex home is refused
+      // before Codex sees it.
+      fc.pre(!withinAny(cwd, [...policy.codexProtectedRoots, ...policy.codexReadOnlyRoots]));
       const home = canonicalCodexHome(root, codexHome);
       for (const [id, { filesystem, network }] of profilesFrom(args)) {
         expect(network, id).toBe(false);
-        for (const target of [...controlPaths(canonicalRoot(root), profile), ...credentialPaths(home)]) {
+        for (const target of [...controlPaths(canonicalRoot(root), profile), ...credentialPaths(home), ...privatePaths(home)]) {
           expect(effectiveAccess(filesystem, target, [cwd]), `${id} ${target}`).toBe("deny");
         }
-        for (const target of modelReadablePaths(home)) {
-          expect(effectiveAccess(filesystem, target, [cwd]), `${id} ${target}`).not.toBe("deny");
+        for (const target of [...modelReadablePaths(home), ...steeringPaths(home, profile)]) {
+          expect(effectiveAccess(filesystem, target, [cwd]), `${id} ${target}`).toBe("read");
         }
       }
     }));
@@ -211,18 +274,22 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
       absolutePath, profileName,
       fc.constantFrom("thread/start", "thread/resume", "thread/fork", "turn/start", "thread/settings/update", "command/exec", "thread/read"),
       sandboxValue, sandboxValue, profileValue, profileValue,
-      fc.option(fc.oneof(absolutePath, fc.constantFrom("inside", "inside-codex-secrets")), { nil: undefined }),
+      fc.option(fc.oneof(absolutePath, fc.constantFrom("inside", "inside-codex-secrets", "inside-codex-home", "codex-home", "above-codex-home")), { nil: undefined }),
       fc.option(fc.dictionary(configKey, fc.constant(true)), { nil: undefined }),
       (root, profile, method, sandbox, sandboxPolicy, permissions, permissionProfile, cwdChoice, config) => {
         const protectedProfiles = path.posix.join(root, "profiles");
         const cwd = cwdChoice === "inside" ? path.posix.join(protectedProfiles, profile, "state")
           : cwdChoice === "inside-codex-secrets" ? path.posix.join(DEFAULT_CODEX_HOME, "secrets", profile)
+          : cwdChoice === "inside-codex-home" ? path.posix.join(DEFAULT_CODEX_HOME, "skills", profile)
+          : cwdChoice === "codex-home" ? DEFAULT_CODEX_HOME
+          : cwdChoice === "above-codex-home" ? path.posix.dirname(DEFAULT_CODEX_HOME)
           : cwdChoice;
         const params: Record<string, unknown> = { threadId: "t" };
         for (const [key, value] of Object.entries({ sandbox, sandboxPolicy, permissions, permissionProfile, cwd, config })) {
           if (value !== undefined) params[key] = value;
         }
-        const rewrite = createOutpostCodexMessageRewriter(policyFor(root).codexProtectedRoots);
+        const policy = policyFor(root);
+        const rewrite = createOutpostCodexMessageRewriter(policy.codexProtectedRoots, { readOnlyRoots: policy.codexReadOnlyRoots });
         let sent: { params: Record<string, unknown> };
         try { sent = JSON.parse(rewrite(JSON.stringify({ id: 1, method, params }))); }
         catch { return; } // A refused request never reaches Codex.
@@ -246,12 +313,15 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
 
         // The profile Codex will apply, from where Codex will run.
         const workspace = typeof out.cwd === "string" ? out.cwd : "/";
-        expect(withinAny(workspace, policyFor(root).codexProtectedRoots)).toBe(false);
-        const { filesystem } = profilesFrom(buildCodexClientArgs({}, [], [], policyFor(root))).get(
+        expect(withinAny(workspace, [...policy.codexProtectedRoots, ...policy.codexReadOnlyRoots])).toBe(false);
+        const { filesystem } = profilesFrom(buildCodexClientArgs({}, [], [], policy)).get(
           typeof selected === "string" ? selected : OUTPOST_PERMISSION_PROFILE_IDS["read-only"])!;
         const home = canonicalCodexHome(root, DEFAULT_CODEX_HOME);
-        for (const target of [...controlPaths(canonicalRoot(root), profile), ...credentialPaths(home)]) {
+        for (const target of [...controlPaths(canonicalRoot(root), profile), ...credentialPaths(home), ...privatePaths(home)]) {
           expect(effectiveAccess(filesystem, target, [workspace]), target).toBe("deny");
+        }
+        for (const target of [...modelReadablePaths(home), ...steeringPaths(home, profile)]) {
+          expect(effectiveAccess(filesystem, target, [workspace]), target).toBe("read");
         }
       },
     ));
@@ -313,11 +383,28 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
       expect(policy.codexProtectedRoots).toEqual([
         path.join(base, "state", "profiles"),
         path.join(mounted, "auth"),
-        ...OUTPOST_CODEX_CREDENTIAL_ENTRIES.slice(1).map((entry) => path.join(home, entry)),
+        ...[...OUTPOST_CODEX_CREDENTIAL_ENTRIES.slice(1), ...OUTPOST_CODEX_PRIVATE_ENTRIES, ...OUTPOST_CODEX_PRIVATE_GLOBS]
+          .map((entry) => path.join(home, entry)),
       ]);
+      expect(policy.codexReadOnlyRoots).toEqual([home]);
       for (const entry of policy.codexProtectedRoots) {
         expect(fs.realpathSync.native(path.dirname(entry)), entry).toBe(path.dirname(entry));
       }
     } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+
+  // Codex reads an entry with *, ? or [ as a glob, so such a character in a
+  // denied path, or in the Codex home that stems the glob entries, would deny
+  // the wrong files or none. Braces and backslashes are literal to Codex, and
+  // a backslash separates every Windows path.
+  it("refuses glob syntax in the PwrAgent root or Codex home and accepts other punctuation", () => {
+    fc.assert(fc.property(absolutePath, fc.constantFrom("*", "?", "[", "]"), (base, syntax) => {
+      expect(() => policyFor("/srv/pwragent", `${base}/co${syntax}dex`)).toThrow(/must not contain/);
+      expect(() => policyFor(`${base}/pwr${syntax}agent`)).toThrow(/must not contain/);
+    }));
+    fc.assert(fc.property(absolutePath, fc.constantFrom("{", "}", "\\", ",", "="), (base, punctuation) => {
+      fc.pre(!hasGlobSyntax(base));
+      expect(() => policyFor(`${base}/pwr${punctuation}agent`, `${base}/co${punctuation}dex`)).not.toThrow();
+    }));
   });
 });

@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 const cli = fileURLToPath(new URL("../bin/pwragent.js", import.meta.url));
 
 // Rule: `serve` probes the sandbox Codex will apply, with the permission
-// profile that denies both the Outpost's state and the Codex credentials,
+// profile that denies the Outpost's state and the Codex home's credentials
+// and private files, and keeps the Codex home read-only,
 // against a protected file that exists while the owner lock is held. The fake
 // Codex records that request and refuses it, so startup stops at the
 // preflight and no owner starts.
@@ -39,7 +40,10 @@ process.exit(1);
   assert.equal(protectedFileExists, true);
   assert.equal(argv[argv.indexOf("-P") + 1], "pwragent-outpost-workspace-write");
   const filesystem = argv.find((value) => value.startsWith("permissions.pwragent-outpost-workspace-write.filesystem="));
-  for (const denied of [path.join(root, "profiles"), path.join(home, "auth.json"), path.join(home, ".credentials.json"), path.join(home, "secrets")]) {
-    assert.ok(filesystem.includes(`${JSON.stringify(denied)}="deny"`), `${denied} in ${filesystem}`);
+  const denied = ["auth.json", ".credentials.json", "secrets", "config.toml", "sessions", "archived_sessions", "history.jsonl", "log", "*.sqlite*"]
+    .map((entry) => path.join(home, entry));
+  for (const entry of [path.join(root, "profiles"), ...denied]) {
+    assert.ok(filesystem.includes(`${JSON.stringify(entry)}="deny"`), `${entry} in ${filesystem}`);
   }
+  assert.ok(filesystem.includes(`${JSON.stringify(home)}="read"`), `read-only Codex home in ${filesystem}`);
 });
