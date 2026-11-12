@@ -196,7 +196,7 @@ function steeringPaths(codexHome: string, name: string): string[] {
 }
 
 // The Codex home's own path is the stem of glob entries.
-const hasGlobSyntax = (value: string) => /[*?[\]{}\\]/.test(value);
+const hasGlobSyntax = (value: string) => /[*?[\]]/.test(value);
 
 const DEFAULT_CODEX_HOME = "/srv/codex-home";
 const policyFor = (root: string, codexHome = DEFAULT_CODEX_HOME) =>
@@ -393,11 +393,18 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
     } finally { fs.rmSync(base, { recursive: true, force: true }); }
   });
 
-  // The Codex home is the stem of glob deny entries, so syntax in its path
-  // would deny the wrong files or none.
-  it("refuses a Codex home whose path contains glob syntax", () => {
-    fc.assert(fc.property(absolutePath, fc.constantFrom("*", "?", "[", "]", "{", "}", "\\"), (base, syntax) => {
-      expect(() => policyFor("/srv/pwragent", `${base}/co${syntax}dex`)).toThrow(/glob|must not contain/);
+  // Codex reads an entry with *, ? or [ as a glob, so such a character in a
+  // denied path, or in the Codex home that stems the glob entries, would deny
+  // the wrong files or none. Braces and backslashes are literal to Codex, and
+  // a backslash separates every Windows path.
+  it("refuses glob syntax in the PwrAgent root or Codex home and accepts other punctuation", () => {
+    fc.assert(fc.property(absolutePath, fc.constantFrom("*", "?", "[", "]"), (base, syntax) => {
+      expect(() => policyFor("/srv/pwragent", `${base}/co${syntax}dex`)).toThrow(/must not contain/);
+      expect(() => policyFor(`${base}/pwr${syntax}agent`)).toThrow(/must not contain/);
+    }));
+    fc.assert(fc.property(absolutePath, fc.constantFrom("{", "}", "\\", ",", "="), (base, punctuation) => {
+      fc.pre(!hasGlobSyntax(base));
+      expect(() => policyFor(`${base}/pwr${punctuation}agent`, `${base}/co${punctuation}dex`)).not.toThrow();
     }));
   });
 });

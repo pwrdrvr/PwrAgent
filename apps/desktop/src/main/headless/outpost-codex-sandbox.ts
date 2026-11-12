@@ -104,8 +104,15 @@ export const OUTPOST_CODEX_PRIVATE_GLOBS = ["*.sqlite*"] as const;
  */
 export const OUTPOST_GLOB_SCAN_MAX_DEPTH = 1;
 
-// Characters a Codex filesystem glob reads as syntax.
-const GLOB_SYNTAX = /[*?[\]{}\\]/;
+// Codex reads an entry containing *, ? or [ as a glob, and ] closes a class.
+const GLOB_SYNTAX = /[*?[\]]/;
+
+// A literal entry with glob syntax would become a pattern that need not match
+// its own path, and the Codex home is the stem of glob entries.
+function assertNoGlobSyntax(value: string, name: string): string {
+  if (GLOB_SYNTAX.test(value)) throw new Error(`The Outpost's ${name} path must not contain *, ?, [ or ].`);
+  return value;
+}
 
 /**
  * The paths agent commands must not read. Every PwrAgent profile lives under
@@ -125,7 +132,7 @@ const GLOB_SYNTAX = /[*?[\]{}\\]/;
  */
 export function resolveOutpostProtectedRoots(pwragentRoot: string, codexHome?: string): string[] {
   if (!path.isAbsolute(pwragentRoot)) throw new Error("The Outpost requires an absolute PWRAGENT_HOME.");
-  const roots = [canonicalOutpostPath(path.join(pwragentRoot, "profiles"))];
+  const roots = [assertNoGlobSyntax(canonicalOutpostPath(path.join(pwragentRoot, "profiles")), "PWRAGENT_HOME")];
   if (codexHome !== undefined) {
     const home = resolveOutpostCodexHome(codexHome);
     for (const entry of [...OUTPOST_CODEX_CREDENTIAL_ENTRIES, ...OUTPOST_CODEX_PRIVATE_ENTRIES]) {
@@ -147,9 +154,7 @@ export function resolveOutpostProtectedRoots(pwragentRoot: string, codexHome?: s
  */
 export function resolveOutpostCodexHome(codexHome: string): string {
   if (!path.isAbsolute(codexHome)) throw new Error("The Outpost requires an absolute Codex home.");
-  const home = canonicalOutpostPath(codexHome);
-  if (GLOB_SYNTAX.test(home)) throw new Error("The Outpost's Codex home path must not contain *, ?, [, ], {, } or \\.");
-  return home;
+  return assertNoGlobSyntax(canonicalOutpostPath(codexHome), "Codex home");
 }
 
 export interface OutpostCodexSandboxOptions {
