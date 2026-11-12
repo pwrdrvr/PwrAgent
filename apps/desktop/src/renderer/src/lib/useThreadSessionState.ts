@@ -508,6 +508,7 @@ function mergeTranscriptEntries(
   let greatestCreatedAt: number | undefined;
   let greatestCreatedAtByTurn = new Map<string, number>();
   let greatestSequenceByTurn = new Map<string, number>();
+  let greatestSequence: number | undefined;
   let terminalTurnIds = new Set<string>();
   // Only the turn of the last row can take another row at the end. An unbound
   // user message is an ordering boundary too, even before its provider id lands.
@@ -519,6 +520,7 @@ function mergeTranscriptEntries(
     greatestCreatedAt = undefined;
     greatestCreatedAtByTurn = new Map();
     greatestSequenceByTurn = new Map();
+    greatestSequence = undefined;
     terminalTurnIds = new Set();
     mergedTurnIds = new Set();
     lastMergedTurnId = undefined;
@@ -552,6 +554,9 @@ function mergeTranscriptEntries(
         terminalTurnIds.add(entry.turn.id);
       }
       const sequence = readRendererSequence(entry);
+      if (typeof sequence === "number") {
+        greatestSequence = Math.max(greatestSequence ?? sequence, sequence);
+      }
       if (entry.turn?.id && typeof sequence === "number") {
         greatestSequenceByTurn.set(
           entry.turn.id,
@@ -594,6 +599,9 @@ function mergeTranscriptEntries(
       terminalTurnIds.add(entry.turn.id);
     }
     const sequence = readRendererSequence(entry);
+    if (typeof sequence === "number") {
+      greatestSequence = Math.max(greatestSequence ?? sequence, sequence);
+    }
     if (entry.turn?.id && typeof sequence === "number") {
       greatestSequenceByTurn.set(
         entry.turn.id,
@@ -630,6 +638,9 @@ function mergeTranscriptEntries(
         terminalTurnIds.add(optimisticEntry.turn.id);
       }
       const replacementSequence = readRendererSequence(optimisticEntry);
+      if (typeof replacementSequence === "number") {
+        greatestSequence = Math.max(greatestSequence ?? replacementSequence, replacementSequence);
+      }
       if (
         optimisticEntry.turn?.id
         && typeof replacementSequence === "number"
@@ -689,14 +700,13 @@ function mergeTranscriptEntries(
       optimisticTurnId
       && !mergedTurnIds.has(optimisticTurnId)
       && typeof optimisticSequence === "number"
+      // Nothing newer is merged in the common case: a live row of the
+      // turn in progress. Skip the scan then.
+      && (greatestSequence ?? -Infinity) > optimisticSequence
       && !isTokenUsageActivityEntry(optimisticEntry)
       && !isMonitorUsageActivityEntry(optimisticEntry)
-        ? merged.findIndex((entry) => {
-            const entrySequence = readRendererSequence(entry);
-            return entry.turn?.id !== optimisticTurnId
-              && typeof entrySequence === "number"
-              && entrySequence > optimisticSequence;
-          })
+        ? merged.findIndex((entry) =>
+            (readRendererSequence(entry) ?? -Infinity) > optimisticSequence)
         : -1;
     if (laterObservedIndex !== -1) {
       merged.splice(laterObservedIndex, 0, optimisticEntry);
@@ -3995,7 +4005,18 @@ function mergeCompletedUserMessageWithOptimisticEntry(
   if (!optimisticEntry) {
     return message;
   }
+  // The acknowledged send keeps its place in the observed live order.
+  const merged = mergeCompletedUserMessagePresentation(message, optimisticEntry);
+  const sequence = readRendererSequence(optimisticEntry);
+  return typeof sequence === "number" && readRendererSequence(merged) === undefined
+    ? withRendererSequence(merged, sequence)
+    : merged;
+}
 
+function mergeCompletedUserMessagePresentation(
+  message: AppServerThreadMessageEntry,
+  optimisticEntry: AppServerThreadMessageEntry,
+): AppServerThreadMessageEntry {
   const preservePresentation = shouldPreserveOptimisticMessagePresentation(
     message,
     optimisticEntry,
