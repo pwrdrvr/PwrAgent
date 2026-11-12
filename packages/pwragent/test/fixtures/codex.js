@@ -26,6 +26,16 @@ assert.equal(launch.shift(), "app-server");
 while (launch[0] === "-c") { launch.shift(); const override = launch.shift(); if (override.startsWith("approval_policy=")) assert.equal(override, 'approval_policy="never"'); }
 assert.ok(launch.length === 0 || JSON.stringify(launch) === JSON.stringify(["--listen", "stdio://"]));
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
+// An Outpost selects its own permission profiles; desktop sends a legacy sandbox.
+const outpostProfiles = { "read-only": "pwragent-outpost-read-only", "workspace-write": "pwragent-outpost-workspace-write" };
+const assertSandbox = (params, field, allowed) => {
+  if (params.permissions !== undefined) {
+    assert.equal(params[field], undefined);
+    assert.ok(allowed.map((mode) => outpostProfiles[mode]).includes(params.permissions));
+    return false;
+  }
+  return true;
+};
 let initialized = false;
 let acknowledged = false;
 let active;
@@ -94,7 +104,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({});
     } else if (method === "thread/start" && params.ephemeral === true && helperControl()) {
       assert.equal(params.approvalPolicy, "never");
-      assert.equal(params.sandbox, "read-only");
+      if (assertSandbox(params, "sandbox", ["read-only"])) assert.equal(params.sandbox, "read-only");
       assert.equal(params.config.project_doc_max_bytes, 0);
       assert.equal(params.config.features.hooks, false);
       assert.deepEqual(params.config.notify, []);
@@ -112,7 +122,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         supportedReasoningEfforts: [], defaultReasoningEffort: "medium", inputModalities: ["text"], additionalSpeedTiers: [], serviceTiers: [] }], nextCursor: null });
     } else if (method === "thread/start" || method === "thread/resume") {
       if (params.approvalPolicy !== undefined) assert.equal(params.approvalPolicy, "never");
-      if (params.sandbox !== undefined) assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
+      if (assertSandbox(params, "sandbox", ["read-only", "workspace-write"]) && params.sandbox !== undefined) {
+        assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
+      }
       if (params.cwd !== undefined) assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const threadId = params.threadId || `thread-${Date.now()}-${++sequence}`;
       if (method === "thread/resume") {
@@ -127,7 +139,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       reply({ thread: threads[threadId] });
     } else if (method === "turn/start") {
       assert.equal(params.approvalPolicy, "never");
-      assert.equal(params.sandboxPolicy.networkAccess, false);
+      if (assertSandbox(params, "sandboxPolicy", ["read-only", "workspace-write"])) assert.equal(params.sandboxPolicy.networkAccess, false);
       assert.ok(params.cwd === process.cwd() || params.cwd.startsWith(process.cwd() + path.sep));
       const prompt = params.input[0].text;
       // Codex reports the first user message as the thread's preview.

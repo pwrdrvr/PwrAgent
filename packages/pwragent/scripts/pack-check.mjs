@@ -32,7 +32,7 @@ try {
   const tarball = path.join(temporary, packed.filename);
   const files = new Set(packed.files.map((file) => file.path));
   for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js", "dist/index.js", "dist/runtime.json",
-    "dist/storage-maintenance-worker.js", "dist/claude-session-reader-worker.js", "dist/mcp-connection-bridge.js", "dist/token-miser-hook.js",
+    "dist/storage-maintenance-worker.js", "dist/claude-session-reader-worker.js", "dist/mcp-connection-bridge.js", "dist/token-miser-hook.js", "dist/outpost-codex-sandbox.js",
     "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c", "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }

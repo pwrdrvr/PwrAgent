@@ -1,4 +1,6 @@
 import type { AppServerBackendKind, FederationPeerRole, ThreadExecutionMode } from "@pwragent/shared";
+import { resolveOutpostProtectedRoots } from "./headless/outpost-codex-sandbox";
+import { resolvePwragentRoot } from "./profile";
 
 /** Host configuration; desktop leaves this unset. */
 export interface OwnerRuntimePolicy {
@@ -10,6 +12,8 @@ export interface OwnerRuntimePolicy {
   executionModes: readonly ThreadExecutionMode[];
   sandboxByMode: Readonly<Partial<Record<ThreadExecutionMode, "read-only" | "workspace-write">>>;
   federationEgressRole: FederationPeerRole;
+  /** Paths every Codex permission profile denies; see outpost-codex-sandbox.ts. */
+  codexProtectedRoots: readonly string[];
 }
 export interface OwnerExecutionRequest {
   backend: AppServerBackendKind;
@@ -27,5 +31,6 @@ export function assertOwnerExecutionPolicy(policy: OwnerRuntimePolicy | undefine
 
 export function createOutpostRuntimePolicy(env: NodeJS.ProcessEnv = process.env): OwnerRuntimePolicy {
   return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, codexHome: env.PWRAGENT_CODEX_HOME, enabledBackends: ["codex"], approvalPolicy: "never",
-    executionModes: ["default", "auto"], sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained" };
+    executionModes: ["default", "auto"], sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained",
+    codexProtectedRoots: resolveOutpostProtectedRoots(resolvePwragentRoot({ env })) };
 }

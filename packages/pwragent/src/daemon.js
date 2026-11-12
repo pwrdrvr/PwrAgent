@@ -77,7 +77,10 @@ export async function serve({ directory, workspace, home, command, profile }) {
     process.env.PWRAGENT_CODEX_COMMAND = command;
     process.on("SIGTERM", signalStop);
     process.on("SIGINT", signalStop);
-    const sandbox = await checkCodexSandbox({ command, home, workspace, signal: preflight.signal });
+    const policy = await import("../dist/outpost-codex-sandbox.js");
+    const sandbox = await checkCodexSandbox({ command, home, workspace, signal: preflight.signal,
+      permissionOverrides: policy.buildOutpostCodexPermissionOverrides(policy.resolveOutpostProtectedRoots(process.env.PWRAGENT_HOME)),
+      profile: policy.OUTPOST_PERMISSION_PROFILE_IDS["workspace-write"], protectedFile: lockPath });
     if (shutdown) return await done;
     if (sandbox.status !== "ready") throw new Error(sandbox.error);
     owner = await import("../dist/index.js");

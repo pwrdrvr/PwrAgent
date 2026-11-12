@@ -80,8 +80,19 @@ The shared federation containment guard covers direct and backpressured sends;
 a contained Outpost cannot initiate remote owner mutations or file transfers.
 Refusals are audited without recording request payloads.
 
-The Codex sandbox preflight runs before the owner starts. A failed check aborts
-startup with its diagnostic. It never retries with broader permissions.
+Model commands run as the Outpost's own user, so file modes cannot keep them
+out of its profile directory, which holds `state/headless/rpc.sock`, the
+`headless-secret.key` file and the state database. Each Outpost Codex sandbox
+is a named permission profile (`pwragent-outpost-read-only`,
+`pwragent-outpost-workspace-write`) that denies `$PWRAGENT_HOME/profiles`.
+The Outpost refuses any other sandbox or profile, a thread working directory
+inside that directory, and Codex config overrides of `permissions`,
+`default_permissions`, `sandbox_mode` or `sandbox_workspace_write`.
+
+The Codex sandbox preflight runs before the owner starts. It applies the
+workspace-write profile and fails unless the sandbox prevents a read of the
+owner lock. A failed check aborts startup with its diagnostic. It never retries
+with broader permissions.
 
 ### Linux containers
 

@@ -95,7 +95,11 @@ try {
   await command("list");
   const launch = fs.readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse).find(row => row.startup)?.startup;
   assert.ok(launch.includes('approval_policy="never"'));
-  assert.ok(launch.includes("sandbox_workspace_write.network_access=false"));
+  assert.ok(launch.includes('default_permissions="pwragent-outpost-read-only"'));
+  assert.ok(launch.includes("permissions.pwragent-outpost-workspace-write.network.enabled=false"));
+  assert.ok(!launch.some((value) => value.startsWith("sandbox_mode=")));
+  const preflight = fs.readFileSync(path.join(data, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse).find(row => row.sandbox)?.sandbox;
+  assert.deepEqual(preflight.slice(preflight.indexOf("-P"), preflight.indexOf("-P") + 2), ["-P", "pwragent-outpost-workspace-write"]);
 } finally {
   daemon.kill("SIGTERM");
   assert.equal((await done)[0], 0, errors);
