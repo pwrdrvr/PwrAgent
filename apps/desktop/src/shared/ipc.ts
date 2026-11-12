@@ -792,6 +792,11 @@ export type WindowOpenMainViewRequest = "automations" | "search";
  */
 export const WINDOW_SHOW_THREAD_CHANNEL = "window:show-thread";
 /**
+ * Renderer → main: show one of this machine's threads in the main window,
+ * from a window that serves another instance.
+ */
+export const WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL = "window:open-thread-in-main";
+/**
  * Main → renderer push: fired when the user invokes the app's
  * "Settings…" menu item (PwrAgent → Settings… on macOS, File → ...
  * on Linux/Windows), or a menu item that lands on one section. The

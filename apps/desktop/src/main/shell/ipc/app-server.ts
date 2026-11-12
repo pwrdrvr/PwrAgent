@@ -12,7 +12,11 @@ import {
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../../shared/ipc";
-import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../../shared/ipc";
+import {
+  USAGE_ACTIVITY_OPEN_THREAD_CHANNEL,
+  USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL,
+  WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL,
+} from "../../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
 import { showUsageActivityWindow } from "../usage-activity-window";
 import { primaryMainWindowWebContents } from "../primary-main-window";
@@ -394,6 +398,19 @@ export function registerAppServerIpcHandlers(): void {
     if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") return;
     const target = primaryMainWindowWebContents();
     if (target) requestShowThread(request, { preferWebContents: target });
+  });
+  ipcMain.removeHandler(WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL);
+  // Only this machine's threads: a peer's thread opens in its own viewer.
+  ipcMain.handle(WINDOW_OPEN_THREAD_IN_MAIN_CHANNEL, (_event, request: WindowShowThreadRequest) => {
+    if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") return;
+    const target = primaryMainWindowWebContents();
+    if (target) {
+      requestShowThread({
+        backend: request.backend,
+        threadId: request.threadId,
+        ...(typeof request.messageId === "string" ? { messageId: request.messageId } : {}),
+      }, { preferWebContents: target });
+    }
   });
   ipcMain.removeHandler(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL);
   ipcMain.handle(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
