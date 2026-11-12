@@ -408,3 +408,79 @@ describe.skipIf(process.platform === "win32")("Outpost Codex sandbox", () => {
     }));
   });
 });
+
+// Rule: an operator who allows Full Access changes only the requests that ask
+// for it. Every other request is rewritten exactly as before, and a request
+// keeps a legacy full-access sandbox only when every selection in it asked for
+// full access. The operator's network choice reaches both profiles.
+describe.skipIf(process.platform === "win32")("Outpost Codex sandbox with operator settings", () => {
+  const isFull = (value: unknown) =>
+    value === "danger-full-access" || (value as { type?: string } | null)?.type === "dangerFullAccess";
+
+  it("Full Access widens only the requests that ask for it", () => {
+    const sandboxValue = fc.constantFrom<unknown>(
+      undefined, null, "read-only", "workspace-write", "danger-full-access", "external",
+      { type: "readOnly", networkAccess: false },
+      { type: "workspaceWrite", writableRoots: ["/"], networkAccess: true },
+      { type: "dangerFullAccess" }, { type: "externalSandbox", networkAccess: "enabled" },
+    );
+    const profileValue = fc.constantFrom<unknown>(undefined, null, "other", ...Object.values(OUTPOST_PERMISSION_PROFILE_IDS));
+    fc.assert(fc.property(
+      absolutePath, profileName,
+      fc.constantFrom("thread/start", "thread/resume", "thread/fork", "turn/start", "command/exec", "thread/read"),
+      sandboxValue, sandboxValue, profileValue, profileValue, fc.boolean(),
+      (root, profile, method, sandbox, sandboxPolicy, permissions, permissionProfile, cwdInside) => {
+        const params: Record<string, unknown> = { threadId: "t" };
+        const cwd = cwdInside ? path.posix.join(root, "profiles", profile, "state") : undefined;
+        for (const [key, value] of Object.entries({ sandbox, sandboxPolicy, permissions, permissionProfile, cwd })) {
+          if (value !== undefined) params[key] = value;
+        }
+        const raw = JSON.stringify({ id: 1, method, params });
+        const roots = policyFor(root).codexProtectedRoots;
+        const attempt = (rewrite: (message: string) => string) => {
+          try { return { sent: rewrite(raw) }; } catch { return { refused: true as const }; }
+        };
+        const locked = attempt(createOutpostCodexMessageRewriter(roots));
+        const open = attempt(createOutpostCodexMessageRewriter(roots, { allowFullAccess: true }));
+        const asksFull = [sandbox, sandboxPolicy].some(isFull);
+
+        if (!asksFull) {
+          expect(open).toEqual(locked);
+          return;
+        }
+        // A working directory inside the Outpost's state stays refused.
+        if (cwdInside) expect(open).toHaveProperty("refused", true);
+        if ("refused" in open) return;
+        const out = (JSON.parse(open.sent) as { params: Record<string, unknown> }).params;
+        const selections = [sandbox, sandboxPolicy].filter((value) => value !== undefined && value !== null);
+        const profiles = [permissions, permissionProfile].filter((value) => value !== undefined && value !== null);
+        if (selections.every(isFull) && profiles.length === 0) {
+          // Every selection asked for full access: the request goes as sent,
+          // less a null legacy selection, which the rewriter always drops.
+          const expected = Object.fromEntries(Object.entries(params)
+            .filter(([key, value]) => !(["sandbox", "sandboxPolicy"].includes(key) && value === null)));
+          expect(out).toEqual(expected);
+        } else {
+          // A narrower selection wins, through an Outpost profile.
+          expect(out).not.toHaveProperty("sandbox");
+          expect(out).not.toHaveProperty("sandboxPolicy");
+          const selected = out[method === "command/exec" ? "permissionProfile" : "permissions"];
+          expect(Object.values(OUTPOST_PERMISSION_PROFILE_IDS)).toContain(selected);
+        }
+      },
+    ));
+  });
+
+  it("the operator's agent network setting reaches both profiles and nothing else", () => {
+    fc.assert(fc.property(absolutePath, fc.constantFrom(undefined, "off", "on"), (root, network) => {
+      const policy = createOutpostRuntimePolicy({ PWRAGENT_HOME: root, PWRAGENT_OUTPOST_AGENT_NETWORK: network });
+      const args = buildCodexClientArgs({}, [], [], policy);
+      for (const [id, { network: enabled }] of profilesFrom(args)) {
+        expect(enabled, id).toBe(network === "on");
+      }
+      for (const key of launchOverrides(args).keys()) {
+        expect(key === "sandbox_mode" || key.startsWith("sandbox_workspace_write")).toBe(false);
+      }
+    }));
+  });
+});

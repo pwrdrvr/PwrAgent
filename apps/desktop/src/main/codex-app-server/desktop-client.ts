@@ -37,7 +37,10 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
         // a legacy sandbox would let model commands read the Outpost's state,
         // and an unlisted agent tool runs in the owner, outside that sandbox.
         if (runtimePolicy) {
-          const sandbox = createOutpostCodexMessageRewriter(runtimePolicy.codexProtectedRoots, { readOnlyRoots: runtimePolicy.codexReadOnlyRoots });
+          const sandbox = createOutpostCodexMessageRewriter(runtimePolicy.codexProtectedRoots, {
+            readOnlyRoots: runtimePolicy.codexReadOnlyRoots,
+            allowFullAccess: runtimePolicy.executionModes.includes("full-access"),
+          });
           const agentTools = createOutpostAgentToolMessageRewriter(runtimePolicy.agentToolAllowlist);
           const send = transport.send.bind(transport);
           transport.send = (message) => send(agentTools(sandbox(message)));

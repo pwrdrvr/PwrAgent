@@ -99,6 +99,7 @@ import { buildCodexClientArgs, withTokenMiserBridgeDescriptorEnv } from "./codex
 import { createDefaultCodexEnvironmentHydrationStore } from "./thread-launchpad-helpers";
 import { DesktopBackendRegistry } from "./backend-registry";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
+import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
@@ -568,6 +569,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       resolveModelProviderIds: () => new Set(
         (settingsService?.resolveCodexModelProviders?.() ?? []).map((provider) => provider.id),
       ),
+      // Codex reaches PwrAgent through dynamic tools, so the skills PwrAgent
+      // ships reach it as files under a root it scans.
+      resolveSkillExtraRoots: settingsService
+        ? async () => [await materializeBundledSkills(bundledSkillRoot())]
+        : undefined,
       clientVersion,
       readHelperModelSettings: () => ports.resolveHelperModelSettingsFn(),
       passSetupVariablesToAgents: () => ports.resolvePassSetupVariablesToAgentsFn(),

@@ -1,6 +1,6 @@
 import type { RegistryContext } from "./registry-context";
 import type { RegistryDependencies } from "./backend-registry-construction";
-import { assertOwnerExecutionPolicy, ownerSandboxForMode } from "../owner-runtime-policy";
+import { assertOwnerExecutionPolicy, executionModeUnavailableMessage, ownerSandboxForMode } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
@@ -1365,7 +1365,7 @@ function executionModeSettings(mode: ThreadExecutionMode) {
   const original = EXECUTION_MODE_SUMMARIES[mode];
   const policy = getOwnerHostServices().runtimePolicy;
   if (!policy) return original;
-  if (!policy.executionModes.includes(mode)) throw new Error("Full access is unavailable on this Outpost.");
+  if (!policy.executionModes.includes(mode)) throw new Error(executionModeUnavailableMessage(mode));
   return { ...original, approvalPolicy: policy.approvalPolicy, approvalsReviewer: "user" as const, sandbox: policy.sandboxByMode[mode] ?? original.sandbox };
 }
 

@@ -391,18 +391,20 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     });
     mcpServer.setRequestHandler(ListResourcesRequestSchema, async (request) => {
       rejectSkillCursor(request.params?.cursor);
-      return { resources: skills.map((skill) => skill.resource) };
+      return { resources: skills.flatMap((skill) => skill.resources) };
     });
     mcpServer.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
       rejectSkillCursor(request.params?.cursor);
       return { resourceTemplates: [] };
     });
     mcpServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      const skill = skills.find((candidate) => candidate.content.uri === request.params.uri);
-      if (!skill) {
+      const content = skills
+        .flatMap((skill) => skill.contents)
+        .find((candidate) => candidate.uri === request.params.uri);
+      if (!content) {
         throw new McpError(-32002, "Unknown resource URI.");
       }
-      return { contents: [skill.content] };
+      return { contents: [content] };
     });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: this.resolveMcpTools(params.clientContext),
