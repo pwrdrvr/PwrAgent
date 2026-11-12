@@ -71,8 +71,11 @@ it("keeps owner.lock private while held and removes it on a clean release", () =
   const lockDirectory = directory();
   const lock = acquireHeadlessOwnerLock(lockDirectory, { processId: 1 });
   const marker = path.join(lockDirectory, HEADLESS_OWNER_LOCK_MARKER);
-  expect(statSync(marker).mode & 0o777).toBe(0o600);
-  expect(statSync(path.join(lockDirectory, HEADLESS_OWNER_LOCK_DATABASE)).mode & 0o777).toBe(0o600);
+  // Windows has no POSIX modes; the Outpost runs on Linux and macOS only.
+  if (process.platform !== "win32") {
+    expect(statSync(marker).mode & 0o777).toBe(0o600);
+    expect(statSync(path.join(lockDirectory, HEADLESS_OWNER_LOCK_DATABASE)).mode & 0o777).toBe(0o600);
+  }
   expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ pid: 1 });
   lock.record("runtime-v2-clean");
   lock.release();
