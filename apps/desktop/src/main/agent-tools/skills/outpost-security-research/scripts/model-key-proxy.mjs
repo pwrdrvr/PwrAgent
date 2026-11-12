@@ -87,12 +87,24 @@ export function createModelKeyProxy({ upstream, apiKey, placeholder, log = defau
     }, (upstreamRes) => {
       res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
       upstreamRes.on("data", (chunk) => { bytesOut += chunk.length; });
+      // A stream the upstream broke must reach the client broken, so it
+      // retries, never hung or ended as if complete.
+      upstreamRes.on("close", () => {
+        if (upstreamRes.complete) return;
+        log("upstream_error", { path, error: "response incomplete" });
+        res.destroy();
+      });
       upstreamRes.pipe(res);
       upstreamRes.on("end", () => log("request", { method: req.method, path, status: upstreamRes.statusCode, bytesIn, bytesOut, ms: Date.now() - started }));
     });
     outgoing.on("error", (error) => {
       log("upstream_error", { path, error: error.code || error.message });
-      if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+      // After the headers, an error body would land inside the stream.
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      res.writeHead(502, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { message: "Upstream unreachable." } }));
     });
     req.on("data", (chunk) => { bytesIn += chunk.length; });

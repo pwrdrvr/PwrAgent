@@ -24,7 +24,7 @@ bundle="$work/$name.bundle"
 cli=/opt/outpost-tools/node_modules/.bin/pwragent
 
 send_bundle() {
-  git bundle verify "$bundle" >/dev/null
+  git -C "$repo" bundle verify "$bundle" >/dev/null
   docker cp "$bundle" "$container:/tmp/$name.bundle"
 }
 full_bundle() {
@@ -35,15 +35,27 @@ full_bundle() {
 if docker exec "$container" test -d "$dest/.git"; then
   if [ -n "$branch" ]; then
     # Send only what the Outpost lacks; a full bundle from a shallow source cannot be read.
-    base="$(docker exec "$container" git -C "$dest" rev-parse --verify -q "refs/remotes/host/$branch" \
-      || docker exec "$container" git -C "$dest" rev-parse --verify -q "refs/heads/$branch")"
-    git -C "$repo" bundle create "$bundle" "$base..$branch"
-    send_bundle
+    # Only Outpost tips this repository also has can be left out: the agent's own commits are unknown here.
+    known="$(docker exec "$container" git -C "$dest" for-each-ref --format='%(objectname)' refs/heads refs/remotes/host \
+      | while read -r tip; do if git -C "$repo" cat-file -e "$tip^{commit}" 2>/dev/null; then echo "^$tip"; fi; done)"
+    # shellcheck disable=SC2086 # $known is a list of ^<sha> words.
+    if [ -z "$(git -C "$repo" rev-list -1 "$branch" $known)" ]; then
+      echo "The Outpost already has every commit on $branch"
+      fresh=
+    else
+      # shellcheck disable=SC2086
+      git -C "$repo" bundle create "$bundle" "$branch" $known
+      send_bundle
+      fresh=1
+    fi
   else
     full_bundle
+    fresh=1
   fi
-  docker exec "$container" git -C "$dest" fetch --no-tags "/tmp/$name.bundle" "+refs/heads/*:refs/remotes/host/*"
-  echo "Fetched into refs/remotes/host/* in $dest"
+  if [ -n "$fresh" ]; then
+    docker exec "$container" git -C "$dest" fetch --no-tags "/tmp/$name.bundle" "+refs/heads/*:refs/remotes/host/*"
+    echo "Fetched into refs/remotes/host/* in $dest"
+  fi
 elif [ "$(git -C "$repo" rev-parse --is-shallow-repository)" = true ]; then
   stage="$work/$name"
   git clone --quiet --no-local --depth 500 ${branch:+--branch "$branch"} "file://$repo" "$stage"
@@ -63,6 +75,10 @@ docker exec "$container" rm -f "/tmp/$name.bundle"
 docker exec "$container" sh -c 'for h in "$1"/.git/hooks/*; do grep -qs "git-lfs\|git lfs" "$h" && rm -f "$h"; done; true' _ "$dest"
 
 printf '{"path":"%s"}\n' "$dest" | docker exec -i "$container" sh -c 'cat > /tmp/register-directory.json'
-docker exec "$container" "$cli" register-directory --params-file /tmp/register-directory.json >/dev/null
+registered="$(docker exec "$container" "$cli" register-directory --params-file /tmp/register-directory.json)"
 docker exec "$container" rm -f /tmp/register-directory.json
-echo "Project key: directory:$dest"
+# The command answers {"ok":false,...} with a zero exit when registration fails.
+case "$registered" in
+  *'"ok":true'*) echo "Project key: directory:$dest" ;;
+  *) echo "The Outpost did not register $dest: $registered" >&2; exit 1 ;;
+esac

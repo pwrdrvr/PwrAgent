@@ -46,8 +46,8 @@ reads the rest from that container.
   `auth.json`.
 - Put no credentials in a research Outpost: no Codex login, no forge token, no
   provider key. In Default and Auto, agent commands can read the whole volume
-  except `$PWRAGENT_HOME/profiles`, and can send what they read out inside a
-  model request.
+  except `$PWRAGENT_HOME/profiles` and the Codex home's credential files, and
+  can send what they read out inside a model request.
 - Only the operator moves code. Review every branch you pull out before you
   merge it.
 
@@ -206,7 +206,7 @@ Expect `models 200`, `wrong token 403`, and an `internet` error such as
 
 ```sh
 OUTPOST_CONTAINER=pwragent-outpost scripts/push-repo.sh <local-repo> [project-name] [branch]
-OUTPOST_CONTAINER=pwragent-outpost scripts/deps-helper.sh <project-name>
+OUTPOST_CONTAINER=pwragent-outpost scripts/deps-helper.sh <local-repo>
 ```
 
 The first command prints the project key, `directory:/home/outpost/workspace/<name>`.
@@ -215,10 +215,12 @@ again to send new commits; they land under `host/*` and never touch the
 agent's branches.
 
 `deps-helper.sh` runs the Outpost's image with network, its volume and its
-user, installs once and exits. No agent runs there. Afterwards a plain `pnpm
-install` in any checkout or worktree inside the Outpost completes offline in
-seconds. Run it again after a lockfile change (`fetch` mode fills the store
-only).
+user, installs once and exits. No agent runs there, and it runs nothing from
+the Outpost's checkouts, which agents can edit: it installs from a `git
+archive` of your repository's `HEAD`, or of `OUTPOST_DEPS_REF`. Afterwards a
+plain `pnpm install` in any checkout or worktree inside the Outpost completes
+offline in seconds. Run it again after a lockfile change (`fetch` mode fills
+the store only). Never run it on an Outpost that allows Full Access.
 
 ## 7. Start Research Threads
 
@@ -259,9 +261,10 @@ Then restart the in-container relay from step 4.
 
 - In Default and Auto, Codex's permission profiles deny agent commands the
   profile folder, which holds the secret store key, the state database and the
-  local control socket. Full Access has no sandbox: never allow it on a
-  research Outpost.
-- Everything else on the volume is readable, including the Codex home and
-  every pushed repository.
+  local control socket, and the Codex home's credentials (`auth.json`,
+  `.credentials.json`, `secrets/`). Full Access has no sandbox: never allow it
+  on a research Outpost.
+- Everything else on the volume is readable, including the rest of the Codex
+  home and every pushed repository.
 - The Outpost's federation role is contained: peers refuse requests it
   originates. Viewers can still start, read and steer its threads.

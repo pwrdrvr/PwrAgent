@@ -16,6 +16,6 @@ trap 'rm -rf "$work"' EXIT
 docker exec "$container" git -C "$dest" bundle create "/tmp/$name-out.bundle" "$branch"
 docker cp "$container:/tmp/$name-out.bundle" "$work/out.bundle"
 docker exec "$container" rm -f "/tmp/$name-out.bundle"
-git bundle verify "$work/out.bundle" >/dev/null
+git -C "$repo" bundle verify "$work/out.bundle" >/dev/null
 git -C "$repo" fetch "$work/out.bundle" "+refs/heads/$branch:refs/remotes/outpost/$branch"
 echo "Fetched outpost/$branch into $repo"

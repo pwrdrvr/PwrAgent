@@ -158,3 +158,83 @@ describe("model key proxy", () => {
     );
   });
 });
+
+// Codex streams Responses over SSE. A stream the upstream breaks must reach
+// Codex as broken, so it retries; a hung or cleanly ended stream is a turn
+// that never finishes or silently loses its tail.
+describe("model key proxy streaming", () => {
+  let streamUpstream: http.Server;
+  let streamProxy: http.Server;
+  let streamProxyPort = 0;
+
+  beforeAll(async () => {
+    streamUpstream = http.createServer((req, res) => {
+      const params = new URL(req.url ?? "/", "http://upstream.invalid").searchParams;
+      const chunks = Number(params.get("chunks"));
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      // The stream has started even before its first event. (A break before
+      // the headers is a 502 from the proxy, a complete response.)
+      res.flushHeaders();
+      for (let index = 0; index < chunks; index += 1) res.write(`data: ${index}\n\n`);
+      if (params.get("finish") === "1") res.end();
+      else setTimeout(() => res.socket?.destroy(), 20);
+    });
+    const upstreamPort = await listen(streamUpstream);
+    const module = (await import(pathToFileURL(PROXY_SCRIPT).href)) as ProxyModule;
+    ({ server: streamProxy } = module.createModelKeyProxy({
+      upstream: `http://127.0.0.1:${upstreamPort}/v1`,
+      apiKey: API_KEY,
+      placeholder: PLACEHOLDER,
+      log: () => {},
+    }));
+    streamProxyPort = await listen(streamProxy);
+  });
+
+  afterAll(async () => {
+    streamProxy.closeAllConnections();
+    await close(streamProxy);
+    await close(streamUpstream);
+  });
+
+  function stream(chunks: number, finish: boolean): Promise<{ outcome: "end" | "broken" | "hung"; body: string }> {
+    return new Promise((resolve) => {
+      let body = "";
+      let settled = false;
+      const settle = (outcome: "end" | "broken" | "hung") => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        req.destroy();
+        resolve({ outcome, body });
+      };
+      const timer = setTimeout(() => settle("hung"), 2_000);
+      const req = http.get({
+        host: "127.0.0.1",
+        port: streamProxyPort,
+        path: `/${PLACEHOLDER}/v1/responses?chunks=${chunks}&finish=${finish ? 1 : 0}`,
+        agent: false,
+      }, (res) => {
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => { body += chunk; });
+        res.on("end", () => settle(res.complete ? "end" : "broken"));
+        res.on("aborted", () => settle("broken"));
+        res.on("error", () => settle("broken"));
+      });
+      req.on("error", () => settle("broken"));
+    });
+  }
+
+  it("ends a stream the upstream finished, and breaks one it broke", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 0, max: 3 }), fc.boolean(), async (chunks, finish) => {
+        const sent = Array.from({ length: chunks }, (_, index) => `data: ${index}\n\n`).join("");
+        const { outcome, body } = await stream(chunks, finish);
+        expect(outcome).toBe(finish ? "end" : "broken");
+        // Nothing the upstream did not send is added to the stream.
+        expect(sent.startsWith(body) || body === sent).toBe(true);
+        if (finish) expect(body).toBe(sent);
+      }),
+      { numRuns: 16 },
+    );
+  });
+});

@@ -225,10 +225,10 @@ before you start a thread. The workspace root is always listed, as
   with `PWRAGENT_OUTPOST_EXECUTION_MODES` and `PWRAGENT_OUTPOST_AGENT_NETWORK`
   at `docker run`; see the package README.
 - In Default and Auto, the Outpost's Codex permission profiles deny agent
-  commands `$PWRAGENT_HOME/profiles`, which holds the secret store key. They
-  can still read the Codex home in the same volume, and Full Access has no
-  sandbox. Do not run untrusted prompts on an Outpost whose credentials
-  matter.
+  commands `$PWRAGENT_HOME/profiles`, which holds the secret store key, and
+  the Codex home's credential files. They can still read the rest of the
+  volume, and Full Access has no sandbox. Do not run untrusted prompts on an
+  Outpost whose credentials matter.
 - For research with an untrusted model and no network, use the bundled
   `outpost-security-research` skill
   (`apps/desktop/src/main/agent-tools/skills/outpost-security-research/`). It

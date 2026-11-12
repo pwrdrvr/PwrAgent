@@ -18,6 +18,16 @@ async function readIfPresent(file: string): Promise<string | undefined> {
   }
 }
 
+/** How long a staged file is another writer's work in progress, not debris from a crash. */
+export const STAGED_FILE_GRACE_MS = 60_000;
+const STAGED_FILE = /\.\d+\.[0-9a-f]{8}\.tmp$/u;
+
+async function isLiveStagedFile(file: string, now: number): Promise<boolean> {
+  if (!STAGED_FILE.test(file)) return false;
+  const stat = await fs.stat(file).catch(() => undefined);
+  return stat !== undefined && now - stat.mtimeMs < STAGED_FILE_GRACE_MS;
+}
+
 async function writeIfChanged(file: string, text: string, mode: number): Promise<void> {
   if (await readIfPresent(file) !== text) {
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -32,11 +42,13 @@ async function writeIfChanged(file: string, text: string, mode: number): Promise
 /**
  * Writes the bundled skills into `root`, one folder per skill, and returns
  * `root`. A file is rewritten only when its content differs. Anything else
- * inside `root` is a skill or file an earlier PwrAgent shipped and is removed.
+ * inside `root` is a skill or file an earlier PwrAgent shipped and is removed,
+ * except a file another writer is still staging.
  */
 export async function materializeBundledSkills(
   root: string,
   skills: readonly BundledSkill[] = PWRAGENT_CODEX_SKILLS,
+  now = Date.now(),
 ): Promise<string> {
   await fs.mkdir(root, { recursive: true });
   const expected = new Map<string, { text: string; mode: number }>();
@@ -59,7 +71,8 @@ export async function materializeBundledSkills(
     const present = await fs.readdir(folder, { recursive: true, withFileTypes: true }).catch(() => []);
     for (const entry of present) {
       const file = path.join(entry.parentPath, entry.name);
-      if (!entry.isDirectory() && !expected.has(file)) await fs.rm(file, { force: true });
+      if (entry.isDirectory() || expected.has(file) || await isLiveStagedFile(file, now)) continue;
+      await fs.rm(file, { force: true });
     }
   }
   for (const [file, { text, mode }] of expected) {

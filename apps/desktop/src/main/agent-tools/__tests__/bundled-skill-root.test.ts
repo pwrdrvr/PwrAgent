@@ -2,8 +2,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
-import { materializeBundledSkills } from "../bundled-skill-root";
+import { materializeBundledSkills, STAGED_FILE_GRACE_MS } from "../bundled-skill-root";
 import { PWRAGENT_CODEX_SKILLS, PWRAGENT_WORKFLOW_SKILLS } from "../pwragent-workflow-skills";
 
 const REPO_ROOT = path.resolve(__dirname, "../../../../../..");
@@ -63,6 +64,54 @@ describe("bundled skill root", () => {
     await fs.utimes(skillFile, past, past);
     await materializeBundledSkills(root);
     expect((await fs.stat(skillFile)).mtimeMs).toBe(past.getTime());
+  });
+
+  // Two PwrAgent processes, or two Codex clients in one, can materialize the
+  // same root at once. A sweep that deletes the other's staged file fails its
+  // rename, and that Codex starts without the skill.
+  it("sweeps away stale files but never another writer's staged file", async () => {
+    const [skill] = PWRAGENT_CODEX_SKILLS;
+    const target = (file: string) => path.join(skill.name, ...file.split("/"));
+    const extra = fc.oneof(
+      fc.record({
+        kind: fc.constant("staged" as const),
+        of: fc.constantFrom(...skill.files.map((file) => file.path)),
+        pid: fc.integer({ min: 1, max: 99_999 }),
+        suffix: fc.stringMatching(/^[0-9a-f]{8}$/u),
+        ageMs: fc.integer({ min: 0, max: 3 * STAGED_FILE_GRACE_MS }),
+      }),
+      fc.record({
+        kind: fc.constant("other" as const),
+        name: fc.constantFrom("retired.sh", "notes.txt", "SKILL.md.tmp", "SKILL.md.1.xyz.tmp", "scripts/old.mjs"),
+        ageMs: fc.integer({ min: 0, max: 3 * STAGED_FILE_GRACE_MS }),
+      }),
+    );
+    await fc.assert(
+      fc.asyncProperty(fc.array(extra, { maxLength: 6 }), async (extras) => {
+        const root = path.join(tempRoot(), "bundled");
+        const now = Date.now();
+        const planted = new Map<string, boolean>();
+        for (const item of extras) {
+          const relative = item.kind === "staged"
+            ? `${target(item.of)}.${item.pid}.${item.suffix}.tmp`
+            : target(item.name);
+          const file = path.join(root, relative);
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(file, "partial");
+          const at = new Date(now - item.ageMs);
+          await fs.utimes(file, at, at);
+          planted.set(file, item.kind === "staged" && item.ageMs < STAGED_FILE_GRACE_MS);
+        }
+        await materializeBundledSkills(root, PWRAGENT_CODEX_SKILLS, now);
+        for (const [file, survives] of planted) {
+          await expect(fs.stat(file).then(() => true, () => false)).resolves.toBe(survives);
+        }
+        for (const file of skill.files) {
+          expect(readFileSync(path.join(root, target(file.path)), "utf8")).toBe(file.text);
+        }
+      }),
+      { numRuns: 40 },
+    );
   });
 
   it("ships the same relay and Dockerfile the repository uses", () => {
