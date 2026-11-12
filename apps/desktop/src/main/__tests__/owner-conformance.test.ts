@@ -2207,9 +2207,11 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         expect(calls.filter(call => call.method === "thread/unsubscribe")).toHaveLength(1);
       }
       expect(outpostCalls.find(call => call.method === "thread/start" && call.params?.ephemeral === true)?.params)
-        .toMatchObject({ approvalPolicy: "never", sandbox: "read-only" });
-      expect(outpostCalls.find(call => call.method === "turn/start" && String(call.params?.threadId).startsWith("helper-"))?.params)
-        .toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false } });
+        .toMatchObject({ approvalPolicy: "never", permissions: "pwragent-outpost-read-only" });
+      const helperTurn = outpostCalls.find(call => call.method === "turn/start" && String(call.params?.threadId).startsWith("helper-"))?.params;
+      // The Outpost's profiles deny its own state; a legacy sandbox could not.
+      expect(helperTurn).toMatchObject({ approvalPolicy: "never", permissions: "pwragent-outpost-read-only" });
+      expect(helperTurn).not.toHaveProperty("sandboxPolicy");
     } finally { await outpost.close(); await desktop.close(); }
   });
 

@@ -1,3 +1,4 @@
+import path from "node:path";
 import fc from "fast-check";
 import { buildCodexClientArgs } from "../app-server/codex-thread-config";
 import { expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { assertOwnerExecutionPolicy, createOutpostRuntimePolicy, type OwnerRunti
 const policy: OwnerRuntimePolicy = {
   enabledBackends: ["codex"], approvalPolicy: "never", executionModes: ["default", "auto"],
   sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained",
+  codexProtectedRoots: [path.resolve("/srv/pwragent/profiles")],
 };
 it("the Outpost host enables Codex only, independent of inherited provider environment", () => {
   fc.assert(fc.property(fc.constantFrom("claude", "acp:gemini", "codex,claude"), value => {
@@ -42,9 +44,9 @@ it("the App Server launch configuration cannot grant approvals or tool network a
       values.set(override.slice(0, separator), override.slice(separator + 1));
     }
     expect(values.get("approval_policy")).toBe('"never"');
-    expect(values.get("sandbox_mode")).toBe('"read-only"');
-    expect(values.get("sandbox_workspace_write.network_access")).toBe("false");
-    expect(values.get("sandbox_workspace_write.exclude_tmpdir_env_var")).toBe("true");
-    expect(values.get("sandbox_workspace_write.exclude_slash_tmp")).toBe("true");
+    // Sandbox profiles and their deny entries: outpost-codex-sandbox.property.test.ts.
+    expect(values.get("default_permissions")).toBe('"pwragent-outpost-read-only"');
+    expect(values.get("permissions.pwragent-outpost-read-only.network.enabled")).toBe("false");
+    expect(values.get("permissions.pwragent-outpost-workspace-write.network.enabled")).toBe("false");
   }));
 });

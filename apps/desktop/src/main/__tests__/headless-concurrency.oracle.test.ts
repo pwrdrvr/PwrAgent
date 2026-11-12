@@ -190,7 +190,8 @@ it("admits a new thread and two independently identified turns while both thread
     .toMatchObject({ queueA: "started", queueB: "started", states: ["active", "active"], newThread: { thread: { backend: "codex", threadId: expect.any(String) } } });
   const providerRequests = await host.requests();
   for (const request of providerRequests.filter(value => value.method === "turn/start")) {
-    expect(request.params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "workspaceWrite", networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true } });
+    expect(request.params).toMatchObject({ approvalPolicy: "never", permissions: "pwragent-outpost-workspace-write" });
+    expect(request.params).not.toHaveProperty("sandboxPolicy");
   }
   expect(providerRequests.filter(value => value.method === "turn/start")).toHaveLength(2);
   expect(turnA.queueEntryId).toBeTruthy();

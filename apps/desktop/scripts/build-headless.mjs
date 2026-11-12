@@ -12,6 +12,8 @@ export const headlessEntries = {
   "claude-session-reader-worker": "src/main/claude/claude-session-reader-worker.ts",
   "mcp-connection-bridge": "src/main/mcp-connections/mcp-connection-bridge-entry.ts",
   "token-miser-hook": "src/main/token-miser/token-miser-hook-entry.ts",
+  // Loaded by the Outpost daemon's sandbox preflight before the owner starts.
+  "outpost-codex-sandbox": "src/main/headless/outpost-codex-sandbox.ts",
 };
 
 export async function buildHeadless({ outputDirectory = path.join(desktop, "out/headless"), plugins = [], portable = false } = {}) {

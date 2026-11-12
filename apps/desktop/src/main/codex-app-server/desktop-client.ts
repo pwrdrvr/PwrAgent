@@ -1,5 +1,4 @@
 import { getOwnerHostServices } from "../owner-host";
-import type { SandboxPolicy } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   CodexAppServerClient as OwnerCodexAppServerClient,
   type CodexClientOptions,
@@ -12,6 +11,7 @@ import { getMainLogger } from "../log";
 import { enrichThreadDirectory } from "../app-server/thread-directory-enricher";
 import { collectDescendants, countOpenFileDescriptors, readProcessTable } from "../process-descendants";
 import { StdioJsonRpcTransport, type StdioJsonRpcTransportOptions } from "./stdio-transport";
+import { createOutpostCodexMessageRewriter } from "../headless/outpost-codex-sandbox";
 import { isCodexInvalidResponseMessageIdError, repairCodexInvalidResponseMessageIds } from "./invalid-response-message-id-recovery";
 
 export * from "@pwragent/owner-core/codex-app-server/client";
@@ -25,18 +25,22 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
   constructor(options: DesktopCodexClientOptions = {}) {
     const runtimePolicy = getOwnerHostServices().runtimePolicy;
     super({ ...options, ...(runtimePolicy ? { helperExecutionPolicy: { approvalPolicy: "never" as const, sandbox: "read-only" as const } } : {}) }, {
-      createTransport: (callbacks) => new StdioJsonRpcTransport({
-        ...options,
-        command: options.command?.trim() || "codex",
-        args: options.args ?? [],
-        ...callbacks,
-      }),
-      ...(runtimePolicy ? { buildSandboxPolicy: (sandbox?: string, cwd?: string): SandboxPolicy | undefined => {
-        if (sandbox === undefined) return undefined;
-        if (sandbox === "read-only") return { type: "readOnly", networkAccess: false };
-        if (sandbox !== "workspace-write") throw new Error("This Outpost requires a read-only or workspace-write sandbox.");
-        return { type: "workspaceWrite", writableRoots: [cwd ?? process.cwd()], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true };
-      } } : {}),
+      createTransport: (callbacks) => {
+        const transport = new StdioJsonRpcTransport({
+          ...options,
+          command: options.command?.trim() || "codex",
+          args: options.args ?? [],
+          ...callbacks,
+        });
+        // Every outbound request is the one place no Outpost path can skip:
+        // a legacy sandbox would let model commands read the Outpost's state.
+        if (runtimePolicy) {
+          const rewrite = createOutpostCodexMessageRewriter(runtimePolicy.codexProtectedRoots);
+          const send = transport.send.bind(transport);
+          transport.send = (message) => send(rewrite(message));
+        }
+        return transport;
+      },
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
       logger: getMainLogger("pwragent:codex-client"),
       rpcLogger: getMainLogger("pwragent:json-rpc"),

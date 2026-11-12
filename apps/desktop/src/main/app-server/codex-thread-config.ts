@@ -8,6 +8,7 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
+import { buildOutpostCodexPermissionOverrides, isOutpostManagedConfigKey } from "../headless/outpost-codex-sandbox";
 import { createHash } from "node:crypto";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
@@ -48,14 +49,19 @@ export function buildCodexClientArgs(
     // Provider tables first, so an operator's own override still wins.
     ...buildCodexModelProviderConfigOverrides(modelProviders, providerIdsWithKeys)
       .flatMap((override) => ["-c", override]),
-    ...validateCodexConfigOverrides(configOverrides).flatMap((override) => [
-      "-c", override,
-    ]),
+    ...validateCodexConfigOverrides(configOverrides).flatMap((override) => {
+      if (policy && isOutpostManagedConfigKey(override.slice(0, override.indexOf("=")))) {
+        throw new Error("models.codex.config_overrides conflicts with the Outpost's Codex sandbox settings.");
+      }
+      return ["-c", override];
+    }),
     "-c",
     `approval_policy=${JSON.stringify(policy?.approvalPolicy ?? "on-request")}`,
-    "-c",
-    `sandbox_mode=${JSON.stringify(policy ? "read-only" : "workspace-write")}`,
-    ...(policy ? ["-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true", "-c", "sandbox_workspace_write.exclude_slash_tmp=true"] : []),
+    // An Outpost selects named permission profiles that deny its own state.
+    // Codex prefers a legacy `sandbox_mode`, so an Outpost never sets one.
+    ...(policy
+      ? buildOutpostCodexPermissionOverrides(policy.codexProtectedRoots).flatMap((override) => ["-c", override])
+      : ["-c", `sandbox_mode=${JSON.stringify("workspace-write")}`]),
     // PwrAgent already waits for idle before unsubscribing; unload without
     // a second Codex delay once the last subscriber leaves an inactive thread.
     "-c",

@@ -35,6 +35,7 @@ import {
   type CodexThreadMigrationMetadata,
 } from "../codex-app-server/desktop-client";
 import { buildCodexClientArgs } from "./codex-thread-config";
+import { getOwnerHostServices } from "../owner-host";
 import { runGitCommand } from "./git-executable";
 
 const migrationLog = getMainLogger("pwragent:thread-migration");
@@ -711,7 +712,7 @@ export class ThreadMigrationService {
         resolveCommand,
       }) ??
       new CodexAppServerClient({
-        args: buildCodexClientArgs(env),
+        args: buildCodexClientArgs(env, [], [], getOwnerHostServices().runtimePolicy),
         command,
         env,
         resolveCommand,

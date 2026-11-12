@@ -1,15 +1,22 @@
 import { spawn } from "node:child_process";
 
+// Exit status of the probe when it could read the protected file.
+const PROTECTED_FILE_READABLE = 86;
+
 // Use Codex's native sandbox entry point, without a model turn or access to
-// Codex-owned files. The policy matches the Outpost's workspace-write turns.
-export function checkCodexSandbox({ command, home, workspace, timeout = 10000, signal }) {
+// Codex-owned files. It applies the Outpost's workspace-write permission
+// profile and proves that profile denies the Outpost's own state: the probe
+// must fail to read `protectedFile` (the owner lock, never a secret; its
+// output is discarded).
+export function checkCodexSandbox({ command, home, workspace, permissionOverrides, profile, protectedFile, timeout = 10000, signal }) {
   const checkedAt = new Date().toISOString();
-  const probe = process.platform === "darwin" ? "/usr/bin/true" : "/bin/true";
+  if (!permissionOverrides?.length || !profile || !protectedFile) {
+    return Promise.resolve({ status: "failed", checkedAt, error: "Codex sandbox preflight requires the Outpost permission profile." });
+  }
   return new Promise((resolve) => {
-    const child = spawn(command, ["sandbox", "-c", "sandbox_mode=\"workspace-write\"",
-      "-c", "approval_policy=\"never\"", "-c", `sandbox_workspace_write.writable_roots=${JSON.stringify([workspace])}`,
-      "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-      "-c", "sandbox_workspace_write.exclude_slash_tmp=true", "--", probe], {
+    const child = spawn(command, ["sandbox", ...permissionOverrides.flatMap(value => ["-c", value]),
+      "-c", "approval_policy=\"never\"", "-P", profile, "--",
+      "/bin/sh", "-c", `if cat -- "$1" >/dev/null 2>&1; then exit ${PROTECTED_FILE_READABLE}; fi`, "sh", protectedFile], {
       cwd: workspace, env: { ...process.env, CODEX_HOME: home },
       stdio: ["ignore", "ignore", "pipe"], detached: true,
     });
@@ -31,6 +38,8 @@ export function checkCodexSandbox({ command, home, workspace, timeout = 10000, s
       signal?.removeEventListener("abort", abort);
       kill();
       if (!failure && code === 0) resolve({ status: "ready", checkedAt });
+      else if (!failure && code === PROTECTED_FILE_READABLE) resolve({ status: "failed", checkedAt,
+        error: "Codex sandbox preflight failed: sandboxed commands can read the Outpost's state directory. Use a Codex release that enforces permission-profile deny entries." });
       else resolve({ status: "failed", checkedAt,
         error: `Codex sandbox preflight failed (${failure || (exitSignal ? `signal ${exitSignal}` : `exit ${code}`)}): ${stderr.trim() || "sandbox command could not run"}` });
     });

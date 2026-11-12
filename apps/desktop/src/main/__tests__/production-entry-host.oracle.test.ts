@@ -20,6 +20,8 @@ const entries = [
   "src/renderer/storage-maintenance.html",
 ];
 const worker = "src/renderer/src/features/thread-detail/image-diff/pixel-diff.worker.ts";
+// The Outpost daemon loads this before the owner starts (sandbox preflight).
+const outpostSandboxEntry = "src/main/headless/outpost-codex-sandbox.ts";
 
 function source(file: string, text = fs.readFileSync(file, "utf8")): ts.SourceFile {
   return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
@@ -117,6 +119,7 @@ it("covers every configured production entry and every inline worker", () => {
   // Its four leaf workers use the same owner-free sources checked below.
   expect(Object.values(headlessEntries).sort()).toEqual([
     "src/main/headless/index.ts",
+    outpostSandboxEntry,
     ...entries.slice(1, 5),
   ].sort());
   // A newly introduced bundler must enter this inventory rather than escaping it.
@@ -124,7 +127,7 @@ it("covers every configured production entry and every inline worker", () => {
   expect(otherBuilders).toEqual([path.join(desktop, "scripts/build-headless.mjs")]);
 });
 
-for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker]) {
+for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker, outpostSandboxEntry]) {
   it(`${entry} retains no owner getter in its executable bundle`, async () => {
     const script = entry.endsWith(".html")
       ? fs.readFileSync(path.join(desktop, entry), "utf8").match(/<script\s+type="module"\s+src="([^"]+)"/)?.[1]
