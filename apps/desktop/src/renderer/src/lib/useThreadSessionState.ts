@@ -1038,23 +1038,32 @@ function adoptOlderPageIdentities(
   tail: AppServerReadThreadResponse,
   page: AppServerReadThreadResponse,
   providerPageTurnIds: ReadonlySet<string> | undefined,
+  hasLoadedHistory: boolean,
 ): AppServerReadThreadResponse {
   const tailIds = new Set(tail.replay.entries.map((entry) => entry.id));
   const pageIds = new Set(page.replay.entries.map((entry) => entry.id));
   // Only rows no provider page delivered can carry a non-provider id. Rows of
   // provider turns keep their ids: two of them may repeat the same text. A
   // sent message is bound to its turn by the send, not by turn metadata.
-  const rowTurnId = (entry: AppServerThreadEntry) =>
-    entry.turn?.id ?? (entry.type === "message" ? readSentTurnId(entry) : undefined);
-  const candidates = tail.replay.entries.filter((entry) => {
+  // A send never bound to its turn has no turn to match, only its text, and
+  // an older turn may repeat that text. Its turn began after every turn shown
+  // above it and before the provider turns below it. So it can be on an older
+  // page only while no provider row or history page precedes it, and then
+  // only as the newest turn of the first older page.
+  const firstProviderRow = tail.replay.entries.findIndex((entry) => {
+    const turnId = transcriptEntryTurnId(entry);
+    return turnId !== undefined && providerPageTurnIds?.has(turnId) === true;
+  });
+  const newestPageTurnId = page.replay.entries.findLast((entry) => entry.turn?.id)?.turn?.id;
+  const candidates = tail.replay.entries.filter((entry, index) => {
     if (pageIds.has(entry.id)) {
       return false;
     }
-    const turnId = rowTurnId(entry);
+    const turnId = transcriptEntryTurnId(entry);
     // A send not yet bound to its turn has no turn at all, but its
     // optimistic id already says no provider page delivered it.
     return turnId === undefined
-      ? entry.id.startsWith("optimistic-")
+      ? entry.id.startsWith("optimistic-") && !hasLoadedHistory && index < firstProviderRow
       : !providerPageTurnIds?.has(turnId);
   });
   if (candidates.length === 0) {
@@ -1076,7 +1085,10 @@ function adoptOlderPageIdentities(
           && messageEchoesSentTurn(pageEntry, candidate))
       : undefined;
     const tailEntry = sentEcho ?? findUniqueLogicalTranscriptRefreshMatch(pageEntry, matchIndex, matched);
-    if (tailEntry) {
+    if (
+      tailEntry
+      && (transcriptEntryTurnId(tailEntry) !== undefined || pageEntry.turn.id === newestPageTurnId)
+    ) {
       matched.add(tailEntry);
       pageEntryByTailEntry.set(tailEntry, pageEntry);
     }
@@ -1208,6 +1220,8 @@ function reconcileRetainedTranscriptTail(
       lastMatchedFreshEntry ? (freshIndexByEntry.get(lastMatchedFreshEntry) ?? -1) + 1 : 0,
       targetIndex,
     );
+    // Each row resumes the scan where the previous row was placed, so one
+    // call walks the span between matches once, not once per row.
     for (const row of rows) {
       const sequence = readRendererSequence(row);
       let at = targetIndex;
@@ -1222,7 +1236,12 @@ function reconcileRetainedTranscriptTail(
       }
       floor = at;
       const anchor = freshEntries[at]!;
-      retainedEntriesBeforeFresh.set(anchor, [...(retainedEntriesBeforeFresh.get(anchor) ?? []), row]);
+      const anchored = retainedEntriesBeforeFresh.get(anchor);
+      if (anchored) {
+        anchored.push(row);
+      } else {
+        retainedEntriesBeforeFresh.set(anchor, [row]);
+      }
     }
   };
 
@@ -1410,32 +1429,49 @@ function findUniqueLogicalTranscriptRefreshMatch(
   retainedMatchIndex: LogicalTranscriptMatchIndex,
   matchedRetainedEntries: ReadonlySet<AppServerThreadEntry>,
 ): AppServerThreadEntry | undefined {
-  return findOnlyTranscriptMatch(
-    logicalTranscriptMatchCandidates(freshEntry, retainedMatchIndex),
-    (retainedEntry) => {
-      if (matchedRetainedEntries.has(retainedEntry)) {
-        return false;
-      }
-      if (
-        freshEntry.turn?.id &&
-        retainedEntry.turn?.id &&
-        freshEntry.turn.id !== retainedEntry.turn.id
-      ) {
-        return false;
-      }
-      if (
-        freshEntry.type === "message" &&
-        retainedEntry.type === "message" &&
-        freshEntry.phase &&
-        retainedEntry.phase &&
-        freshEntry.phase !== retainedEntry.phase
-      ) {
-        return false;
-      }
+  const freshTurnId = transcriptEntryTurnId(freshEntry);
+  const candidates = logicalTranscriptMatchCandidates(freshEntry, retainedMatchIndex);
+  const matches = (retainedEntry: AppServerThreadEntry) => {
+    if (matchedRetainedEntries.has(retainedEntry)) {
+      return false;
+    }
+    const retainedTurnId = transcriptEntryTurnId(retainedEntry);
+    if (freshTurnId && retainedTurnId && freshTurnId !== retainedTurnId) {
+      return false;
+    }
+    if (
+      freshEntry.type === "message" &&
+      retainedEntry.type === "message" &&
+      freshEntry.phase &&
+      retainedEntry.phase &&
+      freshEntry.phase !== retainedEntry.phase
+    ) {
+      return false;
+    }
 
-      return transcriptEntriesMatch(freshEntry, retainedEntry);
-    },
-  );
+    return transcriptEntriesMatch(freshEntry, retainedEntry);
+  };
+  return findOnlyTurnAwareMatch(freshTurnId, candidates, matches);
+}
+
+// A row of the same turn outranks a turnless row with the same text: a
+// repeated send is told apart by its turn alone.
+function findOnlyTurnAwareMatch(
+  turnId: string | undefined,
+  candidates: AppServerThreadEntry[],
+  matches: (candidate: AppServerThreadEntry) => boolean,
+): AppServerThreadEntry | undefined {
+  const sameTurnMatch = turnId
+    ? findOnlyTranscriptMatch(candidates, (candidate) =>
+        transcriptEntryTurnId(candidate) === turnId && matches(candidate))
+    : undefined;
+  return sameTurnMatch ?? findOnlyTranscriptMatch(candidates, matches);
+}
+
+// A sent message carries the turn it opened as sentTurnId until the owner's
+// copy, which carries turn metadata, replaces it.
+function transcriptEntryTurnId(entry: AppServerThreadEntry): string | undefined {
+  return entry.turn?.id ?? (entry.type === "message" ? readSentTurnId(entry) : undefined);
 }
 
 function isCodexImageBoundaryText(value: string): boolean {
@@ -2152,7 +2188,8 @@ function findUniqueTranscriptOrderSource(
   // A row matched by content alone must come from the same turn. The same
   // command or reply in another turn is a different row, and taking its time
   // or place moves this row into that turn.
-  return findOnlyTranscriptMatch(
+  return findOnlyTurnAwareMatch(
+    transcriptEntryTurnId(entry),
     logicalTranscriptMatchCandidates(entry, logicalSourceIndex),
     (source) =>
       typeof source.createdAt === "number" &&
@@ -2168,8 +2205,8 @@ function sameTurnOrUnknown(
   entry: AppServerThreadEntry,
   source: AppServerThreadEntry,
 ): boolean {
-  const entryTurnId = entry.turn?.id;
-  const sourceTurnId = source.turn?.id;
+  const entryTurnId = transcriptEntryTurnId(entry);
+  const sourceTurnId = transcriptEntryTurnId(source);
   return !entryTurnId || !sourceTurnId || entryTurnId === sourceTurnId;
 }
 
@@ -4058,10 +4095,30 @@ function messageEchoesOptimisticEntry(
   message: AppServerThreadMessage & { turn?: AppServerThreadTurnMetadata },
   entry: AppServerThreadMessageEntry
 ): boolean {
+  // A send bound to its turn is echoed only by a message of that turn. A
+  // later send may repeat its text.
+  const sentTurnId = readSentTurnId(entry);
+  if (sentTurnId && message.turn?.id && message.turn.id !== sentTurnId) {
+    return false;
+  }
   return (
     messageTextMatchesEntry(message, entry)
     || (message.role === entry.role && messageEchoesSentTurn(message, entry))
   );
+}
+
+// The pending copy a message echoes. The send's turn, when bound, outranks a
+// pending copy that only repeats its text.
+function findOptimisticEcho<T extends AppServerThreadEntry>(
+  message: AppServerThreadMessageEntry,
+  entries: T[],
+): (T & AppServerThreadMessageEntry) | undefined {
+  const echoes = (entry: T): entry is T & AppServerThreadMessageEntry =>
+    entry.type === "message" && message.role === entry.role;
+  return entries.find((entry): entry is T & AppServerThreadMessageEntry =>
+    echoes(entry) && messageEchoesSentTurn(message, entry))
+    ?? entries.find((entry): entry is T & AppServerThreadMessageEntry =>
+      echoes(entry) && messageEchoesOptimisticEntry(message, entry));
 }
 
 function messageTextMatchesEntry(
@@ -4212,12 +4269,9 @@ function mergeCompletedUserMessageWithOptimisticEntry(
   message: AppServerThreadMessageEntry,
   optimisticEntries: AppServerThreadEntry[]
 ): AppServerThreadMessageEntry {
-  const optimisticEntry = optimisticEntries.find(
-    (entry): entry is AppServerThreadMessageEntry =>
-      entry.type === "message" &&
-      message.role === "user" &&
-      messageEchoesOptimisticEntry(message, entry)
-  );
+  const optimisticEntry = message.role === "user"
+    ? findOptimisticEcho(message, optimisticEntries)
+    : undefined;
   if (!optimisticEntry) {
     return message;
   }
@@ -4266,10 +4320,9 @@ function findPromotedOptimisticUserMessageEntry(
   response: AppServerReadThreadResponse | undefined,
   message: AppServerThreadMessageEntry
 ): AppServerThreadMessageEntry | undefined {
-  return response?.replay.entries.find(
-    (entry): entry is AppServerThreadMessageEntry =>
-      isOptimisticUserMessageEntry(entry) &&
-      messageEchoesOptimisticEntry(message, entry)
+  return findOptimisticEcho(
+    message,
+    response?.replay.entries.filter(isOptimisticUserMessageEntry) ?? [],
   );
 }
 
@@ -8135,6 +8188,7 @@ export function useThreadSessionState(params: {
           current.response,
           reconciledOlderResponse,
           current.providerPageTurnIds,
+          (current.loadedHistory?.entryCount ?? 0) > 0,
         );
         if (!didAppendHistory || appendedHistorySource !== current.loadedHistory) {
           didAppendHistory = true;

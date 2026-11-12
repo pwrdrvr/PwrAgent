@@ -19,8 +19,18 @@ type Item = {
   role: "user" | "assistant";
   tool?: boolean;
   phase?: "commentary" | "final";
+  // A user message's text, when it repeats an earlier message's.
+  text?: string;
 };
-type Model = { ledger: Item[]; turn: number; active?: number; optimistic?: Item; optimisticId?: string };
+type Model = {
+  ledger: Item[];
+  turn: number;
+  active?: number;
+  optimistic?: Item;
+  optimisticId?: string;
+  // Repeated text held by a send that no start has bound to its turn.
+  unboundText?: string;
+};
 type Read = {
   response: AppServerReadThreadResponse;
   resolve: (value: AppServerReadThreadResponse) => void;
@@ -33,6 +43,11 @@ type Visibility = { issued: number; settled: number; live: Map<string, number> }
 type Real = Awaited<ReturnType<typeof mount>>;
 type Operation = "start" | "item" | "redeliver" | "complete" | "send" | "read" | "resolve" | "older" | "compact" | "synthetic";
 const key = (item: Item) => `turn-${item.turn}/item-${item.sequence}`;
+const textOf = (item: Item) => item.text ?? key(item);
+const PROVIDER_ID = /^turn-\d+\/item-\d+$/;
+// The ledger item each optimistic id was sent as. Text cannot identify a
+// send, because sends may repeat an earlier message's text.
+const sentKeys = new Map<string, string>();
 const turnMetadata = (turn: number, active?: number) => ({
   id: `turn-${turn}`, status: active === turn ? "in_progress" as const : "completed" as const,
   startedAt: turn > 2 ? 50_000 : 1_000 * (turn + 1),
@@ -48,7 +63,7 @@ function entry(item: Item, active?: number): AppServerThreadEntry {
     };
   }
   return {
-    type: "message", id: key(item), role: item.role, text: key(item),
+    type: "message", id: key(item), role: item.role, text: textOf(item),
     ...(item.role === "assistant" ? { phase: item.phase ?? "commentary" } : {}), createdAt: item.time,
     turn: turnMetadata(item.turn, active),
   };
@@ -89,6 +104,7 @@ function response(model: Model, before?: number): AppServerReadThreadResponse {
 
 async function mount(model: Model) {
   const reads: Read[] = [];
+  sentKeys.clear();
   const visibility: Visibility = { issued: 0, settled: 0, live: new Map() };
   let emit: (event: AgentEvent) => void = () => { throw new Error("missing subscription"); };
   let first = true;
@@ -125,8 +141,8 @@ function assertLedger(model: Model, real: Real, rows = real.result.current.entri
   expect(new Set(Array.from(rows, (row) => row.id)).size, real.trace.join(" → ")).toBe(rows.length);
   const ledger = [...model.ledger, ...(model.optimistic ? [model.optimistic] : [])];
   const positions = new Map(ledger.map((item, index) => [key(item), index]));
-  // Text is the logical key, so an optimistic id and its acknowledged provider
-  // id cannot hide a duplicate. All generated messages have distinct text.
+  // A send's optimistic id resolves to its ledger item, so an optimistic row
+  // and its acknowledged provider row cannot hide a duplicate.
   const keys = logicalKeys(rows);
   expect(new Set(keys).size, real.trace.join(" → ")).toBe(keys.length);
   const ranks = keys.map((id) => {
@@ -151,7 +167,8 @@ function assertLiveRowsVisible(real: Real) {
 }
 
 function logicalKeys(rows: AppServerThreadEntry[]): string[] {
-  return Array.from(rows).flatMap((row) => row.type === "message" ? [row.text]
+  return Array.from(rows).flatMap((row) => row.type === "message"
+    ? [sentKeys.get(row.id) ?? (PROVIDER_ID.test(row.id) ? row.id : row.text)]
     : row.type === "activity" ? row.details.map((detail) => detail.id) : []);
 }
 
@@ -175,8 +192,15 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
     await act(async () => {
       switch (this.operation) {
         case "send": {
-          model.optimistic = { turn: model.turn + 1, sequence: 0, role: "user", time: NOW };
-          model.optimisticId = real.result.current.addOptimisticUserMessage(key(model.optimistic));
+          // reverse repeats the first message's text, as when "continue" is
+          // sent again. Only the send's turn can tell the two apart. The app
+          // binds a send once startTurn resolves, so two unbound sends never
+          // share a text for long: text alone could not tell them apart.
+          const repeated = textOf(model.ledger[0]!);
+          model.optimistic = { turn: model.turn + 1, sequence: 0, role: "user", time: NOW,
+            ...(this.reverse && model.unboundText !== repeated ? { text: repeated } : {}) };
+          model.optimisticId = real.result.current.addOptimisticUserMessage(textOf(model.optimistic));
+          if (model.optimisticId) sentKeys.set(model.optimisticId, key(model.optimistic));
           break;
         }
         case "start": {
@@ -190,12 +214,14 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
             // which binds the pending copy to the turn it opened.
             if (this.reverse && model.optimisticId) {
               real.result.current.bindOptimisticUserMessageToTurn(model.optimisticId, `turn-${item.turn}`);
+            } else if (item.text) {
+              model.unboundText = item.text;
             }
             // The owner's echo of the sent message. A window can miss it, for
             // example while unfocused, so clock 0 models a missed echo.
             if (this.clock !== 0) {
               real.emit("item/completed", { turnId: `turn-${item.turn}`, item: {
-                id: key(item), type: "userMessage", content: [{ type: "text", text: key(item) }],
+                id: key(item), type: "userMessage", content: [{ type: "text", text: textOf(item) }],
               } });
             }
           }
@@ -643,6 +669,33 @@ it("keeps a send whose echo was missed above a tool-only turn it preceded", asyn
       new LedgerCommand("send"), new LedgerCommand("read"), new LedgerCommand("start"), new LedgerCommand("complete"),
       new LedgerCommand("start"), new LedgerCommand("item", 0, true), new LedgerCommand("complete"),
       new LedgerCommand("start"), new LedgerCommand("older"),
+    ]);
+  } finally { clock.mockRestore(); }
+});
+
+// The missed-echo send repeats turn 0's text. An older page holding turn 0
+// must not hand that row's identity to the send.
+it("keeps a repeated send whose echo was missed out of an older turn's row", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("send", 0, true), new LedgerCommand("read"), new LedgerCommand("start"),
+      new LedgerCommand("complete"), new LedgerCommand("start"), new LedgerCommand("item", 0, true),
+      new LedgerCommand("complete"), new LedgerCommand("start"), new LedgerCommand("older"),
+      new LedgerCommand("older"), new LedgerCommand("older"),
+    ]);
+  } finally { clock.mockRestore(); }
+});
+
+// fast-check seed -452598666, path "683:0:0:10:10:9:12:13:14:14". The
+// pending send repeats the bound one's text. The bound send's turn, not that
+// text, identifies its owner copy, which keeps the send's live place.
+it("keeps a bound send in its place when a pending send repeats its text", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("send", 0, true), new LedgerCommand("start", 0, true), new LedgerCommand("item"),
+      new LedgerCommand("complete"), new LedgerCommand("send", 0, true), new LedgerCommand("resolve", 0, true),
     ]);
   } finally { clock.mockRestore(); }
 });
