@@ -368,9 +368,24 @@ export type ListBackendsRequest = {
   federationTarget?: FederationTarget;
 };
 
+/**
+ * The provider thread refresh an owner runs once at startup. `checking` until
+ * it ends; then `ready`, or `degraded` with the count of providers that failed.
+ */
+export type StartupProviderRefreshStatus = {
+  state: "checking" | "degraded" | "ready";
+  failedProviders?: number;
+};
+
 export type ListBackendsResponse = {
   fetchedAt: number;
   backends: BackendSummary[];
+  /**
+   * The owner's startup provider refresh. Absent before it starts and from
+   * owners that predate the field. A viewer that subscribed after the owner's
+   * `navigation/providerThreads/refreshed` reads here whether it already ran.
+   */
+  providerRefresh?: StartupProviderRefreshStatus;
 };
 
 /**

@@ -5,7 +5,7 @@ import fc from "fast-check";
 import { ThreadTitleGenerationService } from "@pwragent/owner-core/thread-title-generation-service";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -231,14 +231,13 @@ async function startDesktopOwner(
 }
 
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
-async function startOutpostOwner(hostKind: "desktop" | "headless" = "headless"): Promise<OwnerHost & { settleStartup(): Promise<void> }> {
+async function startOutpostOwner(hostKind: "desktop" | "headless" = "headless"): Promise<OwnerHost> {
   const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind });
   outpost.subscribe(EVENT_CLASSES);
-  const host: OwnerHost = { name: hostKind === "desktop" ? "desktop" : "outpost", ownerInstanceId: outpost.ownerInstanceId, client: outpost.client, methods: new Set(Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES)),
+  return { name: hostKind === "desktop" ? "desktop" : "outpost", ownerInstanceId: outpost.ownerInstanceId, client: outpost.client, methods: new Set(Object.keys(FEDERATION_BACKEND_METHOD_CAPABILITIES)),
     providerSteerCount: () => readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")
       .trim().split("\n").map(line => JSON.parse(line)).filter(item => item.method === "turn/steer").length,
     events: outpost.events, workspace: outpost.workspace, close: outpost.close };
-  return { ...host, settleStartup: () => awaitStartupProviderRefresh(host, outpost.env.PWRAGENT_HOME!) };
 }
 
 /**
@@ -255,27 +254,23 @@ async function settle(host: OwnerHost): Promise<void> {
 }
 
 /**
- * Waits until an owner process has finished the provider refresh it starts at
- * boot, then for its events to go quiet. Both hosts end that refresh with one
+ * Waits until an owner has finished the provider refresh it starts at boot,
+ * then for its events to go quiet. Both hosts end that refresh with one
  * `navigation/invalidated` + `navigation/providerThreads/refreshed` pair, and
  * whether it lands before the viewer subscribes or inside the first step
- * depends on load, not on either owner. No federation method reports the
- * refresh, so read the owner's log. The registry logs completion before it
- * publishes the refreshed threads and emits, so the line alone does not mean
- * the pair was sent: wait for it too, unless it went by before the viewer's
+ * depends on load, not on either owner. `listBackends` reports the refresh.
+ * The owner records the outcome before it publishes the refreshed threads and
+ * emits, so wait for the pair too, unless it went by before the viewer's
  * subscription took effect.
  */
-async function awaitStartupProviderRefresh(host: OwnerHost, pwragentHome: string): Promise<void> {
-  const logs = path.join(pwragentHome, "profiles/t/logs");
-  const logged = () => existsSync(logs) && readdirSync(logs).some(name =>
-    readFileSync(path.join(logs, name), "utf8").includes("startup provider thread refresh completed"));
+async function awaitStartupProviderRefresh(host: OwnerHost): Promise<void> {
   const refreshed = () => host.events.some(event => event.notification.method === "navigation/providerThreads/refreshed");
-  const waitFor = async (done: () => boolean, timeoutMs: number) => {
-    for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; await delay(50)) if (done()) return true;
-    return done();
-  };
-  if (!await waitFor(logged, 30_000)) throw new Error(`${host.name} never logged the end of its startup provider refresh in ${logs}.`);
-  await waitFor(refreshed, 5_000);
+  for (const deadline = Date.now() + 30_000; ; await delay(50)) {
+    const state = (await host.client.listBackends({})).providerRefresh?.state;
+    if (state === "ready" || state === "degraded") break;
+    if (Date.now() >= deadline) throw new Error(`${host.name} never finished its startup provider refresh (${state ?? "not started"}).`);
+  }
+  for (const deadline = Date.now() + 5_000; !refreshed() && Date.now() < deadline;) await delay(50);
   await settle(host);
 }
 
@@ -2851,7 +2846,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 
   it("generated read, model, rename and seen histories agree with the desktop owner oracle", async () => {
     const desktop = await startOutpostOwner("desktop");
-    let outpost: Awaited<ReturnType<typeof startOutpostOwner>> | undefined;
+    let outpost: OwnerHost | undefined;
     try {
       outpost = await startOutpostOwner();
       const hosts = [desktop, outpost];
@@ -2924,7 +2919,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
 
   it("fresh desktop and headless owner roots conform strictly across the whole thread lifecycle", async () => {
     const desktop = await startOutpostOwner("desktop");
-    let outpost: Awaited<ReturnType<typeof startOutpostOwner>> | undefined;
+    let outpost: OwnerHost | undefined;
     try {
       outpost = await startOutpostOwner();
       const used = [...new Set(FIRST_PROMPT_SCENARIO.map((step) => step.method))];
@@ -2934,7 +2929,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       }
       // The Outpost implements a subset of desktop's owner methods, never one desktop lacks.
       expect([...outpost.methods].filter((method) => !desktop.methods.has(method)), "outpost-only owner methods").toEqual([]);
-      await Promise.all([desktop.settleStartup(), outpost.settleStartup()]);
+      await Promise.all([desktop, outpost].map(awaitStartupProviderRefresh));
       const desktopRecords = await runScenario(desktop, FIRST_PROMPT_SCENARIO);
       const outpostRecords = await runScenario(outpost, FIRST_PROMPT_SCENARIO);
       const measured: OwnerConformanceBaseline = {
