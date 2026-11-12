@@ -1,5 +1,7 @@
 import fs from "node:fs";
-import path from "node:path";
+// The Outpost runs on Linux and macOS only, and Codex receives POSIX paths,
+// so the policy uses POSIX path rules on every platform that builds it.
+import { posix as path } from "node:path";
 
 /**
  * Codex sandbox policy for the contained Outpost.
