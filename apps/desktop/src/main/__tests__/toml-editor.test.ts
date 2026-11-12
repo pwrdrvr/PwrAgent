@@ -773,3 +773,46 @@ describe("applyTomlEdits with duplicate sections", () => {
     expect(result).toContain("[s]\ny = 2");
   });
 });
+
+describe("applyTomlEdits — repeated keys", () => {
+  it("writes an absent key once when two edits name it", () => {
+    const result = applyTomlEdits("[onboarding]\n", [
+      { op: "set", path: ["onboarding", "completed"], value: false },
+      { op: "set", path: ["onboarding", "completed"], value: true },
+    ]);
+    expect(result).toBe("[onboarding]\ncompleted = true\n");
+  });
+
+  it("removes later copies of a key when it is written, even as a no-op", () => {
+    const source = "[onboarding]\ncompleted = true # first\ncompleted = true\nother = 1\n";
+    const result = applyTomlEdits(source, [
+      { op: "set", path: ["onboarding", "completed"], value: true },
+    ]);
+    expect(result).toBe("[onboarding]\ncompleted = true # first\nother = 1\n");
+  });
+
+  it("deletes every copy of a deleted key", () => {
+    const source = "[s]\nk = 1\nk = 2\n";
+    expect(applyTomlEdits(source, [{ op: "delete", path: ["s", "k"] }]))
+      .toBe("[s]\n");
+  });
+
+  it("leaves a repeated key alone when no edit names it", () => {
+    const source = "[s]\nk = 1\nk = 2\nother = 1\n";
+    expect(applyTomlEdits(source, [{ op: "set", path: ["s", "other"], value: 2 }]))
+      .toBe("[s]\nk = 1\nk = 2\nother = 2\n");
+  });
+});
+
+describe("parseTomlTables — repeated keys", () => {
+  it("reads the last copy and warns instead of throwing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(parseTomlTables("[s]\nk = 1\nk = 2\n", "config.toml"))
+        .toEqual({ s: { k: 2 } });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Duplicate key 'k'"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
