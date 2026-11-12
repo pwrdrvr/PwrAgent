@@ -69,6 +69,14 @@ export function isAgentToolCallAllowed(
 
 type DynamicToolSpecLike = { type?: unknown; name?: unknown; tools?: unknown };
 
+/** The number of tools in a spec list, counting each tool inside a namespace. */
+export function countAgentTools(specs: readonly unknown[]): number {
+  return specs.reduce<number>((count, spec) => {
+    const value = spec as DynamicToolSpecLike | null;
+    return count + (value?.type === "namespace" && Array.isArray(value.tools) ? value.tools.length : 1);
+  }, 0);
+}
+
 /** Removes every advertised tool the allowlist does not name, and empty namespaces. */
 export function filterAdvertisedAgentTools<T>(allowlist: readonly string[], specs: readonly T[]): T[] {
   return specs.flatMap((spec): T[] => {
@@ -95,6 +103,8 @@ export function filterAdvertisedAgentTools<T>(allowlist: readonly string[], spec
  */
 export function createOutpostAgentToolMessageRewriter(allowlist: readonly string[]): (raw: string) => string {
   return (raw) => {
+    // Most outbound messages carry no tool list; skip parsing those.
+    if (!raw.includes("\"dynamicTools\"")) return raw;
     let envelope: unknown;
     try { envelope = JSON.parse(raw); } catch { return raw; }
     if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return raw;

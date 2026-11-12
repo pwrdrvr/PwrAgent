@@ -1,7 +1,7 @@
 import type { RegistryContext } from "./registry-context";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy, ownerSandboxForMode } from "../owner-runtime-policy";
-import { filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
+import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
@@ -15051,12 +15051,18 @@ export class DesktopBackendRegistry {
     }
     // The PDF server's tools run in the owner like dynamic tools, and it has
     // no per-call host gate, so a host that restricts agent tools offers it
-    // only when the grant covers every one of them.
+    // only when the grant covers every one of them. An empty list proves
+    // nothing about what the server resolves per call, so it fails closed.
     const agentToolAllowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
     if (agentToolAllowlist) {
       const pdfTools = buildPwrAgentMessagingPdfToolRouter(this.messagingHandler).buildDynamicToolSpecs();
-      const allowed = filterAdvertisedAgentTools(agentToolAllowlist, pdfTools);
-      if (JSON.stringify(allowed) !== JSON.stringify(pdfTools)) return undefined;
+      const pdfToolCount = countAgentTools(pdfTools);
+      if (
+        pdfToolCount === 0
+        || countAgentTools(filterAdvertisedAgentTools(agentToolAllowlist, pdfTools)) !== pdfToolCount
+      ) {
+        return undefined;
+      }
     }
     try {
       return await this.pdfToolMcpServer.registerClient({
