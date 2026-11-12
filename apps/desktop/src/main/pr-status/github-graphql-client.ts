@@ -27,6 +27,7 @@ import {
 } from "./pr-derivations";
 import type { GithubTerminalNode } from "./pr-terminal-details";
 import { githubMergeQueueStatus } from "./pr-merge-queue";
+import { noteMergeQueueRepository } from "./merge-queue-repositories";
 import {
   hasForgeRepositoryName,
   recordForgeRepositoryName,
@@ -666,6 +667,12 @@ export function mapGraphqlPrNode(
   const headSha = node.headRefOid?.trim() || commitShas[0];
   const lifecycleState = deriveLifecycleState(shaped);
   const mergeQueue = readGraphqlMergeQueue(node, lifecycleState);
+  // The poll already carries the queue setting, so a merge in this
+  // repository learns about its queue without a request of its own.
+  if (node.isMergeQueueEnabled === true && node.url) {
+    const ref = parsePrRefFromUrl(node.url);
+    if (ref) noteMergeQueueRepository("github.com", ref.owner, ref.repo);
+  }
 
   return {
     ...resolvePullRequestIdentity({

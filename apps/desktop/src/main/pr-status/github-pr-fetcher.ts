@@ -5,6 +5,7 @@ import {
   parseGithubMergeQueueGate,
   runGithubQueueMerge,
 } from "./github-merge-queue";
+import { isMergeQueueRepository, mentionsMergeQueue, noteMergeQueueRepository } from "./merge-queue-repositories";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
@@ -146,7 +147,7 @@ export type GithubPrFetcherOptions = {
    */
   ghAvailableCacheTtlMs?: number;
   /** Override the `gh` subprocess a to-do merge runs — used by tests. */
-  runGhCommand?: (command: string, args: string[], options: { cwd?: string; timeout: number }) => Promise<{ stdout: string }>;
+  runGhCommand?: (command: string, args: string[], options: { cwd?: string; timeout: number }) => Promise<{ stdout: string; stderr?: string }>;
 };
 
 export class GithubPrFetcher {
@@ -252,15 +253,32 @@ export class GithubPrFetcher {
     }
     params.assertCanMerge?.(reference.url);
     const label = `#${reference.number}`;
-    const queued = await this.mergeThroughQueue(reference, label, run);
-    if (queued) return queued;
+    // A repository never seen with a queue merges exactly as before.
+    const queueRepository = isMergeQueueRepository(reference.provider, reference.org, reference.repo);
+    if (queueRepository) {
+      const queued = await this.mergeThroughQueue(reference, label, run);
+      if (queued) return queued;
+    }
+    let output: { stdout: string; stderr?: string };
     try {
-      await run(["pr", "merge", params.pullRequest, `--${params.method}`], 60_000);
+      output = await run(["pr", "merge", params.pullRequest, `--${params.method}`], 60_000);
     } catch (error) {
       const err = error as { stderr?: string; message?: string };
       const detail = err.stderr?.trim() || err.message || String(error);
+      // Refused for want of the queue: learn the repository and queue it.
+      if (!queueRepository && mentionsMergeQueue(detail)) {
+        noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
+        const queued = await this.mergeThroughQueue(reference, label, run);
+        if (queued) return queued;
+      }
       const firstLine = detail.split("\n")[0];
       throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`);
+    }
+    // `gh pr merge` adds a PR to a required queue itself, and says so rather
+    // than merging: report that, not a merge.
+    if (mentionsMergeQueue(`${output.stdout}\n${output.stderr ?? ""}`)) {
+      noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
+      return { queued: true, summary: `Sent ${label} to the merge queue: it merges once the queue's checks pass` };
     }
     const verb = MERGE_METHOD_RESULTS[params.method];
     return {
@@ -272,7 +290,8 @@ export class GithubPrFetcher {
 
   /**
    * Add the PR to its base branch's merge queue when the branch requires
-   * one. Undefined when it does not, so the caller merges directly.
+   * one. Undefined when it does not, or when the queue cannot be read, so
+   * the caller merges with gh as before.
    */
   private async mergeThroughQueue(
     reference: PullRequestReferenceIdentity,

@@ -15,6 +15,7 @@ import {
   runGithubQueueMerge,
   type GithubMergeQueueGate,
 } from "./github-merge-queue";
+import { isMergeQueueRepository, mentionsMergeQueue, noteMergeQueueRepository } from "./merge-queue-repositories";
 import type { ForgeAttachment, ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
 import {
   BODY_READ_MAX_CHARS, COMMENT_READ_MAX_CHARS, UNTRUSTED, forgeWebUrl, num, pageUnifiedDiff, payloadItems, payloadObject, positive, readValidatedAttachment, str, untrusted, validateForgeAttachments,
@@ -143,7 +144,7 @@ export class GithubPrToolClient {
   }
 
   async mergeQueueRequirement(r: ForgeRepository, number: number, signal?: AbortSignal): Promise<{ kind: "merge_queue"; baseRef?: string } | undefined> {
-    if (r.provider !== "github") return undefined;
+    if (r.provider !== "github" || !isMergeQueueRepository(r.host, r.owner, r.repo)) return undefined;
     const gate = await this.mergeQueueGate(r, number, signal);
     return gate.required ? { kind: "merge_queue", ...(gate.baseRef ? { baseRef: gate.baseRef } : {}) } : undefined;
   }
@@ -282,13 +283,15 @@ export class GithubPrToolClient {
 
     switch (operation) {
       case "get_pull_request": {
-        // A queue changes what merging means, so the read says where it
-        // stands. The gate read runs beside the PR read and never fails it.
+        // A queue changes what merging means, so in a repository that has
+        // one the read says where it stands. It runs beside the PR read and
+        // never fails it; a repository without a queue makes no extra request.
         const number = await resolvePullRequestNumber();
-        providerRequests++;
+        const queueRepository = isMergeQueueRepository(r.host, r.owner, r.repo);
+        if (queueRepository) providerRequests++;
         const [raw, gate] = await Promise.all([
           readPullRequest(number, true),
-          this.mergeQueueGate(r, number, ctx.signal).catch(() => undefined),
+          queueRepository ? this.mergeQueueGate(r, number, ctx.signal).catch(() => undefined) : undefined,
         ]);
         const pr = withoutNode(raw);
         const removedDetail = describeMergeQueueRemoval(gate?.status);
@@ -479,15 +482,16 @@ export class GithubPrToolClient {
       }
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
-        providerRequests++;
-        // A queue read that fails (an Enterprise Server without the queue
-        // schema, a GraphQL outage) never blocks a merge: it merges as it
-        // always has, and GitHub itself refuses a direct merge past a queue.
-        const gate = await this.mergeQueueGate(r, args.number!, ctx.signal).catch((error: unknown) => {
-          if (ctx.signal?.aborted) throw error;
-          return undefined;
-        });
-        if (gate?.required) {
+        // Read the queue only when it can matter. A queue read that fails
+        // never blocks a merge: GitHub itself refuses a direct merge past one.
+        const readGate = async () => {
+          providerRequests++;
+          return await this.mergeQueueGate(r, args.number!, ctx.signal).catch((error: unknown) => {
+            if (ctx.signal?.aborted) throw error;
+            return undefined;
+          });
+        };
+        const enqueue = async (gate: GithubMergeQueueGate) => {
           // Never a direct merge here, with or without bypass rights.
           if (!gate.open) throw new ForgeReadError("invalid_arguments", `Pull request #${args.number} is not open.`);
           if (gate.headSha && args.expectedHeadSha && gate.headSha !== args.expectedHeadSha) {
@@ -513,6 +517,11 @@ export class GithubPrToolClient {
             return queued({ kind: "merge_queue", state: "not_queued" }, { queued: false, autoMergeEnabled: true, note: queuedNote(gate.baseRef, true) });
           }
           return queued(result.status, { note: queuedNote(gate.baseRef, false) });
+        };
+        // A repository never seen with a queue merges exactly as before.
+        if (isMergeQueueRepository(r.host, r.owner, r.repo)) {
+          const gate = await readGate();
+          if (gate?.required) return await enqueue(gate);
         }
         const method = args.method ?? ctx.defaultMergeMethod();
         let result: Payload;
@@ -520,6 +529,13 @@ export class GithubPrToolClient {
           result = object(await call("PUT", `/pulls/${args.number}/merge`, { merge_method: method, sha: args.expectedHeadSha, ...(args.commitTitle ? { commit_title: args.commitTitle } : {}), ...(args.commitMessage !== undefined ? { commit_message: args.commitMessage } : {}) }));
         } catch (error) {
           if (error instanceof ForgeReadError && error.code === "conflict") throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
+          // GitHub refused because the branch merges through a queue: learn
+          // the repository and queue the PR instead.
+          if (error instanceof ForgeReadError && mentionsMergeQueue(error.message)) {
+            noteMergeQueueRepository(r.host, r.owner, r.repo);
+            const gate = await readGate();
+            if (gate?.required) return await enqueue(gate);
+          }
           throw error;
         }
         return writeResult({ merged: result.merged === true, number: args.number, method, mergeCommitSha: str(result.sha, 64), message: str(result.message, 500), url: `${repositoryUrl(r)}/pull/${args.number}` });
