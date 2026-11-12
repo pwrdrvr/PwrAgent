@@ -5,7 +5,13 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { Readable } from "node:stream";
 import type {
   MessagingPrivateConversationResolveResult,
@@ -1852,7 +1858,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
     try {
       const body = await readRequestBody(request, FEISHU_WEBHOOK_BODY_LIMIT_BYTES);
-      const payload = parseFeishuWebhookPayload(body, this.config.encryptKey);
+      const payload = parseFeishuWebhookPayload(
+        body,
+        request.headers,
+        this.config.encryptKey,
+      );
       const result = await this.handleWebhookPayload(payload);
       if (
         result
@@ -1875,7 +1885,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       this.logger.warn?.("feishu webhook request failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      response.writeHead(400).end();
+      response.writeHead(error instanceof FeishuWebhookAuthError ? 401 : 400).end();
     }
   }
 
@@ -2610,30 +2620,116 @@ function setMetadataField(
   if (value !== undefined) metadata[key] = value;
 }
 
+class FeishuWebhookAuthError extends Error {}
+
+/**
+ * Authenticates and decodes one webhook request body.
+ *
+ * With an Encrypt Key configured, Feishu encrypts every callback and signs it
+ * with `sha256(timestamp + nonce + encryptKey + body)` in the
+ * `x-lark-signature` header. The verification token alone authenticates
+ * nothing: it travels inside every payload, so anyone who has seen one
+ * request can put it in a forged one. So when a key is configured, a request
+ * must be encrypted and carry a valid signature over its exact body before it
+ * is decrypted or dispatched.
+ *
+ * The one exception is the request-URL challenge, which only echoes its
+ * `challenge` value back and starts nothing. It is admitted unsigned only when
+ * it carries no signature headers and its decrypted body is a
+ * `url_verification`.
+ *
+ * Without a key, Feishu sends plaintext callbacks with no signature, and the
+ * in-body token check in `handleWebhookPayload` remains the only check.
+ */
 function parseFeishuWebhookPayload(
   body: Buffer,
+  headers: IncomingHttpHeaders,
   encryptKey: string | undefined,
 ): FeishuEventEnvelope {
   const parsed = JSON.parse(body.toString("utf8")) as unknown;
   const envelope = objectRecord(parsed);
   const encryptedPayload = stringField(envelope.encrypt);
-  if (!encryptedPayload) {
+  if (!encryptKey) {
+    if (encryptedPayload) {
+      throw new Error("Feishu encrypted webhook payload requires an encryption key.");
+    }
     return parsed as FeishuEventEnvelope;
   }
-  if (!encryptKey) {
-    throw new Error("Feishu encrypted webhook payload requires an encryption key.");
+  if (!encryptedPayload) {
+    throw new FeishuWebhookAuthError(
+      "Feishu webhook payload must be encrypted when an Encrypt Key is configured.",
+    );
   }
 
+  const signature = verifyFeishuWebhookSignature({ body, encryptKey, headers });
+  if (signature === "invalid") {
+    throw new FeishuWebhookAuthError("Feishu webhook signature is invalid.");
+  }
   const decrypted = JSON.parse(
     decryptFeishuEncryptedPayload(encryptedPayload, encryptKey),
   ) as unknown;
   const decryptedEnvelope = objectRecord(decrypted);
+  if (signature === "missing") {
+    if (decryptedEnvelope.type !== "url_verification") {
+      throw new FeishuWebhookAuthError("Feishu webhook signature is missing.");
+    }
+    return decryptedEnvelope as FeishuEventEnvelope;
+  }
   const passthrough = { ...envelope };
   delete passthrough.encrypt;
   return {
     ...decryptedEnvelope,
     ...passthrough,
   } as FeishuEventEnvelope;
+}
+
+/**
+ * Checks Feishu's `x-lark-signature` for an encrypted callback.
+ *
+ * Feishu signs the raw request body. Its Node SDK hashes the body after a
+ * `JSON.parse` / `JSON.stringify` round trip instead, which is the same string
+ * for the compact JSON Feishu sends. Both forms are accepted so a body that
+ * differs only in JSON whitespace does not break delivery. Each form still
+ * needs the Encrypt Key to sign.
+ *
+ * Returns `missing` only when none of the three signature headers is present.
+ * A partial set is `invalid`.
+ */
+function verifyFeishuWebhookSignature(params: {
+  body: Buffer;
+  encryptKey: string;
+  headers: IncomingHttpHeaders;
+}): "invalid" | "missing" | "valid" {
+  const rawTimestamp = params.headers["x-lark-request-timestamp"];
+  const rawNonce = params.headers["x-lark-request-nonce"];
+  const rawSignature = params.headers["x-lark-signature"];
+  if (rawTimestamp === undefined && rawNonce === undefined && rawSignature === undefined) {
+    return "missing";
+  }
+  if (
+    typeof rawTimestamp !== "string"
+    || typeof rawNonce !== "string"
+    || typeof rawSignature !== "string"
+  ) {
+    return "invalid";
+  }
+  const signature = rawSignature.toLowerCase();
+  const rawBody = params.body.toString("utf8");
+  const candidates = [rawBody];
+  try {
+    const normalized = JSON.stringify(JSON.parse(rawBody));
+    if (normalized !== rawBody) candidates.push(normalized);
+  } catch {
+    return "invalid";
+  }
+  let valid = false;
+  for (const candidate of candidates) {
+    const expected = createHash("sha256")
+      .update(rawTimestamp + rawNonce + params.encryptKey + candidate)
+      .digest("hex");
+    if (safeEqual(expected, signature)) valid = true;
+  }
+  return valid ? "valid" : "invalid";
 }
 
 function decryptFeishuEncryptedPayload(

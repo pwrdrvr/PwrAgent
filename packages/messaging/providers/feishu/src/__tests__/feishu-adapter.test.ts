@@ -1,5 +1,6 @@
 import { createCipheriv, createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuApi,
@@ -68,6 +69,45 @@ function encryptFeishuPayload(payload: unknown, encryptKey: string): string {
     cipher.update(JSON.stringify(payload), "utf8"),
     cipher.final(),
   ]).toString("base64");
+}
+
+/**
+ * Feishu's documented signature, written out independently of the adapter:
+ * sha256 over timestamp, nonce, Encrypt Key and the exact request body.
+ */
+function signFeishuBody(params: {
+  body: string;
+  encryptKey: string;
+  nonce: string;
+  timestamp: string;
+}): string {
+  return createHash("sha256")
+    .update(params.timestamp + params.nonce + params.encryptKey + params.body)
+    .digest("hex");
+}
+
+function signedFeishuHeaders(
+  body: string,
+  encryptKey: string,
+): Record<string, string> {
+  const timestamp = "1700000000";
+  const nonce = "nonce-1";
+  return {
+    "content-type": "application/json",
+    "x-lark-request-nonce": nonce,
+    "x-lark-request-timestamp": timestamp,
+    "x-lark-signature": signFeishuBody({ body, encryptKey, nonce, timestamp }),
+  };
+}
+
+function webhookServerPort(adapter: FeishuAdapter): number {
+  const address = (adapter as unknown as {
+    server: { address(): AddressInfo | string | null };
+  }).server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected Feishu test webhook server to listen on TCP");
+  }
+  return address.port;
 }
 
 function fakeApi(spies: {
@@ -1148,10 +1188,11 @@ describe("FeishuAdapter", () => {
         },
       };
 
+      const body = JSON.stringify({ encrypt: encryptFeishuPayload(payload, encryptKey) });
       const response = await fetch(`http://127.0.0.1:${address.port}`, {
         method: "POST",
-        body: JSON.stringify({ encrypt: encryptFeishuPayload(payload, encryptKey) }),
-        headers: { "content-type": "application/json" },
+        body,
+        headers: signedFeishuHeaders(body, encryptKey),
       });
 
       expect(response.status).toBe(200);
@@ -2044,5 +2085,215 @@ describe("FeishuAdapter inbound-rejected listeners", () => {
         reason: "unauthorized-actor",
       });
     }
+  });
+});
+
+describe("FeishuAdapter webhook authentication", () => {
+  const encryptKey = "encrypt-key";
+  let messageSequence = 0;
+
+  // Each event gets its own message id, so the adapter's duplicate filter can
+  // never be what drops a forged request.
+  function messageEvent(text: string, messageId = `om_signed_${++messageSequence}`) {
+    return {
+      schema: "2.0",
+      header: {
+        event_id: `evt_${messageId}`,
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "p2p",
+          content: JSON.stringify({ text }),
+          message_id: messageId,
+          message_type: "text",
+        },
+      },
+    };
+  }
+
+  async function withWebhookAdapter(
+    config: { encryptKey?: string; verificationToken?: string },
+    run: (params: {
+      events: MessagingInboundEvent[];
+      post: (body: string, headers?: Record<string, string>) => Promise<Response>;
+    }) => Promise<void>,
+  ): Promise<void> {
+    const { verificationToken: _token, ...configWithoutToken } = baseConfig;
+    const adapter = new FeishuAdapter({
+      config: {
+        ...configWithoutToken,
+        ...config,
+        callbackBaseUrl: "http://127.0.0.1:0",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    try {
+      const port = webhookServerPort(adapter);
+      await run({
+        events,
+        post: (body, headers = { "content-type": "application/json" }) =>
+          fetch(`http://127.0.0.1:${port}`, { method: "POST", body, headers }),
+      });
+    } finally {
+      await adapter.stop();
+    }
+  }
+
+  // Rule: with an Encrypt Key configured, nothing reaches dispatch unless the
+  // request carries Feishu's signature over its exact body. The verification
+  // token rides inside every payload, so it can never stand in for the
+  // signature.
+  it("dispatches a signed request and rejects every unsigned or altered variant", async () => {
+    await withWebhookAdapter({ encryptKey, verificationToken: "verify-token" }, async ({
+      events,
+      post,
+    }) => {
+      const mutations = [
+        "plaintext-with-token",
+        "no-signature-headers",
+        "wrong-key",
+        "other-timestamp",
+        "other-nonce",
+        "other-ciphertext",
+        "missing-one-header",
+      ] as const;
+      await fc.assert(
+        fc.asyncProperty(
+          fc.string({ minLength: 1, maxLength: 40 }).filter((text) => text.trim().length > 0),
+          fc.integer({ min: 1_600_000_000, max: 1_900_000_000 }).map(String),
+          fc.string({ minLength: 1, maxLength: 16 }).filter((nonce) => /^[\x21-\x7e]+$/.test(nonce)),
+          fc.constantFrom(...mutations),
+          async (text, timestamp, nonce, mutation) => {
+            events.length = 0;
+            const event = messageEvent(`hello ${text}`);
+            const body = JSON.stringify({ encrypt: encryptFeishuPayload(event, encryptKey) });
+            const signature = signFeishuBody({ body, encryptKey, nonce, timestamp });
+            const headers = {
+              "content-type": "application/json",
+              "x-lark-request-nonce": nonce,
+              "x-lark-request-timestamp": timestamp,
+              "x-lark-signature": signature,
+            };
+
+            const accepted = await post(body, headers);
+            expect(accepted.status).toBe(200);
+            expect(events).toHaveLength(1);
+
+            events.length = 0;
+            let forged: Response;
+            switch (mutation) {
+              case "plaintext-with-token":
+                forged = await post(JSON.stringify(event));
+                break;
+              case "no-signature-headers":
+                forged = await post(body);
+                break;
+              case "wrong-key":
+                forged = await post(body, {
+                  ...headers,
+                  "x-lark-signature": signFeishuBody({
+                    body,
+                    encryptKey: "not-the-key",
+                    nonce,
+                    timestamp,
+                  }),
+                });
+                break;
+              case "other-timestamp":
+                forged = await post(body, {
+                  ...headers,
+                  "x-lark-request-timestamp": `${timestamp}0`,
+                });
+                break;
+              case "other-nonce":
+                forged = await post(body, { ...headers, "x-lark-request-nonce": `${nonce}x` });
+                break;
+              case "other-ciphertext":
+                forged = await post(
+                  JSON.stringify({
+                    encrypt: encryptFeishuPayload(messageEvent(`hello ${text}!`), encryptKey),
+                  }),
+                  headers,
+                );
+                break;
+              case "missing-one-header": {
+                const { "x-lark-request-nonce": _nonce, ...partial } = headers;
+                forged = await post(body, partial);
+                break;
+              }
+            }
+            expect(forged.status).toBe(401);
+            expect(events).toEqual([]);
+          },
+        ),
+        { numRuns: 40 },
+      );
+    });
+  });
+
+  it("accepts a signature over the compact JSON form of a reformatted body", async () => {
+    await withWebhookAdapter({ encryptKey, verificationToken: "verify-token" }, async ({
+      events,
+      post,
+    }) => {
+      const compact = JSON.stringify({
+        encrypt: encryptFeishuPayload(messageEvent("spaced"), encryptKey),
+      });
+      const spaced = JSON.stringify(JSON.parse(compact), null, 2);
+
+      const response = await post(spaced, signedFeishuHeaders(compact, encryptKey));
+
+      expect(response.status).toBe(200);
+      expect(events).toHaveLength(1);
+    });
+  });
+
+  it("answers an unsigned encrypted URL challenge without dispatching anything", async () => {
+    await withWebhookAdapter({ encryptKey, verificationToken: "verify-token" }, async ({
+      events,
+      post,
+    }) => {
+      const response = await post(JSON.stringify({
+        encrypt: encryptFeishuPayload({
+          challenge: "challenge-1",
+          token: "verify-token",
+          type: "url_verification",
+        }, encryptKey),
+      }));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ challenge: "challenge-1" });
+      expect(events).toEqual([]);
+    });
+  });
+
+  it("keeps the in-body token check when only a verification token is configured", async () => {
+    await withWebhookAdapter({ verificationToken: "verify-token" }, async ({ events, post }) => {
+      const event = messageEvent("token only", "om_token_only");
+      const forged = await post(JSON.stringify({
+        ...event,
+        header: { ...event.header, token: "wrong-token" },
+      }));
+      expect(forged.status).toBe(401);
+      expect(events).toEqual([]);
+
+      const accepted = await post(JSON.stringify(event));
+      expect(accepted.status).toBe(200);
+      expect(events).toHaveLength(1);
+    });
   });
 });
