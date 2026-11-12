@@ -1411,15 +1411,17 @@ function mergeImagePartsFromSources<
   }
 
   const exact = sources.find((candidate) => candidate.id === message.id);
+  // Text, not the sent turn: a steer in the launchpad's turn shares that
+  // turn, and must not inherit the launchpad prompt's attachments.
   const optimistic = sources.filter((candidate) => candidate.id.startsWith("optimistic-launchpad-")
-    && messageEchoesOptimisticEntry(message, candidate)
+    && messageTextMatchesEntry(message, candidate)
     && candidate.createdAt !== undefined && message.createdAt !== undefined
     && message.createdAt >= candidate.createdAt);
   // Text alone is not identity: repeated captions (including empty captions)
   // can belong to entirely different attachments. Only an unambiguous send
   // echo may bridge the optimistic and provider message IDs.
   const source = exact ?? (optimistic.length === 1
-    && targets.filter((target) => messageEchoesOptimisticEntry(target, optimistic[0])).length === 1
+    && targets.filter((target) => messageTextMatchesEntry(target, optimistic[0])).length === 1
     ? optimistic[0] : undefined);
   if (!source?.parts || source.parts.filter((part) => part.type === "image").length
     <= (message.parts ?? []).filter((part) => part.type === "image").length) {
@@ -1613,11 +1615,11 @@ function pruneOptimisticEntries(
         && messageMatchesOptimisticEntry(message, entry, {
           allowImageUrlMismatch: true,
         })
-      ) && !response.replay.entries.some((candidate) =>
+      ) && !(readSentTurnId(entry) && response.replay.entries.some((candidate) =>
         candidate.type === "message"
         && candidate.id !== reconciledLaunchpadMessageId
         && messageEchoesSentTurn(candidate, entry)
-      );
+      ));
     }
 
     if (entry.type === "review") {
@@ -3847,14 +3849,20 @@ function messageEchoesOptimisticEntry(
   message: AppServerThreadMessage & { turn?: AppServerThreadTurnMetadata },
   entry: AppServerThreadMessageEntry
 ): boolean {
-  if (message.role !== entry.role) {
-    return false;
-  }
-
   return (
-    normalizeComposerFileReferenceText(message.text) ===
+    messageTextMatchesEntry(message, entry)
+    || (message.role === entry.role && messageEchoesSentTurn(message, entry))
+  );
+}
+
+function messageTextMatchesEntry(
+  message: AppServerThreadMessage,
+  entry: AppServerThreadMessageEntry
+): boolean {
+  return (
+    message.role === entry.role
+    && normalizeComposerFileReferenceText(message.text) ===
       normalizeComposerFileReferenceText(entry.text)
-    || messageEchoesSentTurn(message, entry)
   );
 }
 
