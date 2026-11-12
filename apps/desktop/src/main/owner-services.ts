@@ -426,6 +426,8 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   // already imports the registry, so the reverse import would be a cycle.
   const federationAgentToolOptions = {
     targetStore: getDesktopOverlayStore(),
+    resolveCallerExecutionMode: async (context: PwrAgentFederationContext) =>
+      await getDesktopBackendRegistry().resolveAgentCallerExecutionMode(context),
     resolveSourceTurnAttachments: (context: PwrAgentFederationContext) => {
       const turnId = context.turnId?.trim();
       return turnId
@@ -474,12 +476,16 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   //   in it — so it returns nothing and the operator's pasted screenshots
   //   never reach the thread they described. The intake's staged
   //   attachments are handed in directly instead.
+  // - `resolveCallerExecutionMode`: the helper turn has no thread whose
+  //   access it could pass on. The intake agent may name Default Access;
+  //   without a mode the thread takes the project's own.
   getDesktopBackendRegistry().setStarMapIntakeFederationHandlerFactory(
     (attachments) =>
       createFederationAgentToolsHandler({
         ...federationAgentToolOptions,
         resolveMessageOrigin: () => ({ kind: "pwragent" }),
         resolveSourceTurnAttachments: () => attachments,
+        resolveCallerExecutionMode: () => "default",
       }),
   );
   getDesktopBackendRegistry().setFederatedThreadMessageHandler(
@@ -681,9 +687,11 @@ wireOwnerRendererEvents();
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,
     mcpGateway, scheduledActions, automations, leaseManager, federationLease, messagingLease,
+    // A to-do runs on the operator's click, which approves the mode its
+    // card shows, so these handlers skip the agent access ceiling.
     todoFederation: {
-      federation: federationAgentToolsHandler,
-      federationWithOrigin: (messageOrigin: AppServerThreadMessageOrigin) => createFederationAgentToolsHandler({ ...federationAgentToolOptions, resolveMessageOrigin: () => messageOrigin }),
+      federation: createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true }),
+      federationWithOrigin: (messageOrigin: AppServerThreadMessageOrigin) => createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true, resolveMessageOrigin: () => messageOrigin }),
     },
     prewarm: prewarmInitialThreadList,
     onConfigPatchWritten: async (patch: DesktopSettingsConfigPatch, previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>) => {
