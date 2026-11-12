@@ -203,8 +203,19 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   interacted: boolean;
   lastTouchedAt: number;
   loadedHistory?: LoadedTranscriptHistory;
+  /**
+   * Counts restarts of older-page history. An older page requested before a
+   * restart belongs to a window the session no longer shows and is dropped.
+   */
+  loadedHistoryResets?: number;
   loading: boolean;
   loadingMore: boolean;
+  /**
+   * Turns `response` holds from provider pages, as distinct from rows seen
+   * only on the live stream. A page is a contiguous run of turns, so a newest
+   * page that shares one of these turns continues the tail without a gap.
+   */
+  providerPageTurnIds?: ReadonlySet<string>;
   needsHydrationAfterCompletion: boolean;
   nextLiveEntrySequence: number;
   // ThreadView's completed live aggregates live in a keyed ref store. State
@@ -991,6 +1002,26 @@ function mergeTranscriptMessages(
   }
 
   return merged;
+}
+
+function transcriptTurnIds(entries: AppServerThreadEntry[]): Set<string> {
+  return new Set(entries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
+}
+
+function withoutTranscriptTurns(
+  response: AppServerReadThreadResponse,
+  turnIds: ReadonlySet<string>,
+): AppServerReadThreadResponse {
+  const entries = response.replay.entries.filter((entry) =>
+    !entry.turn?.id || !turnIds.has(entry.turn.id));
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries,
+      messages: transcriptMessagesForEntries(entries, response.replay.messages),
+    },
+  };
 }
 
 function preserveRetainedTranscriptTail(
@@ -5642,16 +5673,41 @@ export function useThreadSessionState(params: {
             transcriptOrderSources,
             liveTranscriptSources
           );
+          // Keep the cursor bridge for an in-flight older page, and the
+          // observed live tail when a lifecycle or item event overtook this
+          // read. Dropping a completed message also loses the sequence that
+          // its redelivery must reuse, even if the turn itself did not change.
+          const bridgesRetainedRows = Boolean(current.loadedHistory) || current.loadingMore
+            || lifecycleChangedDuringRead || transcriptChangedDuringRead;
+          const pageTurnIds = transcriptTurnIds(response.replay.entries);
+          const previousPageTurnIds = current.providerPageTurnIds;
+          // A bridge assumes the page continues the provider rows above it.
+          // A page cursor falls between turns, so that holds only when the page
+          // shares a turn with them. Otherwise turns can lie between the two
+          // that no loaded page or cursor covers, such as a tool-only turn
+          // whose live row was pruned once it completed. Live rows matching
+          // the page prove nothing: they are not a provider page. Restart the
+          // history from this page's own cursor instead.
+          const skipsProviderTurns = bridgesRetainedRows
+            && response.replay.pagination.supportsPagination
+            && response.replay.pagination.hasPreviousPage
+            && previousPageTurnIds !== undefined
+            && previousPageTurnIds.size > 0
+            && ![...previousPageTurnIds].some((turnId) => pageTurnIds.has(turnId));
+          if (skipsProviderTurns) {
+            delete loadedHistoryIndexesRef.current[targetThreadKey];
+          }
           const responseWithRetainedTail = preserveRetainedTranscriptTail(
             orderedResponse,
-            current.response,
-            // Keep the cursor bridge for an in-flight older page, and the
-            // observed live tail when a lifecycle or item event overtook this
-            // read. Dropping a completed message also loses the sequence that
-            // its redelivery must reuse, even if the turn itself did not change.
-            Boolean(current.loadedHistory) || current.loadingMore
-              || lifecycleChangedDuringRead || transcriptChangedDuringRead,
+            skipsProviderTurns && current.response && previousPageTurnIds
+              ? withoutTranscriptTurns(current.response, previousPageTurnIds)
+              : current.response,
+            bridgesRetainedRows,
           );
+          const providerPageTurnIds =
+            bridgesRetainedRows && !skipsProviderTurns && previousPageTurnIds
+              ? new Set([...previousPageTurnIds, ...pageTurnIds])
+              : pageTurnIds;
           const hydratedPendingRequest = lifecycleChangedDuringRead
             ? undefined
             : response.pendingRequest;
@@ -5811,8 +5867,16 @@ export function useThreadSessionState(params: {
             loadedHistory:
               response.replay.pagination.supportsPagination
               && response.replay.pagination.hasPreviousPage
+              && !skipsProviderTurns
                 ? current.loadedHistory
                 : undefined,
+            ...(skipsProviderTurns
+              ? {
+                  loadedHistoryResets: (current.loadedHistoryResets ?? 0) + 1,
+                  loadingMore: false,
+                }
+              : {}),
+            providerPageTurnIds,
             loading: false,
             completionHydrationRetries,
             compactionOrderSources: undefined,
@@ -7583,6 +7647,7 @@ export function useThreadSessionState(params: {
             loadedHistory: undefined,
             loading: false,
             loadingMore: false,
+            providerPageTurnIds: undefined,
             pendingUsageActivityEntry: undefined,
             pendingTurnUsage: undefined,
             pendingStatusText: undefined,
@@ -7839,6 +7904,7 @@ export function useThreadSessionState(params: {
     }
 
     const requestVersion = hydrationsRef.current.get(threadKey)?.requestVersion ?? 0;
+    const loadedHistoryResets = selectedSession?.loadedHistoryResets;
     updateSession(threadKey, (current) => ({
       ...current,
       error: undefined,
@@ -7892,12 +7958,16 @@ export function useThreadSessionState(params: {
       let appendedHistory: LoadedTranscriptHistory | undefined;
       updateSession(threadKey, (current) => {
         if ((hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) !== requestVersion) return current;
+        // A newest page restarted history while this page was in flight. Its
+        // cursor addressed the old window, so the page cannot join the new one.
+        if (current.loadedHistoryResets !== loadedHistoryResets) return current;
         if (!current.response) {
           delete loadedHistoryIndexesRef.current[threadKey];
           return {
             ...current,
             lastTouchedAt: Date.now(),
             loadingMore: false,
+            providerPageTurnIds: transcriptTurnIds(reconciledOlderResponse.replay.entries),
             response: reconciledOlderResponse,
           };
         }
@@ -7926,6 +7996,7 @@ export function useThreadSessionState(params: {
 
       updateSession(threadKey, (current) => {
         if ((hydrationsRef.current.get(threadKey)?.requestVersion ?? 0) !== requestVersion) return current;
+        if (current.loadedHistoryResets !== loadedHistoryResets) return current;
         return {
           ...current,
           error: error instanceof Error ? error.message : String(error),
@@ -7938,6 +8009,7 @@ export function useThreadSessionState(params: {
     desktopApi,
     selectedPagination,
     selectedSession?.activeTurnId,
+    selectedSession?.loadedHistoryResets,
     selectedSession?.loadingMore,
     thread,
     threadKey,
