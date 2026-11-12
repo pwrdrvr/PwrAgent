@@ -23,6 +23,7 @@ import {
 } from "react";
 import { getDesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
+import { isPendingEntryId } from "./pending-entry-id";
 import { observeThreadLinkRows, readThreadLinkRow, type ThreadLinkRow } from "./thread-link-rows";
 
 export type ResolvedThreadLink = {
@@ -44,6 +45,19 @@ export type ThreadLinkSource = {
   backend: AppServerBackendKind;
   instanceId: FederationInstanceId;
 };
+
+/**
+ * The frame one transcript entry's links are read in. A pending entry is
+ * text the operator wrote in this window and the owner has not recorded
+ * yet. Its bare links name this viewer's threads, as they did in the
+ * composer; the owner's copy names this viewer explicitly once it arrives.
+ */
+export function transcriptEntryLinkSource(
+  entryId: string,
+  source: ThreadLinkSource | undefined,
+): ThreadLinkSource | undefined {
+  return isPendingEntryId(entryId) ? undefined : source;
+}
 
 export type ThreadLinkContextValue = {
   /**

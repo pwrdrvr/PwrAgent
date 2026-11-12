@@ -54,7 +54,7 @@ import { TranscriptRewindMarker } from "./TranscriptRewindMarker";
 import { injectTurnFailures } from "./turn-failure-entries";
 import { capAtTurnAnswer } from "./turn-answer-placement";
 import type { DesktopApi } from "../../lib/desktop-api";
-import type { ThreadLinkSource } from "../../lib/thread-links";
+import { transcriptEntryLinkSource, type ThreadLinkSource } from "../../lib/thread-links";
 import {
   isSidebarResizing,
   subscribeSidebarResizing,
@@ -1627,7 +1627,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   onExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   skills={skills}
-                  threadLinkSource={props.threadLinkSource}
+                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource)}
                 />
               ) : item.entry.type === "plan" ? (
                 <TranscriptPlan
@@ -1635,7 +1635,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   fileViewerContext={props.fileViewerContext}
-                  threadLinkSource={props.threadLinkSource}
+                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource)}
                 />
               ) : item.entry.type === "review" ? (
                 <TranscriptReview
@@ -1646,7 +1646,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   parentThreadId={props.parentThreadId}
                   parentThreadBackend={props.parentThreadBackend}
                   fileViewerContext={props.fileViewerContext}
-                  threadLinkSource={props.threadLinkSource}
+                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource)}
                 />
               ) : (
                 <TranscriptMessage
@@ -1658,7 +1658,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   fileViewerContext={props.fileViewerContext}
                   skills={skills}
                   subAgents={props.subAgents}
-                  threadLinkSource={props.threadLinkSource}
+                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource)}
                   onOpenImage={props.onOpenImage}
                   asyncQuestionReplies={asyncQuestionReplies}
                   asyncQuestionSentAnswers={props.sentAsyncQuestionAnswers}

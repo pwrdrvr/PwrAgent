@@ -48,6 +48,7 @@ import type {
 import { isAppServerBackendKind, isCelestialIconId, threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
+import { isPendingEntryId } from "./pending-entry-id";
 import {
   agentEventThreadIdentityKey,
   threadSummaryIdentityKey,
@@ -3986,7 +3987,7 @@ function isOptimisticUserMessageEntry(
   return (
     entry.type === "message" &&
     entry.role === "user" &&
-    entry.id.startsWith("optimistic-")
+    isPendingEntryId(entry.id)
   );
 }
 

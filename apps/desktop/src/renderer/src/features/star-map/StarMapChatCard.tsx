@@ -28,6 +28,7 @@ import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { hashReferenceThreadIdentity } from "../../lib/hash-references";
+import type { ThreadLinkSource } from "../../lib/thread-links";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -367,6 +368,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         ? ({ scope: "remote", instanceId: remoteInstanceId } as const)
         : undefined,
     [remoteInstanceId],
+  );
+  // The owner's frame for the transcript's bare links, as the thread view's.
+  const threadLinkSource = useMemo<ThreadLinkSource | undefined>(
+    () =>
+      remoteInstanceId
+        ? { backend: thread.source, instanceId: remoteInstanceId }
+        : undefined,
+    [remoteInstanceId, thread.source],
   );
   const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
   const ownedComposerDraftStore = useOwnedComposerDraftStore(
@@ -2090,6 +2099,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
             runningTurnUsageText={session.runningTurnUsageText}
             threadId={thread.id}
+            threadLinkSource={threadLinkSource}
             transientMessages={session.transientMessages}
           />
         </div>
