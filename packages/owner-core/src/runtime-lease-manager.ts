@@ -38,6 +38,13 @@ export type RuntimeLeaseManagerOptions = {
   store: RuntimeLeaseStorage;
   runtimeIdentityIsAlive: (owner: AppRuntimeInstanceRecord) => boolean;
   systemBootedAt: number;
+  /**
+   * Runtime instances proven gone by evidence stronger than PID identity,
+   * such as a kernel-released lock their process held for its whole life.
+   * A container reuses PID 1 for every owner it runs, so a PID check cannot
+   * tell a replaced owner from a live one.
+   */
+  exitedInstanceIds?: Iterable<string>;
 };
 
 /**
@@ -52,7 +59,9 @@ export type RuntimeLeaseManagerOptions = {
  * minute safety grace, a challenger may replace the dead owner inside the
  * store's atomic acquisition transaction. This deliberately favors single-
  * owner safety over taking work away from a process that is alive but
- * temporarily hung.
+ * temporarily hung. A host may also name instances it has proven gone
+ * (`exitedInstanceIds`); those are replaced immediately, like an owner from
+ * before the current boot.
  */
 export class RuntimeLeaseManager {
   private readonly instanceId: string;
@@ -66,6 +75,7 @@ export class RuntimeLeaseManager {
     owner: AppRuntimeInstanceRecord,
   ) => boolean;
   private readonly systemBootedAt: number;
+  private readonly exitedInstanceIds: ReadonlySet<string>;
   private readonly heldLeases = new Set<RuntimeLeaseKind>();
   private readonly claims = new Map<RuntimeLeaseKind, Set<RuntimeLeaseClaim>>();
   private instanceRecorded = false;
@@ -81,6 +91,7 @@ export class RuntimeLeaseManager {
     this.store = options.store;
     this.systemBootedAt = options.systemBootedAt;
     this.runtimeIdentityIsAlive = options.runtimeIdentityIsAlive;
+    this.exitedInstanceIds = new Set(options.exitedInstanceIds);
   }
 
   get id(): string {
@@ -133,7 +144,7 @@ export class RuntimeLeaseManager {
       isOwnerAlive: (owner: AppRuntimeInstanceRecord) =>
         this.isOwnerAlive(owner),
       canReclaimOwnerImmediately: (owner: AppRuntimeInstanceRecord) =>
-        this.ownerPredatesCurrentBoot(owner),
+        this.ownerIsConclusivelyGone(owner),
       now: this.now(),
     };
     const result = kind === "messaging"
@@ -212,7 +223,7 @@ export class RuntimeLeaseManager {
     }
     if (this.isOwnerAlive(owner)) return false;
     return owner.exitedAt === undefined
-      || this.ownerPredatesCurrentBoot(owner)
+      || this.ownerIsConclusivelyGone(owner)
       || this.now() >= owner.exitedAt + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
   }
 
@@ -249,7 +260,7 @@ export class RuntimeLeaseManager {
   }
 
   private isOwnerAlive(owner: AppRuntimeInstanceRecord): boolean {
-    if (owner.exitedAt !== undefined) {
+    if (owner.exitedAt !== undefined || this.exitedInstanceIds.has(owner.instanceId)) {
       return false;
     }
     if (owner.processId === this.processId) {
@@ -258,9 +269,10 @@ export class RuntimeLeaseManager {
     return this.runtimeIdentityIsAlive(owner);
   }
 
-  private ownerPredatesCurrentBoot(owner: AppRuntimeInstanceRecord): boolean {
-    return owner.startedAt
-      < this.systemBootedAt - RUNTIME_BOOT_TIME_TOLERANCE_MS;
+  /** No hung-process grace applies: this owner cannot still be running. */
+  private ownerIsConclusivelyGone(owner: AppRuntimeInstanceRecord): boolean {
+    return this.exitedInstanceIds.has(owner.instanceId)
+      || owner.startedAt < this.systemBootedAt - RUNTIME_BOOT_TIME_TOLERANCE_MS;
   }
 
   private readLease(kind: RuntimeLeaseKind): MessagingRuntimeLeaseRecord | undefined {

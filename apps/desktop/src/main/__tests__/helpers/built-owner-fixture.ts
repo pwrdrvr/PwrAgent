@@ -38,8 +38,8 @@ export async function buildOwnerFixture(directory: string, kind: "desktop" | "he
       let source = fs.readFileSync(args.path, "utf8");
       if (kind === "desktop") {
         source = source.replace('import { createHeadlessOwnerHostServices } from "./owner-host-services";',
-          'import { createDesktopOwnerHostServices } from "../shell/owner-host-services"; import { createOutpostRuntimePolicy } from "../owner-runtime-policy";');
-        source = source.replace('createHeadlessOwnerHostServices({ runtime, profileDirectory, onQuit: () => signal("owner-request") })', "({ ...createDesktopOwnerHostServices(), runtimePolicy: createOutpostRuntimePolicy() })");
+          'import { createDesktopOwnerHostServices } from "../shell/owner-host-services";');
+        source = source.replace('createHeadlessOwnerHostServices({ runtime, profileDirectory, onQuit: () => signal("owner-request"), runtimePolicy })', "({ ...createDesktopOwnerHostServices(), runtimePolicy })");
       }
       return { contents: source + "\n" + extraExports, loader: "ts" };
     });

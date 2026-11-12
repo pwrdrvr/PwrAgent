@@ -28,10 +28,19 @@ launch another installation if that executable becomes unavailable. PwrAgent
 never provisions Codex credentials or reads its storage files.
 
 The profile is under `$PWRAGENT_HOME/profiles/NAME` (default root `~/.pwragent`).
-Use the same account, root and profile for every local command. `serve` takes an
-exclusive 0600 `state/headless/owner.lock` before opening the owner. Stop the
-recorded PID and its descendants before manually removing a lock after a crash;
-never remove a live owner's lock. Back up the entire profile while stopped.
+Use the same account, root and profile for every local command. `serve` holds an
+exclusive OS lock on the private `state/headless/owner-lock.db` for its whole
+life, and writes a 0600 `state/headless/owner.lock` beside it. The kernel
+releases the lock when the process exits, however it exits, so a restarted or
+replacement container on the same volume starts without cleanup, even though
+every container runs the owner as PID 1. A second `serve` on the profile
+refuses while the first is running. The new owner also takes over the profile
+federation and messaging leases of the owners that held this lock before it.
+
+An `owner.lock` written by PwrAgent 1.4.0 or earlier is never taken over,
+because that version may still be running. Stop the recorded PID and its
+descendants before removing that file; never remove a live owner's lock. Back
+up the entire profile while stopped.
 
 Headless secrets use AES-256-GCM and a private 0600 `state/headless-secret.key`.
 Keep that key with the database backup. Desktop keeps its OS keychain. Secrets
