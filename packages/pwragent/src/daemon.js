@@ -71,7 +71,6 @@ export async function serve({ directory, workspace, home, command, profile }) {
   };
   const signalStop = () => { void stop(); };
   try {
-    lock.record(owner.processRuntimeInstanceId());
     process.on("SIGTERM", signalStop);
     process.on("SIGINT", signalStop);
     const sandbox = await checkCodexSandbox({ command, home, workspace, signal: preflight.signal });
@@ -79,6 +78,9 @@ export async function serve({ directory, workspace, home, command, profile }) {
     if (sandbox.status !== "ready") throw new Error(sandbox.error);
     opened = true;
     await owner.prepareOutpostProfile(profile);
+    // Record only once a lease can follow: a start that fails earlier must not
+    // push a crashed lease holder out of the bounded holder list.
+    lock.record(owner.processRuntimeInstanceId());
     services = await owner.startHeadlessHost(undefined, { manageSignals: false, exitedRuntimeInstanceIds: lock.previousInstanceIds });
     if (shutdown) { await owner.shutdownHeadlessHost("outpost-startup-cancelled"); return await done; }
     server = net.createServer((socket) => {

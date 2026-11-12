@@ -66,7 +66,7 @@ export function acquireHeadlessOwnerLock(
       throw new Error(`Headless owner lock already exists: ${markerPath}. An older PwrAgent wrote it; see README crash recovery and never remove a live owner's lock.`);
     }
     db.exec("CREATE TABLE IF NOT EXISTS holders (instance_id TEXT PRIMARY KEY, recorded_at INTEGER NOT NULL)");
-    const previousInstanceIds = db.prepare("SELECT instance_id FROM holders ORDER BY recorded_at DESC, rowid DESC").pluck().all() as string[];
+    const previousInstanceIds = db.prepare("SELECT instance_id FROM holders ORDER BY rowid DESC").pluck().all() as string[];
     writeMarker(markerPath, options.processId ?? process.pid);
     return {
       previousInstanceIds,
@@ -75,7 +75,9 @@ export function acquireHeadlessOwnerLock(
         // One commit per owner start. The exclusive locking mode keeps the
         // lock after this commit, until the connection closes.
         db.prepare("INSERT OR REPLACE INTO holders (instance_id, recorded_at) VALUES (?, ?)").run(instanceId, Date.now());
-        db.prepare("DELETE FROM holders WHERE rowid NOT IN (SELECT rowid FROM holders ORDER BY recorded_at DESC, rowid DESC LIMIT ?)").run(RECORDED_HOLDER_LIMIT);
+        // Insertion order, not the wall clock: a clock set back between
+        // containers must not prune the owner just recorded.
+        db.prepare("DELETE FROM holders WHERE rowid NOT IN (SELECT rowid FROM holders ORDER BY rowid DESC LIMIT ?)").run(RECORDED_HOLDER_LIMIT);
         db.exec("COMMIT");
       },
       release() {
