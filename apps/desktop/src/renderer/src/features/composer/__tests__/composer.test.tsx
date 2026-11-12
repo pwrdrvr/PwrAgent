@@ -8979,9 +8979,11 @@ describe("Composer", () => {
       }));
       const onReplySubmissionSettled = vi.fn();
       const addOptimisticUserMessage = vi.fn(() => "optimistic-answer");
+      const bindOptimisticUserMessageToTurn = vi.fn();
       const onUserRepliedToThread = vi.fn();
       const props = {
         addOptimisticUserMessage,
+        bindOptimisticUserMessageToTurn,
         backends: [backendSummary("codex")],
         desktopApi: { onAgentEvent: () => () => undefined, startTurn },
         onReplySubmissionSettled,
@@ -9007,6 +9009,12 @@ describe("Composer", () => {
         input: [{ type: "text", text: reply }],
       }));
       expect(addOptimisticUserMessage).toHaveBeenCalledWith(reply, []);
+      // The started turn identifies the owner's copy of the reply; a
+      // federated send rewrites its text, so text cannot.
+      expect(bindOptimisticUserMessageToTurn).toHaveBeenCalledWith(
+        "optimistic-answer",
+        "turn-answer",
+      );
       expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
       expect(textarea).toHaveValue("An unrelated draft");
     });
@@ -11708,12 +11716,14 @@ describe("Composer", () => {
       (_request: StartTurnRequest) => startTurnDeferred.promise,
     );
     const addOptimisticUserMessage = vi.fn(() => "optimistic-1");
+    const bindOptimisticUserMessageToTurn = vi.fn();
     let agentEventHandler: ((event: AgentEvent) => void) | undefined;
 
     render(
       <Composer
         activeTurnId="turn-1"
         addOptimisticUserMessage={addOptimisticUserMessage}
+        bindOptimisticUserMessageToTurn={bindOptimisticUserMessageToTurn}
         desktopApi={{
           onAgentEvent: (listener) => {
             agentEventHandler = listener;
@@ -11769,6 +11779,10 @@ describe("Composer", () => {
     expect(addOptimisticUserMessage).toHaveBeenCalledWith(
       "Admit before optimistic reconciliation",
       [],
+      "turn-2",
+    );
+    expect(bindOptimisticUserMessageToTurn).toHaveBeenCalledWith(
+      "optimistic-1",
       "turn-2",
     );
   });
