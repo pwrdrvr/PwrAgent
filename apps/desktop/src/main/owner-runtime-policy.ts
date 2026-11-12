@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { AppServerBackendKind, FederationPeerRole, ThreadExecutionMode } from "@pwragent/shared";
-import { resolveOutpostProtectedRoots } from "./headless/outpost-codex-sandbox";
+import { resolveOutpostCodexHome, resolveOutpostProtectedRoots } from "./headless/outpost-codex-sandbox";
 import { OUTPOST_AGENT_TOOL_ALLOWLIST } from "./headless/outpost-agent-tools";
 import { resolvePwragentRoot } from "./profile";
 
@@ -19,6 +19,8 @@ export interface OwnerRuntimePolicy {
   federationEgressRole: FederationPeerRole;
   /** Paths every Codex permission profile denies, including Codex credentials; see outpost-codex-sandbox.ts. */
   codexProtectedRoots: readonly string[];
+  /** Paths agent commands may read but never write: the Codex home. */
+  codexReadOnlyRoots: readonly string[];
   /**
    * Qualified `namespace/tool` names of the PwrAgent agent tools a model may
    * see and call; every other tool is refused. See outpost-agent-tools.ts.
@@ -74,5 +76,6 @@ export function createOutpostRuntimePolicy(env: NodeJS.ProcessEnv = process.env)
   return { exclusiveProfileOwner: true, codexCommand: env.PWRAGENT_CODEX_COMMAND, codexHome: env.PWRAGENT_CODEX_HOME, enabledBackends: ["codex"], approvalPolicy: "never",
     executionModes: ["default", "auto"], sandboxByMode: { default: "read-only", auto: "workspace-write" }, federationEgressRole: "contained",
     codexProtectedRoots: resolveOutpostProtectedRoots(env.PWRAGENT_HOME?.trim() || resolvePwragentRoot({ env }), codexHome),
+    codexReadOnlyRoots: [resolveOutpostCodexHome(codexHome)],
     agentToolAllowlist: OUTPOST_AGENT_TOOL_ALLOWLIST };
 }
