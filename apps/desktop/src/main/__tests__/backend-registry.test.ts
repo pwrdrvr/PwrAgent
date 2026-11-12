@@ -28174,49 +28174,47 @@ script = "printf setup-output"
   });
 
   it.each(["feature/metadata", "HEAD"])("initializes same-worktree thread metadata from Git branch %s", async (branch) => {
-    const phases: Array<{ phase: string; milliseconds: number }> = [];
-    let activePhase = "starting";
-    let phaseStarted = performance.now();
-    const measure = async <T>(phase: string, run: () => Promise<T>): Promise<T> => {
-      activePhase = phase;
-      phaseStarted = performance.now();
-      try {
-        return await run();
-      } finally {
-        phases.push({ phase, milliseconds: Math.round(performance.now() - phaseStarted) });
-        activePhase = "between phases";
-      }
+    // This oracle needs real Git, but not the host's PATH launcher. The first
+    // /usr/bin/git launch on macOS can spend the case's budget in toolchain
+    // startup before Git runs. Use the same owned runner as the branch reader.
+    const fixtureGit = async (cwd: string, args: string[]): Promise<string> => {
+      const result = await gitExecutable.runGitCommand(cwd, args, {
+        env: gitTestEnv,
+        ownProcessTree: true,
+      });
+      return result.stdout.trim();
     };
-    onTestFinished(() => {
-      console.info("same-worktree metadata phases", JSON.stringify({
-        branch,
-        phases,
-        activePhase,
-        activeMilliseconds: Math.round(performance.now() - phaseStarted),
-      }));
-    });
-    const root = await measure("mkdtemp", () => mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-")));
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
     const repo = path.join(root, "app");
     const worktree = path.join(root, "worktree", "app");
-    await measure("mkdir", () => mkdir(repo, { recursive: true }));
-    await measure("git init", () => git(repo, ["init", "-b", "main"]));
-    await measure("git commit", () => git(repo, ["commit", "--allow-empty", "-m", "init"]));
+    await mkdir(repo, { recursive: true });
+    await fixtureGit(repo, ["init", "-b", "main"]);
+    await fixtureGit(repo, ["commit", "--allow-empty", "-m", "init"]);
     // Both checkouts point at the same commit; only their symbolic HEAD differs.
-    await measure("git worktree add", () => git(repo, branch === "HEAD"
+    await fixtureGit(repo, branch === "HEAD"
       ? ["worktree", "add", "--detach", worktree, "main"]
-      : ["worktree", "add", "-b", branch, worktree, "main"]));
+      : ["worktree", "add", "-b", branch, worktree, "main"]);
+    // Git owns the expected branch and commit identity, including detached
+    // HEAD. Equal commit IDs must not make the primary checkout's main win.
+    const [expectedBranch, primaryCommit, worktreeCommit] = await Promise.all([
+      fixtureGit(worktree, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      fixtureGit(repo, ["rev-parse", "HEAD"]),
+      fixtureGit(worktree, ["rev-parse", "HEAD"]),
+    ]);
+    expect(expectedBranch).toBe(branch);
+    expect(worktreeCommit).toBe(primaryCommit);
     const overlayStore = createOverlayStoreMock();
 
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/metadata/update"] },
     });
-    const registry = await measure("registry construction", async () => createDesktopBackendRegistry({
+    const registry = createDesktopBackendRegistry({
       codexClient,
       overlayStore,
-    }));
+    });
 
     try {
-      await measure("materialize", () => registry.materializeDirectoryLaunchpad({
+      await registry.materializeDirectoryLaunchpad({
         directoryKey: "subthread:codex:thread-parent:same-worktree",
         launchpad: {
           directoryKey: "subthread:codex:thread-parent:same-worktree",
@@ -28234,30 +28232,30 @@ script = "printf setup-output"
           createdAt: 1_000,
           updatedAt: 2_000,
         },
-      }));
+      });
 
       expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
         threadId: "thread-1",
         gitInfo: {
-          branch,
+          branch: expectedBranch,
         },
       });
-      expect(await measure("branch drift", () => registry.checkThreadBranchDrift({
+      expect(await registry.checkThreadBranchDrift({
         backend: "codex",
         threadId: "thread-1",
-        expectedBranch: branch,
-      }))).toMatchObject({
-        expectedBranch: branch,
-        observedBranch: branch,
+        expectedBranch,
+      })).toMatchObject({
+        expectedBranch,
+        observedBranch: expectedBranch,
         drifted: false,
       });
-      expect(await measure("overlay read", () => overlayStore.getThreadOverlayState({
+      expect(await overlayStore.getThreadOverlayState({
         backend: "codex",
         threadId: "thread-1",
-      }))).toMatchObject({ observedGitBranch: branch });
+      })).toMatchObject({ observedGitBranch: expectedBranch });
     } finally {
-      await measure("registry close", () => registry.close());
-      await measure("fixture removal", () => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
