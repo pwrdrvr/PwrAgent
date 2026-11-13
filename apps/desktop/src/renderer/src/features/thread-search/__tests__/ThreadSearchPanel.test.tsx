@@ -316,6 +316,115 @@ describe("ThreadSearchPanel", () => {
       threadId: "thread-1",
     });
   });
+
+  it("offers the remote viewer as its own button on remote results only", async () => {
+    const remote = {
+      ref: {
+        backend: "codex" as const,
+        target: { scope: "remote" as const, instanceId: "client_one" },
+        threadId: "thread-1",
+      },
+      instanceLabel: "Studio Mac",
+      peerStatus: "connected" as const,
+    };
+    const result = (threadId: string, title: string) => ({
+      backend: "codex" as const,
+      confidence: "medium" as const,
+      identityKey: `codex:${threadId}`,
+      linkedDirectories: [],
+      matchReasons: [{ kind: "title_token_overlap" as const }],
+      score: 10,
+      snippets: [],
+      source: "codex" as const,
+      threadId,
+      title,
+    });
+    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all",
+      contentMode: "available",
+      fetchedAt: 1_000,
+      filters: { backend: "all", includeArchived: false },
+      query: "deploy",
+      results: [
+        { ...result("thread-1", "Deploy release"), identityKey: "remote:client_one:codex:thread-1",
+          federation: remote },
+        result("thread-2", "Deploy preview"),
+      ],
+      searchedScopes: ["metadata"],
+      semanticMode: "disabled",
+      unavailableScopes: [],
+    }));
+    const onOpenResult = vi.fn();
+    const onOpenResultInRemoteViewer = vi.fn();
+    render(
+      <ThreadSearchPanel
+        desktopApi={{ searchThreads } as DesktopApi}
+        onOpenResult={onOpenResult}
+        onOpenResultInRemoteViewer={onOpenResultInRemoteViewer}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: "deploy" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Studio Mac");
+
+    // One button for the one remote result, named for the window it opens.
+    const popouts = screen.getAllByRole("button", { name: /window$/ });
+    expect(popouts.map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Open in the Studio Mac window"]);
+    // Its hidden copy in the card does not join the card's name.
+    expect(screen.getByRole("button", { name: /Deploy release/ }))
+      .not.toHaveAccessibleName(/Remote viewer/);
+
+    fireEvent.click(popouts[0]);
+    expect(onOpenResultInRemoteViewer).toHaveBeenCalledExactlyOnceWith(remote);
+    expect(onOpenResult).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Deploy release/ }));
+    expect(onOpenResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      federation: remote,
+      threadId: "thread-1",
+    }));
+    expect(onOpenResultInRemoteViewer).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no remote viewer button where the window supplies no handler", async () => {
+    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all",
+      contentMode: "available",
+      fetchedAt: 1_000,
+      filters: { backend: "all", includeArchived: false },
+      query: "deploy",
+      results: [{
+        backend: "codex",
+        confidence: "medium",
+        identityKey: "remote:client_one:codex:thread-1",
+        linkedDirectories: [],
+        matchReasons: [{ kind: "title_token_overlap" }],
+        score: 10,
+        snippets: [],
+        source: "codex",
+        threadId: "thread-1",
+        title: "Deploy release",
+        federation: {
+          ref: {
+            backend: "codex",
+            target: { scope: "remote", instanceId: "client_one" },
+            threadId: "thread-1",
+          },
+          instanceLabel: "Studio Mac",
+        },
+      }],
+      searchedScopes: ["metadata"],
+      semanticMode: "disabled",
+      unavailableScopes: [],
+    }));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: "deploy" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Studio Mac");
+    expect(screen.queryByRole("button", { name: /window$/ })).not.toBeInTheDocument();
+    expect(document.querySelector(".thread-search-result__popout")).toBeNull();
+  });
 });
 
 describe("basename", () => {

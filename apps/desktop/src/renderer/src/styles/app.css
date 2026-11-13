@@ -11244,6 +11244,61 @@ a.button {
   line-height: 1.3;
 }
 
+/* A remote result's Remote viewer button. Buttons cannot nest, so it is the
+   card's sibling, pinned over the card's bottom-right corner: 15px and 13px
+   are the card's padding plus its 1px border. The card's side column keeps
+   an invisible copy (`--slot`) that holds that corner open, so the snippet
+   wraps before the button and a card without a snippet still fits it. */
+.thread-search-results__item {
+  position: relative;
+}
+
+.thread-search-result__popout {
+  position: absolute;
+  right: 15px;
+  bottom: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.thread-search-result__popout svg {
+  flex: none;
+}
+
+/* Matches `.thread-chip__popout`, the pop-out beside a remote thread link. */
+.thread-search-result__popout:hover,
+.thread-search-result__popout:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent);
+}
+
+.thread-search-result__popout:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-search-result__popout--slot {
+  position: static;
+  visibility: hidden;
+}
+
 .thread-search-empty {
   display: flex;
   flex: 1;

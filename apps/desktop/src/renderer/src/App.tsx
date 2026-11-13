@@ -324,6 +324,7 @@ import {
   ThreadSearchPanel,
   useThreadSearchPanelState,
 } from "./features/thread-search/ThreadSearchPanel";
+import { planSearchResultOpen } from "./features/thread-search/search-result-open";
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
@@ -5120,13 +5121,11 @@ function DesktopAppShell(props: {
                 }
               }}
               onOpenResult={async (result) => {
-                if (
-                  result.federation &&
-                  isRemoteFederationTarget(result.federation.ref.target)
-                ) {
+                const plan = planSearchResultOpen(result, windowFederationTarget);
+                if (plan.kind === "owner-window") {
                   await desktopApi?.openFederationWindow?.({
-                    target: result.federation.ref.target,
-                    initialThread: result.federation.ref,
+                    target: plan.target,
+                    initialThread: plan.initialThread,
                   });
                   return;
                 }
@@ -5139,17 +5138,38 @@ function DesktopAppShell(props: {
                   seed
                     ? {
                         query: seed,
-                        threadKey: buildThreadIdentityKey(
-                          result.backend,
-                          result.threadId,
-                        ),
+                        threadKey: plan.threadKey,
                         turnId: result.turnId,
                       }
                     : undefined,
                 );
+                const request = {
+                  backend: plan.backend,
+                  ...(plan.federationTarget ? { federationTarget: plan.federationTarget } : {}),
+                  threadId: plan.threadId,
+                };
+                if (request.federationTarget) {
+                  // A peer's thread joins this window's sidebar first, as a
+                  // thread link or Cmd+K adds it.
+                  try {
+                    await ensureWindowThreadMounted(desktopApi ?? {}, request, navigation.threads, false);
+                  } catch (error) {
+                    console.warn("Adding the remote thread to this PwrAgent failed.", error);
+                    return;
+                  }
+                }
                 setMainView("thread");
-                await navigation.showThread(result);
+                await navigation.showThread(request);
               }}
+              onOpenResultInRemoteViewer={windowFederationTarget
+                ? undefined
+                : async (federation) => {
+                    if (!isRemoteFederationTarget(federation.ref.target)) return;
+                    await desktopApi?.openFederationWindow?.({
+                      target: federation.ref.target,
+                      initialThread: federation.ref,
+                    });
+                  }}
             />
           ) : threadDetailPending ? (
             <section className="thread-view thread-view--pending">
