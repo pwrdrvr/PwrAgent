@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadReplay, AppServerThreadSummary, ThreadUsageLineRecord } from "@pwragent/shared";
 
@@ -50,7 +50,7 @@ describe("production owner content search persistence", () => {
     // Injecting a protocol client disables the inspection factory in tests.
     // Enable that real factory too so reverting owner routing reproduces the
     // production hydration writes rather than "search unavailable".
-    (registry as unknown as { threadInspectionSearchService: undefined }).threadInspectionSearchService = undefined;
+    registryModules(registry).threadInspectionTools.threadInspectionSearchService = undefined;
     try {
       // Cold transcripts have twenty unhydrated usage lines each. Searching
       // must not turn all sixty into usage-ledger commits, even on a miss.

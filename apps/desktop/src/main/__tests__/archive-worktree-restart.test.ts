@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
@@ -157,11 +157,10 @@ describe("current-profile worktree registration across providers", () => {
       directory: { ...fixture.directory, worktreeOwnership: "external" } });
     const internal = instance.registry as unknown as {
       isLiveDynamicToolCall: () => boolean;
-      requestThreadMaintenanceConfirmation: () => Promise<boolean>;
       handleThreadOrchestrationRequest: (request: PwrAgentThreadOrchestrationRequest) => Promise<PwrAgentThreadOrchestrationResponse>;
     };
     vi.spyOn(internal, "isLiveDynamicToolCall").mockReturnValue(true);
-    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    vi.spyOn(registryModules(instance.registry).threadInspectionTools, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect(await internal.handleThreadOrchestrationRequest({ operation: "register_thread_worktree",
       context: { backend: "codex", threadId: "operator-agent", turnId: "registration" },
       args: { ...owner, worktreePath: fixture.worktree },

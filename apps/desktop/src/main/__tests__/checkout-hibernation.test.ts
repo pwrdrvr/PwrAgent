@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
@@ -196,7 +196,6 @@ const probe = (cwd: string, overrides: Partial<{ limitBytes: number; removeRebui
 function registrationTool(registry: DesktopBackendRegistry) {
   const internal = registry as unknown as {
     isLiveDynamicToolCall: () => boolean;
-    requestThreadMaintenanceConfirmation: (params: { question: string }) => Promise<boolean>;
     handleThreadOrchestrationRequest: (request: PwrAgentThreadOrchestrationRequest) => Promise<PwrAgentThreadOrchestrationResponse>;
   };
   const live = vi.spyOn(internal, "isLiveDynamicToolCall").mockReturnValue(true);
@@ -205,7 +204,9 @@ function registrationTool(registry: DesktopBackendRegistry) {
       context: { backend: "codex", threadId: "registration-agent", turnId: "registration-turn" },
       args: { backend: "codex", threadId, worktreePath, ...(action ? { action } : {}) },
     });
-  return { internal, live, call };
+  // The operator's confirmation card belongs to the thread inspection tools.
+  const approvals = registryModules(registry).threadInspectionTools;
+  return { approvals, live, call };
 }
 
 async function outsideRegistrationFixture() {
@@ -920,13 +921,13 @@ describe("Thread maintenance's hibernate step", () => {
 
   it("registers an explicitly approved outside linked checkout without weakening snapshot or ownership checks (Git oracle)", async () => {
     const fixture = await outsideRegistrationFixture();
-    const { registry, store, internal, call } = fixture;
+    const { registry, store, approvals, call } = fixture;
     await writeFile(path.join(fixture.worktree, "file.txt"), "registered edit\n");
     await writeFile(path.join(fixture.worktree, "notes.txt"), "registered notes\n");
     await writeFile(path.join(fixture.worktree, ".env.local"), "invented ignored fixture\n");
     const service = maintenance(registry);
     expect((await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 })).hibernate?.items).toEqual([]);
-    const approval = vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    const approval = vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     const registered = await measureSqliteWrites(() => call(fixture.worktree));
     expect(registered.result).toMatchObject({ ok: true });
     expectSqliteWriteBudget({ scenario: "worktree-registration-one", writes: registered.writes,
@@ -979,8 +980,8 @@ describe("Thread maintenance's hibernate step", () => {
   });
 
   it.each(["main", "unattached", "unknown", "alias", "ended", "moved-during-review"])("refuses registration for %s", async (scenario) => {
-    const { registry, store, root, repo, worktree, call, internal, live } = await outsideRegistrationFixture();
-    const approval = vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockImplementation(async () => {
+    const { registry, store, root, repo, worktree, call, approvals, live } = await outsideRegistrationFixture();
+    const approval = vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockImplementation(async () => {
       if (scenario === "moved-during-review") {
         await git(repo, ["worktree", "move", worktree, path.join(root, "moved")]);
         await symlink(path.join(root, "moved"), worktree, process.platform === "win32" ? "junction" : "dir");
@@ -1009,8 +1010,8 @@ describe("Thread maintenance's hibernate step", () => {
   });
 
   it("revokes a reviewed registration and keeps outside external owners protected", async () => {
-    const { registry, store, worktree, call, internal } = await outsideRegistrationFixture();
-    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    const { registry, store, worktree, call, approvals } = await outsideRegistrationFixture();
+    vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
     const service = maintenance(registry);
     const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
@@ -1128,8 +1129,8 @@ describe("Thread maintenance's hibernate step", () => {
   });
 
   it.for(["hibernating-owner", "archived-owner"])("revoking the %s receipt cancels an in-flight hibernation before removal", async (ownerKind, { signal }) => {
-    const { registry, store, directory, worktree, call, internal } = await outsideRegistrationFixture();
-    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    const { registry, store, directory, worktree, call, approvals } = await outsideRegistrationFixture();
+    vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
     const revokedThreadId = ownerKind === "hibernating-owner" ? THREAD_ID : "archived-owner";
     if (ownerKind === "archived-owner") {
@@ -1184,7 +1185,7 @@ describe("Thread maintenance's hibernate step", () => {
 
   it("reads a durable receipt after restart but requires current-profile membership", async () => {
     const fixture = await outsideRegistrationFixture();
-    vi.spyOn(fixture.internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    vi.spyOn(fixture.approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await fixture.call(fixture.worktree)).ok).toBe(true);
     const receipt = (await fixture.store.getThreadOverlayState(identity))?.worktreeRegistrations?.[0];
     expect(receipt).toMatchObject({ worktreePath: fixture.worktree,
@@ -1203,8 +1204,8 @@ describe("Thread maintenance's hibernate step", () => {
 
   it("models approval, rejection, observation and revocation without inferring ownership", async ({ signal }) => {
     const fixture = await outsideRegistrationFixture();
-    const { registry, store, worktree, call, internal } = fixture;
-    const approval = vi.spyOn(internal, "requestThreadMaintenanceConfirmation");
+    const { registry, store, worktree, call, approvals } = fixture;
+    const approval = vi.spyOn(approvals, "requestThreadMaintenanceConfirmation");
     type Model = { authorized: boolean };
     type Real = typeof fixture;
     class RegistrationCommand implements fc.AsyncCommand<Model, Real> {
@@ -1241,8 +1242,8 @@ describe("Thread maintenance's hibernate step", () => {
   });
 
   it.each(["recent", "active", "shared", "snapshot-limit", "replaced"])("retains %s protection after outside registration and review", async (protection) => {
-    const { registry, store, root, repo, worktree, call, internal } = await outsideRegistrationFixture();
-    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    const { registry, store, root, repo, worktree, call, approvals } = await outsideRegistrationFixture();
+    vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
     const service = maintenance(registry);
     const scan = await service.scan({ steps: ["hibernate"], hibernateIdleDays: 2 });
@@ -1264,8 +1265,8 @@ describe("Thread maintenance's hibernate step", () => {
   });
 
   it.each(["sole", "active", "external-archived"])("archives a registered outside checkout subject to %s ownership (Git oracle)", async (ownership) => {
-    const { registry, store, repo, worktree, directory, call, internal } = await outsideRegistrationFixture();
-    vi.spyOn(internal, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
+    const { registry, store, repo, worktree, directory, call, approvals } = await outsideRegistrationFixture();
+    vi.spyOn(approvals, "requestThreadMaintenanceConfirmation").mockResolvedValue(true);
     expect((await call(worktree)).ok).toBe(true);
     await writeFile(path.join(worktree, "file.txt"), "saved archive edit\n");
     if (ownership !== "sole") {
