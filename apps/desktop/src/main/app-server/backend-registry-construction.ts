@@ -1,7 +1,7 @@
-import type { ThreadMaintenanceToolScans } from "../agent-tools/thread-maintenance-tool-scans";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import type { RegistryContext } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
+import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -202,7 +202,7 @@ export interface RegistryDependencies {
   handlers: RegistryHandlers;
   context: RegistryContext;
   forgeToolBridge: ForgeToolBridge;
-  threadMaintenanceToolScans?: ThreadMaintenanceToolScans;
+  threadInspectionTools: ThreadInspectionTools;
   ownerAdmission?: ThreadOwnerAdmission;
   managedMaintenanceRoots: () => Promise<string[]>;
   readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
@@ -307,7 +307,6 @@ export interface RegistryDependencies {
     options: { id: string },
   ) => Promise<ScheduledThreadActionMutationResponse>;
   threadTitleGenerationService?: ThreadTitleService;
-  threadInspectionSearchService: ThreadSearchService | null | undefined;
   codexModelProviderCatalog: CodexModelProviderCatalog;
   modelCatalog: BackendModelCatalog;
   queuedMessageTitler: QueuedMessageTitler;

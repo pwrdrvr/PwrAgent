@@ -115,7 +115,7 @@ it("lets no extracted module read its host or store ports while it is constructe
       && ts.isStringLiteral(statement.moduleSpecifier)
       && /(^|\/)registry-context(\.js)?$/.test(statement.moduleSpecifier.text));
   });
-  expect(modules.map((file) => path.basename(file))).toContain("forge-tool-bridge.ts");
+  expect(modules.map((file) => path.basename(file))).toEqual(expect.arrayContaining(["forge-tool-bridge.ts", "thread-inspection-tools.ts"]));
   const violations = modules.flatMap((file) =>
     constructionTimeReads(parse(file)).map((read) => `${path.relative(sourceRoot, file)}: ${read}`));
   expect(violations).toEqual([]);

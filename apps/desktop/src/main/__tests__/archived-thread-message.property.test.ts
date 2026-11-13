@@ -1,10 +1,8 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerThreadSummary,
-  MutateThreadToolArgs,
-  PwrAgentThreadInspectionResponse,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
 } from "@pwragent/shared";
@@ -18,10 +16,17 @@ import { openInMemoryStateDb } from "./sqlite-test-utils";
 type Internals = {
   threadTodoHandler: PwrAgentThreadTodoHandler;
   deliverMessageToThread(request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">): Promise<PwrAgentThreadOrchestrationResponse>;
-  handleGetThreadStatusInspectionRequest(args: { backend: "codex"; threadId: string; includeRemote: false }, context: { backend: "codex"; threadId: string }): Promise<PwrAgentThreadInspectionResponse>;
-  handleMutateThreadInspectionRequest(args: MutateThreadToolArgs): Promise<PwrAgentThreadInspectionResponse>;
   performThreadTurnControl(request: PwrAgentThreadOrchestrationRequest<"steer_thread">): Promise<PwrAgentThreadOrchestrationResponse>;
 };
+
+// The sender asks for the target's status through the get_thread_status Agent tool.
+function readTargetStatus(registry: DesktopBackendRegistry) {
+  return registryModules(registry).threadInspectionTools.handleThreadInspectionRequest({
+    operation: "get_thread_status",
+    args: { backend: "codex", threadId: "target", includeRemote: false },
+    context: { backend: "codex", threadId: "sender" },
+  });
+}
 
 async function fixture(archived: boolean, run: (
   registry: DesktopBackendRegistry,
@@ -154,18 +159,17 @@ describe("archived thread message admission", () => {
 
   it("reports archive membership even when the provider has no archive timestamp", async () => {
     await fixture(true, async (registry) => {
-      const response = await (registry as unknown as Internals).handleGetThreadStatusInspectionRequest(
-        { backend: "codex", threadId: "target", includeRemote: false },
-        { backend: "codex", threadId: "sender" },
-      );
+      const response = await readTargetStatus(registry);
       expect(response).toMatchObject({ ok: true, data: { thread: { archived: true } } });
     });
   });
 
   it("lets the operator restore an archived thread with no archive timestamp", async () => {
     await fixture(true, async (registry) => {
-      const response = await (registry as unknown as Internals).handleMutateThreadInspectionRequest({
-        backend: "codex", threadId: "target", archive: false, includeRemote: false, dryRun: true,
+      const response = await registryModules(registry).threadInspectionTools.handleThreadInspectionRequest({
+        operation: "mutate_thread",
+        args: { backend: "codex", threadId: "target", archive: false, includeRemote: false, dryRun: true },
+        context: { backend: "codex", threadId: "sender" },
       });
       expect(response).toMatchObject({ ok: true });
     });
@@ -239,10 +243,7 @@ describe("archived thread message admission", () => {
         for (const archivedRead of reads) {
           await registry.listThreads({ backend: "codex", archived: archivedRead, enrichDirectories: false });
         }
-        const status = await (registry as unknown as Internals).handleGetThreadStatusInspectionRequest(
-          { backend: "codex", threadId: "target", includeRemote: false },
-          { backend: "codex", threadId: "sender" },
-        );
+        const status = await readTargetStatus(registry);
         expect(status).toMatchObject({ ok: true, data: { thread: { archived } } });
         const destination = registry.locateThreadTodoMessageTarget(
           { backend: "codex", threadId: "sender" }, { backend: "codex", threadId: "target" },

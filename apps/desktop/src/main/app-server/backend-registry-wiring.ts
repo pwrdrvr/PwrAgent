@@ -99,6 +99,7 @@ import { buildCodexClientArgs, withTokenMiserBridgeDescriptorEnv } from "./codex
 import { createDefaultCodexEnvironmentHydrationStore } from "./thread-launchpad-helpers";
 import { DesktopBackendRegistry } from "./backend-registry";
 import { ForgeToolBridge } from "./forge-tool-bridge";
+import { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
@@ -115,6 +116,7 @@ const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 /** The domain modules the composition root built for one registry. */
 export interface RegistryModules {
   readonly forgeToolBridge: ForgeToolBridge;
+  readonly threadInspectionTools: ThreadInspectionTools;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -1348,11 +1350,16 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   };
   // The registry's construction ports are each module's host, bound once the registry connects them.
   const forgeToolBridge = new ForgeToolBridge(context, handlers, () => ports);
+  const threadInspectionTools = new ThreadInspectionTools(context, handlers, {
+    forgeToolBridge,
+    threadInspectionSearchService,
+    threadMaintenanceToolScans,
+  }, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
     forgeToolBridge,
-    threadMaintenanceToolScans,
+    threadInspectionTools,
     handlers,
     ownerAdmission,
     managedMaintenanceRoots,
@@ -1438,7 +1445,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     createScratchProjectDirectory,
     createScheduledThreadActionFn,
     threadTitleGenerationService,
-    threadInspectionSearchService,
     codexModelProviderCatalog,
     modelCatalog,
     queuedMessageTitler,
@@ -1451,6 +1457,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ports = connected;
     for (const run of initialize) run();
   });
-  registryModulesByRegistry.set(registry, { forgeToolBridge });
+  registryModulesByRegistry.set(registry, { forgeToolBridge, threadInspectionTools });
   return registry;
 }
