@@ -68,8 +68,8 @@ function createBridge(options: {
     publishLocalEvent: async (event) => { published.push(event); },
     ...options.host,
   };
-  const bridge = new ForgeToolBridge(context, options.handlers ?? {}, host);
-  return { bridge, events, published, pendingServerRequests, addThreadPullRequestReference };
+  const bridge = new ForgeToolBridge(context, options.handlers ?? {}, () => host);
+  return { bridge, context, host, events, published, pendingServerRequests, addThreadPullRequestReference };
 }
 
 function answerOnlyCard(pendingServerRequests: Map<string, PendingServerRequest>, persist?: "session"): void {
@@ -79,6 +79,30 @@ function answerOnlyCard(pendingServerRequests: Map<string, PendingServerRequest>
 }
 
 describe("ForgeToolBridge", () => {
+  it("reads its host only when a call needs it, so it can be built before the registry connects", async () => {
+    const policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
+    policy.access.comments = "allow";
+    const github = vi.fn<ForgePrToolHandler>(async () => ({ ok: true }));
+    const fixture = createBridge();
+    let connected: ForgeToolBridgeHost | undefined;
+    const host = vi.fn(() => {
+      if (!connected) throw new Error("fixture host read before the registry connected");
+      return connected;
+    });
+    const bridge = new ForgeToolBridge(
+      fixture.context,
+      { forgePrToolHandler: github, forgeToolPolicyResolver: () => policy },
+      host,
+    );
+    expect(host).not.toHaveBeenCalled();
+
+    connected = fixture.host;
+    await expect(bridge.gatedForgePrToolHandler("add_issue_comment", { number: 9, body: "x" }, callContext))
+      .resolves.toEqual({ ok: true });
+    expect(host).toHaveBeenCalled();
+    expect(github).toHaveBeenCalledOnce();
+  });
+
   describe("policy gate", () => {
     it("forwards a read exactly when the family is on and Read is not Off", async () => {
       await fc.assert(fc.asyncProperty(

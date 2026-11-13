@@ -33,6 +33,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { AgentEvent } from "@pwragent/shared";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { registryModules } from "../app-server/backend-registry-wiring";
 import { OwnerConformanceCodexTransport } from "./fixtures/owner-conformance-codex-transport";
 import { ScriptedCodexTransport } from "./fixtures/turn-event-stream-codex-transport";
 import { startDesktopOwnerFixture } from "./helpers/desktop-owner-fixture";
@@ -125,7 +126,10 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "emitToListeners",
   ].map((name) => ({ name, owner: (registry: Members) => registry })),
   // Moved to the forge tool bridge (PWR-146).
-  { name: "raiseWithdrawnForgeApprovalTodo", owner: (registry: Members) => registry.forgeToolBridge as Members | undefined },
+  {
+    name: "raiseWithdrawnForgeApprovalTodo",
+    owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).forgeToolBridge as unknown as Members,
+  },
   ...([
     ["overlayStore", ["getThreadMetadata", "updateThreadMetadata", "completeThreadUsageTurn", "getThreadOverlayState"]],
     ["providerThreadSnapshotStore", ["list", "replace"]],
