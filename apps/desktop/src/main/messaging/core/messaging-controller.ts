@@ -8921,6 +8921,15 @@ export class MessagingController {
    */
   async whenToolUpdatesSettled(): Promise<void> {
     await this.toolUpdatePolicy.whenIdle();
+    await this.whenQueuedTurnDrainsSettled();
+  }
+
+  /**
+   * Resolves once every queued-turn drain that has already begun has finished,
+   * including the start it submits and the queued notice it retires. A drain
+   * scheduled but not yet begun is not awaited.
+   */
+  async whenQueuedTurnDrainsSettled(): Promise<void> {
     await Promise.allSettled([...this.queuedTurnDrains.values()]);
   }
 
