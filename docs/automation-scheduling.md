@@ -137,9 +137,10 @@ time and are rejected unless the registered thread has exactly one active turn.
 ACP runtimes without HTTP MCP support keep starting without the PwrAgent MCP
 instead of failing session creation.
 
-PwrAgent offers an ACP session no other PwrAgent MCP server. Every PwrAgent
-tool an ACP session sees comes from that HTTP server, which lists and refuses
-tools by the member's federation containment. The older
+Apart from the operator's own MCP connections attached to the thread,
+PwrAgent offers an ACP session no other MCP server. Every PwrAgent tool an ACP
+session sees comes from that HTTP server, which lists and refuses tools by the
+member's federation containment. The older
 `PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND` stdio bridge was removed: it had
 no implementation and no route to the owner.
 

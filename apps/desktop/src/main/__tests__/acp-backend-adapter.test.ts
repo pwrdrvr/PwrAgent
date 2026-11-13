@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
 import type {
   AcpAgentUpdateStatus,
@@ -4083,123 +4083,131 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const transportFlag = fc.constantFrom(true, false, undefined);
-    await fc.assert(
-      fc.asyncProperty(
-        fc.record({
-          http: transportFlag,
-          sse: transportFlag,
-          agentToolServer: fc.constantFrom("absent", "registers", "fails"),
-          operatorConnection: fc.boolean(),
-        }),
-        async ({ http, sse, agentToolServer, operatorConnection }) => {
-          const mcpCapabilities: Record<string, boolean> = {};
-          if (http !== undefined) mcpCapabilities.http = http;
-          if (sse !== undefined) mcpCapabilities.sse = sse;
-          const transport = new FakeAcpAgentTransport({
-            initialize: {
-              protocolVersion: 1,
-              agentCapabilities: { loadSession: true, mcpCapabilities },
-            },
-          });
-          const sessions: AcpSessionMetadata[] = [
-            {
-              backendId,
-              sessionId: "session-earlier",
-              title: "Started before containment",
-              cwd: "/repo",
-              createdAt: 900,
-              updatedAt: 950,
-              executionMode: "default",
-              status: "idle",
-            },
-          ];
-          // The removed stdio bridge read this option. Keeping it here makes
-          // the rule fail if any form of that bridge comes back.
-          const legacyStdioBridge: Record<string, unknown> = {
-            automationInspectionMcpCommand: "/usr/local/bin/pwragent",
-          };
-          const adapter = createTestAcpBackendAdapter({
-            ...legacyStdioBridge,
-            acpAgentStore: {
-              getInstalledAgent: () => agent,
-              listInstalledAgents: () => [agent],
-              upsertInstalledAgent: vi.fn(),
-            },
-            acpSessionStore: {
-              listSessions: () => sessions,
-              getSession: (_backendId, sessionId) =>
-                sessions.find((session) => session.sessionId === sessionId),
-              upsertSession: (metadata) => {
-                const index = sessions.findIndex(
-                  (session) => session.sessionId === metadata.sessionId,
-                );
-                if (index === -1) sessions.push(metadata);
-                else sessions[index] = metadata;
-              },
-            },
-            ...(agentToolServer === "absent" ? {} : {
-              agentToolMcpServer: {
-                registerClient: async () => {
-                  if (agentToolServer === "fails") {
-                    throw new Error("agent-tool MCP server did not start");
-                  }
-                  return {
-                    server: {
-                      name: "pwragent",
-                      type: "http" as const,
-                      url: "http://127.0.0.1:43210/mcp",
-                      headers: [],
-                    },
-                    bindThread: () => undefined,
-                  };
-                },
-                close: async () => undefined,
-              },
-            }),
-            resolveMcpConnectionServers: async () =>
-              operatorConnection
-                ? {
-                    servers: [{
-                      name: "operator-connection",
-                      command: "operator-mcp",
-                      args: [],
-                    }],
-                  }
-                : undefined,
-            captureStores: [],
-            createAcpTransport: () => transport,
-            emit: vi.fn(async () => undefined),
-            handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
-          });
-          try {
-            const client = await adapter.getClient(backendId);
-            await client.loadSession(sessions[0]!);
-            await client.startSession({ cwd: "/repo", executionMode: "default" });
-            const offered = transport.requests
-              .filter((request) =>
-                request.method === "session/new" || request.method === "session/load")
-              .map((request) => ({
-                method: request.method,
-                servers: (
-                  request.params as { mcpServers?: Array<{ name: string }> } | undefined
-                )?.mcpServers?.map((server) => server.name) ?? [],
-              }));
-            const expected = [
-              ...(agentToolServer === "registers" && http === true ? ["pwragent"] : []),
-              ...(operatorConnection ? ["operator-connection"] : []),
-            ];
-            expect(offered).toEqual([
-              { method: "session/load", servers: expected },
-              { method: "session/new", servers: expected },
-            ]);
-          } finally {
-            await adapter.close();
-          }
+    // The input space is finite, so check every case rather than a sample.
+    const transportFlags = [true, false, undefined] as const;
+    const cases = transportFlags.flatMap((http) =>
+      transportFlags.flatMap((sse) =>
+        (["absent", "registers", "fails"] as const).flatMap((agentToolServer) =>
+          [true, false].map((operatorConnection) => ({
+            http,
+            sse,
+            agentToolServer,
+            operatorConnection,
+          })))));
+    expect(cases).toHaveLength(54);
+    // The removed stdio bridge took its command from this env var and from
+    // the adapter option below. Supplying both makes the rule fail if the
+    // bridge comes back through either of them.
+    vi.stubEnv("PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND", "/usr/local/bin/pwragent");
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    for (const { http, sse, agentToolServer, operatorConnection } of cases) {
+      const mcpCapabilities: Record<string, boolean> = {};
+      if (http !== undefined) mcpCapabilities.http = http;
+      if (sse !== undefined) mcpCapabilities.sse = sse;
+      const transport = new FakeAcpAgentTransport({
+        initialize: {
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: true, mcpCapabilities },
         },
-      ),
-      { numRuns: 60 },
-    );
+      });
+      const sessions: AcpSessionMetadata[] = [
+        {
+          backendId,
+          sessionId: "session-earlier",
+          title: "Started before containment",
+          cwd: "/repo",
+          createdAt: 900,
+          updatedAt: 950,
+          executionMode: "default",
+          status: "idle",
+        },
+      ];
+      const legacyStdioBridge: Record<string, unknown> = {
+        automationInspectionMcpCommand: "/usr/local/bin/pwragent",
+      };
+      const adapter = createTestAcpBackendAdapter({
+        ...legacyStdioBridge,
+        acpAgentStore: {
+          getInstalledAgent: () => agent,
+          listInstalledAgents: () => [agent],
+          upsertInstalledAgent: vi.fn(),
+        },
+        acpSessionStore: {
+          listSessions: () => sessions,
+          getSession: (_backendId, sessionId) =>
+            sessions.find((session) => session.sessionId === sessionId),
+          upsertSession: (metadata) => {
+            const index = sessions.findIndex(
+              (session) => session.sessionId === metadata.sessionId,
+            );
+            if (index === -1) sessions.push(metadata);
+            else sessions[index] = metadata;
+          },
+        },
+        ...(agentToolServer === "absent" ? {} : {
+          agentToolMcpServer: {
+            registerClient: async () => {
+              if (agentToolServer === "fails") {
+                throw new Error("agent-tool MCP server did not start");
+              }
+              return {
+                server: {
+                  name: "pwragent",
+                  type: "http" as const,
+                  url: "http://127.0.0.1:43210/mcp",
+                  headers: [],
+                },
+                bindThread: () => undefined,
+              };
+            },
+            close: async () => undefined,
+          },
+        }),
+        resolveMcpConnectionServers: async () =>
+          operatorConnection
+            ? {
+                servers: [{
+                  name: "operator-connection",
+                  command: "operator-mcp",
+                  args: [],
+                }],
+              }
+            : undefined,
+        captureStores: [],
+        createAcpTransport: () => transport,
+        emit: vi.fn(async () => undefined),
+        handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      });
+      try {
+        const client = await adapter.getClient(backendId);
+        await client.loadSession(sessions[0]!);
+        await client.startSession({ cwd: "/repo", executionMode: "default" });
+        const offered = transport.requests
+          .filter((request) =>
+            request.method === "session/new" || request.method === "session/load")
+          .map((request) => ({
+            method: request.method,
+            servers: (
+              request.params as { mcpServers?: Array<{ name: string }> } | undefined
+            )?.mcpServers?.map((server) => server.name) ?? [],
+          }));
+        const expected = [
+          ...(agentToolServer === "registers" && http === true ? ["pwragent"] : []),
+          ...(operatorConnection ? ["operator-connection"] : []),
+        ];
+        expect(
+          offered,
+          JSON.stringify({ http, sse, agentToolServer, operatorConnection }),
+        ).toEqual([
+          { method: "session/load", servers: expected },
+          { method: "session/new", servers: expected },
+        ]);
+      } finally {
+        await adapter.close();
+      }
+    }
   });
 
   it("reads Kimi replay from local rollout history instead of session/load", async () => {
