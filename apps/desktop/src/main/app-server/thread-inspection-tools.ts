@@ -60,9 +60,7 @@ import {
   type ThreadSearchResult,
 } from "@pwragent/shared";
 import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
-import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import type {
-  PwrAgentFederatedThreadInspectionHandler,
   PwrAgentFederatedThreadInspectionResult,
   PwrAgentFederatedThreadMutationHandler,
 } from "../agent-tools/pwragent-thread-agent-tools";
@@ -89,12 +87,10 @@ import {
   THREAD_MAINTENANCE_CONFIRM_QUESTION_ID,
 } from "./backend-registry-runtime-helpers";
 import type {
-  AgentThreadActions,
   MessagingArchiveCleanupStore,
   PendingServerRequest,
   ThreadListCallerReason,
   ThreadMaintenanceToolHandler,
-  ThreadPrAutoDispatchHandler,
 } from "./backend-registry-types";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { GitWorkingStateService } from "./git-working-state-service";
@@ -152,11 +148,11 @@ export interface ThreadInspectionToolsDependencies {
  */
 export interface ThreadInspectionToolsHost {
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
-  readonly agentThreadActions: AgentThreadActions | undefined;
-  readonly federationHandler: PwrAgentFederationHandler | undefined;
-  readonly federatedThreadInspectionHandler: PwrAgentFederatedThreadInspectionHandler | undefined;
+  readonly agentThreadActions: RegistryHandlers["agentThreadActions"];
+  readonly federationHandler: RegistryHandlers["federationHandler"];
+  readonly federatedThreadInspectionHandler: RegistryHandlers["federatedThreadInspectionHandler"];
   readonly threadDependencyToolHandler: RegistryHandlers["threadDependencyToolHandler"];
-  readonly threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
+  readonly threadPrAutoDispatchHandler: RegistryHandlers["threadPrAutoDispatchHandler"];
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly gitWorkingStateService: GitWorkingStateService;
   readonly messagingStore: MessagingArchiveCleanupStore | null | undefined;

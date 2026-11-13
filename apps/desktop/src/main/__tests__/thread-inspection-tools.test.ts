@@ -120,7 +120,8 @@ describe("ThreadInspectionTools", () => {
           ...(approveLabel ? { approveLabel } : {}),
         });
         const key = buildPendingRequestKey({ backend: "codex", threadId: "caller", requestId: "request-1" });
-        await vi.waitFor(() => expect(pendingServerRequests.has(key)).toBe(true));
+        // The card is registered and published before the first await.
+        expect(pendingServerRequests.has(key)).toBe(true);
         expect(events).toHaveLength(1);
         expect(events[0]).toMatchObject({ backend: "codex", notification: { method: "item/tool/requestUserInput" } });
         pendingServerRequests.get(key)!.resolve({
