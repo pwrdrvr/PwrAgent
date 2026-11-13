@@ -32,13 +32,14 @@ afterEach(async () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-function storePorts(): Array<{ group: string; name: string; optional: boolean }> {
+function storePorts(): Array<{ group: string; name: string }> {
   return Object.entries(registry.context.stores).flatMap(([group, ports]) =>
-    Object.keys(ports).map((name) => ({
-      group,
-      name,
-      optional: typeof Object.getOwnPropertyDescriptor(ports, name)?.get === "function",
-    })));
+    Object.keys(ports).map((name) => ({ group, name })));
+}
+
+function readPort(group: string, name: string): unknown {
+  const groupPorts = registry.context.stores[group as keyof typeof registry.context.stores] as Record<string, unknown>;
+  return groupPorts[name];
 }
 
 it("calls the overlay store's current method through every context store port", async () => {
@@ -49,8 +50,7 @@ it("calls the overlay store's current method through every context store port", 
     // Replaced after the registry was built, as an adapter or a test may do.
     const replacement = vi.fn(async () => undefined);
     store[name] = replacement;
-    const groupPorts = registry.context.stores[group as keyof typeof registry.context.stores] as Record<string, unknown>;
-    const port = groupPorts[name] as (...args: unknown[]) => unknown;
+    const port = readPort(group, name) as (...args: unknown[]) => unknown;
     // `lines` satisfies the usage-attribution wrapper the registry puts around the store.
     const args = { fixture: name, lines: [] };
     await port(args);
@@ -59,13 +59,20 @@ it("calls the overlay store's current method through every context store port", 
   }
 });
 
-it("reports an optional store method as absent while the store lacks it", () => {
-  const optional = storePorts().filter((port) => port.optional);
-  expect(optional.map((port) => port.name)).toContain("getThreadMetadata");
+it("never lets a port swallow a store method that is absent", async () => {
   const store = overlayStore as unknown as Record<string, unknown>;
-  for (const { group, name } of optional) {
+  let absentPorts = 0;
+  for (const { group, name } of storePorts()) {
     store[name] = undefined;
-    const groupPorts = registry.context.stores[group as keyof typeof registry.context.stores] as Record<string, unknown>;
-    expect(groupPorts[name], `${group}.${name}`).toBeUndefined();
+    const port = readPort(group, name);
+    if (port === undefined) {
+      // An optional method: callers see it is missing and take their fallback.
+      absentPorts += 1;
+      continue;
+    }
+    // A required method: a call fails loudly instead of quietly doing nothing.
+    const call = async () => await (port as (...args: unknown[]) => unknown)({ lines: [] });
+    await expect(call(), `${group}.${name}`).rejects.toThrow(TypeError);
   }
+  expect(absentPorts).toBeGreaterThan(0);
 });
