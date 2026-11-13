@@ -278,6 +278,7 @@ function createSnapshot(
     },
     federation: {
       mode: { value: "disabled", source: "default" },
+      memberRole: { value: "full", source: "default" },
       instanceLabel: { value: "", source: "default" },
       instanceNotes: { value: "", source: "default" },
       listenHost: { value: "127.0.0.1", source: "default" },

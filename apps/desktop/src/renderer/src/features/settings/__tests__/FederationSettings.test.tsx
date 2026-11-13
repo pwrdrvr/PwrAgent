@@ -268,6 +268,74 @@ describe("FederationSettings", () => {
     expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("filePushDirectory");
     expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePull");
     expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("allowFilePullOutsideThreadDirectories");
+    // An unrelated save leaves `member_role` exactly as the file has it.
+    expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("memberRole");
+  });
+
+  describe("Contain this instance", () => {
+    function renderContainment(memberRole: "full" | "contained") {
+      const snapshot = settingsSnapshot();
+      snapshot.federation.memberRole = { value: memberRole, source: memberRole === "full" ? "default" : "config" };
+      const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+      render(
+        <FederationSettings
+          desktopApi={federationHealthApi()}
+          onClearSecret={vi.fn(async () => true)}
+          onReplaceSecret={vi.fn(async () => true)}
+          saving={false}
+          snapshot={snapshot}
+          onSettingsChanged={vi.fn(async () => {})}
+          onWriteConfig={onWriteConfig}
+        />,
+      );
+      return { onWriteConfig, toggle: screen.getByRole("switch", { name: "Contain this instance" }) };
+    }
+
+    it("asks before containing, says peers keep the declaration, and writes contained", async () => {
+      const { onWriteConfig, toggle } = renderContainment("full");
+      expect(toggle).not.toBeChecked();
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
+      expect(onWriteConfig).not.toHaveBeenCalled();
+      const note = screen.getByRole("note");
+      expect(note).toHaveTextContent("only their operators can lift that");
+      fireEvent.click(screen.getByRole("button", { name: "Contain and save" }));
+      await waitFor(() => expect(onWriteConfig).toHaveBeenCalledTimes(1));
+      expect(onWriteConfig.mock.calls[0][0].federation).toMatchObject({ memberRole: "contained" });
+    });
+
+    it("says peers still enforce their assigned role when lifting containment, and writes full", async () => {
+      const { onWriteConfig, toggle } = renderContainment("contained");
+      expect(toggle).toBeChecked();
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
+      expect(screen.getByRole("note")).toHaveTextContent(
+        "Each peer still enforces the role it assigned when it invited this instance",
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Lift containment and save" }));
+      await waitFor(() => expect(onWriteConfig).toHaveBeenCalledTimes(1));
+      expect(onWriteConfig.mock.calls[0][0].federation).toMatchObject({ memberRole: "full" });
+    });
+
+    it("cancels the confirmation without writing, and keeps the edit", async () => {
+      const { onWriteConfig, toggle } = renderContainment("full");
+      await act(async () => {});
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onWriteConfig).not.toHaveBeenCalled();
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+      expect(toggle).toBeChecked();
+    });
+
+    it("toggling back to the saved role saves without asking", async () => {
+      const { onWriteConfig, toggle } = renderContainment("contained");
+      fireEvent.click(toggle);
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
+      await waitFor(() => expect(onWriteConfig).toHaveBeenCalledTimes(1));
+      expect(onWriteConfig.mock.calls[0][0].federation).not.toHaveProperty("memberRole");
+    });
   });
   it.each([
     ["Allow incoming files", "allowFilePush", true],
@@ -1896,6 +1964,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
   return {
     federation: {
       mode: { value: "gateway", source: "config" },
+      memberRole: { value: "full", source: "default" },
       instanceLabel: { value: "", source: "default" },
       instanceNotes: { value: "", source: "default" },
       listenHost: { value: "127.0.0.1", source: "config" },

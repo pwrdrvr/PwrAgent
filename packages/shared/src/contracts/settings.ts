@@ -2,7 +2,7 @@ import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
-import type { FederationTarget } from "./federation";
+import type { FederationPeerRole, FederationTarget } from "./federation";
 import type {
   DesktopHelperModelSettings,
   DesktopTaskMonitorModelChoice,
@@ -1254,6 +1254,14 @@ export type ManagedGitActionResponse = {
 export type DesktopFederationSettingsSnapshot = {
   mode: DesktopSettingsValue<DesktopFederationMode>;
   /**
+   * This instance's own containment, `[federation] member_role`. Contained
+   * refuses the federation requests this instance would originate and gives
+   * its models only read-only PwrAgent tools. A value this build does not
+   * recognize reads as contained. Peers enforce the role they assigned at
+   * enrollment either way.
+   */
+  memberRole: DesktopSettingsValue<FederationPeerRole>;
+  /**
    * Human-readable name this instance advertises to federation peers.
    * Empty means "use the machine hostname" — peers should never have to
    * recognize a raw instance GUID.
@@ -1831,6 +1839,8 @@ export type DesktopSettingsConfigPatch = {
   };
   federation?: {
     mode?: DesktopFederationMode;
+    /** `full` is the default, so it deletes `member_role`. */
+    memberRole?: FederationPeerRole;
     instanceLabel?: string;
     instanceNotes?: string;
     listenHost?: string;

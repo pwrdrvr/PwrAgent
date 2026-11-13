@@ -1332,6 +1332,9 @@ export class DesktopSettingsService {
       },
       federation: {
         mode: this.resolveFederationMode(config.federation?.mode),
+        memberRole: config.federation?.memberRole === undefined
+          ? { value: "full", source: "default" }
+          : { value: config.federation.memberRole, source: "config" },
         instanceLabel: this.resolveConfigString(config.federation?.instanceLabel),
         instanceNotes: this.resolveConfigString(config.federation?.instanceNotes),
         listenHost: this.resolveConfigStringWithDefault(

@@ -92,6 +92,9 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [settingRoleFor, setSettingRoleFor] = useState<string>();
   const [settingIconFor, setSettingIconFor] = useState<string>();
   const [confirmingForget, setConfirmingForget] = useState(false);
+  // Save asks once more when the save would change this instance's own
+  // containment, because peers may keep a contained declaration.
+  const [confirmingContainment, setConfirmingContainment] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   // The revoke the operator is currently confirming, plus what it would do
   // to their pinned threads. An absent `impact` means nothing is pinned
@@ -113,6 +116,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     mode: federation.mode.value,
     instanceLabel: federation.instanceLabel.value,
     compressionEnabled: federation.compressionEnabled.value,
+    contained: federation.memberRole.value === "contained",
     instanceNotes: federation.instanceNotes.value,
     listenHost: federation.listenHost.value,
     listenPort: String(federation.listenPort.value),
@@ -137,6 +141,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     mode,
     instanceLabel,
     compressionEnabled,
+    contained,
     instanceNotes,
     listenHost,
     listenPort,
@@ -144,12 +149,20 @@ export function FederationSettings(props: FederationSettingsProps) {
     gatewayEndpointsText,
     advertisedEndpointsText,
   } = configuration.values;
+  // Only an operator's change writes `member_role`, so a value this build
+  // reads as contained (`"trusted"`) is not rewritten by an unrelated save.
+  const containmentChanged =
+    contained !== (federation.memberRole.value === "contained");
   const setMode = (value: DesktopFederationMode) =>
     configuration.set("mode", value);
   const setInstanceLabel = (value: string) =>
     configuration.set("instanceLabel", value);
   const setCompressionEnabled = (value: boolean) =>
     configuration.set("compressionEnabled", value);
+  const setContained = (value: boolean) => {
+    setConfirmingContainment(false);
+    configuration.set("contained", value);
+  };
   const setInstanceNotes = (value: string) =>
     configuration.set("instanceNotes", value);
   const setListenHost = (value: string) =>
@@ -475,6 +488,9 @@ export function FederationSettings(props: FederationSettingsProps) {
       federation: {
         mode,
         compressionEnabled,
+        ...(containmentChanged
+          ? { memberRole: contained ? "contained" as const : "full" as const }
+          : {}),
         instanceLabel,
         instanceNotes,
         listenHost,
@@ -495,6 +511,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     }
     // What was typed and what was saved can differ ("047831", blank endpoint
     // lines), so show the saved values rather than keep the typed ones.
+    setConfirmingContainment(false);
     configuration.discard();
     await props.onSettingsChanged();
     await loadHealth();
@@ -857,16 +874,68 @@ export function FederationSettings(props: FederationSettingsProps) {
               />
             }
           />
+          <SettingsField
+            label="Contain this instance"
+            sub="A contained instance sends no requests to other instances, so you cannot open or start work on peers from here. Its agents get only the read-only PwrAgent tools, and Auto mode asks you to approve instead of the auto reviewer."
+            help={
+              <>
+                Peers enforce the role they assigned when they invited this
+                instance, whatever this switch says. Saved as{" "}
+                <code>member_role</code> under <code>[federation]</code> in
+                config.toml.
+              </>
+            }
+            control={
+              <SettingsSwitch
+                label="Contain this instance"
+                checked={contained}
+                disabled={props.saving}
+                onChange={setContained}
+              />
+            }
+          />
           <div className="settings-button-row">
-            <button
-              className="button button--primary"
-              type="button"
-              disabled={props.saving}
-              onClick={() => void saveConfiguration()}
-            >
-              Save federation settings
-            </button>
+            {confirmingContainment && containmentChanged ? (
+              <>
+                <button
+                  className="button button--primary"
+                  type="button"
+                  disabled={props.saving}
+                  onClick={() => void saveConfiguration()}
+                >
+                  {contained ? "Contain and save" : "Lift containment and save"}
+                </button>
+                <button
+                  className="button button--ghost"
+                  type="button"
+                  disabled={props.saving}
+                  onClick={() => setConfirmingContainment(false)}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={props.saving}
+                onClick={() =>
+                  containmentChanged
+                    ? setConfirmingContainment(true)
+                    : void saveConfiguration()
+                }
+              >
+                Save federation settings
+              </button>
+            )}
           </div>
+          {confirmingContainment && containmentChanged ? (
+            <p className="federation-security-note" role="note">
+              {contained
+                ? "This instance will stop sending requests to peers, and its agents will lose every PwrAgent tool that is not read-only. It also tells each connected peer that it is contained. Those peers then keep it contained, and only their operators can lift that, in their own Settings → Federation. Saving reconnects federation sessions."
+                : "This lifts only this instance's own limits. Each peer still enforces the role it assigned when it invited this instance, and a peer that recorded this instance as contained keeps it contained until that peer's operator changes it. Saving reconnects federation sessions."}
+            </p>
+          ) : null}
         </div>
       </SettingsSection>
 

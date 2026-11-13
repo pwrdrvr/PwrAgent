@@ -1305,6 +1305,15 @@ export function desktopSettingsPatchToEdits(
       set(["federation", "mode"], patch.federation.mode);
     }
   }
+  if (patch.federation?.memberRole !== undefined) {
+    // Full is the default, so a full member carries no key. Anything else
+    // writes the one value this build reads as contained.
+    if (patch.federation.memberRole === "full") {
+      edits.push({ op: "delete", path: ["federation", "member_role"] });
+    } else {
+      set(["federation", "member_role"], "contained");
+    }
+  }
   if (patch.federation?.instanceLabel !== undefined) {
     if (patch.federation.instanceLabel.trim() === "") {
       edits.push({ op: "delete", path: ["federation", "instance_label"] });
