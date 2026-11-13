@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StartReviewRequest } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { ManagedReviewService, type ManagedReviewServiceHost } from "../app-server/managed-review-service";
+import type { RegistryContext } from "../app-server/registry-context";
 import { resolvePullRequestReview } from "../app-server/pull-request-review";
 
 vi.mock("../app-server/pull-request-review", () => ({
@@ -10,15 +11,16 @@ vi.mock("../app-server/pull-request-review", () => ({
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe("PR review owner boundary", () => {
-  function owner(executionTarget = "local"): DesktopBackendRegistry {
+  function owner(executionTarget = "local"): ManagedReviewService {
     // Exercise the real admission method without booting an app server.
-    return Object.assign(Object.create(DesktopBackendRegistry.prototype), {
-      overlayStore: { getThreadOverlayState: async () => ({
+    const context = {
+      stores: { threads: { getThreadOverlayState: async () => ({
         prs: [{ url: "https://github.com/fixture/project/pull/1" }],
         codexEnvironmentRuntime: { executionTarget },
-      }) },
-      resolveThreadEnvironmentCwd: async () => "/owner/workspace",
-    });
+      }) } },
+    } as unknown as RegistryContext;
+    const host = { resolveThreadEnvironmentCwd: async () => "/owner/workspace" } as unknown as ManagedReviewServiceHost;
+    return new ManagedReviewService(context, () => host);
   }
 
   it("ignores forged trust flags in a serialized IPC/Federation/messaging request", async () => {

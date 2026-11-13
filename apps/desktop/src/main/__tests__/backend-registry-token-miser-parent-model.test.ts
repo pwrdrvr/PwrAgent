@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -221,7 +221,9 @@ describe("Token Miser parent model resolution", () => {
       ["review", { mode: "native", reviewThreadId: "parent", model: "review-model", reasoningEffort: "high", serviceTier: "priority" }],
       ["later-review", { mode: "native", reviewThreadId: "parent", model: "later" }],
     ]);
-    Object.assign(registry, { activeReviewSubAgents: records });
+    // The review service owns its live review records; the registry reads them.
+    vi.spyOn(registryModules(registry).managedReviewService, "activeReviewSubAgentRecords", "get")
+      .mockReturnValue(records as never);
     const observation = observeReads(db);
     expect(await resolve()).toEqual({ model: "review-model", reasoningEffort: "high", serviceTier: "priority" });
     expect(observation.reads).toEqual([]);

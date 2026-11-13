@@ -100,6 +100,7 @@ import { DesktopBackendRegistry } from "./backend-registry";
 import { ForgeToolBridge } from "./forge-tool-bridge";
 import { ThreadInspectionTools } from "./thread-inspection-tools";
 import { ThreadMcpConnections } from "./thread-mcp-connections";
+import { ManagedReviewService } from "./managed-review-service";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolAdvertisedLocally, localAgentToolRefusal } from "../member-containment";
@@ -117,6 +118,7 @@ export interface RegistryModules {
   readonly forgeToolBridge: ForgeToolBridge;
   readonly threadInspectionTools: ThreadInspectionTools;
   readonly threadMcpConnections: ThreadMcpConnections;
+  readonly managedReviewService: ManagedReviewService;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -1307,6 +1309,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get getThreadMetadata() { return overlayStore.getThreadMetadata?.bind(overlayStore); },
         get updateThreadMetadata() { return overlayStore.updateThreadMetadata?.bind(overlayStore); },
         setThreadMcpConnectionIds: (...args) => overlayStore.setThreadMcpConnectionIds(...args),
+        setThreadModelSettings: (...args) => overlayStore.setThreadModelSettings(...args),
       },
       usage: {
         get upsertThreadUsageLines() { return overlayStore.upsertThreadUsageLines?.bind(overlayStore); },
@@ -1320,6 +1323,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get upsertThreadSubAgents() { return overlayStore.upsertThreadSubAgents?.bind(overlayStore); },
         get reconcileOrphanedThreadSubAgents() { return overlayStore.reconcileOrphanedThreadSubAgents?.bind(overlayStore); },
         get moveLegacyThreadSubAgents() { return overlayStore.moveLegacyThreadSubAgents?.bind(overlayStore); },
+        getThreadSubAgent: (...args) => overlayStore.getThreadSubAgent(...args),
+        upsertThreadSubAgent: (...args) => overlayStore.upsertThreadSubAgent(...args),
       },
       workspaces: {
         get readThreadGitWorkingStateCache() { return overlayStore.readThreadGitWorkingStateCache?.bind(overlayStore); },
@@ -1334,6 +1339,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       },
       pullRequests: {
         addThreadPullRequestReference: (...args) => overlayStore.addThreadPullRequestReference(...args),
+      },
+      reviews: {
+        upsertManagedReviewEntry: (...args) => overlayStore.upsertManagedReviewEntry(...args),
       },
     },
     providers: { codex: codexClient, claude: claudeBackend, acp: acpBackend },
@@ -1356,12 +1364,14 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadMaintenanceToolScans,
   }, () => ports);
   const threadMcpConnections = new ThreadMcpConnections(context, { forgeToolBridge }, () => ports);
+  const managedReviewService = new ManagedReviewService(context, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
     forgeToolBridge,
     threadInspectionTools,
     threadMcpConnections,
+    managedReviewService,
     handlers,
     ownerAdmission,
     managedMaintenanceRoots,
@@ -1459,6 +1469,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ports = connected;
     for (const run of initialize) run();
   });
-  registryModulesByRegistry.set(registry, { forgeToolBridge, threadInspectionTools, threadMcpConnections });
+  registryModulesByRegistry.set(registry, { forgeToolBridge, threadInspectionTools, threadMcpConnections, managedReviewService });
   return registry;
 }

@@ -37575,12 +37575,7 @@ command = "pnpm dev"
       overlayStore,
       resolveManagedReviewEnabled: () => true,
     });
-    vi.spyOn(
-      registry as unknown as {
-        resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
-      },
-      "resolveReviewContext",
-    ).mockResolvedValue(context);
+    vi.spyOn(registryModules(registry).managedReviewService, "resolveReviewContext").mockResolvedValue(context);
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
       events.push(event);
@@ -40214,12 +40209,7 @@ command = "pnpm dev"
     });
     const overlayStore = createOverlayStoreMock();
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
-    vi.spyOn(
-      registry as unknown as {
-        resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
-      },
-      "resolveReviewContext",
-    ).mockResolvedValue(context);
+    vi.spyOn(registryModules(registry).managedReviewService, "resolveReviewContext").mockResolvedValue(context);
 
     await registry.startReview({
       backend: "codex",
@@ -62483,9 +62473,8 @@ script = "printf setup"
           }) => Promise<AppServerReviewContext | undefined>;
         };
       };
-      resolveReviewContext(params: unknown): Promise<AppServerReviewContext | undefined>;
     };
-    const resolveReviewContext = vi.spyOn(internals, "resolveReviewContext")
+    const resolveReviewContext = vi.spyOn(registryModules(registry).managedReviewService, "resolveReviewContext")
       .mockResolvedValue(undefined);
 
     await internals.claudeBackend.options.resolveReviewContext({
