@@ -2192,6 +2192,35 @@ select_for_new_threads = true
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
   });
 
+  it("forgets conversation approval when the same registry closes", async () => {
+    const answers: string[] = [];
+    let answer: "accept" | "decline" = "accept";
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      answers.push(answer);
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1",
+        requestId: String(event.notification.params.requestId),
+        response: answer === "accept"
+          ? { action: "accept", content: {}, _meta: { persist: "session" } }
+          : { action: "decline", content: null, _meta: null },
+      });
+    });
+    const connections = registryModules(registry).threadMcpConnections;
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+    // The grant holds for the conversation: the second call asks nothing.
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).success).toBe(true);
+    expect(answers).toEqual(["accept"]);
+    connections.clearSessionApprovals();
+    answer = "decline";
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-3"))).success).toBe(false);
+    expect(answers).toEqual(["accept", "decline"]);
+    const clear = vi.spyOn(connections, "clearSessionApprovals");
+    await registry.close();
+    expect(clear).toHaveBeenCalledTimes(1);
+    createRegistry();
+  });
+
   it("still enforces active-turn and actor permissions after conversation approval", async () => {
     registry.onEvent(async (event) => {
       if (event.notification.method !== "mcpServer/elicitation/request") return;

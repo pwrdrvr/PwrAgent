@@ -131,8 +131,8 @@ export interface ThreadMcpConnectionsHost {
   readonly mcpGatewayTools: McpGatewayToolService | undefined;
   readonly codexEnvironmentCommandEnv: NodeJS.ProcessEnv | undefined;
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
-  readonly pendingStartedThreads: Map<string, AppServerThreadSummary>;
-  readonly taskMonitorDelegations: Map<string, TaskMonitorDelegationRecord>;
+  readonly pendingStartedThreads: ReadonlyMap<string, AppServerThreadSummary>;
+  readonly taskMonitorDelegations: ReadonlyMap<string, TaskMonitorDelegationRecord>;
   withCodexThreadClient<T>(
     threadId: string,
     operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
