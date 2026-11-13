@@ -145,6 +145,18 @@ contained at each peer until that peer's operator changes it. A desktop sets
 the same thing with `member_role` under `[federation]` in its profile's
 `config.toml`; there the default is `full`.
 
+A member's upstream gateway also decides its containment. The gateway answers
+each declaration with the role it assigns, and tells the member again whenever
+its operator changes that role. When the gateway assigns contained, the member
+contains itself as if its own setting said so, toward every peer. It keeps
+that assignment in its state database, so a restart does not release it.
+Other peers' assignments never change the member's containment, so it never
+acts as full toward one peer while its gateway refuses it everywhere. Settings
+→ Federation and `list_federation_instances` show the member's containment, and
+the role each peer assigns it. A member still declares its own setting, not
+the role its gateway gave it. Otherwise a reconnect would re-tighten a role
+the gateway's operator relaxed while the member was offline.
+
 ### What holds in each mode
 
 | | Default, Auto | Full Access |

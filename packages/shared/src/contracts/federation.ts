@@ -406,6 +406,48 @@ export function normalizeFederationPeerRole(value: unknown): FederationPeerRole 
   return value === undefined || value === "full" ? "full" : "contained";
 }
 
+/**
+ * The containment a member enforces on itself. Its own setting can contain
+ * it, and so can its upstream gateway, which owns the decision for the whole
+ * member. No other peer's assignment changes it, so a member never holds a
+ * per-peer answer to "am I contained".
+ */
+export function effectiveFederationMemberRole(
+  configured: FederationPeerRole,
+  gatewayAssigned?: FederationPeerRole,
+): FederationPeerRole {
+  return configured === "contained" || gatewayAssigned === "contained" ? "contained" : "full";
+}
+
+/** This member's own containment, and where it came from. */
+export type FederationMemberContainment = {
+  /** The member's own setting: PWRAGENT_OUTPOST_FEDERATION_ROLE, or `[federation] member_role`. */
+  configuredRole: FederationPeerRole;
+  /**
+   * The role the upstream gateway assigns this member, as the gateway last
+   * reported it. Absent without an upstream gateway, or before it answers.
+   */
+  gatewayAssignedRole?: FederationPeerRole;
+  /** What the member enforces: see effectiveFederationMemberRole. */
+  effectiveRole: FederationPeerRole;
+};
+
+/**
+ * How a peer's assignment differs from the role this member enforces.
+ * `refused`: the peer contains a member that acts as full, so it refuses
+ * that member's requests to operate other instances. `wider`: the peer would
+ * allow more than the member allows itself, which changes nothing.
+ */
+export type FederationAssignedRoleMismatch = "refused" | "wider";
+
+export function federationAssignedRoleMismatch(
+  effective: FederationPeerRole,
+  assigned: FederationPeerRole | undefined,
+): FederationAssignedRoleMismatch | undefined {
+  if (assigned === undefined || assigned === effective) return undefined;
+  return assigned === "contained" ? "refused" : "wider";
+}
+
 export type FederationPeerSummary = {
   /** Missing legacy values retain full access; only local operator actions change this. */
   permissionRole?: FederationPeerRole;
@@ -447,6 +489,12 @@ export type FederationPeerSummary = {
    * own socket, not the peer.
    */
   transfer?: FederationTransferStats;
+  /**
+   * The role this peer assigns the local instance, as it last reported over
+   * its direct connection. Attached only on health reads; absent when the
+   * peer has not said (older software, or never directly connected).
+   */
+  assignsLocalRole?: FederationPeerRole;
   lastConnectedAt?: number;
   lastActivityAt?: number;
   revokedAt?: number;
@@ -659,6 +707,8 @@ export type FederationHealthStatus = {
   };
   peers: FederationPeerSummary[];
   clientEnrollment?: FederationClientEnrollment;
+  /** This instance's own containment as a federation member. */
+  memberContainment?: FederationMemberContainment;
 };
 
 export type ReadFederationHealthRequest = Record<string, never>;
@@ -727,7 +777,9 @@ export type FederationDiagnosticEventKind =
   | "error"
   | "remote_pty_open"
   | "remote_pty_close"
-  | "role_declared";
+  | "role_declared"
+  /** On a member: its upstream gateway changed the containment it assigns. */
+  | "role_assigned";
 
 export type FederationDiagnosticEvent = {
   eventId: number;

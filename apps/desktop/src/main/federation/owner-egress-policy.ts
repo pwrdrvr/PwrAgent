@@ -10,13 +10,19 @@ type Transport = {
 /** Guard the transport itself, including sends that do not go through the router. */
 export function installOwnerEgressPolicy(
   transport: Transport,
-  role: FederationPeerRole | undefined,
-  instanceId: string,
+  /** A fixed role, or a reader asked on every send so a role change applies at once. */
+  memberRole: FederationPeerRole | (() => FederationPeerRole) | undefined,
+  localInstanceId: string | (() => string),
   audit: (event: FederationRefusalAudit) => void,
 ): void {
-  if (!role) return;
+  if (!memberRole) return;
+  const roleNow = typeof memberRole === "function" ? memberRole : () => memberRole;
+  const instanceIdNow = typeof localInstanceId === "function" ? localInstanceId : () => localInstanceId;
   const check = (envelope: FederationProtocolEnvelope) => {
+    const role = roleNow();
+    if (role === "full") return;
     // Relayed envelopes retain the authenticated source's authority.
+    const instanceId = instanceIdNow();
     if (envelope.sourceInstanceId !== instanceId) return;
     try { assertFederationEgress(role, envelope); }
     catch (error) {

@@ -29,7 +29,9 @@ export type FederationSessionAuditKind =
   | "error"
   | "remote_pty_open"
   | "remote_pty_close"
-  | "role_declared";
+  | "role_declared"
+  /** On a member: its upstream gateway changed the containment it assigns. */
+  | "role_assigned";
 
 export type FederationSessionAuditEntry = {
   eventId: number;

@@ -53,6 +53,36 @@ describe("FederationSettings", () => {
     await waitFor(() => expect(field).toHaveAttribute("data-value", "full"));
   });
 
+  it("says when the gateway contains this instance and which peers refuse it", async () => {
+    const peer = (id: string, label: string, assignsLocalRole: "full" | "contained") => ({ id, label,
+      role: "gateway" as const, status: "connected" as const, capabilities: [], assignsLocalRole });
+    render(<FederationSettings desktopApi={{
+      readFederationHealth: async () => ({ health: { enabled: true, role: "client", status: "connected",
+        memberContainment: { configuredRole: "full", gatewayAssignedRole: "contained", effectiveRole: "contained" },
+        peers: [peer("fixture_gateway", "Harbor Gateway", "contained"), peer("fixture_studio", "Studio Mac", "full")] } }),
+    }} snapshot={settingsSnapshot()} saving={false} onSettingsChanged={vi.fn(async () => {})}
+      onClearSecret={vi.fn(async () => true)} onReplaceSecret={vi.fn(async () => true)} onWriteConfig={vi.fn(async () => true)} />);
+    expect(await screen.findByText("Contained by gateway")).toBeInTheDocument();
+    expect(screen.getByText(/The gateway assigns this instance Contained/)).toBeInTheDocument();
+    // This instance enforces contained, so a contained assignment is no
+    // refusal, and a full one changes nothing.
+    expect(screen.getByText("Access for this instance: Contained")).toBeInTheDocument();
+    expect(screen.getByText("Access for this instance: Full")).toBeInTheDocument();
+    expect(screen.queryByText(/refuses requests from this instance/)).not.toBeInTheDocument();
+  });
+
+  it("names a peer that refuses a full instance", async () => {
+    render(<FederationSettings desktopApi={{
+      readFederationHealth: async () => ({ health: { enabled: true, role: "dual", status: "connected",
+        memberContainment: { configuredRole: "full", gatewayAssignedRole: "full", effectiveRole: "full" },
+        peers: [{ id: "fixture_studio", label: "Studio Mac", role: "client", status: "connected", capabilities: [],
+          assignsLocalRole: "contained" }] } }),
+    }} snapshot={settingsSnapshot()} saving={false} onSettingsChanged={vi.fn(async () => {})}
+      onClearSecret={vi.fn(async () => true)} onReplaceSecret={vi.fn(async () => true)} onWriteConfig={vi.fn(async () => true)} />);
+    expect(await screen.findByText("Access for this instance: Contained · refuses requests from this instance")).toBeInTheDocument();
+    expect(screen.queryByText(/The gateway assigns this instance Contained/)).not.toBeInTheDocument();
+  });
+
   it("defaults invitations to contained and sends the operator's selected role before enrollment", async () => {
     const generateFederationInvite = vi.fn(async () => ({ invite: "fixture-invite", expiresAt: 1_000 }));
     render(<FederationSettings desktopApi={{ ...federationHealthApi(), generateFederationInvite }}

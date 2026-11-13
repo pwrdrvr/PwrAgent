@@ -5,7 +5,13 @@ import { FEDERATION_MEMBER_ROLE_DECLARE_METHOD, FEDERATION_PEER_ROLE_METHOD, FED
 import type { FederationPeerRole } from "@pwragent/shared";
 import { applicationHost as app } from "../owner-host";
 import { installOwnerEgressPolicy } from "./owner-egress-policy";
-import { localMemberRole } from "../member-containment";
+import {
+  clearGatewayAssignedMemberRole,
+  configuredMemberRole,
+  localMemberContainment,
+  localMemberRole,
+  recordGatewayAssignedMemberRole,
+} from "../member-containment";
 import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
@@ -1306,6 +1312,12 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     FederationPeerSummary
   >();
+  /**
+   * The role each directly connected peer assigns this instance, as it last
+   * said. Only the upstream gateway's entry decides containment
+   * (recordAssignedRole); the rest are shown to the operator and agents.
+   */
+  private readonly assignedRoles = new Map<FederationInstanceId, FederationPeerRole>();
   /** Short names for every instance; the root gateway generates them. */
   private readonly shortNames = new FederationShortNameCoordinator({
     readMeta: () => isAppStateInitialized()
@@ -1852,6 +1864,7 @@ export class DesktopFederationRuntime {
     this.endpointStatuses.clear();
     this.rpcByPeer.clear();
     this.remotePeerDirectory.clear();
+    this.assignedRoles.clear();
     invalidatePeerActiveDependencies(this);
     this.publishedPeerStatuses.clear();
     this.incomingEventSubscriptions.clear();
@@ -1983,14 +1996,18 @@ export class DesktopFederationRuntime {
       // describe OUR socket with each peer, not facts about the peer.
       // Short names resolve here too: every instance reads its own copy
       // of the map, so they are never gossiped with the directory.
-      peers: this.visiblePeers().map((peer) => {
+      peers: this.visiblePeers().map(({ assignsLocalRole: _gossiped, ...peer }) => {
         const transfer = this.transferLedger.snapshot(peer.id);
         const short = this.shortNames.shortNameFor(peer.id, peer.label);
-        return transfer || short
+        // Only what the peer told this instance directly; a gossiped
+        // directory entry cannot speak for how another peer treats us.
+        const assignsLocalRole = this.assignedRoles.get(peer.id);
+        return transfer || short || assignsLocalRole
           ? {
               ...peer,
               ...(transfer ? { transfer } : {}),
               ...(short ? { shortLabel: short.shortLabel, shortLabelSource: short.source } : {}),
+              ...(assignsLocalRole ? { assignsLocalRole } : {}),
             }
           : peer;
       }),
@@ -1999,6 +2016,7 @@ export class DesktopFederationRuntime {
       unavailableReason: this.gatewayListenerError,
     });
     health.shutdownNotices = this.shutdown.snapshot();
+    health.memberContainment = localMemberContainment();
     if (config.cloudflareAccessOAuthEnabled && this.cloudflareSignInRequiredEndpoint) {
       health.cloudflareSignInRequired = {
         endpoint: this.cloudflareSignInRequiredEndpoint,
@@ -2119,6 +2137,8 @@ export class DesktopFederationRuntime {
     const hadEnrollment = Boolean(
       state.read("gatewayInstanceId"),
     );
+    // The gateway's assignment belongs to the pairing being forgotten.
+    clearGatewayAssignedMemberRole();
     state.write("gatewayInstanceId", "");
     state.write("gatewayPublicKey", "");
     state.write("gatewayNoisePublicKey", "");
@@ -2238,14 +2258,52 @@ export class DesktopFederationRuntime {
    * The reply is the role that peer assigns.
    */
   private declareMemberRole(peerId: string, capabilities: readonly string[]): void {
-    if (!capabilities.includes("member_role_declaration_v1")) return;
-    const role = localMemberRole();
+    // A peer from before declarations can still say how it treats us.
+    const declares = capabilities.includes("member_role_declaration_v1");
+    if (!declares && !capabilities.includes("peer_roles_v1")) return;
+    const role = configuredMemberRole();
     void this.rpcFor({ scope: "remote", instanceId: peerId })
-      .request<{ role?: FederationPeerRole }>({ method: FEDERATION_MEMBER_ROLE_DECLARE_METHOD, params: { role }, timeoutMs: 10_000 })
+      .request<{ role?: FederationPeerRole }>(declares
+        ? { method: FEDERATION_MEMBER_ROLE_DECLARE_METHOD, params: { role }, timeoutMs: 10_000 }
+        : { method: FEDERATION_PEER_ROLE_METHOD, params: {}, timeoutMs: 10_000 })
       .then((reply) => {
-        if (reply?.role !== role) log.info("federation peer assigns a different role", { peerId, declared: role, assigned: reply?.role ?? null });
+        if (reply?.role !== "full" && reply?.role !== "contained") return;
+        if (reply.role !== role) log.info("federation peer assigns a different role", { peerId, declared: role, assigned: reply.role });
+        this.recordAssignedRole(peerId, reply.role);
       })
       .catch((error: unknown) => log.warn("federation member role declaration failed", { peerId, error: error instanceof Error ? error.message : String(error) }));
+  }
+
+  /**
+   * A directly connected peer's own word on the role it assigns this
+   * instance: the reply to a declaration, or a push when its operator
+   * changes the role. A relayed claim speaks for nobody and is ignored.
+   */
+  private receivePeerRoleChanged(envelope: FederationNotificationEnvelope, sourcePeerId: string | undefined): void {
+    if (!sourcePeerId || sourcePeerId !== envelope.sourceInstanceId) return;
+    const role = (envelope.params as { role?: unknown } | undefined)?.role;
+    if (role !== "full" && role !== "contained") return;
+    this.recordAssignedRole(sourcePeerId, role);
+  }
+
+  /**
+   * Only the upstream gateway's assignment decides whether this member is
+   * contained, for every peer at once: the gateway refuses a contained
+   * member's requests to any peer, so no other peer's word may leave this
+   * member believing it is full anywhere.
+   */
+  private recordAssignedRole(peerId: string, role: FederationPeerRole): void {
+    const previous = this.assignedRoles.get(peerId);
+    this.assignedRoles.set(peerId, role);
+    if (peerId === this.gatewayInstanceId) {
+      const { before, after } = recordGatewayAssignedMemberRole(peerId, role);
+      if (before !== after) {
+        log.info("federation gateway changed this member's containment", { gatewayInstanceId: peerId, before, after });
+        this.store().appendAudit({ peerId, kind: "role_assigned", createdAt: Date.now(),
+          detail: `gateway assigns ${role}; this member is now ${after}` });
+      }
+    }
+    if (previous !== role) this.publishHealthChanged();
   }
 
   async setPeerRole(peerId: string, role: FederationPeerRole): Promise<FederationPeerSummary> {
@@ -2575,6 +2633,8 @@ export class DesktopFederationRuntime {
   }> {
     const payload = decodeFederationInvite(invite);
     const state = desktopFederationState;
+    // A new pairing starts with no assignment; the gateway states its own.
+    clearGatewayAssignedMemberRole();
     state.write("gatewayInstanceId", payload.gatewayInstanceId);
     state.write("gatewayPublicKey", payload.gatewayPublicKeyPem);
     state.write(
@@ -4109,6 +4169,8 @@ export class DesktopFederationRuntime {
               : additionalFederationBackendCapabilities(envelope),
     });
     router.registerHandler(FEDERATION_PEER_ROLE_METHOD, (envelope) => ({ role: this.peerRole(envelope.sourceInstanceId) }));
+    router.registerNotificationHandler(FEDERATION_PEER_ROLE_CHANGED_METHOD, (envelope, sourcePeerId) =>
+      this.receivePeerRoleChanged(envelope, sourcePeerId));
     router.registerHandler(FEDERATION_MEMBER_ROLE_DECLARE_METHOD, (envelope, sourcePeerId) =>
       this.receiveMemberRoleDeclaration(envelope.sourceInstanceId, sourcePeerId, envelope.params));
     router.registerBlobChunkHandler(async (envelope) => {
@@ -5072,10 +5134,10 @@ export class DesktopFederationRuntime {
   }
 
   private installEgressPolicy(connection: FederationGatewayConnection | FederationClientWebSocketClient): void {
-    // A contained member refuses its own outbound requests, on any host.
-    const role = localMemberRole();
-    if (role !== "contained") return;
-    installOwnerEgressPolicy(connection, role, this.ensureLocalInstanceId(),
+    // A contained member refuses its own outbound requests, on any host. The
+    // guard asks for the role on each send, so a gateway that contains this
+    // member mid-session takes effect on the next envelope.
+    installOwnerEgressPolicy(connection, localMemberRole, () => this.ensureLocalInstanceId(),
       event => appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), event));
   }
 

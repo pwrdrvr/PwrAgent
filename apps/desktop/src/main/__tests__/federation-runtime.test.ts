@@ -4200,7 +4200,10 @@ describe("DesktopFederationRuntime", () => {
     runtime.registerGatewayConnection(newConnection);
     runtime.unregisterGatewayConnection(oldConnection);
 
-    expect(router.getConnection("client_one")?.sendEnvelope).toBe(newSendEnvelope);
+    // The egress guard wraps each connection's send; the router keeps the
+    // new connection's, never the old one's.
+    expect(router.getConnection("client_one")?.sendEnvelope).toBe(newConnection.sendEnvelope);
+    expect(newConnection.sendEnvelope).not.toBe(oldConnection.sendEnvelope);
 
     runtime.unregisterGatewayConnection(newConnection);
 
