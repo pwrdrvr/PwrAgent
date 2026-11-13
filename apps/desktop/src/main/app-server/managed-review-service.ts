@@ -93,6 +93,19 @@ import {
 // The registry's logger name, so moved log lines read as they did.
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
+/** The fields a review card write may change; the rest come from the record. */
+type ReviewSubAgentCardPatch = Partial<
+  Pick<
+    ThreadSubAgentSummary,
+    | "completedAt"
+    | "lastMessage"
+    | "monitorUsage"
+    | "outcome"
+    | "status"
+    | "updatedAt"
+  >
+>;
+
 /**
  * Registry-owned state and turn operations the review service reads. The
  * registry's construction ports satisfy it; this module never imports the
@@ -274,6 +287,13 @@ export class ManagedReviewService {
   >();
 
   private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
+
+  /**
+   * The newest card write of each review, keyed like `activeReviewSubAgents`.
+   * A card write reads the card and then writes it. A write that read before
+   * the terminal's landed and finished after it would put back `running`.
+   */
+  private readonly reviewCardWrites = new Map<string, Promise<void>>();
 
   /**
    * A reviewer override runs the review as a managed child on the chosen
@@ -1373,17 +1393,35 @@ export class ManagedReviewService {
 
   async persistReviewSubAgent(
     record: ReviewSubAgentRecord,
-    patch: Partial<
-      Pick<
-        ThreadSubAgentSummary,
-        | "completedAt"
-        | "lastMessage"
-        | "monitorUsage"
-        | "outcome"
-        | "status"
-        | "updatedAt"
-      >
-    > = {},
+    patch: ReviewSubAgentCardPatch = {},
+  ): Promise<void> {
+    const reviewKey = buildReviewSubAgentKey(record.backend, record.reviewThreadId, record.turnId);
+    // One card write at a time per review, each reading what the last one
+    // wrote, so a write without a status keeps a terminal's.
+    const write = (this.reviewCardWrites.get(reviewKey) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => await this.writeReviewSubAgentCard(record, patch));
+    this.reviewCardWrites.set(reviewKey, write);
+    try {
+      await write;
+    } finally {
+      if (this.reviewCardWrites.get(reviewKey) === write) this.reviewCardWrites.delete(reviewKey);
+    }
+    this.host().invalidateThreadListCache(record.parentBackend);
+    await this.context.emit({
+      backend: record.parentBackend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: record.parentThreadId,
+        },
+      },
+    });
+  }
+
+  private async writeReviewSubAgentCard(
+    record: ReviewSubAgentRecord,
+    patch: ReviewSubAgentCardPatch,
   ): Promise<void> {
     const monitorId = reviewSubAgentId(record.turnId);
     const existing = await this.context.stores.subAgents.getThreadSubAgent({
@@ -1440,16 +1478,6 @@ export class ManagedReviewService {
       backend: record.parentBackend,
       threadId: record.parentThreadId,
       subAgent,
-    });
-    this.host().invalidateThreadListCache(record.parentBackend);
-    await this.context.emit({
-      backend: record.parentBackend,
-      notification: {
-        method: "thread/subAgents/updated",
-        params: {
-          threadId: record.parentThreadId,
-        },
-      },
     });
   }
 
