@@ -207,7 +207,6 @@ export class ForgeToolBridge {
   private forgeReadHandler?: ForgeReadHandler;
   private localForgeReadHandler?: ForgeReadHandler;
 
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeReadHandlers(local: ForgeReadHandler, routed: ForgeReadHandler): void {
     this.localForgeReadHandler = local;
     this.forgeReadHandler = routed;
@@ -226,25 +225,21 @@ export class ForgeToolBridge {
    * call would otherwise infer (a pull request's head), and fails a bad call
    * before asking.
    */
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgePrToolHandler(handler: ForgePrToolHandler, preflight?: ForgePrToolPreflight): void {
     this.forgePrToolHandler = handler;
     this.forgePrToolPreflight = preflight;
   }
 
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
     this.forgeToolPolicyResolver = resolve;
   }
 
   /** Saves the project rule an approval card's "Always allow" option chose. */
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolRuleWriter(write: ForgeToolRuleWriter): void {
     this.forgeToolRuleWriter = write;
   }
 
   /** Names a repository's project as the Directories lens does. */
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeProjectLabelResolver(resolve: (repository: string) => Promise<string | undefined>): void {
     this.forgeProjectLabelResolver = resolve;
   }
@@ -713,10 +708,10 @@ export class ForgeToolBridge {
     return this.localForgeReadHandler(request.operation, { ...request.args, backend: request.backend, threadId: request.threadId }, { backend: request.backend, threadId: request.threadId, transport: "mcp", signal });
   }
 
-  threadPullRequestStatusToolHandler:
+  private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
     | undefined;
-  threadPullRequestWatchToolHandler:
+  private threadPullRequestWatchToolHandler:
     | ThreadPullRequestWatchToolHandler
     | undefined;
 
@@ -731,7 +726,7 @@ export class ForgeToolBridge {
     | ThreadPullRequestRefreshHandler
     | undefined;
 
-  threadPullRequestCanonicalizer:
+  private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
     | undefined;
   private pullRequestReferenceResolver:
@@ -741,21 +736,31 @@ export class ForgeToolBridge {
     | LocalPullRequestAuthorityResolver
     | undefined;
 
-  // The app-server service needs the registry before it can supply this owner binding.
+  /** Read-only views for the registry's inspection tools and PR projections; the setters own these bindings. */
+  get pullRequestStatusTool(): ThreadPullRequestStatusToolHandler | undefined {
+    return this.threadPullRequestStatusToolHandler;
+  }
+
+  get pullRequestWatchTool(): ThreadPullRequestWatchToolHandler | undefined {
+    return this.threadPullRequestWatchToolHandler;
+  }
+
+  get pullRequestCanonicalizer(): ThreadPullRequestCanonicalizer | undefined {
+    return this.threadPullRequestCanonicalizer;
+  }
+
   setThreadPullRequestStatusToolHandler(
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestCanonicalizer(
     canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
   ): void {
     this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setPullRequestReferenceResolver(
     resolver: PullRequestReferenceResolver | null | undefined,
   ): void {
@@ -766,21 +771,18 @@ export class ForgeToolBridge {
   private threadProjectRepositoryResolver?: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>;
 
   /** Reads a thread's primary repository when the navigation cache has none yet. */
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadProjectRepositoryResolver(
     resolver: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>,
   ): void {
     this.threadProjectRepositoryResolver = resolver;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrimaryGitRepositoryReader(
     reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
   ): void {
     this.threadPrimaryGitRepositoryReader = reader;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setLocalPullRequestAuthorityResolver(
     resolver: LocalPullRequestAuthorityResolver | null | undefined,
   ): void {
@@ -800,21 +802,18 @@ export class ForgeToolBridge {
     return this.localPullRequestAuthorityResolver?.(prKey) ?? false;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestWatchToolHandler(
     handler: ThreadPullRequestWatchToolHandler | null | undefined,
   ): void {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestDetachHandler(
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
     this.threadPullRequestDetachHandler = handler ?? undefined;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPrWatchesPeerHandler(
     handler: ThreadPrWatchesPeerHandler | null | undefined,
   ): void {
@@ -835,7 +834,6 @@ export class ForgeToolBridge {
     return await handler(request);
   }
 
-  // The app-server service needs the registry before it can supply these forge bindings.
   setProjectForgeAutomationHandler(
     handler: ProjectForgeAutomationHandler | null | undefined,
   ): void {
@@ -856,7 +854,6 @@ export class ForgeToolBridge {
     return handler;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadPullRequestRefreshHandler(
     handler: ThreadPullRequestRefreshHandler | null | undefined,
   ): void {
@@ -879,8 +876,8 @@ export class ForgeToolBridge {
 
   /**
    * Detach a PR attachment via the desktop app-server service. The service
-   * owns the PR status registry and dispatch coordinator, so the registry
-   * only mediates (mirrors threadPrAutoDispatchHandler); callers such as
+   * owns the PR status registry and dispatch coordinator, so this module
+   * only mediates; callers such as
    * the federation runtime use this instead of importing the IPC module.
    */
   async detachThreadPullRequest(

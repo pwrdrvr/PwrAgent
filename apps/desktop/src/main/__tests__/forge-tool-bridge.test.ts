@@ -195,6 +195,60 @@ describe("ForgeToolBridge", () => {
       expect(github).not.toHaveBeenCalled();
       expect(events).toHaveLength(0);
     });
+
+    it("runs an Auto write without a card only in Full Access, or in an Auto turn short of approve and merge", async () => {
+      const calls = {
+        pull_requests: ["update_pull_request", { number: 9, title: "fix: tests" }],
+        comments: ["add_issue_comment", { number: 9, body: "Looks good." }],
+        issues: ["create_issue", { title: "Flaky test" }],
+        ci: ["rerun_failed_ci_jobs", { runId: 42 }],
+        approve_merge: ["merge_pull_request", { number: 9 }],
+      } as const;
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom(...Object.keys(calls) as Array<keyof typeof calls>),
+        fc.constantFrom<"default" | "auto" | "full-access" | undefined>("default", "auto", "full-access", undefined),
+        fc.boolean(),
+        async (group, executionMode, automation) => {
+          const policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
+          policy.access[group] = "auto";
+          const github = vi.fn<ForgePrToolHandler>(async () => ({ ok: true }));
+          const { bridge, pendingServerRequests } = createBridge({
+            handlers: {
+              forgePrToolHandler: github,
+              forgePrToolPreflight: async (_operation, args) => ({ repository, args }),
+              forgeToolPolicyResolver: () => policy,
+            },
+            host: {
+              resolveCodexToolCallExecutionMode: async () => executionMode,
+              findHeadlessAutomationTurnForRequest: () => automation ? { executionMode: executionMode ?? "default" } : undefined,
+            },
+          });
+          const [operation, args] = calls[group];
+          let settled = false;
+          const outcome = bridge.gatedForgePrToolHandler(operation, { ...args }, callContext).then(
+            () => "ran",
+            (error: { code?: string }) => error.code,
+          ).finally(() => { settled = true; });
+          await vi.waitFor(() => expect(settled || pendingServerRequests.size === 1).toBe(true));
+          const carded = !settled;
+          if (carded) {
+            const [pending] = pendingServerRequests.values();
+            pending!.resolve({ action: "decline", content: null, _meta: null } as never);
+          }
+          const runsWithoutCard = executionMode === "full-access"
+            || (executionMode === "auto" && group !== "approve_merge" && !automation);
+          if (runsWithoutCard) {
+            expect(await outcome).toBe("ran");
+            expect(github).toHaveBeenCalledOnce();
+          } else {
+            // An automation cannot answer a card, so it is refused instead of asked.
+            expect(carded).toBe(!automation);
+            expect(await outcome).toBe(automation ? "approval_required" : "declined");
+            expect(github).not.toHaveBeenCalled();
+          }
+        },
+      ), { numRuns: 60 });
+    });
   });
 
   describe("Job Monitor threads", () => {

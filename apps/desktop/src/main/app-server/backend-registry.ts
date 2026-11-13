@@ -2264,7 +2264,8 @@ export class DesktopBackendRegistry {
   }
 
   // PR and forge members the registry's importers use. ForgeToolBridge owns
-  // the state; each member delegates to it.
+  // the state; each member delegates to it. The app-server service needs the
+  // registry before it can supply these bindings, so it calls the setters late.
   setForgeReadHandlers(local: ForgeReadHandler, routed: ForgeReadHandler): void {
     this.forgeToolBridge.setForgeReadHandlers(local, routed);
   }
@@ -10055,9 +10056,9 @@ export class DesktopBackendRegistry {
         ...(overlay?.detachedPrs ?? []),
       ];
       let canonicalPrs = prs;
-      if (this.forgeToolBridge.threadPullRequestCanonicalizer && prs.length > 0) {
+      if (this.forgeToolBridge.pullRequestCanonicalizer && prs.length > 0) {
         try {
-          canonicalPrs = await this.forgeToolBridge.threadPullRequestCanonicalizer(prs);
+          canonicalPrs = await this.forgeToolBridge.pullRequestCanonicalizer(prs);
         } catch (error) {
           backendRegistryLog.warn("working-state PR canonicalization failed", {
             error: error instanceof Error ? error.message : String(error),
@@ -10253,9 +10254,9 @@ export class DesktopBackendRegistry {
       ...(overlay?.detachedPrs ?? []),
     ];
     let canonicalPrs = storedPrs;
-    if (this.forgeToolBridge.threadPullRequestCanonicalizer && storedPrs.length > 0) {
+    if (this.forgeToolBridge.pullRequestCanonicalizer && storedPrs.length > 0) {
       try {
-        canonicalPrs = await this.forgeToolBridge.threadPullRequestCanonicalizer(storedPrs);
+        canonicalPrs = await this.forgeToolBridge.pullRequestCanonicalizer(storedPrs);
       } catch (error) {
         backendRegistryLog.warn("federated commit PR canonicalization failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -41589,7 +41590,7 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "check_thread_pull_request_status") {
-      if (!this.forgeToolBridge.threadPullRequestStatusToolHandler) {
+      if (!this.forgeToolBridge.pullRequestStatusTool) {
         return {
           ok: false,
           error: {
@@ -41598,7 +41599,7 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      return await this.forgeToolBridge.threadPullRequestStatusToolHandler(
+      return await this.forgeToolBridge.pullRequestStatusTool(
         {
           ...request.args,
           backend: request.args.backend ?? request.context.backend,
@@ -41609,7 +41610,7 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "watch_thread_pull_request") {
-      if (!this.forgeToolBridge.threadPullRequestWatchToolHandler) {
+      if (!this.forgeToolBridge.pullRequestWatchTool) {
         return {
           ok: false,
           error: {
@@ -41618,7 +41619,7 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      return await this.forgeToolBridge.threadPullRequestWatchToolHandler({
+      return await this.forgeToolBridge.pullRequestWatchTool({
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
