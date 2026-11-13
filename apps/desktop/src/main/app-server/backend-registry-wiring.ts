@@ -99,6 +99,7 @@ import { createDefaultCodexEnvironmentHydrationStore } from "./thread-launchpad-
 import { DesktopBackendRegistry } from "./backend-registry";
 import { ForgeToolBridge } from "./forge-tool-bridge";
 import { ThreadInspectionTools } from "./thread-inspection-tools";
+import { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolAdvertisedLocally, localAgentToolRefusal } from "../member-containment";
@@ -115,6 +116,7 @@ const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 export interface RegistryModules {
   readonly forgeToolBridge: ForgeToolBridge;
   readonly threadInspectionTools: ThreadInspectionTools;
+  readonly threadMcpConnections: ThreadMcpConnections;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -1304,6 +1306,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         getThreadOverlayStates: (...args) => overlayStore.getThreadOverlayStates(...args),
         get getThreadMetadata() { return overlayStore.getThreadMetadata?.bind(overlayStore); },
         get updateThreadMetadata() { return overlayStore.updateThreadMetadata?.bind(overlayStore); },
+        setThreadMcpConnectionIds: (...args) => overlayStore.setThreadMcpConnectionIds(...args),
       },
       usage: {
         get upsertThreadUsageLines() { return overlayStore.upsertThreadUsageLines?.bind(overlayStore); },
@@ -1352,11 +1355,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadInspectionSearchService,
     threadMaintenanceToolScans,
   }, () => ports);
+  const threadMcpConnections = new ThreadMcpConnections(context, { forgeToolBridge }, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
     forgeToolBridge,
     threadInspectionTools,
+    threadMcpConnections,
     handlers,
     ownerAdmission,
     managedMaintenanceRoots,
@@ -1454,6 +1459,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ports = connected;
     for (const run of initialize) run();
   });
-  registryModulesByRegistry.set(registry, { forgeToolBridge, threadInspectionTools });
+  registryModulesByRegistry.set(registry, { forgeToolBridge, threadInspectionTools, threadMcpConnections });
   return registry;
 }

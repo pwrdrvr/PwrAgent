@@ -2,6 +2,7 @@ import type { RegistryHandlers } from "./backend-registry-handlers";
 import type { RegistryContext } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
+import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -202,6 +203,7 @@ export interface RegistryDependencies {
   context: RegistryContext;
   forgeToolBridge: ForgeToolBridge;
   threadInspectionTools: ThreadInspectionTools;
+  threadMcpConnections: ThreadMcpConnections;
   ownerAdmission?: ThreadOwnerAdmission;
   managedMaintenanceRoots: () => Promise<string[]>;
   readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
