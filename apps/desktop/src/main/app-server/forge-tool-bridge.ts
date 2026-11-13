@@ -106,7 +106,7 @@ import type {
   ThreadPullRequestStatusToolHandler,
   ThreadPullRequestWatchToolHandler,
 } from "./backend-registry-types";
-import type { RegistryContext } from "./registry-context";
+import type { RegistryContext, RegistryHost } from "./registry-context";
 import {
   normalizePositivePullRequestNumber,
   parseGitRemoteRepositoryUrl,
@@ -140,8 +140,8 @@ export type ForgeToolBridgeHandlers = Pick<RegistryHandlers,
 >;
 
 /**
- * Registry-owned state and turn queries the forge tools read. The registry
- * passes closures over itself; this module never imports the registry.
+ * Registry-owned state and turn queries the forge tools read. The registry's
+ * construction ports satisfy it; this module never imports the registry.
  */
 export interface ForgeToolBridgeHost {
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
@@ -179,9 +179,9 @@ export interface ForgeToolBridgeHost {
  */
 export class ForgeToolBridge {
   private readonly context: RegistryContext;
-  private readonly host: ForgeToolBridgeHost;
+  private readonly host: RegistryHost<ForgeToolBridgeHost>;
 
-  constructor(context: RegistryContext, handlers: ForgeToolBridgeHandlers, host: ForgeToolBridgeHost) {
+  constructor(context: RegistryContext, handlers: ForgeToolBridgeHandlers, host: RegistryHost<ForgeToolBridgeHost>) {
     this.context = context;
     this.host = host;
     this.localForgeReadHandler = handlers.localForgeReadHandler;
@@ -394,7 +394,7 @@ export class ForgeToolBridge {
       },
       codexModelProvider: (providerId) => {
         try {
-          return this.host.resolveCodexModelProvidersFn().find((provider) => provider.id === providerId)?.name;
+          return this.host().resolveCodexModelProvidersFn().find((provider) => provider.id === providerId)?.name;
         } catch {
           return undefined;
         }
@@ -485,7 +485,7 @@ export class ForgeToolBridge {
         _meta: meta,
       },
     };
-    const automation = this.host.findHeadlessAutomationTurnForRequest(context.backend, notification);
+    const automation = this.host().findHeadlessAutomationTurnForRequest(context.backend, notification);
     if (access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation)) {
       signal.throwIfAborted();
       backendRegistryLog.info("running Auto forge write without an approval card", {
@@ -558,7 +558,7 @@ export class ForgeToolBridge {
     const approved = await new Promise<Approval>((resolve, reject) => {
       const finish = (value: Approval, error?: unknown): void => {
         signal.removeEventListener("abort", aborted);
-        this.host.pendingServerRequests.delete(key);
+        this.host().pendingServerRequests.delete(key);
         if (error) reject(error);
         else resolve(value);
       };
@@ -568,7 +568,7 @@ export class ForgeToolBridge {
           method: "serverRequest/resolved", params: { threadId: context.threadId, turnId: context.turnId, requestId },
         } }).catch(() => undefined);
       };
-      this.host.pendingServerRequests.set(key, {
+      this.host().pendingServerRequests.set(key, {
         backend: context.backend, notification,
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
@@ -685,11 +685,12 @@ export class ForgeToolBridge {
         ? [`“${params.message}”${typeof target === "string" ? ` for ${target}` : ""}`]
         : [];
     });
-    if (!this.host.threadTodoHandler || asked.length === 0) return;
+    const todos = this.host().threadTodoHandler;
+    if (!todos || asked.length === 0) return;
     const serverName = readRecord(requests[0]?.params)?.serverName;
     const forge = typeof serverName === "string" ? serverName : "forge";
     try {
-      await this.host.threadTodoHandler.add({ backend, threadId }, {
+      await todos.add({ backend, threadId }, {
         key: FORGE_APPROVAL_WITHDRAWN_TODO_KEY,
         title: `Reply to retry the withdrawn ${forge} request`,
         detail: `The agent asked ${asked.join(" and ")}. Its turn ended before you answered, so the request was withdrawn and nothing ran.`,
@@ -941,8 +942,8 @@ export class ForgeToolBridge {
   }
 
   private resolveTaskMonitorForgeContext(context: AgentToolCallContext, readOnly: boolean): AgentToolCallContext {
-    if (!this.host.isTaskMonitorThread(context)) return context;
-    const monitor = this.host.taskMonitorForThread(context);
+    if (!this.host().isTaskMonitorThread(context)) return context;
+    const monitor = this.host().taskMonitorForThread(context);
     if (!readOnly || !monitor || monitor.cancellation || monitor.finalizationStarted) {
       throw new ForgeReadError("forbidden", "Job Monitors may only read forge state while monitoring is active.");
     }
@@ -955,12 +956,12 @@ export class ForgeToolBridge {
     if (context.backend === "claude") return this.context.providers.claude.livePermissionMode(context.threadId) === "plan";
     if (context.backend !== "codex") return false;
     const pendingKey = buildActiveTurnKey("codex", context.threadId, `pending:${context.threadId}`);
-    const turnId = context.turnId ?? this.host.getActiveTurnForThread(context)?.turnId;
+    const turnId = context.turnId ?? this.host().getActiveTurnForThread(context)?.turnId;
     const mode = turnId
-      ? this.host.activeCodexTurnCollaborationModes.get(buildActiveTurnKey("codex", context.threadId, turnId))
+      ? this.host().activeCodexTurnCollaborationModes.get(buildActiveTurnKey("codex", context.threadId, turnId))
       : undefined;
     // A dynamic call can arrive before turn/start returns its real turn id.
-    return (mode ?? this.host.activeCodexTurnCollaborationModes.get(pendingKey)) === "plan";
+    return (mode ?? this.host().activeCodexTurnCollaborationModes.get(pendingKey)) === "plan";
   }
 
   /**
@@ -987,11 +988,11 @@ export class ForgeToolBridge {
     automation?: { executionMode?: ThreadExecutionMode },
   ): Promise<boolean> {
     if (context.backend !== "codex" && context.backend !== "claude") {
-      return await this.host.isMcpGatewayFullAccess(context, automation?.executionMode);
+      return await this.host().isMcpGatewayFullAccess(context, automation?.executionMode);
     }
     const executionMode = context.backend === "codex"
-      ? await this.host.resolveCodexToolCallExecutionMode(context, automation?.executionMode)
-      : await this.host.resolveClaudeToolCallExecutionMode(context.threadId, automation?.executionMode);
+      ? await this.host().resolveCodexToolCallExecutionMode(context, automation?.executionMode)
+      : await this.host().resolveClaudeToolCallExecutionMode(context.threadId, automation?.executionMode);
     if (executionMode === "full-access") return true;
     return executionMode === "auto" && group !== "approve_merge" && !automation;
   }
@@ -1019,7 +1020,7 @@ export class ForgeToolBridge {
         },
       };
     }
-    const summary = await this.host.readThreadInspectionSummaryForMutation({
+    const summary = await this.host().readThreadInspectionSummaryForMutation({
       backend: args.backend,
       threadId,
     });
@@ -1069,7 +1070,7 @@ export class ForgeToolBridge {
     // Rows stored before the forge named a renamed repository collapse here,
     // so the tool reply and the chips show one PR.
     const prs = (await this.projectCanonicalPullRequests(overlay))?.prs ?? [];
-    await this.host.publishLocalEvent({
+    await this.host().publishLocalEvent({
       backend: args.backend,
       notification: {
         method: "thread/pullRequests/updated",

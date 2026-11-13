@@ -1317,22 +1317,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     createScheduledThreadActionFn,
     ...options?.handlers,
   };
-  // Registry-owned state the forge tools read, bound once the registry connects its ports.
-  const forgeToolBridge = new ForgeToolBridge(context, handlers, {
-    get pendingServerRequests() { return ports.pendingServerRequests; },
-    get activeCodexTurnCollaborationModes() { return ports.activeCodexTurnCollaborationModes; },
-    get threadTodoHandler() { return ports.threadTodoHandler; },
-    resolveCodexModelProvidersFn: () => ports.resolveCodexModelProvidersFn(),
-    findHeadlessAutomationTurnForRequest: (...args) => ports.findHeadlessAutomationTurnForRequest(...args),
-    getActiveTurnForThread: (...args) => ports.getActiveTurnForThread(...args),
-    isTaskMonitorThread: (...args) => ports.isTaskMonitorThread(...args),
-    taskMonitorForThread: (...args) => ports.taskMonitorForThread(...args),
-    isMcpGatewayFullAccess: (...args) => ports.isMcpGatewayFullAccess(...args),
-    resolveCodexToolCallExecutionMode: (...args) => ports.resolveCodexToolCallExecutionMode(...args),
-    resolveClaudeToolCallExecutionMode: (...args) => ports.resolveClaudeToolCallExecutionMode(...args),
-    readThreadInspectionSummaryForMutation: (...args) => ports.readThreadInspectionSummaryForMutation(...args),
-    publishLocalEvent: (...args) => ports.publishLocalEvent(...args),
-  });
+  // The registry's construction ports are each module's host, bound once the registry connects them.
+  const forgeToolBridge = new ForgeToolBridge(context, handlers, () => ports);
 
   return new DesktopBackendRegistry({
     context,

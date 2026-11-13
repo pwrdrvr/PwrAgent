@@ -28,6 +28,15 @@ export type RegistryToolAccountingStore = Pick<BackendRegistryOverlayStoreLike,
   | "markThreadToolInvocationsNoisy" | "setThreadSpendAlertPending"
 >;
 
+/**
+ * A module's view of registry-owned state that it does not own. The
+ * composition root passes `() => ports`: the registry's construction ports
+ * structurally satisfy each module's host interface, and they are bound only
+ * once the registry connects them. Read it at call time, never while
+ * constructing.
+ */
+export type RegistryHost<Host> = () => Host;
+
 /** Domain modules receive these capabilities and import this type, never the registry. */
 export interface RegistryContext {
   readonly stores: {
