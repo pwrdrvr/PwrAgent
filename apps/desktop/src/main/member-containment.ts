@@ -1,12 +1,13 @@
 import {
   effectiveFederationMemberRole,
   normalizeFederationPeerRole,
+  PWRAGENT_TOOL_NAMESPACE,
   type FederationMemberContainment,
   type FederationPeerRole,
 } from "@pwragent/shared";
 import { getOwnerHostServices } from "./owner-host";
 import type { OwnerApprovals } from "./owner-runtime-policy";
-import { OUTPOST_AGENT_TOOL_ALLOWLIST } from "./headless/outpost-agent-tools";
+import { isAgentToolCallAllowed, OUTPOST_AGENT_TOOL_ALLOWLIST } from "./headless/outpost-agent-tools";
 import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
 import { isAppStateInitialized } from "./storage/desktop-runtime-storage";
 import { desktopFederationState } from "./storage/desktop-federation-storage";
@@ -179,4 +180,21 @@ export function forgetCachedGatewayAssignedMemberRole(): void {
 
 export function localAgentToolAllowlist(): readonly string[] | undefined {
   return agentToolAllowlistForRole(localMemberRole());
+}
+
+/**
+ * Why this member refuses a PwrAgent tool call now, or undefined when it
+ * allows it. A thread keeps the tool list it was shown until its next turn
+ * or longer, so every call is checked again against the current role.
+ */
+export function localAgentToolRefusal(tool: string): string | undefined {
+  const allowlist = localAgentToolAllowlist();
+  return allowlist && !isAgentToolCallAllowed(allowlist, { namespace: PWRAGENT_TOOL_NAMESPACE, tool })
+    ? "this contained member does not allow this PwrAgent tool"
+    : undefined;
+}
+
+/** Whether an MCP client may see a PwrAgent tool under this member's role. */
+export function isAgentToolAdvertisedLocally(name: string): boolean {
+  return localAgentToolRefusal(name) === undefined;
 }
