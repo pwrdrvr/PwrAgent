@@ -100,8 +100,9 @@ environment. An unknown value stops startup instead of falling back.
 | `PWRAGENT_OUTPOST_FEDERATION_ROLE` | `contained` or `full` | `contained` |
 
 With `full-access` allowed, those turns run without the Codex sandbox, so the
-container is the only boundary: agents can read everything in it, including
-the Outpost's own keys. Allow it only for models you trust.
+container is the only boundary on files and network: agents can read
+everything in it, including the Outpost's own keys. See "What holds in each
+mode" below before allowing it for a model you do not trust.
 
 ### Approvals
 
@@ -118,17 +119,48 @@ continues without it. Use it for an Outpost nobody watches.
 ### Containment
 
 The federation role is a property of the member, the same on a desktop and
-an Outpost. A contained member cannot call back into the federation: its own
-owner refuses the requests it would originate, on direct and backpressured
-sends, and audits each refusal without recording the request payload. Its
-models see and can call only a short list of read-only PwrAgent tools. A full
-member has neither limit. Peers still enforce the role they assigned when
-they invited the member.
+an Outpost. A contained member cannot act on other instances. Two parties
+enforce it:
+
+- **Its peers.** Each peer refuses a contained member's requests to act on
+  it, and will not relay for it. A peer assigns a role when it invites the
+  member, `full` unless the inviter chose contained. A contained member
+  also declares itself contained to each peer it connects to, and from then
+  on that peer assigns it contained. Nothing the member sends afterwards
+  relaxes that, so a model that took the member's keys cannot undo it. Only
+  the peer's operator can, in Settings → Federation. Peers on builds without
+  `member_role_declaration_v1` keep the role they assigned at the invite.
+- **The member itself.** Its owner refuses the federation requests it would
+  send, on direct and backpressured sends, and audits each refusal without
+  recording the request payload. Its models see and can call only a short
+  list of read-only PwrAgent tools. This half runs in the same container as
+  the model's commands, so in Full Access it is a convenience, not a
+  boundary: those commands can read the member's federation keys and
+  connect as it. Its peers' half still holds.
 
 Contained is the default, so an upgrade never widens what an existing Outpost
 may do. Set `PWRAGENT_OUTPOST_FEDERATION_ROLE=full` only for models you trust
-with the federation. A desktop sets the same thing with `member_role` under
-`[federation]` in its profile's `config.toml`; there the default is `full`.
+with the federation. An Outpost that once declared itself contained stays
+contained at each peer until that peer's operator changes it. A desktop sets
+the same thing with `member_role` under `[federation]` in its profile's
+`config.toml`; there the default is `full`.
+
+### What holds in each mode
+
+| | Default, Auto | Full Access |
+| --- | --- | --- |
+| Codex sandbox | Read-only or workspace-write; denies the profile folder and Codex credentials | None |
+| Container | Boundary | The only boundary on files and network |
+| Federation keys, `headless-secret.key`, state database | Unreadable to agent commands | Readable to agent commands |
+| Contained role at peers | Holds | Holds |
+| Contained role inside the Outpost | Holds | Bypassable |
+| Approvals | `PWRAGENT_OUTPOST_APPROVALS` | Never asks |
+
+To run untrusted models in Full Access, keep only placeholder credentials in
+the Codex home (the model key proxy holds the real key), give the container
+no route out except the key proxy and its federation link, and treat the
+volume as the model's. Never promote that Outpost to `full` with the same
+federation identity: re-enroll it first.
 
 Model commands run as the Outpost's own user, so file modes cannot keep them
 out of its profile directory, which holds `state/headless/rpc.sock`, the

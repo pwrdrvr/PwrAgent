@@ -122,6 +122,11 @@ example `-e PWRAGENT_OUTPOST_APPROVALS=never` for an Outpost nobody watches or
 `-e PWRAGENT_OUTPOST_FEDERATION_ROLE=full` for one whose models the operator
 trusts with the federation. The package README lists every variable.
 
+A contained Outpost declares itself contained to its gateway when it
+connects, and the gateway then keeps it contained until the gateway's
+operator changes it in Settings → Federation. Changing the variable to `full`
+later does not relax the gateway's role; the operator must do that there.
+
 Put Codex credentials in `/home/outpost/codex` once, with the Codex CLI in
 the container or by copying an auth file you own. Never bake credentials
 into the image.
@@ -241,8 +246,10 @@ before you start a thread. The workspace root is always listed, as
 - In Default and Auto, the Outpost's Codex permission profiles deny agent
   commands `$PWRAGENT_HOME/profiles`, which holds the secret store key, and
   the Codex home's credential files. They can still read the rest of the
-  volume, and Full Access has no sandbox. Do not run untrusted prompts on an
-  Outpost whose credentials matter.
+  volume. Full Access has no sandbox: agent commands can read the Outpost's
+  federation keys and connect as it, so only the gateway's contained role and
+  the container hold. Do not run untrusted prompts on an Outpost whose
+  credentials matter.
 - For research with an untrusted model and no network, use the bundled
   `outpost-security-research` skill
   (`apps/desktop/src/main/agent-tools/skills/outpost-security-research/`). It

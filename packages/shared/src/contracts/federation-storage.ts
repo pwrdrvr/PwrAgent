@@ -28,7 +28,8 @@ export type FederationSessionAuditKind =
   | "relay"
   | "error"
   | "remote_pty_open"
-  | "remote_pty_close";
+  | "remote_pty_close"
+  | "role_declared";
 
 export type FederationSessionAuditEntry = {
   eventId: number;
