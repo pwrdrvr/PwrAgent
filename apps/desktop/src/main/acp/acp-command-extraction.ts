@@ -340,6 +340,33 @@ function readAcpToolMetadata(
   return asRecord(asRecord(record._meta)?.["x.ai/tool"]);
 }
 
+export type AcpProviderTool = {
+  /** The agent's internal tool name, such as `search_replace`. */
+  name?: string;
+  /** The agent's display name for the tool, such as `Edit`. */
+  label?: string;
+  kind?: string;
+};
+
+/**
+ * The tool identity an agent declares beside a tool call. Grok sends it as
+ * `_meta["x.ai/tool"]` on the opening `tool_call` and on most updates.
+ */
+export function readAcpProviderTool(
+  record: Record<string, unknown>,
+): AcpProviderTool | undefined {
+  const metadata = readAcpToolMetadata(record);
+  if (!metadata) {
+    return undefined;
+  }
+  const tool: AcpProviderTool = {
+    name: readString(metadata, "name"),
+    label: readString(metadata, "label"),
+    kind: readString(metadata, "kind"),
+  };
+  return tool.name || tool.label || tool.kind ? tool : undefined;
+}
+
 function extractCommandFromJsonText(text: string): string | undefined {
   try {
     const parsed = JSON.parse(text) as unknown;
