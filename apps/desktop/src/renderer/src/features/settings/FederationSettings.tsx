@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Select } from "../../components/Select";
 import { FederationCapabilities } from "./FederationCapabilities";
 import { CloudflareSetup } from "./CloudflareSetup";
@@ -95,6 +95,8 @@ export function FederationSettings(props: FederationSettingsProps) {
   // Save asks once more when the save would change this instance's own
   // containment, because peers may keep a contained declaration.
   const [confirmingContainment, setConfirmingContainment] = useState(false);
+  const containmentNoteId = useId();
+  const saveConfigurationRef = useRef<HTMLButtonElement>(null);
   const [forgetting, setForgetting] = useState(false);
   // The revoke the operator is currently confirming, plus what it would do
   // to their pinned threads. An absent `impact` means nothing is pinned
@@ -109,6 +111,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     useState<ReadFederationPinImpactResponse>();
   const forgetImpactGenerationRef = useRef(0);
   const federation = props.snapshot.federation;
+  const savedContained = federation.memberRole.value === "contained";
   // The pane's two explicit-save forms. Each field follows the saved value
   // until the operator edits it; a settings refresh (any write, from any
   // section or window) leaves an unsaved edit alone.
@@ -116,7 +119,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     mode: federation.mode.value,
     instanceLabel: federation.instanceLabel.value,
     compressionEnabled: federation.compressionEnabled.value,
-    contained: federation.memberRole.value === "contained",
+    contained: savedContained,
     instanceNotes: federation.instanceNotes.value,
     listenHost: federation.listenHost.value,
     listenPort: String(federation.listenPort.value),
@@ -151,8 +154,8 @@ export function FederationSettings(props: FederationSettingsProps) {
   } = configuration.values;
   // Only an operator's change writes `member_role`, so a value this build
   // reads as contained (`"trusted"`) is not rewritten by an unrelated save.
-  const containmentChanged =
-    contained !== (federation.memberRole.value === "contained");
+  const containmentChanged = contained !== savedContained;
+  const confirmingContainmentChange = confirmingContainment && containmentChanged;
   const setMode = (value: DesktopFederationMode) =>
     configuration.set("mode", value);
   const setInstanceLabel = (value: string) =>
@@ -876,11 +879,11 @@ export function FederationSettings(props: FederationSettingsProps) {
           />
           <SettingsField
             label="Contain this instance"
-            sub="A contained instance sends no requests to other instances, so you cannot open or start work on peers from here. Its agents get only the read-only PwrAgent tools, and Auto mode asks you to approve instead of the auto reviewer."
+            sub="A contained instance sends no requests to other instances, so you cannot open or start work on peers from here. Its agents get only the read-only PwrAgent tools, and Codex Auto threads ask you to approve instead of the automatic reviewer."
             help={
               <>
-                Peers enforce the role they assigned when they invited this
-                instance, whatever this switch says. Saved as{" "}
+                Peers also enforce the role they assigned when they invited
+                this instance; turning this off never lifts that. Saved as{" "}
                 <code>member_role</code> under <code>[federation]</code> in
                 config.toml.
               </>
@@ -895,44 +898,50 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
           />
           <div className="settings-button-row">
-            {confirmingContainment && containmentChanged ? (
-              <>
-                <button
-                  className="button button--primary"
-                  type="button"
-                  disabled={props.saving}
-                  onClick={() => void saveConfiguration()}
-                >
-                  {contained ? "Contain and save" : "Lift containment and save"}
-                </button>
-                <button
-                  className="button button--ghost"
-                  type="button"
-                  disabled={props.saving}
-                  onClick={() => setConfirmingContainment(false)}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
+            {/* One Save button whose label turns into the confirmation, so a
+                keyboard press keeps focus on it instead of dropping to body. */}
+            <button
+              ref={saveConfigurationRef}
+              className="button button--primary"
+              type="button"
+              disabled={props.saving}
+              aria-describedby={
+                confirmingContainmentChange ? containmentNoteId : undefined
+              }
+              onClick={() =>
+                containmentChanged && !confirmingContainment
+                  ? setConfirmingContainment(true)
+                  : void saveConfiguration()
+              }
+            >
+              {!confirmingContainmentChange
+                ? "Save federation settings"
+                : contained
+                  ? "Contain and save"
+                  : "Lift containment and save"}
+            </button>
+            {confirmingContainmentChange ? (
               <button
-                className="button button--primary"
+                className="button button--ghost"
                 type="button"
                 disabled={props.saving}
-                onClick={() =>
-                  containmentChanged
-                    ? setConfirmingContainment(true)
-                    : void saveConfiguration()
-                }
+                onClick={() => {
+                  setConfirmingContainment(false);
+                  saveConfigurationRef.current?.focus();
+                }}
               >
-                Save federation settings
+                Cancel
               </button>
-            )}
+            ) : null}
           </div>
-          {confirmingContainment && containmentChanged ? (
-            <p className="federation-security-note" role="note">
+          {confirmingContainmentChange ? (
+            <p
+              className="federation-security-note"
+              id={containmentNoteId}
+              role="note"
+            >
               {contained
-                ? "This instance will stop sending requests to peers, and its agents will lose every PwrAgent tool that is not read-only. It also tells each connected peer that it is contained. Those peers then keep it contained, and only their operators can lift that, in their own Settings → Federation. Saving reconnects federation sessions."
+                ? "This instance will stop sending requests to peers, and its agents will lose every PwrAgent tool that is not read-only. It also tells each peer it connects to that it is contained. Peers on current releases then keep it contained, and only their operators can lift that, in their own Settings → Federation. Older peers keep the role they assigned at the invite. Saving reconnects federation sessions."
                 : "This lifts only this instance's own limits. Each peer still enforces the role it assigned when it invited this instance, and a peer that recorded this instance as contained keeps it contained until that peer's operator changes it. Saving reconnects federation sessions."}
             </p>
           ) : null}

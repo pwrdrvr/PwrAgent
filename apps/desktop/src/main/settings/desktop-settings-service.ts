@@ -45,6 +45,7 @@ import type {
   DesktopCodexVersionAdvisory,
   DesktopCodexProfileModel,
   DesktopFederationMode,
+  FederationPeerRole,
   DesktopGitDiscoverySnapshot,
   DesktopGitRuntimeChoice,
   DesktopManagedGitSnapshot,
@@ -1332,9 +1333,7 @@ export class DesktopSettingsService {
       },
       federation: {
         mode: this.resolveFederationMode(config.federation?.mode),
-        memberRole: config.federation?.memberRole === undefined
-          ? { value: "full", source: "default" }
-          : { value: config.federation.memberRole, source: "config" },
+        memberRole: this.resolveFederationMemberRole(config.federation?.memberRole),
         instanceLabel: this.resolveConfigString(config.federation?.instanceLabel),
         instanceNotes: this.resolveConfigString(config.federation?.instanceNotes),
         listenHost: this.resolveConfigStringWithDefault(
@@ -4318,6 +4317,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopCodexProfileModel> {
     return {
       value: configValue ?? DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveFederationMemberRole(
+    configValue: FederationPeerRole | undefined,
+  ): DesktopSettingsValue<FederationPeerRole> {
+    return {
+      value: configValue ?? "full",
       source: configValue === undefined ? "default" : "config",
     };
   }

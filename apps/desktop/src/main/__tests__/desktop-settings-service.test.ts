@@ -267,6 +267,24 @@ describe("DesktopSettingsService", () => {
     }
   });
 
+  it("projects this instance's member role, with full as an absent key", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect((await service.readSettingsProjection()).federation.memberRole)
+      .toEqual({ value: "full", source: "default" });
+    await service.writeConfigPatchTargeted({ federation: { memberRole: "contained" } });
+    expect((await service.readSettingsProjection()).federation.memberRole)
+      .toEqual({ value: "contained", source: "config" });
+    await service.writeConfigPatchTargeted({ federation: { memberRole: "full" } });
+    expect((await service.readSettingsProjection()).federation.memberRole)
+      .toEqual({ value: "full", source: "default" });
+    expect(fs.readFileSync(configPath, "utf8")).not.toMatch(/member_role/);
+  });
+
   it("persists an explicit federation compression opt-out in the settings snapshot", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),

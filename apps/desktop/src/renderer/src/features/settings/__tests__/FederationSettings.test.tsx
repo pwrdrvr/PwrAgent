@@ -322,7 +322,12 @@ describe("FederationSettings", () => {
       await act(async () => {});
       fireEvent.click(toggle);
       fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
+      const save = screen.getByRole("button", { name: "Contain and save" });
+      // The Save button itself becomes the confirmation and is described by the note.
+      expect(save).toHaveAccessibleDescription(expect.stringContaining("only their operators can lift that"));
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(save).toHaveAccessibleName("Save federation settings");
+      expect(save).toHaveFocus();
       expect(onWriteConfig).not.toHaveBeenCalled();
       expect(screen.queryByRole("note")).not.toBeInTheDocument();
       expect(toggle).toBeChecked();
