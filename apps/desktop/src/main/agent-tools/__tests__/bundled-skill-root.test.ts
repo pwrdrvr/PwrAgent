@@ -141,6 +141,21 @@ describe("bundled skill root", () => {
     const entrypoint = [...entrypointBlock.matchAll(/^ {6}- (.+)$/gmu)].map((match) => match[1]);
     expect(entrypoint.at(-1)).toBe(dockerArray("ENTRYPOINT")[0]);
     expect(entrypoint.find((line) => line.includes("exec \"$$@\""))).toBeDefined();
+    // The relay runs beside PID 1. When it exits, nothing would restart it,
+    // so it must take PID 1 down with it and let Docker restart the container.
+    expect(entrypoint.join("\n")).toMatch(/\{ node \S+\/tcp-relay\.mjs [^;&\n]+; kill -TERM 1; \} &/u);
+  });
+
+  // Step 2 appends the placeholder to the copied example, and step 5 reads it
+  // back with sed. A second, empty line in the example puts a newline in the
+  // value, which breaks the TOML string the provider entry writes.
+  it("leaves exactly one placeholder line in .env after step 2", () => {
+    const env = `${bundledText("compose.env.example")}MODEL_PROXY_PLACEHOLDER=ph_0123\n`;
+    const read = env.split("\n")
+      .filter((line) => line.startsWith("MODEL_PROXY_PLACEHOLDER="))
+      .map((line) => line.slice("MODEL_PROXY_PLACEHOLDER=".length));
+    expect(read).toEqual(["ph_0123"]);
+    expect(bundledText("SKILL.md")).toContain(">> .env");
   });
 
   it("names every script the skill ships, and ships every script it names", () => {

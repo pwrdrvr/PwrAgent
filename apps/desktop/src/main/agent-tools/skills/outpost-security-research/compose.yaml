@@ -42,15 +42,15 @@ services:
       PWRAGENT_OUTPOST_EXECUTION_MODES: default,auto
       PWRAGENT_OUTPOST_AGENT_NETWORK: "off"
       OUTPOST_ENDPOINT_PORT: ${OUTPOST_ENDPOINT_PORT:-${GATEWAY_PORT:?set GATEWAY_PORT in .env}}
-      OUTPOST_EGRESS: ${OUTPOST_CONTAINER:-pwragent-outpost}-egress
     # pwragent serve needs the Codex home to exist; a new volume has none. The
     # Outpost dials the gateway endpoint it saved at enrollment: relay that
     # loopback port to the egress, then run the image's own command as PID 1.
+    # If the relay exits, it stops PID 1, so Docker restarts the container.
     extra_hosts: ["${OUTPOST_ENDPOINT_HOST:-localhost}:127.0.0.1"]
     entrypoint:
       - sh
       - -c
-      - mkdir -p -m 700 /home/outpost/codex && { node /opt/outpost-relay/tcp-relay.mjs 127.0.0.1 "$$OUTPOST_ENDPOINT_PORT" "$$OUTPOST_EGRESS" 47833 & } && exec "$$@"
+      - mkdir -p -m 700 /home/outpost/codex || exit; { node /opt/outpost-relay/tcp-relay.mjs 127.0.0.1 "$$OUTPOST_ENDPOINT_PORT" egress 47833; kill -TERM 1; } & exec "$$@"
       - sh
       - /opt/outpost-tools/node_modules/.bin/pwragent
     # Overriding the entrypoint clears the image's CMD; this repeats the Dockerfile's.

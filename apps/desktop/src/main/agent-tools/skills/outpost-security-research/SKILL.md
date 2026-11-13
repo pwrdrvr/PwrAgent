@@ -102,8 +102,8 @@ chmod 600 .env
 node -e 'console.log("MODEL_PROXY_PLACEHOLDER=ph_" + require("crypto").randomBytes(16).toString("hex"))' >> .env
 ```
 
-Then edit `.env`. The placeholder line you just appended replaces the empty
-one in the example.
+Then edit `.env`. The example has no placeholder line; the one you just
+appended is the only one.
 
 - `GATEWAY_HOST` and `GATEWAY_PORT`: the federation gateway, as a container
   reaches it. On Docker Desktop, `host.docker.internal` reaches a gateway
@@ -165,9 +165,11 @@ docker exec pwragent-outpost rm /tmp/join.json
 The Outpost dials the gateway endpoint saved at enrollment, which the internal
 network cannot reach. Its entrypoint relays `127.0.0.1:<GATEWAY_PORT>` inside
 the container to the egress at every start. If `pwragent federation-status`
-shows a saved endpoint with another port, or a host rather than `127.0.0.1`,
-set `OUTPOST_ENDPOINT_PORT` or `OUTPOST_ENDPOINT_HOST` in `.env` and run
-`docker compose up -d`. Then check `federation-status` again: the gateway
+shows a saved endpoint with another port, or a host name rather than
+`127.0.0.1`, set `OUTPOST_ENDPOINT_PORT` or `OUTPOST_ENDPOINT_HOST` in `.env`
+and run `docker compose up -d`. A saved IP address other than `127.0.0.1`
+cannot be redirected this way: join with an invite whose endpoint is
+`127.0.0.1` or a host name. Then check `federation-status` again: the gateway
 should be connected.
 
 ## 5. Add the Model Provider
