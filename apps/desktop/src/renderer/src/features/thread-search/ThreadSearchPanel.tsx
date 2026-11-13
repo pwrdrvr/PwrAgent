@@ -58,21 +58,6 @@ export function useThreadSearchPanelState(): ThreadSearchPanelState {
 
 type RemoteViewerFederation = NonNullable<ThreadSearchResult["federation"]>;
 
-/**
- * The federation a result's Remote viewer button opens: a result owned by
- * another machine, in a window that shows such results in place.
- */
-function resultRemoteViewerFederation(
-  result: ThreadSearchResult,
-  canOpenRemoteViewer: boolean,
-): RemoteViewerFederation | undefined {
-  return canOpenRemoteViewer
-    && result.federation
-    && isRemoteFederationTarget(result.federation.ref.target)
-    ? result.federation
-    : undefined;
-}
-
 type ThreadSearchPanelProps = {
   desktopApi?: DesktopApi;
   onOpenResult: (result: {
@@ -297,12 +282,14 @@ function ThreadSearchRemoteViewerButton(props: {
 }): ReactElement | null {
   const { federation, onOpen } = props;
   if (!federation || !onOpen) return null;
-  const label = `Open in the ${federation.instanceLabel} window`;
+  // The name keeps the visible label (WCAG 2.5.3) and adds the machine; the
+  // tooltip, which DataTooltipLayer also hands to assistive tech as the
+  // description, says what happens.
   return (
     <button
-      aria-label={label}
+      aria-label={`Remote viewer for ${federation.instanceLabel}`}
       className="thread-search-result__popout tooltip-target"
-      data-tooltip={label}
+      data-tooltip={`Open in the ${federation.instanceLabel} window`}
       type="button"
       onClick={() => void onOpen(federation)}
     >
@@ -373,8 +360,16 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   }, [api, setResponse]);
 
   const searchUnavailable = !props.desktopApi?.searchThreads;
-  const remoteViewerFederation = (result: ThreadSearchResult) =>
-    resultRemoteViewerFederation(result, Boolean(props.onOpenResultInRemoteViewer));
+  // A result owned by another machine, in a window that shows such results
+  // in place, gets a Remote viewer button.
+  const remoteViewerFederation = (
+    result: ThreadSearchResult,
+  ): RemoteViewerFederation | undefined =>
+    props.onOpenResultInRemoteViewer
+    && result.federation
+    && isRemoteFederationTarget(result.federation.ref.target)
+      ? result.federation
+      : undefined;
   const agentThreadKeys = useMemo(
     () =>
       new Set(

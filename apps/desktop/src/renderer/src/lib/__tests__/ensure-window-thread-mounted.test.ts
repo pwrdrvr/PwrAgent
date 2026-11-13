@@ -23,6 +23,18 @@ describe("ensureWindowThreadMounted", () => {
     expect(addRemoteThreadPin).toHaveBeenCalledWith({ ref });
   });
 
+  it("keeps the owner's display name on a new pin", async () => {
+    const addRemoteThreadPin = vi.fn();
+    await ensureWindowThreadMounted(
+      { hasRemoteThreadPin: async () => false, addRemoteThreadPin },
+      request,
+      [],
+      false,
+      "Studio Mac / default",
+    );
+    expect(addRemoteThreadPin).toHaveBeenCalledWith({ ref, instanceLabel: "Studio Mac / default" });
+  });
+
   it("matches the complete owner and backend identity in its loaded-row fast path", async () => {
     const loaded: NavigationThreadSummary = {
       id: request.threadId, source: request.backend, title: "Fixture", titleSource: "explicit",

@@ -5129,6 +5129,29 @@ function DesktopAppShell(props: {
                   });
                   return;
                 }
+                if (plan.federationTarget) {
+                  // A peer's thread joins this window's sidebar first, as a
+                  // thread link or Cmd+K adds it.
+                  try {
+                    await ensureWindowThreadMounted(
+                      desktopApi ?? {},
+                      plan,
+                      navigation.threads,
+                      false,
+                      result.federation?.instanceLabel,
+                    );
+                  } catch (error) {
+                    // Its owner's window needs no pin here, so the click
+                    // still opens the thread.
+                    console.warn("Adding the remote thread to this PwrAgent failed.", error);
+                    openRemoteViewerFromLink({
+                      backend: plan.backend,
+                      instanceId: plan.federationTarget.instanceId,
+                      threadId: plan.threadId,
+                    });
+                    return;
+                  }
+                }
                 // Deep-link to the match: open the thread with the find bar
                 // seeded with the search query so it highlights + scrolls the
                 // matched message into view (auto-loading older history if the
@@ -5143,31 +5166,17 @@ function DesktopAppShell(props: {
                       }
                     : undefined,
                 );
-                const request = {
-                  backend: plan.backend,
-                  ...(plan.federationTarget ? { federationTarget: plan.federationTarget } : {}),
-                  threadId: plan.threadId,
-                };
-                if (request.federationTarget) {
-                  // A peer's thread joins this window's sidebar first, as a
-                  // thread link or Cmd+K adds it.
-                  try {
-                    await ensureWindowThreadMounted(desktopApi ?? {}, request, navigation.threads, false);
-                  } catch (error) {
-                    console.warn("Adding the remote thread to this PwrAgent failed.", error);
-                    return;
-                  }
-                }
                 setMainView("thread");
-                await navigation.showThread(request);
+                await navigation.showThread(plan);
               }}
               onOpenResultInRemoteViewer={windowFederationTarget
                 ? undefined
-                : async (federation) => {
-                    if (!isRemoteFederationTarget(federation.ref.target)) return;
-                    await desktopApi?.openFederationWindow?.({
-                      target: federation.ref.target,
-                      initialThread: federation.ref,
+                : ({ ref }) => {
+                    if (!isRemoteFederationTarget(ref.target)) return;
+                    openRemoteViewerFromLink({
+                      backend: ref.backend,
+                      instanceId: ref.target.instanceId,
+                      threadId: ref.threadId,
                     });
                   }}
             />

@@ -367,10 +367,13 @@ describe("ThreadSearchPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     await screen.findByText("Studio Mac");
 
-    // One button for the one remote result, named for the window it opens.
-    const popouts = screen.getAllByRole("button", { name: /window$/ });
+    // One button for the one remote result. Its name keeps the visible label
+    // and names the machine; the tooltip says which window opens.
+    const popouts = screen.getAllByRole("button", { name: /^Remote viewer/ });
     expect(popouts.map((button) => button.getAttribute("aria-label")))
-      .toEqual(["Open in the Studio Mac window"]);
+      .toEqual(["Remote viewer for Studio Mac"]);
+    expect(popouts[0]).toHaveTextContent("Remote viewer");
+    expect(popouts[0]).toHaveAttribute("data-tooltip", "Open in the Studio Mac window");
     // Its hidden copy in the card does not join the card's name.
     expect(screen.getByRole("button", { name: /Deploy release/ }))
       .not.toHaveAccessibleName(/Remote viewer/);
@@ -422,7 +425,7 @@ describe("ThreadSearchPanel", () => {
     fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: "deploy" } });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     await screen.findByText("Studio Mac");
-    expect(screen.queryByRole("button", { name: /window$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remote viewer/ })).not.toBeInTheDocument();
     expect(document.querySelector(".thread-search-result__popout")).toBeNull();
   });
 });
