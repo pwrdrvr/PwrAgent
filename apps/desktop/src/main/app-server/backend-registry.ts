@@ -932,7 +932,6 @@ import {
   USAGE_TURN_REPAIR_PEER_QUIET_MS,
   archivedThreadMessageRefusal,
   buildCodexInvalidIdRecoveryCooldownMessage,
-  executionModeSettings,
   isCodexInvalidIdRecoveryCooldownActive,
   isCodexMissingRolloutArchiveError,
   isCodexMissingThreadError,
@@ -942,6 +941,7 @@ import {
   shouldEnrichThreadDirectories,
   threadOrchestrationFailure,
 } from "./backend-registry-runtime-helpers";
+import { executionModeSettings } from "./execution-mode-settings";
 import {
   ActiveTurnKeySet,
   buildActiveTurnKey,

@@ -6,11 +6,14 @@ import type {
   StartReviewRequest,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { BackendClient, ReviewTerminal } from "../app-server/backend-registry-types";
 import { ManagedReviewService, type ManagedReviewServiceHost } from "../app-server/managed-review-service";
 import type { RegistryContext } from "../app-server/registry-context";
 import { reviewStartFailureFingerprint } from "../app-server/thread-orchestration-prompts";
 import { ActiveTurnKeySet, buildActiveTurnKey, reviewSubAgentId } from "../app-server/thread-turn-keys";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const THREAD = "thread-parent";
 const REVIEW_TURN = "review-turn";
@@ -162,13 +165,71 @@ describe("ManagedReviewService", () => {
         return { threads: { getThreadOverlayState: async () => undefined } };
       },
     } as unknown as RegistryContext;
+    // The host the registry connects after construction, read on each call.
+    let activeTurnId = "turn-before";
     const service = new ManagedReviewService(context, () => {
       if (!bound) throw new Error("host read while constructing");
-      return { resolveThreadEnvironmentCwd: async () => "/repo" } as unknown as ManagedReviewServiceHost;
+      // Each read builds a new host, so a host kept from an earlier call goes stale.
+      const turnId = activeTurnId;
+      return {
+        assertThreadNotLocked: async () => {},
+        getActiveTurnForThread: () => ({ backend: "codex", threadId: THREAD, turnId }),
+        resolveThreadEnvironmentCwd: async () => "/repo",
+      } as unknown as ManagedReviewServiceHost;
     });
     bound = true;
-    expect(service.cancelPendingReview("pending-review:unknown", "fixture")).toBe(false);
-    await expect(service.prepareReviewRequest(REVIEW_REQUEST)).resolves.toBe(REVIEW_REQUEST);
+    await expect(service.submitReview(REVIEW_REQUEST)).resolves.toMatchObject({
+      status: "scheduled", invokingTurnId: "turn-before",
+    });
+    activeTurnId = "turn-after";
+    await expect(service.submitReview(REVIEW_REQUEST)).resolves.toMatchObject({
+      status: "scheduled", invokingTurnId: "turn-after",
+    });
+  });
+
+  it("keeps the registry's review members as facades that forward every argument and the module's promise", async () => {
+    const db = openInMemoryStateDb();
+    const registry = createDesktopBackendRegistry({
+      codexClient: {
+        close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
+        listThreads: async () => [], onNotification: () => () => {},
+        onPendingRequest: () => () => {},
+      } as never,
+      overlayStore: new SqliteOverlayStore(db),
+    });
+    try {
+      const reviews = registryModules(registry).managedReviewService;
+      const started = Promise.resolve({ backend: "codex" as const, threadId: THREAD, reviewThreadId: THREAD, turnId: REVIEW_TURN });
+      const prepared = Promise.resolve(REVIEW_REQUEST);
+      const submitted = Promise.resolve({ status: "started" as const, response: { backend: "codex" as const, threadId: THREAD, reviewThreadId: THREAD, turnId: REVIEW_TURN } });
+      const prepare = vi.spyOn(reviews, "prepareReviewRequest").mockReturnValue(prepared);
+      const start = vi.spyOn(reviews, "startReview").mockReturnValue(started);
+      const submit = vi.spyOn(reviews, "submitReview").mockReturnValue(submitted);
+      const cancel = vi.spyOn(reviews, "cancelPendingReview").mockReturnValue(true);
+      const attribution = { delegatedBy: { backend: "codex", threadId: "delegator" } } as never;
+
+      // A caller snapshot is never trusted unless the owner says so.
+      expect(registry.prepareReviewRequest(REVIEW_REQUEST)).toBe(prepared);
+      expect(prepare).toHaveBeenLastCalledWith(REVIEW_REQUEST, false);
+      expect(registry.prepareReviewRequest(REVIEW_REQUEST, true)).toBe(prepared);
+      expect(prepare).toHaveBeenLastCalledWith(REVIEW_REQUEST, true);
+
+      expect(registry.startReview(REVIEW_REQUEST)).toBe(started);
+      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, false, undefined);
+      expect(registry.startReview(REVIEW_REQUEST, true, attribution)).toBe(started);
+      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, true, attribution);
+
+      const keyed = { ...REVIEW_REQUEST, idempotencyKey: "key-1" };
+      expect(registry.submitReview(keyed)).toBe(submitted);
+      expect(submit).toHaveBeenLastCalledWith(keyed, false);
+
+      expect(registry.cancelPendingReview("pending-review:fixture", "operator cancelled")).toBe(true);
+      expect(cancel).toHaveBeenLastCalledWith("pending-review:fixture", "operator cancelled");
+      await Promise.all([started, prepared, submitted]);
+    } finally {
+      await registry.close();
+      db.close();
+    }
   });
 
   it("lets the registry read its review records only through read-only views", async () => {

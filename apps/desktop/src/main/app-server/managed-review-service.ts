@@ -52,7 +52,7 @@ import {
   reviewTaskLabel,
   textFragmentsFromCodexNotification,
 } from "./backend-registry-notifications";
-import { executionModeSettings, threadOrchestrationFailure } from "./backend-registry-runtime-helpers";
+import { threadOrchestrationFailure } from "./backend-registry-runtime-helpers";
 import type {
   BackendClient,
   ModelSettings,
@@ -62,6 +62,7 @@ import type {
 } from "./backend-registry-types";
 import { buildCodexTokenMiserDynamicToolSpecs } from "./codex-thread-config";
 import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
+import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt } from "./managed-review";
 import { resolvePullRequestReview } from "./pull-request-review";
