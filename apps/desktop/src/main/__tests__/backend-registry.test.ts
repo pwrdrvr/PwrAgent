@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
 import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
 import fc from "fast-check";
@@ -16576,7 +16576,7 @@ describe("DesktopBackendRegistry", () => {
       vi.spyOn(internal, "resolveTokenMiserEnabledForOverride").mockReturnValue(true);
       const prepareRuntime = vi.spyOn(internal, "prepareTokenMiserRuntime").mockReturnValue(runtime.promise);
       const refusal = new Error("fixture catalog preparation refused");
-      const catalog = vi.spyOn(registry.forgeToolBridge, "resolveForgeToolPolicy").mockImplementation(() => { throw refusal; });
+      const catalog = vi.spyOn(registryModules(registry).forgeToolBridge, "resolveForgeToolPolicy").mockImplementation(() => { throw refusal; });
       let settled = false;
       try {
         const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", tokenMiserEnabled: true })

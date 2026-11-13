@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -77,7 +77,7 @@ describe("forge project rules at the write gate", () => {
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
     internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
-    registry.forgeToolBridge.handleAttachThreadPullRequestInspectionRequest = async () => ({ ok: true }) as never;
+    registryModules(registry).forgeToolBridge.handleAttachThreadPullRequestInspectionRequest = async () => ({ ok: true }) as never;
   });
 
   afterEach(async () => {

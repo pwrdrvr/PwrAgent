@@ -1415,8 +1415,8 @@ async function refuseResolvedWorkMode(params: {
 
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
-  /** The PR and forge domain: forge tools, PR bindings and PR attachment. */
-  readonly forgeToolBridge: ForgeToolBridge;
+  /** The PR and forge domain: forge tools, PR bindings and PR attachment. Importers use the facade below. */
+  private readonly forgeToolBridge: ForgeToolBridge;
   private readonly launchpadCreationOperations = new LaunchpadCreationOperations();
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<

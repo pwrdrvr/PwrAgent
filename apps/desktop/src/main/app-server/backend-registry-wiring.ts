@@ -104,6 +104,24 @@ import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundl
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
+/** The domain modules the composition root built for one registry. */
+export interface RegistryModules {
+  readonly forgeToolBridge: ForgeToolBridge;
+}
+
+const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
+
+/**
+ * Tests reach an extracted module's public interface here instead of casting
+ * into the registry. Production code calls the registry's facade members;
+ * backend-registry-wiring.property.test.ts holds that rule.
+ */
+export function registryModules(registry: DesktopBackendRegistry): RegistryModules {
+  const modules = registryModulesByRegistry.get(registry);
+  if (!modules) throw new Error("This registry was not built by createDesktopBackendRegistry.");
+  return modules;
+}
+
 /** Owner-only composition. Provider callbacks bind after all collaborators exist. */
 export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOptions): DesktopBackendRegistry {
   let ports: ReturnType<DesktopBackendRegistry["constructionPorts"]>;
@@ -1269,37 +1287,39 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     scan: async (request) => await maintenanceHandler.scan(request),
     getScan: (scanId) => maintenanceHandler.getScan(scanId),
   }) : undefined;
+  // Optional store methods are read on each access, as the registry's own
+  // `this.overlayStore.method?.(...)` reads were, never captured once here.
   const context: RegistryContext = {
     stores: {
       threads: {
         getThreadOverlayState: (...args) => overlayStore.getThreadOverlayState(...args),
         getThreadOverlayStates: (...args) => overlayStore.getThreadOverlayStates(...args),
-        getThreadMetadata: overlayStore.getThreadMetadata?.bind(overlayStore),
-        updateThreadMetadata: overlayStore.updateThreadMetadata?.bind(overlayStore),
+        get getThreadMetadata() { return overlayStore.getThreadMetadata?.bind(overlayStore); },
+        get updateThreadMetadata() { return overlayStore.updateThreadMetadata?.bind(overlayStore); },
       },
       usage: {
-        upsertThreadUsageLines: overlayStore.upsertThreadUsageLines?.bind(overlayStore),
+        get upsertThreadUsageLines() { return overlayStore.upsertThreadUsageLines?.bind(overlayStore); },
         readThreadPricing: (...args) => overlayStore.readThreadPricing(...args),
-        completeThreadUsageTurn: overlayStore.completeThreadUsageTurn?.bind(overlayStore),
-        completeThreadUsageTurns: overlayStore.completeThreadUsageTurns?.bind(overlayStore),
-        readThreadUsageActivities: overlayStore.readThreadUsageActivities?.bind(overlayStore),
-        readThreadUsageActivityForTurn: overlayStore.readThreadUsageActivityForTurn?.bind(overlayStore),
+        get completeThreadUsageTurn() { return overlayStore.completeThreadUsageTurn?.bind(overlayStore); },
+        get completeThreadUsageTurns() { return overlayStore.completeThreadUsageTurns?.bind(overlayStore); },
+        get readThreadUsageActivities() { return overlayStore.readThreadUsageActivities?.bind(overlayStore); },
+        get readThreadUsageActivityForTurn() { return overlayStore.readThreadUsageActivityForTurn?.bind(overlayStore); },
       },
       subAgents: {
-        upsertThreadSubAgents: overlayStore.upsertThreadSubAgents?.bind(overlayStore),
-        reconcileOrphanedThreadSubAgents: overlayStore.reconcileOrphanedThreadSubAgents?.bind(overlayStore),
-        moveLegacyThreadSubAgents: overlayStore.moveLegacyThreadSubAgents?.bind(overlayStore),
+        get upsertThreadSubAgents() { return overlayStore.upsertThreadSubAgents?.bind(overlayStore); },
+        get reconcileOrphanedThreadSubAgents() { return overlayStore.reconcileOrphanedThreadSubAgents?.bind(overlayStore); },
+        get moveLegacyThreadSubAgents() { return overlayStore.moveLegacyThreadSubAgents?.bind(overlayStore); },
       },
       workspaces: {
-        readThreadGitWorkingStateCache: overlayStore.readThreadGitWorkingStateCache?.bind(overlayStore),
-        writeThreadGitWorkingStateCacheEntry: overlayStore.writeThreadGitWorkingStateCacheEntry?.bind(overlayStore),
-        acknowledgeThreadEnvironmentFailure: overlayStore.acknowledgeThreadEnvironmentFailure?.bind(overlayStore),
+        get readThreadGitWorkingStateCache() { return overlayStore.readThreadGitWorkingStateCache?.bind(overlayStore); },
+        get writeThreadGitWorkingStateCacheEntry() { return overlayStore.writeThreadGitWorkingStateCacheEntry?.bind(overlayStore); },
+        get acknowledgeThreadEnvironmentFailure() { return overlayStore.acknowledgeThreadEnvironmentFailure?.bind(overlayStore); },
       },
       toolAccounting: {
         readThreadToolAccounting: (...args) => overlayStore.readThreadToolAccounting(...args),
-        persistThreadToolInvocationBoundary: overlayStore.persistThreadToolInvocationBoundary?.bind(overlayStore),
-        markThreadToolInvocationsNoisy: overlayStore.markThreadToolInvocationsNoisy?.bind(overlayStore),
-        setThreadSpendAlertPending: overlayStore.setThreadSpendAlertPending?.bind(overlayStore),
+        get persistThreadToolInvocationBoundary() { return overlayStore.persistThreadToolInvocationBoundary?.bind(overlayStore); },
+        get markThreadToolInvocationsNoisy() { return overlayStore.markThreadToolInvocationsNoisy?.bind(overlayStore); },
+        get setThreadSpendAlertPending() { return overlayStore.setThreadSpendAlertPending?.bind(overlayStore); },
       },
       pullRequests: {
         addThreadPullRequestReference: (...args) => overlayStore.addThreadPullRequestReference(...args),
@@ -1320,7 +1340,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   // The registry's construction ports are each module's host, bound once the registry connects them.
   const forgeToolBridge = new ForgeToolBridge(context, handlers, () => ports);
 
-  return new DesktopBackendRegistry({
+  const registry = new DesktopBackendRegistry({
     context,
     forgeToolBridge,
     threadMaintenanceToolScans,
@@ -1422,4 +1442,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ports = connected;
     for (const run of initialize) run();
   });
+  registryModulesByRegistry.set(registry, { forgeToolBridge });
+  return registry;
 }

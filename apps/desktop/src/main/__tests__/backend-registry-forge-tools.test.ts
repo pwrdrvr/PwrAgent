@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
@@ -78,7 +78,7 @@ describe("backend forge tool dispatch", () => {
       overlayStore, isBootstrapMode: () => false, resolveTokenMiserEnabled: () => false,
     });
     internals = registry as unknown as typeof internals;
-    bridge = registry.forgeToolBridge;
+    bridge = registryModules(registry).forgeToolBridge;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
     internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
     policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
@@ -647,7 +647,7 @@ describe("backend forge tool dispatch", () => {
     let saved: ThreadExecutionMode;
     let prompts: ReturnType<typeof vi.fn<() => void>>;
     const claudeCall = (operation: Parameters<ForgePrToolHandler>[0], args: Parameters<ForgePrToolHandler>[1]) =>
-      registry.forgeToolBridge.gatedForgePrToolHandler(
+      registryModules(registry).forgeToolBridge.gatedForgePrToolHandler(
         operation, args, { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" });
     const createPr = () => claudeCall("create_pull_request", { title: "fix: tests", head: "fix/tests", draft: true });
     const merge = () => claudeCall("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) });
