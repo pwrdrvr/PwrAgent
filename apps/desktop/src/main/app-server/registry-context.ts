@@ -5,6 +5,7 @@ import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-r
 
 export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadMetadata" | "updateThreadMetadata"
+  | "setThreadMcpConnectionIds"
 >;
 
 export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,

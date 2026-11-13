@@ -9,7 +9,7 @@ import { ConnectionRpcClient } from "../mcp-connections/mcp-connection-rpc-clien
 import { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
 import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
@@ -94,7 +94,7 @@ async function scenario(actions: Array<"settings" | "discover" | "call" | "inspe
     mcpConnectionService: service,
     isBootstrapMode: () => false,
   });
-  vi.spyOn(registry, "listThreadMcpServers").mockResolvedValue({ backend: "codex", threadId: "fixture-thread", detail: "toolsAndAuthOnly", servers: [] });
+  vi.spyOn(registryModules(registry).threadMcpConnections, "listThreadMcpServers").mockResolvedValue({ backend: "codex", threadId: "fixture-thread", detail: "toolsAndAuthOnly", servers: [] });
   try {
     id = (await service.createConnection({ displayName: "PwrDisk fixture", stdio })).id;
     await overlayStore.setThreadMcpConnectionIds({ backend: "codex", threadId: "fixture-thread", connectionIds: [id] });

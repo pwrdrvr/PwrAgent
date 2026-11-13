@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { pwrSuiteInstallOptions, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -27,7 +27,6 @@ import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registr
 import type { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpGatewayInvocation, McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
-import type { McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import { buildMcpElicitationResponse, createMcpElicitationState, readMcpApprovalPersistence } from "../../renderer/src/features/thread-detail/mcp-elicitation";
 import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
 
@@ -49,7 +48,6 @@ describe("backend MCP gateway dispatch", () => {
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     claudeAgentToolMcpServer: AgentToolMcpServerLike;
     acpBackend: AcpBackendAdapter;
-    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string): Promise<McpGatewayApproval>;
     headlessAutomationTurns: Map<string, {
       agentThreadId: string;
       backend: "codex";
@@ -121,7 +119,7 @@ describe("backend MCP gateway dispatch", () => {
     };
     const peekThreadBridge = vi.fn((id: string, threadId: string) => id === "one" && threadId === "thread-1" ? bridge : undefined);
     createRegistry({ registerBridge, requestGatewayToolOperation: operation, peekThreadBridge } as unknown as McpConnectionGatewayService);
-    vi.spyOn(registry, "listThreadMcpServers").mockResolvedValue({ backend: "codex", threadId: "thread-1", detail: "toolsAndAuthOnly", servers: [] });
+    vi.spyOn(registryModules(registry).threadMcpConnections, "listThreadMcpServers").mockResolvedValue({ backend: "codex", threadId: "thread-1", detail: "toolsAndAuthOnly", servers: [] });
     let searchIndex = 0;
     const search = async () => {
       const response = await internals.handleServerRequest("codex", request("search_mcp_tools", { query: "lookup" }, `search-${searchIndex++}`));
@@ -148,8 +146,8 @@ describe("backend MCP gateway dispatch", () => {
     await registry.close();
     const bridge = { name: "one", command: "fixture", args: [], env: {} };
     createRegistry({ registerBridge, requestGatewayToolOperation: operation, peekThreadBridge: () => bridge } as unknown as McpConnectionGatewayService);
-    vi.spyOn(registry, "readThreadMcpConnections").mockResolvedValue({ connectionIds: ["one"], providerServersEnabled: true });
-    vi.spyOn(registry, "listThreadMcpServers").mockResolvedValue({ backend, threadId: "thread-1", detail: "toolsAndAuthOnly", servers: [] });
+    vi.spyOn(registryModules(registry).threadMcpConnections, "readThreadMcpConnections").mockResolvedValue({ connectionIds: ["one"], providerServersEnabled: true });
+    vi.spyOn(registryModules(registry).threadMcpConnections, "listThreadMcpServers").mockResolvedValue({ backend, threadId: "thread-1", detail: "toolsAndAuthOnly", servers: [] });
     const report = await registry.describeThreadMcpConnections({ backend, threadId: "thread-1" });
     expect(report.connections[0].serverNameInAgent).toBe(backend === "acp:fixture" ? bridge.name : buildCodexConnectionMcpServerName(bridge));
   });
@@ -204,7 +202,7 @@ describe("backend MCP gateway dispatch", () => {
   }
 
   async function approveAndInvoke(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, catalogRevision?: string) {
-    const response = await internals.approveGatewayInvocation(invocation, context, signal, undefined, catalogRevision);
+    const response = await registryModules(registry).threadMcpConnections.approveGatewayInvocation(invocation, context, signal, undefined, catalogRevision);
     // These approval-policy tests simulate a successful owner invocation.
     // The broker-backed regressions exercise the actual validation boundary.
     if (typeof response === "object") await response.onInvoked();
@@ -589,9 +587,7 @@ describe("backend MCP gateway dispatch", () => {
       vi.useFakeTimers();
       try {
         vi.setSystemTime(Date.now() + 16_000);
-        const defaults = (registry as unknown as {
-          resolveNewThreadMcpConnectionIds: () => Promise<string[] | undefined>;
-        }).resolveNewThreadMcpConnectionIds();
+        const defaults = registryModules(registry).threadMcpConnections.resolveNewThreadMcpConnectionIds();
         await vi.advanceTimersByTimeAsync(2_001);
         expect(await defaults).toEqual(cache === "expired"
           ? ["pwrsnap", "pwrgit", "builtin:sandboxer", remote.id]
@@ -637,9 +633,7 @@ select_for_new_threads = true
     createRegistry(broker);
     expect((await broker.listConnections({ cachedLocalStatus: true })).find((connection) => connection.id === "sandboxer"))
       .toMatchObject({ kind: "remote", configured: true, serverUrl: "https://legacy.example/mcp" });
-    expect(await (registry as unknown as {
-      resolveNewThreadMcpConnectionIds: () => Promise<string[] | undefined>;
-    }).resolveNewThreadMcpConnectionIds()).toEqual(["sandboxer"]);
+    expect(await registryModules(registry).threadMcpConnections.resolveNewThreadMcpConnectionIds()).toEqual(["sandboxer"]);
     const selection = (await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))!.mcpConnectionIds!;
     expect(selection).toEqual(["sandboxer"]);
     const bridge = await broker.registerBridge(selection[0]!, "thread-1");
@@ -1210,7 +1204,7 @@ select_for_new_threads = true
     createRegistry({
       registerBridge, requestGatewayToolOperation: operation, listConnections: async () => [gatewayConnection(true)],
     } as unknown as McpConnectionGatewayService);
-    const nativeRegistry = registry as unknown as { readConfiguredCodexMcpServerNames(cwd?: string): Promise<string[]> };
+    const nativeRegistry = registryModules(registry).threadMcpConnections;
     vi.spyOn(nativeRegistry, "readConfiguredCodexMcpServerNames").mockResolvedValue(["datadog"]);
     await registry.startAutomationHeadlessTurn({
       backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
@@ -1283,7 +1277,7 @@ select_for_new_threads = true
     }
     if (scenario === "ended-run") {
       const readSelection = registry.readThreadMcpConnections.bind(registry);
-      vi.spyOn(registry, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
+      vi.spyOn(registryModules(registry).threadMcpConnections, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
         const selected = await readSelection(request);
         internals.headlessAutomationTurns.clear();
         return selected;
@@ -1316,7 +1310,7 @@ select_for_new_threads = true
   });
 
   it.each(["allowed", "outside-allowlist", "provider-disabled"])("checks inherited native servers when consent is %s", async (scenario) => {
-    const nativeRegistry = registry as unknown as { readConfiguredCodexMcpServerNames(cwd?: string): Promise<string[]> };
+    const nativeRegistry = registryModules(registry).threadMcpConnections;
     vi.spyOn(nativeRegistry, "readConfiguredCodexMcpServerNames").mockResolvedValue(["native-fixture", "other-native"]);
     await registry.startAutomationHeadlessTurn({
       backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
@@ -1345,7 +1339,7 @@ select_for_new_threads = true
   it("does not answer native consent after the automation ends during the selection check", async () => {
     await startApprovedAutomation();
     const readSelection = registry.readThreadMcpConnections.bind(registry);
-    vi.spyOn(registry, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
+    vi.spyOn(registryModules(registry).threadMcpConnections, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
       const selected = await readSelection(request);
       internals.headlessAutomationTurns.clear();
       return selected;
@@ -1546,7 +1540,7 @@ select_for_new_threads = true
     describe("in a plan turn", () => {
       const refusal = "This is a plan turn, which is read-only, so PwrAgent did not run \"lookup\" on Fixture. "
         + "Put this step in your plan. The operator will reply when the plan should be implemented.";
-      const approve = (annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }) => internals.approveGatewayInvocation(
+      const approve = (annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }) => registryModules(registry).threadMcpConnections.approveGatewayInvocation(
         { ...args, serverName: "Fixture" },
         { backend: "claude", threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
         new AbortController().signal, annotations,

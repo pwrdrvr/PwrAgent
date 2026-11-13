@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, AppServerBackendKind, FederationCapability } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { registryModules } from "../app-server/backend-registry-wiring";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FederationRemoteBackendClient,
@@ -2399,9 +2400,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const registry = desktopOwner.registry as DesktopBackendRegistry;
     const internal = registry as unknown as {
       gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
-      readConfiguredCodexMcpServerNames: () => Promise<string[] | undefined>;
-      registerMcpConnections: (ids: string[] | undefined) => Promise<unknown[]>;
     };
+    const mcp = registryModules(registry).threadMcpConnections;
     let workspaceIndex = 0;
     let grants = 1;
     const workspaces: string[] = [];
@@ -2411,8 +2411,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       workspaces.push(cwd);
       return { cwd, workMode: "worktree", rollback: async () => { effects.push("rollback"); git("worktree", "remove", cwd); } };
     });
-    const inventory = vi.spyOn(internal, "readConfiguredCodexMcpServerNames");
-    vi.spyOn(internal, "registerMcpConnections").mockImplementation(async (ids) => ids?.length ? Array.from({ length: grants }, (_, i) => ({
+    const inventory = vi.spyOn(mcp, "readConfiguredCodexMcpServerNames");
+    vi.spyOn(mcp, "registerMcpConnections").mockImplementation(async (ids) => ids?.length ? Array.from({ length: grants }, (_, i) => ({
       server: { name: `fixture-${i}`, command: "/fixture/mcp", args: [], env: {} },
       bindThread: () => { effects.push(`bind:${i}`); },
       revoke: () => { effects.push(`revoke:${i}`); if (i === 0) throw new Error("fixture grant cleanup refused"); },
@@ -2550,11 +2550,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const internal = registry as unknown as {
         persistStartingTurnOrigin: () => Promise<void>;
         startingTurnOrigins: Set<unknown>;
-        registerMcpConnections: () => Promise<Array<{ server: { name: string; command: string; args: string[]; env: Record<string, string> };
-          bindThread: () => void; revoke: () => void }>>;
       };
       const grants: Array<{ held: boolean }> = [];
-      vi.spyOn(internal, "registerMcpConnections").mockImplementation(async () => {
+      vi.spyOn(registryModules(registry).threadMcpConnections, "registerMcpConnections").mockImplementation(async () => {
         const grant = { held: true }; grants.push(grant);
         return [{ server: { name: "fixture", command: "/fixture/mcp", args: [], env: {} }, bindThread: () => {},
           revoke: () => { expect(grant.held).toBe(true); grant.held = false; } }];

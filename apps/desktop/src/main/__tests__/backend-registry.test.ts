@@ -16614,10 +16614,9 @@ describe("DesktopBackendRegistry", () => {
     const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const internal = registry as unknown as {
       gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
-      registerMcpConnections: () => Promise<unknown[]>;
-      readConfiguredCodexMcpServerNames: () => Promise<string[] | undefined>;
       buildSupportedCodexTokenMiserConfig: () => Promise<undefined>;
     };
+    const mcp = registryModules(registry).threadMcpConnections;
     const registrations = failingRevokes.map((reject, i) => ({
       server: { name: `fixture-${i}`, command: "/fixture/mcp", args: [], env: {} },
       bindThread: vi.fn(),
@@ -16627,8 +16626,8 @@ describe("DesktopBackendRegistry", () => {
     vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: process.cwd(), workMode: "worktree", rollback });
     const connections = createDeferred<unknown[]>();
     const inventory = createDeferred<string[] | undefined>();
-    vi.spyOn(internal, "registerMcpConnections").mockImplementation(async () => await connections.promise);
-    vi.spyOn(internal, "readConfiguredCodexMcpServerNames").mockImplementation(async () => {
+    vi.spyOn(mcp, "registerMcpConnections").mockImplementation(async () => await connections.promise as never);
+    vi.spyOn(mcp, "readConfiguredCodexMcpServerNames").mockImplementation(async () => {
       effects.push("inventory");
       return await inventory.promise;
     });

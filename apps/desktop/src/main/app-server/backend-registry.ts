@@ -1,6 +1,7 @@
 import type { RegistryContext } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
+import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy, executionModeUnavailableMessage, ownerSandboxForMode } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
@@ -32,7 +33,6 @@ import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
 import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-tools/agent-access-ceiling";
 
 
-import { claudePlanTurnRefusal } from "../claude/claude-permissions";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
@@ -68,13 +68,7 @@ import {
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
   type ForgeAgentToolPolicy,
-  type McpConnectionStatus,
-  type McpConnectionToolApprovalResolution,
-  buildMcpProjectToolApprovalOffer,
-  MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
-  readMcpProjectToolApprovalChoice,
-  resolveMcpConnectionToolApproval,
 } from "@pwragent/shared";
 import {
 } from "@pwragent/shared";
@@ -112,7 +106,7 @@ import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
-import { joinConcurrent, collectConcurrent } from "../../shared/concurrent-work";
+import { joinConcurrent } from "../../shared/concurrent-work";
 import {
   buildMonitorJobHeuristicPrompt,
   MonitorJobHeuristicDetector,
@@ -135,7 +129,6 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
 import { codexNativeSubAgentName } from "@pwragent/shared";
-import { mcpElicitationPurpose, type AppServerMcpElicitationSchema } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
 import {
@@ -239,9 +232,6 @@ import {
   buildThreadMarkdownLink,
   buildThreadUrl,
   canIsolateMcpProviderServers,
-  mcpConnectionIdsForNewThread,
-  mcpSelectionApplyTiming,
-  resolveMcpConnectionSetup,
   CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
   type AppServerBackgroundTask,
   isClaudeNativeSubAgent,
@@ -263,7 +253,6 @@ import {
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
-  type AppServerMcpElicitationResponse,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
@@ -389,9 +378,6 @@ import {
   type ReadThreadMcpConnectionsRequest,
   type DescribeThreadMcpConnectionsRequest,
   type DescribeThreadMcpConnectionsResponse,
-  type ThreadMcpConnectionReport,
-  type PwrAgentMcpConnectionRequest,
-  type PwrAgentMcpConnectionResponse,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
   type SetThreadTokenMiserRequest,
@@ -610,8 +596,7 @@ import {
 import { ThreadTodoError } from "../thread-todos/thread-todo-service";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 
-import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
-import { buildAutomationMcpConsent, buildMcpToolApprovalConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
+import { buildAutomationMcpConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
   buildStarMapIntakeAgentTools,
@@ -631,16 +616,7 @@ import {
 } from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
-import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
-import { gatewayToolRequiresApproval, type McpGatewayInvocation, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
-import {
-  elicitationUnavailable,
-  hostApprovalFormRefused,
-  isUrlElicitation,
-} from "../mcp-connections/mcp-elicitation-relay";
-import { mcpTypes } from "../mcp-connections/mcp-sdk";
-import type { ThreadRootDirectory } from "../mcp-connections/mcp-upstream-roots";
-import type { ElicitRequestParams } from "@modelcontextprotocol/sdk/types.js";
+import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import {
   TokenMiserHookBridge,
 } from "../token-miser/token-miser-hook-bridge";
@@ -893,7 +869,6 @@ import {
   type LiveThreadUsageBatch,
   type LiveThreadUsageEmitWork,
   type LocalPullRequestAuthorityResolver,
-  type McpGatewayConversationConsent,
   type McpProjectToolApprovalCardOffer,
   type MessagingArchiveCleaner,
   type MessagingArchiveCleanupResult,
@@ -922,7 +897,6 @@ import {
   type StartupProviderThreadRefresh,
   type TaskMonitorCancellationState,
   type TaskMonitorDelegationRecord,
-  type TaskMonitorMcpAccess,
   type TaskMonitorTokenUsageBreakdown,
   type ThreadGitWorkingStateRefreshHandler,
   type ThreadListCacheHit,
@@ -961,8 +935,6 @@ import {
   LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS,
   MAX_ACCEPTED_THREAD_CONTROL_REQUESTS,
   MAX_QUEUE_FLUSH_ATTEMPTS,
-  MCP_DEFAULTS_READ_BUDGET_MS,
-  MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX,
   NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT,
   ProjectPausedThreadMessageError,
   TASK_MONITOR_RECOVERY_PROGRESS_LIMIT,
@@ -1372,6 +1344,8 @@ export class DesktopBackendRegistry {
   private readonly forgeToolBridge: ForgeToolBridge;
   /** The thread inspection, mutation and maintenance Agent tools. Importers use the facade below. */
   private readonly threadInspectionTools: ThreadInspectionTools;
+  /** Thread MCP connections, the MCP gateway's approvals and Codex MCP servers. Importers use the facade below. */
+  private readonly threadMcpConnections: ThreadMcpConnections;
   private readonly launchpadCreationOperations = new LaunchpadCreationOperations();
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
@@ -1618,9 +1592,6 @@ export class DesktopBackendRegistry {
   private latestCodexConfigWarning?: AgentEvent;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
-  // Process-local conversation grants. A source's revision also includes the
-  // broker's authorization generation, so reauthorization needs fresh consent.
-  private readonly mcpGatewaySessionApprovals = new Map<string, Map<string, McpGatewayConversationConsent>>();
   private readonly fileChangeApprovalContexts = new Map<
     string,
     PendingRequestApprovalContext
@@ -2653,6 +2624,7 @@ export class DesktopBackendRegistry {
     this.createScheduledThreadActionFn = dependencies.handlers.createScheduledThreadActionFn;
     this.threadTitleGenerationService = dependencies.threadTitleGenerationService;
     this.threadInspectionTools = dependencies.threadInspectionTools;
+    this.threadMcpConnections = dependencies.threadMcpConnections;
     this.codexModelProviderCatalog = dependencies.codexModelProviderCatalog;
     this.modelCatalog = dependencies.modelCatalog;
     this.queuedMessageTitler = dependencies.queuedMessageTitler;
@@ -2746,7 +2718,7 @@ export class DesktopBackendRegistry {
       get appManagementHandler() { return current().appManagementHandler; },
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
-      approveGatewayInvocation: (...args: Parameters<typeof this.approveGatewayInvocation>) => this.approveGatewayInvocation(...args),
+      approveGatewayInvocation: (...args: Parameters<ThreadMcpConnections["approveGatewayInvocation"]>) => this.threadMcpConnections.approveGatewayInvocation(...args),
       archiveThread: (...args: Parameters<typeof this.archiveThread>) => this.archiveThread(...args),
       assertThreadOwnership: (...args: Parameters<typeof this.assertThreadOwnership>) => this.assertThreadOwnership(...args),
       attributeCodexProviderUsage: (...args: Parameters<typeof this.attributeCodexProviderUsage>) => this.attributeCodexProviderUsage(...args),
@@ -2757,6 +2729,7 @@ export class DesktopBackendRegistry {
       get checkoutRestores() { return current().checkoutRestores; },
       get closed() { return current().closed; },
       get codexClient() { return current().codexClient; },
+      get codexEnvironmentCommandEnv() { return current().codexEnvironmentCommandEnv; },
       get codexModelProviderCatalog() { return current().codexModelProviderCatalog; },
       get codexModelProviderKeysRead() { return current().codexModelProviderKeysRead; },
       set codexModelProviderKeysRead(value) { current().codexModelProviderKeysRead = value; },
@@ -2769,8 +2742,10 @@ export class DesktopBackendRegistry {
       emitTurnQueueLifecycle: (...args: Parameters<typeof this.emitTurnQueueLifecycle>) => this.emitTurnQueueLifecycle(...args),
       get federatedThreadInspectionHandler() { return current().federatedThreadInspectionHandler; },
       get federationHandler() { return current().federationHandler; },
+      findHeadlessAutomationForThread: (...args: Parameters<typeof this.findHeadlessAutomationForThread>) => this.findHeadlessAutomationForThread(...args),
       findHeadlessAutomationTurnForRequest: (...args: Parameters<typeof this.findHeadlessAutomationTurnForRequest>) => this.findHeadlessAutomationTurnForRequest(...args),
       findReviewForParentTurn: (...args: Parameters<typeof this.findReviewForParentTurn>) => this.findReviewForParentTurn(...args),
+      findThreadForWorkspaceHandoff: (...args: Parameters<typeof this.findThreadForWorkspaceHandoff>) => this.findThreadForWorkspaceHandoff(...args),
       get gatedForgePrToolHandler() { return current().forgeToolBridge.gatedForgePrToolHandler; },
       get gatedForgeReadHandler() { return current().forgeToolBridge.gatedForgeReadHandler; },
       generateStructuredObject: (...args: Parameters<typeof this.generateStructuredObject>) => this.generateStructuredObject(...args),
@@ -2779,7 +2754,7 @@ export class DesktopBackendRegistry {
       getPendingThreadWorkspaceMovesForInspection: (...args: Parameters<typeof this.getPendingThreadWorkspaceMovesForInspection>) => this.getPendingThreadWorkspaceMovesForInspection(...args),
       getQueuedExecutionModesSnapshot: (...args: Parameters<typeof this.getQueuedExecutionModesSnapshot>) => this.getQueuedExecutionModesSnapshot(...args),
       get gitWorkingStateService() { return current().gitWorkingStateService; },
-      handleAgentMcpConnectionRequest: (...args: Parameters<typeof this.handleAgentMcpConnectionRequest>) => this.handleAgentMcpConnectionRequest(...args),
+      handleAgentMcpConnectionRequest: (...args: Parameters<ThreadMcpConnections["handleAgentMcpConnectionRequest"]>) => this.threadMcpConnections.handleAgentMcpConnectionRequest(...args),
       handleAgentTaskMonitorRequest: (...args: Parameters<typeof this.handleAgentTaskMonitorRequest>) => this.handleAgentTaskMonitorRequest(...args),
       handleCodexAppServerUnexpectedExit: (...args: Parameters<typeof this.handleCodexAppServerUnexpectedExit>) => this.handleCodexAppServerUnexpectedExit(...args),
       handleServerRequest: (...args: Parameters<typeof this.handleServerRequest>) => this.handleServerRequest(...args),
@@ -2789,7 +2764,7 @@ export class DesktopBackendRegistry {
       invalidateProviderRuntimeSelections: (...args: Parameters<typeof this.invalidateProviderRuntimeSelections>) => this.invalidateProviderRuntimeSelections(...args),
       get isCodexBootstrapDeferredFn() { return current().isCodexBootstrapDeferredFn; },
       isLiveDynamicToolCall: (...args: Parameters<typeof this.isLiveDynamicToolCall>) => this.isLiveDynamicToolCall(...args),
-      isMcpGatewayFullAccess: (...args: Parameters<typeof this.isMcpGatewayFullAccess>) => this.isMcpGatewayFullAccess(...args),
+      isMcpGatewayFullAccess: (...args: Parameters<ThreadMcpConnections["isMcpGatewayFullAccess"]>) => this.threadMcpConnections.isMcpGatewayFullAccess(...args),
       isQueuedMessageTitleCurrent: (...args: Parameters<typeof this.isQueuedMessageTitleCurrent>) => this.isQueuedMessageTitleCurrent(...args),
       isTaskMonitorThread: (...args: Parameters<typeof this.isTaskMonitorThread>) => this.isTaskMonitorThread(...args),
       listBackends: (...args: Parameters<typeof this.listBackends>) => this.listBackends(...args),
@@ -2805,23 +2780,24 @@ export class DesktopBackendRegistry {
       get modelCatalog() { return current().modelCatalog; },
       get overlayStore() { return current().overlayStore; },
       get pendingServerRequests() { return current().pendingServerRequests; },
+      get pendingStartedThreads() { return current().pendingStartedThreads; },
       get pendingTokenMiserInterceptions() { return current().pendingTokenMiserInterceptions; },
       get planLimits() { return current().planLimits; },
       publishLiveTokenMiserLedgerEntry: (...args: Parameters<typeof this.publishLiveTokenMiserLedgerEntry>) => this.publishLiveTokenMiserLedgerEntry(...args),
       publishLocalEvent: (...args: Parameters<typeof this.publishLocalEvent>) => this.publishLocalEvent(...args),
       readCausalMessagingContext: (...args: Parameters<typeof this.readCausalMessagingContext>) => this.readCausalMessagingContext(...args),
-      readMcpGatewaySelection: (...args: Parameters<typeof this.readMcpGatewaySelection>) => this.readMcpGatewaySelection(...args),
+      readMcpGatewaySelection: (...args: Parameters<ThreadMcpConnections["readMcpGatewaySelection"]>) => this.threadMcpConnections.readMcpGatewaySelection(...args),
       readThread: (...args: Parameters<typeof this.readThread>) => this.readThread(...args),
       readThreadInspectionSummaryForMutation: (...args: Parameters<ThreadInspectionTools["readThreadInspectionSummaryForMutation"]>) => this.threadInspectionTools.readThreadInspectionSummaryForMutation(...args),
       recordClaudeSubAgents: (...args: Parameters<typeof this.recordClaudeSubAgents>) => this.recordClaudeSubAgents(...args),
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
       recordTokenMiserFocusedInference: (...args: Parameters<typeof this.recordTokenMiserFocusedInference>) => this.recordTokenMiserFocusedInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
-      registerAcpMcpConnections: (...args: Parameters<typeof this.registerAcpMcpConnections>) => this.registerAcpMcpConnections(...args),
+      registerAcpMcpConnections: (...args: Parameters<ThreadMcpConnections["registerAcpMcpConnections"]>) => this.threadMcpConnections.registerAcpMcpConnections(...args),
       rememberAcpAvailableCommands: (...args: Parameters<typeof this.rememberAcpAvailableCommands>) => this.rememberAcpAvailableCommands(...args),
       rememberActiveTokenMiserReplayEntry: (...args: Parameters<typeof this.rememberActiveTokenMiserReplayEntry>) => this.rememberActiveTokenMiserReplayEntry(...args),
       renameThread: (...args: Parameters<typeof this.renameThread>) => this.renameThread(...args),
-      requestUpstreamMcpForm: (...args: Parameters<typeof this.requestUpstreamMcpForm>) => this.requestUpstreamMcpForm(...args),
+      requestUpstreamMcpForm: (...args: Parameters<ThreadMcpConnections["requestUpstreamMcpForm"]>) => this.threadMcpConnections.requestUpstreamMcpForm(...args),
       resolveAgentCallerExecutionMode: (...args: Parameters<typeof this.resolveAgentCallerExecutionMode>) => this.resolveAgentCallerExecutionMode(...args),
       resolveAgentToolMcpCallContext: (...args: Parameters<typeof this.resolveAgentToolMcpCallContext>) => this.resolveAgentToolMcpCallContext(...args),
       resolveClaudeToolCallExecutionMode: (...args: Parameters<typeof this.resolveClaudeToolCallExecutionMode>) => this.resolveClaudeToolCallExecutionMode(...args),
@@ -2833,7 +2809,7 @@ export class DesktopBackendRegistry {
       get resolvePassSetupVariablesToAgentsFn() { return current().resolvePassSetupVariablesToAgentsFn; },
       resolveReviewContext: (...args: Parameters<typeof this.resolveReviewContext>) => this.resolveReviewContext(...args),
       get resolveSpendAlertPolicyFn() { return current().resolveSpendAlertPolicyFn; },
-      resolveThreadMcpRootDirectories: (...args: Parameters<typeof this.resolveThreadMcpRootDirectories>) => this.resolveThreadMcpRootDirectories(...args),
+      resolveThreadMcpRootDirectories: (...args: Parameters<ThreadMcpConnections["resolveThreadMcpRootDirectories"]>) => this.threadMcpConnections.resolveThreadMcpRootDirectories(...args),
       get resolveTokenMiserDefaultEnabledFn() { return current().resolveTokenMiserDefaultEnabledFn; },
       get resolveTokenMiserEnabledFn() { return current().resolveTokenMiserEnabledFn; },
       resolveTokenMiserParentModel: (...args: Parameters<typeof this.resolveTokenMiserParentModel>) => this.resolveTokenMiserParentModel(...args),
@@ -2855,12 +2831,13 @@ export class DesktopBackendRegistry {
       suggestClaudeMonitorJob: (...args: Parameters<typeof this.suggestClaudeMonitorJob>) => this.suggestClaudeMonitorJob(...args),
       synchronizeProviderRuntimeSelections: (...args: Parameters<typeof this.synchronizeProviderRuntimeSelections>) => this.synchronizeProviderRuntimeSelections(...args),
       takeAcpMonitorJobSuggestion: (...args: Parameters<typeof this.takeAcpMonitorJobSuggestion>) => this.takeAcpMonitorJobSuggestion(...args),
+      get taskMonitorDelegations() { return current().taskMonitorDelegations; },
       taskMonitorForThread: (...args: Parameters<typeof this.taskMonitorForThread>) => this.taskMonitorForThread(...args),
       get threadDependencyToolHandler() { return current().threadDependencyToolHandler; },
       threadHasActiveTurn: (...args: Parameters<typeof this.threadHasActiveTurn>) => this.threadHasActiveTurn(...args),
       threadHasBlockingWorkspaceMove: (...args: Parameters<typeof this.threadHasBlockingWorkspaceMove>) => this.threadHasBlockingWorkspaceMove(...args),
       get threadInspectionHandler() { return current().threadInspectionHandler; },
-      threadMcpServerNameInAgent: (...args: Parameters<typeof this.threadMcpServerNameInAgent>) => this.threadMcpServerNameInAgent(...args),
+      threadMcpServerNameInAgent: (...args: Parameters<ThreadMcpConnections["threadMcpServerNameInAgent"]>) => this.threadMcpConnections.threadMcpServerNameInAgent(...args),
       get threadOrchestrationHandler() { return current().threadOrchestrationHandler; },
       get threadPrAutoDispatchHandler() { return current().threadPrAutoDispatchHandler; },
       get threadTodoHandler() { return current().threadTodoHandler; },
@@ -2875,6 +2852,7 @@ export class DesktopBackendRegistry {
       get toolOutputAlertPolicy() { return current().toolOutputAlertPolicy; },
       set toolOutputAlertPolicy(value) { current().toolOutputAlertPolicy = value; },
       get unsubscribers() { return current().unsubscribers; },
+      withCodexThreadClient: <T>(...args: Parameters<typeof this.withCodexThreadClient<T>>) => this.withCodexThreadClient<T>(...args),
       writeThreadLock: (...args: Parameters<typeof this.writeThreadLock>) => this.writeThreadLock(...args),
     };
   }
@@ -3894,7 +3872,7 @@ export class DesktopBackendRegistry {
     });
     const client = this.getClient(params.backend, executionMode);
     const mcp = params.backend === "codex"
-      ? await this.prepareAutomationMcp({ client, agentThreadId: params.agentThreadId, cwd, overlay, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist })
+      ? await this.threadMcpConnections.prepareAutomationMcp({ client, agentThreadId: params.agentThreadId, cwd, overlay, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist })
       : undefined;
     if (params.backend !== "codex" && (params.mcpAllowlist?.length || params.toolAllowlist?.length)) {
       throw new Error("Automation MCP allowlists currently require the Codex backend.");
@@ -11765,7 +11743,7 @@ export class DesktopBackendRegistry {
     // Handoffs and messaging create threads without a launchpad. Apply the
     // profile defaults here too, while preserving an explicit empty selection.
     const mcpConnectionIds = requestedMcpConnectionIds
-      ?? await this.resolveNewThreadMcpConnectionIds();
+      ?? await this.threadMcpConnections.resolveNewThreadMcpConnectionIds();
     const modelSettings = await this.admitNewThreadModelSettings(backend, request);
     let cwd: string | undefined =
       !request.cwd?.trim()
@@ -11881,7 +11859,7 @@ export class DesktopBackendRegistry {
       federationHandler: this.federationHandler,
       mcpGatewayTools: this.mcpGatewayTools,
       mcpConnectionHandler: async (request) =>
-        await this.handleAgentMcpConnectionRequest(request),
+        await this.threadMcpConnections.handleAgentMcpConnectionRequest(request),
       messagingHandler: this.messagingHandler,
       taskMonitorHandler: async (request) =>
         await this.handleAgentTaskMonitorRequest(request),
@@ -11903,11 +11881,11 @@ export class DesktopBackendRegistry {
         ? this.registerPdfMcpClient({})
         : Promise.resolve(undefined));
     const connectionPreparation = resources.registerConnections(backend === "codex" || isAcpBackendId(backend)
-      ? this.registerMcpConnections(mcpConnectionIds, undefined, backend)
+      ? this.threadMcpConnections.registerMcpConnections(mcpConnectionIds, undefined, backend)
       : Promise.resolve([]));
     const isolateFromInherited = backend === "codex" && mcpProviderServersEnabled === false;
     const inventoryPreparation = resources.track(backend === "codex" && (mcpConnectionIds?.length || isolateFromInherited)
-      ? this.readConfiguredCodexMcpServerNames(cwd)
+      ? this.threadMcpConnections.readConfiguredCodexMcpServerNames(cwd)
       : Promise.resolve(undefined));
     const resolvedDynamicTools =
       backend === "codex"
@@ -14466,204 +14444,6 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async prepareAutomationMcp(params: {
-    client: BackendClient;
-    agentThreadId: string;
-    cwd?: string;
-    overlay?: ThreadOverlayState;
-    mcpAllowlist?: string[];
-    toolAllowlist?: string[];
-  }): Promise<{
-    config?: CodexThreadStartParams["config"];
-    connectionIds: string[];
-    grantedConnectionIds: string[];
-    serverAliases: Record<string, string[]>;
-    allowedServerNames: string[];
-    registrations: McpConnectionBridgeRegistration[];
-  }> {
-    const registrations: Array<{ connectionId: string; registration: McpConnectionBridgeRegistration }> = [];
-    try {
-      const inheritedNames = await this.readConfiguredCodexMcpServerNames(params.cwd);
-      const providerEnabled = params.overlay?.mcpProviderServersEnabled !== false;
-      const selectedConnectionIds = params.overlay?.mcpConnectionIds ?? [];
-      // Only ids, names, and `enabled` are read here: stored config. A fresh
-      // local CLI probe would hold up every run start for nothing.
-      const connectionStatuses = params.mcpAllowlist?.length || selectedConnectionIds.length
-        ? await this.mcpConnectionService?.listConnections?.({ cachedLocalStatus: true })
-        : undefined;
-      const namesConnection = (connection: { id: string; displayName: string }, name: string) =>
-        name === connection.id || name === connection.displayName || name === connection.displayName.toLowerCase();
-      // A gateway connection the automation names (Datadog, say) is granted to
-      // its runs by that choice, whether or not the Agent thread selected it.
-      // Only connections offered to threads qualify. A display name the Agent
-      // already resolves -- its own Codex server, or another connection it
-      // selected -- grants nothing, or that allowlist entry would turn
-      // ambiguous and fail a run that worked before the grant existed.
-      const grantedConnectionIds = (connectionStatuses ?? [])
-        .filter((connection) => connection.enabled && params.mcpAllowlist?.some((entry) => {
-          const name = entry.trim();
-          if (name === connection.id) return true;
-          return namesConnection(connection, name)
-            && !(providerEnabled && inheritedNames?.includes(name))
-            && !(connectionStatuses ?? []).some((other) =>
-              other.id !== connection.id && selectedConnectionIds.includes(other.id) && namesConnection(other, name));
-        }))
-        .map((connection) => connection.id);
-      const connectionIds = [...new Set([...selectedConnectionIds, ...grantedConnectionIds])];
-      for (const connectionId of connectionIds) {
-        for (const registration of await this.registerMcpConnections([connectionId], undefined, "codex")) {
-          registrations.push({ connectionId, registration });
-        }
-      }
-      if (inheritedNames === undefined && (params.mcpAllowlist?.length || params.toolAllowlist?.length || !providerEnabled)) {
-        throw new Error("The Codex runtime cannot report configured MCP servers, so the automation's MCP allowlist cannot be applied.");
-      }
-      let inventory: ListThreadMcpServersResponse["servers"] = [];
-      if (params.client.listMcpServers && (inheritedNames?.length || registrations.length)) {
-        inventory = await params.client.listMcpServers({ threadId: params.agentThreadId, detail: "toolsAndAuthOnly" });
-      }
-      const bridgeRegistrations = registrations.map(({ registration }) => registration);
-      const baseConfig = buildCodexConnectionMcpConfig(bridgeRegistrations, inheritedNames, { isolateFromInherited: !providerEnabled });
-      const baseServers = readRecord(baseConfig?.mcp_servers) ?? {};
-      const servers: AutomationMcpServer[] = (inheritedNames ?? [])
-        .filter((name) => providerEnabled && readRecord(baseServers[name])?.enabled !== false)
-        .map((name) => ({ name, tools: inventory.find((server) => server.name === name)?.tools }));
-      for (const { connectionId, registration } of registrations) {
-        const parentBridge = this.mcpConnectionService?.peekThreadBridge?.(connectionId, params.agentThreadId);
-        const parentName = parentBridge ? buildCodexConnectionMcpServerName(parentBridge) : undefined;
-        const name = buildCodexConnectionMcpServerName(registration.server);
-        const displayName = connectionStatuses?.find((connection) => connection.id === connectionId)?.displayName;
-        servers.push({
-          name,
-          aliases: [connectionId, registration.server.name, ...(parentName ? [parentName] : []), ...(displayName ? [displayName, displayName.toLowerCase()] : [])],
-          connectionId,
-          config: readRecord(baseServers[name]),
-          tools: inventory.find((server) => server.name === parentName)?.tools,
-        });
-      }
-      const policy = buildAutomationMcpPolicy({ servers, mcpAllowlist: params.mcpAllowlist, toolAllowlist: params.toolAllowlist });
-      const selectedRegistrations = registrations.filter(({ connectionId, registration }) => {
-        if (policy.connectionIds.includes(connectionId)) return true;
-        registration.revoke();
-        return false;
-      });
-      return {
-        config: servers.length || baseConfig ? mergeCodexThreadConfigs(baseConfig, policy.config) : undefined,
-        connectionIds: policy.connectionIds,
-        grantedConnectionIds: grantedConnectionIds.filter((id) => policy.connectionIds.includes(id)),
-        allowedServerNames: servers
-          .filter((server) => readRecord(readRecord(policy.config?.mcp_servers)?.[server.name])?.enabled !== false)
-          .flatMap((server) => [server.name, ...(server.aliases ?? [])]),
-        serverAliases: Object.fromEntries(servers.filter((server) => server.connectionId).map((server) => [server.connectionId!, [server.name, ...(server.aliases ?? [])]])),
-        registrations: selectedRegistrations.map(({ registration }) => registration),
-      };
-    } catch (error) {
-      for (const { registration } of registrations) registration.revoke();
-      throw error;
-    }
-  }
-
-  private async registerMcpConnections(
-    connectionIds: string[] | undefined,
-    threadId?: string,
-    /** The thread's backend, so a managed local server can be given its directories. */
-    backend?: AppServerBackendKind,
-  ): Promise<McpConnectionBridgeRegistration[]> {
-    return await listingDiagnostics.trace("workflow", { query: "mcp-registration" }, () => this.registerSelectedMcpConnections(connectionIds, threadId, backend));
-  }
-
-  private async registerSelectedMcpConnections(
-    connectionIds: string[] | undefined,
-    threadId?: string,
-    backend?: AppServerBackendKind,
-  ): Promise<McpConnectionBridgeRegistration[]> {
-    const selected = [
-      ...new Set(
-        (connectionIds ?? []).map((connectionId) => connectionId.trim()),
-      ),
-    ].filter(Boolean);
-    if (selected.length === 0) return [];
-    const service = this.mcpConnectionService;
-    if (!service) {
-      // A selected connection with no service behind it is a runtime that
-      // cannot honor the thread's setting, so the turn fails rather than
-      // starting without the connection the operator chose. This used to
-      // throw only for the built-in-id guard, which matches the two built-in
-      // ids alone -- so every remote connection took the "unknown id"
-      // branch and was dropped with a warning instead. Nothing here can
-      // tell a stale id from a live one anyway: that is what the catch
-      // below does, and it needs a service to do it.
-      throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
-    }
-    const registered = await collectConcurrent(selected, 4, async (connectionId) => {
-      try {
-        return await service.registerBridge(connectionId, threadId, undefined, backend);
-      } catch (error) {
-        // A connection the operator parked, removed, or locked behind the
-        // gateway switch must drop out of the turn, not fail it. The
-        // selection is sticky and there is no path that prunes a stale id
-        // from a thread, so throwing here would brick every later turn on
-        // that thread with no way to recover from inside the app.
-        backendRegistryLog.warn("connection_mcp_bridge_unavailable", {
-          connectionId,
-          error: error instanceof Error ? error.message : String(error),
-          threadId: threadId ?? null,
-        });
-        return undefined;
-      }
-    });
-    const registrations = registered.filter((registration): registration is McpConnectionBridgeRegistration => registration !== undefined);
-    // An ACP agent cannot be asked what it loaded, so the moment PwrAgent
-    // handed the selection over is the only evidence a verification surface
-    // will ever have for those backends. Record it for every backend, and
-    // only once a bridge actually exists.
-    if (threadId && registrations.length > 0) {
-      this.mcpConnectionService?.noteThreadHandover?.(threadId, Date.now());
-    }
-    return registrations;
-  }
-
-  private async readConfiguredCodexMcpServerNames(
-    cwd?: string,
-  ): Promise<string[] | undefined> {
-    if (!this.codexClient.readConfiguredMcpServerNames) {
-      return undefined;
-    }
-    try {
-      return await listingDiagnostics.trace("workflow", { query: "mcp-inventory" }, () =>
-        this.codexClient.readConfiguredMcpServerNames!(cwd ? { cwd } : undefined));
-    } catch (error) {
-      // A compatibility fallback must not prevent a selected connection from
-      // starting. Without an inventory, omit disable entries rather than
-      // creating a transport-less MCP config record.
-      backendRegistryLog.warn("connection_mcp_config_inventory_failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    }
-  }
-
-  private async registerAcpMcpConnections(
-    connectionIds: string[] | undefined,
-    threadId: string | undefined,
-    backend: AppServerBackendKind,
-  ): Promise<AcpMcpServerRegistration | undefined> {
-    const registrations = await this.registerMcpConnections(
-      connectionIds,
-      threadId,
-      backend,
-    );
-    if (registrations.length === 0) return undefined;
-    return {
-      servers: registrations.map(({ server }) => server),
-      bindThread: async (nextThreadId) => {
-        for (const registration of registrations) {
-          registration.bindThread(nextThreadId);
-        }
-      },
-    };
-  }
-
   async startTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -14779,7 +14559,7 @@ export class DesktopBackendRegistry {
       const input = await ownThreadInputAttachments(await enrichLocalFileInputs(params.input, {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }), params, this.localFilePrivateStorageRoots);
-      const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId, params.backend);
+      const registrations = await this.threadMcpConnections.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId, params.backend);
       let prepared!: Parameters<ClaudeBackend["startTurn"]>[0];
       return await this.threadStarts.startClaude({
         prepare: async () => {
@@ -15033,8 +14813,8 @@ export class DesktopBackendRegistry {
         const connectionPreparation = (async () => {
           if (params.backend !== "codex" || !(overlay?.mcpConnectionIds?.length || isolateFromInherited)) return undefined;
           const [registrations, inheritedNames] = await joinConcurrent([
-            this.registerMcpConnections(overlay?.mcpConnectionIds ?? [], params.threadId, params.backend),
-            cwdPreparation.then((resolvedCwd) => this.readConfiguredCodexMcpServerNames(resolvedCwd)),
+            this.threadMcpConnections.registerMcpConnections(overlay?.mcpConnectionIds ?? [], params.threadId, params.backend),
+            cwdPreparation.then((resolvedCwd) => this.threadMcpConnections.readConfiguredCodexMcpServerNames(resolvedCwd)),
           ]);
           if (isolateFromInherited && inheritedNames === undefined) throw codexMcpIsolationUnavailableError();
           return buildCodexConnectionMcpConfig(registrations, inheritedNames, { isolateFromInherited });
@@ -17466,127 +17246,42 @@ export class DesktopBackendRegistry {
     }
   }
 
-  async listThreadMcpServers(
+  // MCP members the registry's importers use. ThreadMcpConnections owns the
+  // state; each member delegates to it.
+  listThreadMcpServers(
     params: ListThreadMcpServersRequest,
   ): Promise<ListThreadMcpServersResponse> {
-    if (isAcpBackendId(params.backend)) {
-      throw new Error("MCP inventory is only available for Codex and Claude threads");
-    }
-    const detail = params.detail ?? "toolsAndAuthOnly";
-    if (params.backend === "claude") {
-      return { ...params, detail, servers: await this.claudeBackend.listMcpServers(params.threadId) };
-    }
-    const servers = await this.withCodexThreadClient(
-      params.threadId,
-      async (client) => {
-        if (!client.listMcpServers) {
-          throw new Error("Selected backend does not support MCP inventory");
-        }
-        return await client.listMcpServers({
-          threadId: params.threadId,
-          detail,
-        });
-      },
-    );
-    return {
-      backend: params.backend,
-      threadId: params.threadId,
-      detail,
-      servers,
-    };
+    return this.threadMcpConnections.listThreadMcpServers(params);
   }
 
-  async reloadCodexMcpConfig(
+  reloadCodexMcpConfig(
     params: ReloadCodexMcpConfigRequest,
   ): Promise<ReloadCodexMcpConfigResponse> {
-    if (isAcpBackendId(params.backend)) {
-      throw new Error("MCP config reload is only available for Codex threads");
-    }
-    await this.withCodexThreadClient(params.threadId, async (client) => {
-      if (!client.reloadMcpConfig) {
-        throw new Error("Selected backend does not support MCP config reload");
-      }
-      await client.reloadMcpConfig();
-    });
-    return {
-      backend: params.backend,
-      threadId: params.threadId,
-      queued: true,
-    };
+    return this.threadMcpConnections.reloadCodexMcpConfig(params);
   }
 
-  async listCodexMcpServers(
+  listCodexMcpServers(
     params: ListCodexMcpServersRequest = {},
   ): Promise<ListCodexMcpServersResponse> {
-    if (!this.codexClient.listMcpServers) {
-      throw new Error("Selected Codex version does not support MCP inventory");
-    }
-    const detail = params.detail ?? "toolsAndAuthOnly";
-    const codexHome = await this.readActiveCodexMcpHome();
-    return {
-      codexHome,
-      detail,
-      servers: await this.codexClient.listMcpServers({ detail }),
-    };
+    return this.threadMcpConnections.listCodexMcpServers(params);
   }
 
-  async reloadCodexMcpServers(
+  reloadCodexMcpServers(
     params: ReloadCodexMcpServersRequest,
   ): Promise<ReloadCodexMcpServersResponse> {
-    const codexHome = await this.requireActiveCodexMcpHome(params.codexHome);
-    if (!this.codexClient.reloadMcpConfig) {
-      throw new Error("Selected Codex version does not support MCP config reload");
-    }
-    await this.codexClient.reloadMcpConfig();
-    return { codexHome, queued: true };
+    return this.threadMcpConnections.reloadCodexMcpServers(params);
   }
 
-  async startCodexMcpServerLogin(
+  startCodexMcpServerLogin(
     params: StartCodexMcpServerLoginRequest,
   ): Promise<StartCodexMcpServerLoginResponse> {
-    const codexHome = await this.requireActiveCodexMcpHome(params.codexHome);
-    if (!this.codexClient.startMcpServerOAuthLogin) {
-      throw new Error("Selected Codex version does not support MCP login");
-    }
-    const result = await this.codexClient.startMcpServerOAuthLogin({
-      name: params.name,
-    });
-    return {
-      codexHome,
-      name: params.name,
-      authorizationUrl: result.authorizationUrl,
-    };
+    return this.threadMcpConnections.startCodexMcpServerLogin(params);
   }
 
-  async removeCodexMcpServer(
+  removeCodexMcpServer(
     params: RemoveCodexMcpServerRequest,
   ): Promise<RemoveCodexMcpServerResponse> {
-    const codexHome = await this.requireActiveCodexMcpHome(params.codexHome);
-    if (!this.codexClient.removeMcpServer) {
-      throw new Error("Selected Codex version does not support MCP removal");
-    }
-    await this.codexClient.removeMcpServer({ name: params.name });
-    return { codexHome, name: params.name, removed: true };
-  }
-
-  private async readActiveCodexMcpHome(): Promise<string> {
-    if (this.codexClient.readCodexHome) {
-      return await this.codexClient.readCodexHome();
-    }
-    return path.resolve(
-      this.codexEnvironmentCommandEnv?.CODEX_HOME?.trim()
-      || path.join(os.homedir(), ".codex"),
-    );
-  }
-
-  private async requireActiveCodexMcpHome(expectedCodexHome: string): Promise<string> {
-    const activeCodexHome = await this.readActiveCodexMcpHome();
-    if (path.resolve(expectedCodexHome) !== path.resolve(activeCodexHome)) {
-      throw new Error(
-        "Codex profile changed after this app started. Restart PwrAgent before managing MCP servers.",
-      );
-    }
-    return activeCodexHome;
+    return this.threadMcpConnections.removeCodexMcpServer(params);
   }
 
   async steerTurn(
@@ -19289,210 +18984,23 @@ export class DesktopBackendRegistry {
     }
   }
 
-  /**
-   * Read a thread's saved MCP selection.
-   *
-   * Read on demand rather than carried on every navigation summary: the
-   * selection matters only while the operator has the picker open.
-   */
-  async readThreadMcpConnections(
+  // A thread's MCP connection selection, owned by ThreadMcpConnections.
+  readThreadMcpConnections(
     request: ReadThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
-    return {
-      connectionIds: overlay?.mcpConnectionIds ?? [],
-      providerServersEnabled:
-        !canIsolateMcpProviderServers(request.backend)
-        || overlay?.mcpProviderServersEnabled !== false,
-    };
+    return this.threadMcpConnections.readThreadMcpConnections(request);
   }
 
-  /**
-   * What a thread's managed selection actually became inside the agent.
-   *
-   * Settings can say a connection is authorized; nothing said a given thread
-   * loaded its tools, and the only surface that could — the agent's own MCP
-   * inventory — names a managed connection by the hashed alias PwrAgent
-   * injected it under, which appears nowhere else in the product. This joins
-   * the two, so a surface can show the operator's own name and still match
-   * what the agent reports.
-   *
-   * For a backend PwrAgent cannot interrogate, `agentInventoryAvailable` is
-   * false and `handedOverAt` carries the honest remainder: what was passed
-   * over, and when.
-   */
-  async describeThreadMcpConnections(
+  describeThreadMcpConnections(
     request: DescribeThreadMcpConnectionsRequest,
   ): Promise<DescribeThreadMcpConnectionsResponse> {
-    const selection = await this.readThreadMcpConnections(request);
-    // Through the injected seam, like every other connection call here.
-    // Reaching for the module singleton would leave this one method
-    // unstubbable and silently outside whatever a caller injected.
-    const service = this.mcpConnectionService;
-    const statuses = (await service?.listConnections?.()) ?? [];
-    const byId = new Map(statuses.map((status) => [status.id, status]));
-    // Starts as "this backend can be asked" and is downgraded to what is
-    // actually true: an inventory we failed to read is not one we have. The
-    // renderer distinguishes "the agent did not list it" from "we could not
-    // ask" on this flag, so it has to mean the latter.
-    let agentInventoryAvailable = !isAcpBackendId(request.backend);
-    const toolCounts = new Map<string, number>();
-    if (agentInventoryAvailable && selection.connectionIds.length > 0) {
-      try {
-        const inventory = await this.listThreadMcpServers({
-          backend: request.backend,
-          threadId: request.threadId,
-        });
-        for (const server of inventory.servers) {
-          toolCounts.set(server.name, server.tools?.length ?? 0);
-        }
-      } catch {
-        // An older Codex build cannot report its inventory. The selection is
-        // still worth showing; only the tool counts go missing.
-        agentInventoryAvailable = false;
-      }
-    }
-    const sessions = await service?.readThreadSessionStates?.(request.threadId, request.backend);
-    const connections: ThreadMcpConnectionReport[] = selection.connectionIds
-      .map((connectionId) => {
-        const status = byId.get(connectionId);
-        const serverNameInAgent = this.threadMcpServerNameInAgent(connectionId, request);
-        const toolCount = serverNameInAgent
-          ? toolCounts.get(serverNameInAgent)
-          : undefined;
-        const sessionStates = sessions?.[connectionId];
-        const ended = sessionStates?.native === "ended" || sessionStates?.gateway === "ended";
-        return {
-          connectionId,
-          displayName: status?.displayName ?? connectionId,
-          ...(serverNameInAgent ? { serverNameInAgent } : {}),
-          state: ended && status?.state === "ready" ? "temporarily_unavailable" : status?.state ?? "disconnected",
-          configured: status?.configured ?? false,
-          enabled: status?.enabled ?? false,
-          ...(sessionStates ? { sessions: sessionStates } : {}),
-          ...(toolCount === undefined ? {} : { toolCount }),
-        } satisfies ThreadMcpConnectionReport;
-      });
-    const handedOverAt = service?.threadHandoverAt?.(request.threadId);
-    return {
-      backend: request.backend,
-      threadId: request.threadId,
-      connections,
-      providerServersEnabled: selection.providerServersEnabled,
-      appliesAt: mcpSelectionApplyTiming(request.backend),
-      ...(handedOverAt === undefined ? {} : { handedOverAt }),
-      agentInventoryAvailable,
-    };
+    return this.threadMcpConnections.describeThreadMcpConnections(request);
   }
 
-  private threadMcpServerNameInAgent(
-    connectionId: string,
-    context: { backend: AppServerBackendKind; threadId: string },
-  ): string | undefined {
-    const bridge = this.mcpConnectionService?.peekThreadBridge?.(connectionId, context.threadId);
-    if (!bridge) return undefined;
-    // ACP receives the bridge name verbatim; Codex and Claude receive the
-    // hashed configuration alias. Gateway discovery has a separate session.
-    return isAcpBackendId(context.backend) ? bridge.name : buildCodexConnectionMcpServerName(bridge);
-  }
-
-  /**
-   * Change a live thread's MCP selection.
-   *
-   * Codex re-reads this overlay while starting each turn, so the change
-   * reaches the agent on the operator's next message. ACP resolves MCP
-   * servers only at `session/new` and `session/load`, so there the change
-   * waits for the thread's next session load. Callers surface which of those
-   * applies rather than reporting a bare "saved".
-   */
-  async setThreadMcpConnections(
+  setThreadMcpConnections(
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
-    const previousState = await this.overlayStore.getThreadOverlayState(request);
-    const previousRevision = previousState?.mcpSelectionRevision;
-    const reconnect = request.reconnectConnectionId;
-    if (reconnect !== undefined) {
-      if (typeof reconnect !== "string" || !previousState?.mcpConnectionIds?.includes(reconnect)
-        || !request.connectionIds.includes(reconnect)) {
-        throw new Error("Reconnect requires a local command already selected by this thread.");
-      }
-      const selected = new Set(previousState.mcpConnectionIds);
-      if (new Set(request.connectionIds).size !== selected.size || request.connectionIds.some((id) => !selected.has(id))
-        || (request.providerServersEnabled !== undefined
-          && request.providerServersEnabled !== (!canIsolateMcpProviderServers(request.backend)
-            || previousState.mcpProviderServersEnabled !== false))) {
-        throw new Error("Change MCP access separately before reconnecting.");
-      }
-      const connection = (await this.mcpConnectionService?.listConnections?.())?.find((entry) => entry.id === reconnect);
-      if (connection?.kind !== "stdio" || !connection.enabled || !connection.configured
-        || !this.mcpConnectionService?.reconnectThreadConnection) {
-        throw new Error("This thread cannot reconnect that local command.");
-      }
-    }
-    // A backend that cannot suppress its own servers must never be left
-    // holding an "off" it will ignore. The flag is sticky and its control is
-    // hidden for those backends, so a value stored once — by an older build,
-    // a peer, or a launchpad draft that changed provider — would otherwise
-    // never be reachable again.
-    // Reconnect changes only live grants and consent, with no SQLite write.
-    const state = reconnect !== undefined ? previousState! : await this.overlayStore.setThreadMcpConnectionIds({
-      backend: request.backend,
-      threadId: request.threadId,
-      connectionIds: request.connectionIds,
-      providerServersEnabled: canIsolateMcpProviderServers(request.backend)
-        ? request.providerServersEnabled
-        : true,
-    });
-    // A changed selection or explicit reconnect revokes running calls and
-    // conversation grants. Toggling the backend's own servers does neither.
-    if (state.mcpSelectionRevision !== previousRevision || reconnect !== undefined) {
-      this.mcpGatewayTools?.cancel(request.backend, request.threadId);
-      this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
-      for (const monitor of this.taskMonitorDelegations.values()) {
-        if (monitor.monitorThreadId
-          && monitor.mcpAccess?.selectionOwner.backend === request.backend
-          && monitor.mcpAccess.selectionOwner.threadId === request.threadId) {
-          this.mcpGatewayTools?.cancel(monitor.backend, monitor.monitorThreadId);
-          this.mcpGatewaySessionApprovals.delete(JSON.stringify([monitor.backend, monitor.monitorThreadId]));
-        }
-      }
-      // A connection the thread turned off keeps its grant until the agent
-      // reloads its servers, but a local command started for this thread has
-      // no reason to keep running in the meantime. Not awaited: stopping a
-      // process can take seconds, and the operator's switch should not wait.
-      const kept = new Set(state.mcpConnectionIds ?? []);
-      const released = (previousState?.mcpConnectionIds ?? []).filter((id) => !kept.has(id));
-      if (released.length > 0) {
-        void this.mcpConnectionService?.closeThreadSessions?.(request.threadId, released)
-          .catch((error: unknown) => {
-            backendRegistryLog.warn("connection_mcp_session_release_failed", {
-              error: error instanceof Error ? error.message : String(error),
-              threadId: request.threadId,
-            });
-          });
-      }
-      if (reconnect !== undefined) {
-        await this.mcpConnectionService!.reconnectThreadConnection!(reconnect, request.threadId, request.backend);
-      }
-    }
-    const connectionIds = state.mcpConnectionIds ?? [];
-    const providerServersEnabled = !canIsolateMcpProviderServers(request.backend)
-      || state.mcpProviderServersEnabled !== false;
-    await this.emit({
-      backend: request.backend,
-      notification: {
-        method: "thread/mcpConnections/updated",
-        params: {
-          threadId: request.threadId,
-          connectionIds,
-          providerServersEnabled,
-        },
-      },
-    });
-    return { connectionIds, providerServersEnabled };
+    return this.threadMcpConnections.setThreadMcpConnections(request);
   }
 
   async setThreadModelSettings(
@@ -20595,7 +20103,7 @@ export class DesktopBackendRegistry {
     );
     const mcpSeed = options?.skipMcpConnectionDefaults
       ? undefined
-      : await this.resolveLaunchpadMcpSeed(existing);
+      : await this.threadMcpConnections.resolveLaunchpadMcpSeed(existing);
     if (existing) {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
       const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
@@ -22500,7 +22008,7 @@ export class DesktopBackendRegistry {
       await this.stopRunningTurnsForShutdown();
     }
     this.mcpGatewayTools?.cancel();
-    this.mcpGatewaySessionApprovals.clear();
+    this.threadMcpConnections.clearSessionApprovals();
     for (const run of this.headlessAutomationTurns.values()) {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
@@ -23095,7 +22603,7 @@ export class DesktopBackendRegistry {
         federationHandler: this.federationHandler,
         mcpGatewayTools: this.mcpGatewayTools,
         mcpConnectionHandler: async (request) =>
-          await this.handleAgentMcpConnectionRequest(request),
+          await this.threadMcpConnections.handleAgentMcpConnectionRequest(request),
         messagingHandler: this.messagingHandler,
         taskMonitorHandler: async (request) =>
           await this.handleAgentTaskMonitorRequest(request),
@@ -23350,73 +22858,6 @@ export class DesktopBackendRegistry {
       launchpadOptions,
       settings,
     );
-  }
-
-  /**
-   * What a new-thread draft's MCP selection should become, or undefined to
-   * leave it alone.
-   *
-   * A draft is seeded only while nobody has chosen for it: no selection yet,
-   * or one the defaults wrote themselves. A draft the operator has edited is
-   * theirs, including an edit down to nothing. The seed is recomputed each
-   * time rather than written once, because a draft sits open per directory
-   * until it is sent, and a default changed in Settings has to reach the
-   * drafts that already exist.
-   *
-   * Failing to read the connections, or not reading them within
-   * `MCP_DEFAULTS_READ_BUDGET_MS`, leaves the draft as it is. A missing
-   * default is recoverable from the MCP access panel; a failed or stalled
-   * ensure is a New thread screen that will not open.
-   */
-  private async resolveLaunchpadMcpSeed(
-    existing: NavigationLaunchpadDraft | undefined,
-  ): Promise<
-    | Pick<
-        NavigationLaunchpadDraft,
-        "mcpConnectionIds" | "mcpConnectionIdsFromDefaults"
-      >
-    | undefined
-  > {
-    const seeded = existing?.mcpConnectionIdsFromDefaults === true;
-    if (existing?.mcpConnectionIds !== undefined && !seeded) return undefined;
-    const ids = await this.resolveNewThreadMcpConnectionIds();
-    if (ids === undefined) return undefined;
-    if (ids.length === 0) {
-      return seeded
-        ? { mcpConnectionIds: undefined, mcpConnectionIdsFromDefaults: undefined }
-        : undefined;
-    }
-    if (seeded && sameMcpConnectionIds(existing?.mcpConnectionIds, ids)) {
-      return undefined;
-    }
-    return { mcpConnectionIds: ids, mcpConnectionIdsFromDefaults: true };
-  }
-
-  private async resolveNewThreadMcpConnectionIds(): Promise<string[] | undefined> {
-    const service = this.mcpConnectionService;
-    if (!service?.listConnections) return undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(
-            `No answer within ${MCP_DEFAULTS_READ_BUDGET_MS} ms.`,
-          )),
-          MCP_DEFAULTS_READ_BUDGET_MS,
-        );
-        timer.unref?.();
-      });
-      return mcpConnectionIdsForNewThread(
-        await Promise.race([service.listConnections({ cachedLocalStatus: true }), deadline]),
-      );
-    } catch (error) {
-      backendRegistryLog.warn("new_thread_mcp_defaults_unavailable", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   private async resolveLaunchpadDefaults(
@@ -31780,43 +31221,6 @@ export class DesktopBackendRegistry {
       .catch(() => undefined);
   }
 
-  /**
-   * The directories a managed local MCP server in this thread is given as
-   * roots: each linked directory, a worktree as its own checkout rather than
-   * its repository, with the thread's working directory first. A thread with
-   * no linked directory has none, even when its working directory falls back
-   * to something else. Only directories that exist on this machine are
-   * reported.
-   */
-  private async resolveThreadMcpRootDirectories(scope: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): Promise<ThreadRootDirectory[]> {
-    const overlay = await this.overlayStore.getThreadOverlayState(scope);
-    const summary = this.pendingStartedThreads.get(buildThreadIdentityKey(scope.backend, scope.threadId))
-      ?? await this.findThreadForWorkspaceHandoff({
-        ...scope,
-        callerReason: "turn-cwd",
-        freshness: "last-known",
-      });
-    const linked: ThreadRootDirectory[] = [
-      ...(summary?.linkedDirectories ?? []),
-      ...(overlay?.extraLinkedDirectories ?? []),
-    ].map((directory) => ({
-      path: directory.kind === "worktree" && directory.worktreePath
-        ? directory.worktreePath
-        : directory.path,
-      name: directory.label,
-    }));
-    const cwd = resolveThreadWorkspaceCwd(summary, overlay?.extraLinkedDirectories)?.trim();
-    const candidates = cwd && linked.some((directory) => directory.path === cwd)
-      ? [{ path: cwd }, ...linked]
-      : linked;
-    const present = await Promise.all(candidates.map(async (candidate) =>
-      await stat(candidate.path).then((entry) => entry.isDirectory(), () => false)));
-    return candidates.filter((_candidate, index) => present[index]);
-  }
-
   private async resolveThreadEnvironmentCwd(
     backend: AppServerBackendKind,
     threadId: string,
@@ -34973,7 +34377,7 @@ export class DesktopBackendRegistry {
         federationHandler: this.federationHandler,
         mcpGatewayTools: this.mcpGatewayTools,
         mcpConnectionHandler: async (connectionRequest) =>
-          await this.handleAgentMcpConnectionRequest(connectionRequest),
+          await this.threadMcpConnections.handleAgentMcpConnectionRequest(connectionRequest),
         messagingHandler: this.messagingHandler,
         taskMonitorHandler: async (monitorRequest) =>
           await this.handleAgentTaskMonitorRequest(monitorRequest),
@@ -35107,7 +34511,7 @@ export class DesktopBackendRegistry {
       const serverName = String(request.params.serverName ?? "");
       const aliases = Object.values(headlessAutomation.mcpServerAliases ?? {})
         .filter((names) => names.includes(serverName)).flat();
-      const selected = await this.readThreadMcpConnections({
+      const selected = await this.threadMcpConnections.readThreadMcpConnections({
         backend, threadId: headlessAutomation.agentThreadId,
       });
       const connectionIds = Object.entries(headlessAutomation.mcpServerAliases ?? {})
@@ -35145,7 +34549,7 @@ export class DesktopBackendRegistry {
     }
     let projectOffer: McpProjectToolApprovalCardOffer | undefined;
     if (backend === "codex" && isMcpToolApproval(request)) {
-      const decision = await this.selectedConnectionMcpConsent(request, signal);
+      const decision = await this.threadMcpConnections.selectedConnectionMcpConsent(request, signal);
       if (decision?.consent) return decision.consent;
       projectOffer = decision?.projectOffer;
       if (projectOffer) {
@@ -35219,73 +34623,7 @@ export class DesktopBackendRegistry {
       });
     });
     if (request.method !== "mcpServer/elicitation/request") return response;
-    return await this.settleMcpProjectToolApprovalChoice(response, projectOffer);
-  }
-
-  /**
-   * Save the project grant an accepted card chose, then answer Codex without
-   * PwrAgent's key: the choice is PwrAgent's, and Codex's grant scopes are
-   * still whatever `persist` says.
-   */
-  private async settleMcpProjectToolApprovalChoice(
-    response: SubmitServerRequestRequest["response"],
-    offer: McpProjectToolApprovalCardOffer | undefined,
-  ): Promise<SubmitServerRequestRequest["response"]> {
-    if (!response || !("action" in response)) return response;
-    const meta = readRecord(response._meta);
-    if (!meta || !(MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY in meta)) return response;
-    const { [MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY]: _choice, ...rest } = meta;
-    if (response.action === "accept" && readMcpProjectToolApprovalChoice(meta)) {
-      if (offer) await this.saveMcpProjectToolApproval(offer);
-      else backendRegistryLog.warn("ignoring a project grant this card did not offer");
-    }
-    return { ...response, _meta: Object.keys(rest).length > 0 ? rest : null };
-  }
-
-  /**
-   * The operator approved the call either way, so a failed save is logged
-   * and the call still runs once.
-   */
-  private async saveMcpProjectToolApproval(offer: McpProjectToolApprovalCardOffer): Promise<void> {
-    try {
-      await this.mcpConnectionService?.setConnectionProjectToolApproval?.(
-        offer.connectionId,
-        offer.repository,
-        "approve",
-      );
-      backendRegistryLog.info("saved an MCP project tool approval from a card", {
-        connectionId: offer.connectionId,
-        repository: offer.repository,
-      });
-    } catch (error) {
-      backendRegistryLog.warn("could not save an MCP project tool approval", {
-        connectionId: offer.connectionId,
-        repository: offer.repository,
-        error: String(error),
-      });
-    }
-  }
-
-  /**
-   * The grant a tool approval card may offer for this thread's project, or
-   * none. Never for a thread without a repository, and never when the
-   * project itself is set to ask before every tool: the operator already
-   * chose to be asked there.
-   */
-  private async mcpProjectToolApprovalOffer(input: {
-    connection: Pick<McpConnectionStatus, "id" | "displayName">;
-    resolution: McpConnectionToolApprovalResolution;
-    repository: string | undefined;
-  }): Promise<McpProjectToolApprovalCardOffer | undefined> {
-    const { connection, resolution, repository } = input;
-    if (!repository || !this.mcpConnectionService?.setConnectionProjectToolApproval) return undefined;
-    if (resolution.repository && resolution.toolApproval === "prompt") return undefined;
-    const projectLabel = await this.forgeToolBridge.ruleRepositoryProjectLabel(repository);
-    return {
-      connectionId: connection.id,
-      repository,
-      offer: buildMcpProjectToolApprovalOffer({ serverLabel: connection.displayName, projectLabel }),
-    };
+    return await this.threadMcpConnections.settleMcpProjectToolApprovalChoice(response, projectOffer);
   }
 
   private isTaskMonitorThread(context: { backend: AppServerBackendKind; threadId: string }): boolean {
@@ -35296,449 +34634,6 @@ export class DesktopBackendRegistry {
   private taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined {
     return [...this.taskMonitorDelegations.values()].find((record) =>
       record.backend === context.backend && record.monitorThreadId === context.threadId);
-  }
-
-  private async readMcpGatewaySelection(context: AgentToolCallContext): Promise<string[]> {
-    const monitor = this.taskMonitorForThread(context);
-    if (monitor) {
-      const denied = await this.dynamicToolPermissionDenied(monitor.parentBackend, "mcp_connections", {
-        threadId: monitor.parentThreadId, turnId: monitor.parentTurnId, tool: "call_mcp_tool",
-      });
-      if (denied) throw new Error(`The delegating messaging actor lacks permission for MCP gateway tools (${denied}).`);
-      const access = monitor.mcpAccess;
-      if (!access || monitor.cancellation || monitor.finalizationStarted) return [];
-      const selected = await this.readThreadMcpConnections(access.selectionOwner);
-      return access.connectionIds.filter((id) => selected.connectionIds.includes(id)
-        || access.automation?.grantedConnectionIds?.includes(id));
-    }
-    const automation = this.findHeadlessAutomationForThread(context.backend, context.threadId);
-    if (automation?.mcpConnectionIds) {
-      const selected = await this.readThreadMcpConnections({ backend: context.backend, threadId: automation.agentThreadId });
-      return automation.mcpConnectionIds.filter((id) => selected.connectionIds.includes(id) || automation.mcpGrantedConnectionIds?.includes(id));
-    }
-    return (await this.readThreadMcpConnections(context)).connectionIds;
-  }
-
-  private async taskMonitorMcpAccess(context: AgentToolCallContext): Promise<TaskMonitorMcpAccess> {
-    const inherited = this.taskMonitorForThread(context)?.mcpAccess;
-    const automation = this.findHeadlessAutomationForThread(context.backend, context.threadId);
-    return {
-      connectionIds: await this.readMcpGatewaySelection(context),
-      selectionOwner: inherited?.selectionOwner ?? { backend: context.backend, threadId: automation?.agentThreadId ?? context.threadId },
-      ...(inherited?.automation || automation ? {
-        automation: inherited?.automation ?? {
-          grantedConnectionIds: automation?.mcpGrantedConnectionIds?.slice(),
-          serverAliases: automation?.mcpServerAliases ? structuredClone(automation.mcpServerAliases) : undefined,
-          toolAllowlist: automation?.toolAllowlist?.slice(),
-        },
-      } : {}),
-    };
-  }
-
-  private async approveGatewayInvocation(
-    invocation: McpGatewayInvocation,
-    context: AgentToolCallContext,
-    signal: AbortSignal,
-    annotations?: McpGatewayTool["definition"]["annotations"],
-    catalogRevision?: string,
-    consentRevision?: string,
-  ): Promise<McpGatewayApproval> {
-    signal.throwIfAborted();
-    const requestId = `mcp-gateway:${randomUUID()}`;
-    const sourceRevision = consentRevision ?? invocation.schemaRevision;
-    const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
-    const monitor = this.taskMonitorForThread(context);
-    const readOnlyCall = annotations?.readOnlyHint === true && annotations.destructiveHint !== true;
-    if (monitor && !readOnlyCall) return false;
-    // Claude passes plan-turn gateway calls here without its generic card.
-    // The upstream hints decide whether the call can run in a read-only turn.
-    if (!readOnlyCall && context.backend === "claude"
-      && this.claudeBackend.livePermissionMode(context.threadId) === "plan") {
-      throw new Error(claudePlanTurnRefusal(`"${invocation.toolName}" on ${invocation.serverName}`));
-    }
-    const selectionOwner = monitor?.mcpAccess?.selectionOwner ?? context;
-    const approvalContext = monitor
-      ? { backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId }
-      : context;
-    const sessionKey = JSON.stringify([approvalContext.backend, approvalContext.threadId]);
-    const selectionRevision = (await this.overlayStore.getThreadOverlayState(selectionOwner))?.mcpSelectionRevision;
-    const denialKey = JSON.stringify([sourceKey, invocation.schemaRevision, selectionRevision]);
-    if (monitor?.deniedMcpTools?.has(denialKey)) return false;
-    signal.throwIfAborted();
-    const approvals = this.mcpGatewaySessionApprovals.get(sessionKey) ?? new Map<string, McpGatewayConversationConsent>();
-    let current = approvals.get(sourceKey);
-    // Observe revocation before automatic approval as well. Identity changes
-    // supersede pending responses, even when a catalog later restores R1.
-    if (!current || current.schemaRevision !== sourceRevision
-      || current.selectionRevision !== selectionRevision) {
-      current = { schemaRevision: sourceRevision, selectionRevision, approved: false };
-      approvals.set(sourceKey, current);
-      this.mcpGatewaySessionApprovals.set(sessionKey, approvals);
-    }
-    const consent = current;
-    const serverKey = JSON.stringify([invocation.connectionId, invocation.serverName]);
-    let serverConsent = approvals.get(serverKey);
-    if (catalogRevision && (!serverConsent || serverConsent.schemaRevision !== catalogRevision
-      || serverConsent.selectionRevision !== selectionRevision)) {
-      serverConsent = { schemaRevision: catalogRevision, selectionRevision, approved: false };
-      approvals.set(serverKey, serverConsent);
-    }
-    // A connection grant is offered only for a catalog read from the owner,
-    // never a revision supplied in the agent's tool arguments.
-    const connectionConsent = catalogRevision ? serverConsent : undefined;
-    const notification: AppServerPendingRequestNotification = {
-      method: "mcpServer/elicitation/request",
-      params: {
-        threadId: approvalContext.threadId,
-        turnId: approvalContext.turnId,
-        requestId,
-        serverName: invocation.serverName,
-        mode: "form",
-        message: `Allow the agent to call "${invocation.toolName}" on ${invocation.serverName}?`,
-        requestedSchema: { type: "object", properties: {} },
-        _meta: {
-          pwragent_approval_kind: "mcp_tool_call",
-          persist: connectionConsent ? ["session", "server-session"] : ["session"],
-          subtitle: monitor
-            ? `Allow this read-only tool or read-only ${invocation.serverName} tools in this conversation. Job Monitor approval never permits mutating calls. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
-            : connectionConsent
-            ? `Allow this tool or all ${invocation.serverName} tools in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
-            : "Allow this tool in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
-          // The same rows Codex sends, so desktop and messaging draw and
-          // redact the arguments one way.
-          tool_params_display: Object.entries(invocation.arguments).map(([name, value]) => ({
-            name,
-            value: typeof value === "string" ? value : JSON.stringify(value),
-          })),
-        },
-      },
-    };
-    // This is a host-owned invocation approval, not upstream MCP elicitation.
-    // Full Access already authorizes it; ordinary forms and URL flows still
-    // pass through performServerRequest and remain interactive.
-    const monitorAutomation = monitor?.mcpAccess?.automation;
-    if (monitorAutomation) {
-      return Boolean(monitor?.mcpAccess?.connectionIds.includes(invocation.connectionId)
-        && automationMcpToolAllowed(monitorAutomation.toolAllowlist,
-          [invocation.serverName, invocation.connectionId, ...(monitorAutomation.serverAliases?.[invocation.connectionId] ?? [])], invocation.toolName));
-    }
-    const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
-    if (automation?.mcpConnectionIds) {
-      if (!automation.mcpConnectionIds.includes(invocation.connectionId)
-        || !automationMcpToolAllowed(automation.toolAllowlist, [invocation.serverName, invocation.connectionId, ...(automation.mcpServerAliases?.[invocation.connectionId] ?? [])], invocation.toolName)) {
-        return false;
-      }
-      signal.throwIfAborted();
-      return true;
-    }
-    if (await this.isMcpGatewayFullAccess(context, automation?.executionMode)) {
-      signal.throwIfAborted();
-      backendRegistryLog.info("auto-approving Full Access MCP gateway invocation", {
-        backend: context.backend,
-        threadId: context.threadId,
-        turnId: context.turnId,
-        connectionId: invocation.connectionId,
-        serverName: invocation.serverName,
-        toolName: invocation.toolName,
-      });
-      return true;
-    }
-    // Codex auto_review has no client API for reviewing host-owned dynamic
-    // calls. Keep scoped confirmation until that integration is available.
-    if (automation) return false;
-    signal.throwIfAborted();
-    // The connection's Tool approval setting, read now so the next call
-    // follows a change. By default Codex's rule applies: listing and
-    // inspecting run, and a restart still asks.
-    // A project's own mode wins for a thread in that project.
-    const repository = await this.forgeToolBridge.threadProjectRepository(approvalContext.backend, approvalContext.threadId);
-    const { resolution, connection: approvalConnection } =
-      await this.readMcpConnectionToolApproval(invocation.connectionId, repository);
-    const toolApproval = resolution.toolApproval;
-    signal.throwIfAborted();
-    if (!gatewayToolRequiresApproval(annotations, toolApproval)) {
-      backendRegistryLog.info("running MCP gateway tool without approval", {
-        backend: context.backend,
-        threadId: context.threadId,
-        turnId: context.turnId,
-        connectionId: invocation.connectionId,
-        serverName: invocation.serverName,
-        toolName: invocation.toolName,
-        toolApproval,
-        ...(resolution.repository ? { repository: resolution.repository } : {}),
-      });
-      return true;
-    }
-    if ((consent.approved && (!consent.readOnlyOnly || readOnlyCall))
-      || (connectionConsent?.approved && (!connectionConsent.readOnlyOnly || readOnlyCall))) return true;
-    // A Job Monitor's card approves reads only, so it offers no grant.
-    const projectOffer = !monitor && approvalConnection
-      ? await this.mcpProjectToolApprovalOffer({ connection: approvalConnection, resolution, repository })
-      : undefined;
-    signal.throwIfAborted();
-    if (projectOffer) {
-      notification.params._meta = {
-        ...readRecord(notification.params._meta),
-        [MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY]: projectOffer.offer,
-      };
-    }
-    const key = buildPendingRequestKey({ ...approvalContext, requestId });
-    return await new Promise<McpGatewayApproval>((resolve, reject) => {
-      if (monitor) monitor.pendingMcpApprovalCount = (monitor.pendingMcpApprovalCount ?? 0) + 1;
-      let waiting = true;
-      const finish = (approved: McpGatewayApproval, error?: unknown): void => {
-        if (!waiting) return;
-        waiting = false;
-        if (monitor) {
-          monitor.pendingMcpApprovalCount = Math.max(0, (monitor.pendingMcpApprovalCount ?? 0) - 1);
-          monitor.lastActivityAt = Date.now();
-        }
-        signal.removeEventListener("abort", aborted);
-        this.pendingServerRequests.delete(key);
-        if (error) reject(error);
-        else resolve(approved);
-      };
-      const aborted = (): void => {
-        finish(false, signal.reason);
-        void this.emit({ backend: approvalContext.backend, notification: {
-          method: "serverRequest/resolved", params: { threadId: approvalContext.threadId, turnId: approvalContext.turnId, requestId },
-        } }).catch(() => undefined);
-      };
-      this.pendingServerRequests.set(key, {
-        backend: approvalContext.backend, notification,
-        ...(monitor ? { owner: { backend: context.backend, threadId: context.threadId, turnId: context.turnId } } : {}),
-        resolve: (response) => {
-          if (signal.aborted) { aborted(); return; }
-          const approved = Boolean(response && "action" in response && response.action === "accept");
-          if (response && "action" in response && response.action === "decline" && monitor) (monitor.deniedMcpTools ??= new Set()).add(denialKey);
-          const responseMeta = response && "_meta" in response ? readRecord(response._meta) : undefined;
-          if (approved && readMcpProjectToolApprovalChoice(responseMeta)) {
-            if (!projectOffer) {
-              backendRegistryLog.warn("ignoring a project grant this card did not offer", { threadId: context.threadId, requestId });
-              finish(true);
-              return;
-            }
-            void this.saveMcpProjectToolApproval(projectOffer).finally(() => finish(true));
-            return;
-          }
-          const persist = responseMeta?.persist;
-          const rememberedConsent = persist === "session" ? consent
-            : persist === "server-session" ? connectionConsent : undefined;
-          const rememberedKey = persist === "server-session" ? serverKey : sourceKey;
-          if (approved && rememberedConsent) {
-            finish({ onInvoked: async () => {
-              // A late response is provisional until the owner accepts its
-              // exact schema/auth revision. Peer-instance edits also revoke it.
-              if (signal.aborted || this.closed) return;
-              try {
-                const latest = await this.overlayStore.getThreadOverlayState(selectionOwner);
-                if (!signal.aborted && !this.closed
-                  && latest?.mcpSelectionRevision === selectionRevision
-                  && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(rememberedKey) === rememberedConsent) {
-                  if (!monitor) rememberedConsent.readOnlyOnly = false;
-                  else if (!rememberedConsent.approved) rememberedConsent.readOnlyOnly = true;
-                  rememberedConsent.approved = true;
-                }
-              } catch (error) {
-                backendRegistryLog.warn("could not record MCP conversation approval", { error: String(error) });
-              }
-            } });
-            return;
-          }
-          finish(approved);
-        },
-        reject: (error) => finish(false, error),
-      });
-      signal.addEventListener("abort", aborted, { once: true });
-      if (signal.aborted) { aborted(); return; }
-      void this.emit({ backend: approvalContext.backend, notification }).catch((error) => finish(false, error));
-    });
-  }
-
-  /**
-   * Show a form or link that an upstream MCP server sends while a gateway
-   * call runs, on the calling thread's card, and return the person's answer.
-   * A link is drawn with its host and full address, and opens only when the
-   * person chooses Open in browser; its acceptance carries no content.
-   *
-   * This is not invocation approval. Full Access, the connection's tool
-   * approval policy and conversation grants never answer it, and nothing is
-   * remembered from it: the next form asks again. The message, requested
-   * schema and `_meta` reach the card exactly as the server sent them. A Job
-   * Monitor or headless automation has no one to ask, so the form fails
-   * closed there; so does a turn that is no longer live.
-   */
-  private async requestUpstreamMcpForm(
-    request: ElicitRequestParams,
-    invocation: McpGatewayInvocation,
-    context: AgentToolCallContext,
-    signal: AbortSignal,
-  ): Promise<unknown> {
-    signal.throwIfAborted();
-    await mcpTypes.load();
-    if (this.isTaskMonitorThread(context)) {
-      throw elicitationUnavailable("A Job Monitor cannot answer an MCP server's form.");
-    }
-    const link = isUrlElicitation(request)
-      ? request as { url: string; elicitationId: string }
-      : undefined;
-    const requestedSchema = link
-      ? undefined
-      : (request as { requestedSchema?: AppServerMcpElicitationSchema }).requestedSchema;
-    const _meta = request._meta ?? null;
-    // A card drawn as a host tool approval offers a grant to keep. Besides the
-    // `_meta` keys the relay refuses, an empty browser form with an origin
-    // draws as one; a server's own form must never be shown as one.
-    if (!link && mcpElicitationPurpose({ mode: "form", serverName: invocation.serverName, _meta, requestedSchema }) === "tool-approval") {
-      throw hostApprovalFormRefused();
-    }
-    const requestId = `${MCP_UPSTREAM_FORM_REQUEST_ID_PREFIX}${randomUUID()}`;
-    const notification: AppServerPendingRequestNotification = {
-      method: "mcpServer/elicitation/request",
-      params: {
-        threadId: context.threadId,
-        turnId: context.turnId,
-        requestId,
-        serverName: invocation.serverName,
-        message: request.message,
-        ...(link
-          ? { mode: "url" as const, url: link.url, elicitationId: link.elicitationId }
-          : { mode: "form" as const, requestedSchema }),
-        _meta,
-      },
-    };
-    if (this.findHeadlessAutomationTurnForRequest(context.backend, notification)) {
-      throw elicitationUnavailable("A headless automation run has no one to answer an MCP server's form.");
-    }
-    if (!this.isLiveDynamicToolCall(context.backend, context)) {
-      throw elicitationUnavailable("The turn that made this call has ended.");
-    }
-    const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
-    return await new Promise<unknown>((resolve, reject) => {
-      let waiting = true;
-      const finish = (): boolean => {
-        if (!waiting) return false;
-        waiting = false;
-        signal.removeEventListener("abort", withdraw);
-        if (this.pendingServerRequests.get(key)?.notification === notification) {
-          this.pendingServerRequests.delete(key);
-        }
-        return true;
-      };
-      // The call ended first: take the card down and answer nothing.
-      const withdraw = (): void => {
-        if (!finish()) return;
-        reject(signal.reason ?? new DOMException("The MCP form was withdrawn.", "AbortError"));
-        void this.emit({ backend: context.backend, notification: {
-          method: "serverRequest/resolved",
-          params: { threadId: context.threadId, turnId: context.turnId, requestId },
-        } }).catch(() => undefined);
-      };
-      this.pendingServerRequests.set(key, {
-        backend: context.backend,
-        notification,
-        resolve: (response) => {
-          if (signal.aborted) {
-            withdraw();
-            return;
-          }
-          if (finish()) resolve(response);
-        },
-        reject: (error) => {
-          if (finish()) reject(error);
-        },
-      });
-      signal.addEventListener("abort", withdraw, { once: true });
-      if (signal.aborted) {
-        withdraw();
-        return;
-      }
-      void this.emit({ backend: context.backend, notification }).catch((error) => {
-        if (finish()) reject(error);
-      });
-    });
-  }
-
-  /**
-   * Codex's own approval card for a tool on a selected connection. Answers
-   * it when the connection, or the thread's project, is set to Allow all
-   * tools; otherwise names the project grant the card may offer.
-   */
-  private async selectedConnectionMcpConsent(
-    request: AppServerPendingRequestNotification,
-    signal?: AbortSignal,
-  ): Promise<{
-    consent?: AppServerMcpElicitationResponse;
-    projectOffer?: McpProjectToolApprovalCardOffer;
-  } | undefined> {
-    const consent = buildMcpToolApprovalConsent(request);
-    const threadId = request.params.threadId;
-    const turnId = request.params.turnId ?? undefined;
-    const service = this.mcpConnectionService;
-    if (!consent || !service?.peekThreadBridge || !service.listConnections
-      || !this.isLiveDynamicToolCall("codex", { threadId, turnId })) return undefined;
-    try {
-      signal?.throwIfAborted();
-      const selected = await this.readThreadMcpConnections({ backend: "codex", threadId });
-      const connectionId = selected.connectionIds.find((id) => {
-        const bridge = service.peekThreadBridge!(id, threadId);
-        return bridge && buildCodexConnectionMcpServerName(bridge) === request.params.serverName;
-      });
-      if (!connectionId) return undefined;
-      const connection = (await service.listConnections({ cachedLocalStatus: true }))
-        .find((entry) => entry.id === connectionId);
-      if (!connection?.enabled || !connection.configured
-        || connection.state === "disconnected" || connection.state === "reauthorization_required") return undefined;
-      const repository = await this.forgeToolBridge.threadProjectRepository("codex", threadId);
-      const resolution = resolveMcpConnectionToolApproval(connection, repository);
-      if (resolution.toolApproval !== "approve") {
-        if (this.isTaskMonitorThread({ backend: "codex", threadId })) return undefined;
-        const projectOffer = await this.mcpProjectToolApprovalOffer({ connection, resolution, repository });
-        signal?.throwIfAborted();
-        return projectOffer ? { projectOffer } : undefined;
-      }
-      // A server prefix is not proof of ownership. Recheck selection, the
-      // exact live bridge and turn after asynchronous policy reads.
-      const current = await this.readThreadMcpConnections({ backend: "codex", threadId });
-      signal?.throwIfAborted();
-      const currentBridge = service.peekThreadBridge(connectionId, threadId);
-      if (!current.connectionIds.includes(connectionId)
-        || !this.isLiveDynamicToolCall("codex", { threadId, turnId })
-        || !currentBridge || buildCodexConnectionMcpServerName(currentBridge) !== request.params.serverName) return undefined;
-      if (resolution.repository) {
-        backendRegistryLog.info("approving MCP tool call allowed for its project", {
-          threadId, turnId, connectionId, repository: resolution.repository,
-        });
-      }
-      // One invocation only: future requests must reread the connection's
-      // policy rather than inherit a Codex conversation or permanent grant.
-      return { consent };
-    } catch {
-      signal?.throwIfAborted();
-      // An unavailable policy or registration keeps the normal prompt.
-    }
-    return undefined;
-  }
-
-  // A lookup that fails reads as the default, which still asks for anything
-  // the server does not mark safe; it never reads as Allow all tools.
-  private async readMcpConnectionToolApproval(
-    connectionId: string,
-    repository?: string,
-  ): Promise<{ resolution: McpConnectionToolApprovalResolution; connection?: McpConnectionStatus }> {
-    try {
-      // The approval mode is stored config. Reading it must not wait on a
-      // local CLI's status probe before every tool call.
-      const connections = await this.mcpConnectionService?.listConnections?.({ cachedLocalStatus: true });
-      const connection = connections?.find((entry) => entry.id === connectionId);
-      return {
-        resolution: connection ? resolveMcpConnectionToolApproval(connection, repository) : { toolApproval: "auto" },
-        ...(connection ? { connection } : {}),
-      };
-    } catch (error) {
-      backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });
-      return { resolution: { toolApproval: "auto" } };
-    }
   }
 
   /**
@@ -35769,34 +34664,6 @@ export class DesktopBackendRegistry {
       : undefined;
     return activeMode ?? automationMode
       ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId);
-  }
-
-  private async isMcpGatewayFullAccess(
-    context: AgentToolCallContext,
-    automationMode?: ThreadExecutionMode,
-  ): Promise<boolean> {
-    if (context.backend === "codex") {
-      return await this.resolveCodexToolCallExecutionMode(context, automationMode) === "full-access";
-    }
-    // Bypass permissions is Claude's Full Access. Claude asks nothing under
-    // it, so the gateway card would be the only prompt.
-    if (context.backend === "claude") {
-      return await this.resolveClaudeToolCallExecutionMode(context.threadId, automationMode) === "full-access";
-    }
-    if (isAcpBackendId(context.backend)) {
-      const session = this.acpBackend.getSession(context.backend, context.threadId);
-      const runtimeCapabilities = this.acpBackend.getInstalledAgent(context.backend)?.runtimeCapabilities;
-      // Match ACP permission approvals: a runtime selector is authoritative
-      // over a stale session executionMode value.
-      return acpRuntimeHasExecutionModeSelection({
-        registryId: this.acpBackend.getInstalledAgent(context.backend)?.registryId,
-        runtime: session?.acpRuntime,
-        runtimeCapabilities,
-      })
-        ? acpRuntimeStateRequiresFullAccess({ runtime: session?.acpRuntime, runtimeCapabilities })
-        : session?.executionMode === "full-access";
-    }
-    return false;
   }
 
   private async isTokenMiserDynamicToolCallEnabled(
@@ -39294,139 +38161,6 @@ export class DesktopBackendRegistry {
     );
   }
 
-  /**
-   * Back the `manage_mcp_connections` agent tool.
-   *
-   * The split here is deliberate and is the whole safety story: an agent may
-   * read the registry and propose an addition to it, while authorizing,
-   * enabling and removing stay with a person in Settings. `create` writes an
-   * inert record — it reaches no network and mints no bridge grant — so the
-   * worst a prompt injection can achieve is a row an operator has to look at
-   * and consent to before anything can use it.
-   */
-  private async handleAgentMcpConnectionRequest(
-    request: PwrAgentMcpConnectionRequest,
-  ): Promise<PwrAgentMcpConnectionResponse> {
-    const service = this.mcpConnectionService;
-    if (
-      !service?.listConnections
-      || !service.createConnection
-      || !service.probeConnection
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "unsupported_operation",
-          message: "MCP connections are unavailable in this PwrAgent runtime.",
-        },
-      };
-    }
-    try {
-      if (request.args.action === "list") {
-        const gatewayEnabled = this.readMcpGatewayEnabled();
-        const statuses = await service.listConnections();
-        return {
-          ok: true,
-          data: {
-            action: "list",
-            gatewayEnabled,
-            connections: statuses.map((connection) => {
-              const setup = resolveMcpConnectionSetup({
-                connection,
-                gatewayEnabled,
-              });
-              return {
-                id: connection.id,
-                displayName: connection.displayName,
-                serverUrl: connection.serverUrl,
-                kind: connection.kind,
-                authMode: connection.authMode,
-                state: connection.state,
-                setupState: setup.state,
-                setupDetail: setup.detail,
-                configured: connection.configured,
-                enabled: connection.enabled,
-                threadSelectable: setup.threadSelectable,
-              };
-            }),
-          },
-        };
-      }
-      if (request.args.action === "create") {
-        // Probed before it is written, exactly as the Settings form does, so
-        // an agent gets the same actionable answer rather than a saved row
-        // and an OAuth discovery failure.
-        const probe = await service.probeConnection({
-          serverUrl: request.args.serverUrl,
-        });
-        if (!probe.ok) {
-          return {
-            ok: false,
-            error: { code: "invalid_arguments", message: probe.message },
-          };
-        }
-        const connection = await service.createConnection({
-          displayName: request.args.displayName,
-          serverUrl: probe.serverUrl,
-        });
-        const setup = resolveMcpConnectionSetup({
-          connection,
-          gatewayEnabled: this.readMcpGatewayEnabled(),
-        });
-        return {
-          ok: true,
-          data: {
-            action: "create",
-            id: connection.id,
-            displayName: connection.displayName,
-            serverUrl: connection.serverUrl,
-            setupState: setup.state,
-            nextStep:
-              `Registered, but not yet usable. A person has to authorize ${connection.displayName} in Settings → Plugins; PwrAgent cannot complete the OAuth consent on its own. After that it can be selected per thread under MCP access.`,
-          },
-        };
-      }
-      const threadId = request.args.threadId ?? request.context.threadId;
-      if (!threadId) {
-        return {
-          ok: false,
-          error: {
-            code: "invalid_arguments",
-            message: "Pass threadId, or call this from inside a thread.",
-          },
-        };
-      }
-      return {
-        ok: true,
-        data: {
-          action: "describe_thread",
-          ...(await this.describeThreadMcpConnections({
-            backend: request.context.backend,
-            threadId,
-          })),
-        },
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: "internal_error",
-          message: error instanceof Error ? error.message : String(error),
-        },
-      };
-    }
-  }
-
-  private readMcpGatewayEnabled(): boolean {
-    try {
-      return getDesktopSettingsService().resolveMcpGatewayEnabled();
-    } catch {
-      // The gateway defaults on, and a settings read failure is not evidence
-      // that an operator turned it off.
-      return true;
-    }
-  }
-
   private async handleAgentTaskMonitorRequest(
     request: TaskMonitorRequest,
   ): Promise<TaskMonitorResponse> {
@@ -39518,7 +38252,7 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const mcpAccess = await this.taskMonitorMcpAccess({ ...context, transport: "codex_dynamic_tool" });
+    const mcpAccess = await this.threadMcpConnections.taskMonitorMcpAccess({ ...context, transport: "codex_dynamic_tool" });
     if (mcpAccess.connectionIds.length && !this.mcpGatewayTools) {
       return taskMonitorFailure("create_monitor_delegation", "internal_error",
         "Selected MCP connections cannot be delegated because the MCP gateway is unavailable. Keep the cloud task in the parent.");
@@ -40304,7 +39038,7 @@ export class DesktopBackendRegistry {
     }
 
     const client = this.getClient("codex", executionMode);
-    const inheritedNames = await this.readConfiguredCodexMcpServerNames(cwd);
+    const inheritedNames = await this.threadMcpConnections.readConfiguredCodexMcpServerNames(cwd);
     if (inheritedNames === undefined) throw codexMcpIsolationUnavailableError();
     const config = buildCodexConnectionMcpConfig([], inheritedNames, { isolateFromInherited: true });
     const thread = await this.withArchiveWorkspaceWrite(cwd ? [cwd] : [], async () => await client.startThread({
