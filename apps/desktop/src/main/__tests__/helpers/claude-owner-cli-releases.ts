@@ -8,6 +8,8 @@ const CLAUDE_OWNER_CLI_RELEASE_PORT_FILE = "claude-release-port";
 export interface ClaudeOwnerCliReleases {
   /** Release turn `index` (1-based), before or after it reaches the fixture. */
   release(index: number): void;
+  /** Resolves once turn `index` has recorded its prompt and connected. */
+  connected(index: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -25,16 +27,21 @@ export interface ClaudeOwnerCliReleases {
  * fixture connects is held here until it does.
  */
 export async function openClaudeOwnerCliReleases(fixtureDir: string): Promise<ClaudeOwnerCliReleases> {
-  const connections = new Map<number, Socket>();
-  const released = new Set<number>();
-  const sent = new Set<number>();
+  const sockets = new Set<Socket>();
+  const turns = new Map<number, Socket>();
+  const pending = new Set<number>();
+  const waiters = new Map<number, Array<() => void>>();
   const send = (index: number): void => {
-    const socket = connections.get(index);
-    if (!socket || !released.has(index) || sent.has(index)) return;
-    sent.add(index);
-    socket.end("release\n");
+    const socket = turns.get(index);
+    if (!socket || socket.writableEnded) return;
+    if (pending.delete(index)) socket.end("release\n");
   };
   const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => { sockets.delete(socket); });
+    // A fixture killed mid-turn resets its connection. The owner reports
+    // that turn's end itself, so the reset is not this helper's failure.
+    socket.on("error", () => {});
     let buffer = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
@@ -43,8 +50,9 @@ export async function openClaudeOwnerCliReleases(fixtureDir: string): Promise<Cl
       if (newline < 0) return;
       const index = Number(buffer.slice(0, newline));
       buffer = "";
-      connections.set(index, socket);
+      turns.set(index, socket);
       send(index);
+      for (const resolve of waiters.get(index)?.splice(0) ?? []) resolve();
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -55,11 +63,15 @@ export async function openClaudeOwnerCliReleases(fixtureDir: string): Promise<Cl
   await writeFile(path.join(fixtureDir, CLAUDE_OWNER_CLI_RELEASE_PORT_FILE), String(port));
   return {
     release: (index) => {
-      released.add(index);
+      pending.add(index);
       send(index);
     },
+    connected: (index) => turns.has(index) ? Promise.resolve() : new Promise((resolve) => {
+      waiters.set(index, [...waiters.get(index) ?? [], resolve]);
+    }),
     close: async () => {
-      for (const socket of connections.values()) socket.destroy();
+      // A connection that has not named its turn yet still holds the server.
+      for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

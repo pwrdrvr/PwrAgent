@@ -39,10 +39,11 @@ it("completes every released turn exactly once, wherever the release lands", asy
   let index = 0;
   try {
     // beforePrompt: the conformance test's drain after a failed acceptance.
-    // atInit: the tightest point after the provider reports the turn.
-    // afterInit: a release that follows other test work.
+    // atInit: the tightest point after the provider reports the turn, usually
+    // before the fixture's connection lands.
+    // afterConnect: the conformance test's usual path, once the turn waits.
     await fc.assert(fc.asyncProperty(
-      fc.array(fc.constantFrom("beforePrompt", "atInit", "afterInit"), { minLength: 1, maxLength: 8 }),
+      fc.array(fc.constantFrom("beforePrompt", "atInit", "afterConnect"), { minLength: 1, maxLength: 8 }),
       async (timings) => {
         for (const timing of timings) {
           index += 1;
@@ -51,14 +52,23 @@ it("completes every released turn exactly once, wherever the release lands", asy
           if (timing === "beforePrompt") releases.release(index);
           expect(await next()).toMatchObject({ type: "system", subtype: "init" });
           if (timing === "atInit") releases.release(index);
-          if (timing === "afterInit") await new Promise<void>((resolve) => setImmediate(resolve)).then(() => releases.release(index));
+          if (timing === "afterConnect") {
+            await releases.connected(index);
+            releases.release(index);
+          }
           expect(await next()).toMatchObject({ type: "assistant" });
           expect(await next()).toMatchObject({ type: "result", subtype: "success",
             result: `Claude fixture completed ${index}.`, user_message_uuids: [uuid] });
         }
-      }), { numRuns: 20 });
+      }), { numRuns: 20, endOnFailure: true });
   } finally {
-    child.kill();
+    // One process carries every run's stream, so a shrink would read the
+    // failed turn's leftover lines; endOnFailure reports the original case.
+    // The workspace is the fixture's working directory, which Windows will
+    // not remove while the process runs.
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve) => { child.once("exit", resolve); child.kill(); });
+    }
     await releases.close();
     rmSync(workspace, { recursive: true, force: true });
   }
