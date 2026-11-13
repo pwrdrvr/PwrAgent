@@ -142,8 +142,9 @@ Contained is the default, so an upgrade never widens what an existing Outpost
 may do. Set `PWRAGENT_OUTPOST_FEDERATION_ROLE=full` only for models you trust
 with the federation. An Outpost that once declared itself contained stays
 contained at each peer until that peer's operator changes it. A desktop sets
-the same thing with `member_role` under `[federation]` in its profile's
-`config.toml`; there the default is `full`.
+the same thing with **Contain this instance** in Settings → Federation, which
+writes `member_role` under `[federation]` in its profile's `config.toml`;
+there the default is `full`.
 
 A member's upstream gateway also decides its containment. The gateway answers
 each declaration with the role it assigns, and tells the member again whenever
