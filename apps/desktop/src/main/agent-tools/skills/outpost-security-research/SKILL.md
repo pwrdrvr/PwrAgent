@@ -142,9 +142,21 @@ What `compose.yaml` sets up:
 - The Outpost is on an `--internal` network with no route out, with every
   capability dropped, `no-new-privileges`, and your seccomp profile.
   `PWRAGENT_OUTPOST_EXECUTION_MODES=default,auto` lists the modes viewers may
-  pick (`default` is read-only, `auto` is workspace-write, `full-access` is
-  never right for research). `PWRAGENT_OUTPOST_AGENT_NETWORK=off` keeps the
-  Codex sandbox's own network off as a second layer.
+  pick (`default` is read-only, `auto` is workspace-write). Add `full-access`
+  only after reading "Full Access" below. `PWRAGENT_OUTPOST_AGENT_NETWORK=off`
+  keeps the Codex sandbox's own network off as a second layer.
+  `PWRAGENT_OUTPOST_FEDERATION_ROLE=contained` keeps an untrusted model from
+  acting on your other instances. The Outpost declares itself contained to the
+  gateway when it connects, and from then on the gateway refuses its requests
+  and will not relay for it, whatever the invite assigned. Only the gateway's
+  operator can relax that. The Outpost also refuses those requests itself, and
+  its models get only read-only PwrAgent tools. Contained is the default, but
+  it is set explicitly so a later default can never widen a research
+  Outpost. With `PWRAGENT_OUTPOST_APPROVALS=ask`, a command that
+  needs approval waits in Attention for a person on a viewer with the
+  `pending_request_control` grant, even in Auto: a contained Outpost never
+  lets the model review its own escalation. Use `never` to have such commands
+  fail instead. Unknown values stop startup.
 - The egress container is on both networks and relays exactly `:47833` to the
   gateway and `:8787` to `key-proxy`. Nothing else crosses. `key-proxy` is not
   on the internal network, so the Outpost reaches it only through that relay.
@@ -171,6 +183,11 @@ and run `docker compose up -d`. A saved IP address other than `127.0.0.1`
 cannot be redirected this way: join with an invite whose endpoint is
 `127.0.0.1` or a host name. Then check `federation-status` again: the gateway
 should be connected.
+
+Then check the gateway: Settings → Federation should list the Outpost as
+contained. A gateway on a build without `member_role_declaration_v1` keeps
+the invite's role, which is full unless you chose contained when you created
+the invite; set it there by hand.
 
 ## 5. Add the Model Provider
 
@@ -287,10 +304,36 @@ docker compose start outpost
 
 - In Default and Auto, Codex's permission profiles deny agent commands the
   profile folder, which holds the secret store key, the state database and the
-  local control socket, and the Codex home's credentials (`auth.json`,
-  `.credentials.json`, `secrets/`). Full Access has no sandbox: never allow it
-  on a research Outpost.
-- Everything else on the volume is readable, including the rest of the Codex
-  home and every pushed repository.
-- The Outpost's federation role is contained: peers refuse requests it
-  originates. Viewers can still start, read and steer its threads.
+  local control socket. In the Codex home they deny the credentials
+  (`auth.json`, `.credentials.json`, `secrets/`) and the files only Codex
+  reads (`config.toml`, `sessions/`, `archived_sessions/`, `history.jsonl`,
+  `session_index.jsonl`, `log/`), and leave the rest read-only.
+- Everything else on the volume is readable, including every pushed
+  repository.
+- The Outpost's federation role is contained: the gateway refuses requests it
+  originates, and the Outpost refuses them itself. Viewers can still start,
+  read and steer its threads, and answer its approval requests.
+
+## Full Access
+
+Full Access turns run with no Codex sandbox. The model can read and change
+everything in the container: the Outpost's federation keys, its local control
+secret, the state database, the Codex home and every repository. It can
+connect to the gateway as the Outpost. What still holds:
+
+- The container, for files and network. On the internal network the only
+  routes out are the model key proxy and the federation relay.
+- The gateway's contained role for the Outpost. A connection made with the
+  Outpost's keys is still the Outpost, and stays refused. Check the role on
+  the gateway before the first Full Access turn.
+- The real model key, which stays in the `key-proxy` container. Keep only the
+  placeholder in the Codex home.
+
+Allow it only on those terms:
+
+- Treat the volume as the model's. Never run `deps-helper.sh` against it, and
+  move work out by reviewing the bundle, not by trusting the checkout.
+- Never set `PWRAGENT_OUTPOST_FEDERATION_ROLE=full` on that volume. To trust
+  it later, create a new volume and enroll it again.
+- Full Access never asks for approval, so `PWRAGENT_OUTPOST_APPROVALS` does
+  not apply to it.

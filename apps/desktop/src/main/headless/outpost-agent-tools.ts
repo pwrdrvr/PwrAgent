@@ -95,16 +95,21 @@ export function filterAdvertisedAgentTools<T>(allowlist: readonly string[], spec
 }
 
 /**
- * Outbound JSON-RPC rewriter for an Outpost Codex client: any request that
- * carries `dynamicTools` (thread start, resume, fork, a tool refresh, a
- * voice thread) reaches Codex with only the allowed tools. Every
+ * Outbound JSON-RPC rewriter for a contained member's Codex client: any
+ * request that carries `dynamicTools` (thread start, resume, fork, a tool
+ * refresh, a voice thread) reaches Codex with only the allowed tools. Every
  * advertisement path funnels through the transport, so a new call site
- * cannot skip the filter.
+ * cannot skip the filter. The allowlist is read per message; undefined
+ * passes every tool.
  */
-export function createOutpostAgentToolMessageRewriter(allowlist: readonly string[]): (raw: string) => string {
+export function createOutpostAgentToolMessageRewriter(
+  readAllowlist: () => readonly string[] | undefined,
+): (raw: string) => string {
   return (raw) => {
     // Most outbound messages carry no tool list; skip parsing those.
     if (!raw.includes("\"dynamicTools\"")) return raw;
+    const allowlist = readAllowlist();
+    if (!allowlist) return raw;
     let envelope: unknown;
     try { envelope = JSON.parse(raw); } catch { return raw; }
     if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return raw;

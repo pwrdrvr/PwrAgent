@@ -1,10 +1,11 @@
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
 import { appendFederationRefusalAudit } from "@pwragent/federation/federation-refusal-audit";
 import { containedFederationNotificationAllowed } from "@pwragent/federation/federation-backend-methods";
-import { FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
+import { FEDERATION_MEMBER_ROLE_DECLARE_METHOD, FEDERATION_PEER_ROLE_METHOD, FEDERATION_PEER_ROLE_CHANGED_METHOD } from "@pwragent/federation/federation-backend-methods";
 import type { FederationPeerRole } from "@pwragent/shared";
-import { applicationHost as app, getOwnerHostServices } from "../owner-host";
+import { applicationHost as app } from "../owner-host";
 import { installOwnerEgressPolicy } from "./owner-egress-policy";
+import { localMemberRole } from "../member-containment";
 import { invalidatePeerActiveDependencies, readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
 import { pushResumableBlob, type ResumableBlobTransport } from "@pwragent/federation/federation-blob-sender";
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
@@ -644,6 +645,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "pwrsnap_connection",
   "gateway_relay",
   "peer_roles_v1",
+  "member_role_declaration_v1",
   "contained_messaging_upload_v1",
   // Federation is a same-operator trust domain and turn_control already
   // permits code execution via agent turns, so the direct shell defaults to
@@ -2204,6 +2206,46 @@ export class DesktopFederationRuntime {
 
   peerRole(peerId: string): FederationPeerRole {
     return this.store().getPeer(peerId)?.permissionRole ?? "full";
+  }
+
+  /**
+   * A member's own containment, declared over its direct connection. A
+   * contained member's operator chose that limit, so this instance enforces it
+   * from then on, whatever role the invite assigned. The ratchet only
+   * tightens: a member that later declares `full`, or a model on it that took
+   * its keys and connects to declare it, changes nothing. Only this
+   * instance's operator relaxes a role, with setPeerRole.
+   */
+  async receiveMemberRoleDeclaration(
+    sourceInstanceId: string,
+    sourcePeerId: string | undefined,
+    params: unknown,
+  ): Promise<{ role: FederationPeerRole }> {
+    const declared = (params as { role?: unknown } | undefined)?.role;
+    const peer = this.store().getPeer(sourceInstanceId);
+    // A relayed declaration speaks for a peer this instance did not enroll.
+    if (peer && sourcePeerId === sourceInstanceId && declared === "contained" && peer.permissionRole !== "contained") {
+      await this.setPeerRole(sourceInstanceId, "contained");
+      this.store().appendAudit({ peerId: sourceInstanceId, kind: "role_declared", createdAt: Date.now(),
+        detail: "member declared contained; assigned role is now contained" });
+    }
+    return { role: this.peerRole(sourceInstanceId) };
+  }
+
+  /**
+   * Tells a directly connected peer this member's own containment, on every
+   * connection, so a peer enforces it even when the invite assigned `full`.
+   * The reply is the role that peer assigns.
+   */
+  private declareMemberRole(peerId: string, capabilities: readonly string[]): void {
+    if (!capabilities.includes("member_role_declaration_v1")) return;
+    const role = localMemberRole();
+    void this.rpcFor({ scope: "remote", instanceId: peerId })
+      .request<{ role?: FederationPeerRole }>({ method: FEDERATION_MEMBER_ROLE_DECLARE_METHOD, params: { role }, timeoutMs: 10_000 })
+      .then((reply) => {
+        if (reply?.role !== role) log.info("federation peer assigns a different role", { peerId, declared: role, assigned: reply?.role ?? null });
+      })
+      .catch((error: unknown) => log.warn("federation member role declaration failed", { peerId, error: error instanceof Error ? error.message : String(error) }));
   }
 
   async setPeerRole(peerId: string, role: FederationPeerRole): Promise<FederationPeerSummary> {
@@ -4037,6 +4079,7 @@ export class DesktopFederationRuntime {
           : undefined),
       methodCapabilities: {
         [FEDERATION_PEER_ROLE_METHOD]: "peer_roles_v1",
+        [FEDERATION_MEMBER_ROLE_DECLARE_METHOD]: "member_role_declaration_v1",
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         [FEDERATION_MESSAGING_DESTINATION_METHOD]: "messaging_route",
         "messaging.destination.v2": "messaging_files",
@@ -4066,6 +4109,8 @@ export class DesktopFederationRuntime {
               : additionalFederationBackendCapabilities(envelope),
     });
     router.registerHandler(FEDERATION_PEER_ROLE_METHOD, (envelope) => ({ role: this.peerRole(envelope.sourceInstanceId) }));
+    router.registerHandler(FEDERATION_MEMBER_ROLE_DECLARE_METHOD, (envelope, sourcePeerId) =>
+      this.receiveMemberRoleDeclaration(envelope.sourceInstanceId, sourcePeerId, envelope.params));
     router.registerBlobChunkHandler(async (envelope) => {
       if (envelope.purpose === "file_push") {
         if (!this.filePushReceiver) throw new Error("File receiver is unavailable.");
@@ -4770,6 +4815,7 @@ export class DesktopFederationRuntime {
     // restored local subscription state before any queued envelope is handled.
     client.startReceiving();
     log.info("federation client connected", { gatewayUrl });
+    this.declareMemberRole(gatewayInstanceId, client.capabilities);
     if (cloudflareSignIn) {
       this.scheduleAccessRefresh(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
       this.scheduleSignInExpiry(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
@@ -5026,8 +5072,9 @@ export class DesktopFederationRuntime {
   }
 
   private installEgressPolicy(connection: FederationGatewayConnection | FederationClientWebSocketClient): void {
-    const role = getOwnerHostServices().runtimePolicy?.federationEgressRole;
-    if (!role) return;
+    // A contained member refuses its own outbound requests, on any host.
+    const role = localMemberRole();
+    if (role !== "contained") return;
     installOwnerEgressPolicy(connection, role, this.ensureLocalInstanceId(),
       event => appendFederationRefusalAudit(path.join(resolveActiveProfileDir(), "state"), event));
   }
@@ -5064,6 +5111,7 @@ export class DesktopFederationRuntime {
       this.shortNames.reconcile();
       this.shortNames.announce(connection.peerId);
     }
+    this.declareMemberRole(connection.peerId, connection.capabilities);
   }
 
   private unregisterGatewayConnection(connection: FederationGatewayConnection): void {
@@ -5559,7 +5607,7 @@ export class DesktopFederationRuntime {
   }
 
   private canOriginateNotification(method: string): boolean {
-    return getOwnerHostServices().runtimePolicy?.federationEgressRole !== "contained" || containedFederationNotificationAllowed(method);
+    return localMemberRole() !== "contained" || containedFederationNotificationAllowed(method);
   }
 
   private broadcastPeerDirectory(): void {

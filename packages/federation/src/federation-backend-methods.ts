@@ -478,11 +478,18 @@ export const FEDERATION_BACKEND_CONTAINED_DECISIONS = {
 
 export const FEDERATION_PEER_ROLE_METHOD = "federation.peerRole.v1";
 export const FEDERATION_PEER_ROLE_CHANGED_METHOD = "federation.peerRole.changed.v1";
+/**
+ * A member tells a peer the containment its own operator set, as `{ role }`.
+ * The peer records a `contained` declaration as the role it assigns, and
+ * never relaxes a role because a member asked: only the peer's operator can.
+ * The reply is the role the peer now assigns.
+ */
+export const FEDERATION_MEMBER_ROLE_DECLARE_METHOD = "federation.memberRole.declare.v1";
 
 // Replies and subscription events are envelopes, not new owner requests.
 export function containedFederationMethodAllowed(method: string): boolean {
   return method === "messaging.destination" || method === "messaging.destination.v2"
-    || method === FEDERATION_PEER_ROLE_METHOD;
+    || method === FEDERATION_PEER_ROLE_METHOD || method === FEDERATION_MEMBER_ROLE_DECLARE_METHOD;
 }
 
 export const CONTAINED_OUTPOST_MESSAGING_OPERATIONS = [

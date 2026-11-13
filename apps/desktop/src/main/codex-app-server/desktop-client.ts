@@ -13,6 +13,7 @@ import { collectDescendants, countOpenFileDescriptors, readProcessTable } from "
 import { StdioJsonRpcTransport, type StdioJsonRpcTransportOptions } from "./stdio-transport";
 import { createOutpostCodexMessageRewriter } from "../headless/outpost-codex-sandbox";
 import { createOutpostAgentToolMessageRewriter } from "../headless/outpost-agent-tools";
+import { localAgentToolAllowlist } from "../member-containment";
 import { isCodexInvalidResponseMessageIdError, repairCodexInvalidResponseMessageIds } from "./invalid-response-message-id-recovery";
 
 export * from "@pwragent/owner-core/codex-app-server/client";
@@ -33,18 +34,21 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
           args: options.args ?? [],
           ...callbacks,
         });
-        // Every outbound request is the one place no Outpost path can skip:
-        // a legacy sandbox would let model commands read the Outpost's state,
-        // and an unlisted agent tool runs in the owner, outside that sandbox.
-        if (runtimePolicy) {
-          const sandbox = createOutpostCodexMessageRewriter(runtimePolicy.codexProtectedRoots, {
+        // Every outbound request is the one place no path can skip: on an
+        // Outpost a legacy sandbox would let model commands read its state,
+        // and on a contained member of either kind an unlisted agent tool
+        // runs in the owner, outside the sandbox. Containment is read per
+        // message, so a desktop that changes it needs no new client.
+        const sandbox = runtimePolicy
+          ? createOutpostCodexMessageRewriter(runtimePolicy.codexProtectedRoots, {
             readOnlyRoots: runtimePolicy.codexReadOnlyRoots,
             allowFullAccess: runtimePolicy.executionModes.includes("full-access"),
-          });
-          const agentTools = createOutpostAgentToolMessageRewriter(runtimePolicy.agentToolAllowlist);
-          const send = transport.send.bind(transport);
-          transport.send = (message) => send(agentTools(sandbox(message)));
-        }
+          })
+          : (message: string) => message;
+        const agentTools = createOutpostAgentToolMessageRewriter(localAgentToolAllowlist);
+        // The class's own send, looked up per message, so the rewrite stays
+        // the only layer this adds.
+        transport.send = (message) => StdioJsonRpcTransport.prototype.send.call(transport, agentTools(sandbox(message)));
         return transport;
       },
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },

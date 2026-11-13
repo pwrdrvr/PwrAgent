@@ -179,7 +179,9 @@ async function builtHost(): Promise<Host> {
 
 it("admits a new thread and two independently identified turns while both threads are active", async () => {
   const host = await builtHost();
-  expect(await host.policyProbe()).toEqual(["refused", "refused", "refused", "refused"]);
+  // Claude, an unallowed mode and a sandbox above the mode's are refused. An
+  // approval policy is not: the default Outpost asks for approval as a desktop does.
+  expect(await host.policyProbe()).toEqual(["refused", "refused", "admitted", "refused"]);
   const a = await host.startThread();
   const b = await host.startThread();
   const turnA = await host.startTurn(a, "concurrent-a");
@@ -190,7 +192,7 @@ it("admits a new thread and two independently identified turns while both thread
     .toMatchObject({ queueA: "started", queueB: "started", states: ["active", "active"], newThread: { thread: { backend: "codex", threadId: expect.any(String) } } });
   const providerRequests = await host.requests();
   for (const request of providerRequests.filter(value => value.method === "turn/start")) {
-    expect(request.params).toMatchObject({ approvalPolicy: "never", permissions: "pwragent-outpost-workspace-write" });
+    expect(request.params).toMatchObject({ approvalPolicy: "on-request", permissions: "pwragent-outpost-workspace-write" });
     expect(request.params).not.toHaveProperty("sandboxPolicy");
   }
   expect(providerRequests.filter(value => value.method === "turn/start")).toHaveLength(2);

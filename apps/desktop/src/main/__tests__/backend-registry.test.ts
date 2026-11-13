@@ -280,6 +280,20 @@ vi.mock("../shell/notifications/desktop-notification-service", () => ({
 
 const requestShowThreadMock = vi.hoisted(() => vi.fn());
 
+// `[federation] member_role` as a desktop's config.toml would set it. Unset,
+// the config store is the real singleton, which tests never create.
+const configuredMemberRole = vi.hoisted(() => ({ role: undefined as "full" | "contained" | undefined }));
+
+vi.mock("../settings/config-store/desktop-config-store-singleton", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../settings/config-store/desktop-config-store-singleton")>();
+  return {
+    ...actual,
+    getExistingDesktopConfigStore: () => configuredMemberRole.role
+      ? { read: (section: string) => section === "federation" ? { memberRole: configuredMemberRole.role } : {} } as never
+      : actual.getExistingDesktopConfigStore(),
+  };
+});
+
 vi.mock("../shell/window-show-thread", () => ({
   requestShowThread: requestShowThreadMock,
 }));
@@ -8153,6 +8167,97 @@ describe("DesktopBackendRegistry", () => {
     } finally {
       await registry.close();
     }
+  });
+
+  // A desktop and an Outpost are the same kind of federation member. The
+  // host only supplies the operator's settings: an Outpost from its
+  // environment, a desktop from config.toml (which has no approvals switch,
+  // so it always asks). Whether the host is headless must decide nothing.
+  function installMember(host: "desktop" | "outpost", settings: { approvals: "ask" | "never"; role: "full" | "contained" }): void {
+    const previous = getOwnerHostServices();
+    onTestFinished(() => {
+      installOwnerHostServices(previous);
+      configuredMemberRole.role = undefined;
+    });
+    if (host === "outpost") {
+      installOwnerHostServices({ ...previous, runtimePolicy: createOutpostRuntimePolicy({
+        PWRAGENT_OUTPOST_APPROVALS: settings.approvals,
+        PWRAGENT_OUTPOST_FEDERATION_ROLE: settings.role,
+      }) });
+      configuredMemberRole.role = undefined;
+    } else {
+      installOwnerHostServices({ ...previous, runtimePolicy: undefined });
+      configuredMemberRole.role = settings.role;
+    }
+  }
+
+  it("asks for approval by execution mode, approvals setting and role on every host, never by whether it is headless", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("desktop" as const, "outpost" as const), fc.constantFrom("ask" as const, "never" as const),
+      fc.constantFrom("full" as const, "contained" as const), fc.constantFrom("default" as const, "auto" as const),
+      async (host, generatedApprovals, role, mode) => {
+        const approvals = host === "desktop" ? "ask" : generatedApprovals;
+        installMember(host, { approvals, role });
+        // Oracle, from the product rule: Default and Auto ask on request; a
+        // person reviews, except in Auto on a full member, where Codex's Auto
+        // reviewer does; an operator who turned approvals off is never asked.
+        const expected = approvals === "never"
+          ? { approvalPolicy: "never", approvalsReviewer: "user" }
+          : { approvalPolicy: "on-request", approvalsReviewer: mode === "auto" && role === "full" ? "auto_review" : "user" };
+        const codexClient = new MockBackendClient({ threads: [] });
+        const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+        try {
+          const { threadId } = await registry.startThread({ backend: "codex", cwd: process.cwd(), executionMode: mode });
+          expect(codexClient.lastStartThreadParams).toMatchObject(expected);
+          await registry.startTurn({ backend: "codex", threadId, executionMode: mode, input: [{ type: "text", text: "Invented request." }] });
+          expect(codexClient.lastStartTurnParams).toMatchObject(expected);
+        } finally {
+          await registry.close();
+        }
+      },
+    ), { numRuns: 40 });
+  });
+
+  it("lists and runs agent tools by the member's role alone, on every host", async () => {
+    const allowed = ["read_tool_guide"];
+    const refused = ["get_thread_status", "send_message_to_thread", "list_federation_instances"];
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("desktop" as const, "outpost" as const), fc.constantFrom("full" as const, "contained" as const),
+      fc.constantFrom(...allowed, ...refused),
+      async (host, role, tool) => {
+        installMember(host, { approvals: "ask", role });
+        const reachable = role === "full" || allowed.includes(tool);
+        const codexClient = new MockBackendClient({ threads: [] });
+        const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+        const mcp = new McpClient({ name: "member-role-fixture", version: "1.0.0" });
+        try {
+          const { threadId } = await registry.startThread({ backend: "codex", cwd: process.cwd() });
+          // A dynamic tool call from the model, advertised or made up.
+          const call = await codexClient.emitRequest({
+            method: "item/tool/call",
+            params: { threadId, turnId: "role-turn", callId: "role-call", requestId: "role-call", namespace: "pwragent", tool, arguments: {} },
+          } as AppServerPendingRequestNotification);
+          expect(JSON.stringify(call).includes("does not allow this PwrAgent tool")).toBe(!reachable);
+          // The same tools over the MCP server other providers use.
+          // MCP calls need a live turn on the registered thread.
+          const { turnId } = await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Invented request." }] });
+          await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId, turnId, turn: { id: turnId } } } });
+          const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+          const registration = await server.registerClient({ backend: "codex", threadId });
+          await mcp.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
+            requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
+          }));
+          const listed = (await mcp.listTools()).tools.map(({ name }) => name);
+          expect(listed.includes(tool)).toBe(reachable);
+          for (const name of refused) expect(listed.includes(name)).toBe(role === "full");
+          const result = await mcp.callTool({ name: tool, arguments: {} });
+          expect(JSON.stringify(result).includes("does not allow this PwrAgent tool"), JSON.stringify(result)).toBe(!reachable);
+        } finally {
+          await mcp.close();
+          await registry.close();
+        }
+      },
+    ), { numRuns: 30 });
   });
 
   // On an Outpost the operator's execution mode chooses the sandbox. Agent

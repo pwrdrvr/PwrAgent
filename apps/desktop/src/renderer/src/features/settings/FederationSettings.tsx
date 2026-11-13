@@ -1885,6 +1885,7 @@ function parseFederationListenPort(value: string): number {
 
 const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   peer_roles_v1: "receiver-enforced peer access",
+  member_role_declaration_v1: "declare its own containment",
   contained_messaging_upload_v1: "send scoped messaging attachments",
   remote_window: "open a remote workspace",
   thread_navigation: "browse and create threads",

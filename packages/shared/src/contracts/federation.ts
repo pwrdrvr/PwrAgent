@@ -33,6 +33,8 @@ export const FEDERATION_CAPABILITIES = [
   "pwrsnap_connection",
   "gateway_relay",
   "peer_roles_v1",
+  /** A member declares its own containment; a contained declaration is sticky at the receiver. */
+  "member_role_declaration_v1",
   "contained_messaging_upload_v1",
   "remote_pty",
   "service_forward_v1",
@@ -724,7 +726,8 @@ export type FederationDiagnosticEventKind =
   | "relay"
   | "error"
   | "remote_pty_open"
-  | "remote_pty_close";
+  | "remote_pty_close"
+  | "role_declared";
 
 export type FederationDiagnosticEvent = {
   eventId: number;

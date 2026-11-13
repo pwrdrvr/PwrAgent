@@ -41,6 +41,8 @@ services:
     environment:
       PWRAGENT_OUTPOST_EXECUTION_MODES: default,auto
       PWRAGENT_OUTPOST_AGENT_NETWORK: "off"
+      PWRAGENT_OUTPOST_FEDERATION_ROLE: contained
+      PWRAGENT_OUTPOST_APPROVALS: ask
       OUTPOST_ENDPOINT_PORT: ${OUTPOST_ENDPOINT_PORT:-${GATEWAY_PORT:?set GATEWAY_PORT in .env}}
     # pwragent serve needs the Codex home to exist; a new volume has none. The
     # Outpost dials the gateway endpoint it saved at enrollment: relay that

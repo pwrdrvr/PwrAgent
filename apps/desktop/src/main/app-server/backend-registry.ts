@@ -3,6 +3,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy, executionModeUnavailableMessage, ownerSandboxForMode } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
+import { approvalSettingsForMode, localAgentToolAllowlist, localMemberRole } from "../member-containment";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
@@ -1316,12 +1317,18 @@ function withListedArchiveState(thread: AppServerThreadSummary, archived: boolea
   return { ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined };
 }
 
+// Approvals follow the mode, the operator's approvals setting and this
+// member's containment on every host (member-containment.ts). An Outpost's
+// operator also chooses its modes, and its mode chooses the sandbox.
 function executionModeSettings(mode: ThreadExecutionMode) {
   const original = EXECUTION_MODE_SUMMARIES[mode];
   const policy = getOwnerHostServices().runtimePolicy;
-  if (!policy) return original;
-  if (!policy.executionModes.includes(mode)) throw new Error(executionModeUnavailableMessage(mode));
-  return { ...original, approvalPolicy: policy.approvalPolicy, approvalsReviewer: "user" as const, sandbox: policy.sandboxByMode[mode] ?? original.sandbox };
+  if (policy && !policy.executionModes.includes(mode)) throw new Error(executionModeUnavailableMessage(mode));
+  return {
+    ...original,
+    ...approvalSettingsForMode(original, { approvals: policy?.approvals, role: localMemberRole() }),
+    sandbox: policy?.sandboxByMode[mode] ?? original.sandbox,
+  };
 }
 
 
@@ -3910,7 +3917,11 @@ export class DesktopBackendRegistry {
     });
     const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
     const modeSettings = executionModeSettings(executionMode);
-    const approvalPolicy = getOwnerHostServices().runtimePolicy?.approvalPolicy ?? (executionMode === "auto" ? "on-request" : "never");
+    // An automation turn has nobody watching it, so only Auto asks, and only
+    // while the operator lets anything ask.
+    const approvalPolicy = getOwnerHostServices().runtimePolicy?.approvals === "never" || executionMode !== "auto"
+      ? "never"
+      : "on-request";
     const sandbox = modeSettings.sandbox;
     const modelSettings = await this.admitNewThreadModelSettings(params.backend, {
       model: params.model ?? overlay?.model,
@@ -14484,7 +14495,7 @@ export class DesktopBackendRegistry {
     // no per-call host gate, so a host that restricts agent tools offers it
     // only when the grant covers every one of them. An empty list proves
     // nothing about what the server resolves per call, so it fails closed.
-    const agentToolAllowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    const agentToolAllowlist = localAgentToolAllowlist();
     if (agentToolAllowlist) {
       const pdfTools = buildPwrAgentMessagingPdfToolRouter(this.messagingHandler).buildDynamicToolSpecs();
       const pdfToolCount = countAgentTools(pdfTools);
@@ -23151,7 +23162,7 @@ export class DesktopBackendRegistry {
       }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
-    const allowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    const allowlist = localAgentToolAllowlist();
     return allowlist ? filterAdvertisedAgentTools(allowlist, tools) : tools;
   }
 
@@ -34879,7 +34890,7 @@ export class DesktopBackendRegistry {
     // A host that restricts agent tools refuses every other tool here, before
     // any route, so a call the model makes up without an advertisement fails
     // the same way as one for a tool that was never wired.
-    const agentToolAllowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    const agentToolAllowlist = localAgentToolAllowlist();
     if (
       agentToolAllowlist
       && request.method === "item/tool/call"
@@ -34897,7 +34908,7 @@ export class DesktopBackendRegistry {
       return toDynamicToolResponse({
         ok: false,
         code: "forbidden",
-        message: "This Outpost does not allow this PwrAgent tool.",
+        message: "This contained member does not allow this PwrAgent tool.",
       });
     }
     if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
@@ -36037,12 +36048,12 @@ export class DesktopBackendRegistry {
     turnId: string;
     arguments?: unknown;
   }): Promise<string | null> {
-    const agentToolAllowlist = getOwnerHostServices().runtimePolicy?.agentToolAllowlist;
+    const agentToolAllowlist = localAgentToolAllowlist();
     if (agentToolAllowlist && !isAgentToolCallAllowed(agentToolAllowlist, {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       tool: params.tool,
     })) {
-      return "this Outpost does not allow this PwrAgent tool";
+      return "this contained member does not allow this PwrAgent tool";
     }
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {

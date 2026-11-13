@@ -56,7 +56,7 @@ export function buildCodexClientArgs(
       return ["-c", override];
     }),
     "-c",
-    `approval_policy=${JSON.stringify(policy?.approvalPolicy ?? "on-request")}`,
+    `approval_policy=${JSON.stringify(policy?.approvals === "never" ? "never" : "on-request")}`,
     // An Outpost selects named permission profiles that deny its own state.
     // Codex prefers a legacy `sandbox_mode`, so an Outpost never sets one.
     ...(policy
