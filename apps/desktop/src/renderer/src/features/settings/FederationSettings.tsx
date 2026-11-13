@@ -15,6 +15,8 @@ import type {
   FederationEndpointStatus,
   FederationHealthStatus,
   FederationInstanceRole,
+  FederationMemberContainment,
+  FederationPeerRole,
   FederationPinDisposition,
   FederationPinImpactScope,
   FederationTailscaleMode,
@@ -25,6 +27,7 @@ import type {
 import {
   CELESTIAL_ICON_IDS,
   DESKTOP_FEDERATION_MODES,
+  federationAssignedRoleMismatch,
   formatFederationPeerDisplayLabel,
   isCelestialIconId,
   isFederationGatewayEndpointUrl,
@@ -1172,6 +1175,13 @@ export function FederationSettings(props: FederationSettingsProps) {
             sub="Role advertised by the federation health surface."
             control={<span>{roleLabel(effectiveHealth.role)}</span>}
           />
+          {effectiveHealth.memberContainment ? (
+            <SettingsField
+              label="Containment"
+              sub="A contained instance cannot operate other instances, and its models get only the contained agent tools."
+              control={<span>{containmentLabel(effectiveHealth.memberContainment)}</span>}
+            />
+          ) : null}
           <SettingsField
             label="Local listener"
             sub="Loopback or local bind target used by gateway modes."
@@ -1226,6 +1236,14 @@ export function FederationSettings(props: FederationSettingsProps) {
               {connectionRemediation}
             </p>
           ) : null}
+          {effectiveHealth.memberContainment?.gatewayAssignedRole === "contained"
+          && effectiveHealth.memberContainment.configuredRole === "full" ? (
+            <p className="federation-security-note">
+              The gateway assigns this instance Contained, so it is contained
+              although its own setting is Full. The gateway's operator can
+              change it under Peer access for this instance.
+            </p>
+          ) : null}
         </div>
       </SettingsSection>
 
@@ -1278,6 +1296,14 @@ export function FederationSettings(props: FederationSettingsProps) {
                             .finally(() => setSettingRoleFor(undefined));
                         }} />} />
                   ) : <span>Peer access: {peer.permissionRole === "contained" ? "Contained" : "Full"}</span>}
+                  {peer.assignsLocalRole ? (
+                    <span>
+                      {assignedRoleLabel(
+                        peer.assignsLocalRole,
+                        effectiveHealth.memberContainment?.effectiveRole,
+                      )}
+                    </span>
+                  ) : null}
                   {peer.lastConnectedAt ? (
                     <span>
                       Connected {formatTimestamp(peer.lastConnectedAt)}
@@ -2089,6 +2115,22 @@ function celestialIconLabel(icon: CelestialIconId): string {
     case "black-hole":
       return "Black hole";
   }
+}
+
+function containmentLabel(containment: FederationMemberContainment): string {
+  if (containment.effectiveRole === "full") return "Full";
+  return containment.configuredRole === "contained" ? "Contained" : "Contained by gateway";
+}
+
+/** How a peer treats this instance, and what that means when it differs. */
+function assignedRoleLabel(
+  assigned: FederationPeerRole,
+  effective: FederationPeerRole | undefined,
+): string {
+  const label = `Access for this instance: ${assigned === "contained" ? "Contained" : "Full"}`;
+  return effective && federationAssignedRoleMismatch(effective, assigned) === "refused"
+    ? `${label} · refuses requests from this instance`
+    : label;
 }
 
 function roleLabel(role: FederationInstanceRole): string {

@@ -13,6 +13,9 @@ const fields = {
   gatewayLastEndpoint: "federation_gateway_last_endpoint",
   pendingInviteToken: "federation_pending_invite_token",
   gatewayEnrolledAt: "federation_gateway_enrolled_at",
+  // The role the upstream gateway assigns this member, as JSON
+  // `{ gatewayInstanceId, role }`; empty when it has not said.
+  gatewayAssignedRole: "federation_gateway_assigned_role",
   celestialIconAssignments: "federation_celestial_icon_assignments",
   shortNames: "federation_instance_short_names",
   profileName: "profile_name",

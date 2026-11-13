@@ -43,6 +43,7 @@ import {
   buildFederatedThreadRef,
   buildThreadMarkdownLink,
   buildThreadUrl,
+  federationAssignedRoleMismatch,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
@@ -281,6 +282,7 @@ async function listFederationInstances(
     host: peer.host,
     receiverPermissions: peer.receiverPermissions,
     unavailableReason: peer.unavailableReason,
+    ...peerAssignedRole(peer.assignsLocalRole, health.memberContainment?.effectiveRole),
   }));
   const instances = [local, ...peers].filter((instance) =>
     matchesInstanceQuery(instance, args.query),
@@ -962,6 +964,15 @@ async function searchFederationThreads(
   return ok(result);
 }
 
+function peerAssignedRole(
+  assignsLocalRole: FederationInstanceDescriptor["assignsLocalRole"],
+  effectiveRole: FederationInstanceDescriptor["assignsLocalRole"],
+): Pick<FederationInstanceDescriptor, "assignsLocalRole" | "assignedRoleMismatch"> {
+  if (!assignsLocalRole) return {};
+  const mismatch = effectiveRole ? federationAssignedRoleMismatch(effectiveRole, assignsLocalRole) : undefined;
+  return { assignsLocalRole, ...(mismatch ? { assignedRoleMismatch: mismatch } : {}) };
+}
+
 async function localInstanceDescriptor(
   health: FederationHealthStatus,
   collectHostInfo: () => Promise<FederationHostInfo>,
@@ -987,6 +998,7 @@ async function localInstanceDescriptor(
     notes: federation.instanceNotes?.trim() || undefined,
     icon: health.localCelestialIcon,
     ...(host ? { host } : {}),
+    ...(health.memberContainment ? { containment: health.memberContainment } : {}),
   };
 }
 

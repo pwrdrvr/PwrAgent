@@ -477,6 +477,12 @@ export const FEDERATION_BACKEND_CONTAINED_DECISIONS = {
 } satisfies Record<(typeof FEDERATION_BACKEND_METHODS)[keyof typeof FEDERATION_BACKEND_METHODS], "deny" | "allow">;
 
 export const FEDERATION_PEER_ROLE_METHOD = "federation.peerRole.v1";
+/**
+ * A peer tells a directly connected member the role it now assigns that
+ * member, as `{ role }`, whenever its operator changes it (setPeerRole).
+ * Peers with `peer_roles_v1` send it; a member that does not handle it
+ * ignores it.
+ */
 export const FEDERATION_PEER_ROLE_CHANGED_METHOD = "federation.peerRole.changed.v1";
 /**
  * A member tells a peer the containment its own operator set, as `{ role }`.
@@ -500,5 +506,9 @@ export const CONTAINED_OUTPOST_MESSAGING_OPERATIONS = [
 
 export function containedFederationNotificationAllowed(method: string): boolean {
   return ["backend.event", "backend.eventStream", "backend.environmentSetupProgress",
-    "pty.output", "pty.state", "pty.exit", "pty.error", "federation/shutdown"].includes(method);
+    "pty.output", "pty.state", "pty.exit", "pty.error", "federation/shutdown",
+    // It reports only how the sender treats the receiver, so a contained
+    // instance's operator can still change a peer's role, and a contained
+    // gateway can still tell its member.
+    FEDERATION_PEER_ROLE_CHANGED_METHOD].includes(method);
 }

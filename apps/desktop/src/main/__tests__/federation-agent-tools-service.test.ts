@@ -237,6 +237,28 @@ describe("federation agent tools service", () => {
     });
   });
 
+  it("tells agents this instance's containment and which peers refuse it", async () => {
+    const peer = (id: string, assignsLocalRole?: "full" | "contained") => ({ id, label: id, role: "client" as const,
+      status: "connected" as const, capabilities: [], ...(assignsLocalRole ? { assignsLocalRole } : {}) });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({
+          memberContainment: { configuredRole: "full", effectiveRole: "full" },
+          peers: [peer("pwr_refuses", "contained"), peer("pwr_agrees", "full"), peer("pwr_silent")],
+        }),
+      }),
+    });
+    const response = await handler({ operation: "list_federation_instances", context, args: {} });
+    const [local, refuses, agrees, silent] = (response as { ok: true; data: ListFederationInstancesResult }).data.instances;
+    expect(local?.containment).toEqual({ configuredRole: "full", effectiveRole: "full" });
+    expect(refuses).toMatchObject({ assignsLocalRole: "contained", assignedRoleMismatch: "refused" });
+    expect(agrees).toMatchObject({ assignsLocalRole: "full" });
+    expect(agrees).not.toHaveProperty("assignedRoleMismatch");
+    expect(silent).not.toHaveProperty("assignsLocalRole");
+    expect(silent).not.toHaveProperty("assignedRoleMismatch");
+  });
+
   it("pages the instance list with single-use continuation tokens", async () => {
     const peers = Array.from({ length: 30 }, (_, index) => ({
       id: `pwr_peer_${index}`,

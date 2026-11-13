@@ -1,5 +1,5 @@
 import type { AdvertiseServiceArgs, ThreadService } from "./federation-services";
-import type { FederationReceiverPermissions } from "./federation";
+import type { FederationAssignedRoleMismatch, FederationMemberContainment, FederationPeerRole, FederationReceiverPermissions } from "./federation";
 import type {
   FederatedSearchInstanceSummary,
   FederatedSearchPeerFailure,
@@ -95,6 +95,20 @@ export type FederationInstanceDescriptor = {
    */
   load?: FederationLoadStatus;
   unavailableReason?: string;
+  /**
+   * Local instance only: whether this instance is contained and why. When
+   * `effectiveRole` is contained, its models get only the contained agent
+   * tools and every peer refuses its requests to operate other instances.
+   */
+  containment?: FederationMemberContainment;
+  /** Peers only: the role this peer assigns the local instance, as it last said. */
+  assignsLocalRole?: FederationPeerRole;
+  /**
+   * Peers only, when `assignsLocalRole` differs from the local instance's
+   * effective role. `refused`: the peer refuses the local instance's
+   * requests to operate other instances.
+   */
+  assignedRoleMismatch?: FederationAssignedRoleMismatch;
 };
 
 export type ListFederationInstancesToolArgs = {
