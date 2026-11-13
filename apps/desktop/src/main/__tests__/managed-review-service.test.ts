@@ -141,6 +141,7 @@ function createReviewHarness(options: {
           await options.storeGate?.("getThreadSubAgent");
           return cards.get(monitorId);
         },
+        listThreadSubAgents: async () => [...cards.values()],
         upsertThreadSubAgent: async ({ subAgent }: { subAgent: ThreadSubAgentSummary }) => {
           await step("upsertThreadSubAgent");
           await options.storeGate?.("upsertThreadSubAgent");
@@ -167,7 +168,13 @@ const reviewTerminal: ReviewTerminal = {
   method: "turn/completed",
 };
 
-const TERMINAL_CARD_STATUSES = new Set<ThreadSubAgentSummary["status"]>(["success", "failed", "cancelled"]);
+const TERMINAL_CARD_STATUSES = new Set<ThreadSubAgentSummary["status"]>(["success", "failed", "failure", "cancelled"]);
+
+const TERMINAL_CARD_STATUS_BY_METHOD = {
+  "turn/completed": "success",
+  "turn/failed": "failed",
+  "turn/cancelled": "cancelled",
+} as const;
 
 const REVIEW_USAGE: TaskMonitorUsageSnapshot = { summary: "1 token", tokenUsage: { totalTokens: 1 } };
 
@@ -343,34 +350,50 @@ describe("ManagedReviewService", () => {
   });
 
   it("never moves a review card off its terminal status once the terminal is applied", async () => {
-    await fc.assert(fc.asyncProperty(fc.scheduler(), fc.boolean(), async (s, withUsage) => {
-      // Every card read and write takes effect in an order the scheduler picks.
-      const harness = createReviewHarness({ storeGate: (name) => s.schedule(Promise.resolve(), name) });
-      const reviewKey = buildReviewSubAgentKey("codex", THREAD, REVIEW_TURN);
-      // The transport hands over each notification without awaiting the last.
-      const deliveries = [
-        s.schedule(Promise.resolve(), "review terminal")
-          .then(async () => await harness.service.completeReviewSubAgent(reviewTerminal)),
-      ];
-      if (withUsage) {
-        deliveries.push(s.schedule(Promise.resolve(), "review usage").then(async () => {
-          // What the registry does with a live review's token usage, from a
-          // caller that may still hold the record after the terminal ends it.
-          const record = harness.service.activeReviewSubAgentRecords.get(reviewKey);
-          if (!record) return;
-          await s.schedule(Promise.resolve(), "review usage write");
-          await harness.service.persistReviewSubAgent(record, { monitorUsage: REVIEW_USAGE });
-        }));
-      }
-      await s.waitFor(Promise.all([harness.service.startReview(REVIEW_REQUEST), ...deliveries]));
+    await fc.assert(fc.asyncProperty(
+      fc.scheduler(),
+      fc.constantFrom(...Object.keys(TERMINAL_CARD_STATUS_BY_METHOD) as Array<keyof typeof TERMINAL_CARD_STATUS_BY_METHOD>),
+      fc.boolean(),
+      async (s, method, withUsage) => {
+        // Every card read and write takes effect in an order the scheduler picks.
+        const harness = createReviewHarness({ storeGate: (name) => s.schedule(Promise.resolve(), name) });
+        const reviewKey = buildReviewSubAgentKey("codex", THREAD, REVIEW_TURN);
+        // The transport hands over each notification without awaiting the last.
+        const deliveries = [
+          s.schedule(Promise.resolve(), "review terminal")
+            .then(async () => await harness.service.completeReviewSubAgent({ ...reviewTerminal, method })),
+        ];
+        if (withUsage) {
+          deliveries.push(s.schedule(Promise.resolve(), "review usage").then(async () => {
+            // What the registry does with the review's token usage: the live
+            // review's record, else the finished review's card.
+            const record = harness.service.activeReviewSubAgentRecords.get(reviewKey);
+            if (!record) {
+              await harness.service.persistFinishedReviewUsage({
+                backend: "codex",
+                parentThreadId: THREAD,
+                reviewBackend: "codex",
+                reviewThreadId: THREAD,
+                turnId: REVIEW_TURN,
+                usage: REVIEW_USAGE,
+              });
+              return;
+            }
+            // A caller may still hold the record after the terminal ends it.
+            await s.schedule(Promise.resolve(), "review usage write");
+            await harness.service.persistReviewSubAgent(record, { monitorUsage: REVIEW_USAGE });
+          }));
+        }
+        await s.waitFor(Promise.all([harness.service.startReview(REVIEW_REQUEST), ...deliveries]));
 
-      const statuses = harness.cardWrites.map((card) => card.status);
-      const firstTerminal = statuses.findIndex((status) => TERMINAL_CARD_STATUSES.has(status));
-      expect(firstTerminal).toBeGreaterThanOrEqual(0);
-      expect(statuses.slice(firstTerminal).filter((status) => !TERMINAL_CARD_STATUSES.has(status))).toEqual([]);
-      expect(harness.cards.get(reviewSubAgentId(REVIEW_TURN))?.status).toBe("success");
-      expect(harness.service.findReviewForParentTurn({ backend: "codex", parentThreadId: THREAD })).toBeUndefined();
-    }), { numRuns: 200 });
+        const statuses = harness.cardWrites.map((card) => card.status);
+        const firstTerminal = statuses.findIndex((status) => TERMINAL_CARD_STATUSES.has(status));
+        expect(firstTerminal).toBeGreaterThanOrEqual(0);
+        expect(statuses.slice(firstTerminal).filter((status) => !TERMINAL_CARD_STATUSES.has(status))).toEqual([]);
+        expect(harness.cards.get(reviewSubAgentId(REVIEW_TURN))?.status).toBe(TERMINAL_CARD_STATUS_BY_METHOD[method]);
+        expect(harness.service.findReviewForParentTurn({ backend: "codex", parentThreadId: THREAD })).toBeUndefined();
+      },
+    ), { numRuns: 200 });
   });
 });
 

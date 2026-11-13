@@ -41,6 +41,7 @@ import { formatReviewOutputText, parseReviewOutputText } from "../../shared/revi
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import type { CodexPwrdrvrTokenMiserActivation } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
+import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { getReviewAutoFixArming } from "../thread-reviews/review-auto-fix";
 import type { TokenMiserService } from "../token-miser/token-miser-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -289,11 +290,11 @@ export class ManagedReviewService {
   private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
 
   /**
-   * The newest card write of each review, keyed like `activeReviewSubAgents`.
-   * A card write reads the card and then writes it. A write that read before
-   * the terminal's landed and finished after it would put back `running`.
+   * Card writes of each review, keyed like `activeReviewSubAgents`. A card
+   * write reads the card and then writes it. A write that read before the
+   * terminal's landed and finished after it would put back `running`.
    */
-  private readonly reviewCardWrites = new Map<string, Promise<void>>();
+  private readonly reviewCardWrites = new PerKeyAsyncLock();
 
   /**
    * A reviewer override runs the review as a managed child on the chosen
@@ -1398,15 +1399,7 @@ export class ManagedReviewService {
     const reviewKey = buildReviewSubAgentKey(record.backend, record.reviewThreadId, record.turnId);
     // One card write at a time per review, each reading what the last one
     // wrote, so a write without a status keeps a terminal's.
-    const write = (this.reviewCardWrites.get(reviewKey) ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(async () => await this.writeReviewSubAgentCard(record, patch));
-    this.reviewCardWrites.set(reviewKey, write);
-    try {
-      await write;
-    } finally {
-      if (this.reviewCardWrites.get(reviewKey) === write) this.reviewCardWrites.delete(reviewKey);
-    }
+    await this.reviewCardWrites.run(reviewKey, async () => await this.writeReviewSubAgentCard(record, patch));
     this.host().invalidateThreadListCache(record.parentBackend);
     await this.context.emit({
       backend: record.parentBackend,
@@ -1479,6 +1472,68 @@ export class ManagedReviewService {
       threadId: record.parentThreadId,
       subAgent,
     });
+  }
+
+  /**
+   * Adds token usage to the card of a review that is no longer live. Returns
+   * false when the parent has no card for it. It takes its turn among the
+   * review's card writes, so it keeps the terminal's status.
+   */
+  async persistFinishedReviewUsage(params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+    reviewBackend: AppServerBackendKind;
+    reviewThreadId: string;
+    turnId: string;
+    usage: ThreadSubAgentSummary["monitorUsage"];
+  }): Promise<boolean> {
+    const reviewKey = buildReviewSubAgentKey(params.reviewBackend, params.reviewThreadId, params.turnId);
+    const persisted = await this.reviewCardWrites.run(reviewKey, async () => {
+      const store = this.context.stores.subAgents;
+      // The keyed card first; otherwise a review card that names this child
+      // turn. Gate cards are never review cards, so they are not read.
+      const keyed = await store.getThreadSubAgent({
+        backend: params.backend,
+        threadId: params.parentThreadId,
+        monitorId: reviewSubAgentId(params.turnId),
+      });
+      const existing = keyed ?? (await store.listThreadSubAgents({
+        backend: params.backend,
+        threadId: params.parentThreadId,
+        excludeTokenMiser: true,
+      })).find(
+        (subAgent) =>
+          subAgent.monitorThreadId === params.reviewThreadId
+          && subAgent.monitorTurnId === params.turnId,
+      );
+      if (!existing) {
+        return false;
+      }
+      await store.upsertThreadSubAgent({
+        backend: params.backend,
+        threadId: params.parentThreadId,
+        subAgent: {
+          ...existing,
+          monitorUsage: params.usage,
+          updatedAt: Date.now(),
+        },
+      });
+      return true;
+    });
+    if (!persisted) {
+      return false;
+    }
+    this.host().invalidateThreadListCache(params.backend);
+    await this.context.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.parentThreadId,
+        },
+      },
+    });
+    return true;
   }
 
   async completeReviewSubAgent(params: ReviewTerminal): Promise<void> {

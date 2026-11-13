@@ -15,7 +15,7 @@ export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,
 
 export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
   "upsertThreadSubAgents" | "reconcileOrphanedThreadSubAgents" | "moveLegacyThreadSubAgents"
-  | "getThreadSubAgent" | "upsertThreadSubAgent"
+  | "getThreadSubAgent" | "listThreadSubAgents" | "upsertThreadSubAgent"
 >;
 
 export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
