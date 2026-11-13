@@ -7,7 +7,10 @@ import {
   type AppServerThreadSummary,
   type PwrAgentThreadOrchestrationErrorCode,
   type PwrAgentThreadOrchestrationResponse,
+  type ThreadExecutionMode,
 } from "@pwragent/shared";
+import { approvalSettingsForMode, localMemberRole } from "../member-containment";
+import { executionModeUnavailableMessage } from "../owner-runtime-policy";
 import {
   PROVIDER_IDS,
   type ConfigDomainMap,
@@ -16,6 +19,7 @@ import {
 import {
   type ThreadListCallerReason,
 } from "./backend-registry-types";
+import { EXECUTION_MODE_SUMMARIES } from "./thread-model-options";
 
 export const createReplayClientsFromEnv = () => getOwnerHostServices().replayClients();
 
@@ -301,4 +305,15 @@ export function readProviderRuntimeFingerprints(
         ?? "",
     ]),
   ) as Record<ProviderId, string>;
+}
+
+export function executionModeSettings(mode: ThreadExecutionMode) {
+  const original = EXECUTION_MODE_SUMMARIES[mode];
+  const policy = getOwnerHostServices().runtimePolicy;
+  if (policy && !policy.executionModes.includes(mode)) throw new Error(executionModeUnavailableMessage(mode));
+  return {
+    ...original,
+    ...approvalSettingsForMode(original, { approvals: policy?.approvals, role: localMemberRole() }),
+    sandbox: policy?.sandboxByMode[mode] ?? original.sandbox,
+  };
 }

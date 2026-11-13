@@ -5,7 +5,7 @@ import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-r
 
 export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadMetadata" | "updateThreadMetadata"
-  | "setThreadMcpConnectionIds"
+  | "setThreadMcpConnectionIds" | "setThreadModelSettings"
 >;
 
 export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,
@@ -15,6 +15,7 @@ export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,
 
 export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
   "upsertThreadSubAgents" | "reconcileOrphanedThreadSubAgents" | "moveLegacyThreadSubAgents"
+  | "getThreadSubAgent" | "upsertThreadSubAgent"
 >;
 
 export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
@@ -23,6 +24,8 @@ export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
 >;
 
 export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike, "addThreadPullRequestReference">;
+
+export type RegistryReviewStore = Pick<BackendRegistryOverlayStoreLike, "upsertManagedReviewEntry">;
 
 export type RegistryToolAccountingStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadToolAccounting" | "persistThreadToolInvocationBoundary"
@@ -53,6 +56,7 @@ export interface RegistryContext {
     readonly workspaces: RegistryWorkspaceStore;
     readonly toolAccounting: RegistryToolAccountingStore;
     readonly pullRequests: RegistryPullRequestStore;
+    readonly reviews: RegistryReviewStore;
   };
   readonly providers: {
     readonly codex: BackendClient;

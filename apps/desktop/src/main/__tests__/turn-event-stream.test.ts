@@ -67,11 +67,9 @@ type Members = Record<string, unknown>;
  */
 const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | undefined; method?: string }> = [
   ...[
-    "forwardManagedReviewActivity",
     "withThreadMessageContext",
     "rememberFileChangeApprovalContext",
     "withEmbeddedFileChangeApprovalContext",
-    "rememberManagedReviewOutput",
     "recordTaskMonitorActivity",
     "getCachedThreadSummary",
     "repairCodexThreadDirectoryRelationship",
@@ -89,15 +87,9 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "turnLimitObservation",
     "flushPendingTokenMiserLedger",
     "emitThreadPricingUpdated",
-    "findActiveReviewSubAgentForTerminal",
-    "completeReviewSubAgent",
-    "publishManagedReviewTerminal",
     "clearAcceptedToolCallsForEndedTurn",
     "adoptThreadBranchChangeFromActiveTurn",
-    "clearNativeReviewActiveTurns",
     "clearCodexReviewInterruptMappingForTurn",
-    "releaseNativeReviewParent",
-    "drainPendingReviewStartsForTerminalTurn",
     "drainPendingThreadWorkspaceMovesForTerminalTurn",
     "scheduleQueuedAgentChange",
     "flushQueuedExecutionModeIfPresent",
@@ -122,7 +114,6 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "notifyForAttentionRequired",
     "notifyForTerminalOutcome",
     "finishLiveThreadUsageEmitWork",
-    "withReviewRuntimeMetadata",
     "emitToListeners",
   ].map((name) => ({ name, owner: (registry: Members) => registry })),
   // Moved to the forge tool bridge (PWR-146).
@@ -130,6 +121,21 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     name: "raiseWithdrawnForgeApprovalTodo",
     owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).forgeToolBridge as unknown as Members,
   },
+  // Moved to the managed review service (PWR-146).
+  ...[
+    "forwardManagedReviewActivity",
+    "rememberManagedReviewOutput",
+    "findActiveReviewSubAgentForTerminal",
+    "completeReviewSubAgent",
+    "publishManagedReviewTerminal",
+    "clearNativeReviewActiveTurns",
+    "releaseNativeReviewParent",
+    "drainPendingReviewStartsForTerminalTurn",
+    "withReviewRuntimeMetadata",
+  ].map((name) => ({
+    name,
+    owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).managedReviewService as unknown as Members,
+  })),
   ...([
     ["overlayStore", ["getThreadMetadata", "updateThreadMetadata", "completeThreadUsageTurn", "getThreadOverlayState"]],
     ["providerThreadSnapshotStore", ["list", "replace"]],
