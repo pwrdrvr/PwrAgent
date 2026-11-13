@@ -16569,7 +16569,6 @@ describe("DesktopBackendRegistry", () => {
         gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
         prepareTokenMiserRuntime: () => Promise<void>;
         resolveTokenMiserEnabledForOverride: () => boolean;
-        resolveForgeToolPolicy: () => undefined;
       };
       const runtime = createDeferred<void>();
       const rollback = vi.fn(async () => {});
@@ -16577,7 +16576,7 @@ describe("DesktopBackendRegistry", () => {
       vi.spyOn(internal, "resolveTokenMiserEnabledForOverride").mockReturnValue(true);
       const prepareRuntime = vi.spyOn(internal, "prepareTokenMiserRuntime").mockReturnValue(runtime.promise);
       const refusal = new Error("fixture catalog preparation refused");
-      const catalog = vi.spyOn(internal, "resolveForgeToolPolicy").mockImplementation(() => { throw refusal; });
+      const catalog = vi.spyOn(registry.forgeToolBridge, "resolveForgeToolPolicy").mockImplementation(() => { throw refusal; });
       let settled = false;
       try {
         const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", tokenMiserEnabled: true })

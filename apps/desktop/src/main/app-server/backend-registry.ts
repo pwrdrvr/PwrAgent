@@ -1,4 +1,5 @@
 import type { RegistryContext } from "./registry-context";
+import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy, executionModeUnavailableMessage, ownerSandboxForMode } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
@@ -32,13 +33,10 @@ import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-t
 import { claudePlanTurnRefusal } from "../claude/claude-permissions";
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
-import { buildForgeToolDefinitions, type ForgePrToolHandler, type ForgePrToolPreflight, type ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-pr-agent-tools";
-import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
 import {
-  forgePrToolGroup,
-  type ForgePrToolArgs,
-  type ForgePrToolOperation,
 } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
@@ -59,10 +57,8 @@ import {
   findAcpPermissionModeConfigOption,
   isThreadExecutionMode,
   lowerThreadExecutionMode,
-  DEFAULT_FORGE_AGENT_TOOL_POLICY,
   PWRAGENT_TOOL_NAMESPACE,
   TASK_MONITOR_TOOL_NAMESPACE,
-  FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
   totalTokenMiserGateAccountings,
   classifyDirectory,
@@ -70,8 +66,6 @@ import {
   type DesktopCheckoutHibernationPolicy,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
-  type ForgeAgentToolAccess,
-  type ForgeAgentToolGroup,
   type ForgeAgentToolPolicy,
   type McpConnectionStatus,
   type McpConnectionToolApprovalResolution,
@@ -82,28 +76,6 @@ import {
   resolveMcpConnectionToolApproval,
 } from "@pwragent/shared";
 import {
-  buildForgeApprovalRememberOptions,
-  FORGE_AGENT_RULE_APPROVAL_SOURCE,
-  FORGE_APPROVAL_MERGE_METHODS_META_KEY,
-  FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
-  forgeAgentRuleAgentKey,
-  forgeAgentToolRuleDescription,
-  forgeAgentToolRuleOffMessage,
-  forgeAgentToolRuleSentence,
-  forgeAgentToolUnreadableRuleSentence,
-  forgeApprovalRememberRuleAgent,
-  forgeRuleRepositoryLabel,
-  isForgeApprovalRememberGroup,
-  normalizeForgeRuleRepository,
-  readForgeApprovalMergeMethodChoice,
-  readForgeApprovalRememberChoice,
-  resolveForgeAgentToolAccess,
-  type ForgeAgentIdentity,
-  type ForgeAgentRuleNames,
-  type ForgeAgentToolRuleGroup,
-  type ForgeApprovalMergeMethods,
-  type ForgeApprovalRememberOptionId,
-  type ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
@@ -187,10 +159,6 @@ import {
   type FederationTarget,
 } from "@pwragent/shared";
 import {
-  buildPullRequestReferenceUrl,
-  parsePullRequestReferenceUrl,
-  type PullRequestRepositoryRef,
-  type PullRequestReferenceIdentity,
 } from "../pr-status/forge-reference";
 import {
   projectThreadDisplay,
@@ -225,7 +193,6 @@ import {
   formatReviewCommand,
   type NamedReviewPullRequest,
 } from "../../shared/review-command";
-import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   resolveActiveProfileName,
 } from "../profile";
@@ -475,7 +442,6 @@ import {
   type AttachThreadDirectoryResult,
   type AttachThreadDirectoryToolArgs,
   type AttachThreadDirectoryWorkspaceMode,
-  type AttachThreadPullRequestToolArgs,
   type GetThreadStatusToolArgs,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
@@ -545,7 +511,6 @@ import {
   resolveThreadParentKey,
   isAcpBackendId,
   isAppServerBackendKind,
-  normalizePullRequestProvider,
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
@@ -898,8 +863,6 @@ import {
   errorMessageFromTerminalNotification,
   fileChangeApprovalContextKey,
   finalTextFromTerminalNotification,
-  forgeToolApprovalMessage,
-  forgeToolParamsDisplay,
   formatExecutionModeForError,
   isAcpPermissionRequest,
   isAppServerThreadStatus,
@@ -921,7 +884,6 @@ import {
   textFragmentsFromCodexNotification,
   turnIdFromStartedNotification,
   turnIdFromTerminalNotification,
-  withForgeApprovalNotes,
 } from "./backend-registry-notifications";
 import {
   type AcceptedActiveTurnControlRequest,
@@ -949,7 +911,6 @@ import {
   type DerivedLiveThreadTokenUsage,
   type DirectoryGitStatusWriter,
   type ForgeToolRuleWriter,
-  type ForgeWriteApprovalNotes,
   type HandoffSourceSettings,
   type LiveCodexNativeSubAgentUsage,
   type LiveCodexToolItem,
@@ -1022,8 +983,6 @@ import {
   CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS,
   CODEX_THREAD_IDLE_UNSUBSCRIBE_CHECK_INTERVAL_MS,
   CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
-  FORGE_APPROVAL_WITHDRAWN_TODO_KEY,
-  FORGE_PROJECT_LABEL_TIMEOUT_MS,
   FORGE_TOOL_REQUEST_ID_PREFIX,
   INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS,
   LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS,
@@ -1047,7 +1006,6 @@ import {
   USAGE_TURN_REPAIR_PEER_QUIET_MS,
   archivedThreadMessageRefusal,
   buildCodexInvalidIdRecoveryCooldownMessage,
-  execFile,
   isCodexInvalidIdRecoveryCooldownActive,
   isCodexMissingRolloutArchiveError,
   isCodexMissingThreadError,
@@ -1336,9 +1294,6 @@ import {
   taskMonitorRecentActivity,
 } from "./task-monitor-helpers";
 import {
-  normalizePositivePullRequestNumber,
-  parseGitRemoteRepositoryUrl,
-  pullRequestRepositoryKey,
 } from "./thread-forge-helpers";
 
 
@@ -1460,6 +1415,8 @@ async function refuseResolvedWorkMode(params: {
 
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
+  /** The PR and forge domain: forge tools, PR bindings and PR attachment. */
+  readonly forgeToolBridge: ForgeToolBridge;
   private readonly launchpadCreationOperations = new LaunchpadCreationOperations();
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
@@ -2306,504 +2263,109 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private forgeReadHandler?: ForgeReadHandler;
-  private localForgeReadHandler?: ForgeReadHandler;
-
-  // The app-server service needs the registry before it can supply these forge bindings.
+  // PR and forge members the registry's importers use. ForgeToolBridge owns
+  // the state; each member delegates to it. The app-server service needs the
+  // registry before it can supply these bindings, so it calls the setters late.
   setForgeReadHandlers(local: ForgeReadHandler, routed: ForgeReadHandler): void {
-    this.localForgeReadHandler = local;
-    this.forgeReadHandler = routed;
+    this.forgeToolBridge.setForgeReadHandlers(local, routed);
   }
 
-  private forgePrToolHandler?: ForgePrToolHandler;
-  private forgePrToolPreflight?: ForgePrToolPreflight;
-  private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
-  private forgeToolRuleWriter?: ForgeToolRuleWriter;
-  private forgeProjectLabelResolver?: (repository: string) => Promise<string | undefined>;
-  /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
-  private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
-
-  /**
-   * `preflight` names the repository on an approval card, fills in what the
-   * call would otherwise infer (a pull request's head), and fails a bad call
-   * before asking.
-   */
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgePrToolHandler(handler: ForgePrToolHandler, preflight?: ForgePrToolPreflight): void {
-    this.forgePrToolHandler = handler;
-    this.forgePrToolPreflight = preflight;
+    this.forgeToolBridge.setForgePrToolHandler(handler, preflight);
   }
 
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
-    this.forgeToolPolicyResolver = resolve;
+    this.forgeToolBridge.setForgeToolPolicyResolver(resolve);
   }
 
-  /** Saves the project rule an approval card's "Always allow" option chose. */
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeToolRuleWriter(write: ForgeToolRuleWriter): void {
-    this.forgeToolRuleWriter = write;
+    this.forgeToolBridge.setForgeToolRuleWriter(write);
   }
 
-  /** Names a repository's project as the Directories lens does. */
-  // The app-server service needs the registry before it can supply these forge bindings.
   setForgeProjectLabelResolver(resolve: (repository: string) => Promise<string | undefined>): void {
-    this.forgeProjectLabelResolver = resolve;
+    this.forgeToolBridge.setForgeProjectLabelResolver(resolve);
   }
 
-  private resolveForgeToolPolicy(): ForgeAgentToolPolicy {
-    try {
-      return this.forgeToolPolicyResolver?.() ?? DEFAULT_FORGE_AGENT_TOOL_POLICY;
-    } catch (error) {
-      // An unreadable policy must not widen access: treat the family as off.
-      backendRegistryLog.warn("could not read forge tool policy", { error: String(error) });
-      return { ...DEFAULT_FORGE_AGENT_TOOL_POLICY, enabled: false };
-    }
+  readForgeForPeer(request: ForgeReadRequest, signal?: AbortSignal): Promise<unknown> {
+    return this.forgeToolBridge.readForgeForPeer(request, signal);
   }
 
-  /** Refuses a call the operator's policy removed, even from a turn holding an older schema. */
-  private assertForgeToolAllowed(group: ForgeAgentToolGroup, tool: string): ForgeAgentToolAccess {
-    const policy = this.resolveForgeToolPolicy();
-    if (!policy.enabled) {
-      throw new ForgeReadError("tools_disabled", `Forge tools are off in Settings → Git → Agent forge tools, so ${tool} is unavailable. Ask the operator to turn them on; do not work around the setting with the gh or glab CLI.`);
-    }
-    const access = policy.access[group];
-    if (access === "off") {
-      throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${tool} is unavailable. Ask the operator to change the setting; do not work around it with the gh or glab CLI.`);
-    }
-    return access;
+  setThreadPullRequestStatusToolHandler(handler: ThreadPullRequestStatusToolHandler | null | undefined): void {
+    this.forgeToolBridge.setThreadPullRequestStatusToolHandler(handler);
   }
 
-  private readonly gatedForgeReadHandler: ForgeReadHandler = async (operation, args, context) => {
-    context = this.resolveTaskMonitorForgeContext(context, true);
-    this.assertForgeToolAllowed("read", operation);
-    if (!this.forgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this instance.");
-    return await this.forgeReadHandler(operation, args, context);
-  };
-
-  private readonly gatedForgePrToolHandler: ForgePrToolHandler = async (operation, args, context) => {
-    const group = forgePrToolGroup(operation, args);
-    context = this.resolveTaskMonitorForgeContext(context, group === "read");
-    this.assertForgeToolAllowed(group, operation);
-    let target = args;
-    let notes: ForgeWriteApprovalNotes | undefined;
-    if (group !== "read") {
-      // Settle the call before asking: an approved call that then fails on its
-      // arguments makes the agent retry and the operator approve it twice.
-      const prepared = this.forgePrToolPreflight ? await this.forgePrToolPreflight(operation, args, context) : undefined;
-      const repository = prepared?.repository ?? args.repository;
-      let settled = prepared?.args ?? args;
-      const approval = await this.approveForgeToolWrite(operation, settled, context, group, repository, prepared?.mergeMethods);
-      notes = approval.notes;
-      // The operator's pick from the merge menu replaces the settled method.
-      if (approval.mergeMethod) settled = { ...settled, method: approval.mergeMethod };
-      // Act exactly where the card said, even if the thread's remotes or branch change while it waits.
-      target = repository ? { ...settled, repository } : settled;
-    }
-    if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
-    const result = withForgeApprovalNotes(await this.forgePrToolHandler(operation, target, context), notes);
-    if (operation === "create_pull_request") return await this.attachCreatedPullRequest(result, context);
-    return result;
-  };
-
-  /** Link a PR the agent just opened, so its chip and status appear without a branch lookup. */
-  private async attachCreatedPullRequest(result: unknown, context: AgentToolCallContext): Promise<unknown> {
-    const url = readRecord(result)?.url;
-    if (typeof url !== "string") return result;
-    try {
-      // The forge just returned this URL, so it already names the repository.
-      const attached = await this.handleAttachThreadPullRequestInspectionRequest(
-        { backend: context.backend, threadId: context.threadId, url },
-        { forgeUrl: true },
-      );
-      return { ...readRecord(result), attachedToThread: attached.ok };
-    } catch (error) {
-      backendRegistryLog.warn("could not attach created pull request", { threadId: context.threadId, error: String(error) });
-      return { ...readRecord(result), attachedToThread: false };
-    }
+  setThreadPullRequestCanonicalizer(canonicalizer: ThreadPullRequestCanonicalizer | null | undefined): void {
+    this.forgeToolBridge.setThreadPullRequestCanonicalizer(canonicalizer);
   }
 
-  /**
-   * Which agent is making a forge call, from PwrAgent's own records and never
-   * from the call's arguments. A Codex thread's provider is the one Codex
-   * reported, configured in PwrAgent or not; `openai` is the default. A
-   * provider Codex has not reported is unknown, never assumed to be the
-   * default, so a Codex rule can restrict that thread but not loosen it. A
-   * model that cannot be read is unknown, so rules naming a model do not
-   * apply, while agent and provider rules still do.
-   */
-  private async resolveForgeAgentIdentity(context: AgentToolCallContext): Promise<ForgeAgentIdentity> {
-    const { backend, threadId } = context;
-    let codexModelProvider: string | undefined;
-    let codexModelProviderKnown = false;
-    if (backend === "codex") {
-      try {
-        // A configured provider is reported too; the second read covers a
-        // client that only tracks those.
-        const reported = this.codexClient.reportedModelProviderForThread?.(threadId)
-          ?? this.codexClient.modelProviderForThread?.(threadId);
-        if (reported?.trim()) {
-          codexModelProvider = reported.trim();
-          codexModelProviderKnown = true;
-        }
-      } catch (error) {
-        backendRegistryLog.warn("could not read the thread's Codex model provider for forge rules", { threadId, error: String(error) });
-      }
-    }
-    let model: string | undefined;
-    try {
-      if (isAcpBackendId(backend)) {
-        model = this.acpBackend.getSession(backend, threadId)?.acpRuntime?.currentModelId?.trim() || undefined;
-      }
-      if (model === undefined) {
-        // The default desktop adapter uses the shared owner port. Older injected
-        // overlay adapters can still supply the desktop model projection.
-        const metadata = this.overlayStore.getThreadMetadata
-          ? await this.overlayStore.getThreadMetadata({ backend, threadId })
-          : await this.overlayStore.getThreadOverlayState({ backend, threadId });
-        model = metadata?.model?.trim() || undefined;
-      }
-    } catch (error) {
-      model = undefined;
-      backendRegistryLog.warn("could not read the thread's model for forge rules", { backend, threadId, error: String(error) });
-    }
-    if (backend === "codex" && model) {
-      // A qualified id names the provider; rules compare the bare model id.
-      const parsed = parseCodexProviderModelId(model);
-      if (!codexModelProviderKnown && parsed.providerId) {
-        codexModelProvider = parsed.providerId;
-        codexModelProviderKnown = true;
-      }
-      model = parsed.model || undefined;
-    }
-    return {
-      backend,
-      ...(codexModelProvider ? { codexModelProvider } : {}),
-      ...(backend === "codex" && !codexModelProviderKnown ? { codexModelProviderUnknown: true } : {}),
-      ...(model ? { model } : {}),
-    };
+  setPullRequestReferenceResolver(resolver: PullRequestReferenceResolver | null | undefined): void {
+    this.forgeToolBridge.setPullRequestReferenceResolver(resolver);
   }
 
-  /** `ruleRepositoryProjectLabel` for a forge call's repository. */
-  private async forgeProjectLabel(repository: ForgeRepository | undefined): Promise<string | undefined> {
-    if (!repository) return undefined;
-    const fallback = `${repository.owner}/${repository.repo}`;
-    const key = normalizeForgeRuleRepository(repository);
-    return key ? await this.ruleRepositoryProjectLabel(key, fallback) : fallback;
+  setThreadProjectRepositoryResolver(
+    resolver: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>,
+  ): void {
+    this.forgeToolBridge.setThreadProjectRepositoryResolver(resolver);
   }
 
-  /** Display names for rule wording: installed ACP agents and Codex model providers. */
-  private forgeAgentRuleNames(): ForgeAgentRuleNames {
-    return {
-      acpAgent: (registryId) => {
-        const backendId = `acp:${registryId}`;
-        return isAcpBackendId(backendId) ? this.acpBackend.getInstalledAgent(backendId)?.name : undefined;
-      },
-      codexModelProvider: (providerId) => {
-        try {
-          return this.resolveCodexModelProvidersFn().find((provider) => provider.id === providerId)?.name;
-        } catch {
-          return undefined;
-        }
-      },
-    };
+  setThreadPrimaryGitRepositoryReader(
+    reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
+  ): void {
+    this.forgeToolBridge.setThreadPrimaryGitRepositoryReader(reader);
   }
 
-  /**
-   * The operator's consent for one GitHub write. The level comes from the
-   * most specific project rule for this repository and agent, else the
-   * group's setting. Plan turns refuse every write before considering the
-   * level. `allow` runs; `auto` follows the turn's approval mode
-   * (see `forgeAutoRunsWithoutApproval`); otherwise the shipped MCP approval
-   * card asks. Automations cannot answer, so they are refused with the
-   * setting to change.
-   */
-  private async approveForgeToolWrite(
-    operation: ForgePrToolOperation,
-    args: ForgePrToolArgs,
-    context: AgentToolCallContext,
-    group: ForgeAgentToolGroup,
-    repository?: ForgeRepository,
-    mergeMethods?: ForgePrToolPreflightResult["mergeMethods"],
-  ): Promise<{ notes?: ForgeWriteApprovalNotes; mergeMethod?: ThreadTodoMergeMethod }> {
-    if (this.isForgePlanTurn(context)) {
-      throw new ForgeReadError("plan_mode", claudePlanTurnRefusal(operation));
-    }
-    const identity = await this.resolveForgeAgentIdentity(context);
-    const resolution = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), group, repository, identity);
-    const access = resolution.level;
-    const rule = resolution.source === "project_rule" ? resolution.rule : undefined;
-    // What the agent reads names the repository; what the operator reads
-    // names the project, as the sidebar and Settings do.
-    const wording = {
-      ...(repository ? { projectLabel: `${repository.owner}/${repository.repo}` } : {}),
-      names: this.forgeAgentRuleNames(),
-    };
-    if (access === "off") {
-      if (rule) {
-        throw new ForgeReadError("tools_disabled", `${forgeAgentToolRuleOffMessage(rule, group, wording)} Do not work around it with the gh or glab CLI.`);
-      }
-      // The setting changed while the call was prepared.
-      this.assertForgeToolAllowed(group, operation);
-      throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${operation} is unavailable.`);
-    }
-    if (access === "allow") {
-      if (!rule) return {};
-      const description = forgeAgentToolRuleDescription(rule, wording);
-      backendRegistryLog.info("running forge write allowed by a project rule", {
-        backend: context.backend,
-        threadId: context.threadId,
-        turnId: context.turnId,
-        operation,
-        rule: description,
-      });
-      return { notes: { approval: { source: FORGE_AGENT_RULE_APPROVAL_SOURCE, rule: description } } };
-    }
-    const signal = context.signal ?? new AbortController().signal;
-    signal.throwIfAborted();
-    const label = FORGE_AGENT_TOOL_GROUP_LABELS[group];
-    const levelName = access === "auto" ? "Auto" : "Ask";
-    const requestId = `${FORGE_TOOL_REQUEST_ID_PREFIX}${randomUUID()}`;
-    const forge = repository?.provider === "gitlab" ? "GitLab" : "GitHub";
-    // Comment-sized changes may be granted for the conversation; opening,
-    // editing, approving and merging are always one call at a time.
-    const sessionGrant = group === "comments" || group === "issues";
-    const grantNote = sessionGrant
-      ? " A conversation grant lasts until PwrAgent restarts or the setting changes."
-      : " This allows this call only.";
-    const meta: Record<string, unknown> = {
-      pwragent_approval_kind: "mcp_tool_call",
-      ...(sessionGrant ? { persist: ["session"] } : {}),
-      ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
-      ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
-      // `subtitle` is set below, once the call is known to need a card.
-      tool_params_display: forgeToolParamsDisplay(args),
-    };
-    const notification: AppServerPendingRequestNotification = {
-      method: "mcpServer/elicitation/request",
-      params: {
-        threadId: context.threadId,
-        turnId: context.turnId ?? "",
-        requestId,
-        serverName: forge,
-        mode: "form",
-        message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github"),
-        requestedSchema: { type: "object", properties: {} },
-        _meta: meta,
-      },
-    };
-    const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
-    if (access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation)) {
-      signal.throwIfAborted();
-      backendRegistryLog.info("running Auto forge write without an approval card", {
-        backend: context.backend,
-        threadId: context.threadId,
-        turnId: context.turnId,
-        operation,
-        ...(rule ? { rule: forgeAgentToolRuleDescription(rule, wording) } : {}),
-      });
-      return {};
-    }
-    if (automation) {
-      throw new ForgeReadError("approval_required", rule
-        ? `${forgeAgentToolRuleSentence(rule, group, access, wording)} An automation cannot answer an approval. The operator can set the rule to Allow in Settings → Git → Agent forge tools.`
-        : resolution.source === "unreadable_rule"
-          ? `${forgeAgentToolUnreadableRuleSentence(resolution.repository, group, wording)} An automation cannot answer an approval.`
-          : `${label} is set to ${levelName} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
-    }
-    if (!context.turnId) {
-      throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
-    }
-    const sessionKey = JSON.stringify([context.backend, context.threadId]);
-    // A grant covers one tool in one repository, never every repository the
-    // thread links, and ends when the level that asked, or the rule that set
-    // it, changes.
-    const grantTarget = `${operation}\u0000${repository ? repositoryKey(repository) : ""}`;
-    const grantKey = `${group}:${access}${rule
-      ? `:${rule.repository}:${forgeAgentRuleAgentKey(rule.agent)}`
-      : resolution.source === "unreadable_rule" ? ":unreadable" : ""}`;
-    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return {};
-    const cardWording = { ...wording, projectLabel: await this.forgeProjectLabel(repository) };
-    signal.throwIfAborted();
-    meta.subtitle = rule
-      ? `${forgeAgentToolRuleSentence(rule, group, access, cardWording)}${grantNote}`
-      : resolution.source === "unreadable_rule"
-        ? `${forgeAgentToolUnreadableRuleSentence(resolution.repository, group, cardWording)}${grantNote}`
-        : `${label} is set to ${levelName} in Settings → Git → Agent forge tools.${grantNote}`;
-    // "Always allow" choices for this card. Only offered options can be
-    // chosen, and only for this request.
-    const ruleRepository = repository ? normalizeForgeRuleRepository(repository) : undefined;
-    const rememberOptions = ruleRepository
-      ? buildForgeApprovalRememberOptions({
-        group,
-        repository: ruleRepository,
-        identity,
-        resolution,
-        automation: false,
-        projectLabel: cardWording.projectLabel,
-        names: cardWording.names,
-      })
-      : [];
-    if (rememberOptions.length > 0) meta[FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY] = rememberOptions;
-    // A merge names its method on the button and offers the others, as a
-    // to-do merge card does. The settled method is the button's.
-    const offeredMergeMethods = mergeMethods && args.method && mergeMethods.offered.includes(args.method)
-      ? mergeMethods.offered
-      : undefined;
-    if (offeredMergeMethods && args.method) {
-      meta[FORGE_APPROVAL_MERGE_METHODS_META_KEY] = {
-        selected: args.method,
-        methods: offeredMergeMethods,
-      } satisfies ForgeApprovalMergeMethods;
-    }
-    const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
-    type Approval = {
-      grant: "once" | "session";
-      remember?: ForgeApprovalRememberOptionId;
-      mergeMethod?: ThreadTodoMergeMethod;
-    } | false;
-    const approved = await new Promise<Approval>((resolve, reject) => {
-      const finish = (value: Approval, error?: unknown): void => {
-        signal.removeEventListener("abort", aborted);
-        this.pendingServerRequests.delete(key);
-        if (error) reject(error);
-        else resolve(value);
-      };
-      const aborted = (): void => {
-        finish(false, signal.reason);
-        void this.emit({ backend: context.backend, notification: {
-          method: "serverRequest/resolved", params: { threadId: context.threadId, turnId: context.turnId, requestId },
-        } }).catch(() => undefined);
-      };
-      this.pendingServerRequests.set(key, {
-        backend: context.backend, notification,
-        resolve: (response) => {
-          if (signal.aborted) { aborted(); return; }
-          const accepted = Boolean(response && "action" in response && response.action === "accept");
-          if (!accepted) { finish(false); return; }
-          const responseMeta = response && "_meta" in response ? readRecord(response._meta) : undefined;
-          const choice = readForgeApprovalRememberChoice(responseMeta);
-          const remember = choice && rememberOptions.some((option) => option.id === choice) ? choice : undefined;
-          if (choice && !remember) {
-            backendRegistryLog.warn("ignoring a forge remember choice this card did not offer", { threadId: context.threadId, requestId, choice });
-          }
-          const pickedMethod = readForgeApprovalMergeMethodChoice(responseMeta);
-          const mergeMethod = pickedMethod && offeredMergeMethods?.includes(pickedMethod) ? pickedMethod : undefined;
-          if (pickedMethod && !mergeMethod) {
-            backendRegistryLog.warn("ignoring a merge method this card did not offer", { threadId: context.threadId, requestId, method: pickedMethod });
-          }
-          finish({
-            grant: sessionGrant && responseMeta?.persist === "session" ? "session" : "once",
-            ...(remember ? { remember } : {}),
-            ...(mergeMethod ? { mergeMethod } : {}),
-          });
-        },
-        reject: (error) => finish(false, error),
-      });
-      signal.addEventListener("abort", aborted, { once: true });
-      if (signal.aborted) { aborted(); return; }
-      void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
-    });
-    if (!approved) throw new ForgeReadError("declined", `The operator declined ${operation}. Do not retry it or use the gh or glab CLI instead; ask what they want changed.`);
-    if (approved.grant === "session") {
-      const grants = this.forgeToolSessionApprovals.get(sessionKey) ?? new Map<string, string>();
-      grants.set(grantTarget, grantKey);
-      this.forgeToolSessionApprovals.set(sessionKey, grants);
-    }
-    if (approved.mergeMethod) {
-      // A pick from the menu is the operator's preference for the project,
-      // whether or not this merge succeeds, as on a to-do card.
-      try {
-        mergeMethods?.remember?.(approved.mergeMethod);
-      } catch (error) {
-        backendRegistryLog.warn("could not remember a merge method pick", { threadId: context.threadId, error: String(error) });
-      }
-    }
-    const merge = approved.mergeMethod ? { mergeMethod: approved.mergeMethod } : {};
-    if (!approved.remember || !ruleRepository || !isForgeApprovalRememberGroup(group)) return merge;
-    return {
-      ...merge,
-      notes: {
-        rememberedRule: await this.rememberForgeApprovalRule(approved.remember, {
-          group, repository: ruleRepository, identity, context, wording,
-        }),
-      },
-    };
+  setLocalPullRequestAuthorityResolver(resolver: LocalPullRequestAuthorityResolver | null | undefined): void {
+    this.forgeToolBridge.setLocalPullRequestAuthorityResolver(resolver);
   }
 
-  /**
-   * Save the project rule an approval card's "Always allow" option chose,
-   * before the approved call runs. The operator approved the call either
-   * way, so a failed save is reported and the call still runs once.
-   */
-  private async rememberForgeApprovalRule(
-    optionId: ForgeApprovalRememberOptionId,
-    request: {
-      group: ForgeAgentToolRuleGroup;
-      repository: string;
-      identity: ForgeAgentIdentity;
-      context: AgentToolCallContext;
-      wording: { projectLabel?: string; names: ForgeAgentRuleNames };
-    },
-  ): Promise<NonNullable<ForgeWriteApprovalNotes["rememberedRule"]>> {
-    const { group, repository, identity, context, wording } = request;
-    const agent = forgeApprovalRememberRuleAgent(optionId, identity);
-    const rule = agent
-      ? forgeAgentToolRuleDescription({ repository, agent }, wording)
-      : `${wording.projectLabel ?? forgeRuleRepositoryLabel(repository)} rule`;
-    try {
-      if (!agent) throw new Error("This agent cannot be named in a project rule.");
-      if (!this.forgeToolRuleWriter) throw new Error("Project rules cannot be saved on this instance.");
-      await this.forgeToolRuleWriter({ repository, agent, group, level: "allow" });
-      backendRegistryLog.info("saved a forge project rule from an approval card", {
-        backend: context.backend,
-        threadId: context.threadId,
-        group,
-        rule,
-      });
-      return { rule, saved: true };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      backendRegistryLog.warn("could not save a forge project rule from an approval card", {
-        backend: context.backend,
-        threadId: context.threadId,
-        group,
-        rule,
-        error: message,
-      });
-      return { rule, saved: false, error: `The operator approved this call, but the rule could not be saved, so later calls still ask: ${message}` };
-    }
+  isPullRequestLocallyMonitored(prKey: string): boolean {
+    return this.forgeToolBridge.isPullRequestLocallyMonitored(prKey);
   }
 
-  /**
-   * A forge card the agent's turn outlived. Ending the turn cancels the call
-   * and withdraws the card, yet the agent's answer may still ask the operator
-   * to approve it, so the thread keeps a reminder of what was asked.
-   */
-  private async raiseWithdrawnForgeApprovalTodo(
-    backend: AppServerBackendKind,
-    threadId: string,
-    requests: AppServerPendingRequestNotification[],
-  ): Promise<void> {
-    const asked = requests.flatMap((request) => {
-      const params = readRecord(request.params);
-      const target = readRecord(params?._meta)?.connector_name;
-      return typeof params?.message === "string"
-        ? [`“${params.message}”${typeof target === "string" ? ` for ${target}` : ""}`]
-        : [];
-    });
-    if (!this.threadTodoHandler || asked.length === 0) return;
-    const serverName = readRecord(requests[0]?.params)?.serverName;
-    const forge = typeof serverName === "string" ? serverName : "forge";
-    try {
-      await this.threadTodoHandler.add({ backend, threadId }, {
-        key: FORGE_APPROVAL_WITHDRAWN_TODO_KEY,
-        title: `Reply to retry the withdrawn ${forge} request`,
-        detail: `The agent asked ${asked.join(" and ")}. Its turn ended before you answered, so the request was withdrawn and nothing ran.`,
-      });
-    } catch (error) {
-      backendRegistryLog.warn("could not raise a withdrawn forge approval to-do", { backend, threadId, error: String(error) });
-    }
+  setThreadPullRequestWatchToolHandler(handler: ThreadPullRequestWatchToolHandler | null | undefined): void {
+    this.forgeToolBridge.setThreadPullRequestWatchToolHandler(handler);
+  }
+
+  setThreadPullRequestDetachHandler(handler: ThreadPullRequestDetachHandler | null | undefined): void {
+    this.forgeToolBridge.setThreadPullRequestDetachHandler(handler);
+  }
+
+  setThreadPrWatchesPeerHandler(handler: ThreadPrWatchesPeerHandler | null | undefined): void {
+    this.forgeToolBridge.setThreadPrWatchesPeerHandler(handler);
+  }
+
+  manageThreadPrWatchesForPeer(
+    request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
+  ): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> {
+    return this.forgeToolBridge.manageThreadPrWatchesForPeer(request);
+  }
+
+  setProjectForgeAutomationHandler(handler: ProjectForgeAutomationHandler | null | undefined): void {
+    this.forgeToolBridge.setProjectForgeAutomationHandler(handler);
+  }
+
+  ownedProjectForgeAutomation(): ProjectForgeAutomationHandler {
+    return this.forgeToolBridge.ownedProjectForgeAutomation();
+  }
+
+  setThreadPullRequestRefreshHandler(handler: ThreadPullRequestRefreshHandler | null | undefined): void {
+    this.forgeToolBridge.setThreadPullRequestRefreshHandler(handler);
+  }
+
+  refreshOwnedThreadPullRequests(
+    request: RefreshOwnedThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    return this.forgeToolBridge.refreshOwnedThreadPullRequests(request);
+  }
+
+  detachThreadPullRequest(params: DetachThreadPullRequestRequest): Promise<DetachThreadPullRequestResponse> {
+    return this.forgeToolBridge.detachThreadPullRequest(params);
+  }
+
+  canonicalizeNavigationThreadPullRequests(
+    threads: NavigationSnapshot["threads"],
+  ): Promise<NavigationSnapshot["threads"]> {
+    return this.forgeToolBridge.canonicalizeNavigationThreadPullRequests(threads);
   }
 
   /** What the operator has yet to answer on a thread, for get_thread_status. */
@@ -2827,15 +2389,6 @@ export class DesktopBackendRegistry {
     return approvals;
   }
 
-  async readForgeForPeer(request: ForgeReadRequest, signal?: AbortSignal): Promise<unknown> {
-    validateForgeReadArgs(request.operation, request.args);
-    // This instance's operator decides whether its threads' forge data is read, from here or a peer.
-    this.assertForgeToolAllowed("read", request.operation);
-    if (!isAppServerBackendKind(request.backend) || !request.threadId || request.args.instanceId) throw new ForgeReadError("invalid_arguments", "Federated forge reads require a local thread target.");
-    if (!this.localForgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this owner.");
-    return this.localForgeReadHandler(request.operation, { ...request.args, backend: request.backend, threadId: request.threadId }, { backend: request.backend, threadId: request.threadId, transport: "mcp", signal });
-  }
-
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
   private federatedThreadInspectionHandler:
@@ -2855,12 +2408,6 @@ export class DesktopBackendRegistry {
     | undefined;
   private federatedThreadControlHandler:
     | PwrAgentFederatedThreadControlHandler
-    | undefined;
-  private threadPullRequestStatusToolHandler:
-    | ThreadPullRequestStatusToolHandler
-    | undefined;
-  private threadPullRequestWatchToolHandler:
-    | ThreadPullRequestWatchToolHandler
     | undefined;
   private threadMaintenanceToolHandler: ThreadMaintenanceToolHandler | undefined;
   private threadMaintenanceToolScans: ThreadMaintenanceToolScans | undefined;
@@ -2885,27 +2432,8 @@ export class DesktopBackendRegistry {
   private readonly focusedThreadGitWorkingStateRefreshes = new Set<Promise<void>>();
   private threadGitWorkingStateRefreshRound: Promise<void> | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
-  private threadPullRequestDetachHandler:
-    | ThreadPullRequestDetachHandler
-    | undefined;
-  private threadPrWatchesPeerHandler: ThreadPrWatchesPeerHandler | undefined;
-  private projectForgeAutomationHandler:
-    | ProjectForgeAutomationHandler
-    | undefined;
-  private threadPullRequestRefreshHandler:
-    | ThreadPullRequestRefreshHandler
-    | undefined;
   private threadGitWorkingStateRefreshHandler:
     | ThreadGitWorkingStateRefreshHandler
-    | undefined;
-  private threadPullRequestCanonicalizer:
-    | ThreadPullRequestCanonicalizer
-    | undefined;
-  private pullRequestReferenceResolver:
-    | PullRequestReferenceResolver
-    | undefined;
-  private localPullRequestAuthorityResolver:
-    | LocalPullRequestAuthorityResolver
     | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private ownerThreadSearchService: ThreadSearchService | undefined;
@@ -3197,13 +2725,7 @@ export class DesktopBackendRegistry {
     this.isBootstrapModeFn = dependencies.isBootstrapModeFn;
     this.planLimits = dependencies.planLimits;
     this.captureStores = dependencies.captureStores;
-    this.localForgeReadHandler = dependencies.handlers.localForgeReadHandler;
-    this.forgeReadHandler = dependencies.handlers.forgeReadHandler;
-    this.forgePrToolHandler = dependencies.handlers.forgePrToolHandler;
-    this.forgePrToolPreflight = dependencies.handlers.forgePrToolPreflight;
-    this.forgeToolPolicyResolver = dependencies.handlers.forgeToolPolicyResolver;
-    this.forgeToolRuleWriter = dependencies.handlers.forgeToolRuleWriter;
-    this.forgeProjectLabelResolver = dependencies.handlers.forgeProjectLabelResolver;
+    this.forgeToolBridge = dependencies.forgeToolBridge;
     this.messagingAgentToolService = dependencies.handlers.messagingAgentToolService;
     this.automationInspectionHandler = dependencies.handlers.automationInspectionHandler;
     this.federationHandler = dependencies.handlers.federationHandler;
@@ -3214,23 +2736,12 @@ export class DesktopBackendRegistry {
     this.federatedThreadInspectionHandler = dependencies.handlers.federatedThreadInspectionHandler;
     this.federatedThreadMutationHandler = dependencies.handlers.federatedThreadMutationHandler;
     this.federatedThreadControlHandler = dependencies.handlers.federatedThreadControlHandler;
-    this.threadPullRequestStatusToolHandler = dependencies.handlers.threadPullRequestStatusToolHandler;
-    this.threadPullRequestCanonicalizer = dependencies.handlers.threadPullRequestCanonicalizer;
-    this.pullRequestReferenceResolver = dependencies.handlers.pullRequestReferenceResolver;
-    this.threadProjectRepositoryResolver = dependencies.handlers.threadProjectRepositoryResolver;
-    this.threadPrimaryGitRepositoryReader = dependencies.handlers.threadPrimaryGitRepositoryReader;
-    this.localPullRequestAuthorityResolver = dependencies.handlers.localPullRequestAuthorityResolver;
-    this.threadPullRequestWatchToolHandler = dependencies.handlers.threadPullRequestWatchToolHandler;
     this.threadMaintenanceToolHandler = dependencies.handlers.threadMaintenanceToolHandler;
     this.threadMaintenanceToolScans = dependencies.threadMaintenanceToolScans;
     this.threadDependencyToolHandler = dependencies.handlers.threadDependencyToolHandler;
     this.directoryGitStatusWriter = dependencies.handlers.directoryGitStatusWriter;
     this.threadPrAutoDispatchHandler = dependencies.handlers.threadPrAutoDispatchHandler;
-    this.threadPullRequestDetachHandler = dependencies.handlers.threadPullRequestDetachHandler;
     this.threadDependenciesPeerHandler = dependencies.handlers.threadDependenciesPeerHandler;
-    this.threadPrWatchesPeerHandler = dependencies.handlers.threadPrWatchesPeerHandler;
-    this.projectForgeAutomationHandler = dependencies.handlers.projectForgeAutomationHandler;
-    this.threadPullRequestRefreshHandler = dependencies.handlers.threadPullRequestRefreshHandler;
     this.threadGitWorkingStateRefreshHandler = dependencies.handlers.threadGitWorkingStateRefreshHandler;
     // Providers call back into the registry; bind only after every dependency is assigned.
     connect(this.constructionPorts());
@@ -3306,7 +2817,7 @@ export class DesktopBackendRegistry {
       attributeCodexProviderUsage: (...args: Parameters<typeof this.attributeCodexProviderUsage>) => this.attributeCodexProviderUsage(...args),
       authorizeAgentToolMcpCall: (...args: Parameters<typeof this.authorizeAgentToolMcpCall>) => this.authorizeAgentToolMcpCall(...args),
       get automationInspectionHandler() { return current().automationInspectionHandler; },
-      buildTaskMonitorForgeToolDefinitions: (...args: Parameters<typeof this.buildTaskMonitorForgeToolDefinitions>) => this.buildTaskMonitorForgeToolDefinitions(...args),
+      buildTaskMonitorForgeToolDefinitions: (...args: Parameters<ForgeToolBridge["buildTaskMonitorForgeToolDefinitions"]>) => this.forgeToolBridge.buildTaskMonitorForgeToolDefinitions(...args),
       captureUsageAccount: (...args: Parameters<typeof this.captureUsageAccount>) => this.captureUsageAccount(...args),
       get checkoutRestores() { return current().checkoutRestores; },
       get closed() { return current().closed; },
@@ -3322,9 +2833,10 @@ export class DesktopBackendRegistry {
       emitThreadToolAccountingUpdated: (...args: Parameters<typeof this.emitThreadToolAccountingUpdated>) => this.emitThreadToolAccountingUpdated(...args),
       emitTurnQueueLifecycle: (...args: Parameters<typeof this.emitTurnQueueLifecycle>) => this.emitTurnQueueLifecycle(...args),
       get federationHandler() { return current().federationHandler; },
+      findHeadlessAutomationTurnForRequest: (...args: Parameters<typeof this.findHeadlessAutomationTurnForRequest>) => this.findHeadlessAutomationTurnForRequest(...args),
       findReviewForParentTurn: (...args: Parameters<typeof this.findReviewForParentTurn>) => this.findReviewForParentTurn(...args),
-      get gatedForgePrToolHandler() { return current().gatedForgePrToolHandler; },
-      get gatedForgeReadHandler() { return current().gatedForgeReadHandler; },
+      get gatedForgePrToolHandler() { return current().forgeToolBridge.gatedForgePrToolHandler; },
+      get gatedForgeReadHandler() { return current().forgeToolBridge.gatedForgeReadHandler; },
       generateStructuredObject: (...args: Parameters<typeof this.generateStructuredObject>) => this.generateStructuredObject(...args),
       getActiveTurnForThread: (...args: Parameters<typeof this.getActiveTurnForThread>) => this.getActiveTurnForThread(...args),
       handleAgentMcpConnectionRequest: (...args: Parameters<typeof this.handleAgentMcpConnectionRequest>) => this.handleAgentMcpConnectionRequest(...args),
@@ -3336,6 +2848,7 @@ export class DesktopBackendRegistry {
       invalidateProviderRuntimeSelections: (...args: Parameters<typeof this.invalidateProviderRuntimeSelections>) => this.invalidateProviderRuntimeSelections(...args),
       get isCodexBootstrapDeferredFn() { return current().isCodexBootstrapDeferredFn; },
       isLiveDynamicToolCall: (...args: Parameters<typeof this.isLiveDynamicToolCall>) => this.isLiveDynamicToolCall(...args),
+      isMcpGatewayFullAccess: (...args: Parameters<typeof this.isMcpGatewayFullAccess>) => this.isMcpGatewayFullAccess(...args),
       isQueuedMessageTitleCurrent: (...args: Parameters<typeof this.isQueuedMessageTitleCurrent>) => this.isQueuedMessageTitleCurrent(...args),
       isTaskMonitorThread: (...args: Parameters<typeof this.isTaskMonitorThread>) => this.isTaskMonitorThread(...args),
       listBackends: (...args: Parameters<typeof this.listBackends>) => this.listBackends(...args),
@@ -3352,7 +2865,9 @@ export class DesktopBackendRegistry {
       get pendingTokenMiserInterceptions() { return current().pendingTokenMiserInterceptions; },
       get planLimits() { return current().planLimits; },
       publishLiveTokenMiserLedgerEntry: (...args: Parameters<typeof this.publishLiveTokenMiserLedgerEntry>) => this.publishLiveTokenMiserLedgerEntry(...args),
+      publishLocalEvent: (...args: Parameters<typeof this.publishLocalEvent>) => this.publishLocalEvent(...args),
       readMcpGatewaySelection: (...args: Parameters<typeof this.readMcpGatewaySelection>) => this.readMcpGatewaySelection(...args),
+      readThreadInspectionSummaryForMutation: (...args: Parameters<typeof this.readThreadInspectionSummaryForMutation>) => this.readThreadInspectionSummaryForMutation(...args),
       recordClaudeSubAgents: (...args: Parameters<typeof this.recordClaudeSubAgents>) => this.recordClaudeSubAgents(...args),
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
       recordTokenMiserFocusedInference: (...args: Parameters<typeof this.recordTokenMiserFocusedInference>) => this.recordTokenMiserFocusedInference(...args),
@@ -3362,9 +2877,11 @@ export class DesktopBackendRegistry {
       rememberActiveTokenMiserReplayEntry: (...args: Parameters<typeof this.rememberActiveTokenMiserReplayEntry>) => this.rememberActiveTokenMiserReplayEntry(...args),
       requestUpstreamMcpForm: (...args: Parameters<typeof this.requestUpstreamMcpForm>) => this.requestUpstreamMcpForm(...args),
       resolveAgentToolMcpCallContext: (...args: Parameters<typeof this.resolveAgentToolMcpCallContext>) => this.resolveAgentToolMcpCallContext(...args),
+      resolveClaudeToolCallExecutionMode: (...args: Parameters<typeof this.resolveClaudeToolCallExecutionMode>) => this.resolveClaudeToolCallExecutionMode(...args),
       get resolveCodexModelProviderKeysFn() { return current().resolveCodexModelProviderKeysFn; },
       get resolveCodexModelProvidersFn() { return current().resolveCodexModelProvidersFn; },
-      resolveForgeToolPolicy: (...args: Parameters<typeof this.resolveForgeToolPolicy>) => this.resolveForgeToolPolicy(...args),
+      resolveCodexToolCallExecutionMode: (...args: Parameters<typeof this.resolveCodexToolCallExecutionMode>) => this.resolveCodexToolCallExecutionMode(...args),
+      resolveForgeToolPolicy: (...args: Parameters<ForgeToolBridge["resolveForgeToolPolicy"]>) => this.forgeToolBridge.resolveForgeToolPolicy(...args),
       get resolveHelperModelSettingsFn() { return current().resolveHelperModelSettingsFn; },
       get resolvePassSetupVariablesToAgentsFn() { return current().resolvePassSetupVariablesToAgentsFn; },
       resolveReviewContext: (...args: Parameters<typeof this.resolveReviewContext>) => this.resolveReviewContext(...args),
@@ -4190,72 +3707,6 @@ export class DesktopBackendRegistry {
   }
 
   // The app-server service needs the registry before it can supply this owner binding.
-  setThreadPullRequestStatusToolHandler(
-    handler: ThreadPullRequestStatusToolHandler | null | undefined,
-  ): void {
-    this.threadPullRequestStatusToolHandler = handler ?? undefined;
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
-  setThreadPullRequestCanonicalizer(
-    canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
-  ): void {
-    this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
-  setPullRequestReferenceResolver(
-    resolver: PullRequestReferenceResolver | null | undefined,
-  ): void {
-    this.pullRequestReferenceResolver = resolver ?? undefined;
-  }
-
-  private threadPrimaryGitRepositoryReader?: (backend: AppServerBackendKind, threadId: string) => string | undefined;
-  private threadProjectRepositoryResolver?: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>;
-
-  /** Reads a thread's primary repository when the navigation cache has none yet. */
-  // The app-server service needs the registry before it can supply this owner binding.
-  setThreadProjectRepositoryResolver(
-    resolver: (backend: AppServerBackendKind, threadId: string) => Promise<string | undefined>,
-  ): void {
-    this.threadProjectRepositoryResolver = resolver;
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
-  setThreadPrimaryGitRepositoryReader(
-    reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
-  ): void {
-    this.threadPrimaryGitRepositoryReader = reader;
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
-  setLocalPullRequestAuthorityResolver(
-    resolver: LocalPullRequestAuthorityResolver | null | undefined,
-  ): void {
-    this.localPullRequestAuthorityResolver = resolver ?? undefined;
-  }
-
-  /**
-   * True when this instance monitors the PR itself, so a federated
-   * peer's observation of the same PR should not be applied on top of
-   * ours. Defaults to false when no resolver is injected, and also
-   * answers false until the first local navigation snapshot has
-   * registered this instance's PR attachments — an instance that cannot
-   * yet answer the question has no claim to authority, and deferring to
-   * the peer beats asserting ownership we have not established.
-   */
-  isPullRequestLocallyMonitored(prKey: string): boolean {
-    return this.localPullRequestAuthorityResolver?.(prKey) ?? false;
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
-  setThreadPullRequestWatchToolHandler(
-    handler: ThreadPullRequestWatchToolHandler | null | undefined,
-  ): void {
-    this.threadPullRequestWatchToolHandler = handler ?? undefined;
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
   setThreadMaintenanceToolHandler(handler: ThreadMaintenanceToolHandler | undefined): void {
     this.threadMaintenanceToolHandler = handler;
     this.threadMaintenanceToolScans = handler ? new ThreadMaintenanceToolScans({
@@ -4285,13 +3736,6 @@ export class DesktopBackendRegistry {
     this.threadPrAutoDispatchHandler = handler ?? undefined;
   }
 
-  // The app-server service needs the registry before it can supply this owner binding.
-  setThreadPullRequestDetachHandler(
-    handler: ThreadPullRequestDetachHandler | null | undefined,
-  ): void {
-    this.threadPullRequestDetachHandler = handler ?? undefined;
-  }
-
   private threadDependenciesPeerHandler?: (
     request: import("@pwragent/shared").ManageThreadDependenciesRequest,
     requesterInstanceId: string | undefined,
@@ -4309,69 +3753,6 @@ export class DesktopBackendRegistry {
   ): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> {
     if (!this.threadDependenciesPeerHandler) throw new Error("Continue After is not available on this instance yet.");
     return await this.threadDependenciesPeerHandler(request, requesterInstanceId);
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
-  setThreadPrWatchesPeerHandler(
-    handler: ThreadPrWatchesPeerHandler | null | undefined,
-  ): void {
-    this.threadPrWatchesPeerHandler = handler ?? undefined;
-  }
-
-  /** A viewer's history, Stop or Watch CI on one of this owner's threads. */
-  async manageThreadPrWatchesForPeer(
-    request: import("@pwragent/shared").FederationThreadPrWatchesRequestV1,
-  ): Promise<import("@pwragent/shared").ThreadPrWatchesResponse> {
-    const handler = this.threadPrWatchesPeerHandler;
-    if (!handler) {
-      return {
-        ok: false,
-        error: { code: "not_found", message: "PR watches are not available on this instance yet." },
-      };
-    }
-    return await handler(request);
-  }
-
-  // The app-server service needs the registry before it can supply these forge bindings.
-  setProjectForgeAutomationHandler(
-    handler: ProjectForgeAutomationHandler | null | undefined,
-  ): void {
-    this.projectForgeAutomationHandler = handler ?? undefined;
-  }
-
-  /**
-   * The desktop app-server service, which validates, stores and applies a
-   * peer's Forge Automation requests for this instance's projects.
-   * Federation uses this mediator so its runtime does not import the IPC
-   * module.
-   */
-  ownedProjectForgeAutomation(): ProjectForgeAutomationHandler {
-    const handler = this.projectForgeAutomationHandler;
-    if (!handler) {
-      throw new Error("Forge Automation service is not available yet.");
-    }
-    return handler;
-  }
-
-  // The app-server service needs the registry before it can supply this owner binding.
-  setThreadPullRequestRefreshHandler(
-    handler: ThreadPullRequestRefreshHandler | null | undefined,
-  ): void {
-    this.threadPullRequestRefreshHandler = handler ?? undefined;
-  }
-
-  /**
-   * Refresh PR state through the desktop app-server service. Federation uses
-   * this mediator so its backend bridge does not import the IPC module.
-   */
-  async refreshOwnedThreadPullRequests(
-    request: RefreshOwnedThreadPullRequestsRequest,
-  ): Promise<RefreshThreadPullRequestsResponse> {
-    const handler = this.threadPullRequestRefreshHandler;
-    if (!handler) {
-      throw new Error("Pull-request refresh service is not available yet.");
-    }
-    return await handler(request);
   }
 
   // The app-server service needs the registry before it can supply this owner binding.
@@ -4394,22 +3775,6 @@ export class DesktopBackendRegistry {
       throw new Error("Git working-state refresh service is not available yet.");
     }
     return await handler(request);
-  }
-
-  /**
-   * Detach a PR attachment via the desktop app-server service. The service
-   * owns the PR status registry and dispatch coordinator, so the registry
-   * only mediates (mirrors threadPrAutoDispatchHandler); callers such as
-   * the federation runtime use this instead of importing the IPC module.
-   */
-  async detachThreadPullRequest(
-    params: DetachThreadPullRequestRequest,
-  ): Promise<DetachThreadPullRequestResponse> {
-    const handler = this.threadPullRequestDetachHandler;
-    if (!handler) {
-      throw new Error("Pull-request detach service is not available yet.");
-    }
-    return await handler(params);
   }
 
   /**
@@ -10691,9 +10056,9 @@ export class DesktopBackendRegistry {
         ...(overlay?.detachedPrs ?? []),
       ];
       let canonicalPrs = prs;
-      if (this.threadPullRequestCanonicalizer && prs.length > 0) {
+      if (this.forgeToolBridge.pullRequestCanonicalizer && prs.length > 0) {
         try {
-          canonicalPrs = await this.threadPullRequestCanonicalizer(prs);
+          canonicalPrs = await this.forgeToolBridge.pullRequestCanonicalizer(prs);
         } catch (error) {
           backendRegistryLog.warn("working-state PR canonicalization failed", {
             error: error instanceof Error ? error.message : String(error),
@@ -10889,9 +10254,9 @@ export class DesktopBackendRegistry {
       ...(overlay?.detachedPrs ?? []),
     ];
     let canonicalPrs = storedPrs;
-    if (this.threadPullRequestCanonicalizer && storedPrs.length > 0) {
+    if (this.forgeToolBridge.pullRequestCanonicalizer && storedPrs.length > 0) {
       try {
-        canonicalPrs = await this.threadPullRequestCanonicalizer(storedPrs);
+        canonicalPrs = await this.forgeToolBridge.pullRequestCanonicalizer(storedPrs);
       } catch (error) {
         backendRegistryLog.warn("federated commit PR canonicalization failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -12566,9 +11931,9 @@ export class DesktopBackendRegistry {
       taskMonitorHandler: async (request) =>
         await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
-      forgeReadHandler: this.gatedForgeReadHandler,
-      forgePrToolHandler: this.gatedForgePrToolHandler,
-      forgeToolPolicy: this.resolveForgeToolPolicy(),
+      forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
+      forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
+      forgeToolPolicy: this.forgeToolBridge.resolveForgeToolPolicy(),
       threadOrchestrationHandler: this.threadOrchestrationHandler,
       // Gated on the setting, not merely on the store existing: the store is
       // constructed for any live Codex client, so passing it unconditionally
@@ -23776,9 +23141,9 @@ export class DesktopBackendRegistry {
         taskMonitorHandler: async (request) =>
           await this.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
-        forgeReadHandler: this.gatedForgeReadHandler,
-        forgePrToolHandler: this.gatedForgePrToolHandler,
-        forgeToolPolicy: this.resolveForgeToolPolicy(),
+        forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
+        forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
+        forgeToolPolicy: this.forgeToolBridge.resolveForgeToolPolicy(),
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
@@ -35573,7 +34938,7 @@ export class DesktopBackendRegistry {
     if (hostToolCall && this.isTaskMonitorThread({ backend, threadId: hostToolCall.threadId })) {
       const allowedTools = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
         ? ["inject_progress", "complete_monitoring", "search_mcp_tools", "call_mcp_tool", "read_tool_guide",
-            ...this.buildTaskMonitorForgeToolDefinitions().map((tool) => tool.name)]
+            ...this.forgeToolBridge.buildTaskMonitorForgeToolDefinitions().map((tool) => tool.name)]
         : hostToolCall.namespace === TASK_MONITOR_TOOL_NAMESPACE
           ? ["inject_progress", "complete_monitoring"]
           : [];
@@ -35654,8 +35019,8 @@ export class DesktopBackendRegistry {
         taskMonitorHandler: async (monitorRequest) =>
           await this.handleAgentTaskMonitorRequest(monitorRequest),
         threadInspectionHandler: this.threadInspectionHandler,
-        forgeReadHandler: this.gatedForgeReadHandler,
-        forgePrToolHandler: this.gatedForgePrToolHandler,
+        forgeReadHandler: this.forgeToolBridge.gatedForgeReadHandler,
+        forgePrToolHandler: this.forgeToolBridge.gatedForgePrToolHandler,
         // Deliberately omit forgeToolPolicy: stale definitions must reach
         // the per-call policy gate even after a tool is hidden in Settings.
         threadOrchestrationHandler: this.threadOrchestrationHandler,
@@ -35943,21 +35308,6 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The thread's project, as a forge rule names it: its primary repository.
-   * The resolver reads a thread no navigation refresh has listed yet.
-   */
-  private async threadProjectRepository(backend: AppServerBackendKind, threadId: string): Promise<string | undefined> {
-    try {
-      const primary = this.threadPrimaryGitRepositoryReader?.(backend, threadId)
-        ?? await this.threadProjectRepositoryResolver?.(backend, threadId);
-      return primary ? normalizeForgeRuleRepository(primary) : undefined;
-    } catch (error) {
-      backendRegistryLog.warn("could not read a thread's project for MCP tool approval", { threadId, error: String(error) });
-      return undefined;
-    }
-  }
-
-  /**
    * The grant a tool approval card may offer for this thread's project, or
    * none. Never for a thread without a repository, and never when the
    * project itself is set to ask before every tool: the operator already
@@ -35971,39 +35321,12 @@ export class DesktopBackendRegistry {
     const { connection, resolution, repository } = input;
     if (!repository || !this.mcpConnectionService?.setConnectionProjectToolApproval) return undefined;
     if (resolution.repository && resolution.toolApproval === "prompt") return undefined;
-    const projectLabel = await this.ruleRepositoryProjectLabel(repository);
+    const projectLabel = await this.forgeToolBridge.ruleRepositoryProjectLabel(repository);
     return {
       connectionId: connection.id,
       repository,
       offer: buildMcpProjectToolApprovalOffer({ serverLabel: connection.displayName, projectLabel }),
     };
-  }
-
-  /**
-   * The project's name in the Directories lens, so a card names it as the
-   * sidebar and Settings do. `fallback` when no row matches or the lookup is
-   * slow: a card must not wait on the directory inventory.
-   */
-  private async ruleRepositoryProjectLabel(
-    repository: string,
-    fallback = forgeRuleRepositoryLabel(repository),
-  ): Promise<string> {
-    if (!this.forgeProjectLabelResolver) return fallback;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const label = await Promise.race([
-        this.forgeProjectLabelResolver(repository),
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(() => resolve(undefined), FORGE_PROJECT_LABEL_TIMEOUT_MS);
-        }),
-      ]);
-      return label?.trim() || fallback;
-    } catch (error) {
-      backendRegistryLog.warn("could not read the project name for an approval card", { error: String(error) });
-      return fallback;
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
   }
 
   private isTaskMonitorThread(context: { backend: AppServerBackendKind; threadId: string }): boolean {
@@ -36014,24 +35337,6 @@ export class DesktopBackendRegistry {
   private taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined {
     return [...this.taskMonitorDelegations.values()].find((record) =>
       record.backend === context.backend && record.monitorThreadId === context.threadId);
-  }
-
-  private buildTaskMonitorForgeToolDefinitions(policy?: ForgeAgentToolPolicy) {
-    return buildForgeToolDefinitions({
-      forgeReadHandler: this.gatedForgeReadHandler,
-      forgePrToolHandler: this.gatedForgePrToolHandler,
-      policy,
-    }).filter((tool) => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true);
-  }
-
-  private resolveTaskMonitorForgeContext(context: AgentToolCallContext, readOnly: boolean): AgentToolCallContext {
-    if (!this.isTaskMonitorThread(context)) return context;
-    const monitor = this.taskMonitorForThread(context);
-    if (!readOnly || !monitor || monitor.cancellation || monitor.finalizationStarted) {
-      throw new ForgeReadError("forbidden", "Job Monitors may only read forge state while monitoring is active.");
-    }
-    // Hidden monitor threads have no repository links or attached PRs of their own.
-    return { ...context, backend: monitor.parentBackend, threadId: monitor.parentThreadId, turnId: monitor.parentTurnId };
   }
 
   private async readMcpGatewaySelection(context: AgentToolCallContext): Promise<string[]> {
@@ -36187,7 +35492,7 @@ export class DesktopBackendRegistry {
     // follows a change. By default Codex's rule applies: listing and
     // inspecting run, and a restart still asks.
     // A project's own mode wins for a thread in that project.
-    const repository = await this.threadProjectRepository(approvalContext.backend, approvalContext.threadId);
+    const repository = await this.forgeToolBridge.threadProjectRepository(approvalContext.backend, approvalContext.threadId);
     const { resolution, connection: approvalConnection } =
       await this.readMcpConnectionToolApproval(invocation.connectionId, repository);
     const toolApproval = resolution.toolApproval;
@@ -36425,7 +35730,7 @@ export class DesktopBackendRegistry {
         .find((entry) => entry.id === connectionId);
       if (!connection?.enabled || !connection.configured
         || connection.state === "disconnected" || connection.state === "reauthorization_required") return undefined;
-      const repository = await this.threadProjectRepository("codex", threadId);
+      const repository = await this.forgeToolBridge.threadProjectRepository("codex", threadId);
       const resolution = resolveMcpConnectionToolApproval(connection, repository);
       if (resolution.toolApproval !== "approve") {
         if (this.isTaskMonitorThread({ backend: "codex", threadId })) return undefined;
@@ -36475,52 +35780,6 @@ export class DesktopBackendRegistry {
       backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });
       return { resolution: { toolApproval: "auto" } };
     }
-  }
-
-  /** The live turn's plan mode is independent of its saved approval mode. */
-  private isForgePlanTurn(context: AgentToolCallContext): boolean {
-    if (context.backend === "claude") return this.claudeBackend.livePermissionMode(context.threadId) === "plan";
-    if (context.backend !== "codex") return false;
-    const pendingKey = buildActiveTurnKey("codex", context.threadId, `pending:${context.threadId}`);
-    const turnId = context.turnId ?? this.getActiveTurnForThread(context)?.turnId;
-    const mode = turnId
-      ? this.activeCodexTurnCollaborationModes.get(buildActiveTurnKey("codex", context.threadId, turnId))
-      : undefined;
-    // A dynamic call can arrive before turn/start returns its real turn id.
-    return (mode ?? this.activeCodexTurnCollaborationModes.get(pendingKey)) === "plan";
-  }
-
-  /**
-   * Whether a forge group set to Auto runs without a card in this turn.
-   *
-   * Auto follows the turn's approval mode. Full Access runs every group. A
-   * Codex Auto turn runs every group but Approve and merge: in that mode Codex
-   * lets its own reviewer clear the same work done through `gh` or its GitHub
-   * connector, without a card. Codex never reviews PwrAgent's dynamic tools,
-   * so asking here made the PwrAgent tool the one path that always stopped,
-   * and the agent is told not to fall back to `gh`. These tools reach only
-   * the thread's linked repositories. Merging and approving stay Full Access
-   * only, because they cannot be taken back. A headless automation also
-   * needs Full Access: nobody is watching it, and in an Auto automation no
-   * reviewer would see these calls at all.
-   *
-   * A Claude thread follows the same rules. Bypass permissions is its Full
-   * Access, and its Auto mode lets Claude's classifier clear `gh` the way
-   * Codex's reviewer does.
-   */
-  private async forgeAutoRunsWithoutApproval(
-    group: ForgeAgentToolGroup,
-    context: AgentToolCallContext,
-    automation?: { executionMode?: ThreadExecutionMode },
-  ): Promise<boolean> {
-    if (context.backend !== "codex" && context.backend !== "claude") {
-      return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
-    }
-    const executionMode = context.backend === "codex"
-      ? await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode)
-      : await this.resolveClaudeToolCallExecutionMode(context.threadId, automation?.executionMode);
-    if (executionMode === "full-access") return true;
-    return executionMode === "auto" && group !== "approve_merge" && !automation;
   }
 
   /**
@@ -40973,7 +40232,7 @@ export class DesktopBackendRegistry {
         ? new AgentToolRouter([
             ...buildPwrAgentTaskMonitorToolDefinitions(undefined, "monitor"),
             ...buildMcpGatewayToolDefinitions(this.mcpGatewayTools),
-            ...this.buildTaskMonitorForgeToolDefinitions(this.resolveForgeToolPolicy()),
+            ...this.forgeToolBridge.buildTaskMonitorForgeToolDefinitions(this.forgeToolBridge.resolveForgeToolPolicy()),
           ]).buildDynamicToolSpecs()
         : [];
 
@@ -42323,7 +41582,7 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "attach_thread_pull_request") {
-      return await this.handleAttachThreadPullRequestInspectionRequest({
+      return await this.forgeToolBridge.handleAttachThreadPullRequestInspectionRequest({
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
@@ -42331,7 +41590,7 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "check_thread_pull_request_status") {
-      if (!this.threadPullRequestStatusToolHandler) {
+      if (!this.forgeToolBridge.pullRequestStatusTool) {
         return {
           ok: false,
           error: {
@@ -42340,7 +41599,7 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      return await this.threadPullRequestStatusToolHandler(
+      return await this.forgeToolBridge.pullRequestStatusTool(
         {
           ...request.args,
           backend: request.args.backend ?? request.context.backend,
@@ -42351,7 +41610,7 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "watch_thread_pull_request") {
-      if (!this.threadPullRequestWatchToolHandler) {
+      if (!this.forgeToolBridge.pullRequestWatchTool) {
         return {
           ok: false,
           error: {
@@ -42360,7 +41619,7 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      return await this.threadPullRequestWatchToolHandler({
+      return await this.forgeToolBridge.pullRequestWatchTool({
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
@@ -42924,146 +42183,6 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async handleAttachThreadPullRequestInspectionRequest(
-    args: AttachThreadPullRequestToolArgs,
-    options: { forgeUrl?: boolean } = {},
-  ): Promise<PwrAgentThreadInspectionResponse> {
-    if (!args.backend || !isAppServerBackendKind(args.backend)) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: "backend must be a known PwrAgent backend.",
-        },
-      };
-    }
-    const threadId = args.threadId?.trim();
-    if (!threadId) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: "threadId is required.",
-        },
-      };
-    }
-    const summary = await this.readThreadInspectionSummaryForMutation({
-      backend: args.backend,
-      threadId,
-    });
-    if (!summary) {
-      return {
-        ok: false,
-        error: {
-          code: "not_found",
-          message: `Thread ${args.backend}:${threadId} was not found.`,
-        },
-      };
-    }
-
-    const resolved = await this.resolvePullRequestReferenceForThread(args, summary);
-    if (!resolved.ok) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message: resolved.message,
-        },
-      };
-    }
-
-    const ref = options.forgeUrl || resolved.forgeResolved
-      ? resolved.ref
-      : await this.resolveForgePullRequestReference(resolved.ref, summary);
-    const pr: PrSummary = {
-      provider: normalizePullRequestProvider(ref.provider),
-      org: ref.org,
-      repo: ref.repo,
-      number: ref.number,
-      ...(args.title?.trim() ? { title: args.title.trim() } : {}),
-      state: "pending",
-      checkState: "pending",
-      lifecycleState: "open",
-      reviewState: "ready_for_review",
-      mergeState: "unknown",
-      url: ref.url,
-    };
-
-    const overlay = await this.overlayStore.addThreadPullRequestReference({
-      backend: args.backend,
-      threadId,
-      pr,
-    });
-    // Rows stored before the forge named a renamed repository collapse here,
-    // so the tool reply and the chips show one PR.
-    const prs = (await this.projectCanonicalPullRequests(overlay))?.prs ?? [];
-    await this.publishLocalEvent({
-      backend: args.backend,
-      notification: {
-        method: "thread/pullRequests/updated",
-        params: {
-          threadId,
-          prs,
-        },
-      },
-    });
-
-    return {
-      ok: true,
-      data: {
-        pullRequestReference: {
-          backend: args.backend,
-          threadId,
-          pr,
-          prs,
-        },
-      },
-    };
-  }
-
-  /**
-   * The identity the forge gives a PR the agent named. Attaching never fails
-   * because the forge cannot answer; it keeps the typed identity, and a later
-   * lookup's by-URL refresh merges the rows.
-   */
-  private async resolveForgePullRequestReference(
-    ref: PullRequestReferenceIdentity,
-    summary: ThreadInspectionSummary,
-  ): Promise<PullRequestReferenceIdentity> {
-    if (!this.pullRequestReferenceResolver) return ref;
-    const directory = summary.linkedDirectories[0];
-    const cwd = directory?.worktreePath?.trim() || directory?.path.trim() || undefined;
-    try {
-      const resolved = await this.pullRequestReferenceResolver({
-        url: ref.url,
-        ...(cwd ? { cwd } : {}),
-      });
-      const parsed = parsePullRequestReferenceUrl(resolved?.url);
-      if (
-        !resolved
-        || normalizePullRequestProvider(resolved.provider) !== normalizePullRequestProvider(ref.provider)
-        || parsed?.number !== ref.number
-      ) {
-        return ref;
-      }
-      return {
-        ...ref,
-        provider: normalizePullRequestProvider(resolved.provider),
-        org: resolved.org,
-        repo: resolved.repo,
-        url: resolved.url,
-        ...(parsed?.kind ? { kind: parsed.kind } : {}),
-        ...(parsed?.urlBase ? { urlBase: parsed.urlBase } : {}),
-      };
-    } catch (error) {
-      backendRegistryLog.warn("could not resolve pull request reference with its forge", {
-        url: ref.url,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return ref;
-    }
-  }
-
   private async readThreadInspectionSummaryForMutation(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -43175,195 +42294,6 @@ export class DesktopBackendRegistry {
         : undefined;
     }
     return undefined;
-  }
-
-  private async resolvePullRequestReferenceForThread(
-    args: AttachThreadPullRequestToolArgs,
-    summary: ThreadInspectionSummary,
-  ): Promise<
-    | { ok: true; ref: PullRequestReferenceIdentity; forgeResolved?: boolean }
-    | { ok: false; message: string }
-  > {
-    const parsedUrl = parsePullRequestReferenceUrl(args.url);
-    if (args.url?.trim() && !parsedUrl) {
-      return {
-        ok: false,
-        message:
-          "url must look like a GitHub/GHE /pull/<number> URL or a GitLab /merge_requests/<number> URL.",
-      };
-    }
-    const explicitNumber = normalizePositivePullRequestNumber(args.number);
-    const explicitProvider = args.provider?.trim()
-      ? normalizePullRequestProvider(args.provider)
-      : undefined;
-    const explicitOrg = args.org?.trim();
-    const explicitRepo = args.repo?.trim();
-    if (parsedUrl) {
-      const conflicts = [
-        explicitNumber !== undefined && explicitNumber !== parsedUrl.number
-          ? "number"
-          : undefined,
-        explicitProvider && explicitProvider !== parsedUrl.provider
-          ? "provider"
-          : undefined,
-        // Forges fold the case of owner and repository names.
-        explicitOrg && explicitOrg.toLowerCase() !== parsedUrl.org.toLowerCase()
-          ? "org"
-          : undefined,
-        explicitRepo && explicitRepo.toLowerCase() !== parsedUrl.repo.toLowerCase()
-          ? "repo"
-          : undefined,
-      ].filter((field): field is string => Boolean(field));
-      if (conflicts.length > 0) {
-        return {
-          ok: false,
-          message: `url conflicts with explicit ${conflicts.join(
-            "/",
-          )}. Provide matching PR identity fields or omit the conflicting fields.`,
-        };
-      }
-    }
-
-    const number = explicitNumber ?? parsedUrl?.number;
-    if (!number) {
-      return {
-        ok: false,
-        message: "number must be a positive integer unless url contains one.",
-      };
-    }
-
-    const provider = explicitProvider ?? parsedUrl?.provider;
-    // The URL's casing wins over fields that match it case-insensitively.
-    const org = parsedUrl?.org || explicitOrg;
-    const repo = parsedUrl?.repo || explicitRepo;
-    if (provider && org && repo) {
-      return {
-        ok: true,
-        ref: {
-          provider,
-          org,
-          repo,
-          number,
-          url: args.url?.trim() || buildPullRequestReferenceUrl({
-            provider,
-            org,
-            repo,
-            number,
-            urlBase: parsedUrl?.urlBase,
-          }),
-          urlBase: parsedUrl?.urlBase,
-        },
-      };
-    }
-
-    const inferredRepositories = await this.inferPullRequestRepositories(summary);
-    if (inferredRepositories.length > 1 && this.pullRequestReferenceResolver) {
-      const resolvedRepositories = await this.resolveInferredPullRequestRepositories(
-        inferredRepositories,
-        number,
-        summary,
-      );
-      if (resolvedRepositories.length === 1) {
-        return { ok: true, ref: resolvedRepositories[0]!, forgeResolved: true };
-      }
-    }
-    if (inferredRepositories.length !== 1) {
-      return {
-        ok: false,
-        message:
-          inferredRepositories.length === 0
-            ? "provider/org/repo are required because no repository could be inferred from the thread."
-            : "provider/org/repo are required because the thread has multiple inferable repositories.",
-      };
-    }
-    const [inferred] = inferredRepositories;
-    return {
-      ok: true,
-      ref: {
-        ...inferred,
-        number,
-        url: buildPullRequestReferenceUrl({ ...inferred, number }),
-      },
-    };
-  }
-
-  /**
-   * The PR under each inferred repository, as the forge names it. A checkout
-   * cloned before a rename keeps the old remote, and the forge answers the
-   * old name with the new one, so both names collapse to one repository.
-   * Known renames come from the alias map without a fetch. A name the forge
-   * cannot place keeps its own identity, so the ambiguity stands.
-   */
-  private async resolveInferredPullRequestRepositories(
-    repositories: readonly PullRequestRepositoryRef[],
-    number: number,
-    summary: ThreadInspectionSummary,
-  ): Promise<PullRequestReferenceIdentity[]> {
-    const answers = await Promise.all(repositories.map(async (repository) =>
-      await this.resolveForgePullRequestReference(
-        {
-          ...repository,
-          number,
-          url: buildPullRequestReferenceUrl({ ...repository, number }),
-        },
-        summary,
-      )
-    ));
-    const byKey = new Map<string, PullRequestReferenceIdentity>();
-    for (const answer of answers) {
-      const key = pullRequestRepositoryKey(answer);
-      if (!byKey.has(key)) byKey.set(key, answer);
-    }
-    return [...byKey.values()];
-  }
-
-  private async inferPullRequestRepositories(
-    summary: ThreadInspectionSummary,
-  ): Promise<PullRequestRepositoryRef[]> {
-    const byKey = new Map<string, PullRequestRepositoryRef>();
-    for (const pr of summary.pullRequests ?? []) {
-      const parsedUrl = parsePullRequestReferenceUrl(pr.url);
-      const ref = {
-        provider: normalizePullRequestProvider(pr.provider),
-        org: pr.org,
-        repo: pr.repo,
-        kind: parsedUrl?.kind,
-        urlBase: parsedUrl?.urlBase,
-      };
-      byKey.set(pullRequestRepositoryKey(ref), ref);
-    }
-    await Promise.all(
-      summary.linkedDirectories.map(async (directory) => {
-        const cwd = directory.worktreePath?.trim() || directory.path.trim();
-        if (!cwd) {
-          return;
-        }
-        const ref = await this.readPullRequestRepositoryFromGitRemote(cwd);
-        if (ref) {
-          const key = pullRequestRepositoryKey(ref);
-          // A known PR URL is stronger evidence than an unclassified remote.
-          byKey.set(key, { ...ref, kind: byKey.get(key)?.kind ?? ref.kind });
-        }
-      }),
-    );
-    return [...byKey.values()].sort((left, right) =>
-      pullRequestRepositoryKey(left).localeCompare(pullRequestRepositoryKey(right)),
-    );
-  }
-
-  private async readPullRequestRepositoryFromGitRemote(
-    cwd: string,
-  ): Promise<PullRequestRepositoryRef | undefined> {
-    try {
-      const result = await execFile(
-        "git",
-        ["-C", cwd, "config", "--get", "remote.origin.url"],
-        { env: buildPwrAgentChildProcessEnv(process.env), timeout: 2_000 },
-      );
-      return parseGitRemoteRepositoryUrl(result.stdout);
-    } catch {
-      return undefined;
-    }
   }
 
   async mutateThreadParentV1(
@@ -44243,7 +43173,7 @@ export class DesktopBackendRegistry {
         });
         return toThreadInspectionSummaryFromSearchResult(
           result,
-          await this.projectCanonicalPullRequests(overlay),
+          await this.forgeToolBridge.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
@@ -44273,82 +43203,11 @@ export class DesktopBackendRegistry {
             : undefined);
         return toThreadInspectionSummary(
           gitWorkingState ? { ...thread, gitWorkingState } : thread,
-          await this.projectCanonicalPullRequests(overlay),
+          await this.forgeToolBridge.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
     );
-  }
-
-  /**
-   * Project a navigation snapshot's PR chips through the canonical PR
-   * status registry.
-   *
-   * The thread overlay stores which PRs are attached to a thread; the
-   * *status* on those stored rows is only a cached projection, and the
-   * background poller does not write back into it — it updates the PR
-   * status registry (and its `pr_status_cache` table) and emits
-   * `pullRequest/status/updated`. Every path that serves PR chips to a
-   * client therefore has to canonicalize, or it hands out whatever
-   * status happened to be persisted the last time the attachment list
-   * was rewritten. The renderer's own snapshot path does this; so must
-   * the bridge that serves federation viewers and messaging browse,
-   * otherwise a viewer sees a PR that merged hours ago still rendered
-   * open with checks running, and never converges — the background
-   * poller drops terminal PRs from its rotation, so nothing it emits
-   * will correct the stale row.
-   *
-   * Deliberately does less than the renderer path's
-   * `applyCanonicalPrStatuses`: no seeding of the status registry from
-   * the passed threads (a serving path should read the registry, not
-   * write to it) and no equality check to preserve thread identity
-   * (these threads are about to be serialized over IPC or federation,
-   * so identity buys nothing). Keep it that way if the two are ever
-   * merged.
-   */
-  async canonicalizeNavigationThreadPullRequests(
-    threads: NavigationSnapshot["threads"],
-  ): Promise<NavigationSnapshot["threads"]> {
-    const primaryRepository = this.threadPrimaryGitRepositoryReader;
-    if (primaryRepository) threads = threads.map((thread) => ({
-      ...thread, primaryGitRepository: primaryRepository(thread.source, thread.id),
-    }));
-    const canonicalizer = this.threadPullRequestCanonicalizer;
-    if (!canonicalizer) {
-      return threads;
-    }
-    try {
-      return await Promise.all(
-        threads.map(async (thread) => {
-          if (!thread.prs?.length) {
-            return thread;
-          }
-          return { ...thread, prs: await canonicalizer(thread.prs) };
-        }),
-      );
-    } catch (error) {
-      // Canonicalizing reads the durable `pr_status_cache`. If that read
-      // fails, serving the snapshot with the overlay's own PR rows is a
-      // far better outcome than failing the snapshot: the client gets
-      // possibly-stale chips instead of an error, and for a federation
-      // viewer an error means a disconnected window rather than one
-      // slightly wrong row.
-      backendRegistryLog.warn("pr status canonicalization failed", {
-        error: error instanceof Error ? error.message : String(error),
-        threadCount: threads.length,
-      });
-      return threads;
-    }
-  }
-
-  private async projectCanonicalPullRequests(
-    overlay: ThreadOverlayState | undefined,
-  ): Promise<ThreadOverlayState | undefined> {
-    if (!overlay?.prs?.length || !this.threadPullRequestCanonicalizer) {
-      return overlay;
-    }
-    const prs = await this.threadPullRequestCanonicalizer(overlay.prs);
-    return { ...overlay, prs };
   }
 
   private async getThreadInspectionMessagingBindings(params: {
@@ -46098,7 +44957,7 @@ export class DesktopBackendRegistry {
         }
         if (withdrawnForgeApprovals.length > 0) {
           // Off the terminal path: the card is a notice, not turn state.
-          void this.raiseWithdrawnForgeApprovalTodo(
+          void this.forgeToolBridge.raiseWithdrawnForgeApprovalTodo(
             event.backend,
             event.notification.params.threadId,
             withdrawnForgeApprovals,

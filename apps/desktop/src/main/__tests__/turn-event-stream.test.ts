@@ -82,7 +82,6 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "findActiveCodexReviewTurnKey",
     "resolveCodexThreadExecutionModeForActiveTurn",
     "emit",
-    "raiseWithdrawnForgeApprovalTodo",
     "flushLiveThreadUsageLines",
     "persistLiveCodexNativeSubAgentUsage",
     "usageAccountForTurn",
@@ -125,6 +124,8 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "withReviewRuntimeMetadata",
     "emitToListeners",
   ].map((name) => ({ name, owner: (registry: Members) => registry })),
+  // Moved to the forge tool bridge (PWR-146).
+  { name: "raiseWithdrawnForgeApprovalTodo", owner: (registry: Members) => registry.forgeToolBridge as Members | undefined },
   ...([
     ["overlayStore", ["getThreadMetadata", "updateThreadMetadata", "completeThreadUsageTurn", "getThreadOverlayState"]],
     ["providerThreadSnapshotStore", ["list", "replace"]],
