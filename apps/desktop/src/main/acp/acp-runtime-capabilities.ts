@@ -128,6 +128,12 @@ export function acpRuntimeSupportsSessionLoad(
   return capabilities?.agentCapabilities?.loadSession !== false;
 }
 
+export function acpRuntimeSupportsHttpMcp(
+  capabilities: BackendAcpRuntimeCapabilities | undefined,
+): boolean {
+  return capabilities?.agentCapabilities?.mcp?.http === true;
+}
+
 export function acpRuntimeSupportsSessionHistoryReplay(
   capabilities: BackendAcpRuntimeCapabilities | undefined,
 ): boolean {

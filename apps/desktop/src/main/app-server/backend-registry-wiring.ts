@@ -47,7 +47,6 @@ import { AcpBackendAdapter, createLocalAcpAgentDiscovery, noLocalAcpAgentDiscove
 import { CodexAppServerClient } from "../codex-app-server/desktop-client";
 import { DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS } from "../codex-app-server/app-server-recycle-policy";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
-import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
@@ -1035,9 +1034,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         backendId,
       );
     },
-    automationInspectionMcpCommand:
-      options?.automationInspectionMcpCommand ??
-      resolveAutomationInspectionMcpCommand(),
   });
   initialize.push(() => {
     // A Codex window leaves the summary when it resets; tell listeners, so a

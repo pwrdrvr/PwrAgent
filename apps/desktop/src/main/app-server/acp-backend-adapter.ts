@@ -55,10 +55,6 @@ import {
 } from "./turn-input-attachment-files";
 import type { ThreadAssetOwner } from "./thread-assets";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
-import {
-  acpRuntimeSupportsHttpMcp,
-  buildAutomationInspectionAcpMcpServers,
-} from "../automations/automation-inspection-cli.js";
 import type {
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server.js";
@@ -96,6 +92,7 @@ import {
 } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord, AcpRegistrySnapshot } from "../acp/acp-registry-types";
 import {
+  acpRuntimeSupportsHttpMcp,
   acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
 } from "../acp/acp-runtime-capabilities";
@@ -318,7 +315,6 @@ export type AcpBackendAdapterOptions = {
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   agentToolMcpServer?: AgentToolMcpServerLike;
-  automationInspectionMcpCommand?: string;
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
@@ -1172,7 +1168,6 @@ export class AcpBackendAdapter {
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
   private readonly agentToolMcpServer?: AgentToolMcpServerLike;
-  private readonly automationInspectionMcpCommand?: string;
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
@@ -1255,7 +1250,6 @@ export class AcpBackendAdapter {
     });
     this.captureStores = options.captureStores;
     this.agentToolMcpServer = options.agentToolMcpServer;
-    this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
     this.resolveMcpConnectionServers = options.resolveMcpConnectionServers;
@@ -3512,10 +3506,7 @@ export class AcpBackendAdapter {
         backendId,
         runtimeCapabilities,
         sessionId,
-      }): Promise<
-        AcpMcpServerRegistration
-        | ReturnType<typeof buildAutomationInspectionAcpMcpServers>
-      > => {
+      }): Promise<AcpMcpServerRegistration> => {
         let baseRegistration: AcpMcpServerRegistration | undefined;
         if (
           this.agentToolMcpServer
@@ -3538,15 +3529,6 @@ export class AcpBackendAdapter {
             });
           }
         }
-        const fallbackRegistration = buildAutomationInspectionAcpMcpServers({
-            backend: backendId,
-            command: this.automationInspectionMcpCommand,
-            runtimeCapabilities,
-            threadId: sessionId,
-          });
-        baseRegistration ??= Array.isArray(fallbackRegistration)
-          ? { servers: fallbackRegistration }
-          : fallbackRegistration;
         const connectionRegistration =
           await this.resolveMcpConnectionServers?.({ backendId, sessionId });
         return mergeMcpServerRegistrations(
