@@ -137,9 +137,11 @@ time and are rejected unless the registered thread has exactly one active turn.
 ACP runtimes without HTTP MCP support keep starting without the PwrAgent MCP
 instead of failing session creation.
 
-`PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND` remains a compatibility fallback
-for the older automation-only stdio bridge. New integrations should use the
-self-registered `pwragent` HTTP MCP catalog.
+PwrAgent offers an ACP session no other PwrAgent MCP server. Every PwrAgent
+tool an ACP session sees comes from that HTTP server, which lists and refuses
+tools by the member's federation containment. The older
+`PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND` stdio bridge was removed: it had
+no implementation and no route to the owner.
 
 Manual smoke test:
 

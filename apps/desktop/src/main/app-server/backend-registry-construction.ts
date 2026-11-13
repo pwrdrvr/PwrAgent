@@ -119,7 +119,6 @@ export type DesktopBackendRegistryOptions = {
   mcpConnectionService?: BackendRegistryMcpConnectionService | null;
   messagingStore?: MessagingArchiveCleanupStore | null;
   messagingArchiveCleaner?: MessagingArchiveCleaner | null;
-  automationInspectionMcpCommand?: string;
   appManagementHandler?: PwrAgentAppManagementHandler | null;
   starMapHandler?: PwrAgentStarMapHandler | null;
   createScratchProjectDirectory?: () => Promise<string>;
