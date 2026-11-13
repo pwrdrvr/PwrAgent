@@ -4,8 +4,9 @@ import {
   FEDERATION_PEER_ROLE_CHANGED_METHOD,
   FEDERATION_PEER_ROLE_METHOD,
 } from "@pwragent/federation/federation-backend-methods";
-import { FEDERATION_CAPABILITIES, type FederationPeerRole, type FederationProtocolEnvelope } from "@pwragent/shared";
+import { FEDERATION_CAPABILITIES, FEDERATION_INVITE_VERSION, type FederationPeerRole, type FederationProtocolEnvelope } from "@pwragent/shared";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { encodeFederationInvite } from "@pwragent/federation/federation-enrollment";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import type { FederationRouter } from "../federation/federation-router";
 import { installOwnerEgressPolicy } from "../federation/owner-egress-policy";
@@ -243,4 +244,58 @@ it("costs no state DB commit to reconnect to a gateway whose assignment did not 
       writes: reconnects,
     });
   } finally { await host.close(); }
+});
+
+it("drops the gateway's assignment with its pairing, and ignores a report from a forgotten gateway", async () => {
+  const previous = getOwnerHostServices();
+  onTestFinished(() => installOwnerHostServices(previous));
+  await openAppState();
+  configure("full");
+  clearGatewayAssignedMemberRole();
+  const host = await member();
+  // Federation's own restart and config writes are not under test here.
+  vi.mocked(getDesktopSettingsService).mockReturnValue({ readFederationConfig: () => ({}),
+    writeConfigPatchTargeted: async () => {}, clearSecret: async () => {},
+  } as unknown as ReturnType<typeof getDesktopSettingsService>);
+  const runtime = Object.assign(host.runtime, { restart: async () => {}, readRuntimeConfig: () => ({ mode: "gateway" }),
+    celestialAssignmentMap: () => new Map(), enrollmentScopedPinInstanceIds: () => [] }) as unknown as typeof host.runtime & {
+      resetEnrollment(): Promise<unknown>; importInvite(invite: string): Promise<unknown> };
+  const afterRestart = () => { forgetCachedGatewayAssignedMemberRole(); return localMemberRole(); };
+  try {
+    await host.reply(GATEWAY, "contained");
+    expect(afterRestart()).toBe("contained");
+
+    // Forget pairing. The runtime still holds the old gateway connection
+    // until its restart runs, and that gateway may still speak.
+    await runtime.resetEnrollment();
+    expect(localMemberRole()).toBe("full");
+    await host.push(GATEWAY, GATEWAY, "contained");
+    expect(localMemberRole()).toBe("full");
+    expect(afterRestart()).toBe("full");
+
+    // A row stored for some other gateway goes with the next pairing too, so
+    // pairing with that gateway later does not inherit it.
+    desktopFederationState.write("gatewayAssignedRole", JSON.stringify({ gatewayInstanceId: "gateway-later", role: "contained" }));
+    await runtime.importInvite(encodeFederationInvite({ version: FEDERATION_INVITE_VERSION, token: "fixture-token",
+      gatewayInstanceId: "gateway-later", gatewayPublicKeyPem: "fixture-pem", gatewayNoisePublicKey: "fixture-noise",
+      gatewayUrl: "ws://gateway.example:47833", expiresAt: Date.now() + 60_000 }));
+    expect(desktopFederationState.read("gatewayInstanceId")).toBe("gateway-later");
+    expect(afterRestart()).toBe("full");
+  } finally { await host.close(); }
+});
+
+it("sees an assignment another instance on this profile recorded, within seconds", async () => {
+  const previous = getOwnerHostServices();
+  onTestFinished(() => installOwnerHostServices(previous));
+  await openAppState();
+  configure("full");
+  clearGatewayAssignedMemberRole();
+  desktopFederationState.write("gatewayInstanceId", GATEWAY);
+  expect(localMemberRole()).toBe("full");
+  // The instance holding this profile's federation lease hears its gateway.
+  desktopFederationState.write("gatewayAssignedRole", JSON.stringify({ gatewayInstanceId: GATEWAY, role: "contained" }));
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => { vi.useRealTimers(); });
+  vi.setSystemTime(Date.now() + 5_001);
+  expect(localMemberRole()).toBe("contained");
 });

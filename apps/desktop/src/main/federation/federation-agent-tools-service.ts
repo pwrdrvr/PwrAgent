@@ -11,6 +11,7 @@ import type {
   FederationHostInfo,
   FederationInstanceDescriptor,
   FederationAttentionThreadSummary,
+  FederationPeerRole,
   FederationInstanceBackendSummary,
   FederationInstanceId,
   FederationLoadStatus,
@@ -966,7 +967,7 @@ async function searchFederationThreads(
 
 function peerAssignedRole(
   assignsLocalRole: FederationInstanceDescriptor["assignsLocalRole"],
-  effectiveRole: FederationInstanceDescriptor["assignsLocalRole"],
+  effectiveRole: FederationPeerRole | undefined,
 ): Pick<FederationInstanceDescriptor, "assignsLocalRole" | "assignedRoleMismatch"> {
   if (!assignsLocalRole) return {};
   const mismatch = effectiveRole ? federationAssignedRoleMismatch(effectiveRole, assignsLocalRole) : undefined;
