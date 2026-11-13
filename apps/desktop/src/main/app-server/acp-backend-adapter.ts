@@ -128,6 +128,7 @@ import {
   shouldCheckGrokCliUpdate,
 } from "../acp/grok-cli-update";
 import { getMainLogger } from "../log";
+import { localMemberRole } from "../member-containment";
 import {
   getAppStateMode,
   isAppStateInitialized,
@@ -3505,6 +3506,8 @@ export class AcpBackendAdapter {
       },
       onRequest: async (request) =>
         await this.handleServerRequest(agent.backendId, request),
+      // The agent tool server lists tools by this member's containment.
+      agentToolCatalogKey: localMemberRole,
       mcpServers: async ({
         backendId,
         runtimeCapabilities,

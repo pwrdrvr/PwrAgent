@@ -253,6 +253,13 @@ export type AcpAgentClientOptions = {
     | AcpMcpServerConfig[]
     | AcpMcpServerRegistration
     | Promise<AcpMcpServerConfig[] | AcpMcpServerRegistration>;
+  /**
+   * Names the agent tool catalog the MCP servers advertise now. An agent
+   * lists a session's tools once, when session/new or session/load starts
+   * its servers, so a session set up under another key is reloaded before
+   * its next prompt.
+   */
+  agentToolCatalogKey?: () => string;
 };
 
 export class AcpAgentClient {
@@ -295,6 +302,8 @@ export class AcpAgentClient {
    * session/load would bring back neither. They are never idle-closed.
    */
   private readonly sessionsWithoutFaithfulReload = new Set<string>();
+  /** The `agentToolCatalogKey` each session's MCP servers started under, by app session id. */
+  private readonly sessionAgentToolCatalogKeys = new Map<string, string>();
   private readonly now: () => number;
   private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
@@ -610,6 +619,7 @@ export class AcpAgentClient {
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
+    this.sessionAgentToolCatalogKeys.delete(sessionId);
   }
 
   supportsTurnSteering(): boolean {
@@ -645,6 +655,7 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
+    this.sessionAgentToolCatalogKeys.clear();
     await this.options.transport.close?.();
   }
 
@@ -848,6 +859,8 @@ export class AcpAgentClient {
     params: Parameters<AcpAgentClient["startSession"]>[0],
   ): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
+    // Read before the servers are built, so a change meanwhile reads as stale.
+    const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
     const defaultMcpRegistration =
       params.mcpServers === "none"
         ? { servers: [] }
@@ -907,6 +920,7 @@ export class AcpAgentClient {
     if (params.sessionMeta || params.mcpServers === "none") {
       this.sessionsWithoutFaithfulReload.add(appSessionId);
     }
+    this.rememberAgentToolCatalogKey(appSessionId, agentToolCatalogKey);
     this.rememberSessionConfigOptions(sessionId, result);
     await Promise.resolve(mcpRegistration.bindThread?.(appSessionId));
     this.notifyRuntimeCapabilities({
@@ -2001,6 +2015,7 @@ export class AcpAgentClient {
     }
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
+    const agentToolCatalogKey = this.options.agentToolCatalogKey?.();
     const mcpRegistration = await this.buildMcpServers({
       cwd,
       sessionId: metadata.sessionId,
@@ -2056,8 +2071,48 @@ export class AcpAgentClient {
       runtimeState,
     });
     this.loadedSessionCwds.set(protocolSessionId, cwd);
+    this.rememberAgentToolCatalogKey(metadata.sessionId, agentToolCatalogKey);
     this.touchSession(metadata.sessionId);
     return result;
+  }
+
+  private rememberAgentToolCatalogKey(sessionId: string, key: string | undefined): void {
+    if (key === undefined) this.sessionAgentToolCatalogKeys.delete(sessionId);
+    else this.sessionAgentToolCatalogKeys.set(sessionId, key);
+  }
+
+  /**
+   * Whether an open session's MCP servers advertise another catalog than the
+   * current one, such as the full one after this member became contained,
+   * and a close and load can give it the current one. Calls outside the
+   * current catalog are refused either way; this only fixes what the model
+   * is shown.
+   */
+  private agentToolCatalogIsStale(sessionId: string): boolean {
+    const advertised = this.sessionAgentToolCatalogKeys.get(sessionId);
+    if (advertised === undefined) return false;
+    const current = this.options.agentToolCatalogKey?.();
+    return current !== undefined
+      && current !== advertised
+      && this.supportsSessionClose()
+      && this.supportsSessionLoad()
+      && !this.sessionsWithoutFaithfulReload.has(sessionId)
+      && this.loadedSessionCwds.has(this.protocolSessionIdFor(sessionId));
+  }
+
+  /**
+   * Close and load a session whose catalog is stale, so the agent starts its
+   * MCP servers again and lists the current tools. A close that fails keeps
+   * the session as it was.
+   */
+  private async refreshAgentToolCatalog(sessionId: string): Promise<void> {
+    acpClientLog.info("reloading ACP session for a new agent tool catalog", {
+      backendId: this.options.backendId,
+      sessionId,
+    });
+    if (await this.closeIdleSession(sessionId)) {
+      await this.reopenIdleClosedSession(sessionId);
+    }
   }
 
   private isSessionLoaded(metadata: AcpSessionMetadata): boolean {
@@ -2127,8 +2182,12 @@ export class AcpAgentClient {
       ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
     );
     // The turn is already tracked, so no idle close can start now; one that
-    // already released the session is undone first.
-    const reload = this.reloadBeforeRequest(params.sessionId);
+    // already released the session is undone first. A session whose MCP
+    // servers list another agent tool catalog is reloaded the same way.
+    const reload = this.reloadBeforeRequest(params.sessionId)
+      ?? (this.agentToolCatalogIsStale(params.sessionId)
+        ? this.refreshAgentToolCatalog(params.sessionId)
+        : undefined);
     return Promise.race([
       reload ? reload.then(sendPrompt) : sendPrompt(),
       terminalResponseGuard,

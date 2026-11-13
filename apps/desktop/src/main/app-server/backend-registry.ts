@@ -3,7 +3,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { RegistryDependencies } from "./backend-registry-construction";
 import { assertOwnerExecutionPolicy, executionModeUnavailableMessage, ownerSandboxForMode } from "../owner-runtime-policy";
 import { countAgentTools, filterAdvertisedAgentTools, isAgentToolCallAllowed } from "../headless/outpost-agent-tools";
-import { approvalSettingsForMode, localAgentToolAllowlist, localMemberRole } from "../member-containment";
+import { approvalSettingsForMode, localAgentToolAllowlist, localAgentToolRefusal, localMemberRole } from "../member-containment";
 import { buildPwrAgentMessagingPdfToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import { requestShowThread, ownerNotifications as getDesktopNotificationService, getOwnerHostServices } from "../owner-host";
 import { ThreadCreationLifecycle, type PreparedThreadCreation, type ThreadCreationPreparation } from "@pwragent/owner-core/thread-creation-lifecycle";
@@ -14491,10 +14491,12 @@ export class DesktopBackendRegistry {
     if (!this.pdfToolMcpServer) {
       return undefined;
     }
-    // The PDF server's tools run in the owner like dynamic tools, and it has
-    // no per-call host gate, so a host that restricts agent tools offers it
-    // only when the grant covers every one of them. An empty list proves
-    // nothing about what the server resolves per call, so it fails closed.
+    // The PDF server's tools run in the owner like dynamic tools, so a host
+    // that restricts agent tools offers it only when the grant covers every
+    // one of them. An empty list proves nothing about what the server
+    // resolves per call, so it fails closed. The server also refuses each
+    // unlisted call, for a thread that started before this member was
+    // contained.
     const agentToolAllowlist = localAgentToolAllowlist();
     if (agentToolAllowlist) {
       const pdfTools = buildPwrAgentMessagingPdfToolRouter(this.messagingHandler).buildDynamicToolSpecs();
@@ -14864,6 +14866,8 @@ export class DesktopBackendRegistry {
             instructions,
             mcpServers,
             ...(this.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
+            // PwrAgent's server lists tools by this member's containment.
+            ...(owned ? { agentToolCatalogKey: localMemberRole() } : {}),
             // Directories attached to the thread, so Claude can work in them too.
             attachedDirectories: overlay?.extraLinkedDirectories,
             shellEnvironment: setupVariablesForAgent(
@@ -36048,13 +36052,8 @@ export class DesktopBackendRegistry {
     turnId: string;
     arguments?: unknown;
   }): Promise<string | null> {
-    const agentToolAllowlist = localAgentToolAllowlist();
-    if (agentToolAllowlist && !isAgentToolCallAllowed(agentToolAllowlist, {
-      namespace: PWRAGENT_TOOL_NAMESPACE,
-      tool: params.tool,
-    })) {
-      return "this contained member does not allow this PwrAgent tool";
-    }
+    const refusal = localAgentToolRefusal(params.tool);
+    if (refusal) return refusal;
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;

@@ -379,6 +379,8 @@ type ClaudeSessionConfig = {
   mcpServers?: Options["mcpServers"];
   mcpKey: string;
   strictMcpConfig?: boolean;
+  /** The agent tool catalog PwrAgent's MCP server listed when the process started. */
+  agentToolCatalogKey?: string;
   /** Tools Claude runs without asking, fixed when the process starts. */
   allowedTools: string[];
   /** The thread's other linked directories, fixed when the process starts. */
@@ -469,6 +471,12 @@ type ClaudeTurnParams = {
   executionMode?: ThreadExecutionMode; instructions?: string;
   mcpServers?: Options["mcpServers"];
   strictMcpConfig?: boolean;
+  /**
+   * Names the agent tool catalog PwrAgent's MCP server lists now, such as a
+   * federation member's role. Claude lists a server's tools when it connects
+   * and keeps the list, so a change relaunches the session.
+   */
+  agentToolCatalogKey?: string;
   /** Plan runs this turn in Claude's read-only plan mode. */
   collaborationMode?: AppServerCollaborationModeRequest;
   /** Directories attached to the thread after it was created. */
@@ -507,6 +515,7 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
     strictMcpConfig: params.strictMcpConfig,
+    agentToolCatalogKey: params.agentToolCatalogKey,
     allowedTools: claudeAllowedTools(params.mcpServers),
     additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
@@ -1324,6 +1333,14 @@ export class ClaudeBackend {
       });
     }
     if (config.strictMcpConfig !== live.config.strictMcpConfig) return false;
+    // The server's URL stays the same, so setMcpServers would keep Claude's
+    // listing. PwrAgent refuses an unlisted call meanwhile.
+    if (config.agentToolCatalogKey !== live.config.agentToolCatalogKey) {
+      if (!keepTasks) return false;
+      claudeBackendLog.info("Deferring a new agent tool catalog until the session relaunches", {
+        threadId: live.session.thread.id, taskCount: live.tasks.active().length,
+      });
+    }
     try {
       if (config.model !== live.config.model) {
         await query.setModel(config.model);
