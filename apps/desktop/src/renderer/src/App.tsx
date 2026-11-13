@@ -324,6 +324,7 @@ import {
   ThreadSearchPanel,
   useThreadSearchPanelState,
 } from "./features/thread-search/ThreadSearchPanel";
+import { planSearchResultOpen } from "./features/thread-search/search-result-open";
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
@@ -5120,15 +5121,36 @@ function DesktopAppShell(props: {
                 }
               }}
               onOpenResult={async (result) => {
-                if (
-                  result.federation &&
-                  isRemoteFederationTarget(result.federation.ref.target)
-                ) {
+                const plan = planSearchResultOpen(result, windowFederationTarget);
+                if (plan.kind === "owner-window") {
                   await desktopApi?.openFederationWindow?.({
-                    target: result.federation.ref.target,
-                    initialThread: result.federation.ref,
+                    target: plan.target,
+                    initialThread: plan.initialThread,
                   });
                   return;
+                }
+                if (plan.federationTarget) {
+                  // A peer's thread joins this window's sidebar first, as a
+                  // thread link or Cmd+K adds it.
+                  try {
+                    await ensureWindowThreadMounted(
+                      desktopApi ?? {},
+                      plan,
+                      navigation.threads,
+                      false,
+                      result.federation?.instanceLabel,
+                    );
+                  } catch (error) {
+                    // Its owner's window needs no pin here, so the click
+                    // still opens the thread.
+                    console.warn("Adding the remote thread to this PwrAgent failed.", error);
+                    openRemoteViewerFromLink({
+                      backend: plan.backend,
+                      instanceId: plan.federationTarget.instanceId,
+                      threadId: plan.threadId,
+                    });
+                    return;
+                  }
                 }
                 // Deep-link to the match: open the thread with the find bar
                 // seeded with the search query so it highlights + scrolls the
@@ -5139,17 +5161,24 @@ function DesktopAppShell(props: {
                   seed
                     ? {
                         query: seed,
-                        threadKey: buildThreadIdentityKey(
-                          result.backend,
-                          result.threadId,
-                        ),
+                        threadKey: plan.threadKey,
                         turnId: result.turnId,
                       }
                     : undefined,
                 );
                 setMainView("thread");
-                await navigation.showThread(result);
+                await navigation.showThread(plan);
               }}
+              onOpenResultInRemoteViewer={windowFederationTarget
+                ? undefined
+                : ({ ref }) => {
+                    if (!isRemoteFederationTarget(ref.target)) return;
+                    openRemoteViewerFromLink({
+                      backend: ref.backend,
+                      instanceId: ref.target.instanceId,
+                      threadId: ref.threadId,
+                    });
+                  }}
             />
           ) : threadDetailPending ? (
             <section className="thread-view thread-view--pending">

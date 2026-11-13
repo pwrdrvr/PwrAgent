@@ -6744,6 +6744,128 @@ describe("App", () => {
     })).toBeInTheDocument();
   });
 
+  it("shows a remote search result in this window while Remote viewer opens the owner's", async () => {
+    const remoteTarget = { scope: "remote" as const, instanceId: "studio-mac" };
+    const remoteRef = { backend: "codex" as const, target: remoteTarget, threadId: "thread-remote" };
+    const thread = (id: string, title: string, updatedAt: number) => ({
+      id,
+      title,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      updatedAt,
+    });
+    const localThread = thread("thread-local", "Local planning thread", 2_000);
+    const remoteThread = {
+      ...thread("thread-remote", "Runner preflight", 1_000),
+      federation: { ref: remoteRef, instanceLabel: "Studio Mac", peerStatus: "connected" as const },
+    };
+    let remotePinned = false;
+    const addRemoteThreadPin = vi.fn(async (request: { ref: typeof remoteRef }) => {
+      remotePinned = true;
+      return { pin: { ref: request.ref, addedAt: Date.now(), instanceLabel: "Studio Mac" } };
+    });
+    const openFederationWindow = vi.fn(async () => ({ windowId: 2 }));
+    const searchThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      contentMode: "available" as const,
+      fetchedAt: Date.now(),
+      filters: { backend: "all" as const, includeArchived: false },
+      query: "runner",
+      results: [{
+        backend: "codex" as const,
+        confidence: "high" as const,
+        identityKey: "remote:studio-mac:codex:thread-remote",
+        linkedDirectories: [],
+        matchReasons: [{ kind: "exact_title" as const }],
+        score: 90,
+        snippets: [{ scope: "provider_content" as const, text: "Matched on the peer." }],
+        source: "codex" as const,
+        threadId: "thread-remote",
+        title: remoteThread.title,
+        federation: remoteThread.federation,
+      }],
+      searchedScopes: ["metadata" as const],
+      semanticMode: "disabled" as const,
+      unavailableScopes: [],
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        readFederationHealth: async () => ({
+          health: {
+            instanceId: "pwr_viewer", enabled: true, role: "client", status: "connected",
+            peers: [{ id: "studio-mac", label: "Studio Mac", role: "client", status: "connected", capabilities: [] }],
+          },
+        }),
+        addRemoteThreadPin,
+        hasRemoteThreadPin: async () => remotePinned,
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: remotePinned
+            ? ["codex:thread-local", "codex:thread-remote"]
+            : ["codex:thread-local"],
+          threads: remotePinned ? [localThread, remoteThread] : [localThread],
+          directories: [],
+          launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const },
+        }),
+        listSkills: async () => ({ backend: "codex" as const, fetchedAt: Date.now(), data: [] }),
+        markThreadSeen: async (request: { backend: AppServerBackendKind; threadId: string }) => ({
+          ...request,
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        openFederationWindow,
+        platform: "darwin",
+        readThread: async (request: { backend: AppServerBackendKind; threadId: string }) => ({
+          ...request,
+          fetchedAt: Date.now(),
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+        searchThreads,
+        versions: { electron: "41.2.1" },
+      }),
+    });
+
+    await renderApp();
+    await screen.findByRole("heading", { level: 2, name: localThread.title });
+    const main = screen.getByRole("main");
+    const content = within(main);
+    await clickButton("Search threads");
+    fireEvent.change(content.getByRole("combobox", { name: "Search threads" }), {
+      target: { value: "runner" },
+    });
+    await clickButton("Search", () => main);
+    await content.findByText("Matched on the peer.");
+
+    // The labelled button is the only way to the owner's window.
+    await clickButton("Remote viewer for Studio Mac", () => main);
+    expect(openFederationWindow).toHaveBeenCalledExactlyOnceWith({
+      target: remoteTarget,
+      initialThread: remoteRef,
+    });
+    expect(addRemoteThreadPin).not.toHaveBeenCalled();
+
+    // The card itself shows the thread here, added under the owner's name.
+    await clickButton(/Matched on the peer/, () => main);
+    await waitFor(() => expect(addRemoteThreadPin).toHaveBeenCalledExactlyOnceWith({
+      ref: remoteRef,
+      instanceLabel: "Studio Mac",
+    }));
+    expect(await screen.findByRole("heading", { level: 2, name: remoteThread.title }))
+      .toBeInTheDocument();
+    expect(openFederationWindow).toHaveBeenCalledTimes(1);
+  });
+
   it("reuses cached thread history when reselecting an unchanged thread", async () => {
     const readThread = vi.fn(
       async ({

@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  isRemoteFederationTarget,
   parseThreadSearchQuery,
   threadSearchTextTerms,
   matchesThreadSearchProjects,
@@ -31,7 +32,7 @@ import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { ProjectSearchInput } from "./ProjectSearchInput";
 import { mergeAgentMatches, mergePrNumberMatches } from "./thread-match";
-import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
+import { BranchIcon, FolderIcon, PopoutIcon, SearchIcon, WorktreeIcon } from "../../icons";
 
 /**
  * The query + results pair, liftable above the panel. The panel unmounts
@@ -55,6 +56,8 @@ export function useThreadSearchPanelState(): ThreadSearchPanelState {
   );
 }
 
+type RemoteViewerFederation = NonNullable<ThreadSearchResult["federation"]>;
+
 type ThreadSearchPanelProps = {
   desktopApi?: DesktopApi;
   onOpenResult: (result: {
@@ -64,6 +67,14 @@ type ThreadSearchPanelProps = {
     /** Turn of the matched message, for deep-linking to it in the thread. */
     turnId?: string;
   }) => Promise<void> | void;
+  /**
+   * Opens a remote result in its owner's remote viewer window. Only the
+   * main window passes it: there a click shows the remote thread in place,
+   * so the other window is a separate, labelled choice on the card.
+   */
+  onOpenResultInRemoteViewer?: (
+    federation: RemoteViewerFederation,
+  ) => Promise<void> | void;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   onOpenMessagingSettings?: () => void;
   /**
@@ -173,6 +184,8 @@ function ThreadSearchResultRow(props: {
   isAgent: boolean;
   query: string;
   onOpen: () => void;
+  /** The result has a {@link ThreadSearchRemoteViewerButton} beside it. */
+  hasRemoteViewer: boolean;
 }): ReactElement {
   const { result, query } = props;
   const showProvider = useProviderChipNeeded(result.backend);
@@ -240,7 +253,48 @@ function ThreadSearchResultRow(props: {
         <span className="thread-search-result__reason">
           {describeMatchReason(result.matchReasons[0]?.kind)}
         </span>
+        {props.hasRemoteViewer ? (
+          // Holds the corner the sibling Remote viewer button covers: the
+          // snippet wraps before it, and a card without a snippet still has
+          // room for it.
+          <span
+            aria-hidden
+            className="thread-search-result__popout thread-search-result__popout--slot"
+          >
+            <PopoutIcon size={12} strokeWidth={2.2} />
+            Remote viewer
+          </span>
+        ) : null}
       </span>
+    </button>
+  );
+}
+
+/**
+ * Opens a remote result in its owner's remote viewer window. It sits beside
+ * the result's card, since a <button> cannot nest in the card's <button>,
+ * and is pinned over the card's bottom-right corner, which the card's hidden
+ * copy of it holds open.
+ */
+function ThreadSearchRemoteViewerButton(props: {
+  federation: RemoteViewerFederation | undefined;
+  onOpen: ThreadSearchPanelProps["onOpenResultInRemoteViewer"];
+}): ReactElement | null {
+  const { federation, onOpen } = props;
+  if (!federation || !onOpen) return null;
+  // The name keeps the visible label (WCAG 2.5.3) and adds the machine; the
+  // tooltip, which DataTooltipLayer also hands to assistive tech as the
+  // description, says what happens.
+  return (
+    <button
+      aria-label={`Remote viewer for ${federation.instanceLabel}`}
+      className="thread-search-result__popout tooltip-target"
+      data-tooltip={`Open in the ${federation.instanceLabel} window`}
+      type="button"
+      onClick={() => void onOpen(federation)}
+    >
+      <PopoutIcon size={12} strokeWidth={2.2} aria-hidden />
+      Remote viewer
     </button>
   );
 }
@@ -306,6 +360,16 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   }, [api, setResponse]);
 
   const searchUnavailable = !props.desktopApi?.searchThreads;
+  // A result owned by another machine, in a window that shows such results
+  // in place, gets a Remote viewer button.
+  const remoteViewerFederation = (
+    result: ThreadSearchResult,
+  ): RemoteViewerFederation | undefined =>
+    props.onOpenResultInRemoteViewer
+    && result.federation
+    && isRemoteFederationTarget(result.federation.ref.target)
+      ? result.federation
+      : undefined;
   const agentThreadKeys = useMemo(
     () =>
       new Set(
@@ -465,9 +529,10 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           resultCount > 0 ? (
             <div className="thread-search-results" role="list">
               {response.results.map((result) => (
-                <div key={result.identityKey} role="listitem">
+                <div key={result.identityKey} className="thread-search-results__item" role="listitem">
                   <ThreadSearchResultRow
                     result={result}
+                    hasRemoteViewer={remoteViewerFederation(result) !== undefined}
                     isAgent={agentThreadKeys.has(result.identityKey)}
                     query={parseThreadSearchQuery(response.query).query}
                     onOpen={() => {
@@ -480,6 +545,10 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
                         turnId: result.snippets.find((s) => s.turnId)?.turnId,
                       });
                     }}
+                  />
+                  <ThreadSearchRemoteViewerButton
+                    federation={remoteViewerFederation(result)}
+                    onOpen={props.onOpenResultInRemoteViewer}
                   />
                 </div>
               ))}

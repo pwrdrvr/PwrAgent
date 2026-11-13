@@ -8,6 +8,8 @@ export async function ensureWindowThreadMounted(
   request: WindowShowThreadRequest,
   threads: readonly NavigationThreadSummary[],
   isRemoteViewer: boolean,
+  /** The owner's display name, kept on a new pin for when the peer is unreachable. */
+  instanceLabel?: string,
 ): Promise<void> {
   const target = request.federationTarget;
   if (!target || isRemoteViewer || threads.some((thread) =>
@@ -20,5 +22,6 @@ export async function ensureWindowThreadMounted(
   if (!api.addRemoteThreadPin) throw new Error("This window cannot mount remote threads.");
   await api.addRemoteThreadPin({
     ref,
+    ...(instanceLabel ? { instanceLabel } : {}),
   });
 }
