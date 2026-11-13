@@ -3,10 +3,10 @@ import waitingOnWork from "./skills/waiting-on-work/SKILL.md?raw";
 import toolGuide from "./skills/tool-guide/SKILL.md?raw";
 import outpostSecurityResearch from "./skills/outpost-security-research/SKILL.md?raw";
 import outpostDockerfile from "./skills/outpost-security-research/Dockerfile?raw";
+import outpostCompose from "./skills/outpost-security-research/compose.yaml?raw";
+import outpostComposeEnv from "./skills/outpost-security-research/compose.env.example?raw";
 import outpostTcpRelay from "./skills/outpost-security-research/scripts/tcp-relay.mjs?raw";
 import outpostModelKeyProxy from "./skills/outpost-security-research/scripts/model-key-proxy.mjs?raw";
-import outpostStartModelKeyProxy from "./skills/outpost-security-research/scripts/start-model-key-proxy.sh?raw";
-import outpostSetupNetwork from "./skills/outpost-security-research/scripts/setup-network.sh?raw";
 import outpostPushRepo from "./skills/outpost-security-research/scripts/push-repo.sh?raw";
 import outpostPullBranch from "./skills/outpost-security-research/scripts/pull-branch.sh?raw";
 import outpostDepsHelper from "./skills/outpost-security-research/scripts/deps-helper.sh?raw";
@@ -91,10 +91,10 @@ const WORKFLOW_SKILLS = [
 
 const OUTPOST_SECURITY_RESEARCH_SKILL = bundledSkill(outpostSecurityResearch, [
   supportingFile("Dockerfile", outpostDockerfile),
+  supportingFile("compose.yaml", outpostCompose),
+  supportingFile("compose.env.example", outpostComposeEnv),
   supportingFile("scripts/tcp-relay.mjs", outpostTcpRelay),
   supportingFile("scripts/model-key-proxy.mjs", outpostModelKeyProxy),
-  supportingFile("scripts/start-model-key-proxy.sh", outpostStartModelKeyProxy),
-  supportingFile("scripts/setup-network.sh", outpostSetupNetwork),
   supportingFile("scripts/push-repo.sh", outpostPushRepo),
   supportingFile("scripts/pull-branch.sh", outpostPullBranch),
   supportingFile("scripts/deps-helper.sh", outpostDepsHelper),

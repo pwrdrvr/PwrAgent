@@ -123,6 +123,41 @@ describe("bundled skill root", () => {
     ).replace(/\r\n/gu, "\n"));
   });
 
+  // compose.yaml overrides the Outpost's entrypoint to start its relay, which
+  // clears the image's CMD. It must run exactly what the Dockerfile runs.
+  it("starts the Outpost in compose.yaml with the Dockerfile's entrypoint and command", () => {
+    const dockerfile = bundledText("Dockerfile");
+    const compose = bundledText("compose.yaml");
+    const dockerArray = (instruction: string) => {
+      const match = new RegExp(`^${instruction} (\\[.*\\])$`, "mu").exec(dockerfile);
+      if (!match) throw new Error(`The Dockerfile has no exec-form ${instruction}.`);
+      return JSON.parse(match[1]) as string[];
+    };
+    const outpost = /^ {2}outpost:\n([\s\S]*?)(?=^ {2}\S)/mu.exec(compose)?.[1] ?? "";
+    const command = /^ {4}command: (\[.*\])$/mu.exec(outpost)?.[1];
+    expect(command, "the outpost service's command, as a one-line JSON array").toBeDefined();
+    expect(JSON.parse(command ?? "[]")).toEqual(dockerArray("CMD"));
+    const entrypointBlock = /^ {4}entrypoint:\n((?: {6}- .+\n)+)/mu.exec(outpost)?.[1] ?? "";
+    const entrypoint = [...entrypointBlock.matchAll(/^ {6}- (.+)$/gmu)].map((match) => match[1]);
+    expect(entrypoint.at(-1)).toBe(dockerArray("ENTRYPOINT")[0]);
+    expect(entrypoint.find((line) => line.includes("exec \"$$@\""))).toBeDefined();
+    // The relay runs beside PID 1. When it exits, nothing would restart it,
+    // so it must take PID 1 down with it and let Docker restart the container.
+    expect(entrypoint.join("\n")).toMatch(/\{ node \S+\/tcp-relay\.mjs [^;&\n]+; kill -TERM 1; \} &/u);
+  });
+
+  // Step 2 appends the placeholder to the copied example, and step 5 reads it
+  // back with sed. A second, empty line in the example puts a newline in the
+  // value, which breaks the TOML string the provider entry writes.
+  it("leaves exactly one placeholder line in .env after step 2", () => {
+    const env = `${bundledText("compose.env.example")}MODEL_PROXY_PLACEHOLDER=ph_0123\n`;
+    const read = env.split("\n")
+      .filter((line) => line.startsWith("MODEL_PROXY_PLACEHOLDER="))
+      .map((line) => line.slice("MODEL_PROXY_PLACEHOLDER=".length));
+    expect(read).toEqual(["ph_0123"]);
+    expect(bundledText("SKILL.md")).toContain(">> .env");
+  });
+
   it("names every script the skill ships, and ships every script it names", () => {
     const body = bundledText("SKILL.md");
     const shipped = OUTPOST_SKILL?.files.map((file) => file.path).filter((file) => file.startsWith("scripts/")) ?? [];

@@ -12,6 +12,9 @@
 # on the volume. Inside the Outpost a plain `pnpm install` then works offline, in any
 # checkout or worktree, with its own node_modules hard-linked from the store.
 #
+# pnpm runs through the image's root-owned corepack shims. An image built before it had
+# them gets shims in ~/.local/bin on the volume instead.
+#
 # Usage: deps-helper.sh <local-repo> [install|fetch]
 #   OUTPOST_CONTAINER   default pwragent-outpost
 #   OUTPOST_DEPS_REF    the commit to install from, default HEAD; use the one you pushed
@@ -19,7 +22,8 @@
 #   fetch only fills the store from the lockfile; use it after a lockfile change.
 #
 # On an Outpost that allows Full Access an agent can also change the caches this runs
-# (corepack's pnpm, the shims in ~/.local/bin). Do not run the helper on one.
+# (corepack's pnpm, and on an older image the shims in ~/.local/bin). Do not run the
+# helper on one.
 set -eu
 repo="$(cd "$1" && git rev-parse --show-toplevel)"
 mode="${2:-install}"
@@ -48,9 +52,14 @@ git -C "$repo" archive --format=tar "$ref" | docker run -i --rm --name "$contain
     trap "rm -rf \"$stage\"" EXIT
     tar -x -C "$stage" -f -
     cd "$stage"
-    mkdir -p "$HOME/.local/bin"
-    corepack enable --install-directory "$HOME/.local/bin"
-    export PATH="$HOME/.local/bin:$PATH"
+    if [ -e /usr/local/bin/pnpm ]; then
+      # Shims an earlier run left on the volume would come first on PATH in the Outpost.
+      rm -f "$HOME/.local/bin/pnpm" "$HOME/.local/bin/pnpx"
+    else
+      mkdir -p "$HOME/.local/bin"
+      corepack enable --install-directory "$HOME/.local/bin"
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
     echo "pnpm $(pnpm --version), store $(pnpm store path)"
     if [ "$1" = fetch ]; then pnpm fetch; else pnpm install --frozen-lockfile; fi
     # PwrAgent: the pwragent package build, which its tests run, downloads a pinned Git runtime.
@@ -58,11 +67,12 @@ git -C "$repo" archive --format=tar "$ref" | docker run -i --rm --name "$contain
   ' _ "$mode"
 
 # Login shells inside the Outpost (Codex runs `bash -lc`) find pnpm, never try the network
-# for it, and reuse the cached Git runtime.
-docker exec -i "$container" sh -c 'f="$HOME/.profile"; grep -qs "PWRGIT_RUNTIME_CACHE" "$f" || cat >> "$f"' <<'EOF'
-# outpost-deps: pnpm via corepack shims installed by the deps helper
-export PATH="$HOME/.local/bin:$PATH"
-export COREPACK_ENABLE_NETWORK=0
-export PWRGIT_RUNTIME_CACHE="$HOME/.cache/pwrgit-runtime-cache"
-EOF
+# for it, and reuse the cached Git runtime. Only an older image needs ~/.local/bin on PATH.
+# shellcheck disable=SC2016 # these lines expand in the Outpost's shell, not here.
+{
+  echo '# outpost-deps: pnpm through corepack, with packages cached by the deps helper'
+  docker exec "$container" test -e /usr/local/bin/pnpm || echo 'export PATH="$HOME/.local/bin:$PATH"'
+  echo 'export COREPACK_ENABLE_NETWORK=0'
+  echo 'export PWRGIT_RUNTIME_CACHE="$HOME/.cache/pwrgit-runtime-cache"'
+} | docker exec -i "$container" sh -c 'f="$HOME/.profile"; grep -qs "PWRGIT_RUNTIME_CACHE" "$f" || cat >> "$f"'
 echo "Dependencies cached from $(git -C "$repo" rev-parse --short "$ref^{commit}"); run pnpm install in each checkout"

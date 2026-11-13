@@ -1,0 +1,110 @@
+# A contained research Outpost: the Outpost, its egress relay and its model key proxy.
+# Docker restarts every service after a crash or a reboot, on any host that runs Docker.
+#
+#   cp compose.env.example .env && chmod 600 .env      # then fill it in
+#   MODEL_PROXY_API_KEY="$(op read 'op://<vault>/<item>/<field>')" docker compose up -d
+#
+# The key reaches only the key-proxy container, as a Compose secret: Compose copies it
+# to /run/secrets inside that container. It is not in .env, on the host disk, or in
+# `docker inspect`. Compose needs it again whenever it recreates key-proxy.
+#
+# The Outpost is on the internal network only. It reaches two ports on the egress
+# container and nothing else: :47833 goes to the federation gateway, :8787 to key-proxy.
+# key-proxy is not on the internal network.
+name: pwragent-outpost
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-relay: &relay
+  image: ${OUTPOST_RELAY_IMAGE:-node:24-bookworm}
+  restart: unless-stopped
+  user: "1000:1000"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges]
+  extra_hosts: ["host.docker.internal:host-gateway"]
+  logging: *logging
+
+services:
+  outpost:
+    image: ${OUTPOST_IMAGE:-pwragent-outpost:research}
+    container_name: ${OUTPOST_CONTAINER:-pwragent-outpost}
+    restart: unless-stopped
+    networks: [internal]
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges
+      - seccomp=${OUTPOST_SECCOMP:-./seccomp-outpost.json}
+    environment:
+      PWRAGENT_OUTPOST_EXECUTION_MODES: default,auto
+      PWRAGENT_OUTPOST_AGENT_NETWORK: "off"
+      OUTPOST_ENDPOINT_PORT: ${OUTPOST_ENDPOINT_PORT:-${GATEWAY_PORT:?set GATEWAY_PORT in .env}}
+    # pwragent serve needs the Codex home to exist; a new volume has none. The
+    # Outpost dials the gateway endpoint it saved at enrollment: relay that
+    # loopback port to the egress, then run the image's own command as PID 1.
+    # If the relay exits, it stops PID 1, so Docker restarts the container.
+    extra_hosts: ["${OUTPOST_ENDPOINT_HOST:-localhost}:127.0.0.1"]
+    entrypoint:
+      - sh
+      - -c
+      - mkdir -p -m 700 /home/outpost/codex || exit; { node /opt/outpost-relay/tcp-relay.mjs 127.0.0.1 "$$OUTPOST_ENDPOINT_PORT" egress 47833; kill -TERM 1; } & exec "$$@"
+      - sh
+      - /opt/outpost-tools/node_modules/.bin/pwragent
+    # Overriding the entrypoint clears the image's CMD; this repeats the Dockerfile's.
+    command: ["serve", "--workspace", "/home/outpost/workspace", "--codex-home", "/home/outpost/codex", "--codex-bin", "/opt/outpost-tools/node_modules/.bin/codex"]
+    volumes:
+      - home:/home/outpost
+      - ./scripts/tcp-relay.mjs:/opt/outpost-relay/tcp-relay.mjs:ro
+    depends_on: [egress]
+
+  egress:
+    <<: *relay
+    container_name: ${OUTPOST_CONTAINER:-pwragent-outpost}-egress
+    read_only: true
+    networks: [internal, egress]
+    environment:
+      GATEWAY_HOST: ${GATEWAY_HOST:-host.docker.internal}
+      GATEWAY_PORT: ${GATEWAY_PORT:?set GATEWAY_PORT in .env}
+    # If either relay exits, the container exits and Docker restarts both.
+    entrypoint:
+      - bash
+      - -c
+      - node /opt/outpost-relay/tcp-relay.mjs 0.0.0.0 47833 "$$GATEWAY_HOST" "$$GATEWAY_PORT" & node /opt/outpost-relay/tcp-relay.mjs 0.0.0.0 8787 key-proxy 8787 & wait -n; exit 1
+    volumes:
+      - ./scripts/tcp-relay.mjs:/opt/outpost-relay/tcp-relay.mjs:ro
+    depends_on: [key-proxy]
+
+  # Not read_only: Compose copies the secret into the container's file system.
+  key-proxy:
+    <<: *relay
+    networks: [egress]
+    environment:
+      MODEL_PROXY_UPSTREAM: ${MODEL_PROXY_UPSTREAM:?set MODEL_PROXY_UPSTREAM in .env}
+      MODEL_PROXY_PLACEHOLDER: ${MODEL_PROXY_PLACEHOLDER:?set MODEL_PROXY_PLACEHOLDER in .env}
+      MODEL_PROXY_LISTEN: 0.0.0.0:8787
+      MODEL_PROXY_API_KEY_FILE: /run/secrets/model_api_key
+    secrets:
+      - source: model_api_key
+        target: model_api_key
+        mode: 0400
+        uid: "1000"
+    entrypoint: ["node", "/opt/outpost-relay/model-key-proxy.mjs"]
+    volumes:
+      - ./scripts/model-key-proxy.mjs:/opt/outpost-relay/model-key-proxy.mjs:ro
+
+networks:
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  home:
+    external: true
+    name: ${OUTPOST_VOLUME:-pwragent-outpost-home}
+
+secrets:
+  model_api_key:
+    environment: MODEL_PROXY_API_KEY

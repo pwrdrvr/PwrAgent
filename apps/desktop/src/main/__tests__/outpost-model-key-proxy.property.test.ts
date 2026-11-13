@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import fc from "fast-check";
@@ -237,4 +238,282 @@ describe("model key proxy streaming", () => {
       { numRuns: 16 },
     );
   });
+});
+
+// Codex can also reach Responses over a WebSocket. The upgrade must pass the
+// same gate as a plain request, and the frames after it are the model's
+// traffic: the proxy may not drop, add or rewrite a byte in either direction.
+describe("model key proxy WebSocket upgrades", () => {
+  type Upgrade = {
+    url: string;
+    authorization?: string;
+    apiKeyHeader?: string;
+    upgrade?: string;
+    key?: string;
+    host?: string;
+  };
+  const WS_KEY = "dGhlIHNhbXBsZSBub25jZQ==";
+  let wsUpstream: http.Server;
+  let wsProxy: http.Server;
+  let wsProxyPort = 0;
+  let wsUpstreamHost = "";
+  let connections = 0;
+  const upgrades: Upgrade[] = [];
+  // What the upstream sends after its 101, and what reached it after the handshake.
+  let serverBytes = Buffer.alloc(0);
+  let upstreamReceived = Buffer.alloc(0);
+  let upstreamWaiter: (() => void) | undefined;
+  let upstreamClosed: Promise<void> = Promise.resolve();
+
+  beforeAll(async () => {
+    wsUpstream = http.createServer((_req, res) => {
+      res.writeHead(426);
+      res.end();
+    });
+    wsUpstream.on("connection", () => { connections += 1; });
+    wsUpstream.on("upgrade", (req, socket, head: Buffer) => {
+      upgrades.push({
+        url: req.url ?? "",
+        authorization: req.headers.authorization,
+        apiKeyHeader: req.headers["x-api-key"] as string | undefined,
+        upgrade: req.headers.upgrade,
+        key: req.headers["sec-websocket-key"] as string | undefined,
+        host: req.headers.host,
+      });
+      upstreamReceived = Buffer.from(head);
+      upstreamClosed = new Promise((resolve) => socket.on("close", () => resolve()));
+      socket.on("error", () => {});
+      // An http.Server socket is half-open; close when the proxy does, as a
+      // WebSocket server would.
+      socket.on("end", () => socket.end());
+      socket.on("data", (chunk: Buffer) => {
+        upstreamReceived = Buffer.concat([upstreamReceived, chunk]);
+        upstreamWaiter?.();
+      });
+      const accept = createHash("sha1")
+        .update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+        .digest("base64");
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n"
+        + `sec-websocket-accept: ${accept}\r\n\r\n`,
+      );
+      socket.write(serverBytes);
+    });
+    const upstreamPort = await listen(wsUpstream);
+    wsUpstreamHost = `127.0.0.1:${upstreamPort}`;
+    const module = (await import(pathToFileURL(PROXY_SCRIPT).href)) as ProxyModule;
+    ({ server: wsProxy } = module.createModelKeyProxy({
+      upstream: `http://${wsUpstreamHost}${UPSTREAM_BASE}`,
+      apiKey: API_KEY,
+      placeholder: PLACEHOLDER,
+      log: () => {},
+    }));
+    wsProxyPort = await listen(wsProxy);
+  });
+
+  afterAll(async () => {
+    wsProxy.closeAllConnections();
+    wsUpstream.closeAllConnections();
+    await close(wsProxy);
+    await close(wsUpstream);
+  });
+
+  function proxyConnections(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      wsProxy.getConnections((error, count) => (error ? reject(error) : resolve(count)));
+    });
+  }
+
+  // A socket the proxy leaves open after the client is gone is a descriptor
+  // held for good: rejected upgrades from the container would exhaust them.
+  // Measured against the run's own start, so one leak fails only its own run.
+  async function untilProxyBackTo(baseline: number): Promise<void> {
+    const deadline = Date.now() + 500;
+    for (;;) {
+      const open = await proxyConnections();
+      if (open <= baseline) return;
+      if (Date.now() > deadline) throw new Error(`the proxy still holds ${open - baseline} connection(s) from this run`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  function untilUpstreamHas(length: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        upstreamWaiter = undefined;
+        reject(new Error(`upstream received ${upstreamReceived.length} of ${length} bytes`));
+      }, 3_000);
+      const check = () => {
+        if (upstreamReceived.length < length) return;
+        clearTimeout(timer);
+        upstreamWaiter = undefined;
+        resolve();
+      };
+      upstreamWaiter = check;
+      check();
+    });
+  }
+
+  type Handshake = { status: number; body: () => Buffer; socket: net.Socket };
+
+  // A raw socket, so the request target reaches the proxy byte for byte and
+  // client frames can ride in the same packet as the handshake (the proxy's
+  // `head`).
+  function upgradeThroughProxy(
+    rawPath: string,
+    headers: Record<string, string>,
+    clientBytes: Buffer,
+    withHandshake: boolean,
+    serverLength: number,
+  ): Promise<Handshake> {
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(wsProxyPort, "127.0.0.1");
+      let buffered = Buffer.alloc(0);
+      let body: Buffer | undefined;
+      let status = 0;
+      let settled = false;
+      const timer = setTimeout(() => {
+        socket.destroy();
+        if (!settled) reject(new Error(`no outcome for ${rawPath}; status ${status}`));
+      }, 3_000);
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ status, body: () => body ?? Buffer.alloc(0), socket });
+      };
+      socket.on("connect", () => {
+        const head = [
+          `GET ${rawPath} HTTP/1.1`, "host: proxy.invalid", "upgrade: websocket", "connection: Upgrade",
+          `sec-websocket-key: ${WS_KEY}`, "sec-websocket-version: 13",
+          ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`), "", "",
+        ].join("\r\n");
+        socket.write(withHandshake ? Buffer.concat([Buffer.from(head, "latin1"), clientBytes]) : head);
+      });
+      socket.on("data", (chunk: Buffer) => {
+        if (body) {
+          body = Buffer.concat([body, chunk]);
+        } else {
+          buffered = Buffer.concat([buffered, chunk]);
+          const end = buffered.indexOf("\r\n\r\n");
+          if (end < 0) return;
+          status = Number(/^HTTP\/1\.1 (\d{3})/u.exec(buffered.toString("latin1"))?.[1] ?? 0);
+          body = buffered.subarray(end + 4);
+          if (status === 101 && !withHandshake) socket.write(clientBytes);
+        }
+        if (status === 101 && body.length >= serverLength) settle();
+      });
+      socket.on("close", settle);
+      socket.on("error", settle);
+    });
+  }
+
+  function wsFrame(opcode: number, payload: Uint8Array, mask?: Uint8Array) {
+    const maskBit = mask ? 0x80 : 0;
+    let header: Buffer;
+    if (payload.length < 126) {
+      header = Buffer.from([0x80 | opcode, maskBit | payload.length]);
+    } else if (payload.length < 65_536) {
+      header = Buffer.from([0x80 | opcode, maskBit | 126, payload.length >> 8, payload.length & 0xff]);
+    } else {
+      header = Buffer.alloc(10);
+      header[0] = 0x80 | opcode;
+      header[1] = maskBit | 127;
+      header.writeBigUInt64BE(BigInt(payload.length), 2);
+    }
+    if (!mask) return Buffer.concat([header, payload]);
+    const masked = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]));
+    return Buffer.concat([header, mask, masked]);
+  }
+
+  // Clients mask their frames; servers do not.
+  const frames = (masked: boolean) => fc.array(
+    fc.record({
+      opcode: fc.constantFrom(0x1, 0x2, 0x9, 0xa),
+      payload: fc.oneof(
+        { arbitrary: fc.uint8Array({ maxLength: 300 }), weight: 9 },
+        { arbitrary: fc.constant(new Uint8Array(70_000).fill(0x5a)), weight: 1 },
+      ),
+      mask: fc.uint8Array({ minLength: 4, maxLength: 4 }),
+    }),
+    { maxLength: 4 },
+  ).map((list) => Buffer.concat(list.map((frame) => wsFrame(frame.opcode, frame.payload, masked ? frame.mask : undefined))));
+
+  function plainSegment(segment: string): boolean {
+    const decoded = decodesTo(segment);
+    return decoded !== undefined
+      && decoded !== "." && decoded !== ".."
+      && !decoded.includes("/") && !decoded.includes("\\");
+  }
+
+  it("upgrades only the placeholder's paths under the upstream base, with the real key, and passes frames unchanged", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom(...TOKENS),
+        fc.boolean(),
+        fc.array(fc.constantFrom(...SEGMENTS), { maxLength: 3 }),
+        fc.constantFrom("", "?model=x"),
+        fc.constantFrom<Record<string, string>>(
+          {},
+          { authorization: "Bearer client-supplied" },
+          { "x-api-key": "client-supplied" },
+        ),
+        frames(true),
+        frames(false),
+        fc.boolean(),
+        async (token, withV1, segments, query, clientHeaders, clientBytes, toClient, withHandshake) => {
+          const rest = segments.map((segment) => `/${segment}`).join("");
+          const rawPath = `/${token}${withV1 ? "/v1" : ""}${rest}${query}`;
+          const accepted = decodesTo(token) === PLACEHOLDER && segments.every(plainSegment);
+          serverBytes = toClient;
+          const connectionsBefore = connections;
+          const upgradesBefore = upgrades.length;
+          const openBefore = await proxyConnections();
+
+          const handshake = await upgradeThroughProxy(
+            rawPath, clientHeaders, clientBytes, withHandshake, accepted ? toClient.length : 0,
+          );
+          try {
+            if (!accepted) {
+              expect(handshake.status).toBe(403);
+              expect(connections).toBe(connectionsBefore);
+              expect(upgrades).toHaveLength(upgradesBefore);
+              await untilProxyBackTo(openBefore);
+              return;
+            }
+            expect(handshake.status).toBe(101);
+            await untilUpstreamHas(clientBytes.length);
+            expect(upstreamReceived.equals(clientBytes)).toBe(true);
+            expect(handshake.body().equals(toClient)).toBe(true);
+            expect(upgrades).toHaveLength(upgradesBefore + 1);
+            const seenUpgrade = upgrades[upgrades.length - 1];
+            const afterToken = `${withV1 ? "/v1" : ""}${rest}`;
+            const leadingV1 = afterToken === "/v1" || afterToken.startsWith("/v1/");
+            expect(seenUpgrade.url).toBe(`${UPSTREAM_BASE}${leadingV1 ? afterToken.slice(3) : afterToken}${query}`);
+            expect(seenUpgrade.authorization).toBe(`Bearer ${API_KEY}`);
+            expect(seenUpgrade.apiKeyHeader).toBeUndefined();
+            expect(seenUpgrade.upgrade).toBe("websocket");
+            expect(seenUpgrade.key).toBe(WS_KEY);
+            expect(seenUpgrade.host).toBe(wsUpstreamHost);
+            handshake.socket.destroy();
+            await upstreamClosed;
+            await untilProxyBackTo(openBefore);
+          } finally {
+            // A failed run must not leave sockets that fail the next one.
+            handshake.socket.destroy();
+            if (upgrades.length > upgradesBefore) await upstreamClosed;
+          }
+        },
+      ),
+      {
+        numRuns: 200,
+        examples: [
+          [PLACEHOLDER, true, ["responses"], "", {}, wsFrame(1, Buffer.from("hi"), Buffer.from([1, 2, 3, 4])), wsFrame(1, Buffer.from("ok")), false],
+          ["wrong", true, ["responses"], "", {}, Buffer.alloc(0), Buffer.alloc(0), false],
+          [PLACEHOLDER, true, ["..", "..", "admin"], "", {}, Buffer.alloc(0), Buffer.alloc(0), true],
+          [PLACEHOLDER, true, ["%2e%2e"], "", {}, Buffer.alloc(0), Buffer.alloc(0), false],
+        ],
+      },
+    );
+  }, 60_000);
 });
