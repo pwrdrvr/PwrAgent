@@ -333,6 +333,32 @@ describe("FederationSettings", () => {
       expect(toggle).toBeChecked();
     });
 
+    it("says the gateway keeps a gateway-contained instance contained, on the switch and when lifting", async () => {
+      const snapshot = settingsSnapshot();
+      snapshot.federation.memberRole = { value: "contained", source: "config" };
+      const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+      render(
+        <FederationSettings
+          desktopApi={{ readFederationHealth: async () => ({ health: { enabled: true, role: "client", status: "connected",
+            memberContainment: { configuredRole: "contained", gatewayAssignedRole: "contained", effectiveRole: "contained" },
+            peers: [] } }) }}
+          onClearSecret={vi.fn(async () => true)}
+          onReplaceSecret={vi.fn(async () => true)}
+          saving={false}
+          snapshot={snapshot}
+          onSettingsChanged={vi.fn(async () => {})}
+          onWriteConfig={onWriteConfig}
+        />,
+      );
+      expect(await screen.findByText("gateway contains this instance")).toBeInTheDocument();
+      expect(screen.getByText(/stays contained whatever this switch says/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("switch", { name: "Contain this instance" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
+      const note = screen.getByRole("note");
+      expect(note).toHaveTextContent("Its gateway still assigns it Contained, so it stays contained after you save");
+      expect(note).not.toHaveTextContent("lifts only");
+    });
+
     it("toggling back to the saved role saves without asking", async () => {
       const { onWriteConfig, toggle } = renderContainment("contained");
       fireEvent.click(toggle);

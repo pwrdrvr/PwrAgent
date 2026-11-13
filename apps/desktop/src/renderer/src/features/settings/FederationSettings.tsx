@@ -372,6 +372,11 @@ export function FederationSettings(props: FederationSettingsProps) {
     } satisfies FederationHealthStatus);
   const gatewayEndpointStatuses = effectiveHealth.gatewayEndpoints ?? [];
   const now = Date.now();
+  // The switch holds this instance's own setting. Its gateway can contain
+  // it as well (member-containment.ts), and only the gateway's operator can
+  // lift that, so the switch and its confirmation say so.
+  const gatewayContains =
+    effectiveHealth.memberContainment?.gatewayAssignedRole === "contained";
 
   const changeCelestialIcon = (instanceId: string, value: string) => {
     // The empty value is the Auto option: it clears an operator override
@@ -880,10 +885,15 @@ export function FederationSettings(props: FederationSettingsProps) {
           <SettingsField
             label="Contain this instance"
             sub="A contained instance sends no requests to other instances, so you cannot open or start work on peers from here. Its agents get only the read-only PwrAgent tools, and Codex Auto threads ask you to approve instead of the automatic reviewer."
+            source={gatewayContains ? "gateway contains this instance" : undefined}
             help={
               <>
-                Peers also enforce the role they assigned when they invited
-                this instance; turning this off never lifts that. Saved as{" "}
+                {gatewayContains
+                  ? "Its gateway contains this instance, so it stays contained whatever this switch says, until the gateway's operator changes Peer access for it. "
+                  : null}
+                Each peer also enforces the role it assigns this instance, and
+                a gateway that assigns Contained contains it everywhere.
+                Turning this off never lifts either. Saved as{" "}
                 <code>member_role</code> under <code>[federation]</code> in
                 config.toml.
               </>
@@ -941,8 +951,10 @@ export function FederationSettings(props: FederationSettingsProps) {
               role="note"
             >
               {contained
-                ? "This instance will stop sending requests to peers, and its agents will lose every PwrAgent tool that is not read-only. It also tells each peer it connects to that it is contained. Peers on current releases then keep it contained, and only their operators can lift that, in their own Settings → Federation. Older peers keep the role they assigned at the invite. Saving reconnects federation sessions."
-                : "This lifts only this instance's own limits. Each peer still enforces the role it assigned when it invited this instance, and a peer that recorded this instance as contained keeps it contained until that peer's operator changes it. Saving reconnects federation sessions."}
+                ? "This instance will stop sending requests to peers, and its agents will lose every PwrAgent tool that is not read-only. It also tells each peer it connects to that it is contained. Peers on current releases then keep it contained, and only their operators can lift that, in their own Settings → Federation. Its gateway then contains it as well, so turning this switch off later does not lift containment until the gateway's operator changes Peer access for this instance. Older peers keep the role they assigned at the invite. Saving reconnects federation sessions."
+                : gatewayContains
+                  ? "This changes only this instance's own setting. Its gateway still assigns it Contained, so it stays contained after you save, until the gateway's operator changes Peer access for this instance. Saving reconnects federation sessions."
+                  : "This lifts only this instance's own setting. Each peer still enforces the role it assigned when it invited this instance, and a peer that recorded this instance as contained keeps it contained until that peer's operator changes it. Saving reconnects federation sessions."}
             </p>
           ) : null}
         </div>
