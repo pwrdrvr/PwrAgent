@@ -8196,8 +8196,17 @@ describe("DesktopBackendRegistry", () => {
     };
   }
 
+  // The member properties start their threads here, never in the test's own
+  // checkout: nothing about the machine running them may reach the answer.
+  function emptyThreadDirectory(): string {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "member-thread-"));
+    onTestFinished(() => rmSync(cwd, { recursive: true, force: true }));
+    return cwd;
+  }
+
   it("asks for approval by execution mode, approvals setting and role on every host, never by whether it is headless", async ({ signal }) => {
     const installMember = memberInstaller(signal);
+    const cwd = emptyThreadDirectory();
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("desktop" as const, "outpost" as const), fc.constantFrom("ask" as const, "never" as const),
       fc.constantFrom("full" as const, "contained" as const), fc.constantFrom("default" as const, "auto" as const),
@@ -8213,7 +8222,7 @@ describe("DesktopBackendRegistry", () => {
         const codexClient = new MockBackendClient({ threads: [] });
         const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
         try {
-          const { threadId } = await registry.startThread({ backend: "codex", cwd: process.cwd(), executionMode: mode });
+          const { threadId } = await registry.startThread({ backend: "codex", cwd, executionMode: mode });
           expect(codexClient.lastStartThreadParams).toMatchObject(expected);
           await registry.startTurn({ backend: "codex", threadId, executionMode: mode, input: [{ type: "text", text: "Invented request." }] });
           expect(codexClient.lastStartTurnParams).toMatchObject(expected);
@@ -8232,11 +8241,12 @@ describe("DesktopBackendRegistry", () => {
     // get_thread_status reads its thread's Git working state. With the
     // test's own checkout as the thread's directory, that was ten Git
     // commands per call, about a second on CI runners. The thread lives in
-    // an empty directory, the working state is served here, and the property
-    // runs no process at all.
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "member-role-"));
-    onTestFinished(() => rmSync(cwd, { recursive: true, force: true }));
-    const gitWorkingStateService = { readWorkingState: async () => undefined } as unknown as GitWorkingStateService;
+    // an empty directory, the real working-state service runs Git through a
+    // runner that finds no repository, and the property runs no process.
+    const cwd = emptyThreadDirectory();
+    const gitWorkingStateService = new GitWorkingStateService({
+      runGit: async () => { throw new Error("not a git repository"); },
+    });
     // Every process launch passes through this internal method.
     const childProcess = ChildProcess.prototype as unknown as { spawn(options: { args: string[] }): unknown };
     const spawn = vi.spyOn(childProcess, "spawn");

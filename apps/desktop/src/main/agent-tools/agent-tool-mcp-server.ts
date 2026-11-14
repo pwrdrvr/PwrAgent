@@ -167,6 +167,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   >();
   private readonly tokensByBoundThread = new Map<string, string>();
   private readonly connectionsWithoutRequests = new Set<Socket>();
+  /** Ends each open standalone event stream (a client's GET). */
+  private readonly standaloneStreams = new Set<() => void>();
   private httpServer?: NodeHttpServer;
   private port?: number;
   private startPromise?: Promise<void>;
@@ -240,6 +242,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         // fetch pool replaces an aborted SSE connection with just such a socket.
         // It owns no admitted work, so shutdown must release it explicitly.
         for (const socket of this.connectionsWithoutRequests) socket.destroy();
+        // A client's standalone event stream carries no call either, and its
+        // client may never hang up. Ending it finishes its response, which
+        // releases the connection.
+        for (const end of this.standaloneStreams) end();
       });
     }
     this.port = undefined;
@@ -635,8 +641,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       if (!finished) void reader.cancel().catch(() => undefined);
     };
     response.on("close", cancel);
+    const standalone = request.method === "GET";
+    if (standalone) this.standaloneStreams.add(cancel);
     try {
-      if (response.destroyed) cancel();
+      if (response.destroyed || (standalone && this.closed)) cancel();
       response.writeHead(
         webResponse.status,
         Object.fromEntries(webResponse.headers.entries()),
@@ -653,6 +661,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       throw error;
     } finally {
       finished = true;
+      this.standaloneStreams.delete(cancel);
       response.end();
     }
   }
