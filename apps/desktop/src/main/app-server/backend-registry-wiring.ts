@@ -12,6 +12,7 @@ import { DEFAULT_CHECKOUT_HIBERNATION_POLICY, DEFAULT_THREAD_ARCHIVE_POLICY } fr
 import { restartGateHolds } from "./restart-continuation-gate";
 import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
+import { syncCodexProfileProviderConfig } from "../settings/codex-profile-provider-config";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { codexModelProviderApiKeyEnv, type CodexModelProviderSettings } from "@pwragent/shared";
@@ -647,6 +648,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       ports.unsubscribers.push(settingsService.onCodexModelProviderKeysChanged(() => {
         ports.codexModelProviderKeysRead = undefined;
         ports.codexModelProviderCatalog?.invalidate();
+        // env_key is written only for a provider that has a key.
+        syncCodexProfileProviders();
         void ports.invalidateProviderRuntimeSelections({ acp: false, codex: true }).catch((error) => {
           backendRegistryLog.warn("Codex reconnect after a provider key change failed", {
             error: error instanceof Error ? error.message : String(error),
@@ -1182,6 +1185,37 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         : undefined,
     },
   });
+  // A PwrAgent-managed Codex home (`~/.codex/profiles/<name>`) carries the
+  // providers in its own config.toml, so the Codex CLI on that home has them
+  // too. The shared `~/.codex` home is never edited. Writes are serialized.
+  let codexProfileProviderSync = Promise.resolve();
+  const syncCodexProfileProviders = (): void => {
+    const codexHome = settingsService?.resolveStartupCodexHome?.();
+    const profileRoot = typeof settingsService?.readCodexProfiles === "function"
+      ? settingsService.readCodexProfiles().profileRoot
+      : undefined;
+    if (!codexHome || !profileRoot) return;
+    codexProfileProviderSync = codexProfileProviderSync.then(async () => {
+      const keys = await ports.resolveCodexModelProviderKeysFn().catch((): Record<string, string> => ({}));
+      const result = await syncCodexProfileProviderConfig({
+        codexHome,
+        profileRoot,
+        providers: ports.resolveCodexModelProvidersFn(),
+        providerIdsWithKeys: new Set(Object.keys(keys).filter((id) => Boolean(keys[id]))),
+      });
+      if (result.changed || result.skipped.length) {
+        backendRegistryLog.info("Codex profile model providers synchronized", {
+          configPath: result.configPath,
+          written: result.written,
+          skipped: result.skipped,
+        });
+      }
+    }).catch((error: unknown) => {
+      backendRegistryLog.warn("Codex profile model providers not written", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
   let providersFingerprint = JSON.stringify(resolveCodexModelProvidersFn());
   const refreshCodexProviderModels = (): void => {
     const next = JSON.stringify(ports.resolveCodexModelProvidersFn());
@@ -1189,8 +1223,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     providersFingerprint = next;
     ports.codexModelProviderCatalog.invalidate();
     ports.modelCatalog.invalidate("codex");
+    syncCodexProfileProviders();
   };
   initialize.push(() => {
+    syncCodexProfileProviders();
     if (ports.configStore) {
       ports.unsubscribers.push(ports.configStore.subscribe(["models"], refreshCodexProviderModels));
     } else if (typeof settingsService?.onConfigWritten === "function") {
