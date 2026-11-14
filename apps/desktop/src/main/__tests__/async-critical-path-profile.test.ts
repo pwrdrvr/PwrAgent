@@ -5,8 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { NavigationDetailService } from "../app-server/navigation-detail-service";
+import { NavigationDetailService, type NavigationDetailRegistry } from "../app-server/navigation-detail-service";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -112,18 +111,27 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
       };
       vi.spyOn(store, "projectNavigationThreadDetail").mockResolvedValue(selected);
       const gitCache = new Map<string, { currentBranch: string }>();
-      const detail = new NavigationDetailService({
+      // Typed without a cast: typecheck covers this opt-in file, so a member
+      // the service starts calling fails CI here instead of rotting unseen.
+      // Only the summary and the timed Git probes are fixture-controlled; the
+      // rest is the real registry's own state.
+      const detailRegistry: NavigationDetailRegistry = {
         getCachedThreadSummary: () => selected,
-        getQueuedExecutionModeForThread: () => undefined,
-        canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
-        hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
-        listLiveTokenMiserSubAgents: () => [], readLiveSubAgentRevisionSource: () => [],
-        mergeLiveTokenMiserSubAgents: (_id: string, cards: unknown[]) => cards,
-        readSelectedWorkspaceGitStatus: async (cwd: string) => {
+        resolveThread: (params) => registry.resolveThread(params),
+        getQueuedExecutionModeForThread: (ref) => registry.getQueuedExecutionModeForThread(ref),
+        iterateQueuedTurnSummaries: (ref) => registry.iterateQueuedTurnSummaries(ref),
+        readCheckoutHibernation: (identity) => registry.readCheckoutHibernation(identity),
+        canonicalizeNavigationThreadPullRequests: async (threads) => threads,
+        hydrateThreadGitWorkingStates: async (threads) => threads,
+        listLiveTokenMiserSubAgents: (id) => registry.listLiveTokenMiserSubAgents(id),
+        readLiveSubAgentRevisionSource: (id) => registry.readLiveSubAgentRevisionSource(id),
+        mergeLiveTokenMiserSubAgents: (id, cards) => registry.mergeLiveTokenMiserSubAgents(id, cards),
+        readSelectedWorkspaceGitStatus: async (cwd) => {
           if (!gitCache.has(cwd)) { await delay(20); gitCache.set(cwd, { currentBranch: "fixture" }); }
           return gitCache.get(cwd);
         },
-      } as unknown as DesktopBackendRegistry);
+      };
+      const detail = new NavigationDetailService(detailRegistry);
       for (const temperature of ["cold", "warm", "warm", "warm"]) {
         const clickedAt = performance.now();
         const result = await detail.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "detail" }, includeWorkspaceConfiguration: true });

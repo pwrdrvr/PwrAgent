@@ -74,9 +74,26 @@ function decodeQueueCursor(value: string): QueueCursor {
   }
 }
 
+/** The registry members detail reads use. Narrowed so a stand-in that misses
+ * one fails typecheck, including in opt-in suites CI never runs. */
+export type NavigationDetailRegistry = Pick<
+  DesktopBackendRegistry,
+  | "canonicalizeNavigationThreadPullRequests"
+  | "getCachedThreadSummary"
+  | "getQueuedExecutionModeForThread"
+  | "hydrateThreadGitWorkingStates"
+  | "iterateQueuedTurnSummaries"
+  | "listLiveTokenMiserSubAgents"
+  | "mergeLiveTokenMiserSubAgents"
+  | "readCheckoutHibernation"
+  | "readLiveSubAgentRevisionSource"
+  | "readSelectedWorkspaceGitStatus"
+  | "resolveThread"
+>;
+
 export class NavigationDetailService {
   constructor(
-    private readonly registry: DesktopBackendRegistry = getDesktopBackendRegistry(),
+    private readonly registry: NavigationDetailRegistry = getDesktopBackendRegistry(),
   ) {}
 
   async readLaunchpadConfig(
