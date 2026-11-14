@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
@@ -63,7 +63,7 @@ async function drivePacer<T>(registry: DesktopBackendRegistry, promise: Promise<
   let settled = false;
   const settlement = promise.then(() => { settled = true; }, () => { settled = true; });
   for (;;) {
-    await Promise.race([settlement, registry.whenArchiveCleanupCheckpointPendingForTests()]);
+    await Promise.race([settlement, registryModules(registry).threadArchiveCoordinator.whenArchiveCleanupCheckpointPendingForTests()]);
     if (settled) return await promise;
     await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
   }
@@ -453,7 +453,7 @@ describe("archive cleanup pipeline", () => {
       return { backend: intent.backend, threadId: intent.threadId, archivedAt: intent.archivedAt,
         cleanup: (intent.deferredWorktrees ?? []).map((row) => ({ worktreePath: row.worktreePath, removedWorktree: true, deletedBranch: false })) };
     });
-    Object.assign(fixture.registry, { archiveWorktreeReferences: refs, completeArchivedThreadCleanup: complete });
+    Object.assign(registryModules(fixture.registry).threadArchiveCoordinator, { archiveWorktreeReferences: refs, completeArchivedThreadCleanup: complete });
     let publications = 0;
     const completed = new Promise<void>((resolve) => fixture.registry.onEvent((event) => {
       if (event.notification.method === "thread/archiveCleanup/completed" && ++publications === 300) resolve();
@@ -542,7 +542,7 @@ describe("archive cleanup pipeline", () => {
 
   it("Run now re-audits existing archived worktrees", async () => {
     const fixture = build([]);
-    const repair = vi.spyOn(fixture.registry, "repairArchivedThreadWorktrees").mockResolvedValue({
+    const repair = vi.spyOn(registryModules(fixture.registry).threadArchiveCoordinator, "repairArchivedThreadWorktrees").mockResolvedValue({
       archivedThreads: 1477, discoveredWorktrees: 501, missingWorktrees: 0, protectedWorktrees: 3,
       protectedWorktreeDetails: [], candidates: [], cleanup: [], emptyContainerCandidates: [], containerCleanup: [],
     });
@@ -790,7 +790,7 @@ describe("archive cleanup pipeline", () => {
       const fixture = buildRepair();
       if (shared) fixture.active.push(codexThread({ id: "active-owner", linkedDirectories: fixture.archived[0]!.linkedDirectories }));
       try {
-        await drivePacer(fixture.registry, fixture.registry.repairArchivedThreadWorktrees({ dryRun: true }));
+        await drivePacer(fixture.registry, registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees({ dryRun: true }));
         expect(fixture.client.archiveThread).not.toHaveBeenCalled();
         expect(fixture.archiveWorktree).not.toHaveBeenCalled();
         expect(fixture.store.setThreadArchiveTombstone).not.toHaveBeenCalled();
@@ -978,7 +978,7 @@ describe("archive cleanup pipeline", () => {
       return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
     });
     try {
-      const result = await drivePacer(fixture.registry, fixture.registry.repairArchivedThreadWorktrees({ dryRun: true }));
+      const result = await drivePacer(fixture.registry, registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees({ dryRun: true }));
       expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: path.normalize("/contrived/Mixed-denied"), removedWorktree: false, error: "Access denied" })]);
       expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: path.normalize("/contrived/Mixed-valid") }]);
     } finally { canonical?.mockRestore(); }
@@ -999,14 +999,14 @@ describe("archive cleanup pipeline", () => {
       check();
       return { worktreePath, containerPath: path.dirname(worktreePath), removed: true };
     });
-    Object.assign(fixture.registry, { worktreeContainerService: {
+    Object.assign(registryModules(fixture.registry).threadArchiveCoordinator, { worktreeContainerService: {
       containerPath: async (worktreePath: string) => paths.includes(worktreePath) ? path.dirname(worktreePath) : undefined,
       comparisonPaths: (value: string) => [value], worktreeComparisonPaths: (value: string) => [value],
       inspect: async (worktreePath: string) => ({ worktreePath, containerPath: path.dirname(worktreePath), identity: { dev: "1", ino: "2" } }),
       prune,
     } });
     try {
-      const result = await drivePacer(fixture.registry, fixture.registry.repairArchivedThreadWorktrees());
+      const result = await drivePacer(fixture.registry, registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees());
       expect(result.emptyContainerCandidates.map((candidate) => candidate.worktreePath)).toEqual(paths);
       expect(prune.mock.calls.map(([worktreePath]) => worktreePath)).toEqual(paths);
       expect(result.containerCleanup.every((item) => item.removed)).toBe(true);
@@ -1040,7 +1040,7 @@ describe("archive cleanup pipeline", () => {
       removed.add(params.worktreePath);
       return snapshot;
     });
-    const repair = fixture.registry.repairArchivedThreadWorktrees();
+    const repair = registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     await vi.advanceTimersByTimeAsync(100_000);
     const result = await drivePacer(fixture.registry, repair);
     expect(result.cleanup.filter((item) => item.removedWorktree)).toHaveLength(4);
@@ -1071,7 +1071,7 @@ describe("archive cleanup pipeline", () => {
         }
         return await archive(params);
       });
-      const repair = fixture.registry.repairArchivedThreadWorktrees({ onProgress: (completed) => {
+      const repair = registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees({ onProgress: (completed) => {
         if (completed !== 1) return;
         overlapped = secondStarted;
         if (change === "new owner") fixture.active.push(codexThread({ id: "new-owner", linkedDirectories: second.linkedDirectories }));
@@ -1136,7 +1136,7 @@ describe("archive cleanup pipeline", () => {
       }
       return { worktreePath, containerPath: path.dirname(worktreePath), removed: true };
     });
-    Object.assign(fixture.registry, { worktreeContainerService: {
+    Object.assign(registryModules(fixture.registry).threadArchiveCoordinator, { worktreeContainerService: {
       containerPath: async (worktreePath: string) => path.dirname(worktreePath),
       comparisonPaths: (value: string) => [value],
       worktreeComparisonPaths: (value: string) => [value],
@@ -1149,7 +1149,7 @@ describe("archive cleanup pipeline", () => {
       limits.push(params.limit);
       return await read(params);
     });
-    const repair = fixture.registry.repairArchivedThreadWorktrees();
+    const repair = registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     await vi.advanceTimersByTimeAsync(100_000);
     const result = await drivePacer(fixture.registry, repair);
     expect(result.emptyContainerCandidates).toHaveLength(2);
@@ -1188,7 +1188,7 @@ describe("archive cleanup pipeline", () => {
       if (mutation && params.archived) { finish(); await mutation; mutation = undefined; }
       return page;
     });
-    const repair = fixture.registry.repairArchivedThreadWorktrees();
+    const repair = registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     await vi.advanceTimersByTimeAsync(100_000);
     const result = await drivePacer(fixture.registry, repair);
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
@@ -1224,7 +1224,7 @@ describe("archive cleanup pipeline", () => {
     Object.assign(fixture.registry, { acpWorktreeRepositoryResolver: async (cwd: string) =>
       archived.find((thread) => thread.linkedDirectories[0]?.worktreePath === cwd)?.linkedDirectories[0] });
     vi.mocked(stat).mockImplementation(async () => ({ isDirectory: () => true }) as Awaited<ReturnType<typeof stat>>);
-    const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
+    const scan = registryModules(fixture.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees({ dryRun: true });
     await vi.advanceTimersByTimeAsync(100_000);
     const result = await drivePacer(fixture.registry, scan);
     expect(result.archivedThreads).toBe(501);
@@ -1247,11 +1247,11 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.counts.archiveMutations).toBe(1);
     expect(await request).toMatchObject({ cleanupPending: true, cleanup: [] });
     expect(fixture.counts.providerPages).toBe(0);
-    await fixture.registry.whenArchiveCleanupCheckpointPendingForTests();
+    await registryModules(fixture.registry).threadArchiveCoordinator.whenArchiveCleanupCheckpointPendingForTests();
     await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
     // Admission itself yields, then the provider page gets its own slice.
     expect(fixture.counts.providerPages).toBe(0);
-    await fixture.registry.whenArchiveCleanupCheckpointPendingForTests();
+    await registryModules(fixture.registry).threadArchiveCoordinator.whenArchiveCleanupCheckpointPendingForTests();
     await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
     expect(fixture.counts.providerPages).toBe(1);
     expect(fixture.counts.overlayReads).toBe(0);

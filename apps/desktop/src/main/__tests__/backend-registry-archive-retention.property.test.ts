@@ -1,27 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { buildThreadIdentityKey, type AppServerThreadSummary } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { archiveCoordinatorStandIn } from "./helpers/archive-coordinator-stand-in";
 
 const providers = ["codex", "claude", "acp:kimi"] as const;
 const threadId = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 
-/** Exercise the registry's inventory without starting providers or maintenance. */
+/** Exercise the archive coordinator's inventory without starting providers or maintenance. */
 function inventoryFixture(rows: AppServerThreadSummary[], activeDuplicates = false) {
   const list = (source: string, archived: boolean) => rows.filter((thread) =>
     thread.source === source && (Boolean(thread.archivedAt) === archived || (activeDuplicates && !archived)));
-  const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
+  const host = {
     subAgentStartupReconciliation: Promise.resolve(),
     isBootstrapModeFn: () => false,
     isCodexBootstrapDeferredFn: () => false,
-    codexClient: {
-      listThreads: vi.fn(async ({ archived }: { archived: boolean }) => list("codex", archived)),
-      listNativeSubAgentThreads: vi.fn(async () => []),
-    },
-    claudeBackend: { listThreads: vi.fn(async ({ archived }: { archived: boolean }) => list("claude", archived)) },
     listAllInstalledAcpThreads: vi.fn(async (_filter: unknown, archived: boolean) => list("acp:kimi", archived)),
-  }) as { listThreadsForArchiveRetention(): Promise<AppServerThreadSummary[]> };
-  return registry;
+  };
+  return archiveCoordinatorStandIn({
+    registry: () => host,
+    providers: {
+      codex: {
+        listThreads: vi.fn(async ({ archived }: { archived: boolean }) => list("codex", archived)),
+        listNativeSubAgentThreads: vi.fn(async () => []),
+      },
+      claude: { listThreads: vi.fn(async ({ archived }: { archived: boolean }) => list("claude", archived)) },
+    },
+  }) as unknown as { listThreadsForArchiveRetention(): Promise<AppServerThreadSummary[]> };
 }
 
 function thread(source: typeof providers[number], id: string, archived: boolean): AppServerThreadSummary {

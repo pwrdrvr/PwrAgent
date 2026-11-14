@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../../app-server/backend-registry-wiring";
 import { vi } from "vitest";
 import { realpath } from "node:fs/promises";
 import type { AppServerThreadSummary, LinkedDirectorySummary, ThreadOverlayState, WorktreeSnapshotSummary } from "@pwragent/shared";
@@ -82,7 +82,7 @@ export async function drivePacer<T>(registry: DesktopBackendRegistry, promise: P
   let settled = false;
   const settlement = promise.then(() => { settled = true; }, () => { settled = true; });
   for (;;) {
-    await Promise.race([settlement, registry.whenArchiveCleanupCheckpointPendingForTests()]);
+    await Promise.race([settlement, registryModules(registry).threadArchiveCoordinator.whenArchiveCleanupCheckpointPendingForTests()]);
     if (settled) return await promise;
     await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
   }

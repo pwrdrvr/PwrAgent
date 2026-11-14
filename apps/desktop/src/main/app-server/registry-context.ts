@@ -7,7 +7,7 @@ export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadListingOverlayStates"
   | "getThreadMetadata" | "updateThreadMetadata" | "setThreadMcpConnectionIds" | "setThreadModelSettings"
   | "setThreadForkOrigin"
->;
+> & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadParent">>;
 
 // The overlay store requires upsertThreadUsageLine and readThreadPricing, but
 // the wiring's getters return undefined for a store without them, and their
@@ -23,17 +23,29 @@ export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,
 export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
   "upsertThreadSubAgents" | "reconcileOrphanedThreadSubAgents" | "moveLegacyThreadSubAgents"
   | "getThreadSubAgent" | "getThreadSubAgents" | "listThreadSubAgents"
-  | "listThreadSubAgentsByMonitorIdPrefix" | "upsertThreadSubAgent"
+  | "listThreadSubAgentsByMonitorIdPrefix" | "upsertThreadSubAgent" | "listActiveThreadSubAgents"
 >;
 
 export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadGitWorkingStateCache" | "writeThreadGitWorkingStateCacheEntry"
-  | "acknowledgeThreadEnvironmentFailure"
+  | "acknowledgeThreadEnvironmentFailure" | "setThreadCodexEnvironmentRuntime"
 >;
 
-export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike, "addThreadPullRequestReference">;
+export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike,
+  "addThreadPullRequestReference" | "listActiveThreadPrStatusWatches" | "listAllActivePrStatusWatches"
+  | "readPrStatusCache"
+>;
 
 export type RegistryReviewStore = Pick<BackendRegistryOverlayStoreLike, "upsertManagedReviewEntry">;
+
+export type RegistryArchiveStore = Pick<BackendRegistryOverlayStoreLike,
+  "setThreadArchiveTombstone" | "setThreadKeepCheckoutAwake" | "upsertWorktreeSnapshot"
+  | "forgetThreadArchiveStates" | "getArchiveCleanupOverlayStates" | "listFinishedMonitorWorkerThreadKeys"
+  | "listThreadArchiveStates" | "listThreadArchiveStatesFor" | "observeArchivedThreads"
+  | "readArchiveCleanupChangeToken"
+>;
+
+export type RegistryMessagingStore = Pick<BackendRegistryOverlayStoreLike, "appendMessagingBindingTransition">;
 
 export type RegistryToolAccountingStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadToolAccounting" | "persistThreadToolInvocationBoundary"
@@ -67,6 +79,8 @@ export interface RegistryContext {
     readonly toolAccounting: RegistryToolAccountingStore;
     readonly pullRequests: RegistryPullRequestStore;
     readonly reviews: RegistryReviewStore;
+    readonly archive: RegistryArchiveStore;
+    readonly messaging: RegistryMessagingStore;
   };
   readonly providers: {
     readonly codex: BackendClient;

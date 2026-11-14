@@ -103,6 +103,7 @@ import { ThreadMcpConnections } from "./thread-mcp-connections";
 import { ManagedReviewService } from "./managed-review-service";
 import { SubAgentMonitorService } from "./subagent-monitor-service";
 import { ThreadUsageLedger } from "./thread-usage-ledger";
+import { ThreadArchiveCoordinator, type ThreadArchiveCoordinatorDependencies } from "./thread-archive-coordinator";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolAdvertisedLocally, localAgentToolRefusal } from "../member-containment";
@@ -123,6 +124,7 @@ export interface RegistryModules {
   readonly managedReviewService: ManagedReviewService;
   readonly subAgentMonitorService: SubAgentMonitorService;
   readonly threadUsageLedger: ThreadUsageLedger;
+  readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -146,7 +148,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const captureStores: ProtocolCaptureStore[] = [];
   let ownerAdmission: RegistryDependencies["ownerAdmission"];
   let configStore: RegistryDependencies["configStore"];
-  let archiveCleanupCheckpointStore: RegistryDependencies["archiveCleanupCheckpointStore"];
+  let archiveCleanupCheckpointStore: ThreadArchiveCoordinatorDependencies["archiveCleanupCheckpointStore"];
   let projectHeldWakeupStore: RegistryDependencies["projectHeldWakeupStore"];
   let restartContinuationStore: RegistryDependencies["restartContinuationStore"];
   let mcpConnectionService: RegistryDependencies["mcpConnectionService"];
@@ -1316,6 +1318,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         setThreadMcpConnectionIds: (...args) => overlayStore.setThreadMcpConnectionIds(...args),
         setThreadModelSettings: (...args) => overlayStore.setThreadModelSettings(...args),
         get setThreadForkOrigin() { return overlayStore.setThreadForkOrigin?.bind(overlayStore); },
+        // The coordinator tests for setThreadParent before calling it, as the
+        // registry did; a getter keeps a missing method missing.
+        get setThreadParent() { return overlayStore.setThreadParent?.bind(overlayStore); },
       },
       usage: {
         // The store requires upsertThreadUsageLine and readThreadPricing, but
@@ -1347,11 +1352,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         listThreadSubAgents: (...args) => overlayStore.listThreadSubAgents(...args),
         listThreadSubAgentsByMonitorIdPrefix: (...args) => overlayStore.listThreadSubAgentsByMonitorIdPrefix(...args),
         upsertThreadSubAgent: (...args) => overlayStore.upsertThreadSubAgent(...args),
+        listActiveThreadSubAgents: (...args) => overlayStore.listActiveThreadSubAgents(...args),
       },
       workspaces: {
         get readThreadGitWorkingStateCache() { return overlayStore.readThreadGitWorkingStateCache?.bind(overlayStore); },
         get writeThreadGitWorkingStateCacheEntry() { return overlayStore.writeThreadGitWorkingStateCacheEntry?.bind(overlayStore); },
         get acknowledgeThreadEnvironmentFailure() { return overlayStore.acknowledgeThreadEnvironmentFailure?.bind(overlayStore); },
+        get setThreadCodexEnvironmentRuntime() { return overlayStore.setThreadCodexEnvironmentRuntime?.bind(overlayStore); },
       },
       toolAccounting: {
         // The ledger tests for readThreadToolAccounting before calling it, as
@@ -1368,9 +1375,27 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       },
       pullRequests: {
         addThreadPullRequestReference: (...args) => overlayStore.addThreadPullRequestReference(...args),
+        listActiveThreadPrStatusWatches: (...args) => overlayStore.listActiveThreadPrStatusWatches(...args),
+        listAllActivePrStatusWatches: (...args) => overlayStore.listAllActivePrStatusWatches(...args),
+        readPrStatusCache: (...args) => overlayStore.readPrStatusCache(...args),
       },
       reviews: {
         upsertManagedReviewEntry: (...args) => overlayStore.upsertManagedReviewEntry(...args),
+      },
+      archive: {
+        setThreadArchiveTombstone: (...args) => overlayStore.setThreadArchiveTombstone(...args),
+        setThreadKeepCheckoutAwake: (...args) => overlayStore.setThreadKeepCheckoutAwake(...args),
+        upsertWorktreeSnapshot: (...args) => overlayStore.upsertWorktreeSnapshot(...args),
+        get forgetThreadArchiveStates() { return overlayStore.forgetThreadArchiveStates?.bind(overlayStore); },
+        get getArchiveCleanupOverlayStates() { return overlayStore.getArchiveCleanupOverlayStates?.bind(overlayStore); },
+        get listFinishedMonitorWorkerThreadKeys() { return overlayStore.listFinishedMonitorWorkerThreadKeys?.bind(overlayStore); },
+        get listThreadArchiveStates() { return overlayStore.listThreadArchiveStates?.bind(overlayStore); },
+        get listThreadArchiveStatesFor() { return overlayStore.listThreadArchiveStatesFor?.bind(overlayStore); },
+        get observeArchivedThreads() { return overlayStore.observeArchivedThreads?.bind(overlayStore); },
+        get readArchiveCleanupChangeToken() { return overlayStore.readArchiveCleanupChangeToken?.bind(overlayStore); },
+      },
+      messaging: {
+        appendMessagingBindingTransition: (...args) => overlayStore.appendMessagingBindingTransition(...args),
       },
     },
     providers: { codex: codexClient, claude: claudeBackend, acp: acpBackend },
@@ -1403,6 +1428,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     managedReviewService,
     subAgentMonitorService,
   }, () => ports);
+  const threadArchiveCoordinator = new ThreadArchiveCoordinator(context, {
+    managedMaintenanceRoots,
+    readThreadArchivePolicy,
+    readCheckoutHibernationPolicy,
+    archiveCleanupCheckpointStore,
+    worktreeContainerService,
+  }, handlers, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
@@ -1412,14 +1444,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     managedReviewService,
     subAgentMonitorService,
     threadUsageLedger,
+    threadArchiveCoordinator,
     handlers,
     ownerAdmission,
-    managedMaintenanceRoots,
-    readThreadArchivePolicy,
-    readCheckoutHibernationPolicy,
     configStore,
     runtimeInstanceId,
-    archiveCleanupCheckpointStore,
     projectHeldWakeupStore,
     restartContinuationStore,
     restartDispatchPlanOptions,
@@ -1482,7 +1511,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     gitWorkingStateService,
     worktreeArchiveService,
     worktreeRecoveryService,
-    worktreeContainerService,
     pdfToolMcpServer,
     claudeAgentToolMcpServer,
     claudeBackend,
@@ -1516,6 +1544,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     managedReviewService,
     subAgentMonitorService,
     threadUsageLedger,
+    threadArchiveCoordinator,
   });
   return registry;
 }
