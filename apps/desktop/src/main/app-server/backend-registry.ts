@@ -35500,9 +35500,8 @@ export class DesktopBackendRegistry {
         && readStatusType(event.notification.params.status) === "systemError")
     ) {
       const threadId = event.notification.params.threadId;
-      const monitor = Array.from(this.subAgentMonitorService.taskMonitorDelegationRecords.values()).find(
-        (record) => record.backend === event.backend && record.monitorThreadId === threadId,
-      ) ?? this.subAgentMonitorService.completedTaskMonitorRecords.get(taskMonitorThreadKey(event.backend, threadId));
+      const monitor = this.subAgentMonitorService.taskMonitorForThread({ backend: event.backend, threadId })
+        ?? this.subAgentMonitorService.completedTaskMonitorRecords.get(taskMonitorThreadKey(event.backend, threadId));
       const backend = event.errorNoticeContext?.backend
         ?? monitor?.parentBackend ?? event.backend;
       const ownerThreadId = event.errorNoticeContext?.threadId
