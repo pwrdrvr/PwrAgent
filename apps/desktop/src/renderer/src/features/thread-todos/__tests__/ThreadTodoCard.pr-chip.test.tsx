@@ -62,6 +62,7 @@ function inProject(id: string, prs: PrSummary[]): NavigationThreadSummary {
       label: "atlas",
       path: REPO_ROOT,
       worktreePath,
+      repositoryKey: "github.com/acme/atlas",
     }],
   } as Partial<NavigationThreadSummary>);
 }
@@ -133,8 +134,10 @@ describe("merge card PR chip", () => {
   });
 
   it("keeps the text when the number names PRs in two repositories", () => {
+    const raiser = inProject("raiser", []);
+    raiser.linkedDirectories[0].repositoryKeys = ["github.com/acme/atlas", "github.com/acme/atlas-web"];
     renderCard(mergeCard("418"), [
-      thread("raiser", []),
+      raiser,
       inProject("one", [pr()]),
       inProject("two", [pr({ repo: "atlas-web", url: "https://github.com/acme/atlas-web/pull/418" })]),
     ]);
