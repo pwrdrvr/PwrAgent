@@ -2418,6 +2418,9 @@ export type NavigationQueryPage = {
   /** Exact item count for the queried collection, distinct from thread facet counts. */
   collectionSize?: number;
   selectionDirectory?: NavigationDirectoryRow;
+  /** Complete viewer projection dependencies, before pagination. Omitted when
+   * coverage or the bounded metadata budget cannot establish an exclusion. */
+  metadataDependencies?: NavigationMetadataDependencies;
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
   /** Offset of this page in its immutable owner generation. Omitted means zero. */
@@ -2429,6 +2432,13 @@ export type NavigationQueryPage = {
   unchanged?: boolean;
   /** Empty payload confirms these already retained rows; continuation remains explicit. */
   rangeUnchanged?: { start: number; count: number };
+};
+
+export type NavigationMetadataDependencies = {
+  version: 1;
+  /** JSON tuples [ownerInstanceId or null, backend, threadId]. */
+  threadKeys: string[];
+  prKeys: string[];
 };
 
 /** Selected launchpad configuration excludes unsent text, attachments and environment output. */

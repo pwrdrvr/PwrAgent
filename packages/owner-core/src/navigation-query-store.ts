@@ -264,6 +264,7 @@ function pageBase(params: {
     countsRevision: generation.completeRevision,
     coverage: generation.materialization.coverage,
     counts: generation.materialization.counts,
+    ...(generation.materialization.metadataDependencies ? { metadataDependencies: generation.materialization.metadataDependencies } : {}),
     ...(generation.materialization.collectionSize !== undefined ? { collectionSize: generation.materialization.collectionSize } : {}),
     ...(generation.materialization.selectionDirectory ? { selectionDirectory: generation.materialization.selectionDirectory } : {}),
     ...(generation.materialization.facets ? { facets: generation.materialization.facets } : {}),

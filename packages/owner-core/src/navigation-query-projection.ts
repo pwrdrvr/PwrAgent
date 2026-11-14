@@ -17,6 +17,7 @@ import type {
   NavigationRow,
   NavigationRowHomeProject,
   NavigationThreadSummary,
+  NavigationMetadataDependencies,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
@@ -28,6 +29,8 @@ import {
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   rankThreadJumpMatches,
   textMatchesJumpQuery,
+  buildPullRequestStatusKey,
+  readNavigationMetadataDependencies,
 } from "@pwragent/shared";
 import {
   navigationAttentionIdentity,
@@ -41,6 +44,7 @@ export type NavigationQueryMaterialization = {
   counts: NavigationCounts;
   collectionSize?: number;
   selectionDirectory?: NavigationDirectoryRow;
+  metadataDependencies?: NavigationMetadataDependencies;
   facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
   collectionKind?: "directories";
@@ -1178,8 +1182,28 @@ export function projectNavigationQuery(params: {
       || (query.kind === "lens" && query.roots !== undefined)
       ? selectedThreads
       : params.index.threads;
+  // These pages also carry directory-wide counts. Derive their dependencies
+  // from the same complete, viewer-regrouped inventory as their descriptors,
+  // never loaded roots, linked paths, or a remote owner's directory scope.
+  let metadataDependencies: NavigationMetadataDependencies | undefined;
+  if (params.request.inventory === "viewer" && params.index.coverage?.state === "complete"
+    && (query.kind === "directory" || query.kind === "directory-index" || query.kind === "exact")) {
+    const descriptorDirectories = query.kind === "directory-index" ? params.index.directories
+      : query.kind === "directory" ? params.index.directories.filter((directory) => directory.key === query.directoryKey)
+      : params.index.directories.filter((directory) => directory.threadKeys.some((key) => selectedThreads[0] === threadsByLegacyKey.get(key))).slice(0, 1);
+    const dependencies = new Set([...selectedThreads, ...countsThreads,
+      ...descriptorDirectories.flatMap((directory) => directoryMemberThreads(directory, threadsByLegacyKey))]);
+    metadataDependencies = readNavigationMetadataDependencies({ version: 1,
+      threadKeys: [...new Set([...dependencies].map((thread) => {
+        const ref = navigationIdentity(thread);
+        return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
+      }))].sort(),
+      prKeys: [...new Set([...dependencies].flatMap((thread) => thread.prs?.map(buildPullRequestStatusKey) ?? []))].sort(),
+    });
+  }
   return {
     coverage: params.index.coverage ?? { state: "complete" },
+    ...(metadataDependencies ? { metadataDependencies } : {}),
     // Both pages count every owner thread, so both can say which providers
     // the owner uses. Provider chips hide while that is a single provider.
     counts: countsForThreads(countsThreads, {
