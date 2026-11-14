@@ -382,6 +382,12 @@ export class ThreadUsageLedger {
 
   private tokenMiserStoragePreparation: Promise<void> = Promise.resolve();
 
+  /**
+   * The settlement of the last queued live gate publish. Each publish waits
+   * for this, so gate cards update in the order the store reported them.
+   */
+  private tokenMiserLivePublishChain: Promise<void> = Promise.resolve();
+
   private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
 
   private liveThreadUsageObservationSequence = 0;
@@ -3484,7 +3490,22 @@ export class ThreadUsageLedger {
     };
   }
 
-  async publishLiveTokenMiserLedgerEntry(
+  /**
+   * Queues one live gate publish behind every earlier one and returns its
+   * promise. A failed publish rejects its own promise but does not hold up
+   * the next: the chain keeps only its settlement.
+   */
+  publishLiveTokenMiserLedgerEntryInOrder(
+    entry: TokenMiserObjectMetadata,
+  ): Promise<void> {
+    const publish = this.tokenMiserLivePublishChain.then(() =>
+      this.publishLiveTokenMiserLedgerEntry(entry),
+    );
+    this.tokenMiserLivePublishChain = publish.catch(() => undefined);
+    return publish;
+  }
+
+  private async publishLiveTokenMiserLedgerEntry(
     entry: TokenMiserObjectMetadata,
   ): Promise<void> {
     if (this.context.lifecycle.closed) {

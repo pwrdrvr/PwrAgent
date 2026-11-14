@@ -796,7 +796,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const readAccounting = () =>
       registry.listLiveTokenMiserSubAgents("thread-parent")[0]
         ?.tokenMiserAccounting;
-    await internals.publishLiveTokenMiserLedgerEntry(entry);
+    await internals.publishLiveTokenMiserLedgerEntryInOrder(entry);
     expect(events.some(
       (event) => event.notification.method === "thread/subAgents/updated",
     )).toBe(true);

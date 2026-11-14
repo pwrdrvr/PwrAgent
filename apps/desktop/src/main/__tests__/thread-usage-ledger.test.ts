@@ -32,6 +32,7 @@ type LedgerInternals = {
     previousOutputChars: number;
   };
   persistTokenMiserLedgerEntries(entries: readonly TokenMiserObjectMetadata[]): Promise<void>;
+  publishLiveTokenMiserLedgerEntry(entry: TokenMiserObjectMetadata): Promise<void>;
 };
 
 /** A ledger over a fixture context and host; nothing here touches SQLite. */
@@ -491,6 +492,68 @@ describe("ThreadUsageLedger", () => {
     release();
     await reconciliation;
     expect(settled).toBe(true);
+  });
+
+  it("runs live gate publishes one at a time, in submission order, past failures", async () => {
+    // Model: a queue. Only its head may be in flight; the head starts once
+    // everything submitted before it has settled, failed or not.
+    const command = fc.oneof(
+      fc.record({ kind: fc.constant("submit" as const), fail: fc.boolean() }),
+      fc.record({ kind: fc.constant("settle" as const), pick: fc.nat({ max: 3 }) }),
+    );
+    const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+    await fc.assert(fc.asyncProperty(fc.array(command, { maxLength: 30 }), async (commands) => {
+      const { ledger, internals } = createLedger();
+      const failing = new Set<string>();
+      const inFlight: { objectId: string; settle: () => void }[] = [];
+      const started: string[] = [];
+      const settled: string[] = [];
+      let maxInFlight = 0;
+      vi.spyOn(internals, "publishLiveTokenMiserLedgerEntry").mockImplementation((entry) => {
+        started.push(entry.objectId);
+        return new Promise<void>((resolve, reject) => {
+          inFlight.push({
+            objectId: entry.objectId,
+            settle: () => failing.has(entry.objectId) ? reject(new Error(entry.objectId)) : resolve(),
+          });
+          maxInFlight = Math.max(maxInFlight, inFlight.length);
+        });
+      });
+      const submitted: string[] = [];
+      const outcomes = new Map<string, "resolved" | "rejected">();
+      const settleOne = (pick: number) => {
+        const [publish] = inFlight.splice(pick % inFlight.length, 1);
+        publish.settle();
+      };
+      for (const step of commands) {
+        if (step.kind === "submit") {
+          const objectId = `gate-${submitted.length}`;
+          submitted.push(objectId);
+          if (step.fail) failing.add(objectId);
+          void ledger
+            .publishLiveTokenMiserLedgerEntryInOrder(gate({ objectId, threadId: "thread-live", createdAt: 1 }))
+            .then(
+              () => outcomes.set(objectId, "resolved"),
+              () => outcomes.set(objectId, "rejected"),
+            )
+            .finally(() => settled.push(objectId));
+        } else if (inFlight.length > 0) {
+          settleOne(step.pick);
+        }
+        await drain();
+      }
+      while (inFlight.length > 0) {
+        settleOne(0);
+        await drain();
+      }
+
+      expect(maxInFlight).toBeLessThanOrEqual(1);
+      expect(started).toEqual(submitted);
+      expect(settled).toEqual(submitted);
+      for (const objectId of submitted) {
+        expect(outcomes.get(objectId)).toBe(failing.has(objectId) ? "rejected" : "resolved");
+      }
+    }));
   });
 
   it("is the ledger the registry's facades and hub read", async () => {

@@ -717,12 +717,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           if (reason === "replay" || reason === "flushed") {
             return;
           }
-          const publish = ports.tokenMiserLivePublishChain.then(() =>
-            ports.publishLiveTokenMiserLedgerEntry(metadata),
-          );
-          ports.tokenMiserLivePublishChain = publish.catch(() => undefined);
           try {
-            await publish;
+            await ports.publishLiveTokenMiserLedgerEntryInOrder(metadata);
           } catch (error) {
             backendRegistryLog.warn("live Token Miser ledger publish failed", {
               error: error instanceof Error ? error.message : String(error),

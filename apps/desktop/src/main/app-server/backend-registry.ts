@@ -1319,7 +1319,6 @@ export class DesktopBackendRegistry {
     number
   >();
   private codexThreadStatusObservationSequence = 0;
-  private tokenMiserLivePublishChain: Promise<void> = Promise.resolve();
   private readonly transcriptRepairs = new Map<string, Promise<void>>();
   private readonly pendingTranscriptRepairReplays = new Map<string, AppServerThreadReplay>();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
@@ -2184,7 +2183,7 @@ export class DesktopBackendRegistry {
       persistStartingTurnOrigin: (...args: Parameters<typeof this.persistStartingTurnOrigin>) => this.persistStartingTurnOrigin(...args),
       get planLimits() { return current().planLimits; },
       prepareTokenMiserRuntime: (...args: Parameters<typeof this.prepareTokenMiserRuntime>) => this.prepareTokenMiserRuntime(...args),
-      publishLiveTokenMiserLedgerEntry: (...args: Parameters<ThreadUsageLedger["publishLiveTokenMiserLedgerEntry"]>) => this.threadUsageLedger.publishLiveTokenMiserLedgerEntry(...args),
+      publishLiveTokenMiserLedgerEntryInOrder: (...args: Parameters<ThreadUsageLedger["publishLiveTokenMiserLedgerEntryInOrder"]>) => this.threadUsageLedger.publishLiveTokenMiserLedgerEntryInOrder(...args),
       publishLocalEvent: (...args: Parameters<typeof this.publishLocalEvent>) => this.publishLocalEvent(...args),
       readCausalMessagingContext: (...args: Parameters<typeof this.readCausalMessagingContext>) => this.readCausalMessagingContext(...args),
       readCodexDefaultModelsOnce: (...args: Parameters<typeof this.readCodexDefaultModelsOnce>) => this.readCodexDefaultModelsOnce(...args),
@@ -2278,8 +2277,6 @@ export class DesktopBackendRegistry {
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
       get tokenMiserDiagnostics() { return current().tokenMiserDiagnostics; },
-      get tokenMiserLivePublishChain() { return current().tokenMiserLivePublishChain; },
-      set tokenMiserLivePublishChain(value) { current().tokenMiserLivePublishChain = value; },
       get tokenMiserPostToolUseExactOutputVersion() { return current().tokenMiserPostToolUseExactOutputVersion; },
       get tokenMiserService() { return current().tokenMiserService; },
       get tokenMiserStore() { return current().tokenMiserStore; },
