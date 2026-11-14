@@ -15,6 +15,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { threadSummaryIdentityKey } from "./federated-thread-events";
 
 export type PullRequestLinkContextValue = {
   hasPeerStatusAuthority: (pr: PrSummary) => boolean;
@@ -337,20 +338,26 @@ function pullRequestsByNumberForActiveProject(params: {
     return new Map();
   }
 
+  const selectedThread = params.activeThread;
   const activeThread = params.threads.find(
-    (thread) =>
-      thread.source === params.activeThread?.source
-      && thread.id === params.activeThread.id,
-  ) ?? params.activeThread;
+    (thread) => threadSummaryIdentityKey(thread) === threadSummaryIdentityKey(selectedThread),
+  ) ?? selectedThread;
+  const activeKey = threadSummaryIdentityKey(activeThread);
+  const repositoryKeys = threadRepositoryKeys(activeThread);
   const candidatesByNumber = new Map<number, Map<string, PrSummary>>();
 
-  for (const thread of params.threads) {
-    const sameThread =
-      thread.source === activeThread.source && thread.id === activeThread.id;
-    if (!sameThread && !siblingPullRequestsAreInScope(activeThread, thread)) {
-      continue;
-    }
+  // Selected detail can be present before its navigation row is loaded.
+  const candidates = [activeThread, ...params.threads.filter(
+    (thread) => threadSummaryIdentityKey(thread) !== activeKey,
+  )];
+  for (const thread of candidates) {
+    const sameThread = threadSummaryIdentityKey(thread) === activeKey;
     for (const pr of thread.prs ?? []) {
+      // An attachment can outlive the directory it came from. Only the active
+      // thread's own attachments establish scope without a repository match.
+      if (!sameThread && ![...repositoryKeys].some((key) => pullRequestMatchesRepositoryKey(pr, key))) {
+        continue;
+      }
       const key = buildPullRequestStatusKey(pr);
       const byKey = candidatesByNumber.get(pr.number) ?? new Map();
       byKey.set(key, params.prsByKey.get(key) ?? pr);
@@ -370,26 +377,17 @@ function pullRequestsByNumberForActiveProject(params: {
   return resolved;
 }
 
-function siblingPullRequestsAreInScope(
-  activeThread: NavigationThreadSummary,
-  siblingThread: NavigationThreadSummary,
-): boolean {
-  const activeRepositories = threadRepositoryPaths(activeThread);
-  const siblingRepositories = threadRepositoryPaths(siblingThread);
-  if (siblingRepositories.size > 0) {
-    return (
-      activeRepositories.size > 0
-      && [...siblingRepositories].every((path) => activeRepositories.has(path))
-    );
+function threadRepositoryKeys(thread: NavigationThreadSummary): Set<string> {
+  const keys = new Set<string>();
+  const add = (key: string | undefined) => {
+    if (key?.trim()) keys.add(key.trim().toLowerCase());
+  };
+  add(thread.primaryGitRepository);
+  for (const directory of thread.linkedDirectories ?? []) {
+    add(directory.repositoryKey);
+    for (const key of directory.repositoryKeys ?? []) add(key);
   }
-
-  const activeProjectKey = normalizeProjectPath(activeThread.projectKey);
-  const siblingProjectKey = normalizeProjectPath(siblingThread.projectKey);
-  return Boolean(
-    activeProjectKey
-    && siblingProjectKey
-    && activeProjectKey === siblingProjectKey,
-  );
+  return keys;
 }
 
 function threadRepositoryPaths(thread: NavigationThreadSummary): Set<string> {
