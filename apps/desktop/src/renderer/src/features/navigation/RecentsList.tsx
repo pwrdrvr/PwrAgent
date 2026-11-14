@@ -432,7 +432,7 @@ export function RecentsList(props: RecentsListProps) {
               terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-              draftThreadKeys={props.draftThreadKeys}
+              hasUnsentDraft={props.draftThreadKeys?.[childKey] === true}
               composerSourceThreadKey={props.composerSourceThreadKey}
               actionsMenuOpen={childKey === props.actionsMenuThreadKey}
               renaming={isRenamingRow(props.renamingRow, childKey, undefined)}
@@ -548,7 +548,7 @@ export function RecentsList(props: RecentsListProps) {
       terminalThreadKeys: props.terminalThreadKeys,
       inputRequestThreadKeys: props.inputRequestThreadKeys,
       queuedMessageThreadKeys: props.queuedMessageThreadKeys,
-      draftThreadKeys: props.draftThreadKeys,
+      hasUnsentDraft: props.draftThreadKeys?.[key] === true,
       composerSourceThreadKey: props.composerSourceThreadKey,
       actionsMenuOpen: key === props.actionsMenuThreadKey,
       renaming: isRenamingRow(props.renamingRow, key, undefined),

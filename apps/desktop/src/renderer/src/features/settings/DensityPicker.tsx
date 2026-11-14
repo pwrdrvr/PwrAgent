@@ -119,7 +119,7 @@ export function DensityPicker(props: {
                 {threads.map((thread) => (
                   <ThreadRow
                     key={thread.id}
-                    draftThreadKeys={PREVIEW_DRAFT_KEYS}
+                    hasUnsentDraft={PREVIEW_DRAFT_KEYS[threadSummaryIdentityKey(thread)] === true}
                     includeLinkedDirectories
                     linkedDirectoryMode="kind"
                     thread={thread}
@@ -145,8 +145,7 @@ export function DensityPicker(props: {
 function noop(): void {}
 
 const PREVIEW_DRAFT_THREAD_ID = "density-preview-pdf";
-// Keyed the way ThreadRow looks threads up, so the Draft chip shows.
-const PREVIEW_DRAFT_KEYS = {
+const PREVIEW_DRAFT_KEYS: Record<string, boolean> = {
   [threadSummaryIdentityKey({ id: PREVIEW_DRAFT_THREAD_ID, source: "codex" })]: true,
 };
 

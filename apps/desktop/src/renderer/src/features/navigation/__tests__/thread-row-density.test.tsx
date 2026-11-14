@@ -49,7 +49,7 @@ function renderRow(
         onOpenContextMenu={vi.fn()}
         onSelectThread={vi.fn()}
         onSetReaction={onSetReaction}
-        draftThreadKeys={draftThreadKeys}
+        hasUnsentDraft={draftThreadKeys?.[threadSummaryIdentityKey(row)] === true}
       />
     </ThreadRowDensityContext.Provider>,
   );

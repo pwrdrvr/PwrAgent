@@ -744,15 +744,13 @@ describe("ThreadRow chip flow", () => {
   });
 
   describe("unsent draft chip", () => {
-    const draftKeys = { [`${baseThread.source}:${baseThread.id}`]: true };
-
     it("renders only when the thread's scope holds unsent text", () => {
       const { container: without } = renderRow();
       expect(without.querySelector('[data-thread-draft="unsent"]')).toBeNull();
 
       cleanup();
 
-      const { container: with_ } = renderRow({ draftThreadKeys: draftKeys });
+      const { container: with_ } = renderRow({ hasUnsentDraft: true });
       const chip = with_.querySelector('[data-thread-draft="unsent"]');
       expect(chip).not.toBeNull();
       expect(chip).toHaveTextContent("Draft");
@@ -764,7 +762,7 @@ describe("ThreadRow chip flow", () => {
       // The label deliberately omits the word "reply" — `getByLabel` is a
       // substring match and 31 E2E call sites drive the composer with
       // `getByLabel("Reply")`.
-      const { container } = renderRow({ draftThreadKeys: draftKeys });
+      const { container } = renderRow({ hasUnsentDraft: true });
       const chip = container.querySelector('[data-thread-draft="unsent"]')!;
       expect(chip).toHaveAttribute("role", "img");
       expect(chip).toHaveAttribute("aria-label", "Unsent draft");
@@ -773,7 +771,7 @@ describe("ThreadRow chip flow", () => {
 
     it("sits inside the shared chip flow, before bindings and PR chips", () => {
       const { container } = renderRow({
-        draftThreadKeys: draftKeys,
+        hasUnsentDraft: true,
         thread: {
           ...baseThread,
           messagingBindings: [telegramBinding],
