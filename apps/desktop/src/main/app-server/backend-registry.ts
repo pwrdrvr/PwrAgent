@@ -1146,10 +1146,6 @@ function withListedArchiveState(thread: AppServerThreadSummary, archived: boolea
   return { ...thread, archivedAt: archived ? thread.archivedAt ?? 1 : undefined };
 }
 
-// Approvals follow the mode, the operator's approvals setting and this
-// member's containment on every host (member-containment.ts). An Outpost's
-// operator also chooses its modes, and its mode chooses the sandbox.
-
 function logBackendLifecycleNotification(
   backend: AppServerBackendKind,
   notification: AppServerNotification,
@@ -24523,15 +24519,7 @@ export class DesktopBackendRegistry {
       ) {
         return;
       }
-      if (
-        Array.from(this.subAgentMonitorService.taskMonitorDelegationRecords.values()).some(
-          (record) =>
-            record.backend === event.backend && record.monitorThreadId === threadId,
-        )
-        || this.subAgentMonitorService.completedTaskMonitorRecords.has(
-          taskMonitorThreadKey(event.backend, threadId),
-        )
-      ) {
+      if (this.subAgentMonitorService.isTaskMonitorThread({ backend: event.backend, threadId })) {
         return;
       }
       if (turnId) {
@@ -25058,9 +25046,7 @@ export class DesktopBackendRegistry {
     { backend, threadId, turnId }: ResolvedAgentToolMcpCallContext,
   ): Promise<boolean> {
     if (this.subAgentMonitorService.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return false;
-    if (Array.from(this.subAgentMonitorService.taskMonitorDelegationRecords.values()).some(
-      (record) => record.backend === backend && record.monitorThreadId === threadId,
-    ) || this.subAgentMonitorService.completedTaskMonitorRecords.has(taskMonitorThreadKey(backend, threadId))) return false;
+    if (this.subAgentMonitorService.isTaskMonitorThread({ backend, threadId })) return false;
     if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return false;
     if (this.getActiveTurnForThread({ backend, threadId })?.turnId !== turnId) return false;
     return this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId });
@@ -25097,9 +25083,7 @@ export class DesktopBackendRegistry {
     });
     if (!repeated && !isCiWaitCommand(params.command)) return undefined;
     if (this.subAgentMonitorService.resolveSubAgentThreadOwner({ backend, threadId }).isSubAgent) return undefined;
-    if (Array.from(this.subAgentMonitorService.taskMonitorDelegationRecords.values()).some(
-      (record) => record.backend === backend && record.monitorThreadId === threadId,
-    ) || this.subAgentMonitorService.completedTaskMonitorRecords.has(taskMonitorThreadKey(backend, threadId))) return undefined;
+    if (this.subAgentMonitorService.isTaskMonitorThread({ backend, threadId })) return undefined;
     if (!await this.monitorJobSuggestionEnabledForThread(backend, threadId)) return undefined;
     if (!this.overlayStore.claimMonitorJobSuggestion({ backend, threadId, turnId })) return undefined;
     backendRegistryLog.info("monitor job suggestion appended to Claude tool result", {
@@ -25167,14 +25151,10 @@ export class DesktopBackendRegistry {
         backend: evidence.backend,
         threadId: evidence.threadId,
       }).isSubAgent
-      || Array.from(this.subAgentMonitorService.taskMonitorDelegationRecords.values()).some(
-        (record) =>
-          record.backend === evidence.backend
-          && record.monitorThreadId === evidence.threadId,
-      )
-      || this.subAgentMonitorService.completedTaskMonitorRecords.has(
-        taskMonitorThreadKey(evidence.backend, evidence.threadId),
-      )
+      || this.subAgentMonitorService.isTaskMonitorThread({
+        backend: evidence.backend,
+        threadId: evidence.threadId,
+      })
       || !await this.monitorJobSuggestionEnabledForThread(
         evidence.backend,
         evidence.threadId,
@@ -35554,9 +35534,8 @@ export class DesktopBackendRegistry {
         && readStatusType(event.notification.params.status) === "systemError")
     ) {
       const threadId = event.notification.params.threadId;
-      const monitor = Array.from(this.subAgentMonitorService.taskMonitorDelegationRecords.values()).find(
-        (record) => record.backend === event.backend && record.monitorThreadId === threadId,
-      ) ?? this.subAgentMonitorService.completedTaskMonitorRecords.get(taskMonitorThreadKey(event.backend, threadId));
+      const monitor = this.subAgentMonitorService.taskMonitorForThread({ backend: event.backend, threadId })
+        ?? this.subAgentMonitorService.completedTaskMonitorRecords.get(taskMonitorThreadKey(event.backend, threadId));
       const backend = event.errorNoticeContext?.backend
         ?? monitor?.parentBackend ?? event.backend;
       const ownerThreadId = event.errorNoticeContext?.threadId
