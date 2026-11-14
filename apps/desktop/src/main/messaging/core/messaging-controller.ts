@@ -8916,7 +8916,8 @@ export class MessagingController {
 
   /**
    * Resolves once the tool-update batches that a flush timer already started
-   * have finished delivering, including their store writes. dispose() is
+   * have finished delivering, including their store writes, and then once
+   * every queued-turn drain already begun has finished. dispose() is
    * synchronous and only stops new batches.
    */
   async whenToolUpdatesSettled(): Promise<void> {
