@@ -16,11 +16,12 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
-  shouldSurfaceAcpThoughtsAsMessages,
+  type AcpSessionReplayNormalizerOptions,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import {
@@ -310,16 +311,14 @@ export class AcpAgentClient {
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   private archiveRestoreSupported = false;
-  private readonly surfaceThoughtsAsMessages: boolean;
+  private readonly normalizerOptions: AcpSessionReplayNormalizerOptions;
   private activeOperations = 0;
 
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
     this.runtimeCapabilities = options.initialRuntimeCapabilities;
     this.approvalRequesterName = approvalRequesterNameForOptions(options);
-    this.surfaceThoughtsAsMessages = shouldSurfaceAcpThoughtsAsMessages(
-      options.backendId,
-    );
+    this.normalizerOptions = acpSessionReplayNormalizerOptions(options.backendId);
   }
 
   async initialize(): Promise<void> {
@@ -1720,7 +1719,8 @@ export class AcpAgentClient {
     } satisfies AcpSessionUpdate);
     const shouldTrackAssistantTextUpdate =
       updateKind === "agent_message_chunk" ||
-      (updateKind === "agent_thought_chunk" && this.surfaceThoughtsAsMessages);
+      (updateKind === "agent_thought_chunk"
+        && this.normalizerOptions.surfaceThoughtsAsMessages === true);
     const text = readUpdateText(update);
     // Replay owns message boundaries, including metadata, late tool progress,
     // explicit IDs, and phase changes. A second live-only tracker can split a
@@ -1842,9 +1842,7 @@ export class AcpAgentClient {
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
     let normalizer = this.normalizers.get(sessionId);
     if (!normalizer) {
-      normalizer = new AcpSessionReplayNormalizer({
-        surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
-      });
+      normalizer = new AcpSessionReplayNormalizer(this.normalizerOptions);
       this.normalizers.set(sessionId, normalizer);
     }
     return normalizer;
@@ -1867,9 +1865,7 @@ export class AcpAgentClient {
     if (!this.options.rolloutStore) {
       return { isComplete: false };
     }
-    const normalizer = new AcpSessionReplayNormalizer({
-      surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
-    });
+    const normalizer = new AcpSessionReplayNormalizer(this.normalizerOptions);
     let hasTranscriptHistory = false;
     const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,

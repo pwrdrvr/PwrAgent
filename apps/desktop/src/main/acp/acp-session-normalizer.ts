@@ -26,7 +26,7 @@ import {
   readAcpWebSearch,
   readFirstLocationPath,
 } from "./acp-command-extraction.js";
-import { readAcpFileEdit } from "./acp-file-edit.js";
+import { acpDiffContentIsWholeFile, readAcpFileEdit } from "./acp-file-edit.js";
 import {
   type AcpFileRead,
   fileBaseName,
@@ -47,10 +47,26 @@ export type AcpSessionUpdate = {
 
 export type AcpSessionReplayNormalizerOptions = {
   surfaceThoughtsAsMessages?: boolean;
+  /**
+   * The agent puts the whole file before and after an edit in ACP `diff`
+   * content, so a diff with no position can still be drawn at its real line
+   * numbers. See `acpDiffContentIsWholeFile`.
+   */
+  wholeFileDiffContent?: boolean;
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
   return backendId !== "acp:qwen" && backendId !== "acp:grok";
+}
+
+/** How to normalize the updates of the agent behind an ACP backend. */
+export function acpSessionReplayNormalizerOptions(
+  backendId: string,
+): AcpSessionReplayNormalizerOptions {
+  return {
+    surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(backendId),
+    wholeFileDiffContent: acpDiffContentIsWholeFile(backendId),
+  };
 }
 
 export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
@@ -800,7 +816,14 @@ export class AcpSessionReplayNormalizer {
       this.fileReads.set(toolCallId, fileRead);
     }
     this.upsertActivity(
-      toolActivity(update, kind, createdAt, providerTool, fileRead),
+      toolActivity(
+        update,
+        kind,
+        createdAt,
+        providerTool,
+        fileRead,
+        this.options.wholeFileDiffContent,
+      ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
         : undefined,
@@ -1588,6 +1611,7 @@ function toolActivity(
   createdAt: number,
   providerTool?: AcpProviderTool,
   fileRead?: AcpFileRead,
+  wholeFileDiffContent?: boolean,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -1666,7 +1690,7 @@ function toolActivity(
       ],
     };
   }
-  const fileEdit = readAcpFileEdit(update.update);
+  const fileEdit = readAcpFileEdit(update.update, { wholeFileDiffContent });
   if (fileEdit) {
     const label = `${fileEdit.verb} ${fileBaseName(fileEdit.path)}`;
     const status = readToolActivityStatus(update.update);
