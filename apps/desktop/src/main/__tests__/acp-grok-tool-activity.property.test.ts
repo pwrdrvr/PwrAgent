@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AppServerThreadActivityEntry } from "@pwragent/shared";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
+import { applyUnifiedDiff, fileLines } from "./helpers/unified-diff";
 
 // Grok opens every tool call with a bare `tool_call` whose title is the
 // tool's internal name (`search_replace`, `todo_write`, `spawn_subagent`) and
@@ -224,45 +225,6 @@ function applyFrames(frames: Record<string, unknown>[]): AcpSessionReplayNormali
     normalizer.apply({ sessionId, receivedAt: 1_000 + index, update });
   });
   return normalizer;
-}
-
-/**
- * Applies a unified diff to the lines of a file, failing if any context or
- * removed line does not match what the file holds there.
- */
-function applyUnifiedDiff(oldLines: string[], diff: string): string[] {
-  const result = [...oldLines];
-  let offset = 0;
-  const lines = diff.split("\n");
-  let index = lines.findIndex((line) => line.startsWith("@@"));
-  while (index >= 0 && index < lines.length) {
-    const header = /^@@ -(\d+),(\d+) \+(\d+),(\d+) @@$/u.exec(lines[index] ?? "");
-    if (!header) {
-      throw new Error(`bad hunk header: ${lines[index]}`);
-    }
-    const oldStart = Number(header[1]);
-    const oldCount = Number(header[2]);
-    const newCount = Number(header[4]);
-    const body: string[] = [];
-    index += 1;
-    while (index < lines.length && !lines[index]?.startsWith("@@")) {
-      body.push(lines[index] ?? "");
-      index += 1;
-    }
-    const before = body.filter((line) => !line.startsWith("+")).map((line) => line.slice(1));
-    const after = body.filter((line) => !line.startsWith("-")).map((line) => line.slice(1));
-    expect(before).toHaveLength(oldCount);
-    expect(after).toHaveLength(newCount);
-    const at = (oldCount === 0 ? oldStart : oldStart - 1) + offset;
-    expect(result.slice(at, at + oldCount)).toEqual(before);
-    result.splice(at, oldCount, ...after);
-    offset += newCount - oldCount;
-  }
-  return result;
-}
-
-function fileLines(text: string): string[] {
-  return text === "" ? [] : text.replace(/\n$/u, "").split("\n");
 }
 
 describe("Grok tool activity", () => {

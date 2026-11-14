@@ -6,13 +6,13 @@ import {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  acpSessionReplayNormalizerOptions,
   isAcpSessionMetadataUpdateKind,
   isAcpUsageUpdateKind,
   isAcpUserBoilerplateMessage,
   isGrokTransientUpdateKind,
   readAcpContentText,
   readAcpTopicTitle,
-  shouldSurfaceAcpThoughtsAsMessages,
 } from "./acp-session-normalizer.js";
 
 export type AcpRolloutRecord = {
@@ -97,11 +97,9 @@ export class AcpRolloutStore {
     backendId: AcpBackendId;
     sessionId: string;
   }): AppServerThreadReplay {
-    const normalizer = new AcpSessionReplayNormalizer({
-      surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(
-        params.backendId,
-      ),
-    });
+    const normalizer = new AcpSessionReplayNormalizer(
+      acpSessionReplayNormalizerOptions(params.backendId),
+    );
     for (const record of this.readUpdates(params)) {
       normalizer.apply({
         sessionId: params.sessionId,

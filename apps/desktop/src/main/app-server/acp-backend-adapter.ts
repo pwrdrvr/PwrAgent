@@ -99,6 +99,7 @@ import {
 import type { AcpSessionMetadata, AcpSessionStorage } from "@pwragent/owner-core/acp-storage";
 import {
   AcpSessionReplayNormalizer,
+  acpSessionReplayNormalizerOptions,
   inferAcpReplayTurns,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
@@ -2295,11 +2296,9 @@ export class AcpBackendAdapter {
     if (!this.acpRolloutStore) {
       return inferAcpReplayTurns(replay);
     }
-    const normalizer = new AcpSessionReplayNormalizer({
-      surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(
-        session.backendId,
-      ),
-    });
+    const normalizer = new AcpSessionReplayNormalizer(
+      acpSessionReplayNormalizerOptions(session.backendId),
+    );
     let syntheticUpdateCount = 0;
     for (const record of this.acpRolloutStore.readUpdates({
       backendId: session.backendId,

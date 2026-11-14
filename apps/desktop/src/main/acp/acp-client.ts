@@ -16,6 +16,7 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
   readAcpTopicTitle,
@@ -1842,9 +1843,9 @@ export class AcpAgentClient {
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
     let normalizer = this.normalizers.get(sessionId);
     if (!normalizer) {
-      normalizer = new AcpSessionReplayNormalizer({
-        surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
-      });
+      normalizer = new AcpSessionReplayNormalizer(
+        acpSessionReplayNormalizerOptions(this.options.backendId),
+      );
       this.normalizers.set(sessionId, normalizer);
     }
     return normalizer;
@@ -1867,9 +1868,9 @@ export class AcpAgentClient {
     if (!this.options.rolloutStore) {
       return { isComplete: false };
     }
-    const normalizer = new AcpSessionReplayNormalizer({
-      surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
-    });
+    const normalizer = new AcpSessionReplayNormalizer(
+      acpSessionReplayNormalizerOptions(this.options.backendId),
+    );
     let hasTranscriptHistory = false;
     const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,
