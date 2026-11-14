@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { buildProviderResponseBlockEntry } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -238,6 +239,60 @@ describe("useThreadSessionState", () => {
       expect.objectContaining({ status: "completed", images: [image] }),
     ]);
     expect(result.current.activeTurnId).toBeUndefined();
+  });
+
+  it("keeps a recovered content-filter block after a later turn's read", async () => {
+    // thread/read never carries a block Codex recovered from, so the live
+    // entry is its only record. A later turn must not settle it away.
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const turnOneReply = messageEntry({
+      id: "reply-1",
+      role: "assistant",
+      text: "Here is a permitted alternative.",
+      createdAt: 1_500,
+    });
+    const turnOne = { id: "turn-1", status: "completed" as const, startedAt: 1_000, completedAt: 2_000 };
+    const turnTwo = { id: "turn-2", status: "completed" as const, startedAt: 3_000, completedAt: 4_000 };
+    const readThread = vi.fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [{ ...turnOneReply, turn: turnOne }],
+        hasPreviousPage: false,
+      }))
+      .mockResolvedValue(readThreadResponse({
+        entries: [
+          { ...turnOneReply, turn: turnOne },
+          { ...messageEntry({ id: "reply-2", role: "assistant", text: "Next.", createdAt: 3_500 }), turn: turnTwo },
+        ],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread,
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    const blockEntry = buildProviderResponseBlockEntry({
+      block: "contentFilter",
+      turnEnded: false,
+      turn: turnOne,
+      createdAt: 1_200,
+    })!;
+    act(() => result.current.upsertLiveTranscriptEntry(blockEntry));
+
+    act(() => emit({ backend: "codex", notification: { method: "turn/started", params: {
+      threadId: "thread-1", turn: { id: "turn-2", status: "in_progress" },
+    } } }));
+    act(() => emit({ backend: "codex", notification: { method: "turn/completed", params: {
+      threadId: "thread-1", turnId: "turn-2", turn: { ...turnTwo, output: [] },
+    } } }));
+    await waitFor(() => {
+      expect(result.current.entries.some((entry) => entry.id === "reply-2")).toBe(true);
+    });
+    await flushReactUpdates();
+
+    expect(result.current.entries.filter((entry) => entry.id === blockEntry.id)).toHaveLength(1);
   });
 
   it.each(["codex", "claude"] as const)("keeps safe live %s image parts when a completed reply replaces streamed text", async (backend) => {

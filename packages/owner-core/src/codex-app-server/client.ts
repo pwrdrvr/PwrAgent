@@ -44,6 +44,8 @@ import {
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
+  buildProviderResponseBlockEntry,
+  detectProviderResponseBlock,
   formatWebSearchLabel,
   isToolManagedWorktreePath,
   navigationQueryEventRequiresRefresh,
@@ -1429,6 +1431,7 @@ function normalizeFailedTurnCompletedNotification(
   const message = parseCodexTurnErrorMessage(
     pickStringAllowEmpty(turnError, ["message"]) ?? guardianDenialLimitMessage,
   );
+  const block = detectProviderResponseBlock(turnError);
   const startedAt = normalizeEpochTimestamp(
     pickNumber(turn, ["startedAt", "started_at"]),
   );
@@ -1450,10 +1453,25 @@ function normalizeFailedTurnCompletedNotification(
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
-        error: { message },
+        error: { message, ...(block ? { block } : {}) },
       },
     },
   };
+}
+
+/**
+ * Codex reports a provider's content filter as a stream error: on a retry the
+ * message is "Reconnecting... n/N", which reads as a network fault. Returns the
+ * error tagged with the block so every consumer can name it instead.
+ */
+function tagProviderBlockedError(
+  method: string,
+  record: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (method !== "error") return undefined;
+  const error = asRecord(record.error);
+  const block = detectProviderResponseBlock(error);
+  return error && block ? { ...error, block } : undefined;
 }
 
 type LiveAgentMessagePhase = {
@@ -1551,12 +1569,14 @@ function normalizeServerNotification(
     method === "configWarning"
       ? extractConfigWarningMetadata(record)
       : undefined;
+  const blockedError = tagProviderBlockedError(method, record);
 
   return {
     method: method as AppServerNotification["method"],
     params: {
       ...record,
       ...(configWarningMetadata ?? {}),
+      ...(blockedError ? { error: blockedError } : {}),
       ...(normalizedItem ? {
         item: normalizedItem.type === "agentMessage" && phase
           ? { ...normalizedItem, phase }
@@ -5515,6 +5535,23 @@ function extractThreadEntries(
       startIndex: turnStartIndex,
       turn: turnMetadata,
     });
+    // thread/read keeps a failed turn's error, so a turn a content filter
+    // ended stays named after a reload. A block Codex recovered from leaves
+    // no protocol record, so only the live entry can show it.
+    const block = turnMetadata?.status === "failed"
+      ? detectProviderResponseBlock(turn.error)
+      : undefined;
+    const blockEntry = block
+      ? buildProviderResponseBlockEntry({
+          block,
+          turnEnded: true,
+          turn: turnMetadata,
+          createdAt: turnMetadata?.completedAt ?? createdAt,
+        })
+      : undefined;
+    if (blockEntry) {
+      entries.push(blockEntry);
+    }
   }
 
   return entries;

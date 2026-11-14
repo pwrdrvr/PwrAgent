@@ -4,6 +4,7 @@ export * from "./backend-selection";
 export * from "./command-action-labels";
 export * from "./codex-environment-action-runs";
 export * from "./codex-turn-error";
+export * from "./provider-response-block";
 export * from "./codex-speed";
 export * from "./codex-version";
 export * from "./managed-git-version";

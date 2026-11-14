@@ -14,7 +14,7 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
-import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
+import { classifyDirectory, detectProviderResponseBlock, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
@@ -1673,9 +1673,11 @@ function DesktopAppShell(props: {
         const params = event.notification.params as {
           threadId?: string;
           turnId?: string;
-          turn?: { error?: { message?: unknown; recovery?: unknown } };
+          turn?: { error?: { message?: unknown; recovery?: unknown; block?: unknown } };
         };
         const recovery = params.turn?.error?.recovery === "claudeSessionGone" ? "claudeSessionGone" as const : undefined;
+        // A peer on an older build forwards the text without the tag.
+        const block = detectProviderResponseBlock(params.turn?.error);
         const rawMessage = params.turn?.error?.message;
         const errorMessage =
           typeof rawMessage === "string" && rawMessage.trim()
@@ -1707,6 +1709,7 @@ function DesktopAppShell(props: {
               recovery,
               onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
             } : {}),
+            ...(block ? { block } : {}),
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",

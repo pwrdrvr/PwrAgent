@@ -22,6 +22,35 @@ describe("Codex stream notices", () => {
     expect(result).toBeUndefined();
   });
 
+  it("names a content-filter block instead of a reconnect", () => {
+    const reason =
+      "stream disconnected before completion: Incomplete response returned, reason: content_filter";
+    expect(resolveCodexStreamNotice({
+      threadLabel: "Bar jokes",
+      notification: {
+        method: "error",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          willRetry: true,
+          error: {
+            message: "Reconnecting... 1/5",
+            codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+            additionalDetails: reason,
+            block: "contentFilter",
+          },
+        },
+      },
+    }, [])).toMatchObject({
+      notice: {
+        title: "Response blocked by content filter",
+        message: "The model provider's content filter blocked a response. The agent was asked to offer a permitted alternative instead.",
+        tone: "warning",
+        status: { state: "progress" },
+      },
+    });
+  });
+
   it("still toasts ordinary warnings", () => {
     expect(resolveCodexStreamNotice({
       threadLabel: "Package lookup",
