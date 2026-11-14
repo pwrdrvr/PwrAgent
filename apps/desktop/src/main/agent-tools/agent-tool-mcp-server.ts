@@ -284,6 +284,14 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private async start(): Promise<void> {
     const httpServer = createHttpServer((request, response) => {
       this.connectionsWithoutRequests.delete(request.socket);
+      // Shutdown closes idle connections at once but lets an admitted response
+      // finish. Once it has, nothing but the client's keep-alive timer (about
+      // 3 seconds in undici) would close that connection, and close() would
+      // wait for it. Release it as soon as its response is done.
+      const socket = request.socket;
+      response.once("finish", () => {
+        if (this.closed) socket.destroySoon();
+      });
       void this.handleHttpRequest(request, response).catch((error) => {
         agentToolMcpLog.error("MCP request failed", {
           error: error instanceof Error ? error.message : String(error),
