@@ -1,10 +1,9 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerPendingRequestNotification,
   MessagingDynamicToolCategory,
-  TaskMonitorRequest,
   TaskMonitorResponse,
 } from "@pwragent/shared";
 import type { DynamicToolCallResponse, DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
@@ -29,7 +28,6 @@ describe("Codex catalog dynamic tool dispatch", () => {
     performServerRequest(backend: "codex", request: AppServerPendingRequestNotification, signal?: AbortSignal): Promise<DynamicToolCallResponse>;
     isTokenMiserDynamicToolCallEnabled(): Promise<boolean>;
     dynamicToolPermissionDenied(): string | null;
-    handleAgentTaskMonitorRequest(request: TaskMonitorRequest): Promise<TaskMonitorResponse>;
   };
   const request = (namespace: string, tool: string): AppServerPendingRequestNotification => ({
     method: "item/tool/call",
@@ -169,13 +167,14 @@ describe("Codex catalog dynamic tool dispatch", () => {
   });
 
   it.each(["create_monitor_delegation", "inject_progress", "complete_monitoring"])("retains the frozen legacy task-monitor operation %s", async (tool) => {
-    const handler = vi.spyOn(internals, "handleAgentTaskMonitorRequest").mockResolvedValue({ ok: true } as TaskMonitorResponse);
+    const handler = vi.spyOn(registryModules(registry).subAgentMonitorService, "handleAgentTaskMonitorRequest")
+      .mockResolvedValue({ ok: true } as TaskMonitorResponse);
     expect((await internals.performServerRequest("codex", request("pwragent_task_monitors", tool))).success).toBe(true);
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ operation: tool }));
   });
 
   it("does not add cancellation to the frozen legacy task-monitor namespace", async () => {
-    const handler = vi.spyOn(internals, "handleAgentTaskMonitorRequest");
+    const handler = vi.spyOn(registryModules(registry).subAgentMonitorService, "handleAgentTaskMonitorRequest");
     const response = await internals.performServerRequest("codex", request("pwragent_task_monitors", "cancel_monitor_delegation"));
     expect(response.success).toBe(false);
     expect(JSON.stringify(response)).toContain("Unsupported legacy");

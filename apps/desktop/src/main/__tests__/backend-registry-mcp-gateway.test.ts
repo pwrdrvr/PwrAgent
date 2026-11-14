@@ -61,8 +61,6 @@ describe("backend MCP gateway dispatch", () => {
     }>;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<{ success: boolean; contentItems: unknown[] }>;
     pendingServerRequests: Map<string, unknown>;
-    taskMonitorDelegations: Map<string, { pendingMcpApprovalCount?: number; staleInterruptAttempted?: boolean }>;
-    checkStaleTaskMonitors(now?: number): Promise<void>;
   };
   let monitorCreationIndex = 0;
   const args = { connectionId: "one", toolName: "lookup", schemaRevision: "r1", arguments: { id: "fixture" } };
@@ -447,9 +445,10 @@ describe("backend MCP gateway dispatch", () => {
     const event = approval();
     const pending = call("call_mcp_tool", args);
     await event;
-    const monitor = [...internals.taskMonitorDelegations.values()][0];
+    const monitors = registryModules(registry).subAgentMonitorService;
+    const monitor = [...monitors.taskMonitorDelegationRecords.values()][0];
     expect(monitor.pendingMcpApprovalCount).toBe(1);
-    await internals.checkStaleTaskMonitors(Date.now() + 60 * 60_000);
+    await monitors.checkStaleTaskMonitors(Date.now() + 60 * 60_000);
     expect(monitor.staleInterruptAttempted).not.toBe(true);
     expect(internals.pendingServerRequests.size).toBe(1);
     await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] });
@@ -736,7 +735,7 @@ select_for_new_threads = true
       threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed" },
     } } } as AgentEvent);
     expect(internals.pendingServerRequests.size).toBe(1);
-    expect([...internals.taskMonitorDelegations.values()][0].pendingMcpApprovalCount).toBe(1);
+    expect([...registryModules(registry).subAgentMonitorService.taskMonitorDelegationRecords.values()][0].pendingMcpApprovalCount).toBe(1);
     await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
       requestId: String(event.notification.params.requestId), response: { action, content: {}, _meta: null } });
     expect((await pending).success).toBe(action === "accept");

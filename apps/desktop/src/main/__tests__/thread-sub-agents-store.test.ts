@@ -612,7 +612,8 @@ describe("thread sub-agent table", () => {
       const registry = {
         getCachedThreadSummary: () => ({ id: threadId, source: "codex" }),
         liveTokenMiserSubAgents: new Map([[threadId, new Map((live.gates ?? []).map((gate) => [gate.monitorId, gate]))]]),
-        liveCodexNativeSubAgentUsage: new Map([[threadId, new Map(live.usage ?? [])]]),
+        // The registry reads live native usage through the sub-agent monitor service.
+        subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map([[threadId, new Map(live.usage ?? [])]]) },
         mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.mergeLiveTokenMiserSubAgents,
         listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
         readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,

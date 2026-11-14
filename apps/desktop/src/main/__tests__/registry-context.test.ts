@@ -51,8 +51,8 @@ it("calls the overlay store's current method through every context store port", 
     const replacement = vi.fn(async () => undefined);
     store[name] = replacement;
     const port = readPort(group, name) as (...args: unknown[]) => unknown;
-    // `lines` satisfies the usage-attribution wrapper the registry puts around the store.
-    const args = { fixture: name, lines: [] };
+    // `line` and `lines` satisfy the usage-attribution wrapper the registry puts around the store.
+    const args = { fixture: name, line: {}, lines: [] };
     await port(args);
     expect(replacement, `${group}.${name} reads the store's method when called`).toHaveBeenCalledWith(args);
     expect(replacement.mock.contexts[0], `${group}.${name} is called on the store, not detached`).toBeDefined();

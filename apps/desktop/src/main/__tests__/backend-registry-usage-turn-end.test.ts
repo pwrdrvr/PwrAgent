@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -175,7 +175,6 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
     const privateRegistry = registry as unknown as {
       repairCodexThreadDirectoryRelationship(): Promise<void>;
-      restoreCodexNativeSubAgentsFromReplay(): Promise<void>;
     };
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
@@ -183,7 +182,8 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       if (directoryFails) throw new Error("directory repair failed");
       await pending;
     });
-    const workers = vi.spyOn(privateRegistry, "restoreCodexNativeSubAgentsFromReplay").mockImplementation(() => pending);
+    const workers = vi.spyOn(registryModules(registry).subAgentMonitorService, "restoreCodexNativeSubAgentsFromReplay")
+      .mockImplementation(() => pending);
     let closed = false;
     try {
       await registry.readThread({ backend: "codex", threadId: "selected", includeAccounting: false });

@@ -4,18 +4,19 @@ import type { AcpBackendAdapter } from "./acp-backend-adapter";
 import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-registry-types";
 
 export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
-  "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadMetadata" | "updateThreadMetadata"
-  | "setThreadMcpConnectionIds" | "setThreadModelSettings"
+  "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadListingOverlayStates"
+  | "getThreadMetadata" | "updateThreadMetadata" | "setThreadMcpConnectionIds" | "setThreadModelSettings"
 >;
 
 export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,
-  "upsertThreadUsageLines" | "readThreadPricing" | "completeThreadUsageTurn"
+  "upsertThreadUsageLine" | "upsertThreadUsageLines" | "readThreadPricing" | "completeThreadUsageTurn"
   | "completeThreadUsageTurns" | "readThreadUsageActivities" | "readThreadUsageActivityForTurn"
 >;
 
 export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
   "upsertThreadSubAgents" | "reconcileOrphanedThreadSubAgents" | "moveLegacyThreadSubAgents"
-  | "getThreadSubAgent" | "listThreadSubAgents" | "upsertThreadSubAgent"
+  | "getThreadSubAgent" | "getThreadSubAgents" | "listThreadSubAgents"
+  | "listThreadSubAgentsByMonitorIdPrefix" | "upsertThreadSubAgent"
 >;
 
 export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
