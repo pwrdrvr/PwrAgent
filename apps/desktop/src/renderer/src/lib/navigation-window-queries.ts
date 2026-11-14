@@ -1,7 +1,7 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope } from "@pwragent/shared";
-import type { AgentEvent, FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
+import type { AgentEvent, FederationTarget, NavigationMetadataDependencies, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import {
@@ -116,6 +116,7 @@ export class NavigationWindowQueries {
   private activeReads = 0;
   private activePageBytes = 0;
   private readonly pageSizes = new WeakMap<NavigationQueryPage, number>();
+  private readonly pageDependencies = new WeakMap<NavigationQueryPage, NavigationMetadataDependencies | undefined>();
   private readonly readWaiters = new Set<() => void>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
@@ -301,6 +302,8 @@ export class NavigationWindowQueries {
       const method = event?.notification.method === "navigation/invalidated"
         ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
       const pinParams = event?.notification.params as { threadId?: unknown; rowChanges?: unknown } | undefined;
+      const metadataRowChange = method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges)
+        || method === "pullRequest/status/updated";
       const childRowChange = resource.value.state.request.query.kind === "children"
         && (method === "thread/pin/added" || method === "thread/pin/removed"
           || (method === "navigation/remoteThreadPins/changed" && (typeof pinParams?.threadId === "string" || Array.isArray(pinParams?.rowChanges)))
@@ -308,7 +311,7 @@ export class NavigationWindowQueries {
       // An instance-only summary notice can discover new mounted children.
       // Its pending replacement cannot use the old membership to exclude a
       // subsequent metadata change to one of those newly discovered rows.
-      if (!childRowChange && navigationInvalidationMayChangeMembership(method)) resource.membershipUncertain = true;
+      if (!childRowChange && !metadataRowChange && navigationInvalidationMayChangeMembership(method)) resource.membershipUncertain = true;
       if (method === "thread/pullRequests/updated" || method === "navigation/remoteThreadPins/changed") resource.prAttachmentsUncertain = true;
       // Pinning moves a root between two independent directory queries. Its
       // old section must stop using it as an anchor before the next read,
@@ -367,6 +370,18 @@ export class NavigationWindowQueries {
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
+    if (request.inventory === "viewer" && request.federationTarget?.scope !== "remote" && !resource.membershipUncertain
+      && page?.coverage.state === "complete") {
+      if (!this.pageDependencies.has(page)) this.pageDependencies.set(page, readNavigationMetadataDependencies(page.metadataDependencies));
+      const dependencies = this.pageDependencies.get(page);
+      if (dependencies && event.federationTarget?.scope !== "remote"
+        && method === "navigation/remoteThreadPins/changed" && params.rowChanges && params.instanceId) {
+        return params.rowChanges.some((ref) => dependencies.threadKeys.includes(navigationIdentityKey(ref)));
+      }
+      if (dependencies && method === "pullRequest/status/updated" && typeof params.prKey === "string") {
+        return Boolean(resource.prAttachmentsUncertain) || dependencies.prKeys.includes(params.prKey);
+      }
+    }
     if (request.query.kind === "directory" && directoryScope && !resource.membershipUncertain
       && (!request.backend || request.backend === "all")
       && !navigationInvalidationMayChangeMembership(method)

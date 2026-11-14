@@ -2,7 +2,7 @@ import { Profiler } from "react";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import { buildPullRequestStatusKey, readNavigationMetadataDependencies } from "@pwragent/shared";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { ThreadRow } from "../../features/navigation/ThreadRow";
 import * as order from "../../features/navigation/navigation-presentation-order";
@@ -131,7 +131,7 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
   } finally { mounted.unmount(); rows.restore(); completions.splice(0).forEach((finish) => finish()); }
 }, 30_000);
 
-it.each([4, 16, 48].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))))("bounds unrelated metadata refresh $kind with $groups expanded mounted roots", async ({ groups, kind }) => {
+it.each([4, 16, 48, 128].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))))("bounds unrelated metadata refresh $kind with $groups expanded mounted roots", async ({ groups, kind }) => {
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   const home = { key: "directory:/fixture", kind: "directory" as const, label: "Fixture", path: "/fixture" };
   const target = { scope: "remote" as const, instanceId: "peer" };
@@ -151,6 +151,12 @@ it.each([4, 16, 48].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))
   let gated = false;
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
     const page = navigationQueryFixture(request, { directories: [home], threads });
+    // The real owner projection is oracle-tested in navigation-viewer-dependencies.
+    // This transport fixture's only directory contains this complete population.
+    if (request.inventory === "viewer" && ["directory", "directory-index", "exact"].includes(request.query.kind)) {
+      page.metadataDependencies = readNavigationMetadataDependencies({ version: 1, prKeys: [], threadKeys: threads.map((thread) =>
+        JSON.stringify(["peer", thread.source, thread.id])) });
+    }
     if (gated) await new Promise<void>((resolve) => replies.push(resolve));
     return page;
   });
@@ -186,7 +192,7 @@ it.each([4, 16, 48].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))
     });
     await waitFor(() => expect(idle()).toBe(true));
     const pins = `directory-pins:${home.key}`;
-    if (!navigation.pagedNavigation.resources.get(pins)?.state.page?.complete) {
+    while (!navigation.pagedNavigation.resources.get(pins)?.state.page?.complete) {
       await act(async () => { await navigation.pagedNavigation.loadMore(pins); });
     }
     await waitFor(() => {
@@ -201,6 +207,8 @@ it.each([4, 16, 48].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))
       { backend: "codex", notification: { method: "pullRequest/status/updated", params: { prKey: buildPullRequestStatusKey(pr), pr } } },
     ];
     for (const event of [changes[kind]!]) {
+      const retainedPins = navigation.pagedNavigation.resources.get(pins)!.state.page;
+      expect(retainedPins!.entries).toHaveLength(groups);
       read.mockClear(); publish.mockClear(); commits = 0; rowRenders = 0; gated = true;
       await act(async () => {
         for (const listener of listeners) listener(event);
@@ -212,10 +220,11 @@ it.each([4, 16, 48].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))
       console.info("mounted metadata budget", { groups, method: event.notification.method,
         calls: read.mock.calls.length, childCalls, publications: publish.mock.calls.length, commits, rowRenders });
       expect(childCalls).toBe(0);
-      expect(read.mock.calls.length).toBe(groups > 10 ? 5 : 4);
-      expect(publish).toHaveBeenCalledTimes(9);
-      expect(commits).toBeLessThanOrEqual(10);
+      expect(read.mock.calls.length).toBe(0);
+      expect(publish).toHaveBeenCalledTimes(0);
+      expect(commits).toBe(0);
       expect(rowRenders).toBe(0);
+      expect(navigation.pagedNavigation.resources.get(pins)!.state.page).toBe(retainedPins);
     }
   } finally { mounted.unmount(); rows.restore(); replies.splice(0).forEach((reply) => reply()); }
 }, 30_000);

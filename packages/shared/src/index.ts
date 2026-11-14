@@ -42,6 +42,7 @@ export * from "./contracts/mcp-connections";
 export * from "./contracts/navigation";
 export * from "./contracts/pr-activity";
 export * from "./navigation-query-events";
+export * from "./navigation-metadata-dependencies";
 export * from "./navigation-star-map-filters";
 export * from "./contracts/rbac";
 export * from "./contracts/settings";
