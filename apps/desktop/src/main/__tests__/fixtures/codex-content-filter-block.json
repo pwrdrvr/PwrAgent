@@ -1,0 +1,342 @@
+{
+  "source": "Captured 2026-11-14 from the managed Codex App Server 0.163.0-pwragent.1 over stdio, driven against a local mock Responses API that ends a response with response.incomplete and incomplete_details.reason=content_filter (the shape openai/codex's scenarios_content_filter test uses). HTTP transport, so the first retry is reported; over WebSockets a release build hides it. Only turn/item/error notifications are kept; thread/read keeps id, status and turns.",
+  "recoveredBlock": {
+    "modelRequests": 2,
+    "notifications": [
+      {
+        "method": "turn/started",
+        "params": {
+          "threadId": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+          "turn": {
+            "id": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+            "rootTurnId": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+            "items": [],
+            "itemsView": "notLoaded",
+            "status": "inProgress",
+            "error": null,
+            "startedAt": 1794696123,
+            "completedAt": null,
+            "durationMs": null
+          }
+        }
+      },
+      {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "userMessage",
+            "id": "01a1dc39-93d6-7c10-a9af-cdb86b5003bc",
+            "clientId": null,
+            "content": [
+              {
+                "type": "text",
+                "text": "Tell me something.",
+                "text_elements": []
+              }
+            ]
+          },
+          "threadId": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+          "turnId": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+          "startedAtMs": 1794696123351
+        }
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "userMessage",
+            "id": "01a1dc39-93d6-7c10-a9af-cdb86b5003bc",
+            "clientId": null,
+            "content": [
+              {
+                "type": "text",
+                "text": "Tell me something.",
+                "text_elements": []
+              }
+            ]
+          },
+          "threadId": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+          "turnId": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+          "completedAtMs": 1794696123351
+        }
+      },
+      {
+        "method": "error",
+        "params": {
+          "error": {
+            "message": "Reconnecting... 1/2",
+            "codexErrorInfo": {
+              "responseStreamDisconnected": {
+                "httpStatusCode": null
+              }
+            },
+            "additionalDetails": "stream disconnected before completion: Incomplete response returned, reason: content_filter",
+            "misalignment": null
+          },
+          "willRetry": true,
+          "threadId": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+          "turnId": "01a1dc39-93ca-7f41-96cb-882a57477aec"
+        }
+      },
+      {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "msg_ok",
+            "text": "I can offer a permitted alternative.",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          },
+          "threadId": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+          "turnId": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+          "startedAtMs": 1794696123550
+        }
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "agentMessage",
+            "id": "msg_ok",
+            "text": "I can offer a permitted alternative.",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          },
+          "threadId": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+          "turnId": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+          "completedAtMs": 1794696123550
+        }
+      },
+      {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+          "turn": {
+            "id": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+            "rootTurnId": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+            "items": [
+              {
+                "type": "agentMessage",
+                "id": "msg_ok",
+                "text": "I can offer a permitted alternative.",
+                "phase": null,
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null
+              }
+            ],
+            "itemsView": "summary",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1794696123,
+            "completedAt": 1794696123,
+            "durationMs": 213
+          }
+        }
+      }
+    ],
+    "threadRead": {
+      "thread": {
+        "id": "01a1dc39-93bd-7ae0-ae20-9a55f9558f41",
+        "status": {
+          "type": "idle"
+        },
+        "turns": [
+          {
+            "id": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+            "rootTurnId": "01a1dc39-93ca-7f41-96cb-882a57477aec",
+            "items": [
+              {
+                "type": "userMessage",
+                "id": "01a1dc39-93d6-7c10-a9af-cdb86b5003bc",
+                "clientId": null,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Tell me something.",
+                    "text_elements": []
+                  }
+                ]
+              },
+              {
+                "type": "agentMessage",
+                "id": "msg_ok",
+                "text": "I can offer a permitted alternative.",
+                "phase": null,
+                "memoryCitation": null,
+                "delivery": null,
+                "questions": null
+              }
+            ],
+            "itemsView": "full",
+            "status": "completed",
+            "error": null,
+            "startedAt": 1794696123,
+            "completedAt": 1794696123,
+            "durationMs": 213
+          }
+        ]
+      }
+    }
+  },
+  "turnEndingBlock": {
+    "modelRequests": 2,
+    "notifications": [
+      {
+        "method": "turn/started",
+        "params": {
+          "threadId": "01a1dc3a-7ea6-7a20-8d00-6a76108dd9dc",
+          "turn": {
+            "id": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+            "rootTurnId": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+            "items": [],
+            "itemsView": "notLoaded",
+            "status": "inProgress",
+            "error": null,
+            "startedAt": 1794696183,
+            "completedAt": null,
+            "durationMs": null
+          }
+        }
+      },
+      {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "userMessage",
+            "id": "01a1dc3a-7ebe-7370-903e-cb698243d385",
+            "clientId": null,
+            "content": [
+              {
+                "type": "text",
+                "text": "Tell me something.",
+                "text_elements": []
+              }
+            ]
+          },
+          "threadId": "01a1dc3a-7ea6-7a20-8d00-6a76108dd9dc",
+          "turnId": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+          "startedAtMs": 1794696183486
+        }
+      },
+      {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "userMessage",
+            "id": "01a1dc3a-7ebe-7370-903e-cb698243d385",
+            "clientId": null,
+            "content": [
+              {
+                "type": "text",
+                "text": "Tell me something.",
+                "text_elements": []
+              }
+            ]
+          },
+          "threadId": "01a1dc3a-7ea6-7a20-8d00-6a76108dd9dc",
+          "turnId": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+          "completedAtMs": 1794696183487
+        }
+      },
+      {
+        "method": "error",
+        "params": {
+          "error": {
+            "message": "Reconnecting... 1/1",
+            "codexErrorInfo": {
+              "responseStreamDisconnected": {
+                "httpStatusCode": null
+              }
+            },
+            "additionalDetails": "stream disconnected before completion: Incomplete response returned, reason: content_filter",
+            "misalignment": null
+          },
+          "willRetry": true,
+          "threadId": "01a1dc3a-7ea6-7a20-8d00-6a76108dd9dc",
+          "turnId": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51"
+        }
+      },
+      {
+        "method": "error",
+        "params": {
+          "error": {
+            "message": "stream disconnected before completion: Incomplete response returned, reason: content_filter",
+            "codexErrorInfo": "other",
+            "additionalDetails": null,
+            "misalignment": null
+          },
+          "willRetry": false,
+          "threadId": "01a1dc3a-7ea6-7a20-8d00-6a76108dd9dc",
+          "turnId": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51"
+        }
+      },
+      {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "01a1dc3a-7ea6-7a20-8d00-6a76108dd9dc",
+          "turn": {
+            "id": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+            "rootTurnId": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+            "items": [],
+            "itemsView": "notLoaded",
+            "status": "failed",
+            "error": {
+              "message": "stream disconnected before completion: Incomplete response returned, reason: content_filter",
+              "codexErrorInfo": "other",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "startedAt": 1794696183,
+            "completedAt": 1794696183,
+            "durationMs": 209
+          }
+        }
+      }
+    ],
+    "threadRead": {
+      "thread": {
+        "id": "01a1dc3a-7ea6-7a20-8d00-6a76108dd9dc",
+        "status": {
+          "type": "systemError"
+        },
+        "turns": [
+          {
+            "id": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+            "rootTurnId": "01a1dc3a-7eb2-7130-af1a-95deaf11ec51",
+            "items": [
+              {
+                "type": "userMessage",
+                "id": "01a1dc3a-7ebe-7370-903e-cb698243d385",
+                "clientId": null,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Tell me something.",
+                    "text_elements": []
+                  }
+                ]
+              }
+            ],
+            "itemsView": "full",
+            "status": "failed",
+            "error": {
+              "message": "stream disconnected before completion: Incomplete response returned, reason: content_filter",
+              "codexErrorInfo": "other",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "startedAt": 1794696183,
+            "completedAt": 1794696183,
+            "durationMs": 209
+          }
+        ]
+      }
+    }
+  }
+}

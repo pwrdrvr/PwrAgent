@@ -879,6 +879,13 @@ export type AppServerThreadTurnStatus =
   | "cancelled"
   | "interrupted";
 
+/**
+ * Why a model provider refused to deliver a response. Today the only kind is
+ * a content filter: the Responses API ends the response with
+ * `response.incomplete` and `incomplete_details.reason: "content_filter"`.
+ */
+export type ProviderResponseBlock = "contentFilter";
+
 export type AppServerThreadTurnMetadata = {
   id: string;
   /** Server-reported attribution. Null or absent means unknown. */
@@ -2092,6 +2099,8 @@ export type AppServerNotification =
           message: string;
           codexErrorInfo?: unknown;
           additionalDetails?: string | null;
+          /** Set when the provider refused the response, not a transport fault. */
+          block?: ProviderResponseBlock;
         };
       };
     }
@@ -2198,6 +2207,8 @@ export type AppServerNotification =
              * thread can continue in a new one.
              */
             recovery?: "claudeSessionGone";
+            /** Set when the provider refused the response, not a transport fault. */
+            block?: ProviderResponseBlock;
           };
         };
       };

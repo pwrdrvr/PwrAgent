@@ -6,6 +6,25 @@ import {
 } from "../backend-error-notice";
 
 describe("resolveBackendErrorNotice", () => {
+  it("names a turn a content filter ended, keeping the provider text to copy", () => {
+    const reason =
+      "stream disconnected before completion: Incomplete response returned, reason: content_filter";
+    expect(resolveBackendErrorNotice({
+      kind: "turn-failed",
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      threadLabel: "Bar jokes",
+      errorMessage: reason,
+      block: "contentFilter",
+      originLabel: "This machine",
+    }, undefined)).toMatchObject({
+      title: "Turn blocked by content filter",
+      message: "The model provider's content filter blocked the response, and the turn ended.",
+      copyText: reason,
+    });
+  });
+
   it("names a failed automation and links its visible Agent thread", () => {
     const notice = resolveBackendErrorNotice({
       kind: "turn-failed",

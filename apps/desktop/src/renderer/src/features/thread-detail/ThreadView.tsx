@@ -1,5 +1,10 @@
 import { ContinueAfterStatus } from "../thread-dependencies/ContinueAfterStatus";
-import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
+import {
+  buildProviderResponseBlockEntry,
+  parseRemoteOperatorItemKey,
+  readProviderResponseBlockNotification,
+  threadTodoThreadKey,
+} from "@pwragent/shared";
 import { StartupTiming } from "../composer/StartupTiming";
 import { LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { ThreadServices } from "../federation/ThreadServices";
@@ -3630,6 +3635,26 @@ export function ThreadView(props: ThreadViewProps) {
           );
         }
         return;
+      }
+
+      // A provider's content filter arrives as a stream error, so nothing in
+      // the transcript would say why the agent changed course or the turn
+      // ended. Fall through: turn/failed still settles the live entries.
+      const responseBlock = readProviderResponseBlockNotification(event.notification);
+      if (responseBlock) {
+        const blockEntry = buildProviderResponseBlockEntry({
+          block: responseBlock.block,
+          turnEnded: responseBlock.turnEnded,
+          turn: buildLiveTurnMetadata({
+            turnId: liveNotificationTurnId(responseBlock.turnId),
+            activeTurnStartedAt: props.activeTurnStartedAt,
+            ...(responseBlock.turnEnded ? { status: "failed" as const } : {}),
+          }),
+          createdAt: Date.now(),
+        });
+        if (blockEntry) {
+          deferLiveTranscriptEntry(blockEntry);
+        }
       }
 
       if (

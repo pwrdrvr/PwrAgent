@@ -31,6 +31,8 @@ import {
   readCodexAsyncQuestionsFromNotification,
   normalizeRenamedTitleSource,
   parseCodexTurnErrorMessage,
+  readProviderResponseBlockNotification,
+  describeProviderResponseBlock,
   parseThreadIdentityKey,
   permissionForActionId,
   permissionForCommandVerb,
@@ -2338,6 +2340,18 @@ export class MessagingController {
         if (turnFailureText) {
           await this.deliverTurnFailureMessage(turnFailureText, event, binding);
         }
+      }
+
+      // A recovered content-filter block changes what the agent answers, so
+      // say why. A block that ends the turn is reported as the turn failure.
+      const responseBlock = readProviderResponseBlockNotification(event.notification);
+      if (
+        responseBlock
+        && !responseBlock.turnEnded
+        && !suppressSourceResponse
+        && !automationTurnEvent
+      ) {
+        await this.deliverResponseBlockedNotice(responseBlock, event, binding);
       }
 
       if (completedPlan && !automationTurnEvent && !suppressSourceResponse) {
@@ -8714,12 +8728,39 @@ export class MessagingController {
       );
       return;
     }
+    const block = readProviderResponseBlockNotification(event.notification);
     await this.deliver(
       buildErrorIntent({
         id: this.newIntentId("turn-failed"),
         createdAt: this.now(),
-        title: "Turn failed",
-        body: text,
+        title: block ? "Turn blocked" : "Turn failed",
+        body: block
+          ? describeProviderResponseBlock({ block: block.block, turnEnded: true })
+          : text,
+        recoverable: true,
+      }),
+      binding,
+    );
+  }
+
+  private async deliverResponseBlockedNotice(
+    responseBlock: NonNullable<ReturnType<typeof readProviderResponseBlockNotification>>,
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    // Codex retries each block; one notice per turn is enough.
+    if (!this.markAssistantMessageDelivered(event, binding, "response-blocked")) {
+      return;
+    }
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("response-blocked"),
+        createdAt: this.now(),
+        title: "Response blocked",
+        body: describeProviderResponseBlock({
+          block: responseBlock.block,
+          turnEnded: false,
+        }),
         recoverable: true,
       }),
       binding,

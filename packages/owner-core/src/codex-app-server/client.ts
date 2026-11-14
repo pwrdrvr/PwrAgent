@@ -44,6 +44,8 @@ import {
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
+  buildProviderResponseBlockEntry,
+  detectProviderResponseBlock,
   formatWebSearchLabel,
   isToolManagedWorktreePath,
   navigationQueryEventRequiresRefresh,
@@ -1429,6 +1431,7 @@ function normalizeFailedTurnCompletedNotification(
   const message = parseCodexTurnErrorMessage(
     pickStringAllowEmpty(turnError, ["message"]) ?? guardianDenialLimitMessage,
   );
+  const block = detectProviderResponseBlock(turnError);
   const startedAt = normalizeEpochTimestamp(
     pickNumber(turn, ["startedAt", "started_at"]),
   );
@@ -1450,10 +1453,29 @@ function normalizeFailedTurnCompletedNotification(
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
-        error: { message },
+        error: { message, ...(block ? { block } : {}) },
       },
     },
   };
+}
+
+/**
+ * Codex reports a provider's content filter as a stream error: on a retry the
+ * message is "Reconnecting... n/N", which reads as a network fault. Tag it so
+ * every consumer can name the block instead.
+ */
+function normalizeProviderBlockedErrorNotification(
+  method: string,
+  record: Record<string, unknown>,
+): AppServerNotification | undefined {
+  if (method !== "error") return undefined;
+  const error = asRecord(record.error);
+  const block = detectProviderResponseBlock(error);
+  if (!error || !block) return undefined;
+  return {
+    method: "error",
+    params: { ...record, error: { ...error, block } },
+  } as AppServerNotification;
 }
 
 type LiveAgentMessagePhase = {
@@ -1521,6 +1543,10 @@ function normalizeServerNotification(
   );
   if (failedTurn) {
     return failedTurn;
+  }
+  const blockedError = normalizeProviderBlockedErrorNotification(method, record);
+  if (blockedError) {
+    return blockedError;
   }
 
   const itemRecord = asRecord(record.item);
@@ -5515,6 +5541,23 @@ function extractThreadEntries(
       startIndex: turnStartIndex,
       turn: turnMetadata,
     });
+    // thread/read keeps a failed turn's error, so a turn a content filter
+    // ended stays named after a reload. A block Codex recovered from leaves
+    // no protocol record, so only the live entry can show it.
+    const block = turnMetadata?.status === "failed"
+      ? detectProviderResponseBlock(turn.error)
+      : undefined;
+    const blockEntry = block
+      ? buildProviderResponseBlockEntry({
+          block,
+          turnEnded: true,
+          turn: turnMetadata,
+          createdAt: turnMetadata?.completedAt ?? createdAt,
+        })
+      : undefined;
+    if (blockEntry) {
+      entries.push(blockEntry);
+    }
   }
 
   return entries;

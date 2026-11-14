@@ -1,4 +1,9 @@
-import type { AppServerBackendKind, FederationInstanceId } from "@pwragent/shared";
+import {
+  describeProviderResponseBlock,
+  detectProviderResponseBlock,
+  type AppServerBackendKind,
+  type FederationInstanceId,
+} from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import {
   codexWarningSuppressionId,
@@ -99,16 +104,23 @@ export function resolveCodexStreamNotice(
     }
     const details = readText(error?.additionalDetails);
     const retrying = method === "error" && params.willRetry === true;
+    // Codex words a content-filter retry as "Reconnecting... n/N". Name the
+    // block instead of describing a network fault that did not happen.
+    const block = method === "error" ? detectProviderResponseBlock(error) : undefined;
     return {
       notice: {
         id,
         // Warnings have no turn ID or matching completion signal. Show the
         // fallback information without leaving a stale retry incident behind.
         autoDismiss: method === "warning",
-        title: method === "warning"
-          ? `${provider} warning`
-          : retrying ? `${provider} is retrying` : `${provider} error`,
-        message: details ? `${message}\n${details}` : message,
+        title: block
+          ? "Response blocked by content filter"
+          : method === "warning"
+            ? `${provider} warning`
+            : retrying ? `${provider} is retrying` : `${provider} error`,
+        message: block
+          ? describeProviderResponseBlock({ block, turnEnded: !retrying })
+          : details ? `${message}\n${details}` : message,
         ...(skillQuestionsWarning ? { skillQuestionsWarning: true } : {}),
         ...(warningSuppressionId ? { warningSuppressionId } : {}),
         tone: method === "warning" || retrying ? "warning" : "error",

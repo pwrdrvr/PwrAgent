@@ -7825,6 +7825,76 @@ describe("ThreadView", () => {
     }
   });
 
+  it("shows a content-filter block Codex reported as a reconnect", async () => {
+    let agentEventHandler:
+      | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
+      | undefined;
+
+    function Harness() {
+      const [entries, setEntries] = useState<AppServerThreadEntry[]>([]);
+      return (
+        <ThreadView
+          activeTurnId="turn-1"
+          activeTurnStartedAt={1_000}
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{
+            onAgentEvent: (callback) => {
+              agentEventHandler = callback as typeof agentEventHandler;
+              return () => undefined;
+            },
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          selectedThread={{
+            id: "thread-live",
+            title: "Live turn",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+          skills={[]}
+          transcriptEntries={entries}
+          clearPendingRequest={() => undefined}
+          onLiveTranscriptEntry={(entry) => {
+            setEntries((current) => [...current.filter((item) => item.id !== entry.id), entry]);
+          }}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    render(<Harness />);
+    // The normalized retry, as Codex 0.163 sends it for a filtered response.
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "error",
+          params: {
+            threadId: "thread-live",
+            turnId: "turn-1",
+            willRetry: true,
+            error: {
+              message: "Reconnecting... 1/5",
+              codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+              additionalDetails:
+                "stream disconnected before completion: Incomplete response returned, reason: content_filter",
+              block: "contentFilter",
+            },
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/Blocked by content filter/)).toBeInTheDocument();
+  });
+
   it.each([false, true])("gates setup-failure continuation on authoritative composer readiness (disabled=%s)", async (disabled) => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

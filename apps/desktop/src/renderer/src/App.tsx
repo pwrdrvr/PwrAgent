@@ -1669,9 +1669,10 @@ function DesktopAppShell(props: {
         const params = event.notification.params as {
           threadId?: string;
           turnId?: string;
-          turn?: { error?: { message?: unknown; recovery?: unknown } };
+          turn?: { error?: { message?: unknown; recovery?: unknown; block?: unknown } };
         };
         const recovery = params.turn?.error?.recovery === "claudeSessionGone" ? "claudeSessionGone" as const : undefined;
+        const block = params.turn?.error?.block === "contentFilter" ? "contentFilter" as const : undefined;
         const rawMessage = params.turn?.error?.message;
         const errorMessage =
           typeof rawMessage === "string" && rawMessage.trim()
@@ -1703,6 +1704,7 @@ function DesktopAppShell(props: {
               recovery,
               onContinueClaudeSession: () => continueClaudeThreadInNewSession(params.threadId!, noticeId),
             } : {}),
+            ...(block ? { block } : {}),
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",

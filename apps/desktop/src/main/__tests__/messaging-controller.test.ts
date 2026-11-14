@@ -10621,6 +10621,74 @@ describe("MessagingController", () => {
     );
   });
 
+  it("says a turn was blocked by the provider's content filter", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    const reason =
+      "stream disconnected before completion: Incomplete response returned, reason: content_filter";
+    const turnStarted = (turnId: string): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "running" } },
+      },
+    });
+    const retry = (turnId: string, attempt: number): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "error",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          willRetry: true,
+          error: {
+            message: `Reconnecting... ${attempt}/5`,
+            codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+            additionalDetails: reason,
+            block: "contentFilter",
+          },
+        },
+      },
+    });
+
+    // A block Codex recovers from: one notice per turn, however many retries.
+    await harness.controller.handleBackendEvent(turnStarted("turn-1"));
+    await harness.controller.handleBackendEvent(retry("turn-1", 1));
+    await harness.controller.handleBackendEvent(retry("turn-1", 2));
+    const notices = harness.delivered.filter(
+      (intent) => intent.kind === "error" && intent.title === "Response blocked",
+    );
+    expect(notices).toEqual([expect.objectContaining({
+      body: "The model provider's content filter blocked a response. The agent was asked to offer a permitted alternative instead.",
+    })]);
+
+    // A block that ends the turn names the block, not the transport text.
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: { message: reason, block: "contentFilter" },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "error",
+      title: "Turn blocked",
+      body: "The model provider's content filter blocked the response, and the turn ended.",
+    }));
+    expect(harness.delivered.some(
+      (intent) => intent.kind === "error" && intent.title === "Turn failed",
+    )).toBe(false);
+  });
+
   it.each([
     ["telegram", actionsForTelegramIntent, textForTelegramIntent],
     ["discord", actionsForDiscordIntent, textForDiscordIntent],

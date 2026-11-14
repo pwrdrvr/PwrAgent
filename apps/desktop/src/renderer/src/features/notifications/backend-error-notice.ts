@@ -1,8 +1,9 @@
-import { isCodexAuthenticationFailure } from "@pwragent/shared";
+import { describeProviderResponseBlock, isCodexAuthenticationFailure } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerBackendKind,
   FederationInstanceId,
+  ProviderResponseBlock,
 } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import { turnFailureNoticeId } from "./turn-failure-acknowledgements";
@@ -37,6 +38,8 @@ export type BackendErrorSignal = (
       /** Offered when the turn's error says Claude deleted the thread's session. */
       onContinueClaudeSession?: () => void;
       recovery?: "claudeSessionGone";
+      /** The provider refused the response; name the block, not a fault. */
+      block?: ProviderResponseBlock;
       backend: AppServerBackendKind;
       threadId: string;
       turnId: string;
@@ -153,7 +156,9 @@ export function resolveBackendErrorNotice(
       ...(signal.onDismiss ? { onDismiss: signal.onDismiss } : {}),
       title: context?.automationName
         ? "Automation failed"
-        : context?.taskMonitor ? "Task monitor failed" : "Turn failed",
+        : context?.taskMonitor
+          ? "Task monitor failed"
+          : signal.block ? "Turn blocked by content filter" : "Turn failed",
       ...(originLabel
         ? { status: { label: originLabel, state: "error" as const } }
         : {}),
@@ -173,7 +178,9 @@ export function resolveBackendErrorNotice(
         && signal.recovery === "claudeSessionGone" && signal.onContinueClaudeSession
         ? { actions: [{ label: "Continue in a new session", onClick: signal.onContinueClaudeSession }] }
         : {}),
-      message: signal.errorMessage,
+      message: signal.block
+        ? describeProviderResponseBlock({ block: signal.block, turnEnded: true })
+        : signal.errorMessage,
       detail: signal.threadLabel,
       threadLink: {
         backend: context?.backend ?? signal.backend,

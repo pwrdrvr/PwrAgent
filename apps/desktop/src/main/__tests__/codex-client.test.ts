@@ -5,9 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildProviderResponseBlockEntry,
+  readProviderResponseBlockNotification,
+} from "@pwragent/shared";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
+  AppServerThreadEntry,
   AppServerThreadSummary,
   AppServerTurnInputItem,
   DesktopHelperModelSettings,
@@ -17,6 +22,7 @@ import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
+import contentFilterCapture from "./fixtures/codex-content-filter-block.json";
 import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
 import { buildAutomationMcpConsent } from "../mcp-connections/mcp-approval-consent";
 import {
@@ -17786,6 +17792,83 @@ describe("CodexAppServerClient", () => {
       await open("thread-2");
       expect(sent().filter((request) => request.method === "thread/resume")).toHaveLength(2);
       await client.close();
+    });
+  });
+
+  // Replays what Codex 0.163.0-pwragent.1 emitted for a Responses API
+  // content-filter block (see the fixture's `source`). Codex words it as a
+  // stream reconnect and a recovered block leaves no thread/read item, so
+  // before this rule the operator saw nothing that named the block.
+  describe("provider content-filter blocks", () => {
+    async function replayLive(notifications: readonly unknown[]) {
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const client = new CodexAppServerClient();
+      const seen: AppServerNotification[] = [];
+      client.onNotification((notification) => { seen.push(notification); });
+      await client.readRateLimits();
+      const transport = MockTransport.instances.at(-1)!;
+      for (const notification of notifications) transport.emitInbound(notification);
+      await vi.waitFor(() => expect(seen.some((n) =>
+        n.method === "turn/completed" || n.method === "turn/failed")).toBe(true));
+      await client.close();
+      return seen;
+    }
+
+    function blockEntries(entries: readonly AppServerThreadEntry[]) {
+      return entries.filter((entry) => entry.type === "activity" && entry.id.startsWith("response-block"));
+    }
+
+    it("tags the retry Codex reports as a reconnect with the content-filter block", async () => {
+      const { recoveredBlock } = contentFilterCapture;
+      const seen = await replayLive(recoveredBlock.notifications);
+      const errors = seen.filter((n) => n.method === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatchObject({
+        params: {
+          willRetry: true,
+          error: { message: "Reconnecting... 1/2", block: "contentFilter" },
+        },
+      });
+      const signal = readProviderResponseBlockNotification(errors[0]!);
+      const turnId = recoveredBlock.threadRead.thread.turns[0]!.id;
+      expect(signal).toEqual({ block: "contentFilter", turnEnded: false, turnId });
+      expect(buildProviderResponseBlockEntry({ ...signal!, turnId })).toMatchObject({
+        id: `response-block-${turnId}`,
+        tone: "warning",
+        summary: expect.stringMatching(/^Blocked by content filter: /),
+      });
+      expect(seen.find((n) => n.method === "turn/completed")).toMatchObject({
+        params: { turn: { status: "completed" } },
+      });
+    });
+
+    it("names a block that ended the turn, live and after a reload", async () => {
+      const { turnEndingBlock } = contentFilterCapture;
+      const seen = await replayLive(turnEndingBlock.notifications);
+      const turnId = turnEndingBlock.threadRead.thread.turns[0]!.id;
+      expect(seen.filter((n) => n.method === "error").map((n) => readProviderResponseBlockNotification(n)))
+        .toEqual([
+          { block: "contentFilter", turnEnded: false, turnId },
+          { block: "contentFilter", turnEnded: true, turnId },
+        ]);
+      expect(seen.find((n) => n.method === "turn/failed")).toMatchObject({
+        params: { turnId, turn: { status: "failed", error: { block: "contentFilter" } } },
+      });
+
+      const { extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
+      const replay = extractThreadReplayFromReadResult(turnEndingBlock.threadRead);
+      expect(blockEntries(replay.entries)).toEqual([expect.objectContaining({
+        id: `response-block-turn-${turnId}`,
+        summary: "Blocked by content filter: The model provider's content filter blocked the response, and the turn ended.",
+        turn: expect.objectContaining({ id: turnId, status: "failed" }),
+      })]);
+    });
+
+    it("finds no record of a recovered block in thread/read", async () => {
+      // The protocol gap: only the live notification can show this block.
+      const { extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
+      const replay = extractThreadReplayFromReadResult(contentFilterCapture.recoveredBlock.threadRead);
+      expect(blockEntries(replay.entries)).toEqual([]);
     });
   });
 });
