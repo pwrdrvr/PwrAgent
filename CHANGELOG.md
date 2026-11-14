@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.4.3 - 2026-11-14
+
+- Thread Search - Stop pruning cached search documents when a provider returns a partial or unavailable thread list. Preserve the index for later searches, reduce database work, and yield during indexing so cancellation remains responsive.
+- Navigation Responsiveness - Refresh only the directory, selection, thread summary, and PR-child queries affected by a change, instead of repeatedly refreshing unrelated views and connected-machine summaries.
+- Full Access Requests - Let Voice and Star Map managers propose a higher-access thread through a To-do card for the operator to start, rather than escalating directly. Full Access cards pass through the risk confirmation, and starting a card is refused if its access changed after the operator saw it.
+- Queued Message Safety - Keep messages with different execution settings or operator approval status in separate queued batches, and recheck access when replacing a message. One message cannot inherit another's higher access or approval, and replacements cannot change their approval status.
+- Pull Request Links - Resolve bare PR numbers against the correct repository and owning instance in transcripts and To-do cards. Avoid linking the same number to an unrelated repository, stale project attachment, or another machine's thread.
+- Claude Sub-agent Transcripts - Recognize valid Claude backend addresses when opening sub-agent transcript windows instead of rejecting them as unsupported.
+- Local Thread Targets - Treat a target that explicitly names this machine as local, so thread inspection and message delivery do not require a federation route back to the same instance.
+- Usage Updates - Keep live Token Miser publications ordered by the thread's usage ledger.
+
 ## v1.4.2 - 2026-11-13
 
 - Outpost Federation - Let trusted Outposts participate as full federation members, with the same owner-side agent tools and cross-instance operations as desktop instances. Outposts remain contained by default; full membership is an explicit operator choice, separate from Full Access execution mode.

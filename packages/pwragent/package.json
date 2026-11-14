@@ -1,6 +1,6 @@
 {
   "name": "pwragent",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "private": false,
   "type": "module",
   "description": "PwrAgent owner services under Node, with a foreground Outpost daemon and local CLI.",
