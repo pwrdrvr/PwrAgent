@@ -36,7 +36,7 @@ import * as transcriptImageProtocol from "../transcript-images";
 import * as gitExecutable from "../app-server/git-executable";
 import * as gitHeadBranch from "../app-server/git-head-branch";
 import { resolveActiveProfilePath } from "../profile";
-import { execFile as execFileCallback } from "node:child_process";
+import { ChildProcess, execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
   copyFile,
@@ -8170,25 +8170,43 @@ describe("DesktopBackendRegistry", () => {
   // host only supplies the operator's settings: an Outpost from its
   // environment, a desktop from config.toml (which has no approvals switch,
   // so it always asks). Whether the host is headless must decide nothing.
-  function installMember(host: "desktop" | "outpost", settings: { approvals: "ask" | "never"; role: "full" | "contained" }): void {
-    const previous = getOwnerHostServices();
+  //
+  // The host services are global. A property that outlives its test (a
+  // timeout) keeps running, and each run it starts would install a member
+  // under the next test. So the test restores its own services when it
+  // finishes, and no member is installed once its signal has aborted.
+  function memberInstaller(signal: AbortSignal) {
+    const original = getOwnerHostServices();
     onTestFinished(() => {
-      installOwnerHostServices(previous);
+      installOwnerHostServices(original);
       configuredMemberRole.role = undefined;
     });
-    if (host === "outpost") {
-      installOwnerHostServices({ ...previous, runtimePolicy: createOutpostRuntimePolicy({
-        PWRAGENT_OUTPOST_APPROVALS: settings.approvals,
-        PWRAGENT_OUTPOST_FEDERATION_ROLE: settings.role,
-      }) });
-      configuredMemberRole.role = undefined;
-    } else {
-      installOwnerHostServices({ ...previous, runtimePolicy: undefined });
-      configuredMemberRole.role = settings.role;
-    }
+    return (host: "desktop" | "outpost", settings: { approvals: "ask" | "never"; role: "full" | "contained" }): void => {
+      signal.throwIfAborted();
+      if (host === "outpost") {
+        installOwnerHostServices({ ...original, runtimePolicy: createOutpostRuntimePolicy({
+          PWRAGENT_OUTPOST_APPROVALS: settings.approvals,
+          PWRAGENT_OUTPOST_FEDERATION_ROLE: settings.role,
+        }) });
+        configuredMemberRole.role = undefined;
+      } else {
+        installOwnerHostServices({ ...original, runtimePolicy: undefined });
+        configuredMemberRole.role = settings.role;
+      }
+    };
   }
 
-  it("asks for approval by execution mode, approvals setting and role on every host, never by whether it is headless", async () => {
+  // The member properties start their threads here, never in the test's own
+  // checkout: nothing about the machine running them may reach the answer.
+  function emptyThreadDirectory(): string {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "member-thread-"));
+    onTestFinished(() => rmSync(cwd, { recursive: true, force: true }));
+    return cwd;
+  }
+
+  it("asks for approval by execution mode, approvals setting and role on every host, never by whether it is headless", async ({ signal }) => {
+    const installMember = memberInstaller(signal);
+    const cwd = emptyThreadDirectory();
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("desktop" as const, "outpost" as const), fc.constantFrom("ask" as const, "never" as const),
       fc.constantFrom("full" as const, "contained" as const), fc.constantFrom("default" as const, "auto" as const),
@@ -8204,7 +8222,7 @@ describe("DesktopBackendRegistry", () => {
         const codexClient = new MockBackendClient({ threads: [] });
         const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
         try {
-          const { threadId } = await registry.startThread({ backend: "codex", cwd: process.cwd(), executionMode: mode });
+          const { threadId } = await registry.startThread({ backend: "codex", cwd, executionMode: mode });
           expect(codexClient.lastStartThreadParams).toMatchObject(expected);
           await registry.startTurn({ backend: "codex", threadId, executionMode: mode, input: [{ type: "text", text: "Invented request." }] });
           expect(codexClient.lastStartTurnParams).toMatchObject(expected);
@@ -8215,9 +8233,24 @@ describe("DesktopBackendRegistry", () => {
     ), { numRuns: 40 });
   });
 
-  it("lists and runs agent tools by the member's role alone, on every host", async () => {
+  it("lists and runs agent tools by the member's role alone, on every host", async ({ signal }) => {
+    const installMember = memberInstaller(signal);
     const allowed = ["read_tool_guide"];
     const refused = ["get_thread_status", "send_message_to_thread", "list_federation_instances"];
+    // Role alone decides; nothing on the machine running the test may.
+    // get_thread_status reads its thread's Git working state. With the
+    // test's own checkout as the thread's directory, that was ten Git
+    // commands per call, about a second on CI runners. The thread lives in
+    // an empty directory, the real working-state service runs Git through a
+    // runner that finds no repository, and the property runs no process.
+    const cwd = emptyThreadDirectory();
+    const gitWorkingStateService = new GitWorkingStateService({
+      runGit: async () => { throw new Error("not a git repository"); },
+    });
+    // Every process launch passes through this internal method.
+    const childProcess = ChildProcess.prototype as unknown as { spawn(options: { args: string[] }): unknown };
+    const spawn = vi.spyOn(childProcess, "spawn");
+    onTestFinished(() => spawn.mockRestore());
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("desktop" as const, "outpost" as const), fc.constantFrom("full" as const, "contained" as const),
       fc.constantFrom(...allowed, ...refused),
@@ -8225,10 +8258,10 @@ describe("DesktopBackendRegistry", () => {
         installMember(host, { approvals: "ask", role });
         const reachable = role === "full" || allowed.includes(tool);
         const codexClient = new MockBackendClient({ threads: [] });
-        const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+        const registry = createDesktopBackendRegistry({ codexClient, gitWorkingStateService, overlayStore: createOverlayStoreMock() });
         const mcp = new McpClient({ name: "member-role-fixture", version: "1.0.0" });
         try {
-          const { threadId } = await registry.startThread({ backend: "codex", cwd: process.cwd() });
+          const { threadId } = await registry.startThread({ backend: "codex", cwd });
           // A dynamic tool call from the model, advertised or made up.
           const call = await codexClient.emitRequest({
             method: "item/tool/call",
@@ -8255,6 +8288,7 @@ describe("DesktopBackendRegistry", () => {
         }
       },
     ), { numRuns: 30 });
+    expect(spawn.mock.calls.map(([options]) => options.args.join(" "))).toEqual([]);
   });
 
   // On an Outpost the operator's execution mode chooses the sandbox. Agent
