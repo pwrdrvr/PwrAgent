@@ -752,6 +752,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setStarMapIntakeFederationHandlerFactory:
       setStarMapIntakeFederationHandlerFactoryMock,
     setFederatedThreadMessageHandler: setFederatedThreadMessageHandlerMock,
+    setLocalFederationInstanceId: vi.fn(),
     setFederatedThreadInspectionHandler:
       setFederatedThreadInspectionHandlerMock,
     setFederatedThreadMutationHandler: setFederatedThreadMutationHandlerMock,

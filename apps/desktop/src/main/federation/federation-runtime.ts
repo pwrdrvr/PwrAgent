@@ -1154,6 +1154,18 @@ export class DesktopFederationRuntime {
     return this.ensureLocalInstanceId();
   }
 
+  /**
+   * This instance's federation id when it has one, without creating it. An
+   * instance with no id yet cannot be named by anyone, so a routing check
+   * needs nothing more.
+   */
+  knownLocalInstanceId(): FederationInstanceId | undefined {
+    if (this.localInstanceId) return this.localInstanceId;
+    const existing = desktopFederationState.read("instanceId");
+    if (existing) this.localInstanceId = existing;
+    return existing;
+  }
+
   async consumeMessagingFile(sourceInstanceId: string, file: FilePushResult): Promise<Uint8Array> {
     if (!this.receiverPermissions().filePush) throw new Error("Incoming files are disabled on the messaging owner.");
     // Receipt scope belongs to the acknowledged upload, so promotion must not

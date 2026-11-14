@@ -21,6 +21,7 @@
     "getDesktopBackendRegistry().setAgentCreatedThreadObserver",
     "getDesktopBackendRegistry().setStarMapIntakeFederationHandlerFactory",
     "getDesktopBackendRegistry().setFederatedThreadMessageHandler",
+    "getDesktopBackendRegistry().setLocalFederationInstanceId",
     "getDesktopBackendRegistry().setFederatedThreadInspectionHandler",
     "getDesktopBackendRegistry().setFederatedThreadMutationHandler",
     "getDesktopBackendRegistry().setFederatedThreadControlHandler",

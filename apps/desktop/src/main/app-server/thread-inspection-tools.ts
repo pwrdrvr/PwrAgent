@@ -156,6 +156,8 @@ export interface ThreadInspectionToolsHost {
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly gitWorkingStateService: GitWorkingStateService;
   readonly messagingStore: MessagingArchiveCleanupStore | null | undefined;
+  /** Nothing when an instance id names this instance itself, whose threads are local. */
+  ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;
   listThreads(params?: {
     archived?: boolean;
     backend?: AppServerBackendKind;
@@ -221,6 +223,15 @@ export interface ThreadInspectionToolsHost {
 }
 
 /**
+ * The operations that route a named instanceId through federation. Each takes
+ * includeRemote, which widens it beyond this instance. mark_project_read
+ * resolves this instance's own id itself.
+ */
+const ROUTED_OPERATIONS: ReadonlySet<PwrAgentThreadInspectionRequest["operation"]> = new Set([
+  "search_threads", "get_thread_status", "read_thread", "mutate_thread",
+]);
+
+/**
  * The thread inspection domain of the backend registry: the agent tools that
  * search, read and report on threads, mutate a thread's settings, grouping
  * and lifecycle, run thread maintenance, and dispatch the PR, dependency and
@@ -270,6 +281,23 @@ export class ThreadInspectionTools {
     }) : undefined;
   }
 
+  /**
+   * An agent can name this instance's own thread by this instance's id. That
+   * thread is local: federation has no peer with this instance's id, so the
+   * read, status, search or mutation must not be routed to one. Naming this
+   * instance still means this instance only, so no peer is asked either.
+   */
+  private ownerRelativeRequest(request: PwrAgentThreadInspectionRequest): PwrAgentThreadInspectionRequest {
+    if (!ROUTED_OPERATIONS.has(request.operation)) return request;
+    const args = request.args as { instanceId?: unknown; includeRemote?: unknown } | undefined;
+    // includeRemote false with an instanceId is refused whoever it names.
+    if (!args || args.includeRemote === false) return request;
+    if (typeof args.instanceId !== "string" || !args.instanceId.trim()) return request;
+    if (this.host().ownerRelativeInstanceId(args.instanceId) !== undefined) return request;
+    const { instanceId: _instanceId, ...local } = args;
+    return { ...request, args: { ...local, includeRemote: false } } as PwrAgentThreadInspectionRequest;
+  }
+
   /** What the operator has yet to answer on a thread, for get_thread_status. */
   private pendingApprovalsForInspection(
     backend: AppServerBackendKind,
@@ -292,8 +320,9 @@ export class ThreadInspectionTools {
   }
 
   async handleThreadInspectionRequest(
-    request: PwrAgentThreadInspectionRequest,
+    named: PwrAgentThreadInspectionRequest,
   ): Promise<PwrAgentThreadInspectionResponse> {
+    const request = this.ownerRelativeRequest(named);
     if (request.operation === "search_threads") {
       const backend = readThreadInspectionBackend(request.args.backend);
       if (request.args.backend !== undefined && !backend) {
