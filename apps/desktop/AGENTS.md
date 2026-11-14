@@ -120,6 +120,14 @@ complete scope, native typecheck command and formatting policy.
 - A surface with a live settings snapshot (the main window's `App`) passes
   `dismissed` / `onDismiss`; anything else lets the gate read and write the
   preference itself.
+- An agent never raises access itself (`checkAgentAccessRequest`). When it
+  needs a thread with more access than its own, it proposes a `start_thread`
+  to-do card at that mode, as the Voice and Star Map managers are told to.
+  Starting the card is the operator's escalation, and runs through
+  `useThreadTodoFullAccessGate`, which wraps this same gate. The gate judges
+  the window's copy of the card, so the run carries the access it showed
+  (`seenExecutionMode`) and the owner refuses the start if the stored card
+  changed since; an agent's `update_todo` cannot slip a raise in between.
 - Messaging surfaces deliberately do NOT share this gate. An escalation
   requested over Telegram or Discord is made by a remote actor, so
   `MessagingController.ensureFullAccessEscalationAllowed` gates it on the

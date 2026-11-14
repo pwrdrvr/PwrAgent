@@ -9,6 +9,10 @@ import { ThreadRowDensityContext } from "./features/navigation/thread-row-densit
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { runThreadTodoAndMountStarted } from "./features/thread-todos/thread-todo-started-mount";
+import {
+  useThreadTodoFullAccessGate,
+  withSeenExecutionMode,
+} from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
 import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
@@ -158,7 +162,6 @@ import { useSidebarOwnerBackends } from "./lib/useSidebarOwnerBackends";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
-import { useExecutionModeSelection } from "./lib/useExecutionModeSelection";
 import {
   readRendererFederationLabel,
   readRendererFederationTarget,
@@ -2884,19 +2887,11 @@ function DesktopAppShell(props: {
   );
   // A handoff card asking for Full Access passes the same confirmation as
   // every other escalation: the agent proposed the mode, the operator has
-  // not chosen it yet. A declined dialog leaves the run's promise pending,
-  // which the card reads as "nothing happened".
-  const pendingFullAccessTodoRunRef = useRef<(() => void) | undefined>(undefined);
+  // not chosen it yet.
   const {
     fullAccessRiskDialog: todoFullAccessRiskDialog,
-    requestExecutionModeSelection: requestTodoExecutionMode,
-  } = useExecutionModeSelection({
-    applyExecutionMode: () => {
-      const run = pendingFullAccessTodoRunRef.current;
-      pendingFullAccessTodoRunRef.current = undefined;
-      run?.();
-    },
-    currentExecutionMode: "default",
+    gateRun: gateTodoRun,
+  } = useThreadTodoFullAccessGate({
     desktopApi,
     dismissed: settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
     onDismiss: () => handleDismissFullAccessRiskWarning(),
@@ -2996,7 +2991,8 @@ function DesktopAppShell(props: {
         threadTodoController.resolve(todo.id, status, resolution, options),
       setItemChecked: (todo, itemId, checked) =>
         threadTodoController.setItemChecked(todo.id, itemId, checked),
-      run: (todo, options) => {
+      run: (todo, requested) => {
+        const options = withSeenExecutionMode(todo, requested);
         const runAndMount = () => runThreadTodoAndMountStarted(
           () => threadTodoController.runAction(todo.id, options),
           desktopApi,
@@ -3008,19 +3004,7 @@ function DesktopAppShell(props: {
               federationMachines.find((machine) => machine.instanceId === instanceId)?.label,
           },
         );
-        if (
-          todo.action?.type !== "start_thread"
-          || options?.messageTarget !== undefined
-          || todo.action.executionMode !== "full-access"
-        ) {
-          return runAndMount();
-        }
-        return new Promise((resolve, reject) => {
-          pendingFullAccessTodoRunRef.current = () => {
-            runAndMount().then(resolve, reject);
-          };
-          requestTodoExecutionMode("full-access");
-        });
+        return gateTodoRun(todo, options, runAndMount);
       },
       openThread: (todo) => showTodoThread(todo),
       openStartedThread: (todo) => {
@@ -3064,6 +3048,7 @@ function DesktopAppShell(props: {
     configuredMergeMethod,
     desktopApi,
     federationMachines,
+    gateTodoRun,
     listThreadTodos,
     localThreadProjects,
     localThreadTitles,
@@ -3071,7 +3056,6 @@ function DesktopAppShell(props: {
     openOperatorWait,
     operatorRequests,
     respondToOperatorWait,
-    requestTodoExecutionMode,
     showThreadFromLink,
     threadTodoController,
     todoProjectMenu,

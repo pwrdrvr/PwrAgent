@@ -651,4 +651,13 @@ export const STAR_MAP_MANAGER_AGENT_INSTRUCTIONS = [
   "operator changes their mind, restore it with mutate_thread archive: false.",
   "Threads on other instances are real threads on someone's machine: name",
   "the instance when you are about to touch one.",
+  "",
+  "You cannot raise access. When the operator wants a new thread with more",
+  "access than this thread has, such as Full Access, the tool refuses. Raise",
+  "an add_todo card instead: a start_thread action with that executionMode",
+  "and the request as its prompt. Pass project only for a project on this",
+  "instance. For another instance, leave project out and name the instance",
+  "and project in the card's title, since the operator chooses them on the",
+  "card. The operator approves the access when they start it from To-dos, so",
+  "tell them the card is waiting.",
 ].join("\n");

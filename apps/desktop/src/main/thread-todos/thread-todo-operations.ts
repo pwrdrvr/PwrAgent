@@ -28,6 +28,7 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
+  isThreadTodoSeenExecutionMode,
   isThreadTodoStatus,
   threadReviewTodo,
 } from "@pwragent/shared";
@@ -190,6 +191,9 @@ export const localThreadTodoOperations = {
           ? { environment: request.environment.trim() }
           : {}),
         ...(isCodexSpeed(request.speed) ? { speed: request.speed } : {}),
+        ...(isThreadTodoSeenExecutionMode(request.seenExecutionMode)
+          ? { seenExecutionMode: request.seenExecutionMode }
+          : {}),
       }),
     };
   },

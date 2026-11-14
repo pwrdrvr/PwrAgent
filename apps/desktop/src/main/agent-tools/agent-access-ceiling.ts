@@ -92,11 +92,17 @@ function escalationRefusal(
   ceiling: AgentAccessCeiling,
 ): AgentAccessRefusal {
   const subject = ceiling === "target" ? "the target thread" : "this thread";
+  // A new thread at more access is still reachable: the operator starts a
+  // proposed card, and that start passes the desktop's Full Access gate.
+  const propose = ceiling === "caller"
+    ? "To start a new thread at that access, propose it with add_todo as a "
+      + "start_thread card at that executionMode for the operator to start. "
+    : "";
   return {
     code: "forbidden",
     message:
       `${requested} asks for more access than ${subject} has (${EXECUTION_MODE_LABELS[ceilingMode]}). `
-      + `${AGENT_ACCESS_REFUSAL_MARKER} Ask the operator to raise it in PwrAgent, `
+      + `${AGENT_ACCESS_REFUSAL_MARKER} ${propose}Ask the operator to raise it in PwrAgent, `
       + `or retry with ${subject}'s access or less.`,
   };
 }

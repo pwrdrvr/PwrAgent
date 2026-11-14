@@ -3,6 +3,7 @@ import type { ProjectRepositoryIdentity } from "../federation-project-match";
 import type { FederationRemoteTarget, FederationTarget } from "./federation";
 import { federatedThreadIdentityKey } from "./federation";
 import { buildThreadIdentityKey, isAppServerBackendKind } from "./navigation";
+import { isThreadExecutionMode } from "../thread-execution-mode";
 
 import type {
   AppServerBackendKind,
@@ -651,7 +652,44 @@ export type RunThreadTodoActionRequest = {
    * card done, so it follows the same rule as resolving it.
    */
   allowOpenItems?: boolean;
+  /**
+   * Handoff cards that start a thread: the access the operator saw on the
+   * card when they started it (`threadTodoSeenExecutionMode`). The owner
+   * refuses the start when the stored card no longer says the same, so an
+   * agent's `update_todo` cannot raise access between the operator's view
+   * and the run.
+   */
+  seenExecutionMode?: ThreadTodoSeenExecutionMode;
 };
+
+/** A start card's access as shown: its named mode, or `inherit` for none. */
+export type ThreadTodoSeenExecutionMode = ThreadExecutionMode | "inherit";
+
+export function isThreadTodoSeenExecutionMode(value: unknown): value is ThreadTodoSeenExecutionMode {
+  return value === "inherit" || isThreadExecutionMode(value);
+}
+
+/** The access a start card shows: what an operator who starts it has seen. */
+export function threadTodoSeenExecutionMode(
+  action: Extract<ThreadTodoAction, { type: "start_thread" }>,
+): ThreadTodoSeenExecutionMode {
+  return action.executionMode ?? "inherit";
+}
+
+/**
+ * Whether a start card's stored access differs from what the operator saw.
+ * Any difference refuses, a lowered mode included: the operator confirmed
+ * one card, and the one about to run is another. A caller that predates
+ * `seenExecutionMode` confirmed nothing, so only a Full Access card, the
+ * one mode the desktop gate holds back, is refused for it.
+ */
+export function threadTodoStartAccessChanged(
+  action: Extract<ThreadTodoAction, { type: "start_thread" }>,
+  seen: ThreadTodoSeenExecutionMode | undefined,
+): boolean {
+  if (seen === undefined) return action.executionMode === "full-access";
+  return threadTodoSeenExecutionMode(action) !== seen;
+}
 
 /**
  * The environments a handoff can start with on one instance. Ask the card's

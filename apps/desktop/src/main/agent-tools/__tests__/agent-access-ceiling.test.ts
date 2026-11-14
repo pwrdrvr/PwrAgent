@@ -8,11 +8,19 @@ describe("checkAgentAccessRequest", () => {
       expect(checkAgentAccessRequest("default", { executionMode })).toEqual({
         code: "forbidden",
         message: expect.stringMatching(
-          /more access than this thread has \(Default Access\)\. An agent cannot raise access\. Ask the operator/,
+          /more access than this thread has \(Default Access\)\. An agent cannot raise access\. .*Ask the operator/,
         ),
       });
     },
   );
+
+  it("points a refused caller at a card the operator can start", () => {
+    expect(checkAgentAccessRequest("default", { executionMode: "full-access" })?.message)
+      .toContain("propose it with add_todo as a start_thread card");
+    // A per-turn override on an existing thread has no card equivalent.
+    expect(checkAgentAccessRequest("default", { executionMode: "full-access" }, "target")?.message)
+      .not.toContain("add_todo");
+  });
 
   it("refuses an Auto caller asking for full-access", () => {
     expect(checkAgentAccessRequest("auto", { executionMode: "full-access" }))
