@@ -1114,19 +1114,10 @@ export class McpConnectionGatewayService {
       controller.signal.addEventListener("abort", abort, { once: true });
       try {
         await client.connect(transport, { timeout: this.stdioTestTimeoutMs, signal: controller.signal });
-        let toolCount = 0;
-        let cursor: string | undefined;
-        const cursors = new Set<string>();
-        for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
-          const result = await client.listTools(cursor ? { cursor } : undefined, {
-            timeout: this.stdioTestTimeoutMs,
-            signal: controller.signal,
-          });
-          toolCount += result.tools.length;
-          cursor = result.nextCursor;
-          if (!cursor || cursors.has(cursor)) break;
-          cursors.add(cursor);
-        }
+        const toolCount = await countSettingsTestTools(client, () => ({
+          timeout: this.stdioTestTimeoutMs,
+          signal: controller.signal,
+        }));
         const version = client.getServerVersion();
         return {
           ok: true,
@@ -1226,7 +1217,9 @@ export class McpConnectionGatewayService {
       this.fetchFn,
       prepared.token ? { pastedToken: prepared.token } : {},
     );
-    if (existing && github.account === existing.github?.account) {
+    // Only a test of what is stored describes the row; a pasted token is
+    // not saved until Save.
+    if (existing && github.account === existing.github?.account && !prepared.token) {
       this.githubAccounts.remember(existing.id, github.account, check);
     }
     if (!token || !githubMcpAccountUsable(check.state)) {
@@ -1246,24 +1239,16 @@ export class McpConnectionGatewayService {
     const discovery = new McpDiscovery(connection.id || "github-test", Date.now() + this.stdioTestTimeoutMs);
     let session: UpstreamSession | undefined;
     try {
-      session = await this.openGithubSession(connection, token, {
+      session = await this.connectUpstreamClient(connection, {
         clientName: "pwragent-settings-test",
         discovery,
         recordFailure: false,
+        githubToken: token,
       });
       const client = session.client;
-      let toolCount = 0;
-      let cursor: string | undefined;
-      const cursors = new Set<string>();
-      for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
-        const result = await client.listTools(cursor ? { cursor } : undefined, {
-          timeout: discovery.remaining(), signal: discovery.signal,
-        });
-        toolCount += result.tools.length;
-        cursor = result.nextCursor;
-        if (!cursor || cursors.has(cursor)) break;
-        cursors.add(cursor);
-      }
+      const toolCount = await countSettingsTestTools(client, () => ({
+        timeout: discovery.remaining(), signal: discovery.signal,
+      }));
       const skillCount = await this.countMcpSkills(client, discovery);
       const version = client.getServerVersion();
       return {
@@ -1707,7 +1692,10 @@ export class McpConnectionGatewayService {
     });
     let tokenChanged = false;
     try {
-      if (prepared?.token) {
+      const stored = prepared?.token
+        ? await this.githubTokenSources(existing.id).readStoredToken().catch(() => undefined)
+        : undefined;
+      if (prepared?.token && prepared.token !== stored) {
         await this.stdioSecrets.write(existing.id, { [GITHUB_MCP_TOKEN_ENV]: prepared.token });
         tokenChanged = true;
       } else if (github?.account === "gh_cli" && existing.github?.account === "token") {
@@ -3040,6 +3028,13 @@ export class McpConnectionGatewayService {
       this.fetchFn,
     )).check;
     let account = this.githubAccounts.cached(connection.id, github.account);
+    // A failure is what the operator is fixing, in gh or by pasting a token,
+    // so a full read asks again rather than serving it for a minute: a cached
+    // "signed out" would keep bridge registration refusing after the fix.
+    if (account && !githubMcpAccountUsable(account.state) && !cachedOnly) {
+      this.githubAccounts.forget(connection.id);
+      account = undefined;
+    }
     if (!account && cachedOnly) {
       void this.githubAccounts.read(connection.id, github.account, read)
         .then(() => this.announceChanged([connection.id]), () => undefined);
@@ -3496,20 +3491,22 @@ export class McpConnectionGatewayService {
       options.discovery.remaining();
     } catch (error) {
       await transport.close().catch(() => undefined);
+      // GitHub refused the token itself. A thread's connect is the first to
+      // know when it was revoked, so the row says so without waiting for its
+      // account check to expire. A Settings test describes no saved row.
+      if (connection.kind === "github" && connection.id && options.recordFailure !== false
+        && isStreamableHttpError(error) && error.code === 401) {
+        const source = connection.github!.account;
+        if (this.githubAccounts.cached(connection.id, source)?.state !== "rejected") {
+          this.githubAccounts.remember(connection.id, source, { source, state: "rejected" });
+          this.announceChanged([connection.id]);
+        }
+      }
       throw error;
     } finally {
       options.discovery.signal.removeEventListener("abort", abort);
     }
     return { client, transport };
-  }
-
-  /** A GitHub session for a Settings test, with a token already read. */
-  private async openGithubSession(
-    connection: McpConnectionRecord,
-    token: string,
-    options: { clientName: string; discovery: McpDiscovery; recordFailure: boolean },
-  ): Promise<UpstreamSession> {
-    return await this.connectUpstreamClient(connection, { ...options, githubToken: token });
   }
 
   /**
@@ -5145,6 +5142,27 @@ function githubSessionFailureMessage(error: unknown, github: GithubMcpSettings):
   return github.server === "hosted"
     ? `PwrAgent could not connect to GitHub's MCP server. ${error instanceof Error ? error.message : String(error)}`
     : error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Every tool a Settings test session lists, across pages. A repeated cursor
+ * ends the count rather than failing the test: the session answered.
+ */
+async function countSettingsTestTools(
+  client: Client,
+  options: () => { timeout: number; signal: AbortSignal },
+): Promise<number> {
+  let toolCount = 0;
+  let cursor: string | undefined;
+  const cursors = new Set<string>();
+  for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+    const result = await client.listTools(cursor ? { cursor } : undefined, options());
+    toolCount += result.tools.length;
+    cursor = result.nextCursor;
+    if (!cursor || cursors.has(cursor)) break;
+    cursors.add(cursor);
+  }
+  return toolCount;
 }
 
 function grantThreadId(grant: BridgeGrant): string | undefined {

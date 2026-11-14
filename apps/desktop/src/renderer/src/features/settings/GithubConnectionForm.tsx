@@ -226,42 +226,46 @@ export function GithubConnectionFields(props: {
           Account
           <small>Whose access threads use</small>
         </span>
-        <div aria-labelledby={`${id}-account`} className="settings-mcp-local__control" role="radiogroup">
-          <ChoiceCard
-            buttonRef={accountGroup.ref("gh_cli")}
-            disabled={disabled}
-            selected={draft.account === "gh_cli"}
-            status={cliLine?.text}
-            statusTone={cliLine?.tone}
-            title="GitHub CLI sign-in"
-            onKeyDown={accountGroup.onKeyDown}
-            onSelect={() => change({ account: "gh_cli" })}
-          >
-            {draft.account === "gh_cli" && cli && cliProblem ? (
-              describeGithubMcpAccount(cli)
-            ) : (
-              <>
-                Uses the account <code>gh</code> is signed in to on this computer. It is read each
-                time the server connects, so <code>gh auth refresh</code> or a switch of account
-                applies on the next connect.
-                {cli?.state === "ready" && cli.scopes?.length ? (
-                  <> Scopes: <b>{cli.scopes.join(", ")}</b>.</>
-                ) : null}
-              </>
-            )}
-          </ChoiceCard>
-          <ChoiceCard
-            buttonRef={accountGroup.ref("token")}
-            disabled={disabled}
-            selected={draft.account === "token"}
-            status={tokenAccount?.state === "ready" && tokenAccount.login ? `@${tokenAccount.login}` : undefined}
-            title="Personal access token"
-            onKeyDown={accountGroup.onKeyDown}
-            onSelect={() => change({ account: "token" })}
-          >
-            A fine-grained or classic token, stored encrypted in this profile and never shown
-            again. Use it to give threads less access than your own account.
-          </ChoiceCard>
+        <div className="settings-mcp-local__control">
+          {/* Only the two cards are the radio group; the field and button
+              beside them are not options. */}
+          <div aria-labelledby={`${id}-account`} className="settings-mcp-local__control" role="radiogroup">
+            <ChoiceCard
+              buttonRef={accountGroup.ref("gh_cli")}
+              disabled={disabled}
+              selected={draft.account === "gh_cli"}
+              status={cliLine?.text}
+              statusTone={cliLine?.tone}
+              title="GitHub CLI sign-in"
+              onKeyDown={accountGroup.onKeyDown}
+              onSelect={() => change({ account: "gh_cli" })}
+            >
+              {draft.account === "gh_cli" && cli && cliProblem ? (
+                describeGithubMcpAccount(cli)
+              ) : (
+                <>
+                  Uses the account <code>gh</code> is signed in to on this computer. It is read each
+                  time the server connects, so <code>gh auth refresh</code> or a switch of account
+                  applies on the next connect.
+                  {cli?.state === "ready" && cli.scopes?.length ? (
+                    <> Scopes: <b>{cli.scopes.join(", ")}</b>.</>
+                  ) : null}
+                </>
+              )}
+            </ChoiceCard>
+            <ChoiceCard
+              buttonRef={accountGroup.ref("token")}
+              disabled={disabled}
+              selected={draft.account === "token"}
+              status={tokenAccount?.state === "ready" && tokenAccount.login ? `@${tokenAccount.login}` : undefined}
+              title="Personal access token"
+              onKeyDown={accountGroup.onKeyDown}
+              onSelect={() => change({ account: "token" })}
+            >
+              A fine-grained or classic token, stored encrypted in this profile and never shown
+              again. Use it to give threads less access than your own account.
+            </ChoiceCard>
+          </div>
           {draft.account === "gh_cli" && cliProblem && props.onRecheck ? (
             <button
               className="button button--secondary settings-mcp-local__add"

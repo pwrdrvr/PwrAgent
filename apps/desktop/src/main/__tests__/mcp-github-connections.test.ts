@@ -239,6 +239,15 @@ describe("GitHub MCP connections", () => {
     });
     expect(registry.get(created.id)?.github?.account).toBe("gh_cli");
 
+    // gh auth login again: the next read says so at once, not after the
+    // minute a failure would otherwise be cached, so a new thread's bridge
+    // is not refused for a sign-in that is already fixed.
+    cli.token = "gho_first0000";
+    const [fixed] = (await service.listConnections()).filter((connection) => connection.id === created.id);
+    expect(fixed).toMatchObject({ configured: true, githubAccount: { state: "ready", login: "octo-dev" } });
+    cli.token = null;
+    await service.listConnections();
+
     // A peer sees the connection but not whose account it is.
     expect(mcpConnectionsForPeer([row!])[0]).not.toHaveProperty("githubAccount");
   });
@@ -276,6 +285,29 @@ describe("GitHub MCP connections", () => {
     expect(created).toMatchObject({ configured: true, githubAccount: { login: "octo-bot" } });
     expect(stored()).toContain("github_pat_narrow");
     expect(JSON.stringify(await service.listConnections())).not.toContain("github_pat_narrow");
+
+    // A test of an unsaved token in the edit dialog does not change whose
+    // account the saved row reports.
+    await service.testGithubConnection({
+      connectionId: created.id,
+      github: { account: "token", server: "hosted", ...DEFAULTS, token: "gho_second000" },
+    });
+    expect((await service.listConnections()).find((item) => item.id === created.id)?.githubAccount?.login)
+      .toBe("octo-bot");
+
+    // GitHub's MCP server rejecting the stored token on a connect shows on
+    // the row at once.
+    delete ACCOUNTS.github_pat_narrow;
+    try {
+      await expect(service.listConnectionTools({ connectionId: created.id, refresh: true })).rejects.toThrow();
+      const rows = await service.listConnections({ cachedLocalStatus: true });
+      expect(rows.find((item) => item.id === created.id)).toMatchObject({
+        configured: false,
+        githubAccount: { state: "rejected" },
+      });
+    } finally {
+      ACCOUNTS.github_pat_narrow = { login: "octo-bot", scopes: "" };
+    }
 
     // An edit that leaves the token blank keeps it.
     await service.updateConnection({

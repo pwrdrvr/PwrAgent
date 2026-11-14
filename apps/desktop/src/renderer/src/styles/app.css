@@ -18482,8 +18482,9 @@ a.button {
   outline-offset: 1px;
 }
 
-.settings-github-choice:disabled,
-.settings-github-toolset:disabled {
+/* Scoped like the rules above, or their pointer cursor wins. */
+.settings-github .settings-github-choice:disabled,
+.settings-github .settings-github-toolset:disabled {
   cursor: default;
   opacity: 0.6;
 }
