@@ -293,7 +293,9 @@ describe("GitHub MCP connections", () => {
     expect(row).toMatchObject({ configured: false, githubAccount: { source: "gh_cli", state: "gh_missing" } });
   });
 
-  it("starts the local server with GitHub's flags and the token as its one secret", async () => {
+  // The fake server is a `#!/usr/bin/env node` script, which Windows cannot
+  // execute directly; the local command suite skips Windows the same way.
+  it.skipIf(process.platform === "win32")("starts the local server with GitHub's flags and the token as its one secret", async () => {
     const fixture = makeFixture();
     const { service } = createService(fixture, { installed: true, token: "gho_first0000" });
 

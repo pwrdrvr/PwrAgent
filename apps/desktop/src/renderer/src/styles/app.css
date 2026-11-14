@@ -18446,7 +18446,7 @@ a.button {
 }
 
 .settings-github-choice__status--warn {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .settings-github-choice__status--muted {
@@ -18542,7 +18542,7 @@ a.button {
 }
 
 .settings-github__warn {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .settings-github-switch {
