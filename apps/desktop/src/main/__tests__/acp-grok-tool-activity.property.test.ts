@@ -94,6 +94,130 @@ function searchReplaceFrames(params: {
   ];
 }
 
+type LaterFrameOptions = {
+  /** Whether each later frame repeats `rawInput`. */
+  laterRawInput?: boolean[];
+  /** Whether each later frame repeats the x.ai tool identity. */
+  laterIdentity?: boolean[];
+};
+
+/**
+ * The frames Grok 1.0.45 sent for one tool call that reads: the bare opening
+ * `tool_call`, the update with the descriptive title and `locations`, and the
+ * completing update with the output. Later frames may drop `rawInput` and the
+ * x.ai identity, as recorded rollouts show.
+ */
+function readOnlyToolFrames(params: LaterFrameOptions & {
+  id: string;
+  name: "read_file" | "list_dir";
+  target: string;
+  rawInput: Record<string, unknown>;
+  variant: string;
+  acpKind: string;
+  title: string;
+  completed: Record<string, unknown>;
+}): Record<string, unknown>[] {
+  const meta = params.name === "read_file"
+    ? xaiTool("read_file", "read", "Read")
+    : xaiTool("list_dir", "list", "List Files");
+  const later = (index: number) => ({
+    ...(params.laterRawInput?.[index] ?? true
+      ? { rawInput: { variant: params.variant, ...params.rawInput } }
+      : {}),
+    ...(params.laterIdentity?.[index] ?? index === 0 ? { _meta: meta } : {}),
+  });
+  return [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: params.id,
+      title: params.name,
+      rawInput: params.rawInput,
+      _meta: meta,
+    },
+    {
+      sessionUpdate: "tool_call_update",
+      toolCallId: params.id,
+      kind: params.acpKind,
+      title: params.title,
+      locations: [{ path: params.target }],
+      ...later(0),
+    },
+    {
+      sessionUpdate: "tool_call_update",
+      toolCallId: params.id,
+      kind: params.acpKind,
+      status: "completed",
+      title: params.title,
+      ...params.completed,
+      ...later(1),
+    },
+  ];
+}
+
+function readFileFrames(params: LaterFrameOptions & {
+  id: string;
+  target: string;
+  offset?: number | null;
+  limit?: number;
+  pages?: string;
+}): Record<string, unknown>[] {
+  const rawInput: Record<string, unknown> = { target_file: params.target };
+  if (params.offset !== undefined) {
+    rawInput.offset = params.offset;
+  }
+  if (params.limit !== undefined) {
+    rawInput.limit = params.limit;
+  }
+  if (params.pages !== undefined) {
+    rawInput.pages = params.pages;
+  }
+  const text = "1\u2192const board = [];\n2\u2192";
+  return readOnlyToolFrames({
+    ...params,
+    name: "read_file",
+    rawInput,
+    variant: "ReadFile",
+    acpKind: "read",
+    title: `Read \`${params.target}\``,
+    completed: {
+      content: [{ type: "content", content: { type: "text", text } }],
+      rawOutput: {
+        type: "ReadFile",
+        FileContent: {
+          content: text,
+          absolute_path: params.target,
+          offset: params.offset ?? null,
+          limit: params.limit ?? null,
+          total_lines: 2,
+        },
+      },
+    },
+  });
+}
+
+function listDirFrames(params: LaterFrameOptions & {
+  id: string;
+  target: string;
+}): Record<string, unknown>[] {
+  return readOnlyToolFrames({
+    ...params,
+    name: "list_dir",
+    rawInput: { target_directory: params.target },
+    variant: "ListDir",
+    acpKind: "other",
+    title: `List \`${params.target}\``,
+    completed: {
+      rawOutput: {
+        type: "ListDir",
+        Content: {
+          content: `- ${params.target}\n  - src/\n`,
+          absolute_root_path: params.target,
+        },
+      },
+    },
+  });
+}
+
 function applyFrames(frames: Record<string, unknown>[]): AcpSessionReplayNormalizer {
   const normalizer = new AcpSessionReplayNormalizer();
   frames.forEach((update, index) => {
@@ -358,6 +482,104 @@ describe("Grok tool activity", () => {
         expect(activity?.details[0]?.label).toBe(expected);
       }),
       { numRuns: 300 },
+    );
+  });
+
+  it("shows a read_file as the file it read, with the lines it asked for", () => {
+    const target = "/work/tree/apps/desktop/src/checkers.ts";
+    const [activity] = activities(applyFrames(readFileFrames({
+      id: "call-read",
+      target,
+      offset: 250,
+      limit: 120,
+    })));
+    expect(activity).toMatchObject({
+      summary: "Read checkers.ts (lines 250-369)",
+      status: "completed",
+      details: [{ kind: "read", label: "Read checkers.ts (lines 250-369)", path: target }],
+    });
+  });
+
+  it("shows a list_dir as the directory it listed", () => {
+    const target = "/work/tree/apps/desktop/";
+    const [activity] = activities(applyFrames(listDirFrames({ id: "call-list", target })));
+    expect(activity).toMatchObject({
+      summary: "Listed desktop",
+      status: "completed",
+      details: [{ kind: "read", label: "Listed desktop", path: target }],
+    });
+  });
+
+  it("names a URL read by its file, without the query, and by its host when it has no path", () => {
+    const image = "https://images.example.test/media/board%20photo.jpg?name=large#top";
+    const [imageRow] = activities(applyFrames(readFileFrames({ id: "call-url", target: image })));
+    expect(imageRow?.summary).toBe("Read board photo.jpg");
+    expect(imageRow?.details[0]?.path).toBe(image);
+
+    const site = "https://docs.example.test/";
+    const [siteRow] = activities(applyFrames(readFileFrames({ id: "call-site", target: site })));
+    expect(siteRow?.summary).toBe("Read docs.example.test");
+  });
+
+  it("property: a read or listing keeps its own label whatever Grok's later frames carry", () => {
+    const segment = fc.stringMatching(/^[a-z][a-z0-9_.-]{0,10}$/u);
+    const scenario = fc.record({
+      tool: fc.constantFrom<"read_file" | "list_dir">("read_file", "list_dir"),
+      segments: fc.array(segment, { minLength: 1, maxLength: 6 }),
+      trailingSlash: fc.boolean(),
+      offset: fc.option(fc.integer({ min: 1, max: 5_000 }), { nil: undefined }),
+      offsetNull: fc.boolean(),
+      limit: fc.option(fc.integer({ min: 1, max: 1_000 }), { nil: undefined }),
+      pages: fc.option(
+        fc.constantFrom("3", "1-10", "11-13"),
+        { nil: undefined },
+      ),
+      // Grok does not always repeat its input or its tool identity.
+      laterRawInput: fc.array(fc.boolean(), { minLength: 2, maxLength: 2 }),
+      laterIdentity: fc.array(fc.boolean(), { minLength: 2, maxLength: 2 }),
+      steps: fc.integer({ min: 1, max: 3 }),
+    });
+
+    fc.assert(
+      fc.property(scenario, (input) => {
+        const name = input.segments.at(-1)!;
+        const target = `/${input.segments.join("/")}${input.trailingSlash ? "/" : ""}`;
+        const all = input.tool === "read_file"
+          ? readFileFrames({
+              id: "call-prop-read",
+              target,
+              offset: input.offset ?? (input.offsetNull ? null : undefined),
+              limit: input.limit,
+              pages: input.pages,
+              laterRawInput: input.laterRawInput,
+              laterIdentity: input.laterIdentity,
+            })
+          : listDirFrames({
+              id: "call-prop-list",
+              target,
+              laterRawInput: input.laterRawInput,
+              laterIdentity: input.laterIdentity,
+            });
+        const [activity] = activities(applyFrames(all.slice(0, input.steps)));
+
+        let expected: string;
+        if (input.tool === "list_dir") {
+          expected = `Listed ${name}`;
+        } else if (input.pages !== undefined) {
+          expected = `Read ${name} (${/^\d+$/u.test(input.pages) ? "page" : "pages"} ${input.pages})`;
+        } else if (input.limit !== undefined) {
+          const from = input.offset ?? 1;
+          expected = `Read ${name} (lines ${from}-${from + input.limit - 1})`;
+        } else if (input.offset !== undefined && input.offset > 1) {
+          expected = `Read ${name} (from line ${input.offset})`;
+        } else {
+          expected = `Read ${name}`;
+        }
+        expect(activity?.summary).toBe(expected);
+        expect(activity?.details).toHaveLength(1);
+        expect(activity?.details[0]).toMatchObject({ kind: "read", label: expected, path: target });
+      }),
+      { numRuns: 400 },
     );
   });
 

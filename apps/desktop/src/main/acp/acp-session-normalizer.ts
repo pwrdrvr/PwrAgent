@@ -27,6 +27,11 @@ import {
   readFirstLocationPath,
 } from "./acp-command-extraction.js";
 import { readAcpFileEdit } from "./acp-file-edit.js";
+import {
+  type AcpFileRead,
+  fileBaseName,
+  readAcpFileRead,
+} from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 
 export type AcpSessionUpdate = {
@@ -275,6 +280,11 @@ export class AcpSessionReplayNormalizer {
    * on updates that do not always repeat the identity.
    */
   private readonly providerTools = new Map<string, AcpProviderTool>();
+  /**
+   * The file or directory each read-only call named. Grok's completing update
+   * can drop the input that names it, and its title is the absolute path.
+   */
+  private readonly fileReads = new Map<string, AcpFileRead>();
   /** The retry run whose row is still in progress, if any. */
   private openRetry?: { id: string; attempts: number };
   /** The automatic compaction whose row is still in progress, if any. */
@@ -305,6 +315,7 @@ export class AcpSessionReplayNormalizer {
     // A call's identity matters only while its updates arrive. Keeping every
     // call's for the whole session would grow without bound.
     this.providerTools.clear();
+    this.fileReads.clear();
     this.upsertMessage({
       id,
       role: "user",
@@ -782,8 +793,14 @@ export class AcpSessionReplayNormalizer {
     const providerTool = toolCallId
       ? this.providerTools.get(toolCallId)
       : declared;
+    const fileRead =
+      (toolCallId ? this.fileReads.get(toolCallId) : undefined)
+      ?? readAcpFileRead(update.update, providerTool);
+    if (toolCallId && fileRead) {
+      this.fileReads.set(toolCallId, fileRead);
+    }
     this.upsertActivity(
-      toolActivity(update, kind, createdAt, providerTool),
+      toolActivity(update, kind, createdAt, providerTool, fileRead),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
         : undefined,
@@ -1570,6 +1587,7 @@ function toolActivity(
   kind: string,
   createdAt: number,
   providerTool?: AcpProviderTool,
+  fileRead?: AcpFileRead,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -1701,18 +1719,23 @@ function toolActivity(
     providerTool?.label && sameLabel(titleCandidate, providerTool.name)
       ? providerTool.label
       : titleCandidate;
-  const label = webFetchUrl
-    ? `Fetched ${webFetchUrl}`
-    : displayCommand && isGenericShellToolTitle(labelCandidate)
-      ? displayCommand
-      : labelCandidate;
+  const label = fileRead
+    ? fileRead.label
+    : webFetchUrl
+      ? `Fetched ${webFetchUrl}`
+      : displayCommand && isGenericShellToolTitle(labelCandidate)
+        ? displayCommand
+        : labelCandidate;
   const status = readToolActivityStatus(update.update);
-  const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
+  const path =
+    fileRead?.path
+    ?? readString(update.update, "path")
+    ?? readFirstLocationPath(update.update);
   const output = readToolOutput(update.update);
   const exitCode = readNumber(update.update, "exitCode");
   const detailKind = rawCommand
     ? "command"
-    : webFetchUrl
+    : webFetchUrl || fileRead
       ? "read"
       : toolDetailKind(readString(update.update, "kind"), path);
 
@@ -1756,10 +1779,6 @@ function readToolActivityStatus(
     : status === "pending"
       ? "in_progress"
       : undefined;
-}
-
-function fileBaseName(filePath: string): string {
-  return filePath.split(/[\\/]/u).filter(Boolean).at(-1) ?? filePath;
 }
 
 function sameLabel(value: string, other: string | undefined): boolean {
