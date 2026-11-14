@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { StateDb as SharedStateDb } from "@pwragent/sqlite-storage/state-db";
+import { CURRENT_STATE_DB_USER_VERSION as SHARED_STATE_DB_USER_VERSION, StateDb as SharedStateDb } from "@pwragent/sqlite-storage/state-db";
 import { StateDb as DesktopStateDb } from "../storage/state-db";
 import { StateDb, CURRENT_STATE_DB_USER_VERSION } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -12,13 +12,19 @@ import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sql
 const oraclePath = path.join(import.meta.dirname, "fixtures/shared-sqlite-schema-oracle.json");
 const hosts = [DesktopStateDb, SharedStateDb, StateDb];
 
-function schema(db: StateDb, beforeOwnerJobs = false): { sha256: string; objects: number; userVersion: number } {
-  const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ tbl_name: string }>;
-  const compared = beforeOwnerJobs ? rows.filter(row => row.tbl_name !== "owner_jobs") : rows;
+function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string; objects: number; userVersion: number } {
+  const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string }>;
+  // Keep the extraction oracle frozen at v80, excluding only the explicitly
+  // additive owner-job and search-key migrations that followed it.
+  const compared = beforeAdditiveMigrations ? rows.filter(row =>
+    row.tbl_name !== "owner_jobs"
+    && row.tbl_name !== "thread_search_fts_rows"
+    && row.name !== "idx_thread_usage_lines_identity"
+  ) : rows;
   return {
     sha256: createHash("sha256").update(JSON.stringify(compared)).digest("hex"),
     objects: compared.length,
-    userVersion: beforeOwnerJobs ? 80 : db.raw.pragma("user_version", { simple: true }) as number,
+    userVersion: beforeAdditiveMigrations ? 80 : db.raw.pragma("user_version", { simple: true }) as number,
   };
 }
 
@@ -40,11 +46,11 @@ function schemaDefinition(db: StateDb): unknown {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("retains the exact pre-extraction SQLite schema beneath the additive owner-job migration", () => {
+it("retains the exact pre-extraction SQLite schema beneath the additive migrations", () => {
   const db = openFreshStateDb(":memory:");
   try {
     const actual = schema(db, true);
-    expect(db.raw.pragma("user_version", { simple: true })).toBe(81);
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     if (process.env.UPDATE_SHARED_SQLITE_SCHEMA_ORACLE === "1") {
       writeFileSync(oraclePath, JSON.stringify(actual, null, 2) + "\n");
     }
@@ -55,7 +61,7 @@ it("retains the exact pre-extraction SQLite schema beneath the additive owner-jo
 it("binds desktop adapters and state compatibility exports to one portable implementation", () => {
   expect(DesktopStateDb).toBe(SharedStateDb);
   expect(StateDb).toBe(SharedStateDb);
-  expect(CURRENT_STATE_DB_USER_VERSION).toBe(81);
+  expect(CURRENT_STATE_DB_USER_VERSION).toBe(SHARED_STATE_DB_USER_VERSION);
 });
 
 // These are old profile shapes already supported by the versioned ladder.
