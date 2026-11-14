@@ -153,7 +153,7 @@ afterEach(async () => {
 describe("registry", () => {
   it("registers locally without a request and refuses a second active name in scope", async () => {
     const service = makeService();
-    expect(service.register(CODEX, ROUTE_DEFINITION)).toMatchObject({
+    expect(await service.register(CODEX, ROUTE_DEFINITION)).toMatchObject({
       decisionId: "decision-1", name: "route_support_ticket", version: 1, scope: "profile",
     });
     expect(server.requests).toHaveLength(0);
@@ -171,8 +171,8 @@ describe("registry", () => {
 
   it("keeps thread scope to its owning thread and profile scope to its profile", async () => {
     const service = makeService();
-    service.register(CODEX, { ...ROUTE_DEFINITION, name: "private_rule", scope: "thread" });
-    service.register(CODEX, { ...ROUTE_DEFINITION, name: "shared_rule" });
+    await service.register(CODEX, { ...ROUTE_DEFINITION, name: "private_rule", scope: "thread" });
+    await service.register(CODEX, { ...ROUTE_DEFINITION, name: "shared_rule" });
     const names = (caller: typeof CODEX) =>
       (service.list(caller, {}) as { decisions: Array<{ name: string }> }).decisions.map((d) => d.name);
     expect(names(CODEX)).toEqual(["private_rule", "shared_rule"]);
@@ -184,7 +184,7 @@ describe("registry", () => {
     expect((await captureError(() => service.delete(OTHER_THREAD, { name: "private_rule" }))).code)
       .toBe("decision_not_found");
     // Another thread may reuse a thread-scoped name.
-    expect(service.register(OTHER_THREAD, { ...ROUTE_DEFINITION, name: "private_rule", scope: "thread" }))
+    expect(await service.register(OTHER_THREAD, { ...ROUTE_DEFINITION, name: "private_rule", scope: "thread" }))
       .toMatchObject({ scope: "thread" });
 
     // A second profile is a second state database.
@@ -200,7 +200,7 @@ describe("registry", () => {
 
   it("gives each update a new version and cache key, and keeps old versions pinnable until delete", async () => {
     const service = makeService();
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     const updated = service.update(OTHER_THREAD, {
       ...ROUTE_DEFINITION,
       instructions: "Which team owns this ticket?",
@@ -230,14 +230,14 @@ describe("registry", () => {
     }
     expect(server.requests).toHaveLength(before);
     // The name is free again, as a new decision starting at version 1.
-    expect(service.register(CODEX, ROUTE_DEFINITION)).toMatchObject({ decisionId: "decision-2", version: 1 });
+    expect(await service.register(CODEX, ROUTE_DEFINITION)).toMatchObject({ decisionId: "decision-2", version: 1 });
   });
 });
 
 describe("invoke", () => {
   it("sends the exact documented request with the key only in the Authorization header", async () => {
     const service = makeService();
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     const result = await service.invoke(CODEX, {
       name: "route_support_ticket",
       input: { ticket: "I was charged twice." },
@@ -305,7 +305,7 @@ describe("invoke", () => {
 
   it("refuses invalid input, credential arguments, and a missing key with zero requests", async () => {
     const service = makeService();
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     for (const args of [
       { name: "route_support_ticket", input: { ticket: 5 } },
       { name: "route_support_ticket", input: { ticket: "x", extra: true } },
@@ -330,7 +330,7 @@ describe("invoke", () => {
 
   it("maps a 401 that echoes the key to credential_rejected without leaking it", async () => {
     const service = makeService();
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     server.responses.push({
       status: 401,
       headers: { "x-request-id": "req_denied" },
@@ -349,7 +349,7 @@ describe("invoke", () => {
 
   it("retries only 429 slow_down and 503 server_is_overloaded with a short Retry-After", async () => {
     const service = makeService();
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     const invoke = async () => await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "x" } });
 
     server.responses.push(
@@ -397,7 +397,7 @@ describe("invoke", () => {
         return await globalThis.fetch(...args);
       },
     });
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     const invoke = () => service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "x" } });
     const running = [invoke(), invoke(), invoke(), invoke(), invoke()];
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -417,7 +417,7 @@ describe("invoke", () => {
         return await globalThis.fetch(...args);
       },
     });
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     const invoke = (signal?: AbortSignal) =>
       service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "x" } }, signal);
     const running = invoke();
@@ -434,7 +434,7 @@ describe("invoke", () => {
 
   it("sums usage per decision version in memory and writes it as one batch, on the API project account", async () => {
     const service = makeService();
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     server.responses.push(
       { status: 429, headers: { "retry-after": "1", "x-request-id": "req_slow" }, body: { error: { code: "slow_down" } } },
       successResponse(undefined, "req_ok_1"),
@@ -502,7 +502,7 @@ describe("invoke", () => {
 
   it("writes a batch once the pending request count reaches the threshold", async () => {
     const service = makeService({ usageFlushCount: 3 });
-    service.register(CODEX, ROUTE_DEFINITION);
+    await service.register(CODEX, ROUTE_DEFINITION);
     for (const ticket of ["a", "b"]) await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket } });
     expect(usageBatches).toBe(0);
     await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "c" } });
@@ -512,9 +512,9 @@ describe("invoke", () => {
   });
 });
 
-it("stores no key material in the registry rows", () => {
+it("stores no key material in the registry rows", async () => {
   const service = makeService();
-  service.register(CODEX, ROUTE_DEFINITION);
+  await service.register(CODEX, ROUTE_DEFINITION);
   const rows = JSON.stringify(db.raw.prepare("SELECT * FROM openai_decision_versions").all());
   expect(rows).not.toContain(TEST_KEY);
   expect(rows).not.toMatch(/api_?key|authorization/i);

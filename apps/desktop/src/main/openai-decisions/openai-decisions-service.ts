@@ -14,6 +14,7 @@ import {
   validateOpenAIDecisionInput,
   type OpenAIDecisionQuestion,
   type OpenAIDecisionsPrice,
+  type RegisteredDecisionProvider,
   type OpenAIDecisionsUsage,
 } from "@pwragent/shared/openai-decisions";
 import {
@@ -25,6 +26,8 @@ import {
 } from "../storage/openai-decision-store";
 import { codexModelProviderAccountKey } from "../usage-account-identity";
 import { OpenAIDecisionsUsageBatcher } from "./openai-decisions-usage-batcher";
+import type { SystemOneTarget } from "../decision/system-one";
+import { buildSystemOneDecisionRequest, postSystemOneDecision } from "./system-one-decisions";
 import {
   postOpenAIDecision,
   type OpenAIDecisionsAttempt,
@@ -65,6 +68,13 @@ export type OpenAIDecisionsServiceOptions = {
   store: OpenAIDecisionRegistryStorage;
   /** Reads `openaiDecisionsApiKey`. Called only after local validation passes. */
   readApiKey: () => Promise<string | undefined>;
+  /**
+   * The saved Jev or local decision model: endpoint, model and key. Read per
+   * request, after validation. Undefined when that provider cannot run.
+   */
+  readSystemOneTarget?: (provider: "jev" | "local") => Promise<SystemOneTarget | undefined>;
+  /** The provider for a registration that names none. Defaults to openai. */
+  resolveDefaultProvider?: () => Promise<RegisteredDecisionProvider>;
   readAccountSettings: () => { organizationId?: string; projectId?: string };
   profileId: () => string;
   /** Writes a batch of summed usage lines in one transaction. */
@@ -119,13 +129,16 @@ export class OpenAIDecisionsService {
     await this.usage.close();
   }
 
-  register(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
+  async register(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
     const parsed = parseOpenAIDecisionRegistration(args);
     if (!parsed.ok) throw new OpenAIDecisionsError("invalid_definition", parsed.message);
     const definition = parsed.value;
     if (this.options.store.findActiveByName(definition.name, caller).length > 0) {
       throw nameTaken(definition.name);
     }
+    const provider = definition.provider
+      ?? await this.options.resolveDefaultProvider?.()
+      ?? "openai";
     const decisionId = (this.options.newDecisionId ?? randomUUID)();
     const record: OpenAIDecisionVersionRecord = {
       decisionId,
@@ -135,6 +148,7 @@ export class OpenAIDecisionsService {
       ownerBackend: caller.backend,
       ...(definition.scope === "thread" ? { ownerThreadId: caller.threadId } : {}),
       status: "active",
+      provider,
       questions: definition.questions,
       ...(definition.prefix !== undefined ? { prefix: definition.prefix } : {}),
       inputSchema: definition.inputSchema,
@@ -153,6 +167,7 @@ export class OpenAIDecisionsService {
       name: record.name,
       version: 1,
       scope: record.scope,
+      provider,
       inputSchema: record.inputSchema,
       questions: record.questions,
     };
@@ -174,6 +189,7 @@ export class OpenAIDecisionsService {
         name: record.name,
         version: record.version,
         scope: record.scope,
+        provider: record.provider,
         questions: record.questions.map((question) => summarizeQuestion(question, includeInstructions)),
         inputSchema: record.inputSchema,
         hasPrefix: record.prefix !== undefined,
@@ -201,6 +217,7 @@ export class OpenAIDecisionsService {
       ...current,
       version,
       status: "active",
+      provider: definition.provider ?? current.provider,
       questions: definition.questions,
       inputSchema: definition.inputSchema,
       promptCacheKey: promptCacheKey(current.decisionId, version, definition.questions, definition.prefix),
@@ -223,6 +240,7 @@ export class OpenAIDecisionsService {
       name: record.name,
       version,
       scope: record.scope,
+      provider: record.provider,
       inputSchema: record.inputSchema,
     };
   }
@@ -263,6 +281,20 @@ export class OpenAIDecisionsService {
     }
     const input = validateOpenAIDecisionInput(record.inputSchema, args.input);
     if (!input.ok) throw new OpenAIDecisionsError("invalid_input", input.message);
+    if (record.provider !== "openai") {
+      const provider = record.provider;
+      const target = await this.options.readSystemOneTarget?.(provider);
+      if (!target) {
+        throw new OpenAIDecisionsError(
+          "credential_missing",
+          provider === "jev"
+            ? "No TypeSafe Jev API key is saved. Add one in Settings → AI Providers → TypeSafe Jev."
+            : "The local decision model is not set up. Configure it in Settings → AI Providers → Local decision model.",
+        );
+      }
+      return await this.inLane(record.decisionId, signal, async () =>
+        await this.postSystemOne(record, provider, target, input.value, signal));
+    }
     const apiKey = (await this.options.readApiKey())?.trim();
     if (!apiKey) {
       throw new OpenAIDecisionsError(
@@ -348,10 +380,55 @@ export class OpenAIDecisionsService {
       decisionId: record.decisionId,
       name: record.name,
       version: record.version,
+      provider: "openai" as const,
       model: typeof result.body.model === "string" ? result.body.model : undefined,
       ...(result.requestId ? { requestId: result.requestId } : {}),
       response,
       usage: usageSummary(usage, price),
+    };
+  }
+
+  private async postSystemOne(
+    record: OpenAIDecisionVersionRecord,
+    provider: "jev" | "local",
+    target: SystemOneTarget,
+    input: unknown,
+    signal: AbortSignal | undefined,
+  ) {
+    const request = buildSystemOneDecisionRequest({
+      questions: record.questions,
+      prefix: record.prefix,
+      input,
+    });
+    const result = await postSystemOneDecision({
+      target,
+      request,
+      questions: record.questions,
+      ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+      ...(this.options.timeoutMs ? { timeoutMs: this.options.timeoutMs } : {}),
+      ...(signal ? { signal } : {}),
+    });
+    this.options.log?.[result.ok ? "info" : "warn"]("decision request finished", {
+      ...logFields(record),
+      ...(result.ok ? {} : { code: result.code, status: result.status }),
+    });
+    if (!result.ok) {
+      const statusNote = result.status ? ` HTTP ${result.status}.` : "";
+      throw new OpenAIDecisionsError(
+        result.code,
+        `${result.code}:${statusNote}${result.detail ? ` ${result.detail}` : ""}`.trim(),
+        result.status ? { status: result.status } : undefined,
+      );
+    }
+    return {
+      decisionId: record.decisionId,
+      name: record.name,
+      version: record.version,
+      provider,
+      model: result.model ?? target.model,
+      answers: result.answers,
+      // System One reports no token usage, so PwrAgent records no spend line.
+      usage: { priceStatus: "unavailable", priceUnavailableReason: "the provider reports no token usage" },
     };
   }
 
@@ -564,7 +641,7 @@ function sha256Hex(text: string): string {
 }
 
 function logFields(record: OpenAIDecisionVersionRecord): Record<string, unknown> {
-  return { decisionId: record.decisionId, version: record.version, scope: record.scope };
+  return { decisionId: record.decisionId, version: record.version, scope: record.scope, provider: record.provider };
 }
 
 function usageLogFields(usage: OpenAIDecisionsUsage | undefined): Record<string, unknown> {

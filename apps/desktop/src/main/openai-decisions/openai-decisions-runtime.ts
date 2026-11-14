@@ -1,4 +1,9 @@
 import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import {
+  readSystemOneTarget,
+  resolveDefaultDecisionProvider,
+  type DecisionSettingsReader,
+} from "./decision-provider-targets";
 import type { PwrAgentOpenAIDecisionsHandler } from "../agent-tools/pwragent-openai-decisions-agent-tools";
 import { getMainLogger } from "../log";
 import { resolveActiveProfileName } from "../profile";
@@ -24,8 +29,7 @@ export async function flushOpenAIDecisionsUsage(): Promise<void> {
  * validation; nothing here holds it.
  */
 export function createOpenAIDecisionsAgentToolsHandler(params: {
-  settings: {
-    resolveOpenAIDecisionsApiKey: () => Promise<string | undefined>;
+  settings: DecisionSettingsReader & {
     resolveOpenAIDecisionsSettings: () => { organizationId?: string; projectId?: string };
   };
   recordUsageLines: (lines: ThreadUsageLineRecord[]) => Promise<void>;
@@ -47,6 +51,8 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     },
     readApiKey: async () => await params.settings.resolveOpenAIDecisionsApiKey(),
     readAccountSettings: () => params.settings.resolveOpenAIDecisionsSettings(),
+    readSystemOneTarget: async (provider) => await readSystemOneTarget(params.settings, provider),
+    resolveDefaultProvider: async () => await resolveDefaultDecisionProvider(params.settings),
     profileId: () => resolveActiveProfileName(),
     recordUsageLines: params.recordUsageLines,
     log: {

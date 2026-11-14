@@ -1,7 +1,9 @@
-import type {
-  OpenAIDecisionInputSchema,
-  OpenAIDecisionQuestion,
-  OpenAIDecisionScope,
+import {
+  isRegisteredDecisionProvider,
+  type OpenAIDecisionInputSchema,
+  type OpenAIDecisionQuestion,
+  type OpenAIDecisionScope,
+  type RegisteredDecisionProvider,
 } from "@pwragent/shared/openai-decisions";
 import type { StateDb } from "./state-db.js";
 
@@ -16,6 +18,7 @@ export type OpenAIDecisionVersionRecord = {
   /** Required for thread scope; undefined for profile scope. */
   ownerThreadId?: string;
   status: OpenAIDecisionVersionStatus;
+  provider: RegisteredDecisionProvider;
   questions: OpenAIDecisionQuestion[];
   prefix?: string;
   inputSchema: OpenAIDecisionInputSchema;
@@ -64,6 +67,7 @@ type Row = {
   owner_backend: string;
   owner_thread_id: string | null;
   status: OpenAIDecisionVersionStatus;
+  provider: string;
   questions_json: string;
   prefix_text: string | null;
   input_schema_json: string;
@@ -170,9 +174,9 @@ export class OpenAIDecisionStore implements OpenAIDecisionRegistryStorage {
   private insertRow(record: OpenAIDecisionVersionRecord): void {
     this.stateDb.raw.prepare(
       `INSERT INTO openai_decision_versions (
-        decision_id, version, name, scope, owner_backend, owner_thread_id, status,
+        decision_id, version, name, scope, owner_backend, owner_thread_id, status, provider,
         questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       record.decisionId,
       record.version,
@@ -181,6 +185,7 @@ export class OpenAIDecisionStore implements OpenAIDecisionRegistryStorage {
       record.ownerBackend,
       record.scope === "thread" ? record.ownerThreadId ?? null : null,
       record.status,
+      record.provider,
       JSON.stringify(record.questions),
       record.prefix ?? null,
       JSON.stringify(record.inputSchema),
@@ -206,6 +211,7 @@ function fromRow(row: Row): OpenAIDecisionVersionRecord {
     ownerBackend: row.owner_backend,
     ...(row.owner_thread_id ? { ownerThreadId: row.owner_thread_id } : {}),
     status: row.status,
+    provider: isRegisteredDecisionProvider(row.provider) ? row.provider : "openai",
     questions: JSON.parse(row.questions_json) as OpenAIDecisionQuestion[],
     ...(row.prefix_text !== null ? { prefix: row.prefix_text } : {}),
     inputSchema: JSON.parse(row.input_schema_json) as OpenAIDecisionInputSchema,

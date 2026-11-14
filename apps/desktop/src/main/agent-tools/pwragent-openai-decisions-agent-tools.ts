@@ -107,8 +107,9 @@ function isCodedError(error: unknown): error is CodedError {
 
 const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
   decisions_register: [
-    "Register a reusable decision that PwrAgent runs on the OpenAI Decisions API with gpt-6-luna.",
-    "It does not use the Clef or TypeSafe Jev decision model.",
+    "Register a reusable decision that a decision model answers with probabilities instead of text.",
+    "provider picks the model: openai (OpenAI Decisions, gpt-6-luna), jev (TypeSafe Jev), or local (a decision model on this Mac).",
+    "Omit provider to use the one the operator set up.",
     "Give one predicate, choice, or score question, or up to 16 questions.",
     "Add an input JSON Schema and an optional shared prefix.",
     "Registration is stored locally and makes no API call.",
@@ -120,20 +121,20 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
   ].join(" "),
   decisions_list: [
     "List registered OpenAI decisions visible to this thread.",
-    "Each entry has its id, name, version, scope, questions, choice values or score labels, and input schema.",
+    "Each entry has its id, name, version, scope, provider, questions, choice values or score labels, and input schema.",
     "Instructions and prefixes appear only with includeInstructions.",
   ].join(" "),
   decisions_invoke: [
     "Run a registered decision on new input.",
     "Input is checked against the stored schema before any request.",
-    "Returns every answer, the OpenAI request id, and token usage with an estimated API price.",
+    "Returns every answer, and for OpenAI the request id and token usage with an estimated API price.",
     "A refusal for one question is still a success.",
-    "Calls bill the operator's OpenAI API project, not a ChatGPT or Codex subscription.",
+    "OpenAI calls bill the operator's API project, and Jev calls bill their TypeSafe account.",
     "Pass version to pin an older stored version. Omit it for the latest.",
     "Call decisions_list first to find names and schemas.",
   ].join(" "),
   decisions_update: [
-    "Replace a registered decision's questions, schema, or prefix.",
+    "Replace a registered decision's questions, schema, prefix, or provider.",
     "Takes the decisions_register arguments plus an optional decisionId.",
     "Stores a new version and makes it the default.",
     "Older versions stay invokable by pinned version until the decision is deleted.",
@@ -207,6 +208,11 @@ const QUESTION_SCHEMA = {
 
 const DEFINITION_PROPERTIES = {
   name: NAME_SCHEMA,
+  provider: {
+    type: "string",
+    enum: ["openai", "jev", "local"],
+    description: "Which decision model runs it. Omit to use the one the operator set up.",
+  },
   scope: { type: "string", enum: ["profile", "thread"] },
   instructions: {
     type: "string",

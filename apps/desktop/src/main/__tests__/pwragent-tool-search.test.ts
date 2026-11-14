@@ -110,6 +110,7 @@ describe("PwrAgent tool discovery", () => {
     expect(names("register a decision model prompt that evaluates jokes")[0]).toBe("decisions_register");
     expect(names("run a decision classifier on new input")).toContain("decisions_invoke");
     expect(names("list registered decisions")[0]).toBe("decisions_list");
+    expect(names("register a Jev decision")[0]).toBe("decisions_register");
   });
 
   it("returns every exact tool name in a query regardless of limit", () => {

@@ -76,9 +76,9 @@ const SEARCH_ALIASES: Record<string, string> = {
   send_messaging_file: "telegram discord slack line lark feishu mattermost send attachment file",
   // Registered OpenAI Decisions. People ask for "a decision model", "a
   // classifier" or "a rubric", in the singular, rather than for the tool names.
-  decisions_register: "decision decisions decide model prompt rubric classifier classify judge evaluate evaluator grade score predicate choice create define save reusable",
+  decisions_register: "decision decisions decide model prompt rubric classifier classify judge evaluate evaluator grade score predicate choice create define save reusable jev typesafe clef local openai",
   decisions_list: "decision decisions registered existing available show prompts models",
-  decisions_invoke: "decision decisions decide run evaluate classify classifier judge grade score answer test new input",
+  decisions_invoke: "decision decisions decide run evaluate classify classifier judge grade score answer test new input jev typesafe clef",
   decisions_update: "decision decisions edit change revise rubric prompt version",
   decisions_delete: "decision decisions remove retire",
 };

@@ -52,7 +52,7 @@ export function OpenAIDecisionsScreen(props: {
       <SettingsPanelHead
         eyebrow="AI Providers"
         title="OpenAI Decisions"
-        help="Agents in any thread can register a decision once and run it again on new evidence. PwrAgent sends each run to OpenAI's Decisions API with gpt-6-luna. This is separate from the Decisions setting, which picks Clef or Jev for live voice."
+        help="Agents in any thread can register a decision once and run it again on new evidence. A decision registered for OpenAI runs on its Decisions API with gpt-6-luna. Agents can also register decisions for TypeSafe Jev or the local decision model, which use their own settings."
       />
       <SettingsSection
         title="Connection"

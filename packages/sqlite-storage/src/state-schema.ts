@@ -85,6 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_thread_sandboxes_pending
  * by pinned version until the decision is `deleted`. No secret column and no
  * raw HTTP response body.
  *
+ * `provider` names the decision model that runs it: openai, jev or local.
+ *
  * Active names are unique per scope: per owning thread for `thread`, per
  * profile for `profile` (whatever backend registered it). Written once per
  * register, update or delete tool call; never per turn, event, or timer.
@@ -98,6 +100,7 @@ CREATE TABLE IF NOT EXISTS openai_decision_versions (
   owner_backend     TEXT NOT NULL,
   owner_thread_id   TEXT,
   status            TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'deleted')),
+  provider          TEXT NOT NULL DEFAULT 'openai',
   questions_json    TEXT NOT NULL,
   prefix_text       TEXT,
   input_schema_json TEXT NOT NULL,

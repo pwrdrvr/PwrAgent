@@ -87,7 +87,21 @@ export type OpenAIDecisionDefinition = {
   prefix?: string;
 };
 
+/**
+ * Which decision model runs a registered decision. `openai` is OpenAI's
+ * Decisions API; `jev` (TypeSafe's hosted model) and `local` (a decision
+ * model on this Mac, such as Clef) speak TypeSafe's System One API.
+ */
+export const REGISTERED_DECISION_PROVIDERS = ["openai", "jev", "local"] as const;
+export type RegisteredDecisionProvider = (typeof REGISTERED_DECISION_PROVIDERS)[number];
+
+export function isRegisteredDecisionProvider(value: unknown): value is RegisteredDecisionProvider {
+  return typeof value === "string" && (REGISTERED_DECISION_PROVIDERS as readonly string[]).includes(value);
+}
+
 export type OpenAIDecisionRegistration = OpenAIDecisionDefinition & {
+  /** Absent: the service picks one from what the operator configured. */
+  provider?: RegisteredDecisionProvider;
   name: string;
   scope: OpenAIDecisionScope;
 };
@@ -126,6 +140,7 @@ export function findCredentialProperty(value: unknown, depth = 0): string | unde
 }
 
 const REGISTRATION_KEYS = new Set([
+  "provider",
   "name",
   "scope",
   "instructions",
@@ -161,6 +176,9 @@ export function parseOpenAIDecisionRegistration(
       ok: false,
       message: "name must match ^[a-z][a-z0-9_]{0,63}$.",
     };
+  }
+  if (args.provider !== undefined && !isRegisteredDecisionProvider(args.provider)) {
+    return { ok: false, message: "provider must be openai, jev or local." };
   }
   const scope = args.scope ?? "profile";
   if (scope !== "profile" && scope !== "thread") {
@@ -232,6 +250,7 @@ export function parseOpenAIDecisionRegistration(
     value: {
       name: args.name,
       scope,
+      ...(args.provider !== undefined ? { provider: args.provider as RegisteredDecisionProvider } : {}),
       questions,
       inputSchema: schema.value,
       ...(prefix !== undefined ? { prefix } : {}),
