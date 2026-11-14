@@ -125,7 +125,8 @@ describe("syncCodexProfileProviderConfig", () => {
     expect(created).toMatchObject({ changed: true, written: ["mathos"] });
     const configPath = path.join(home, "config.toml");
     expect(readFileSync(configPath, "utf8")).toContain("[model_providers.mathos]");
-    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX permission bits to check.
+    if (process.platform !== "win32") expect(statSync(configPath).mode & 0o777).toBe(0o600);
 
     writeFileSync(configPath, `model = "gpt-6-sol"\n${readFileSync(configPath, "utf8")}`);
     chmodSync(configPath, 0o644);
@@ -133,7 +134,7 @@ describe("syncCodexProfileProviderConfig", () => {
       .toMatchObject({ changed: false });
     await syncCodexProfileProviderConfig({ codexHome: home, profileRoot, providers: [], providerIdsWithKeys: new Set() });
     expect(readFileSync(configPath, "utf8")).toBe("model = \"gpt-6-sol\"\n");
-    expect(statSync(configPath).mode & 0o777).toBe(0o644);
+    if (process.platform !== "win32") expect(statSync(configPath).mode & 0o777).toBe(0o644);
 
     const shared = path.join(root, ".codex");
     expect(await syncCodexProfileProviderConfig({ codexHome: shared, profileRoot, providers: mathos, providerIdsWithKeys: new Set() }))

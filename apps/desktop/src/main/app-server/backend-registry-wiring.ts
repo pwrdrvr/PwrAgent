@@ -1190,10 +1190,21 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   // too. The shared `~/.codex` home is never edited. Writes are serialized.
   let codexProfileProviderSync = Promise.resolve();
   const syncCodexProfileProviders = (): void => {
-    const codexHome = settingsService?.resolveStartupCodexHome?.();
-    const profileRoot = typeof settingsService?.readCodexProfiles === "function"
-      ? settingsService.readCodexProfiles().profileRoot
-      : undefined;
+    // Best effort: a settings service that cannot say which home it runs on
+    // (or a partial one) means there is nothing to write, never a failure.
+    let codexHome: string | undefined;
+    let profileRoot: string | undefined;
+    try {
+      codexHome = settingsService?.resolveStartupCodexHome?.();
+      profileRoot = typeof settingsService?.readCodexProfiles === "function"
+        ? settingsService.readCodexProfiles()?.profileRoot
+        : undefined;
+    } catch (error) {
+      backendRegistryLog.warn("Codex profile home unavailable for model providers", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     if (!codexHome || !profileRoot) return;
     codexProfileProviderSync = codexProfileProviderSync.then(async () => {
       const keys = await ports.resolveCodexModelProviderKeysFn().catch((): Record<string, string> => ({}));
