@@ -9,6 +9,7 @@ import {
   type CheckFederationTargetProject,
   type FederationProjectDirectory,
 } from "../chrome/useFederationProjectStates";
+import { projectCrumbFit } from "./project-crumb-fit";
 
 /** The card's `max-width` in app.css, kept clear of the window's right edge. */
 const MENU_MAX_WIDTH = 320;
@@ -96,7 +97,10 @@ export function ThreadHeaderProjectCrumb(props: {
     <>
       {/* The span keeps the eyebrow's cap-height trim and baseline, as the
           title's h2 does for its button. */}
-      <span className="thread-header__eyebrow thread-header__eyebrow--link">
+      <span
+        className="thread-header__eyebrow thread-header__eyebrow--link"
+        data-fit={projectCrumbFit(label)}
+      >
         <button
           type="button"
           className="thread-header__project-button tooltip-target"
