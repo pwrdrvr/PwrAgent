@@ -17858,7 +17858,7 @@ describe("CodexAppServerClient", () => {
       const { extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
       const replay = extractThreadReplayFromReadResult(turnEndingBlock.threadRead);
       expect(blockEntries(replay.entries)).toEqual([expect.objectContaining({
-        id: `response-block-turn-${turnId}`,
+        id: `response-block-${turnId}`,
         summary: "Blocked by content filter: The model provider's content filter blocked the response, and the turn ended.",
         turn: expect.objectContaining({ id: turnId, status: "failed" }),
       })]);

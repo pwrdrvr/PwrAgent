@@ -1461,21 +1461,17 @@ function normalizeFailedTurnCompletedNotification(
 
 /**
  * Codex reports a provider's content filter as a stream error: on a retry the
- * message is "Reconnecting... n/N", which reads as a network fault. Tag it so
- * every consumer can name the block instead.
+ * message is "Reconnecting... n/N", which reads as a network fault. Returns the
+ * error tagged with the block so every consumer can name it instead.
  */
-function normalizeProviderBlockedErrorNotification(
+function tagProviderBlockedError(
   method: string,
   record: Record<string, unknown>,
-): AppServerNotification | undefined {
+): Record<string, unknown> | undefined {
   if (method !== "error") return undefined;
   const error = asRecord(record.error);
   const block = detectProviderResponseBlock(error);
-  if (!error || !block) return undefined;
-  return {
-    method: "error",
-    params: { ...record, error: { ...error, block } },
-  } as AppServerNotification;
+  return error && block ? { ...error, block } : undefined;
 }
 
 type LiveAgentMessagePhase = {
@@ -1544,10 +1540,6 @@ function normalizeServerNotification(
   if (failedTurn) {
     return failedTurn;
   }
-  const blockedError = normalizeProviderBlockedErrorNotification(method, record);
-  if (blockedError) {
-    return blockedError;
-  }
 
   const itemRecord = asRecord(record.item);
   const normalizedItem =
@@ -1577,12 +1569,14 @@ function normalizeServerNotification(
     method === "configWarning"
       ? extractConfigWarningMetadata(record)
       : undefined;
+  const blockedError = tagProviderBlockedError(method, record);
 
   return {
     method: method as AppServerNotification["method"],
     params: {
       ...record,
       ...(configWarningMetadata ?? {}),
+      ...(blockedError ? { error: blockedError } : {}),
       ...(normalizedItem ? {
         item: normalizedItem.type === "agentMessage" && phase
           ? { ...normalizedItem, phase }

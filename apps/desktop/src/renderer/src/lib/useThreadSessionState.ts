@@ -46,7 +46,12 @@ import type {
   MessagingConversationKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { isAppServerBackendKind, isCelestialIconId, threadTodoMessageOriginFromUnknown } from "@pwragent/shared";
+import {
+  isAppServerBackendKind,
+  isCelestialIconId,
+  isProviderResponseBlockEntry,
+  threadTodoMessageOriginFromUnknown,
+} from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { isPendingEntryId } from "./pending-entry-id";
@@ -1860,6 +1865,12 @@ function pruneOptimisticEntries(
     if (entry.type === "activity") {
       if (entry.id.startsWith("live-tools-") && entry.details.length === 0) {
         return false;
+      }
+      // Replay has a block entry only for a turn the block ended. A block
+      // Codex recovered from has no protocol record, so the turn moving out
+      // of the latest position must not drop it; only its replay twin does.
+      if (isProviderResponseBlockEntry(entry)) {
+        return !hasMatchingReplayActivity(response.replay.entries, entry);
       }
       // Both inferences below read the response as a snapshot taken after
       // this row. A row observed after its read was issued cannot be in that

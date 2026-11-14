@@ -3645,6 +3645,8 @@ export function ThreadView(props: ThreadViewProps) {
         const blockEntry = buildProviderResponseBlockEntry({
           block: responseBlock.block,
           turnEnded: responseBlock.turnEnded,
+          // Codex's id, which the replay entry uses, not the client's.
+          ...(responseBlock.turnId ? { turnId: responseBlock.turnId } : {}),
           turn: buildLiveTurnMetadata({
             turnId: liveNotificationTurnId(responseBlock.turnId),
             activeTurnStartedAt: props.activeTurnStartedAt,

@@ -66,7 +66,7 @@ describe("detectProviderResponseBlock", () => {
     }));
   });
 
-  it("gives a turn-ending error and its turn/failed one entry, apart from a recovered block", () => {
+  it("gives a turn one block entry, which a turn-ending block replaces", () => {
     fc.assert(fc.property(
       fc.stringMatching(/^[0-9a-f-]{8,36}$/),
       errorArb.filter(({ reason }) => reason === "content_filter"),
@@ -86,9 +86,14 @@ describe("detectProviderResponseBlock", () => {
         expect(final?.turnEnded).toBe(true);
         expect(failed?.turnEnded).toBe(true);
         expect(retry?.turnEnded).toBe(false);
-        const id = (signal: typeof final) => buildProviderResponseBlockEntry({ ...signal!, turnId })?.id;
-        expect(id(final)).toBe(id(failed));
-        expect(id(retry)).not.toBe(id(final));
+        // The client's own turn id may differ; the provider's id wins so the
+        // live entry matches the replay entry.
+        const turn = { id: `client-${turnId}` };
+        const entry = (signal: typeof final) =>
+          buildProviderResponseBlockEntry({ ...signal!, turnId, turn });
+        expect(new Set([retry, final, failed].map((signal) => entry(signal)?.id)))
+          .toEqual(new Set([buildProviderResponseBlockEntry({ ...failed!, turn: { id: turnId } })?.id]));
+        expect(entry(failed)?.summary).toMatch(/turn ended/);
       },
     ));
   });
