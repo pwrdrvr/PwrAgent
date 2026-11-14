@@ -11,7 +11,9 @@ export function isPathWithin(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return (
     relative.length > 0
-    && !relative.startsWith("..")
+    && relative !== ".."
+    // A descendant may be named `..cache`; only `../` leaves the root.
+    && !relative.startsWith(`..${path.sep}`)
     && !path.isAbsolute(relative)
   );
 }

@@ -914,6 +914,9 @@ export class AcpAgentClient {
     };
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
+    // An update that arrived before session/new answered made the session's
+    // normalizer without a workspace.
+    this.normalizers.get(appSessionId)?.setWorkspace(cwd);
     this.loadedSessionCwds.set(sessionId, cwd);
     this.touchSession(appSessionId);
     if (params.sessionMeta || params.mcpServers === "none") {

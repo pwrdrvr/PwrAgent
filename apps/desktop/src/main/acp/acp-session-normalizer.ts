@@ -318,7 +318,23 @@ export class AcpSessionReplayNormalizer {
   private openCompactionId?: string;
   private readonly subAgents = new Map<string, AcpSubAgentState>();
 
-  constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {}
+  /** How this session's edits are read; the workspace can arrive later. */
+  private fileEditOptions: ReadAcpFileEditOptions;
+
+  constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {
+    this.fileEditOptions = {
+      wholeFileDiffContent: options.wholeFileDiffContent,
+      cwd: options.cwd,
+    };
+  }
+
+  /**
+   * Names later edits relative to the session's workspace. A live session can
+   * receive updates before its metadata, and with it the workspace, is stored.
+   */
+  setWorkspace(cwd: string): void {
+    this.fileEditOptions = { ...this.fileEditOptions, cwd };
+  }
 
   recordUserPrompt(params: {
     sessionId: string;
@@ -833,10 +849,7 @@ export class AcpSessionReplayNormalizer {
         createdAt,
         providerTool,
         fileRead,
-        {
-          wholeFileDiffContent: this.options.wholeFileDiffContent,
-          cwd: this.options.cwd,
-        },
+        this.fileEditOptions,
       ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
