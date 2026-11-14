@@ -6344,9 +6344,8 @@ function isRequestTimeoutError(error: unknown, method: string): boolean {
   return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
 }
 
-function extractThreadsFromValue(value: unknown, textCache: ThreadListTextCache): RawCodexThreadSummary[] {
+function* threadSummariesFromValue(value: unknown, textCache: ThreadListTextCache): Generator<RawCodexThreadSummary> {
   const items = extractThreadRecords(value);
-  const summaries = new Map<string, RawCodexThreadSummary>();
 
   for (const record of items) {
     const threadId =
@@ -6415,7 +6414,7 @@ function extractThreadsFromValue(value: unknown, textCache: ThreadListTextCache)
     });
     const threadStatus = readThreadStatus(record);
 
-    summaries.set(threadId, {
+    yield {
       id: threadId,
       ...text,
       ...(threadStatus ? { threadStatus } : {}),
@@ -6459,12 +6458,18 @@ function extractThreadsFromValue(value: unknown, textCache: ThreadListTextCache)
       ]),
       codexThreadSourceKind,
       codexNativeSubAgent,
-    });
+    };
   }
+}
 
-  return [...summaries.values()].sort(
+function sortThreadSummaries(summaries: Iterable<RawCodexThreadSummary>): RawCodexThreadSummary[] {
+  return [...new Map([...summaries].map((thread) => [thread.id, thread])).values()].sort(
     (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
   );
+}
+
+function extractThreadsFromValue(value: unknown, textCache: ThreadListTextCache): RawCodexThreadSummary[] {
+  return sortThreadSummaries(threadSummariesFromValue(value, textCache));
 }
 
 function extractThreadListPage(value: unknown, textCache: ThreadListTextCache): RawCodexThreadListPage {
@@ -9898,6 +9903,9 @@ export class CodexAppServerClient {
     cursor?: string;
     limit: number;
     checkpoint: () => Promise<void>;
+    /** Candidate discovery also bounds title/preview normalization, even
+     * when it deliberately defers all Git discovery to the coordinator. */
+    rowCheckpoint?: () => Promise<void>;
     directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
     /** Admission still reads every identity; only disjoint Git probes skip. */
     directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
@@ -9924,7 +9932,23 @@ export class CodexAppServerClient {
       } satisfies CodexThreadListParams],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
-    const page = extractThreadListPage(result, this.threadListTextCache);
+    let page: RawCodexThreadListPage;
+    if (params.rowCheckpoint) {
+      if (extractThreadRecords(result).length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
+      const summaries: RawCodexThreadSummary[] = [];
+      const iterator = threadSummariesFromValue(result, this.threadListTextCache);
+      while (true) {
+        await params.rowCheckpoint();
+        const next = iterator.next();
+        if (next.done) break;
+        summaries.push(next.value);
+      }
+      const record = asRecord(result);
+      page = { threads: sortThreadSummaries(summaries),
+        nextCursor: record ? pickString(record, ["nextCursor", "next_cursor", "after"]) : undefined };
+    } else {
+      page = extractThreadListPage(result, this.threadListTextCache);
+    }
     if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
     // Native code-review children inherit their parent's cwd and have no
     // independent checkout to restore, even after retirement. Completed
@@ -9941,6 +9965,7 @@ export class CodexAppServerClient {
       concurrency: 1,
       directoryObservations: params.directoryObservations,
       directoryFilter: params.directoryFilter,
+      rowCheckpoint: params.rowCheckpoint,
     });
     return { threads: hydrateMissingLinkedDirectoriesFromSiblingRepos(threads), nextCursor: page.nextCursor };
   }
@@ -9994,6 +10019,7 @@ export class CodexAppServerClient {
       checkpoint: () => Promise<void>; strict: boolean; concurrency: number;
       directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
       directoryFilter?: (cwd: string | undefined) => Promise<boolean>;
+      rowCheckpoint?: () => Promise<void>;
     },
   ): Promise<EnrichedCodexThread[]> {
     const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
@@ -10009,6 +10035,7 @@ export class CodexAppServerClient {
         index: number;
         thread: EnrichedCodexThread;
       }> => {
+        await background?.rowCheckpoint?.();
         const projectKey = await resolveThreadProjectKey(thread);
         let enrichment: ThreadDirectoryEnrichment;
         try {

@@ -1,0 +1,5 @@
+{
+  "cold-200": { "identities": 200, "providerPages": 2, "canonicalObservations": 3, "childProcesses": 0, "sqlReads": 34 },
+  "unchanged-200": { "identities": 200, "providerPages": 2, "canonicalObservations": 3, "childProcesses": 0, "sqlReads": 33 },
+  "double-400": { "identities": 400, "providerPages": 4, "canonicalObservations": 3, "childProcesses": 0, "sqlReads": 65 }
+}

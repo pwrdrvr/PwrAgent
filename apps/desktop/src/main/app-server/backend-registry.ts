@@ -1073,6 +1073,7 @@ export class DesktopBackendRegistry {
   // first sighting of a given cwd. Injectable for deterministic tests.
   private readonly acpWorktreeRepositoryResolver: (
     cwd: string,
+    options?: { fresh?: boolean },
   ) => Promise<LinkedDirectorySummary | undefined>;
   // Launchpad drafts have no ACP session to ask for `availableCommands`, so the
   // repo's last-observed list is cached here and replayed for them. See
