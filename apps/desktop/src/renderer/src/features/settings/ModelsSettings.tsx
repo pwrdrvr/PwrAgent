@@ -16,6 +16,7 @@ import type {
   DesktopCodexDiscoveryCandidate,
   DesktopHelperModelSettings,
   DesktopDecisionModelSettings,
+  DesktopOpenAIDecisionsSettings,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
@@ -96,6 +97,11 @@ import {
   DecisionProviderScreen,
   decisionSecrets,
 } from "./DecisionModelSettings";
+import {
+  OPENAI_DECISIONS_FOCUS,
+  OpenAIDecisionsScreen,
+  openAIDecisionsKeyState,
+} from "./OpenAIDecisionsSettings";
 import {
   commandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure,
@@ -184,6 +190,8 @@ export function ModelsSettings(props: {
   onSaveCodexModelProviders?: (providers: CodexModelProviderSettings[]) => Promise<boolean>;
   /** Persist Defaults → Decisions and the decision provider screens. */
   onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
+  /** Persist AI Providers → OpenAI Decisions account ids. */
+  onSaveOpenAIDecisions?: (settings: DesktopOpenAIDecisionsSettings) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
   /** Persist which pwrdrvr/codex track the managed runtime follows. */
@@ -672,6 +680,18 @@ export function ModelsSettings(props: {
     );
   }
 
+  if (props.focus === OPENAI_DECISIONS_FOCUS) {
+    return (
+      <OpenAIDecisionsScreen
+        snapshot={props.snapshot}
+        saving={props.saving}
+        onSave={async (settings) => await props.onSaveOpenAIDecisions?.(settings)}
+        onClearSecret={props.onClearSecret}
+        onReplaceSecret={props.onReplaceSecret}
+      />
+    );
+  }
+
   if (props.focus === "claude") {
     return (
       <SettingsSectionStack paneId="models-claude" aria-label="Claude provider settings">
@@ -918,6 +938,13 @@ export function ModelsSettings(props: {
               />
             );
           })}
+          <SettingsIndexRow
+            name="OpenAI Decisions"
+            meta="Registered decisions on gpt-6-luna"
+            chip={openAIDecisionsKeyState(props.snapshot).configured ? "Key saved" : "No API key"}
+            chipKind={openAIDecisionsKeyState(props.snapshot).configured ? "ok" : "muted"}
+            onOpen={() => props.onFocusChange?.(OPENAI_DECISIONS_FOCUS)}
+          />
           {orderedAcpEntries.length === 0 ? (
             <p className="settings-empty">
               {acpCatalog.unavailable

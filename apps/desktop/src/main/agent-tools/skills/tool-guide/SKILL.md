@@ -29,6 +29,8 @@ Use get_current_messaging_surface before a messaging action.
 For delegated or completion turns without a live inbound origin, use list_messaging_surfaces and attach_thread_to_surface.
 Prefer the causal recommendation over unrelated newer traffic. Sole-surface selection requires complete discovery.
 Send messages or files only when authorized.
+Use decisions_list, then decisions_invoke, to run a registered OpenAI decision on new evidence.
+decisions_register stores one locally. Each invoke bills the operator's OpenAI API project, so do not run one in a loop.
 Use search_mcp_tools to find tools on selected connections.
 Use call_mcp_tool with the returned identity and schemaRevision.
 Check status before you retry an action that can change state.

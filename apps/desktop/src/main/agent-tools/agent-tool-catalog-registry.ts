@@ -48,6 +48,10 @@ import {
   buildPwrAgentThreadTodoToolRouter,
   type PwrAgentThreadTodoHandler,
 } from "./pwragent-thread-todo-agent-tools.js";
+import {
+  buildPwrAgentOpenAIDecisionsToolRouter,
+  type PwrAgentOpenAIDecisionsHandler,
+} from "./pwragent-openai-decisions-agent-tools.js";
 import { buildPwrAgentToolGuideDefinition } from "./pwragent-tool-guide.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
@@ -80,6 +84,7 @@ export function resolveAgentToolCatalogs(params: {
   tokenMiserFocused?: TokenMiserFocusedSummaries;
   starMapHandler?: PwrAgentStarMapHandler;
   threadTodoHandler?: PwrAgentThreadTodoHandler;
+  openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -134,6 +139,14 @@ export function resolveAgentToolCatalogs(params: {
     params.threadTodoHandler,
   );
   const threadTodoDynamicTools = threadTodoRouter.buildDynamicToolSpecs();
+  // Five fixed tools for every registered decision. A registered decision is
+  // an argument to decisions_invoke, never a tool of its own: Codex fixes its
+  // dynamic tools at thread start, and a per-decision tool would copy its
+  // prompt into every transcript that saw the catalog.
+  const openAIDecisionsRouter = buildPwrAgentOpenAIDecisionsToolRouter(
+    params.openAIDecisionsHandler,
+  );
+  const openAIDecisionsDynamicTools = openAIDecisionsRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -263,6 +276,25 @@ export function resolveAgentToolCatalogs(params: {
           id: "thread_todos",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: threadTodoDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "openai_decisions",
+      dynamicTools: openAIDecisionsDynamicTools,
+      router: openAIDecisionsRouter,
+      summary: {
+        id: "openai_decisions",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: Boolean(params.openAIDecisionsHandler),
+        toolCount: countDynamicTools(openAIDecisionsDynamicTools),
+        ...(!params.openAIDecisionsHandler
+          ? { unavailableReason: "OpenAI Decisions are unavailable in this PwrAgent runtime." }
+          : {}),
+        fingerprint: buildCatalogFingerprint({
+          id: "openai_decisions",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: openAIDecisionsDynamicTools,
         }),
       },
     },

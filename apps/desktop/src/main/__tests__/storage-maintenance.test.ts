@@ -198,6 +198,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     };
     const measured = { deletion: measure(wal), vacuum: measure(vacuumWal) };
     // v82's FTS mapping table/unique index and usage index add three VACUUM pages.
+    // openai_decision_versions, its primary-key index and its active-name index add three more.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

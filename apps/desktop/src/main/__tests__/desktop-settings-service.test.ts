@@ -5995,3 +5995,37 @@ describe("DesktopSettingsService", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);
   });
 });
+
+describe("OpenAI Decisions settings", () => {
+  it("keeps the key in the secret store and shows the renderer only whether one is saved", async () => {
+    const testKey = "sk-test-openai-decisions-settings-0123456789";
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const service = new DesktopSettingsService({
+      configPath, env: {}, secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect((await service.readSettingsProjection()).models.openaiDecisions?.apiKey.configured).toBe(false);
+
+    await service.replaceSecret("openaiDecisionsApiKey", testKey);
+    await service.writeConfigPatchTargeted({
+      models: { openaiDecisions: { organizationId: " org-fixture ", projectId: "proj_fixture" } },
+    });
+    const projection = await service.readSettingsProjection();
+    expect(projection.models.openaiDecisions).toMatchObject({
+      organizationId: "org-fixture",
+      projectId: "proj_fixture",
+      apiKey: { configured: true },
+    });
+    expect(JSON.stringify(projection)).not.toContain(testKey);
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain(testKey);
+    expect(service.resolveOpenAIDecisionsSettings()).toEqual({
+      organizationId: "org-fixture", projectId: "proj_fixture",
+    });
+    await expect(service.resolveOpenAIDecisionsApiKey()).resolves.toBe(testKey);
+    // The Clef / Jev decision settings are untouched.
+    expect(projection.models.decisionSecrets?.jevApiKey.configured).toBe(false);
+
+    await service.writeConfigPatchTargeted({ models: { openaiDecisions: { projectId: "has space" } } });
+    expect(service.resolveOpenAIDecisionsSettings()).toEqual({});
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("organization_id");
+  });
+});

@@ -37,6 +37,7 @@ import { removeRetiredCiArtifactStore } from "./pr-status/forge-artifact-downloa
 import { hadExistingAppStateDatabase, initializeDesktopState } from "./storage/desktop-state-lifecycle";
 import { getDesktopStorageMaintenanceStorage } from "./storage/desktop-storage-maintenance";
 import { getDesktopOverlayStore } from "./storage/desktop-overlay-store";
+import { createOpenAIDecisionsAgentToolsHandler } from "./openai-decisions/openai-decisions-runtime";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type { CreateInstanceThreadResult, PwrAgentFederationContext } from "@pwragent/shared";
 import { createStarMapAgentToolsHandler } from "./star-map/star-map-agent-tools-service";
@@ -420,6 +421,15 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       // It raises the window and replaces the operator's selection; only
       // the Voice manager acts on the operator's spoken request to open one.
       mayOpenThread: (caller) => caller.backend === "codex" && isVoiceManagerThread(caller.threadId),
+    }),
+  );
+  // Registered OpenAI Decisions: five fixed tools over a profile registry.
+  // The key stays in the settings secret store until an invoke needs it.
+  getDesktopBackendRegistry().setPwrAgentOpenAIDecisionsHandler(
+    createOpenAIDecisionsAgentToolsHandler({
+      settings: getDesktopSettingsService(),
+      recordUsageLine: async (line) =>
+        await getDesktopBackendRegistry().recordOpenAIDecisionsUsageLine(line),
     }),
   );
   // Injected rather than owned by the registry: the federation runtime

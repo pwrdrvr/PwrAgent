@@ -17,6 +17,7 @@
     "app.dock?.setMenu",
     "getDesktopBackendRegistry().setPwrAgentAppManagementHandler",
     "getDesktopBackendRegistry().setPwrAgentStarMapHandler",
+    "getDesktopBackendRegistry().setPwrAgentOpenAIDecisionsHandler",
     "getDesktopBackendRegistry().setPwrAgentFederationHandler",
     "getDesktopBackendRegistry().setAgentCreatedThreadObserver",
     "getDesktopBackendRegistry().setStarMapIntakeFederationHandlerFactory",

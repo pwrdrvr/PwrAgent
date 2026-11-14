@@ -145,7 +145,8 @@ function localSettings(local: { endpoint?: string; model?: string }): DesktopDec
 }
 
 /** A text setting saved on Enter or on leaving the box, checked first. */
-function DraftTextField(props: {
+/** A text field that saves on Enter or blur. Escape restores the saved value. */
+export function DraftTextField(props: {
   label: string;
   sub?: ReactNode;
   help?: ReactNode;

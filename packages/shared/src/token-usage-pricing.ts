@@ -110,7 +110,10 @@ export type ThreadUsageLineRecord = {
   provider: string;
   pricingCatalogId?: string;
   pricingCatalogVersion?: string;
-  pricingBasis?: "aggregate" | "request-components" | "provider-reported";
+  // "decisions-output-uncharged": one registered OpenAI Decisions request,
+  // priced from its own rate band with output at $0 (the route does not
+  // charge output). It is already exact for that request; do not re-price it.
+  pricingBasis?: "aggregate" | "request-components" | "provider-reported" | "decisions-output-uncharged";
   pricingRateId?: string;
   reasoningEffort?: string;
   reasoningOutputTokens: number;
@@ -118,7 +121,9 @@ export type ThreadUsageLineRecord = {
   serviceTier?: string;
   settingsConfidence?: ThreadUsageSettingsSnapshot["settingsConfidence"];
   settingsSource?: ThreadUsageSettingsSnapshot["settingsSource"];
-  source: "live" | "hydration" | "backfill" | "monitor";
+  // "openai_decisions": a host-made POST /v1/decisions call billed to an
+  // OpenAI API project, attributed to the calling thread for display only.
+  source: "live" | "hydration" | "backfill" | "monitor" | "openai_decisions";
   sourceItemId?: string;
   startedAt?: number;
   status: ThreadUsageLineStatus;

@@ -22,7 +22,7 @@ import { THREAD_DEPENDENCY_SCHEMA } from "./state-schema.js";
 import { PROJECT_HELD_WAKEUP_SCHEMA } from "./state-schema.js";
 import { RESTART_CONTINUATION_SCHEMA } from "./state-schema.js";
 import { MESSAGING_REQUEST_SCHEMA } from "./state-schema.js";
-import { THREAD_SANDBOX_SCHEMA } from "./state-schema.js";
+import { OPENAI_DECISION_VERSIONS_SCHEMA, THREAD_SANDBOX_SCHEMA } from "./state-schema.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
@@ -2935,6 +2935,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(DURABLE_TURN_REQUEST_SCHEMA);
     db.exec(THREAD_REVIEW_SCHEMA);
     ensureThreadReviewFindingStatusNames(db);
+    db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

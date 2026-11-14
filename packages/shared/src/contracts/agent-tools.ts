@@ -12,6 +12,7 @@ export const AGENT_TOOL_CATALOG_IDS = [
   "token_miser",
   "star_map",
   "thread_todos",
+  "openai_decisions",
 ] as const;
 
 export type AgentToolCatalogId = (typeof AGENT_TOOL_CATALOG_IDS)[number];
