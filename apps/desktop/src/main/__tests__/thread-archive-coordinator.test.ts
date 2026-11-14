@@ -451,13 +451,13 @@ describe("registry-facing accessors", () => {
     expect(work).not.toHaveBeenCalled();
   });
 
-  it("drains candidate discovery and stops its sweeper at shutdown, including before a sweep starts", async () => {
+  it("stops its sweeper at shutdown, and has nothing to stop before one starts", async () => {
     const coordinator = archiveCoordinatorStandIn({});
-    await expect(coordinator.stopThreadArchiveSweeper()).resolves.toBeUndefined();
+    expect(coordinator.stopThreadArchiveSweeper()).toBeUndefined();
     const stopped = Promise.resolve();
     const stop = vi.fn(() => stopped);
     (coordinator as unknown as { threadArchiveSweeper: { stop: () => Promise<void> } }).threadArchiveSweeper = { stop };
-    await expect(coordinator.stopThreadArchiveSweeper()).resolves.toBeUndefined();
+    expect(coordinator.stopThreadArchiveSweeper()).toBe(stopped);
     expect(stop).toHaveBeenCalledTimes(1);
   });
 

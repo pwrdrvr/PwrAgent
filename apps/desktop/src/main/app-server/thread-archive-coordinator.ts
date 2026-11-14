@@ -349,8 +349,12 @@ export class ThreadArchiveCoordinator {
   }
 
   /** Stops the inactive-thread sweeper at shutdown. */
-  async stopThreadArchiveSweeper(): Promise<void> {
-    await Promise.all([this.threadArchiveSweeper?.stop(), this.candidateDiscovery.close()]);
+  stopThreadArchiveSweeper(): Promise<void> | undefined {
+    const discovery = this.candidateDiscovery.close();
+    const sweep = this.threadArchiveSweeper?.stop();
+    // Preserve idle shutdown's existing boundary. Only add a drain barrier
+    // when discovery actually owns work.
+    return discovery ? Promise.all([sweep, discovery]).then(() => {}) : sweep;
   }
 
   private readonly worktreeContainerService: WorktreeContainerService;

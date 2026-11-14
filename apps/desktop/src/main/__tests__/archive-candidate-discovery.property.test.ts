@@ -237,4 +237,30 @@ describe("candidate discovery pacing and ownership", () => {
     expect(read).toHaveBeenCalledTimes(2);
     await owner.close();
   });
+
+  it("adds a shutdown barrier only while discovery owns work", async () => {
+    const entered = deferred();
+    const release = deferred();
+    let signal!: AbortSignal;
+    const owner = new ArchiveCandidateDiscovery(async (_publish, current) => {
+      signal = current;
+      entered.resolve();
+      await release.promise;
+      return [];
+    });
+    expect(owner.close()).toBeUndefined();
+    const listing = owner.list();
+    await entered.promise;
+    const closing = owner.close();
+    expect(closing).toBeInstanceOf(Promise);
+    expect(signal.aborted).toBe(true);
+    let closed = false;
+    void closing!.then(() => { closed = true; });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    release.resolve();
+    await closing;
+    await listing;
+    expect(owner.close()).toBeUndefined();
+  });
 });

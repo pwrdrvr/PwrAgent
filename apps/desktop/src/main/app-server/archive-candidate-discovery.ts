@@ -90,8 +90,10 @@ export class ArchiveCandidateDiscovery {
     }
   }
 
-  async close(): Promise<void> {
-    this.pass?.abort.abort();
-    await this.pass?.done.catch(() => {});
+  close(): Promise<void> | undefined {
+    const pass = this.pass;
+    if (!pass) return;
+    pass.abort.abort();
+    return pass.done.then(() => {}, () => {});
   }
 }
