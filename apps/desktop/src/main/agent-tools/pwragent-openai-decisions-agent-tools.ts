@@ -125,8 +125,10 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "Instructions and prefixes appear only with includeInstructions.",
   ].join(" "),
   decisions_invoke: [
-    "Run a registered decision on new input.",
-    "Input is checked against the stored schema before any request.",
+    "Run a registered decision on new input, or pass definition to run one ad hoc without registering it.",
+    "Pass inputs instead of input to run a batch of up to 500 items, at most 8 at once.",
+    "A batch returns one result per item in input order, and a failed item does not stop the rest.",
+    "Every input is checked against the schema before any request.",
     "Returns every answer, and for OpenAI the request id and token usage with an estimated API price.",
     "A refusal for one question is still a success.",
     "OpenAI calls bill the operator's API project, and Jev calls bill their TypeSafe account.",
@@ -258,13 +260,38 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
   decisions_invoke: {
     type: "object",
     additionalProperties: false,
-    required: ["input"],
     properties: {
       name: NAME_SCHEMA,
       decisionId: { type: "string" },
       version: { type: "integer", minimum: 1 },
+      definition: {
+        type: "object",
+        description: "An ad hoc decision instead of name: provider, instructions, question or questions, prefix, optional inputSchema. Nothing is stored.",
+        additionalProperties: false,
+        properties: {
+          provider: DEFINITION_PROPERTIES.provider,
+          instructions: DEFINITION_PROPERTIES.instructions,
+          question: DEFINITION_PROPERTIES.question,
+          questions: DEFINITION_PROPERTIES.questions,
+          prefix: DEFINITION_PROPERTIES.prefix,
+          inputSchema: DEFINITION_PROPERTIES.inputSchema,
+        },
+      },
       input: {
-        description: "Evidence for the decision, matching the stored inputSchema (an object or a string).",
+        description: "Evidence for one run, matching the schema (an object or a string).",
+      },
+      inputs: {
+        type: "array",
+        minItems: 1,
+        maxItems: OPENAI_DECISION_BOUNDS.bulkMaxItems,
+        description: "A batch of inputs instead of input. Results come back by index.",
+        items: {},
+      },
+      concurrency: {
+        type: "integer",
+        minimum: 1,
+        maximum: OPENAI_DECISION_BOUNDS.bulkMaxConcurrency,
+        description: "Requests in flight at once for inputs. Default 8.",
       },
     },
   },

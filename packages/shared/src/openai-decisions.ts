@@ -53,6 +53,11 @@ export const OPENAI_DECISION_BOUNDS = {
   inputJsonMaxBytes: 256 * 1024,
   inputJsonMaxDepth: 32,
   inputJsonMaxValues: 10_000,
+  /** One decisions_invoke call may run a batch of inputs. */
+  bulkMaxItems: 500,
+  bulkMaxConcurrency: 8,
+  /** All inputs of one batch, as compact JSON. */
+  bulkMaxTotalBytes: 4 * 1024 * 1024,
 } as const;
 
 export const OPENAI_DECISION_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
@@ -534,7 +539,8 @@ function schemaProblem(schema: unknown, path: string, depth: number): string | u
  * limits. Runs before the secret is read and before any request.
  */
 export function validateOpenAIDecisionInput(
-  schema: OpenAIDecisionInputSchema,
+  /** Undefined for an ad hoc definition without a schema: any string or object. */
+  schema: OpenAIDecisionInputSchema | undefined,
   input: unknown,
 ): OpenAIDecisionValidation<unknown> {
   const credential = findCredentialProperty(input);
@@ -555,8 +561,60 @@ export function validateOpenAIDecisionInput(
   if (shape.values > OPENAI_DECISION_BOUNDS.inputJsonMaxValues) {
     return { ok: false, message: `input has more than ${OPENAI_DECISION_BOUNDS.inputJsonMaxValues} values.` };
   }
+  if (!schema) {
+    return typeof input === "string" || isPlainObject(input)
+      ? { ok: true, value: input }
+      : { ok: false, message: "input must be a string or an object." };
+  }
   const problem = inputProblem(schema, input, "input");
   return problem ? { ok: false, message: problem } : { ok: true, value: input };
+}
+
+export type OpenAIDecisionAdHocDefinition = {
+  provider?: RegisteredDecisionProvider;
+  questions: OpenAIDecisionQuestion[];
+  prefix?: string;
+  /** Optional for an ad hoc decision. Without one, input is any string or object. */
+  inputSchema?: OpenAIDecisionInputSchema;
+};
+
+const AD_HOC_KEYS = new Set(["provider", "instructions", "question", "questions", "prefix", "inputSchema"]);
+
+/**
+ * An ad hoc definition for one decisions_invoke call: the registration
+ * fields that shape the request, with the same bounds, and nothing stored.
+ */
+export function parseOpenAIDecisionAdHocDefinition(
+  value: unknown,
+): OpenAIDecisionValidation<OpenAIDecisionAdHocDefinition> {
+  if (!isPlainObject(value)) return { ok: false, message: "definition must be an object." };
+  for (const key of Object.keys(value)) {
+    if (!AD_HOC_KEYS.has(key)) {
+      return {
+        ok: false,
+        message: key === "name" || key === "scope"
+          ? `definition.${key} is only for decisions_register.`
+          : `Unknown property "definition.${key}".`,
+      };
+    }
+  }
+  // The registration parser holds every bound; a placeholder name and
+  // schema stand in for the fields an ad hoc call does not need.
+  const parsed = parseOpenAIDecisionRegistration({
+    ...value,
+    name: "ad_hoc",
+    inputSchema: value.inputSchema ?? { type: "string" },
+  });
+  if (!parsed.ok) return parsed;
+  return {
+    ok: true,
+    value: {
+      ...(parsed.value.provider ? { provider: parsed.value.provider } : {}),
+      questions: parsed.value.questions,
+      ...(parsed.value.prefix !== undefined ? { prefix: parsed.value.prefix } : {}),
+      ...(value.inputSchema !== undefined ? { inputSchema: parsed.value.inputSchema } : {}),
+    },
+  };
 }
 
 function jsonShape(value: unknown, depth: number): { depth: number; values: number } {

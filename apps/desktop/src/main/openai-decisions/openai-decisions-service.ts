@@ -1,17 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type { ThreadUsageLineRecord } from "@pwragent/shared";
 import {
   OPENAI_DECISIONS_ORIGIN,
   OPENAI_DECISIONS_PRICING_CATALOG_ID,
   OPENAI_DECISIONS_PRICING_CATALOG_VERSION,
   OPENAI_DECISIONS_PROVIDER,
+  OPENAI_DECISION_BOUNDS,
   buildOpenAIDecisionsRequestBody,
+  canonicalJson,
+  parseOpenAIDecisionAdHocDefinition,
   openAIDecisionPromptCacheMaterial,
   openAIDecisionSafetyMaterial,
   parseOpenAIDecisionRegistration,
   priceOpenAIDecisionsUsage,
   readOpenAIDecisionsUsage,
   validateOpenAIDecisionInput,
+  type OpenAIDecisionInputSchema,
   type OpenAIDecisionQuestion,
   type OpenAIDecisionsPrice,
   type RegisteredDecisionProvider,
@@ -93,7 +98,9 @@ export type OpenAIDecisionsServiceOptions = {
   queueLimit?: number;
 };
 
-const INVOKE_KEYS = new Set(["name", "decisionId", "version", "input"]);
+const INVOKE_KEYS = new Set(["name", "decisionId", "version", "input", "inputs", "concurrency", "definition"]);
+/** A failure every later item in a batch would repeat. */
+const BATCH_STOPPING_CODES = new Set(["credential_missing", "credential_rejected", "model_unavailable"]);
 const TARGET_KEYS = new Set(["name", "decisionId"]);
 
 /**
@@ -259,7 +266,32 @@ export class OpenAIDecisionsService {
     for (const key of Object.keys(args)) {
       if (!INVOKE_KEYS.has(key)) throw new OpenAIDecisionsError("invalid_input", `Unknown property "${key}".`);
     }
-    if (!("input" in args)) throw new OpenAIDecisionsError("invalid_input", "input is required.");
+    const bulk = args.inputs !== undefined;
+    if (bulk === ("input" in args)) {
+      throw new OpenAIDecisionsError("invalid_input", "Pass input for one item or inputs for a batch, not both.");
+    }
+    const inputs = bulk ? parseBulkInputs(args.inputs) : [args.input];
+    const concurrency = parseConcurrency(args.concurrency, bulk);
+    const { record, schema } = args.definition !== undefined
+      ? await this.adHocRecord(caller, args)
+      : this.registeredRecord(caller, args);
+    // Every input is checked before the key is read or any request is sent.
+    const validated = inputs.map((input, index) => {
+      const result = validateOpenAIDecisionInput(schema, input);
+      if (!result.ok) {
+        throw new OpenAIDecisionsError("invalid_input", bulk ? `inputs[${index}]: ${result.message}` : result.message);
+      }
+      return result.value;
+    });
+    const run = await this.itemRunner(caller, record, signal);
+    return await this.inLane(record.decisionId, signal, async () => {
+      if (!bulk) return await run(validated[0]);
+      return await this.runBatch(record, validated, concurrency, run, signal);
+    });
+  }
+
+  /** The stored version a call names: latest active, or a pinned version. */
+  private registeredRecord(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
     if (
       args.version !== undefined
       && (!Number.isInteger(args.version) || (args.version as number) < 1)
@@ -279,8 +311,58 @@ export class OpenAIDecisionsService {
     if (record.status === "deleted") {
       throw new OpenAIDecisionsError("decision_deleted", `Decision "${record.name}" was deleted.`);
     }
-    const input = validateOpenAIDecisionInput(record.inputSchema, args.input);
-    if (!input.ok) throw new OpenAIDecisionsError("invalid_input", input.message);
+    return { record, schema: record.inputSchema as OpenAIDecisionInputSchema | undefined };
+  }
+
+  /**
+   * An ad hoc definition, built for this call and never stored. Its id is a
+   * digest of the definition, so repeating the same definition reuses the
+   * same prompt cache key and queue.
+   */
+  private async adHocRecord(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
+    for (const key of ["name", "decisionId", "version"] as const) {
+      if (args[key] !== undefined) {
+        throw new OpenAIDecisionsError("invalid_input", `Pass ${key} or definition, not both.`);
+      }
+    }
+    const parsed = parseOpenAIDecisionAdHocDefinition(args.definition);
+    if (!parsed.ok) throw new OpenAIDecisionsError("invalid_definition", parsed.message);
+    const definition = parsed.value;
+    const provider = definition.provider
+      ?? await this.options.resolveDefaultProvider?.()
+      ?? "openai";
+    const decisionId = `adhoc:${sha256Hex(canonicalJson({
+      provider,
+      questions: definition.questions,
+      prefix: definition.prefix ?? null,
+    })).slice(0, 32)}`;
+    const record: OpenAIDecisionVersionRecord = {
+      decisionId,
+      version: 1,
+      name: "ad_hoc",
+      scope: "thread",
+      ownerBackend: caller.backend,
+      ownerThreadId: caller.threadId,
+      status: "active",
+      provider,
+      questions: definition.questions,
+      ...(definition.prefix !== undefined ? { prefix: definition.prefix } : {}),
+      inputSchema: definition.inputSchema ?? {},
+      promptCacheKey: promptCacheKey(decisionId, 1, definition.questions, definition.prefix),
+      createdAt: this.now(),
+    };
+    return { record, schema: definition.inputSchema };
+  }
+
+  /**
+   * Checks the provider's credential once, then returns the function that
+   * runs one validated input. It throws OpenAIDecisionsError on failure.
+   */
+  private async itemRunner(
+    caller: OpenAIDecisionCaller,
+    record: OpenAIDecisionVersionRecord,
+    signal: AbortSignal | undefined,
+  ): Promise<(input: unknown) => Promise<DecisionItemResult>> {
     if (record.provider !== "openai") {
       const provider = record.provider;
       const target = await this.options.readSystemOneTarget?.(provider);
@@ -292,8 +374,7 @@ export class OpenAIDecisionsService {
             : "The local decision model is not set up. Configure it in Settings → AI Providers → Local decision model.",
         );
       }
-      return await this.inLane(record.decisionId, signal, async () =>
-        await this.postSystemOne(record, provider, target, input.value, signal));
+      return async (input) => await this.postSystemOne(record, provider, target, input, signal);
     }
     const apiKey = (await this.options.readApiKey())?.trim();
     if (!apiKey) {
@@ -302,8 +383,69 @@ export class OpenAIDecisionsService {
         "No OpenAI Decisions API key is saved. Add one in Settings → AI Providers → OpenAI Decisions.",
       );
     }
-    return await this.inLane(record.decisionId, signal, async () =>
-      await this.post(caller, record, input.value, apiKey, signal));
+    return async (input) => await this.post(caller, record, input, apiKey, signal);
+  }
+
+  /**
+   * Runs a batch with at most `concurrency` requests in flight. Results come
+   * back in input order. A failed item does not stop the others, except a
+   * failure no later item can avoid (a missing or rejected credential, an
+   * unavailable model) or a cancelled call: the rest are then skipped.
+   */
+  private async runBatch(
+    record: OpenAIDecisionVersionRecord,
+    inputs: readonly unknown[],
+    concurrency: number,
+    run: (input: unknown) => Promise<DecisionItemResult>,
+    signal: AbortSignal | undefined,
+  ) {
+    let stopped: { code: string; message: string } | undefined;
+    const results: BatchItemResult[] = new Array(inputs.length);
+    function* pending(): Generator<number> {
+      for (let index = 0; index < inputs.length; index += 1) {
+        if (stopped || signal?.aborted) return;
+        yield index;
+      }
+    }
+    const mapper = new IterableMapper(pending(), async (index: number): Promise<number> => {
+      try {
+        results[index] = { index, ok: true, ...batchItemData(await run(inputs[index])) };
+      } catch (error) {
+        if (!(error instanceof OpenAIDecisionsError)) throw error;
+        results[index] = { index, ok: false, code: error.code, message: error.message };
+        if (BATCH_STOPPING_CODES.has(error.code)) stopped ??= { code: error.code, message: error.message };
+      }
+      return index;
+    }, { concurrency, maxUnread: concurrency * 2 });
+    for await (const _index of mapper) {
+      // Results are written by index; draining keeps the mapper moving.
+    }
+    const skippedReason = stopped
+      ? `Skipped after ${stopped.code}.`
+      : "Skipped because the call was cancelled.";
+    for (let index = 0; index < inputs.length; index += 1) {
+      results[index] ??= { index, ok: false, code: "skipped", message: skippedReason };
+    }
+    const succeeded = results.filter((result) => result.ok).length;
+    this.options.log?.info("decision batch finished", {
+      ...logFields(record),
+      items: inputs.length,
+      succeeded,
+      concurrency,
+      ...(stopped ? { stoppedBy: stopped.code } : {}),
+    });
+    return {
+      decisionId: record.decisionId,
+      name: record.name,
+      version: record.version,
+      provider: record.provider,
+      count: inputs.length,
+      succeeded,
+      failed: inputs.length - succeeded,
+      ...(stopped ? { stoppedBy: stopped } : {}),
+      results,
+      usage: batchUsage(results),
+    };
   }
 
   private async post(
@@ -312,7 +454,7 @@ export class OpenAIDecisionsService {
     input: unknown,
     apiKey: string,
     signal: AbortSignal | undefined,
-  ) {
+  ): Promise<DecisionItemResult> {
     const account = this.options.readAccountSettings();
     const body = buildOpenAIDecisionsRequestBody({
       questions: record.questions,
@@ -394,7 +536,7 @@ export class OpenAIDecisionsService {
     target: SystemOneTarget,
     input: unknown,
     signal: AbortSignal | undefined,
-  ) {
+  ): Promise<DecisionItemResult> {
     const request = buildSystemOneDecisionRequest({
       questions: record.questions,
       prefix: record.prefix,
@@ -528,6 +670,96 @@ export class OpenAIDecisionsService {
   private now(): number {
     return (this.options.now ?? Date.now)();
   }
+}
+
+/** What one input's run returns, from either provider. */
+type DecisionItemResult = {
+  decisionId: string;
+  name: string;
+  version: number;
+  provider: RegisteredDecisionProvider;
+  model?: string;
+  requestId?: string;
+  response?: Record<string, unknown>;
+  answers?: unknown[];
+  usage: Record<string, unknown>;
+};
+
+type BatchItemResult =
+  | ({ index: number; ok: true } & Partial<Pick<DecisionItemResult, "model" | "requestId" | "response" | "answers">> & {
+      usage?: Record<string, unknown>;
+    })
+  | { index: number; ok: false; code: string; message: string };
+
+function parseBulkInputs(value: unknown): unknown[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > OPENAI_DECISION_BOUNDS.bulkMaxItems) {
+    throw new OpenAIDecisionsError(
+      "invalid_input",
+      `inputs must be an array of 1 to ${OPENAI_DECISION_BOUNDS.bulkMaxItems} items.`,
+    );
+  }
+  if (Buffer.byteLength(JSON.stringify(value)) > OPENAI_DECISION_BOUNDS.bulkMaxTotalBytes) {
+    throw new OpenAIDecisionsError(
+      "invalid_input",
+      `inputs must total at most ${OPENAI_DECISION_BOUNDS.bulkMaxTotalBytes} bytes of compact JSON.`,
+    );
+  }
+  return value;
+}
+
+function parseConcurrency(value: unknown, bulk: boolean): number {
+  if (value === undefined) return OPENAI_DECISION_BOUNDS.bulkMaxConcurrency;
+  if (!bulk) throw new OpenAIDecisionsError("invalid_input", "concurrency applies only to inputs.");
+  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > OPENAI_DECISION_BOUNDS.bulkMaxConcurrency) {
+    throw new OpenAIDecisionsError(
+      "invalid_input",
+      `concurrency must be an integer from 1 to ${OPENAI_DECISION_BOUNDS.bulkMaxConcurrency}.`,
+    );
+  }
+  return value as number;
+}
+
+/** One batch item without the fields every item shares. */
+function batchItemData(result: DecisionItemResult) {
+  const usage = result.provider === "openai" ? result.usage : undefined;
+  return {
+    ...(result.model ? { model: result.model } : {}),
+    ...(result.requestId ? { requestId: result.requestId } : {}),
+    ...(result.response ? { response: result.response } : {}),
+    ...(result.answers ? { answers: result.answers } : {}),
+    ...(usage ? { usage } : {}),
+  };
+}
+
+/** Token and price totals across a batch's OpenAI items. */
+function batchUsage(results: readonly BatchItemResult[]) {
+  const totals = { inputTokens: 0, cachedTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+  let costUsd = 0;
+  let priced = 0;
+  let unpriced = 0;
+  for (const result of results) {
+    if (!result.ok || !result.usage) continue;
+    const usage = result.usage;
+    for (const key of Object.keys(totals) as Array<keyof typeof totals>) {
+      if (typeof usage[key] === "number") totals[key] += usage[key] as number;
+    }
+    if (usage.priceStatus === "estimated" && typeof usage.estimatedCostUsd === "number") {
+      priced += 1;
+      costUsd += usage.estimatedCostUsd;
+    } else {
+      unpriced += 1;
+    }
+  }
+  if (priced === 0 && unpriced === 0) {
+    return { priceStatus: "unavailable", priceUnavailableReason: "the provider reports no token usage" };
+  }
+  return {
+    ...totals,
+    priceStatus: unpriced === 0 ? "estimated" : priced === 0 ? "unavailable" : "partial",
+    estimatedCostUsd: Math.round(costUsd * 1_000_000) / 1_000_000,
+    pricedItems: priced,
+    unpricedItems: unpriced,
+  };
 }
 
 /**
