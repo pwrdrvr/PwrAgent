@@ -176,6 +176,22 @@ describe("batches", () => {
     expect(JSON.stringify(stopped)).not.toContain(OPENAI_KEY);
   });
 
+  it("keeps completed answers when one item fails unexpectedly", async () => {
+    const service = makeService(async (_url, init) => {
+      const state = String((JSON.parse(String(init!.body)) as { state: string }).state);
+      // Not a Response: reading it throws a TypeError inside the request path.
+      if (state === "item-1") return {} as Response;
+      return json({ answers: { bar: { noul: 0.5 } } });
+    });
+    const result = await service.invoke(CALLER, {
+      definition: { provider: "jev", ...PREDICATE },
+      inputs: ["item-0", "item-1", "item-2"],
+      concurrency: 1,
+    }) as { results: Array<{ ok: boolean; code?: string }>; succeeded: number };
+    expect(result.succeeded).toBe(2);
+    expect(result.results[1]).toMatchObject({ ok: false, code: "internal_error" });
+  });
+
   it("stops scheduling when the call is cancelled", async () => {
     const controller = new AbortController();
     let calls = 0;
@@ -214,6 +230,8 @@ describe("batches", () => {
     ]) {
       expect((await errorOf(() => service.invoke(CALLER, args))).code).toBe("invalid_input");
     }
+    const missing = await errorOf(() => service.invoke(CALLER, { name: "bar_joke" }));
+    expect(missing.message).not.toContain("not both");
     expect(calls).toBe(0);
   });
 

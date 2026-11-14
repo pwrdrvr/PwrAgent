@@ -12,6 +12,9 @@ export type DecisionSettingsReader = {
   resolveOpenAIDecisionsApiKey: () => Promise<string | undefined>;
   resolveDecisionModelSettings: () => DesktopDecisionModelSettings;
   resolveDecisionApiKey: (provider: DecisionProviderId) => Promise<string | undefined>;
+  /** Presence only: picking a default never decrypts a key. */
+  hasOpenAIDecisionsApiKey: () => Promise<boolean>;
+  hasDecisionApiKey: (provider: DecisionProviderId) => Promise<boolean>;
 };
 
 /** The saved Jev or local decision model, as Settings → AI Providers holds it. */
@@ -40,9 +43,9 @@ export async function readSystemOneTarget(
 export async function resolveDefaultDecisionProvider(
   settings: DecisionSettingsReader,
 ): Promise<RegisteredDecisionProvider> {
-  if ((await settings.resolveOpenAIDecisionsApiKey())?.trim()) return "openai";
+  if (await settings.hasOpenAIDecisionsApiKey()) return "openai";
   const chosen = resolveDecisionModelSettings(settings.resolveDecisionModelSettings()).model;
   if (chosen === "jev" || chosen === "local") return chosen;
-  if ((await settings.resolveDecisionApiKey("jev"))?.trim()) return "jev";
+  if (await settings.hasDecisionApiKey("jev")) return "jev";
   return "openai";
 }

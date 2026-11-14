@@ -3411,6 +3411,19 @@ export class DesktopSettingsService {
       ?? await this.options.secretStore.getSecret("openaiDecisionsApiKey");
   }
 
+  /** Whether an OpenAI Decisions key is set, from env or the store. Never decrypts. */
+  async hasOpenAIDecisionsApiKey(): Promise<boolean> {
+    return Boolean(readEnvString(this.env, OPENAI_DECISIONS_API_KEY_ENV))
+      || await this.options.secretStore.hasSecret("openaiDecisionsApiKey").catch(() => false);
+  }
+
+  /** Whether a local or Jev decision key is saved. Never decrypts. */
+  async hasDecisionApiKey(provider: DecisionProviderId): Promise<boolean> {
+    return await this.options.secretStore
+      .hasSecret(provider === "local" ? "decisionLocalApiKey" : "typesafeJevApiKey")
+      .catch(() => false);
+  }
+
   async resolveDecisionApiKey(provider: DecisionProviderId): Promise<string | undefined> {
     return await this.options.secretStore.getSecret(
       provider === "local" ? "decisionLocalApiKey" : "typesafeJevApiKey",

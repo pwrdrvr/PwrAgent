@@ -222,6 +222,8 @@ describe("default provider and targets", () => {
       resolveOpenAIDecisionsApiKey: async () => params.openaiKey,
       resolveDecisionModelSettings: () => params.decision ?? {},
       resolveDecisionApiKey: async (provider) => provider === "jev" ? params.jevKey : params.localKey,
+      hasOpenAIDecisionsApiKey: async () => Boolean(params.openaiKey),
+      hasDecisionApiKey: async (provider) => Boolean(provider === "jev" ? params.jevKey : params.localKey),
     };
   }
 
@@ -231,6 +233,15 @@ describe("default provider and targets", () => {
     expect(await resolveDefaultDecisionProvider(reader({ jevKey: JEV_KEY, openaiKey: OPENAI_KEY }))).toBe("openai");
     expect(await resolveDefaultDecisionProvider(reader({ decision: { model: "local" } }))).toBe("local");
     expect(await resolveDefaultDecisionProvider(reader({}))).toBe("openai");
+  });
+
+  it("picks a default from key presence without decrypting any key", async () => {
+    const decrypting: DecisionSettingsReader = {
+      ...reader({ jevKey: JEV_KEY }),
+      resolveOpenAIDecisionsApiKey: async () => { throw new Error("decrypted the OpenAI key"); },
+      resolveDecisionApiKey: async () => { throw new Error("decrypted a decision key"); },
+    };
+    expect(await resolveDefaultDecisionProvider(decrypting)).toBe("jev");
   });
 
   it("defaults the Jev model to jev-latest and needs a Jev key", async () => {

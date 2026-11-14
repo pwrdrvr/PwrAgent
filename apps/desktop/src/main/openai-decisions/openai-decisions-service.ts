@@ -267,8 +267,12 @@ export class OpenAIDecisionsService {
       if (!INVOKE_KEYS.has(key)) throw new OpenAIDecisionsError("invalid_input", `Unknown property "${key}".`);
     }
     const bulk = args.inputs !== undefined;
-    if (bulk === ("input" in args)) {
+    const single = "input" in args;
+    if (bulk && single) {
       throw new OpenAIDecisionsError("invalid_input", "Pass input for one item or inputs for a batch, not both.");
+    }
+    if (!bulk && !single) {
+      throw new OpenAIDecisionsError("invalid_input", "Pass input for one item, or inputs for a batch.");
     }
     const inputs = bulk ? parseBulkInputs(args.inputs) : [args.input];
     const concurrency = parseConcurrency(args.concurrency, bulk);
@@ -411,7 +415,17 @@ export class OpenAIDecisionsService {
       try {
         results[index] = { index, ok: true, ...batchItemData(await run(inputs[index])) };
       } catch (error) {
-        if (!(error instanceof OpenAIDecisionsError)) throw error;
+        // Any failure stays with its item: earlier items were sent and
+        // billed, and their answers must not be lost to one bad item.
+        if (!(error instanceof OpenAIDecisionsError)) {
+          this.options.log?.warn("decision batch item failed unexpectedly", {
+            ...logFields(record),
+            index,
+            error: error instanceof Error ? error.name : "unknown",
+          });
+          results[index] = { index, ok: false, code: "internal_error", message: "The item failed unexpectedly." };
+          return index;
+        }
         results[index] = { index, ok: false, code: error.code, message: error.message };
         if (BATCH_STOPPING_CODES.has(error.code)) stopped ??= { code: error.code, message: error.message };
       }
