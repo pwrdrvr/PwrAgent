@@ -164,18 +164,26 @@ codex app-server generate-json-schema --out ./schemas
 ```
 
 `CODEX_HOME` was an empty temporary directory. The same binary was also
-asked for TypeScript bindings:
+asked for both TypeScript surfaces. `generate-ts --help` documents
+`--experimental` as "Include experimental methods and fields in the
+generated output."
 
 ```bash
 codex app-server generate-ts --out ./bindings
+codex app-server generate-ts --experimental --out ./bindings-experimental
 ```
 
-Neither command logged in or started a turn. Homebrew `codex-cli 0.160.0`
+The stable command wrote 760 `.ts` files. The experimental command wrote
+909. Neither logged in or started a turn. Homebrew `codex-cli 0.160.0`
 is also on `PATH` and was not the binary inspected.
 
-### Public protocol fields on 0.163.0-pwragent.1
+PwrAgnt uses the experimental surface. `initialize` in
+`packages/owner-core/src/codex-app-server/client.ts` sends
+`capabilities.experimentalApi: true`.
 
-From that binary's `generate-ts` output:
+### Stable protocol fields on 0.163.0-pwragent.1
+
+From `generate-ts` without `--experimental`:
 
 - `ReasoningEffort` is an open `string`.
 - `TurnStartParams.effort` is an optional `ReasoningEffort`. The same
@@ -219,41 +227,50 @@ can return a bundled catalog and must be treated as a catalog, not an
 entitlement check. A completed turn is what verifies access to the
 selected model. This research did not start a turn.
 
-`generate-ts` still emits a `MultiAgentMode` type
-(`explicitRequestOnly`, `proactive`, or `{ custom: string }`). In this
-0.163.0 generation the type is exported and no request or response field
-uses it. `generate-json-schema` matches that: the type is defined, and
+Stable `generate-ts` still emits a `MultiAgentMode` type
+(`explicitRequestOnly`, `proactive`, or `{ custom: string }`). On that
+surface the type is exported and no request or response field uses it.
+Stable `generate-json-schema` matches that: the type is defined, and
 nothing references it.
 
-### What package 0.164.0 adds, and what it still lacks
+### Experimental surface on the same 0.163.0 binary
 
-`@pwrdrvr/codex-app-server-protocol@0.164.0` is the package this repo
-compiles against. It is one release newer than the installed binary. It
-still has no `reasoning.mode` field.
+`generate-ts --experimental` emits the Ultra comments. Package 0.164.0
+repeats the same comments. On this surface:
 
-It does declare `multiAgentMode` on thread start, turn start, thread
-settings, and thread settings update, marked deprecated and ignored:
+- `TurnStartParams.multiAgentMode` is optional and marked deprecated:
+  "Ignored. Use `effort: "ultra"` for proactive multi-agent behavior."
+  `TurnStartParams.effort` remains the reasoning-effort override.
+- `ThreadSettings.multiAgentMode` is marked deprecated: "Always
+  `explicitRequestOnly`. Use `effort` for Ultra behavior."
+- `ThreadSettingsUpdateParams` exists and carries optional `effort` and
+  optional deprecated `multiAgentMode`, with the same "use `effort:
+  "ultra"`" comment.
+- `ThreadStartParams` carries optional deprecated `multiAgentMode`, with
+  "Use Ultra reasoning effort for proactive multi-agent behavior." It
+  still has no `effort` field. The word "effort" in that file is only in
+  the comment.
+- `TurnSettingsUpdateParams.effort` also exists.
 
-- `TurnStartParams`: "Use `effort: "ultra"` for proactive multi-agent
-  behavior."
-- `ThreadStartParams`: "Use Ultra reasoning effort for proactive
-  multi-agent behavior." `ThreadStartParams` still has no `effort` field
-  of its own.
-- `ThreadSettings`: "Always `explicitRequestOnly`. Use `effort` for Ultra
-  behavior."
+A search of all 909 files finds no `reasoningMode`, `reasoning_mode`,
+`reasoning.mode`, or `pro_mode`. The deprecated switch tells the client
+to send the effort string `ultra` instead. It does not define Pro, and it
+does not say how many agents that effort starts. Official Codex docs
+remain the source for Ultra meaning subagents. This comment is the
+protocol's own mapping from the old multi-agent switch onto that effort
+string.
 
-Those sentences are the protocol package's description of a retired
-multi-agent switch. They are not in the 0.163.0 binary's generated
-bindings. They do not add `reasoning.mode`, and they do not describe the
-Chat Pro control or the ChatGPT Pro plan. They also do not say how many
-agents Ultra starts.
+`@pwrdrvr/codex-app-server-protocol@0.164.0`, the package this repo
+compiles against, repeats those same deprecated comments and still has
+no `reasoning.mode` field. It is one release newer than the installed
+binary. The comments are in both 0.163's experimental surface and that
+package.
 
-A note from the named-provider thread described those 0.164.0 comments as
-the output of `generate-ts` on 0.163.0-pwragent.1. A clean regeneration
-from that binary does not contain them. The shared conclusion still
-holds: this App Server version has no field for Responses
-`reasoning.mode=pro`. The Ultra sentences should be cited from package
-0.164.0, not from the installed binary's bindings.
+The first named-provider note cited the comments without saying
+`--experimental`. Plain `generate-ts` does not contain them. The
+correction, with `--experimental`, matches this regeneration, except
+that `ThreadStartParams` has the Ultra comment on `multiAgentMode` and
+does not grow an `effort` field.
 
 ### PwrAgnt passthrough today
 
@@ -276,7 +293,7 @@ would use the signed-in account.
 
 | Question | Result | Proof |
 | --- | --- | --- |
-| Does this App Server expose Responses `reasoning.mode=pro`? | Absent | No field in the 0.163.0-pwragent.1 `generate-ts` or `generate-json-schema` output, and none in protocol package 0.164.0. Not an experimental field in that schema. |
+| Does this App Server expose Responses `reasoning.mode=pro`? | Absent | No field on the stable or `--experimental` `generate-ts` output of 0.163.0-pwragent.1, and none in protocol package 0.164.0. |
 | Does it expose the Chat Pro control? | Absent on the public protocol. Unknown as a private Chat behavior. | Same schema. Official pages do not document a Chat-only Pro field or say that a Chat picker setting applies to App Server. |
 | Is a later Codex version able to expose it? | Unknown | This binary and the 0.164.0 package do not. A newer unpublished protocol was not claimed. |
 | Can an API-key Responses call stand in for Chat Pro? | No | Different auth and billing route. Do not add that fallback. |
