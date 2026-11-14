@@ -100,6 +100,18 @@ describe("PwrAgent tool discovery", () => {
     expect([...VOICE_MANAGER_EAGER_TOOLS].filter((name) => !used.includes(name))).toEqual([]);
   });
 
+  it("finds the registered-decision tools from how people ask for them", () => {
+    // The 2026-11-14 dev thread asked for a "decision model prompt" and got only
+    // the MCP gateway tools, then told the operator nothing could register one.
+    const names = (query: string, limit?: number) =>
+      searchPwrAgentTools(catalog, query, limit).map((tool) => tool.name);
+    expect(names("search_mcp_tools call_mcp_tool discover connected MCP tools Jev decision model", 5))
+      .toEqual(expect.arrayContaining(["decisions_register"]));
+    expect(names("register a decision model prompt that evaluates jokes")[0]).toBe("decisions_register");
+    expect(names("run a decision classifier on new input")).toContain("decisions_invoke");
+    expect(names("list registered decisions")[0]).toBe("decisions_list");
+  });
+
   it("returns every exact tool name in a query regardless of limit", () => {
     // The 2026-10-01 Voice manager turn: four names, limit 2, two returned.
     const query = "read_operator_focus list_federation_instances list_instance_projects create_instance_thread";

@@ -108,6 +108,7 @@ function isCodedError(error: unknown): error is CodedError {
 const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
   decisions_register: [
     "Register a reusable decision that PwrAgent runs on the OpenAI Decisions API with gpt-6-luna.",
+    "It does not use the Clef or TypeSafe Jev decision model.",
     "Give one predicate, choice, or score question, or up to 16 questions.",
     "Add an input JSON Schema and an optional shared prefix.",
     "Registration is stored locally and makes no API call.",
