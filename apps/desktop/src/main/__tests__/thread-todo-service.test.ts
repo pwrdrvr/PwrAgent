@@ -263,6 +263,81 @@ describe("ThreadTodoService", () => {
     expect(service.mergeMethodPreferences().byProject).toEqual({ [SNAP.key]: "merge" });
   });
 
+  describe("a start card's access changed after the operator saw it", () => {
+    const modes = [undefined, "default", "auto", "full-access"] as const;
+    const startedModes = (startThread: ReturnType<typeof vi.fn>) =>
+      startThread.mock.calls.map(([params]) => (params as { action: { executionMode?: string } }).action.executionMode);
+
+    // Model: the operator sees the card, an agent may then change its access
+    // with update_todo, and the operator's start carries what they saw. A
+    // thread may start only at the access the operator saw.
+    it.each(modes.flatMap((shown) => [...modes, "unchanged" as const].map((agentSets) => ({ shown, agentSets }))))(
+      "shown $shown, agent sets $agentSets",
+      async ({ shown, agentSets }) => {
+        const startThread = vi.fn(async () => ({ backend: "codex" as const, threadId: "child-1" }));
+        const service = createService({ mergePullRequest: vi.fn(), startThread });
+        const todo = service.add({
+          ...THREAD,
+          input: {
+            title: "Hand off",
+            action: { type: "start_thread", prompt: "Go", ...(shown ? { executionMode: shown } : {}) },
+          },
+        }).todo;
+        const seenExecutionMode = shown ?? "inherit";
+        if (agentSets !== "unchanged") {
+          service.update({ id: todo.id, action: { executionMode: agentSets ?? null } });
+        }
+
+        const run = service.runAction(todo.id, { seenExecutionMode });
+
+        if (agentSets === "unchanged" || agentSets === shown) {
+          await expect(run).resolves.toMatchObject({ status: "done" });
+          expect(startedModes(startThread)).toEqual([shown]);
+        } else {
+          await expect(run).rejects.toMatchObject({ code: "conflict" });
+          expect(startThread).not.toHaveBeenCalled();
+          expect(service.get(todo.id)).toMatchObject({ status: "open" });
+        }
+      },
+    );
+
+    it.each(modes)("from a caller that predates the field, a %s card", async (stored) => {
+      const startThread = vi.fn(async () => ({ backend: "codex" as const, threadId: "child-1" }));
+      const service = createService({ mergePullRequest: vi.fn(), startThread });
+      const todo = service.add({
+        ...THREAD,
+        input: {
+          title: "Hand off",
+          action: { type: "start_thread", prompt: "Go", ...(stored ? { executionMode: stored } : {}) },
+        },
+      }).todo;
+
+      const run = service.runAction(todo.id);
+
+      // It confirmed nothing, so the one mode the desktop gate holds back
+      // is refused, and the rest run as before.
+      if (stored === "full-access") {
+        await expect(run).rejects.toMatchObject({ code: "conflict" });
+        expect(startThread).not.toHaveBeenCalled();
+      } else {
+        await expect(run).resolves.toMatchObject({ status: "done" });
+      }
+    });
+
+    it("sends the prompt to an existing thread whatever the card's access", async () => {
+      const sendMessage = vi.fn(async () => ({ summary: "Sent" }));
+      const service = createService({ mergePullRequest: vi.fn(), startThread: vi.fn(), sendMessage });
+      const todo = service.add({
+        ...THREAD,
+        input: { title: "Hand off", action: { type: "start_thread", prompt: "Go", executionMode: "full-access" } },
+      }).todo;
+
+      await expect(service.runAction(todo.id, {
+        messageTarget: { backend: "codex", threadId: "thread-b" },
+      })).resolves.toMatchObject({ status: "done" });
+    });
+  });
+
   it("starts a handoff on a peer and names the peer in the result", async () => {
     const startThread = vi.fn();
     const startThreadOnInstance = vi.fn(async () => ({

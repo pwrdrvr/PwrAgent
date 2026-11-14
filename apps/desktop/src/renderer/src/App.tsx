@@ -9,7 +9,10 @@ import { ThreadRowDensityContext } from "./features/navigation/thread-row-densit
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { runThreadTodoAndMountStarted } from "./features/thread-todos/thread-todo-started-mount";
-import { useThreadTodoFullAccessGate } from "./features/thread-todos/useThreadTodoFullAccessGate";
+import {
+  useThreadTodoFullAccessGate,
+  withSeenExecutionMode,
+} from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
 import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
@@ -2988,7 +2991,8 @@ function DesktopAppShell(props: {
         threadTodoController.resolve(todo.id, status, resolution, options),
       setItemChecked: (todo, itemId, checked) =>
         threadTodoController.setItemChecked(todo.id, itemId, checked),
-      run: (todo, options) => {
+      run: (todo, requested) => {
+        const options = withSeenExecutionMode(todo, requested);
         const runAndMount = () => runThreadTodoAndMountStarted(
           () => threadTodoController.runAction(todo.id, options),
           desktopApi,

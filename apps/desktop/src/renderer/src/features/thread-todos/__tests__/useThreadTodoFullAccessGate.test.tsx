@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   threadTodoRunRaisesToFullAccess,
   useThreadTodoFullAccessGate,
+  withSeenExecutionMode,
 } from "../useThreadTodoFullAccessGate";
 import type { ThreadTodoRunOptions } from "../thread-todos-view";
 
@@ -87,6 +88,25 @@ describe("threadTodoRunRaisesToFullAccess", () => {
       kind: "reminder",
       action: undefined,
     })).toBe(false);
+  });
+});
+
+describe("withSeenExecutionMode", () => {
+  // The owner compares this with its stored card, so it must be the access
+  // of the same copy the gate judged.
+  it.each([
+    [undefined, "inherit"],
+    ["default", "default"],
+    ["auto", "auto"],
+    ["full-access", "full-access"],
+  ] as const)("sends a %s start card as %s", (mode, seen) => {
+    expect(withSeenExecutionMode(handoffTodo(mode), { workMode: "worktree" }))
+      .toEqual({ workMode: "worktree", seenExecutionMode: seen });
+  });
+
+  it("adds nothing to a prompt sent to an existing thread", () => {
+    const options = { messageTarget: { backend: "codex" as const, threadId: "existing" } };
+    expect(withSeenExecutionMode(handoffTodo("full-access"), options)).toBe(options);
   });
 });
 

@@ -11,6 +11,7 @@ import type {
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
   ThreadTodoResolution,
+  ThreadTodoSeenExecutionMode,
   ThreadTodoStartedThread,
   ThreadTodoStatus,
   ThreadTodosChangedEvent,
@@ -29,6 +30,7 @@ import {
   threadTodoKindForAction,
   threadTodoBlockingItems,
   threadTodoItemNoun,
+  threadTodoStartAccessChanged,
   threadTodoSteps,
 } from "@pwragent/shared";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
@@ -681,6 +683,8 @@ export class ThreadTodoService {
       modelSettings?: ThreadTodoModelSettings;
       /** A run that succeeds marks the card done, so it asks the same. */
       allowOpenItems?: boolean;
+      /** The access the operator saw on a start card. */
+      seenExecutionMode?: ThreadTodoSeenExecutionMode;
     } & ThreadTodoStartChoices = {},
   ): Promise<ThreadTodo> {
     const todo = this.require(id);
@@ -692,6 +696,19 @@ export class ThreadTodoService {
       throw new ThreadTodoError(
         "invalid_arguments",
         "This to-do has no action that runs here.",
+      );
+    }
+    // The desktop's Full Access gate judged the card the operator saw. An
+    // agent can change a card's access at any time, so the start runs only
+    // if the stored card still matches it.
+    if (
+      action.type === "start_thread"
+      && !options.messageTarget
+      && threadTodoStartAccessChanged(action, options.seenExecutionMode)
+    ) {
+      throw new ThreadTodoError(
+        "conflict",
+        "This card's access changed after you saw it. Review it and start it again.",
       );
     }
     if (!options.allowOpenItems) {

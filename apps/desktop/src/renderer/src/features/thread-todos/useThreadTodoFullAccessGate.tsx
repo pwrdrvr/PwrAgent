@@ -1,5 +1,5 @@
 import { useCallback, useRef, type ReactNode } from "react";
-import type { ThreadTodo } from "@pwragent/shared";
+import { threadTodoSeenExecutionMode, type ThreadTodo } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import type { ThreadTodoRunOptions } from "./thread-todos-view";
@@ -19,6 +19,19 @@ export function threadTodoRunRaisesToFullAccess(
   return todo.action?.type === "start_thread"
     && options?.messageTarget === undefined
     && todo.action.executionMode === "full-access";
+}
+
+/**
+ * The run options plus the access the operator saw on a start card. The
+ * card's owner refuses the start when its stored card says otherwise, since
+ * the gate below judged only this copy.
+ */
+export function withSeenExecutionMode(
+  todo: ThreadTodo,
+  options?: ThreadTodoRunOptions,
+): ThreadTodoRunOptions | undefined {
+  if (todo.action?.type !== "start_thread" || options?.messageTarget !== undefined) return options;
+  return { ...options, seenExecutionMode: threadTodoSeenExecutionMode(todo.action) };
 }
 
 export type ThreadTodoFullAccessGate = {
