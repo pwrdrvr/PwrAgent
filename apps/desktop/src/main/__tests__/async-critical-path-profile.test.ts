@@ -60,9 +60,8 @@ describe("async critical path profile", () => {
     });
     const internals = registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
-      repairCodexThreadDirectoryRelationship(): Promise<void>;
     };
-    vi.spyOn(internals, "repairCodexThreadDirectoryRelationship").mockImplementation(async () => { await delay(20); });
+    vi.spyOn(registryModules(registry).threadDirectoryService, "repairCodexThreadDirectoryRelationship").mockImplementation(async () => { await delay(20); });
     vi.spyOn(registryModules(registry).subAgentMonitorService, "restoreCodexNativeSubAgentsFromReplay")
       .mockImplementation(async () => { await delay(20); });
     vi.spyOn(registryModules(registry).threadUsageLedger, "emitThreadPricingUpdated").mockImplementation(async () => { await delay(40); });

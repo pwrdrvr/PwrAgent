@@ -28187,7 +28187,10 @@ ${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
       return { backend: "codex", threadId: "late-empty-thread", executionMode: "default" };
     });
     const turn = vi.spyOn(registry, "startTurn");
-    const archive = vi.spyOn(registry, "archiveThread").mockResolvedValue({ backend: "codex", threadId: "late-empty-thread", archivedAt: 1, cleanup: [] });
+    // The directory service reaches archive through its host, which
+    // delegates to the archive coordinator.
+    const archive = vi.spyOn(registryModules(registry).threadArchiveCoordinator, "archiveThread")
+      .mockResolvedValue({ backend: "codex", threadId: "late-empty-thread", archivedAt: 1, cleanup: [] });
     let outcome: Promise<unknown> | undefined;
     try {
       const running = registry.materializeDirectoryLaunchpad({ operationId: "cancel-race", submittedAt: 100,
@@ -46648,7 +46651,9 @@ script = "printf setup"
       gitWorkspaceHandoffService: { handoff } as never,
     });
     onTestFinished(() => registry.close());
-    vi.spyOn(registry, "ensureDirectoryLaunchpad").mockResolvedValue({} as never);
+    // The workspace service reaches the launchpad through its host, which
+    // delegates to the directory service.
+    vi.spyOn(registryModules(registry).threadDirectoryService, "ensureDirectoryLaunchpad").mockResolvedValue({} as never);
     await registry.publishLocalEvent({ backend: "codex", notification: {
       method: "turn/started", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1" } },
     } });
@@ -54617,11 +54622,12 @@ script = "printf setup"
     });
 
     let fenced = false;
-    const withThreadWorkspaceMutation = vi.fn(async (_identity: unknown, work: () => Promise<unknown>) => {
-      fenced = true;
-      try { return await work(); } finally { fenced = false; }
-    });
-    Object.assign(registry, { withThreadWorkspaceMutation });
+    // attach_thread_directory takes the archive coordinator's workspace fence.
+    const withThreadWorkspaceMutation = vi.spyOn(registryModules(registry).threadArchiveCoordinator, "withThreadWorkspaceMutation")
+      .mockImplementation(async (_identity, work) => {
+        fenced = true;
+        try { return await work(); } finally { fenced = false; }
+      });
     let fencedAtFirstOverlayRead: boolean | undefined;
     const readOverlay = overlayStore.getThreadOverlayState.bind(overlayStore);
     vi.spyOn(overlayStore, "getThreadOverlayState").mockImplementation(async (identity) => {

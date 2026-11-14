@@ -71,7 +71,6 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "rememberFileChangeApprovalContext",
     "withEmbeddedFileChangeApprovalContext",
     "getCachedThreadSummary",
-    "repairCodexThreadDirectoryRelationship",
     "rememberThreadTitleFromEvent",
     "shouldInvalidateThreadListCacheForNotification",
     "invalidateThreadListCache",
@@ -154,6 +153,11 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     name,
     owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).threadWorkspaceService as unknown as Members,
   })),
+  // Moved to the thread directory service (PWR-146).
+  {
+    name: "repairCodexThreadDirectoryRelationship",
+    owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).threadDirectoryService as unknown as Members,
+  },
   ...([
     ["overlayStore", ["getThreadMetadata", "updateThreadMetadata", "completeThreadUsageTurn", "getThreadOverlayState"]],
     ["providerThreadSnapshotStore", ["list", "replace"]],
