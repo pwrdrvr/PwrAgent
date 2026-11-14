@@ -25071,8 +25071,9 @@ export class DesktopBackendRegistry {
         }
         return;
       }
-      const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
+      const reviewUsagePersisted = await this.managedReviewService.persistFinishedReviewUsage({
         backend: completedReviewRecord?.parentBackend ?? event.backend,
+        reviewBackend: event.backend,
         parentThreadId:
           completedReviewRecord?.parentThreadId ?? notification.params.threadId,
         reviewThreadId:
@@ -26494,56 +26495,6 @@ export class DesktopBackendRegistry {
         receiverThreadId: event.notification.params.threadId,
       });
     }
-  }
-
-  private async persistExistingReviewSubAgentUsage(params: {
-    backend: AppServerBackendKind;
-    parentThreadId: string;
-    reviewThreadId: string;
-    turnId: string;
-    usage: ThreadSubAgentSummary["monitorUsage"];
-  }): Promise<boolean> {
-    const monitorId = reviewSubAgentId(params.turnId);
-    // The keyed card first; otherwise a review card that names this child
-    // turn. Gate cards are never review cards, so they are not read.
-    const keyed = await this.overlayStore.getThreadSubAgent({
-      backend: params.backend,
-      threadId: params.parentThreadId,
-      monitorId,
-    });
-    const existing = keyed ?? (await this.overlayStore.listThreadSubAgents({
-      backend: params.backend,
-      threadId: params.parentThreadId,
-      excludeTokenMiser: true,
-    })).find(
-      (subAgent) =>
-        subAgent.monitorThreadId === params.reviewThreadId
-        && subAgent.monitorTurnId === params.turnId,
-    );
-    if (!existing) {
-      return false;
-    }
-
-    await this.overlayStore.upsertThreadSubAgent({
-      backend: params.backend,
-      threadId: params.parentThreadId,
-      subAgent: {
-        ...existing,
-        monitorUsage: params.usage,
-        updatedAt: Date.now(),
-      },
-    });
-    this.invalidateThreadListCache(params.backend);
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "thread/subAgents/updated",
-        params: {
-          threadId: params.parentThreadId,
-        },
-      },
-    });
-    return true;
   }
 
   private async recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void> {

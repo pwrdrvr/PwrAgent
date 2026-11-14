@@ -1324,6 +1324,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get reconcileOrphanedThreadSubAgents() { return overlayStore.reconcileOrphanedThreadSubAgents?.bind(overlayStore); },
         get moveLegacyThreadSubAgents() { return overlayStore.moveLegacyThreadSubAgents?.bind(overlayStore); },
         getThreadSubAgent: (...args) => overlayStore.getThreadSubAgent(...args),
+        listThreadSubAgents: (...args) => overlayStore.listThreadSubAgents(...args),
         upsertThreadSubAgent: (...args) => overlayStore.upsertThreadSubAgent(...args),
       },
       workspaces: {
