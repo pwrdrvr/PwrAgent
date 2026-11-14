@@ -488,6 +488,11 @@ export class RemoteThreadSummaryCache {
    * part of a peer's threads, and forgetting a name because the latest
    * snapshot was narrower would send a row back to its raw thread id.
    *
+   * Only the queried owner's rows establish its names. A relayed child is
+   * neither that owner's identity nor a fresh observation from the child's
+   * owner: this request's sequence cannot order a relay against owner reads.
+   * Unstamped legacy rows are native to the queried peer.
+   *
    * Only names are kept, not summaries — this exists so a display string is
    * always in hand, and holding whole rows for every thread ever seen on
    * every peer would be a real memory cost for no extra answer. Rows whose
@@ -500,6 +505,9 @@ export class RemoteThreadSummaryCache {
     observationSequence: number,
   ): void {
     for (const thread of threads) {
+      if (!isThreadOwnedByPeer(thread, instanceId)) {
+        continue;
+      }
       // A fallback or blank title is not news, and observing one anyway leaves
       // an entry behind: the store rejects the value but still creates the
       // record. A peer exposing thousands of unnamed threads would cost
@@ -552,8 +560,8 @@ export class RemoteThreadSummaryCache {
    * 1. Local only — this instance's thread list. Correct only when the caller
    *    knows every thread it can see is its own.
    * 2. Local + cached remote (this method) — the right default. A remote
-   *    thread the operator can see was named by some snapshot on the way to
-   *    the screen; asking the peer again buys nothing.
+   *    thread already named by an owner snapshot needs no peer round trip
+   *    for its display name.
    * 3. Local + live remote (`threadFromPeer`) — for callers that genuinely
    *    need current data and can afford to wait on a peer.
    *
@@ -586,7 +594,7 @@ export class RemoteThreadSummaryCache {
    * A single thread from a connected peer's snapshot, fetching when the cache
    * has lapsed; undefined when the peer is unreachable or the thread is absent
    * (e.g. archived). Tier 3 — it can wait on the peer. Callers that only need
-   * a name should use `cachedThreadFromPeer`.
+   * a name should use `cachedThreadNameFromPeer`.
    */
   async threadFromPeer(params: {
     target: FederationRemoteTarget;
@@ -608,7 +616,8 @@ export class RemoteThreadSummaryCache {
       );
       return threads.find(
         (thread) =>
-          thread.source === params.backend && thread.id === params.threadId,
+          isThreadOwnedByPeer(thread, params.target.instanceId)
+          && thread.source === params.backend && thread.id === params.threadId,
       );
     } catch {
       return undefined;
