@@ -30066,6 +30066,8 @@ command = "pnpm dev"
       await vi.advanceTimersByTimeAsync(70_000);
       expect(providerFetch).toHaveBeenCalledTimes(2);
       expect((await codexSummary())?.codexModelProviders).toMatchObject([{ id: "mathos", status: "unavailable" }]);
+      // Nothing changed, so windows are not asked to re-read.
+      expect(events.some((event) => event.notification.method === "backend/providerStatus/updated")).toBe(false);
 
       down = false;
       await vi.advanceTimersByTimeAsync(150_000);

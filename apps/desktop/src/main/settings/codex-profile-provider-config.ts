@@ -18,16 +18,35 @@ import { isCodexTomlTable, parseCodexConfigToml } from "./codex-config-toml";
  * also covers the shared `~/.codex` home. That home is the operator's and is
  * never edited here.
  *
- * PwrAgent owns one marked block of the file and nothing else. Every byte
- * outside it is the operator's. A provider the operator defined in the file
- * themselves is left to them. No key is ever written: a provider with a key
- * names the environment variable PwrAgent passes it in, which a CLI session
- * must export itself.
+ * Each PwrAgent profile owns one marked block of the file and nothing else,
+ * so profiles that run on the same Codex home keep their own providers.
+ * Every byte outside the block is the operator's, or another profile's. A
+ * provider defined there is left alone. No key is ever written: a provider
+ * with a key names the environment variable PwrAgent passes it in, which a
+ * CLI session must export itself.
  */
 
 const BLOCK_START = "# >>> PwrAgent model providers";
 const BLOCK_END = "# <<< PwrAgent model providers";
-const BLOCK_PATTERN = new RegExp(`${escapeRegExp(BLOCK_START)}[^\\n]*\\n[\\s\\S]*?${escapeRegExp(BLOCK_END)}[^\\n]*(?:\\n|$)`, "u");
+
+/** One profile's block: its start line names the profile. */
+function blockPattern(owner: string): RegExp {
+  const start = `${escapeRegExp(BLOCK_START)} \\(profile ${escapeRegExp(owner)};`;
+  return new RegExp(`${start}[^\\n]*\\n[\\s\\S]*?${escapeRegExp(BLOCK_END)} \\(profile ${escapeRegExp(owner)}\\)[^\\n]*(?:\\n|$)`, "u");
+}
+
+/**
+ * `model_providers = { … }` before the first table header. Codex cannot
+ * extend an inline table with `[model_providers.<id>]`, and rejects the
+ * whole file if anything tries.
+ */
+function definesInlineModelProviders(text: string): boolean {
+  for (const line of text.split(/\r?\n/u)) {
+    if (/^\s*\[/u.test(line)) return false;
+    if (/^\s*(?:model_providers|"model_providers"|'model_providers')\s*=/u.test(line)) return true;
+  }
+  return false;
+}
 
 export type ManagedProviderBlockResult = {
   text: string;
@@ -49,8 +68,14 @@ export function applyManagedProviderBlock(
   source: string,
   providers: readonly CodexModelProviderSettings[],
   providerIdsWithKeys: ReadonlySet<string>,
+  owner: string,
 ): ManagedProviderBlockResult {
-  const operatorText = removeBlock(source);
+  const pattern = blockPattern(owner);
+  const operatorText = removeBlock(source, pattern);
+  if (definesInlineModelProviders(operatorText)) {
+    const reason = "config.toml defines model_providers as an inline table, which Codex cannot extend.";
+    return { text: operatorText, written: [], skipped: providers.map((provider) => ({ id: provider.id, reason })) };
+  }
   let operatorProviders: ReadonlySet<string>;
   try {
     const tables = parseCodexConfigToml(operatorText).model_providers;
@@ -72,8 +97,12 @@ export function applyManagedProviderBlock(
     }
     return true;
   });
-  const block = included.length ? renderBlock(included, providerIdsWithKeys) : "";
-  return { text: insertBlock(source, operatorText, block), written: included.map((provider) => provider.id), skipped };
+  const block = included.length ? renderBlock(included, providerIdsWithKeys, owner) : "";
+  return {
+    text: insertBlock(source, operatorText, block, pattern),
+    written: included.map((provider) => provider.id),
+    skipped,
+  };
 }
 
 /**
@@ -84,6 +113,8 @@ export function applyManagedProviderBlock(
 export async function syncCodexProfileProviderConfig(params: {
   codexHome: string;
   profileRoot: string;
+  /** The PwrAgent profile whose block this is. */
+  owner: string;
   providers: readonly CodexModelProviderSettings[];
   providerIdsWithKeys: ReadonlySet<string>;
 }): Promise<ManagedProviderBlockResult & { changed: boolean; managed: boolean; configPath: string }> {
@@ -100,7 +131,7 @@ export async function syncCodexProfileProviderConfig(params: {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const result = applyManagedProviderBlock(source, params.providers, params.providerIdsWithKeys);
+  const result = applyManagedProviderBlock(source, params.providers, params.providerIdsWithKeys, params.owner);
   if (result.text === source) return { ...result, changed: false, managed: true, configPath };
   await mkdir(params.codexHome, { recursive: true, mode: 0o700 });
   const temporary = `${configPath}.pwragent-${process.pid}-${Date.now()}.tmp`;
@@ -117,9 +148,10 @@ export async function syncCodexProfileProviderConfig(params: {
 function renderBlock(
   providers: readonly CodexModelProviderSettings[],
   providerIdsWithKeys: ReadonlySet<string>,
+  owner: string,
 ): string {
   const lines = [
-    `${BLOCK_START} (written by PwrAgent; edits inside this block are replaced)`,
+    `${BLOCK_START} (profile ${owner}; written by PwrAgent, edits inside this block are replaced)`,
     "# A provider with env_key reads its API key from that environment variable.",
     "# PwrAgent sets it for its own Codex. Export it to use the provider from the Codex CLI.",
   ];
@@ -139,12 +171,12 @@ function renderBlock(
         : []),
     );
   }
-  lines.push(BLOCK_END);
+  lines.push(`${BLOCK_END} (profile ${owner})`);
   return `${lines.join("\n")}\n`;
 }
 
-function removeBlock(source: string): string {
-  const match = BLOCK_PATTERN.exec(source);
+function removeBlock(source: string, pattern: RegExp): string {
+  const match = pattern.exec(source);
   if (!match) return source;
   let start = match.index;
   // The blank line PwrAgent puts before the block goes with it.
@@ -153,8 +185,8 @@ function removeBlock(source: string): string {
 }
 
 /** Put the block where it was, or at the end after a blank line. */
-function insertBlock(source: string, operatorText: string, block: string): string {
-  const match = BLOCK_PATTERN.exec(source);
+function insertBlock(source: string, operatorText: string, block: string, pattern: RegExp): string {
+  const match = pattern.exec(source);
   if (match) {
     if (block) return source.slice(0, match.index) + block + source.slice(match.index + match[0].length);
     return operatorText;

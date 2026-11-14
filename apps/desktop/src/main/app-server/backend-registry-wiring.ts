@@ -1194,7 +1194,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     // (or a partial one) means there is nothing to write, never a failure.
     let codexHome: string | undefined;
     let profileRoot: string | undefined;
+    let owner: string;
     try {
+      owner = resolveActiveProfileName();
       codexHome = settingsService?.resolveStartupCodexHome?.();
       profileRoot = typeof settingsService?.readCodexProfiles === "function"
         ? settingsService.readCodexProfiles()?.profileRoot
@@ -1211,6 +1213,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       const result = await syncCodexProfileProviderConfig({
         codexHome,
         profileRoot,
+        owner,
         providers: ports.resolveCodexModelProvidersFn(),
         providerIdsWithKeys: new Set(Object.keys(keys).filter((id) => Boolean(keys[id]))),
       });

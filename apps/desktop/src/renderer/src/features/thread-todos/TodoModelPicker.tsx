@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { BackendSummary, ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
 import {
@@ -122,9 +122,12 @@ export function TodoModelPicker(props: MachinePickerProps) {
       {detail ? <span className="todo-model-picker__detail">{detail}</span> : null}
     </button>
   );
-  const providers = backends.filter((backend) => backend.available && backend.capabilities.createThread);
+  const providers = useMemo(
+    () => backends.filter((backend) => backend.available && backend.capabilities.createThread),
+    [backends],
+  );
   // Each Codex model provider is its own entry, as in the composer.
-  const providerEntries = buildProviderPickerEntries(providers);
+  const providerEntries = useMemo(() => buildProviderPickerEntries(providers), [providers]);
   const backend = backends.find((entry) => entry.kind === selection.settings.backend);
   const models = backend?.launchpadOptions?.models ?? [];
   const model = models.find((entry) => entry.id === selection.settings.model);

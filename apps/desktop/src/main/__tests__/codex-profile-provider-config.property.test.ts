@@ -58,8 +58,8 @@ function settings(entries: Array<{ id: string; name: string; baseUrl: string; bo
 /** The text with PwrAgent's block, and the blank line it adds before it, taken out. */
 function outsideBlock(text: string): string {
   return text
-    .replace(/(\n)\n# >>> PwrAgent model providers[\s\S]*?# <<< PwrAgent model providers\n/u, "$1")
-    .replace(/^# >>> PwrAgent model providers[\s\S]*?# <<< PwrAgent model providers\n/u, "");
+    .replace(/(\n)\n# >>> PwrAgent model providers[\s\S]*?# <<< PwrAgent model providers[^\n]*\n/u, "$1")
+    .replace(/^# >>> PwrAgent model providers[\s\S]*?# <<< PwrAgent model providers[^\n]*\n/u, "");
 }
 
 describe("PwrAgent's provider block in a managed Codex config.toml", () => {
@@ -67,12 +67,12 @@ describe("PwrAgent's provider block in a managed Codex config.toml", () => {
     fc.assert(fc.property(operatorContent, fc.array(providerArbitrary, { maxLength: 4 }), ({ ownProvider, text }, specs) => {
       const providers = settings(specs);
       const withKeys = new Set(specs.filter((spec) => spec.hasKey).map((spec) => spec.id));
-      const first = applyManagedProviderBlock(text, providers, withKeys);
+      const first = applyManagedProviderBlock(text, providers, withKeys, "default");
       // Idempotent, and the operator's text survives byte for byte.
-      expect(applyManagedProviderBlock(first.text, providers, withKeys).text).toBe(first.text);
+      expect(applyManagedProviderBlock(first.text, providers, withKeys, "default").text).toBe(first.text);
       expect(outsideBlock(first.text)).toBe(text);
       // With no providers the file is exactly what the operator wrote.
-      expect(applyManagedProviderBlock(first.text, [], withKeys).text).toBe(text);
+      expect(applyManagedProviderBlock(first.text, [], withKeys, "default").text).toBe(text);
 
       const expected = providers.filter((provider) => !provider.compatibility && provider.id !== ownProvider);
       expect(first.written).toEqual(expected.map((provider) => provider.id));
@@ -97,10 +97,38 @@ describe("PwrAgent's provider block in a managed Codex config.toml", () => {
 
   it("writes nothing into a file it cannot read as TOML", () => {
     const broken = "[model_providers.mathos\nname = ";
-    const result = applyManagedProviderBlock(broken, settings([{ id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1", bonsai: false }]), new Set());
+    const result = applyManagedProviderBlock(broken, settings([{ id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1", bonsai: false }]), new Set(), "default");
     expect(result.text).toBe(broken);
     expect(result.written).toEqual([]);
     expect(result.skipped).toEqual([{ id: "mathos", reason: expect.stringContaining("could not be read") }]);
+  });
+});
+
+describe("profiles and operator shapes the block must respect", () => {
+  const mathos = settings([{ id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1", bonsai: false }]);
+  const refuseless = settings([{ id: "refuseless", name: "Refuseless", baseUrl: "https://api.refuseless.example/v1", bonsai: false }]);
+
+  it("adds nothing when model_providers is an inline table, which Codex could not extend", () => {
+    const inline = "model_providers = { mine = { name = \"Mine\", base_url = \"https://mine.example/v1\" } }\n";
+    const result = applyManagedProviderBlock(inline, mathos, new Set(), "default");
+    expect(result.text).toBe(inline);
+    expect(result.written).toEqual([]);
+    expect(result.skipped).toEqual([{ id: "mathos", reason: expect.stringContaining("inline table") }]);
+    // A block written before the operator inlined the table is taken out.
+    const withBlock = applyManagedProviderBlock("", mathos, new Set(), "default").text;
+    expect(applyManagedProviderBlock(`${inline}\n${withBlock}`, mathos, new Set(), "default").text).toBe(`${inline}`);
+  });
+
+  it("keeps each PwrAgent profile's providers when two profiles share a Codex home", () => {
+    const work = applyManagedProviderBlock("", mathos, new Set(), "work").text;
+    const both = applyManagedProviderBlock(work, [...refuseless, ...mathos], new Set(), "lab");
+    // Lab adds Refuseless and leaves Work's MathOS to Work.
+    expect(both.written).toEqual(["refuseless"]);
+    expect(both.skipped).toEqual([{ id: "mathos", reason: expect.stringContaining("already defines") }]);
+    const tables = parseCodexConfigToml(both.text).model_providers;
+    expect(isCodexTomlTable(tables) ? Object.keys(tables).sort() : []).toEqual(["mathos", "refuseless"]);
+    // Lab dropping its providers does not touch Work's block.
+    expect(applyManagedProviderBlock(both.text, [], new Set(), "lab").text).toBe(work);
   });
 });
 
@@ -121,7 +149,7 @@ describe("syncCodexProfileProviderConfig", () => {
     expect(isPwrAgentManagedCodexHome(path.join(root, ".codex"), profileRoot)).toBe(false);
     expect(isPwrAgentManagedCodexHome(profileRoot, profileRoot)).toBe(false);
 
-    const created = await syncCodexProfileProviderConfig({ codexHome: home, profileRoot, providers: mathos, providerIdsWithKeys: new Set(["mathos"]) });
+    const created = await syncCodexProfileProviderConfig({ codexHome: home, profileRoot, providers: mathos, providerIdsWithKeys: new Set(["mathos"]), owner: "default" });
     expect(created).toMatchObject({ changed: true, written: ["mathos"] });
     const configPath = path.join(home, "config.toml");
     expect(readFileSync(configPath, "utf8")).toContain("[model_providers.mathos]");
@@ -130,14 +158,14 @@ describe("syncCodexProfileProviderConfig", () => {
 
     writeFileSync(configPath, `model = "gpt-6-sol"\n${readFileSync(configPath, "utf8")}`);
     chmodSync(configPath, 0o644);
-    expect(await syncCodexProfileProviderConfig({ codexHome: home, profileRoot, providers: mathos, providerIdsWithKeys: new Set(["mathos"]) }))
+    expect(await syncCodexProfileProviderConfig({ codexHome: home, profileRoot, providers: mathos, providerIdsWithKeys: new Set(["mathos"]), owner: "default" }))
       .toMatchObject({ changed: false });
-    await syncCodexProfileProviderConfig({ codexHome: home, profileRoot, providers: [], providerIdsWithKeys: new Set() });
+    await syncCodexProfileProviderConfig({ codexHome: home, profileRoot, providers: [], providerIdsWithKeys: new Set(), owner: "default" });
     expect(readFileSync(configPath, "utf8")).toBe("model = \"gpt-6-sol\"\n");
     if (process.platform !== "win32") expect(statSync(configPath).mode & 0o777).toBe(0o644);
 
     const shared = path.join(root, ".codex");
-    expect(await syncCodexProfileProviderConfig({ codexHome: shared, profileRoot, providers: mathos, providerIdsWithKeys: new Set() }))
+    expect(await syncCodexProfileProviderConfig({ codexHome: shared, profileRoot, providers: mathos, providerIdsWithKeys: new Set(), owner: "default" }))
       .toMatchObject({ changed: false, managed: false });
     expect(existsSync(path.join(shared, "config.toml"))).toBe(false);
   });

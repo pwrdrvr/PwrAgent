@@ -18926,13 +18926,19 @@ export class DesktopBackendRegistry {
     const models = await this.modelCatalog.readModels("codex", "provider-catalog-retry");
     const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
     if (generation !== this.codexBackendGeneration || !this.codexBackendSummary) return states;
-    const { codexModelProviders: _previous, ...summary } = this.codexBackendSummary;
+    const { codexModelProviders: previousStates, ...summary } = this.codexBackendSummary;
+    const launchpadOptions = buildLaunchpadOptions("codex", models);
+    const changed = JSON.stringify([summary.launchpadOptions, previousStates ?? []])
+      !== JSON.stringify([launchpadOptions, states]);
     this.codexBackendSummary = {
       ...summary,
-      launchpadOptions: buildLaunchpadOptions("codex", models),
+      launchpadOptions,
       ...(states.length ? { codexModelProviders: states } : {}),
     };
-    await this.emit({ backend: "codex", notification: { method: "backend/providerStatus/updated", params: { backend: "codex" } } });
+    // A retry that found the same state tells windows nothing new.
+    if (changed) {
+      await this.emit({ backend: "codex", notification: { method: "backend/providerStatus/updated", params: { backend: "codex" } } });
+    }
     return states;
   }
 
