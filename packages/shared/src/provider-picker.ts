@@ -142,7 +142,11 @@ export function findCodexModelProviderLabel(
   backends: readonly ProviderPickerBackend[] | undefined,
   providerId: string,
 ): string | undefined {
-  return codexModelProviderLabels(backends).get(providerId);
+  const codex = backends?.find((backend) => backend.kind === "codex");
+  const state = codex?.codexModelProviders?.find((candidate) => candidate.id === providerId);
+  if (state?.name) return state.name;
+  return codex?.launchpadOptions?.models?.find((model) =>
+    model.providerLabel && modelMenuEntryProviderId(model) === providerId)?.providerLabel;
 }
 
 function countModels(count: number): string {

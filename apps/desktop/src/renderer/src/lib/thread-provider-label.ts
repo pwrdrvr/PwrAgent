@@ -60,11 +60,13 @@ export function useThreadProviderCatalogs(
   ownerBackends: ReadonlyMap<string, readonly ProviderPickerBackend[]>,
   windowInstanceId: string | undefined,
 ): ThreadProviderCatalogs {
-  const key = JSON.stringify([
+  // Derive the names only when a backend list changes, not on every render;
+  // the key then keeps one value while the names themselves are unchanged.
+  const key = useMemo(() => JSON.stringify([
     windowInstanceId ?? null,
     [...codexModelProviderLabels(windowBackends)],
     [...ownerBackends].map(([instanceId, backends]) => [instanceId, [...codexModelProviderLabels(backends)]]),
-  ]);
+  ]), [ownerBackends, windowBackends, windowInstanceId]);
   return useMemo(() => {
     const [instanceId, windowLabels, owners] = JSON.parse(key) as [
       string | null,

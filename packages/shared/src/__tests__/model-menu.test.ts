@@ -72,4 +72,13 @@ describe("model menu options", () => {
     expect(buildModelMenu({ kind: "claude", models, thread: { model: "opus" } }))
       .toEqual({ primary: [models[0]], other: [models[1]], providerGroups: [] });
   });
+
+  it("keeps another backend's model whose id looks qualified in its own list", () => {
+    const models = [{ id: "@cf/meta/llama-3.1" }, { id: "kimi-k3" }];
+    expect(buildModelMenu({ kind: "acp:kimi", models }))
+      .toEqual({ primary: models, other: [], providerGroups: [] });
+    // A Codex catalog still files an unlabelled qualified id under its provider.
+    expect(buildModelMenu({ kind: "codex", models: [{ id: "gpt-6-sol" }, { id: "@mathos/x" }] }).providerGroups)
+      .toEqual([{ providerId: "mathos", label: "mathos", models: [{ id: "@mathos/x" }] }]);
+  });
 });

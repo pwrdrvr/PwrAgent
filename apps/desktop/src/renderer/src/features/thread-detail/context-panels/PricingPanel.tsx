@@ -1,4 +1,4 @@
-import { formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG } from "@pwragent/shared";
+import { codexProviderIdOfModel, formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG } from "@pwragent/shared";
 import { buildThreadPricingDisplay, type ThreadPricingDisplay } from "@pwragent/shared";
 import {
   type PricingUsageLine,
@@ -1361,7 +1361,8 @@ function formatUsageLineRuntimeLabel(
   // Monitor rows are stored under their parent thread backend so its ledger
   // can aggregate them. Without a loaded sub-agent summary, the pricing
   // provider is the truthful runtime identity.
-  return line.scope === "monitor"
+  // A Codex model provider's monitor line names its provider in the model.
+  return line.scope === "monitor" && !codexProviderIdOfModel(line.model)
     ? formatPricingProviderLabel(line.provider)
     : formatProvider(line.backend as AppServerBackendKind, line.model);
 }

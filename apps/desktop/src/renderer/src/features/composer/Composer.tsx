@@ -11188,18 +11188,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const selectedServiceTier =
     currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
   const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
-  const providerOptions =
-    props.backends?.filter(
+  const providerOptions = useMemo(
+    () => props.backends?.filter(
       (candidate) => candidate.available && candidate.capabilities.createThread
-    ) ?? [];
+    ) ?? [],
+    [props.backends],
+  );
   // Each Codex model provider is its own entry, named the way the owner
   // named it. It still starts a `codex` thread; its models carry the
   // provider in their qualified ids.
   const providerPickerEntries = useMemo(
-    () => buildProviderPickerEntries(
-      props.backends?.filter((candidate) => candidate.available && candidate.capabilities.createThread) ?? [],
-    ),
-    [props.backends],
+    () => buildProviderPickerEntries(providerOptions),
+    [providerOptions],
   );
   // A new chat's Model menu offers the chosen provider's models only.
   const launchpadModelScope = props.launchpad && backend?.kind === "codex"

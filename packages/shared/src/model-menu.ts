@@ -1,12 +1,16 @@
 import { codexProviderIdOfModel } from "./codex-model-providers";
 
 /**
- * The Codex model provider that serves a catalog entry: its `providerId`, or
- * the provider its qualified `@<provider>/` id names when an owner reported
- * the id without one.
+ * The Codex model provider that serves a catalog entry: its `providerId`, or,
+ * for a Codex catalog, the provider its qualified `@<provider>/` id names when
+ * an owner reported the id without one. Another backend's ids are its own,
+ * whatever they look like.
  */
-export function modelMenuEntryProviderId(model: { id: string; providerId?: string }): string | undefined {
-  return model.providerId ?? codexProviderIdOfModel(model.id);
+export function modelMenuEntryProviderId(
+  model: { id: string; providerId?: string },
+  kind: string | undefined = "codex",
+): string | undefined {
+  return model.providerId ?? (kind === "codex" ? codexProviderIdOfModel(model.id) : undefined);
 }
 
 /** The catalog fields the menu rule reads. */
@@ -49,7 +53,7 @@ export function splitModelMenuOptions<T extends ModelMenuEntry>(
   kind: string | undefined,
   models: readonly T[],
 ): { primary: T[]; other: T[] } {
-  const ownModels = models.filter((model) => !modelMenuEntryProviderId(model));
+  const ownModels = models.filter((model) => !modelMenuEntryProviderId(model, kind));
   const hasGpt6 = ownModels.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
   const hasSolReplacement = ownModels.some((model) => /^gpt-6\.1-(?:sol|terra)$/iu.test(model.id));
   const primary: T[] = [];
@@ -57,7 +61,7 @@ export function splitModelMenuOptions<T extends ModelMenuEntry>(
   for (const model of models) {
     const isOther = kind === "claude"
       ? model.other
-      : kind === "codex" && !modelMenuEntryProviderId(model) && (
+      : kind === "codex" && !modelMenuEntryProviderId(model, kind) && (
         (hasGpt6 && /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
         || (hasSolReplacement && /^gpt-6-sol$/iu.test(model.id))
       );
@@ -88,12 +92,12 @@ export function buildModelMenu<T extends ModelMenuEntry>(params: {
   const { kind, models } = params;
   if (params.thread && kind === "codex") {
     const provider = codexProviderIdOfModel(params.thread.model);
-    const own = models.filter((model) => modelMenuEntryProviderId(model) === provider);
+    const own = models.filter((model) => modelMenuEntryProviderId(model, kind) === provider);
     return { ...splitModelMenuOptions(kind, own), providerGroups: [] };
   }
   const groups = new Map<string, ModelMenuProviderGroup<T>>();
   for (const model of models) {
-    const providerId = modelMenuEntryProviderId(model);
+    const providerId = modelMenuEntryProviderId(model, kind);
     if (!providerId) continue;
     let group = groups.get(providerId);
     if (!group) {
@@ -103,7 +107,7 @@ export function buildModelMenu<T extends ModelMenuEntry>(params: {
     group.models.push(model);
   }
   return {
-    ...splitModelMenuOptions(kind, models.filter((model) => !modelMenuEntryProviderId(model))),
+    ...splitModelMenuOptions(kind, models.filter((model) => !modelMenuEntryProviderId(model, kind))),
     providerGroups: [...groups.values()],
   };
 }
