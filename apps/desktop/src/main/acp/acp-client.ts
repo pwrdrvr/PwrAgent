@@ -914,6 +914,9 @@ export class AcpAgentClient {
     };
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
+    // An update that arrived before session/new answered made the session's
+    // normalizer without a workspace.
+    this.normalizers.get(appSessionId)?.setWorkspace(cwd);
     this.loadedSessionCwds.set(sessionId, cwd);
     this.touchSession(appSessionId);
     if (params.sessionMeta || params.mcpServers === "none") {
@@ -1839,10 +1842,19 @@ export class AcpAgentClient {
     };
   }
 
+  /** The backend's normalizer options, with the session's workspace. */
+  private normalizerOptionsFor(cwd?: string): AcpSessionReplayNormalizerOptions {
+    return cwd ? { ...this.normalizerOptions, cwd } : this.normalizerOptions;
+  }
+
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
     let normalizer = this.normalizers.get(sessionId);
     if (!normalizer) {
-      normalizer = new AcpSessionReplayNormalizer(this.normalizerOptions);
+      normalizer = new AcpSessionReplayNormalizer(
+        this.normalizerOptionsFor(
+          this.options.store.getSession(this.options.backendId, sessionId)?.cwd,
+        ),
+      );
       this.normalizers.set(sessionId, normalizer);
     }
     return normalizer;
@@ -1865,7 +1877,9 @@ export class AcpAgentClient {
     if (!this.options.rolloutStore) {
       return { isComplete: false };
     }
-    const normalizer = new AcpSessionReplayNormalizer(this.normalizerOptions);
+    const normalizer = new AcpSessionReplayNormalizer(
+      this.normalizerOptionsFor(metadata.cwd),
+    );
     let hasTranscriptHistory = false;
     const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,

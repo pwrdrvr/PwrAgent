@@ -1,6 +1,7 @@
 import type { AppServerThreadFileDiff } from "@pwragent/shared";
 import {
   renderUnifiedFileDiff,
+  unifiedDiffFileName,
   type UnifiedDiffHunk,
 } from "../../shared/unified-file-diff.js";
 import {
@@ -46,6 +47,11 @@ export function acpDiffContentIsWholeFile(backendId: string): boolean {
 export type ReadAcpFileEditOptions = {
   /** The agent sends whole files in `diff` content. */
   wholeFileDiffContent?: boolean;
+  /**
+   * The session's workspace. A file inside it is named relative to it in the
+   * diff header, as Claude's edits are.
+   */
+  cwd?: string;
 };
 
 export function readAcpFileEdit(
@@ -189,7 +195,7 @@ function buildFileDiff(
   if (hunks.length === 0) {
     return undefined;
   }
-  const name = path.replace(/\\/g, "/").replace(/^[A-Za-z]:/, "").replace(/^\/+/, "");
+  const name = unifiedDiffFileName(path.replace(/\\/g, "/"), options.cwd);
   return renderUnifiedFileDiff({ name, created, hunks }).fileDiff;
 }
 

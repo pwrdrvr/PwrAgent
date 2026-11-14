@@ -1,7 +1,11 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AppServerThreadActivityEntry } from "@pwragent/shared";
-import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
+import {
+  AcpSessionReplayNormalizer,
+  type AcpSessionReplayNormalizerOptions,
+} from "../acp/acp-session-normalizer";
+import { claudeFileDiff } from "../claude/claude-tool-activity";
 import { applyUnifiedDiff, fileLines } from "./helpers/unified-diff";
 
 // Grok opens every tool call with a bare `tool_call` whose title is the
@@ -13,6 +17,7 @@ import { applyUnifiedDiff, fileLines } from "./helpers/unified-diff";
 
 const sessionId = "session-grok";
 const filePath = "/work/notes/checkers.md";
+const defaultFilePath = filePath;
 
 function xaiTool(name: string, kind: string, label: string) {
   return { "x.ai/tool": { version: 1, name, kind, namespace: "grok_build", label } };
@@ -33,7 +38,9 @@ function searchReplaceFrames(params: {
   newLine: number;
   linePrefix?: string;
   contextAfter?: string;
+  path?: string;
 }): Record<string, unknown>[] {
+  const filePath = params.path ?? defaultFilePath;
   const rawInput = {
     variant: "SearchReplace",
     file_path: filePath,
@@ -219,8 +226,11 @@ function listDirFrames(params: LaterFrameOptions & {
   });
 }
 
-function applyFrames(frames: Record<string, unknown>[]): AcpSessionReplayNormalizer {
-  const normalizer = new AcpSessionReplayNormalizer();
+function applyFrames(
+  frames: Record<string, unknown>[],
+  options?: AcpSessionReplayNormalizerOptions,
+): AcpSessionReplayNormalizer {
+  const normalizer = new AcpSessionReplayNormalizer(options);
   frames.forEach((update, index) => {
     normalizer.apply({ sessionId, receivedAt: 1_000 + index, update });
   });
@@ -386,6 +396,91 @@ describe("Grok tool activity", () => {
     const [activity] = activities(normalizer);
     expect(activity?.summary).toBe("Edited a.ts");
     expect(activity?.details[0]?.fileDiff).toBeUndefined();
+  });
+
+  // The header named the absolute path with its leading slash dropped, so a
+  // Grok edit read `a/Users/<name>/.pwragent/worktrees/…/docs/a.md`: the home
+  // directory in every diff, and a different name than a Claude row for the
+  // same file.
+  it("names an edited file relative to the session's workspace", () => {
+    const cwd = "/Users/someone/.pwragent/worktrees/x/repo";
+    const edited = `${cwd}/docs/a.md`;
+    const normalizer = applyFrames(searchReplaceFrames({
+      id: "call-relative",
+      oldString: "one",
+      newString: "two",
+      oldLine: 3,
+      newLine: 3,
+      path: edited,
+    }), { cwd });
+
+    const [detail] = activities(normalizer)[0]?.details ?? [];
+    expect(detail?.path).toBe(edited);
+    expect(detail?.fileDiff?.diff.split("\n").slice(0, 3)).toEqual([
+      "diff --git a/docs/a.md b/docs/a.md",
+      "--- a/docs/a.md",
+      "+++ b/docs/a.md",
+    ]);
+  });
+
+  it("property: a Grok edit is headed like a Claude edit of the same file", () => {
+    const segment = fc.stringMatching(/^[a-z][a-z0-9._-]{0,7}$/u);
+    const scenario = fc.record({
+      workspace: fc.array(segment, { minLength: 1, maxLength: 4 }),
+      // A file in the workspace, or in a sibling of it, or above it.
+      place: fc.constantFrom("inside", "sibling", "above"),
+      file: fc.array(segment, { minLength: 1, maxLength: 4 }),
+    });
+    fc.assert(
+      fc.property(scenario, ({ workspace, place, file }) => {
+        const cwd = `/${workspace.join("/")}`;
+        const parent = workspace.length > 1 ? `/${workspace.slice(0, -1).join("/")}` : "";
+        const dir =
+          place === "inside"
+            ? cwd
+            : place === "sibling"
+              ? `${parent}/${workspace.at(-1)}-other`
+              : parent;
+        const edited = `${dir}/${file.join("/")}`;
+        const normalizer = applyFrames(searchReplaceFrames({
+          id: "call-oracle",
+          oldString: "old",
+          newString: "new",
+          oldLine: 1,
+          newLine: 1,
+          path: edited,
+        }), { cwd });
+        const [detail] = activities(normalizer)[0]?.details ?? [];
+        const claude = claudeFileDiff({
+          filePath: edited,
+          structuredPatch: [{
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: ["-old", "+new"],
+          }],
+        }, cwd);
+
+        expect(detail?.path).toBe(edited);
+        expect(detail?.fileDiff?.diff.split("\n").slice(0, 3))
+          .toEqual(claude?.diff.split("\n").slice(0, 3));
+      }),
+      { numRuns: 300 },
+    );
+  });
+
+  it("keeps the absolute name when the session's workspace is unknown", () => {
+    const normalizer = applyFrames(searchReplaceFrames({
+      id: "call-no-cwd",
+      oldString: "one",
+      newString: "two",
+      oldLine: 3,
+      newLine: 3,
+    }));
+    const [detail] = activities(normalizer)[0]?.details ?? [];
+    expect(detail?.fileDiff?.diff.split("\n")[0])
+      .toBe("diff --git a/work/notes/checkers.md b/work/notes/checkers.md");
   });
 
   it("property: a tool's internal name never outlives a descriptive title", () => {

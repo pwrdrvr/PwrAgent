@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { AppServerThreadFileDiff } from "@pwragent/shared";
+import { isPathWithin } from "./path-within";
 
 /** Larger diffs keep their counts, not their text. */
 export const MAX_FILE_DIFF_CHARS = 256 * 1024;
@@ -11,6 +13,21 @@ export type UnifiedDiffHunk = {
   newLines: number;
   lines: readonly string[];
 };
+
+/**
+ * The name a diff header gives an edited file: relative to the thread's
+ * workspace when the file is inside it, else the absolute path without its
+ * leading slash or drive. Every backend names its edits through this, so the
+ * same file reads the same in every row. The row's own `path` stays absolute;
+ * nothing opens a file by this name.
+ */
+export function unifiedDiffFileName(filePath: string, cwd?: string): string {
+  const name =
+    cwd && path.isAbsolute(filePath) && isPathWithin(cwd, filePath)
+      ? path.relative(cwd, filePath)
+      : filePath;
+  return name.split(path.sep).join("/").replace(/^[A-Za-z]:/, "").replace(/^\/+/, "");
+}
 
 /**
  * The unified diff of one file's edit, as a transcript row shows it: a

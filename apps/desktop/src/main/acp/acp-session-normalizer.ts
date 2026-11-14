@@ -26,7 +26,11 @@ import {
   readAcpWebSearch,
   readFirstLocationPath,
 } from "./acp-command-extraction.js";
-import { acpDiffContentIsWholeFile, readAcpFileEdit } from "./acp-file-edit.js";
+import {
+  acpDiffContentIsWholeFile,
+  readAcpFileEdit,
+  type ReadAcpFileEditOptions,
+} from "./acp-file-edit.js";
 import {
   type AcpFileRead,
   fileBaseName,
@@ -53,6 +57,11 @@ export type AcpSessionReplayNormalizerOptions = {
    * numbers. See `acpDiffContentIsWholeFile`.
    */
   wholeFileDiffContent?: boolean;
+  /**
+   * The session's workspace. Edit diffs name a file inside it relative to it,
+   * as Claude's do; without it they name the absolute path.
+   */
+  cwd?: string;
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
@@ -62,10 +71,12 @@ export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
 /** How to normalize the updates of the agent behind an ACP backend. */
 export function acpSessionReplayNormalizerOptions(
   backendId: string,
+  cwd?: string,
 ): AcpSessionReplayNormalizerOptions {
   return {
     surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(backendId),
     wholeFileDiffContent: acpDiffContentIsWholeFile(backendId),
+    ...(cwd ? { cwd } : {}),
   };
 }
 
@@ -307,7 +318,23 @@ export class AcpSessionReplayNormalizer {
   private openCompactionId?: string;
   private readonly subAgents = new Map<string, AcpSubAgentState>();
 
-  constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {}
+  /** How this session's edits are read; the workspace can arrive later. */
+  private fileEditOptions: ReadAcpFileEditOptions;
+
+  constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {
+    this.fileEditOptions = {
+      wholeFileDiffContent: options.wholeFileDiffContent,
+      cwd: options.cwd,
+    };
+  }
+
+  /**
+   * Names later edits relative to the session's workspace. A live session can
+   * receive updates before its metadata, and with it the workspace, is stored.
+   */
+  setWorkspace(cwd: string): void {
+    this.fileEditOptions = { ...this.fileEditOptions, cwd };
+  }
 
   recordUserPrompt(params: {
     sessionId: string;
@@ -822,7 +849,7 @@ export class AcpSessionReplayNormalizer {
         createdAt,
         providerTool,
         fileRead,
-        this.options.wholeFileDiffContent,
+        this.fileEditOptions,
       ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
@@ -1611,7 +1638,7 @@ function toolActivity(
   createdAt: number,
   providerTool?: AcpProviderTool,
   fileRead?: AcpFileRead,
-  wholeFileDiffContent?: boolean,
+  fileEditOptions?: ReadAcpFileEditOptions,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -1690,7 +1717,7 @@ function toolActivity(
       ],
     };
   }
-  const fileEdit = readAcpFileEdit(update.update, { wholeFileDiffContent });
+  const fileEdit = readAcpFileEdit(update.update, fileEditOptions);
   if (fileEdit) {
     const label = `${fileEdit.verb} ${fileBaseName(fileEdit.path)}`;
     const status = readToolActivityStatus(update.update);

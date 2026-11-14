@@ -4,7 +4,7 @@ import type {
   AppServerThreadPlanStep,
 } from "@pwragent/shared";
 import { formatToolIdentifier, formatToolInvocation } from "../../shared/tool-activity";
-import { renderUnifiedFileDiff } from "../../shared/unified-file-diff";
+import { renderUnifiedFileDiff, unifiedDiffFileName } from "../../shared/unified-file-diff";
 
 /** Claude's checklist tool. Its calls are the turn's plan, not tool rows. */
 export const CLAUDE_TODO_TOOL = "TodoWrite";
@@ -218,10 +218,7 @@ export function claudeFileDiff(result: unknown, cwd: string): { diff: string; fi
     hunks = [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((line) => `+${line}`) }];
   }
   if (hunks.length === 0) return undefined;
-  const relative = path.relative(cwd, filePath);
-  const name = (relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : filePath)
-    .split(path.sep).join("/").replace(/^[A-Za-z]:/, "").replace(/^\/+/, "");
-  return renderUnifiedFileDiff({ name, created, hunks });
+  return renderUnifiedFileDiff({ name: unifiedDiffFileName(filePath, cwd), created, hunks });
 }
 
 /**
