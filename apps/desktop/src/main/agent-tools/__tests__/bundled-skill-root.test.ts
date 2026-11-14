@@ -103,7 +103,10 @@ describe("bundled skill root", () => {
           await fs.writeFile(file, "partial");
           const at = new Date(now - item.ageMs);
           await fs.utimes(file, at, at);
-          planted.set(file, item.kind === "staged" && item.ageMs < STAGED_FILE_GRACE_MS);
+          // Judge age from the stored mtime, which can miss `at` by a
+          // fraction of a millisecond (see the unchanged-file check above).
+          const ageMs = now - (await fs.stat(file)).mtimeMs;
+          planted.set(file, item.kind === "staged" && ageMs < STAGED_FILE_GRACE_MS);
         }
         await materializeBundledSkills(root, PWRAGENT_CODEX_SKILLS, now);
         for (const [file, survives] of planted) {
