@@ -68,8 +68,16 @@ export type DesktopCodexModelProvider = CodexModelProviderSettings & {
 
 /** What Settings shows after Test connection. */
 export type CodexModelProviderTestResult = {
-  /** `GET /models`. */
-  models: { ok: boolean; count: number; error?: string };
+  /** `GET /models`, every page of it. */
+  models: {
+    ok: boolean;
+    count: number;
+    /** Pages read when the endpoint paginates. */
+    pages?: number;
+    /** The endpoint lists more models than PwrAgent loads. */
+    truncated?: boolean;
+    error?: string;
+  };
   /** A completed text response to a short request with instructions and namespaced tools. */
   responses: { ok: boolean; model?: string; skipped?: boolean; error?: string };
   latencyMs?: number;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore, type CSSProperties } from "react";
 import { BranchIcon, DraftIcon, FolderIcon, SubthreadIcon, WorktreeIcon } from "../../icons";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { useProviderChipNeeded } from "./provider-chip-visibility";
 import { useRendererRecoveryState } from "../../lib/RendererRecoveryState";
 import type { PendingLaunchpadCreation, SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
@@ -69,7 +69,11 @@ export function SubthreadDraftRow(props: {
   const title = typedTitle || SUBTHREAD_DRAFT_UNTITLED;
   const parentTitle = draft.parentThreadTitle;
   const worktree = draft.launchpad.workMode === "worktree";
-  const showProvider = useProviderChipNeeded(draft.launchpad.backend);
+  const showProvider = useProviderChipNeeded(draft.launchpad.backend, draft.launchpad.model);
+  const providerLabel = useThreadProviderLabel({
+    source: draft.launchpad.backend,
+    model: draft.launchpad.model,
+  });
   const branchName = draft.launchpad.branchName?.trim();
   const nested = props.nestedDepth !== undefined;
   const shellRef = useRef<HTMLDivElement>(null);
@@ -133,7 +137,7 @@ export function SubthreadDraftRow(props: {
         <span aria-hidden="true" className="thread-row__chips">
           {showProvider ? (
             <span className="thread-row__chip thread-row__chip--backend">
-              {formatBackendLabel(draft.launchpad.backend)}
+              {providerLabel}
             </span>
           ) : null}
           {worktree ? (

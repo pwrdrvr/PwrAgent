@@ -26,6 +26,8 @@ type ThreadPlaceholderLayoutControls = {
 type ThreadPlaceholderHeaderProps = {
   /** The provider behind `backendLabel`; it decides whether the chip shows. */
   backend?: AppServerBackendKind;
+  /** The model chosen, which names a Codex model provider when qualified. */
+  model?: string;
   backendLabel?: string;
   /**
    * The launchpad's machine chip portals into this slot, beside the
@@ -69,7 +71,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
   const showMasthead =
     sidebarHidden && !hasAppTitleBar && Boolean(props.masthead);
-  const providerChipNeeded = useProviderChipNeeded(props.backend);
+  const providerChipNeeded = useProviderChipNeeded(props.backend, props.model);
   const showBackendLabel = Boolean(props.backendLabel) && providerChipNeeded;
 
   return (

@@ -1,12 +1,12 @@
 import type { BackendSummary, CodexSpeed, ThreadTodoModelSettings } from "@pwragent/shared";
 import { codexSpeedOptions } from "@pwragent/shared";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { FEDERATION_TARGET_AVAILABILITY_LABEL } from "../chrome/federation-thread-targets";
 
 export function formatTodoDispatchSettings(settings: ThreadTodoModelSettings, backends: BackendSummary[]): string {
   const summary = backends.find((entry) => entry.kind === settings.backend);
   const model = summary?.launchpadOptions?.models?.find((entry) => entry.id === settings.model);
-  return [formatBackendLabel(settings.backend, backends), model?.label ?? settings.model ?? "Default model",
+  return [formatOwnerProviderLabel(settings.backend, settings.model, backends), model?.label ?? settings.model ?? "Default model",
     settings.reasoningEffort].filter(Boolean).join(" · ");
 }
 

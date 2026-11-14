@@ -238,6 +238,31 @@ export type BackendModelOption = {
   supportsImage?: boolean;
 };
 
+/**
+ * What one Codex model provider's catalog read found. Built by the owner
+ * from the provider's own `GET /models`, with the provider's own key.
+ */
+export type CodexModelProviderCatalogState = {
+  /** The provider id, the `@<id>/` model-id prefix. */
+  id: string;
+  /** The operator's display name for it, such as `MathOS`. */
+  name: string;
+  /**
+   * `ready`: the last read succeeded. `unavailable`: it failed, and `error`
+   * says why. `off`: the operator turned discovery off, so only the listed
+   * models are offered. `pending`: no read has finished yet.
+   */
+  status: "ready" | "unavailable" | "off" | "pending";
+  /** Models the operator listed in Settings. */
+  listedCount: number;
+  /** Models the last successful read returned. */
+  discoveredCount?: number;
+  /** The read stopped at PwrAgent's model limit while the endpoint had more. */
+  truncated?: boolean;
+  /** A short reason for `unavailable`, with the key redacted. */
+  error?: string;
+};
+
 export type BackendLaunchpadOptions = {
   models?: BackendModelOption[];
   reasoningEfforts?: string[];
@@ -307,6 +332,12 @@ export type BackendSummary = {
   /** Owner preferences used by federated composer controls. */
   modelDefaults?: DesktopProviderModelDefaults;
   codexFastAllowed?: boolean;
+  /**
+   * The Codex model providers this owner registered, with each one's
+   * catalog state, so a picker can name a provider that offers no model and
+   * say why. Codex only. Absent on owners that predate it.
+   */
+  codexModelProviders?: CodexModelProviderCatalogState[];
   kind: AppServerBackendKind;
   source?: BackendSourceKind;
   label: string;

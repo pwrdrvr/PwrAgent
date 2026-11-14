@@ -3,7 +3,7 @@ import type {
   MessagingChannelKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -129,7 +129,8 @@ export type ThreadTitleRenameControls = {
  */
 export function ThreadHeader(props: ThreadHeaderProps) {
   const projectLabel = props.projectLabel?.trim();
-  const showProvider = useProviderChipNeeded(props.thread.source);
+  const showProvider = useProviderChipNeeded(props.thread.source, props.thread.model);
+  const providerLabel = useThreadProviderLabel(props.thread);
   // Where the app paints its own title strip — Windows and Linux, both of
   // which lose the native title bar and the menu bar inside it — that strip
   // owns everything window-scoped: the layout toggles, the Star Map, the MSG
@@ -241,7 +242,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             ) : null}
             {showProvider ? (
               <span className="chip chip--backend">
-                {formatBackendLabel(props.thread.source)}
+                {providerLabel}
               </span>
             ) : null}
             {props.hasApprovalRequest ? (

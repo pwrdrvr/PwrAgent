@@ -5,7 +5,7 @@ import {
   type BackendSummary,
   type ThreadTodoAction,
 } from "@pwragent/shared";
-import { fitTodoDispatchSettings, todoDispatchMachines, todoDispatchSpeed } from "../todo-dispatch-model";
+import { fitTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchMachines, todoDispatchSpeed } from "../todo-dispatch-model";
 
 const thread = { backend: "claude" as const, model: "opus", reasoningEffort: "high" };
 const lastDispatch = { backend: "codex" as const, model: "sol", reasoningEffort: "high" };
@@ -121,5 +121,27 @@ describe("handoff machines", () => {
     });
     expect(owner.dispatchTarget).toBe(false);
     expect(machines).toEqual([owner]);
+  });
+});
+
+describe("formatTodoDispatchSettings with Codex model providers", () => {
+  const codexBackends = [{
+    kind: "codex",
+    label: "OpenAI",
+    available: true,
+    capabilities: { createThread: true },
+    launchpadOptions: {
+      models: [
+        { id: "sol", label: "GPT-6.1-Sol" },
+        { id: "@mathos/gpt-oss-120b", label: "gpt-oss-120b", providerId: "mathos", providerLabel: "MathOS" },
+      ],
+    },
+  }] as BackendSummary[];
+
+  it("names a model provider's settings by the provider, and OpenAI's by OpenAI", () => {
+    expect(formatTodoDispatchSettings({ backend: "codex", model: "@mathos/gpt-oss-120b" }, codexBackends))
+      .toBe("MathOS · gpt-oss-120b");
+    expect(formatTodoDispatchSettings({ backend: "codex", model: "sol" }, codexBackends))
+      .toBe("OpenAI · GPT-6.1-Sol");
   });
 });

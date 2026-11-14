@@ -2,6 +2,7 @@ import { useStarMapForeground } from "./useStarMapForeground";
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -119,6 +120,12 @@ import {
 } from "./star-map-project-layout";
 import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useBackendSummaries } from "../../lib/useBackendSummaries";
+import { useSidebarOwnerBackends } from "../../lib/useSidebarOwnerBackends";
+import {
+  ThreadProviderCatalogsContext,
+  useThreadProviderCatalogs,
+} from "../../lib/thread-provider-label";
 import { StarMapChatCard } from "./StarMapChatCard";
 import { buildStarMapEventSubscriptions } from "./star-map-event-subscriptions";
 import {
@@ -1368,6 +1375,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
     ...localThreads, ...[...remote.threadsByInstance.values()].flat(),
   ], [localThreads, remote.threadsByInstance]);
   const localDraftThreadKeys = useThreadDraftIndicators({ composerDraftStore: props.composerDraftStore, threads: draftIndicatorThreads });
+  // Cards name a Codex model provider from its owner's catalog. Inside the
+  // main window the app already provides those catalogs; the dedicated
+  // Star Map window reads its own.
+  const parentProviderCatalogs = useContext(ThreadProviderCatalogsContext);
+  const ownProviderCatalogs = !parentProviderCatalogs && active;
+  const starMapWindowBackends = useBackendSummaries(props.desktopApi, { enabled: ownProviderCatalogs });
+  const starMapOwnerBackends = useSidebarOwnerBackends(props.desktopApi, draftIndicatorThreads, { enabled: ownProviderCatalogs });
+  const starMapProviderCatalogs = useThreadProviderCatalogs(starMapWindowBackends.backends, starMapOwnerBackends, undefined);
   const draftThreadKeys = props.draftThreadKeys ?? localDraftThreadKeys;
   const remoteGeometryError = remote.geometryErrorsByInstance.entries().next().value;
   const remoteGeometryErrorText = remoteGeometryError
@@ -6014,6 +6029,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   return (
     <ThreadProvidersContext.Provider value={threadProviders}>
+    <ThreadProviderCatalogsContext.Provider value={parentProviderCatalogs ?? starMapProviderCatalogs}>
     <div
       ref={layerRef}
       // `is-flying` mirrors the pointer pan's `is-panning` for keyboard
@@ -6901,6 +6917,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         </div>
       ) : null}
     </div>
+    </ThreadProviderCatalogsContext.Provider>
     </ThreadProvidersContext.Provider>
   );
 }

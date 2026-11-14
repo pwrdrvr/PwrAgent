@@ -22,7 +22,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { useProviderLabelFormatter } from "../../lib/thread-provider-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { ChevronRightIcon, MoreVerticalIcon } from "../../icons";
@@ -650,6 +650,7 @@ function AutomationTableRow(props: {
  * spotting from across the table.
  */
 function AutomationRuntimeCell(props: { automation: AutomationDetail }) {
+  const formatProvider = useProviderLabelFormatter();
   const profile = props.automation.executionProfile;
   const runtimeDetails = [
     profile?.model,
@@ -663,7 +664,7 @@ function AutomationRuntimeCell(props: { automation: AutomationDetail }) {
     <div className="automations-table__runtime" role="cell">
       <p className="automations-table__runtime-line">
         <span className="automation-runtime__provider">
-          {formatBackendLabel(profile?.backend ?? props.automation.backend)}
+          {formatProvider(profile?.backend ?? props.automation.backend, profile?.model)}
         </span>
         <span className="automation-runtime__model">
           {runtimeDetails || "Agent default"}

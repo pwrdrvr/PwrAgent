@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from "react";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
-import { formatBackendLabel } from "../../../lib/backend-label";
+import { formatOwnerProviderLabel } from "../../../lib/thread-provider-label";
 import { formatExecutionModeLabel } from "../../../lib/execution-mode";
 import {
   CODEX_AGENT_THREAD_CHANGE_NOTE,
@@ -135,7 +135,7 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
         <dl className="context-grid">
           <div>
             <dt>Backend</dt>
-            <dd>{formatBackendLabel(props.thread.source, props.backends)}</dd>
+            <dd>{formatOwnerProviderLabel(props.thread.source, props.thread.model, props.backends)}</dd>
           </div>
           <div>
             <dt>Initial load</dt>

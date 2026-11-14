@@ -359,7 +359,7 @@ function ProviderEditor(props: {
       ) : null}
       <SettingsField
         label="Name"
-        sub="Shown in model pickers, as in Refuseless · GLM 5.3."
+        sub="Shown in the Provider picker, on thread chips and in model pickers."
         control={
           <input
             aria-label="Provider name"
@@ -630,7 +630,9 @@ function ProviderTestResult(props: {
       <li className={result.models.ok ? "is-ok" : "is-err"}>
         <strong>/models</strong>{" "}
         {result.models.ok
-          ? `${result.models.count} model${result.models.count === 1 ? "" : "s"}${
+          ? `${result.models.count.toLocaleString("en-US")} model${result.models.count === 1 ? "" : "s"}${
+            result.models.pages ? ` over ${result.models.pages} pages` : ""
+          }${result.models.truncated ? " (more not loaded)" : ""}${
             result.latencyMs !== undefined ? ` · ${result.latencyMs} ms` : ""
           }`
           : result.models.error ?? "Failed"}

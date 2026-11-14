@@ -2087,6 +2087,13 @@ export type NavigationCounts = {
    * thread. Absent from older owners.
    */
   backends?: AppServerBackendKind[];
+  /**
+   * Distinct provider identities among the counted threads, sorted: the
+   * backend kind, or `codex:@<provider>` for a Codex thread on a registered
+   * model provider (`threadProviderIdentity`). Set wherever `backends` is.
+   * Absent from older owners, which a viewer reads through `backends`.
+   */
+  providers?: string[];
 };
 
 export type NavigationQueryCoverage = {

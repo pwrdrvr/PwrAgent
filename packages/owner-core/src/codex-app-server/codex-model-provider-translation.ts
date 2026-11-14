@@ -48,6 +48,7 @@ export class CodexModelProviderTranslator {
   }
 
   translateRequest(method: string, params: unknown): unknown {
+    if (method === "thread/list") return this.listEveryProvider(params);
     if (!isRecord(params) || !REQUEST_METHODS.has(method)) return params;
     const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
     const requested = new Set<string>();
@@ -113,6 +114,20 @@ export class CodexModelProviderTranslator {
     const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
     const provider = threadId ? this.providerForThread(threadId) : undefined;
     return provider ? qualifyModelIds(params, provider) : params;
+  }
+
+  /**
+   * Codex lists only its default provider's threads unless `thread/list`
+   * names providers, so a thread on a configured provider would never be
+   * listed: no name, no title, no status in navigation. An empty list asks
+   * for every provider. A filter the caller chose is kept, and without a
+   * configured provider the request is Codex's default listing.
+   */
+  private listEveryProvider(params: unknown): unknown {
+    if (!isRecord(params) || params.modelProviders !== undefined) return params;
+    if (this.resolveProviderIds().size === 0) return params;
+    // A copy: the caller's params may be reused for a retry.
+    return { ...params, modelProviders: [] };
   }
 
   private observeThread(thread: unknown): unknown {

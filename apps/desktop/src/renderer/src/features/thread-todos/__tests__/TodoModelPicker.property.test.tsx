@@ -40,7 +40,13 @@ describe("to-do dispatch model picker properties", () => {
         });
         fireEvent.click(screen.getByRole("menuitem", { name: /^To-do model:/ }));
         const list = screen.getByRole("listbox", { name: /^To-do model/ });
-        expectModelDropdownToList(list, "To-do model", expectedModelDropdown({ kind: "codex", models }));
+        // The Provider picker chooses the Codex provider, so the Model menu
+        // lists that provider's models by the shared rule.
+        expectModelDropdownToList(list, "To-do model", expectedModelDropdown({
+          kind: "codex",
+          models,
+          thread: { model: choice.id },
+        }));
       } finally {
         cleanup();
       }

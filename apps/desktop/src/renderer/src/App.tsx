@@ -113,6 +113,10 @@ import {
   ThreadProvidersContext,
   useStableThreadProviders,
 } from "./features/navigation/provider-chip-visibility";
+import {
+  ThreadProviderCatalogsContext,
+  useThreadProviderCatalogs,
+} from "./lib/thread-provider-label";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
 import type {
   LaunchpadMachineControl,
@@ -2744,8 +2748,15 @@ function DesktopAppShell(props: {
   const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.
+  // Each row names a Codex model provider from its owner's catalog.
+  const threadProviderCatalogs = useThreadProviderCatalogs(
+    windowBackendSummaries.backends,
+    remoteSidebarBackends,
+    windowFederationTarget?.scope === "remote" ? windowFederationTarget.instanceId : undefined,
+  );
+  const directoryIndexCounts = navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts;
   const threadProviders = useStableThreadProviders(
-    navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts.backends,
+    directoryIndexCounts?.providers ?? directoryIndexCounts?.backends,
   );
   const localThreadTitles = useMemo(() => {
     const titles = new Map<string, string>();
@@ -4716,6 +4727,7 @@ function DesktopAppShell(props: {
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
+    <ThreadProviderCatalogsContext.Provider value={threadProviderCatalogs}>
     <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
     <ThreadMaintenanceLauncherContext.Provider value={canMaintainThreads ? openThreadMaintenance : undefined}>
     <TranscriptLinkProvider
@@ -5462,6 +5474,7 @@ function DesktopAppShell(props: {
     </TranscriptLinkProvider>
     </ThreadMaintenanceLauncherContext.Provider>
     </ThreadHandoffBandContext.Provider>
+    </ThreadProviderCatalogsContext.Provider>
     </ThreadProvidersContext.Provider>
     </ThreadPrWatchIndicatorsContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
