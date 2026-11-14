@@ -39,7 +39,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 81;
+export const CURRENT_STATE_DB_USER_VERSION = 82;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2182,6 +2182,22 @@ export class StateDb {
           if ((db.pragma("user_version", { simple: true }) as number) >= 81) return;
           db.exec(OWNER_JOB_SCHEMA);
           db.pragma("user_version = 81");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 82) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 82) return;
+          // Keep existing FTS rowids: one linear copy, without rebuilding tokens
+          // or changing document identities. Future replacements reuse the key.
+          db.exec(`CREATE TABLE IF NOT EXISTS thread_search_fts_rows (
+            fts_rowid INTEGER PRIMARY KEY,
+            identity_key TEXT NOT NULL UNIQUE
+          );
+          INSERT INTO thread_search_fts_rows (fts_rowid, identity_key)
+            SELECT rowid, identity_key FROM thread_search_fts;
+          CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_identity
+            ON thread_usage_lines(backend, thread_id);`);
+          db.pragma("user_version = 82");
         }).immediate();
       }
       db.exec(OWNER_JOB_SCHEMA);
