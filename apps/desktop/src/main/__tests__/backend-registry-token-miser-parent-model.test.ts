@@ -87,17 +87,21 @@ describe("Token Miser parent model resolution", () => {
   let registry: DesktopBackendRegistry;
   let tempDir: string | undefined;
 
+  // The usage ledger reads the store the composition root wired, so a test
+  // that moves to another database builds a registry over it.
+  const createRegistry = (overlayStore: SqliteOverlayStore) => createDesktopBackendRegistry({
+    codexClient: {
+      close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
+      listThreads: async () => [], onNotification: () => () => {},
+      onPendingRequest: () => () => {},
+    } as never,
+    overlayStore,
+  });
+
   beforeEach(() => {
     db = openInMemoryStateDb();
     store = new SqliteOverlayStore(db);
-    registry = createDesktopBackendRegistry({
-      codexClient: {
-        close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
-        listThreads: async () => [], onNotification: () => () => {},
-        onPendingRequest: () => () => {},
-      } as never,
-      overlayStore: store,
-    });
+    registry = createRegistry(store);
   });
 
   afterEach(async () => {
@@ -109,9 +113,7 @@ describe("Token Miser parent model resolution", () => {
   });
 
   function resolve() {
-    return (registry as unknown as {
-      resolveTokenMiserParentModel(threadId: string): Promise<TokenMiserDiagnosticContext | undefined>;
-    }).resolveTokenMiserParentModel("parent");
+    return registryModules(registry).threadUsageLedger.resolveTokenMiserParentModel("parent");
   }
 
   async function legacySelection() {
@@ -198,12 +200,16 @@ describe("Token Miser parent model resolution", () => {
   });
 
   it("does not repair prices or write when resolving an unpriced model", async () => {
+    await registry.close();
     db.close();
     const temp = createTempStateDb("pwragent-parent-model-read-only-");
     tempDir = temp.tempDir;
     db = StateDb.open(temp.dbPath);
     store = new SqliteOverlayStore(db);
-    Object.assign(registry, { overlayStore: store });
+    registry = createRegistry(store);
+    // The new registry's startup repairs write to this database; let them
+    // settle on the empty ledger so the measurement holds only the read.
+    await (registry as unknown as { usageTurnStartupRepair: Promise<void> }).usageTurnStartupRepair;
     seed(db, [{ id: "unpriced", model: "gpt-6-astra", createdAt: Date.UTC(2026, 9, 17), priceStatus: "unpriced" }]);
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
     const { result, writes } = await measureSqliteWrites(resolve);
@@ -233,12 +239,13 @@ describe("Token Miser parent model resolution", () => {
   });
 
   it("sees other connections' commits, rollbacks and deletions without a stale cache", async () => {
+    await registry.close();
     db.close();
     const temp = createTempStateDb("pwragent-parent-model-");
     tempDir = temp.tempDir;
     db = StateDb.open(temp.dbPath);
     store = new SqliteOverlayStore(db);
-    Object.assign(registry, { overlayStore: store });
+    registry = createRegistry(store);
     const writer = StateDb.open(temp.dbPath);
     try {
       seed(writer, [{ id: "old", model: "old" }]);

@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import { buildTokenMiserSavingsSummary, estimateTokenUsageCost } from "@pwragent/shared";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
@@ -110,11 +110,22 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
 
   it("attributes focused inference once to its requesting thread, including discarded answers, and subtracts it from savings", async () => {
     // This measured path needs a real WAL; the other ledger tests use RAM.
+    // The usage ledger reads the store the registry was built with.
+    await registry.close();
     stateDb.close();
     stateDb = StateDb.open(path.join(directory, "focused-usage.db"));
     store = new SqliteOverlayStore(stateDb);
-    Object.assign(registry, { overlayStore: store });
-    const internals = registry as unknown as {
+    registry = createDesktopBackendRegistry({
+      codexClient: {
+        close: async () => {},
+        getInitializeResult: async () => ({ methods: [] }),
+        listThreads: async () => [],
+        onNotification: () => () => {},
+        onPendingRequest: () => () => {},
+      } as never,
+      overlayStore: store,
+    });
+    const internals = registryModules(registry).threadUsageLedger as unknown as {
       recordTokenMiserFocusedInference: NonNullable<TokenMiserServiceOptions["onFocusedInference"]>;
       buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; replays: ReturnType<typeof indexTokenMiserCachedReplays> }): Promise<{ gateCostMicros: number; savingsMicros: number }>;
     };
@@ -172,7 +183,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await fs.writeFile(path.join(root, `${legacy.objectId}.json`), JSON.stringify(legacy));
     await fs.writeFile(path.join(root, `${legacy.objectId}.txt`), "contrived private output");
     const tokenMiserStore = new TokenMiserStore(root);
-    const internals = registry as unknown as {
+    const internals = registryModules(registry).threadUsageLedger as unknown as {
       initializeTokenMiserLedger(): Promise<void>;
       recordTokenMiserParentModelRequest(event: AgentEvent): Promise<void>;
       activeTokenMiserReplayEntries: Map<string, Map<string, unknown>>;
@@ -239,17 +250,9 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         parentModel: "gpt-5.6-terra",
       });
     }
-    const internals = registry as unknown as {
-      tokenMiserStore?: TokenMiserStore;
-      withTokenMiserAccounting(params: {
-        backend: "codex";
-        threadId: string;
-        accounting: ThreadToolAccounting;
-      }): Promise<ThreadToolAccounting>;
-    };
-    internals.tokenMiserStore = tokenMiserStore;
+    (registry as unknown as { tokenMiserStore?: TokenMiserStore }).tokenMiserStore = tokenMiserStore;
     const listMetadata = vi.spyOn(tokenMiserStore, "listMetadata");
-    const accounting = await internals.withTokenMiserAccounting({
+    const accounting = await registryModules(registry).threadUsageLedger.withTokenMiserAccounting({
       backend: "codex",
       threadId: "thread-parent",
       accounting: await store.readThreadToolAccounting({ backend: "codex", threadId: "thread-parent" }),
@@ -269,9 +272,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     registry.onEvent((event) => { events.push(event); });
     const readFile = vi.spyOn(fs, "readFile");
     try {
-      await (registry as unknown as {
-        emitThreadToolAccountingUpdated(params: { backend: "codex"; threadId: string }): Promise<void>;
-      }).emitThreadToolAccountingUpdated({ backend: "codex", threadId: "thread-parent" });
+      await registryModules(registry).threadUsageLedger.emitThreadToolAccountingUpdated({ backend: "codex", threadId: "thread-parent" });
       expect(events.some((event) => event.notification.method === "thread/toolAccounting/updated")).toBe(true);
       expect(readFile.mock.calls.filter(([file]) => String(file).includes("token-miser-objects"))).toEqual([]);
     } finally {
@@ -325,12 +326,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const upsertSubAgents = vi.spyOn(store, "upsertThreadSubAgents");
     const upsertUsageLines = vi.spyOn(store, "upsertThreadUsageLines");
     const persist = (
-      registry as unknown as {
+      registryModules(registry).threadUsageLedger as unknown as {
         persistTokenMiserLedgerEntries(
           metadata: readonly TokenMiserObjectMetadata[],
         ): Promise<void>;
       }
-    ).persistTokenMiserLedgerEntries.bind(registry);
+    ).persistTokenMiserLedgerEntries.bind(registryModules(registry).threadUsageLedger);
 
     await persist([metadata("gate-1", "helper-1"), metadata("gate-2", "helper-2")]);
 
@@ -394,12 +395,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
 
   it("labels a deliberate pass-through as an evaluation with no claimed token savings", async () => {
     const persist = (
-      registry as unknown as {
+      registryModules(registry).threadUsageLedger as unknown as {
         persistTokenMiserLedgerEntries(
           metadata: readonly TokenMiserObjectMetadata[],
         ): Promise<void>;
       }
-    ).persistTokenMiserLedgerEntries.bind(registry);
+    ).persistTokenMiserLedgerEntries.bind(registryModules(registry).threadUsageLedger);
     await persist([{
       ...metadata("gate-1", "helper-1"),
       disposition: "passed_through",
@@ -431,12 +432,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
 
   it("prices a deterministic pass-through without inventing a Luna charge", async () => {
     const persist = (
-      registry as unknown as {
+      registryModules(registry).threadUsageLedger as unknown as {
         persistTokenMiserLedgerEntries(
           metadata: readonly TokenMiserObjectMetadata[],
         ): Promise<void>;
       }
-    ).persistTokenMiserLedgerEntries.bind(registry);
+    ).persistTokenMiserLedgerEntries.bind(registryModules(registry).threadUsageLedger);
     const { helperUsage: _helperUsage, ...policyEntry } = metadata(
       "gate-1",
       "unused-helper",
@@ -480,12 +481,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
   // reached it. After a restart every existing gate stayed un-nested.
   it("rewrites a persisted gate when its rendered projection changes", async () => {
     const persist = (
-      registry as unknown as {
+      registryModules(registry).threadUsageLedger as unknown as {
         persistTokenMiserLedgerEntries(
           metadata: readonly TokenMiserObjectMetadata[],
         ): Promise<void>;
       }
-    ).persistTokenMiserLedgerEntries.bind(registry);
+    ).persistTokenMiserLedgerEntries.bind(registryModules(registry).threadUsageLedger);
 
     // A gate persisted by an older build: same accounting, no parentTurnId.
     await store.upsertThreadSubAgents({
@@ -519,12 +520,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
 
   it("prices a gate from its stamped parent model when no parent line exists", async () => {
     const persist = (
-      registry as unknown as {
+      registryModules(registry).threadUsageLedger as unknown as {
         persistTokenMiserLedgerEntries(
           metadata: readonly TokenMiserObjectMetadata[],
         ): Promise<void>;
       }
-    ).persistTokenMiserLedgerEntries.bind(registry);
+    ).persistTokenMiserLedgerEntries.bind(registryModules(registry).threadUsageLedger);
 
     await persist([{
       ...metadata("gate-1", "helper-1"),
@@ -582,13 +583,13 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     registry.onEvent((event) => {
       events.push(event);
     });
-    const internals = registry as unknown as {
+    const internals = registryModules(registry).threadUsageLedger as unknown as {
       publishLiveTokenMiserLedgerEntry(
         entry: TokenMiserObjectMetadata,
       ): Promise<void>;
       writePendingLiveThreadUsageLines(): Promise<void>;
     };
-    const publish = internals.publishLiveTokenMiserLedgerEntry.bind(registry);
+    const publish = internals.publishLiveTokenMiserLedgerEntry.bind(internals);
     const baseLiveEntry = metadata("gate-live", "helper-live");
     const liveEntry = {
       ...baseLiveEntry,
@@ -736,12 +737,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     ).toHaveLength(1);
 
     const persist = (
-      registry as unknown as {
+      registryModules(registry).threadUsageLedger as unknown as {
         persistTokenMiserLedgerEntries(
           metadata: readonly TokenMiserObjectMetadata[],
         ): Promise<void>;
       }
-    ).persistTokenMiserLedgerEntries.bind(registry);
+    ).persistTokenMiserLedgerEntries.bind(registryModules(registry).threadUsageLedger);
     await persist([retrieved]);
     await persist([retrieved]);
 
@@ -780,16 +781,8 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       toolUseId: "tool-live",
       turnId: "turn-parent",
     });
-    const internals = registry as unknown as {
-      publishLiveTokenMiserLedgerEntry(
-        metadata: TokenMiserObjectMetadata,
-      ): Promise<void>;
-      rememberActiveTokenMiserReplayEntry(
-        metadata: TokenMiserObjectMetadata,
-      ): void;
-      tokenMiserStore?: TokenMiserStore;
-    };
-    internals.tokenMiserStore = tokenMiserStore;
+    (registry as unknown as { tokenMiserStore?: TokenMiserStore }).tokenMiserStore = tokenMiserStore;
+    const internals = registryModules(registry).threadUsageLedger;
     internals.rememberActiveTokenMiserReplayEntry(entry);
 
     const events: AgentEvent[] = [];
@@ -849,7 +842,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
   it.each(["source", "summary"] as const)("charges the requesting round's entire cached prompt once for a %s retrieval", async (kind) => {
     const { objectId, tokenMiserStore } = await startLiveReplayGate();
     const entry = (await tokenMiserStore.readMetadata(objectId))!;
-    const internals = registry as unknown as {
+    const internals = registryModules(registry).threadUsageLedger as unknown as {
       withTokenMiserAccounting(params: { backend: "codex"; threadId: string; accounting: ThreadToolAccounting }): Promise<ThreadToolAccounting>;
       buildTokenMiserLedgerArtifact(params: { entry: TokenMiserObjectMetadata; indexes: { pricing: ReturnType<typeof indexTokenMiserPricingLines>; replays: ReturnType<typeof indexTokenMiserCachedReplays> } }): { subAgent: ThreadSubAgentSummary };
     };
@@ -926,7 +919,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         item: { id: "compact-retrieval", type: "ContextCompaction" },
       } },
     });
-    const internals = registry as unknown as { activeTokenMiserReplayEntries: Map<string, Map<string, unknown>> };
+    const internals = registryModules(registry).threadUsageLedger as unknown as { activeTokenMiserReplayEntries: Map<string, Map<string, unknown>> };
     expect(internals.activeTokenMiserReplayEntries.has("thread-parent")).toBe(false);
     const before = (await tokenMiserStore.readMetadata(objectId))!;
     const requestingRound = parentContextUsageEvent({
@@ -1316,9 +1309,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         // Match the production store callback: stopped gates leave the active
         // replay set, even while their original outputs remain retrievable.
         onMetadataUpdated: (entry) => {
-          (registry as unknown as {
-            rememberActiveTokenMiserReplayEntry(metadata: TokenMiserObjectMetadata): void;
-          }).rememberActiveTokenMiserReplayEntry(entry);
+          registryModules(registry).threadUsageLedger.rememberActiveTokenMiserReplayEntry(entry);
         },
       },
     );
@@ -1340,14 +1331,8 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       toolUseId: "tool-live",
       turnId: "turn-parent",
     });
-    const internals = registry as unknown as {
-      rememberActiveTokenMiserReplayEntry(
-        metadata: TokenMiserObjectMetadata,
-      ): void;
-      tokenMiserStore?: TokenMiserStore;
-    };
-    internals.tokenMiserStore = tokenMiserStore;
-    internals.rememberActiveTokenMiserReplayEntry(entry);
+    (registry as unknown as { tokenMiserStore?: TokenMiserStore }).tokenMiserStore = tokenMiserStore;
+    registryModules(registry).threadUsageLedger.rememberActiveTokenMiserReplayEntry(entry);
     return { objectId, tokenMiserStore };
   }
 });

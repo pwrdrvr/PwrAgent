@@ -14,6 +14,7 @@ import { statSync } from "node:fs";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
+import { usageLedgerStandIn } from "./helpers/usage-ledger-stand-in";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
@@ -611,9 +612,12 @@ describe("thread sub-agent table", () => {
     } = {}) {
       const registry = {
         getCachedThreadSummary: () => ({ id: threadId, source: "codex" }),
-        liveTokenMiserSubAgents: new Map([[threadId, new Map((live.gates ?? []).map((gate) => [gate.monitorId, gate]))]]),
-        // The registry reads live native usage through the sub-agent monitor service.
-        subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map([[threadId, new Map(live.usage ?? [])]]) },
+        // The registry merges live gates through its usage ledger, which reads
+        // live native usage through the sub-agent monitor service.
+        threadUsageLedger: usageLedgerStandIn({
+          subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map([[threadId, new Map(live.usage ?? [])]]) },
+          subAgents: new Map([[threadId, new Map((live.gates ?? []).map((gate) => [gate.monitorId, gate]))]]),
+        }),
         mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.mergeLiveTokenMiserSubAgents,
         listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
         readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
