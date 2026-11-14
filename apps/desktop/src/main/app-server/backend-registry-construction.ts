@@ -199,6 +199,7 @@ export type DesktopBackendRegistryOptions = {
   queuedMessageTitleSettleMs?: number;
   acpWorktreeRepositoryResolver?: (
     cwd: string,
+    options?: { fresh?: boolean },
   ) => Promise<LinkedDirectorySummary | undefined>;
   };
 
@@ -286,6 +287,7 @@ export interface RegistryDependencies {
   tokenMiserPluginManager?: TokenMiserPluginManager;
   acpWorktreeRepositoryResolver: (
     cwd: string,
+    options?: { fresh?: boolean },
   ) => Promise<LinkedDirectorySummary | undefined>;
   acpAvailableCommandsStore?: AcpAvailableCommandsStorage;
   acpAvailableCommandProbeBudgetMs: number;

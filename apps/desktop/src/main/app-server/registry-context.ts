@@ -24,6 +24,7 @@ export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
   "upsertThreadSubAgents" | "reconcileOrphanedThreadSubAgents" | "moveLegacyThreadSubAgents"
   | "getThreadSubAgent" | "getThreadSubAgents" | "listThreadSubAgents"
   | "listThreadSubAgentsByMonitorIdPrefix" | "upsertThreadSubAgent" | "listActiveThreadSubAgents"
+  | "listArchiveActiveSubAgentThreadIds"
 >;
 
 export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
