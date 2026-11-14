@@ -111,8 +111,10 @@ Using decimal MB and `events/second × bytes/event × 86400 seconds`:
 The usage index adds no commit: the measured incremental projection is
 **4.120 MB/day at 1,000 individually committed new usage lines/day**. Grouped
 ledger writes can share pages; this is a one-insert-per-commit calibration.
-The migration's map copy and index construction happen once, with no recurring
-migration writes. Search no longer commits per missing identity.
+The existing full-compaction page budget increases by three WAL frames
+(12,360 bytes), with the same two commits. At one compaction/day that adds
+0.01236 MB/day. The migration's map copy and index construction happen once,
+with no recurring migration writes. Search no longer commits per missing identity.
 
 ## Regression evidence and reproduction
 
