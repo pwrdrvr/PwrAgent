@@ -75639,6 +75639,8 @@ describe("agent tool access ceiling", () => {
     storedCallerMode?: Mode;
     /** The target thread's own stored mode. Default Access unless named. */
     targetMode?: Mode;
+    /** Registers the caller as the Voice and Star Map manager thread. */
+    manager?: boolean;
   }) {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
@@ -75675,6 +75677,13 @@ describe("agent tool access ceiling", () => {
         },
       },
     });
+    if (params.manager) {
+      const manager = { backend: "codex" as const, threadId: "agent-thread" };
+      Object.assign(overlayStore, {
+        getVoiceManagerThread: () => manager,
+        getStarMapManagerThread: () => manager,
+      });
+    }
     const registry = createDesktopBackendRegistry({
       codexClient,
       createScratchProjectDirectory: async () => "/repo/scratch",
@@ -75914,6 +75923,68 @@ describe("agent tool access ceiling", () => {
         await registry.close();
       },
     );
+  });
+
+  // The Voice and Star Map managers start at the launchpad default, which is
+  // Default Access unless the operator changed it. Being a manager grants no
+  // access: an operator's spoken or typed "start a Full Access thread" is
+  // still the manager's own tool call, and the operator never saw a gate.
+  describe("a manager thread started at the launchpad default", () => {
+    it.each([
+      {
+        tool: "handoff_task",
+        args: {
+          task: "Fix the flaky test.",
+          title: "Flaky test",
+          workspaceMode: "none",
+          executionMode: "full-access",
+        },
+      },
+      {
+        tool: "send_message_to_thread",
+        args: {
+          backend: "codex",
+          threadId: "target-thread",
+          prompt: "Pick this up.",
+          executionMode: "full-access",
+        },
+      },
+      {
+        tool: "mutate_thread",
+        args: { backend: "codex", threadId: "target-thread", executionMode: "full-access" },
+      },
+    ])("refuses $tool asking for Full Access", async ({ tool, args }) => {
+      const { codexClient, overlayStore, registry, call } = await startCaller({
+        callerMode: "default",
+        manager: true,
+      });
+
+      expect(await call(tool, args)).toMatchObject(forbidden);
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+      expect(codexClient.startTurnCalls).toHaveLength(0);
+      await expect(overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "target-thread",
+      })).resolves.toMatchObject({ executionMode: "default" });
+
+      await registry.close();
+    });
+
+    it("hands off at Full Access only once the operator raised the manager itself", async () => {
+      const { registry, call } = await startCaller({ callerMode: "full-access", manager: true });
+
+      const result = await call("handoff_task", {
+        task: "Fix the flaky test.",
+        title: "Flaky test",
+        workspaceMode: "none",
+        executionMode: "full-access",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.payload.inheritedSettings).toMatchObject({ executionMode: "full-access" });
+
+      await registry.close();
+    });
   });
 
   describe("a lower mode the operator queued mid-turn", () => {

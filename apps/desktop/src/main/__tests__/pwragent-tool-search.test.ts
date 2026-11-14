@@ -82,11 +82,17 @@ describe("PwrAgent tool discovery", () => {
     const mentions = (name: string, line: string) => new RegExp(`\\b${name}\\b`).test(line);
     // A tool named only in a "Never use X" line is forbidden, not used.
     const forbidden = names.filter((name) => lines.some((line) => /\bnever use\b/i.test(line) && mentions(name, line)));
-    const used = names.filter((name) => !forbidden.includes(name)
+    // "load X with tool_search" names a tool for a rare path, loaded on
+    // demand. Sending its schema on every turn would waste the budget the
+    // eager set is held to.
+    const onDemand = names.filter((name) => !forbidden.includes(name)
+      && lines.some((line) => new RegExp(`\\bload ${name} with tool_search\\b`).test(line)));
+    const used = names.filter((name) => !forbidden.includes(name) && !onDemand.includes(name)
       && lines.some((line) => mentions(name, line)));
     expect(used.length).toBeGreaterThan(0);
     expect(used.filter((name) => !VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
     expect(forbidden.filter((name) => VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
+    expect(onDemand.filter((name) => VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
     // Every eager tool earns its per-turn cost by being one the instructions use.
     expect([...VOICE_MANAGER_EAGER_TOOLS].filter((name) => !used.includes(name))).toEqual([]);
   });
