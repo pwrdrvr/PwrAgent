@@ -74,6 +74,7 @@ function projectThread(params: {
         label: params.path.split("/").pop() ?? params.path,
         path: params.path,
         worktreePath,
+        repositoryKey: `github.com/exampleorg/${params.path.split("/").pop()}`,
       },
     ],
   });
@@ -324,6 +325,25 @@ describe("pull request links in transcript markdown", () => {
     expect(screen.getByText(/#13290/)).toBeInTheDocument();
   });
 
+  it("keeps review finding numbers plain when a same-directory thread carries foreign PRs", () => {
+    const activeThread = projectThread({ id: "active", path: "/repos/catalog-service", prs: [prSummary()] });
+    const sibling = projectThread({
+      id: "sibling", path: "/repos/catalog-service",
+      prs: [1, 2].map((number) => prSummary({
+        number, repo: "unrelated", url: `https://github.com/ExampleOrg/unrelated/pull/${number}`,
+      })),
+    });
+    render(
+      <PullRequestLinkProvider activeThread={activeThread} threads={[activeThread, sibling]}>
+        <ThreadMarkdown text={"- **Addressed #1:** Preview links preserve selection.\n- **Addressed #2:** Screens follow the visible mount.\n\nPR #13290 checks passed."} />
+      </PullRequestLinkProvider>,
+    );
+    expect(screen.getByText("Addressed #1:")).toBeInTheDocument();
+    expect(screen.getByText("Addressed #2:")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /unrelated#/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /catalog-service#13290/ })).toBeInTheDocument();
+  });
+
   it("leaves a bare number plain when it is ambiguous across linked repositories", () => {
     const firstPath = "/repos/catalog-service";
     const secondPath = "/repos/analytics";
@@ -336,6 +356,7 @@ describe("pull request links in transcript markdown", () => {
           label: "catalog-service",
           path: firstPath,
           worktreePath: "/worktrees/active-first",
+          repositoryKey: "github.com/exampleorg/catalog-service",
         },
         {
           id: "active-second",
@@ -343,6 +364,7 @@ describe("pull request links in transcript markdown", () => {
           label: "analytics",
           path: secondPath,
           worktreePath: "/worktrees/active-second",
+          repositoryKey: "github.com/exampleorg/analytics",
         },
       ],
     });

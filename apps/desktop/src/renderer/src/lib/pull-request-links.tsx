@@ -2,6 +2,9 @@ import {
   buildPullRequestStatusKey,
   pullRequestMatchesRepositoryKey,
   resolvePullRequestIdentity,
+  threadTodoThreadKey,
+  type AppServerBackendKind,
+  type FederationRemoteTarget,
   type NavigationThreadSummary,
   type PrSummary,
 } from "@pwragent/shared";
@@ -15,6 +18,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { federationTargetsEqual, threadSummaryIdentityKey } from "./federated-thread-events";
 
 export type PullRequestLinkContextValue = {
   hasPeerStatusAuthority: (pr: PrSummary) => boolean;
@@ -31,15 +35,16 @@ export type PullRequestLinkContextValue = {
 
 /**
  * A bare PR number named by one thread, such as a to-do's merge card. The
- * number resolves against that thread's attached PRs, then against PRs
- * attached to threads in `projectPath`. It resolves only when exactly one
- * PR matches, so a chip never opens another repository's PR.
+ * number resolves against that owner's thread attachments, then against PRs
+ * matching the repository identity its owner supplies for `projectPath`.
+ * It resolves only when exactly one PR matches.
  */
 export type ThreadPullRequestNumberRequest = {
-  backend: string;
+  backend: AppServerBackendKind;
   threadId: string;
   number: number;
   projectPath?: string;
+  federationTarget?: FederationRemoteTarget;
 };
 
 function samePullRequestChip(
@@ -175,7 +180,7 @@ class PullRequestLinkMetadataStore {
   ): PrSummary | undefined {
     // useSyncExternalStore reads on every render and every wake; scan the
     // thread list once per navigation update instead.
-    const cacheKey = [request.backend, request.threadId, request.number, request.projectPath ?? ""]
+    const cacheKey = [threadTodoThreadKey(request), request.number, request.projectPath ?? ""]
       .join("\u0000");
     if (this.threadNumberSnapshots.has(cacheKey)) {
       return this.threadNumberSnapshots.get(cacheKey);
@@ -188,20 +193,23 @@ class PullRequestLinkMetadataStore {
   private resolveThreadNumber(
     request: ThreadPullRequestNumberRequest,
   ): PrSummary | undefined {
-    const thread = this.threads.find((candidate) =>
-      candidate.source === request.backend && candidate.id === request.threadId);
+    const threadKey = threadTodoThreadKey(request);
+    const thread = this.threads.find((candidate) => threadSummaryIdentityKey(candidate) === threadKey);
     const own = thread ? this.uniqueNumberMatch([thread], request.number) : undefined;
     if (own !== undefined) {
       return own ?? undefined;
     }
     const projectPath = normalizeProjectPath(request.projectPath);
-    if (!projectPath) {
-      return undefined;
+    const repositoryKeys = thread ? threadRepositoryKeys(thread, projectPath) : new Set<string>();
+    if (repositoryKeys.size === 0 && projectPath) {
+      // Paths select directory metadata on the card's owner only. They never
+      // authorize importing that directory's threads' attachment history.
+      for (const candidate of this.threads) {
+        if (!federationTargetsEqual(candidate.federation?.ref.target, request.federationTarget)) continue;
+        for (const key of threadRepositoryKeys(candidate, projectPath)) repositoryKeys.add(key);
+      }
     }
-    const inProject = this.threads.filter((candidate) =>
-      normalizeProjectPath(candidate.projectKey) === projectPath
-      || threadRepositoryPaths(candidate).has(projectPath));
-    return this.uniqueNumberMatch(inProject, request.number) ?? undefined;
+    return this.uniqueNumberMatch(this.threads, request.number, [...repositoryKeys]) ?? undefined;
   }
 
   /**
@@ -211,11 +219,13 @@ class PullRequestLinkMetadataStore {
   private uniqueNumberMatch(
     threads: NavigationThreadSummary[],
     number: number,
+    repositoryKeys?: readonly string[],
   ): PrSummary | null | undefined {
     let match: string | undefined;
     for (const thread of threads) {
       for (const pr of thread.prs ?? []) {
         if (pr.number !== number) continue;
+        if (repositoryKeys && !repositoryKeys.some((key) => pullRequestMatchesRepositoryKey(pr, key))) continue;
         const key = buildPullRequestStatusKey(pr);
         if (match !== undefined && match !== key) return null;
         match = key;
@@ -337,20 +347,26 @@ function pullRequestsByNumberForActiveProject(params: {
     return new Map();
   }
 
+  const selectedThread = params.activeThread;
   const activeThread = params.threads.find(
-    (thread) =>
-      thread.source === params.activeThread?.source
-      && thread.id === params.activeThread.id,
-  ) ?? params.activeThread;
+    (thread) => threadSummaryIdentityKey(thread) === threadSummaryIdentityKey(selectedThread),
+  ) ?? selectedThread;
+  const activeKey = threadSummaryIdentityKey(activeThread);
+  const repositoryKeys = threadRepositoryKeys(activeThread);
   const candidatesByNumber = new Map<number, Map<string, PrSummary>>();
 
-  for (const thread of params.threads) {
-    const sameThread =
-      thread.source === activeThread.source && thread.id === activeThread.id;
-    if (!sameThread && !siblingPullRequestsAreInScope(activeThread, thread)) {
-      continue;
-    }
+  // Selected detail can be present before its navigation row is loaded.
+  const candidates = [activeThread, ...params.threads.filter(
+    (thread) => threadSummaryIdentityKey(thread) !== activeKey,
+  )];
+  for (const thread of candidates) {
+    const sameThread = threadSummaryIdentityKey(thread) === activeKey;
     for (const pr of thread.prs ?? []) {
+      // An attachment can outlive the directory it came from. Only the active
+      // thread's own attachments establish scope without a repository match.
+      if (!sameThread && ![...repositoryKeys].some((key) => pullRequestMatchesRepositoryKey(pr, key))) {
+        continue;
+      }
       const key = buildPullRequestStatusKey(pr);
       const byKey = candidatesByNumber.get(pr.number) ?? new Map();
       byKey.set(key, params.prsByKey.get(key) ?? pr);
@@ -370,37 +386,25 @@ function pullRequestsByNumberForActiveProject(params: {
   return resolved;
 }
 
-function siblingPullRequestsAreInScope(
-  activeThread: NavigationThreadSummary,
-  siblingThread: NavigationThreadSummary,
-): boolean {
-  const activeRepositories = threadRepositoryPaths(activeThread);
-  const siblingRepositories = threadRepositoryPaths(siblingThread);
-  if (siblingRepositories.size > 0) {
-    return (
-      activeRepositories.size > 0
-      && [...siblingRepositories].every((path) => activeRepositories.has(path))
-    );
+function threadRepositoryKeys(thread: NavigationThreadSummary, projectPath?: string): Set<string> {
+  const keys = new Set<string>();
+  const add = (key: string | undefined) => {
+    if (key?.trim()) keys.add(key.trim().toLowerCase());
+  };
+  const matchesProject = (directory: NavigationThreadSummary["linkedDirectories"][number]) =>
+    !projectPath
+    || normalizeProjectPath(directory.path) === projectPath
+    || normalizeProjectPath(directory.worktreePath) === projectPath;
+  const primary = thread.linkedDirectories?.[0];
+  if (!projectPath || normalizeProjectPath(thread.projectKey) === projectPath || (primary && matchesProject(primary))) {
+    add(thread.primaryGitRepository);
   }
-
-  const activeProjectKey = normalizeProjectPath(activeThread.projectKey);
-  const siblingProjectKey = normalizeProjectPath(siblingThread.projectKey);
-  return Boolean(
-    activeProjectKey
-    && siblingProjectKey
-    && activeProjectKey === siblingProjectKey,
-  );
-}
-
-function threadRepositoryPaths(thread: NavigationThreadSummary): Set<string> {
-  const paths = new Set<string>();
   for (const directory of thread.linkedDirectories ?? []) {
-    const directoryPath = normalizeProjectPath(directory.path);
-    if (directoryPath) {
-      paths.add(directoryPath);
-    }
+    if (!matchesProject(directory)) continue;
+    add(directory.repositoryKey);
+    for (const key of directory.repositoryKeys ?? []) add(key);
   }
-  return paths;
+  return keys;
 }
 
 function normalizeProjectPath(value: string | undefined): string | undefined {
@@ -518,6 +522,7 @@ export function useThreadPullRequestNumber(
   const threadId = request?.threadId;
   const number = request?.number;
   const projectPath = request?.projectPath;
+  const instanceId = request?.federationTarget?.instanceId;
   const subscribe = useCallback(
     (listener: () => void) =>
       links?.subscribeThreadNumbers(listener) ?? (() => {}),
@@ -530,9 +535,10 @@ export function useThreadPullRequestNumber(
           threadId,
           number,
           ...(projectPath ? { projectPath } : {}),
+          ...(instanceId ? { federationTarget: { scope: "remote", instanceId } as const } : {}),
         })
       : undefined,
-    [links, backend, threadId, number, projectPath],
+    [links, backend, threadId, number, projectPath, instanceId],
   );
 
   return useSyncExternalStore(subscribe, getSnapshot, () => undefined);

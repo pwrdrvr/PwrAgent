@@ -11,7 +11,8 @@ import { PullRequestLinkChip } from "../pr-status/PullRequestLinkChip";
  * A merge card's pull request as the live PR chip: status dot, status card
  * on hover, click to open. The action stores what `gh pr merge` takes, a
  * number or a URL. A URL names its PR; a number resolves against the PRs
- * attached to the raising thread, then to threads in the card's project.
+ * attached to the raising thread on its owner, then to the card's project
+ * repository using metadata from that owner.
  * When nothing resolves, the plain `#123` text stays: a guessed chip could
  * open another repository's PR.
  */
@@ -31,6 +32,7 @@ export function TodoPullRequestChip(props: {
         threadId: todo.threadId,
         number: Number(pullRequest),
         projectPath: threadTodoActionProject(todo)?.path,
+        federationTarget: todo.federationTarget,
       }
     : undefined);
   const pr = fromUrl ?? fromThread;
