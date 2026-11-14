@@ -47,15 +47,18 @@ export function hydrateHoverStableSidebarSnapshot(
       threadSummaryIdentityKey(thread),
     ),
   );
+  const frozenVisibleKeys = new Set(frozen.visibleKeys);
+  const latestVisibleKeys = options?.removeMissingThreads ? new Set(latest.visibleKeys) : undefined;
 
   return {
     order: retainNavigationPresentationOrder(frozen.order, latest.order),
-    visibleKeys: [...frozen.visibleKeys.filter((key) => !options?.removeMissingThreads || latest.visibleKeys.includes(key)),
-      ...latest.visibleKeys.filter((key) => !frozen.visibleKeys.includes(key))],
+    visibleKeys: [...frozen.visibleKeys.filter((key) => !latestVisibleKeys || latestVisibleKeys.has(key)),
+      ...latest.visibleKeys.filter((key) => !frozenVisibleKeys.has(key))],
     directories: [
       ...frozen.directories.map((directory) => {
         const latestDirectory = latestDirectoriesByKey.get(directory.key);
         if (!latestDirectory) return directory;
+        if (latestDirectory.pinnedRank === directory.pinnedRank) return latestDirectory;
         return {
           ...latestDirectory,
           pinnedRank: directory.pinnedRank,
@@ -74,6 +77,14 @@ export function hydrateHoverStableSidebarSnapshot(
         if (!latestThread) {
           return options?.removeMissingThreads ? [] : [thread];
         }
+        if (latestThread.createdAt === thread.createdAt
+          && latestThread.parentThreadBackend === thread.parentThreadBackend
+          && latestThread.parentThreadId === thread.parentThreadId
+          && latestThread.parentThreadInstanceId === thread.parentThreadInstanceId
+          && (options?.refreshThreadPinRanks || latestThread.pinnedRank === thread.pinnedRank)
+          && latestThread.codexNativeSubAgents === thread.codexNativeSubAgents
+          && latestThread.subthreadsCollapsed === thread.subthreadsCollapsed
+          && latestThread.subthreadOrder === thread.subthreadOrder) return [latestThread];
         return [
           {
             ...latestThread,
@@ -166,18 +177,13 @@ function preserveOrder(
  * Wrap `hydrateHoverStableSidebarSnapshot` so that a call producing the same
  * VALUES as the previous call returns the previous OBJECTS.
  *
- * The hydrate runs during render for as long as the pointer rests on a row,
- * and it rebuilds every thread, every directory, and every array on each
- * call — so without this a memoized row re-renders on every parent render for
- * exactly as long as the pointer is on it, which is the one situation the
- * memo was added for. Measured before this existed: 200 `thread`-identity
- * changes while hovering versus 0 when not.
+ * Hydration runs while the pointer rests on a row. Structural overrides can
+ * allocate replacement rows, so recover the previous identity when their
+ * values have not changed at the downstream memo boundary.
  *
- * Identity has to be recovered from values rather than from input references.
- * The `latest` argument is a fresh object literal built inline at the
- * `useHoverStableSnapshot` call site — its `visibleKeys` is a fresh `.map()`
- * and its `order` a fresh Map — so it is never reference-equal to the
- * previous render's, and a cache keyed on the inputs would never hit.
+ * Immutable input collections also allow unrelated Sidebar renders to reuse
+ * the result before building indexes. Equal-but-fresh producer values still
+ * recover identity at the row memo boundary below.
  *
  * One hydrator instance holds one previous result, so callers must keep it
  * per component instance (a ref), not per module.
@@ -188,7 +194,16 @@ export function createHoverStableSidebarHydrator(): (
   options?: HydrateHoverStableSidebarOptions,
 ) => HoverStableSidebarSnapshot {
   let previous: HoverStableSidebarSnapshot | undefined;
+  let inputs: { frozen: HoverStableSidebarSnapshot; latest: HoverStableSidebarSnapshot;
+    refreshThreadPinRanks: boolean; removeMissingThreads: boolean } | undefined;
   return (frozen, latest, options) => {
+    const refreshThreadPinRanks = options?.refreshThreadPinRanks === true;
+    const removeMissingThreads = options?.removeMissingThreads === true;
+    if (inputs?.frozen === frozen && inputs.latest.directories === latest.directories
+      && inputs.latest.threads === latest.threads && inputs.latest.visibleKeys === latest.visibleKeys
+      && inputs.latest.order === latest.order && inputs.refreshThreadPinRanks === refreshThreadPinRanks
+      && inputs.removeMissingThreads === removeMissingThreads) return previous!;
+    inputs = { frozen, latest, refreshThreadPinRanks, removeMissingThreads };
     const next = hydrateHoverStableSidebarSnapshot(frozen, latest, options);
     if (previous === undefined) {
       previous = next;

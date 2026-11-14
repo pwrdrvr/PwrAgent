@@ -19,6 +19,9 @@ export function navigationDiagnosticCause(event?: AgentEvent): NavigationDiagnos
 /** Only known row-change methods survive; arbitrary approval method prefixes do not. */
 export function safeNavigationDiagnosticTrigger(method: unknown): string | undefined {
   if (typeof method !== "string" || method.length > 100) return undefined;
+  if (method === "action/create-thread" || method === "action/materialize-launchpad"
+    || method === "action/show-thread" || method === "action/select-subthread-parent"
+    || method === "action/pull-request-refresh") return method;
   if (method.endsWith("/requestApproval")) return "approval-request";
   return method === "approval-request" || navigationQueryEventRequiresRefresh(method) ? method : undefined;
 }

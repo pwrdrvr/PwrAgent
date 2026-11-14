@@ -56,6 +56,7 @@ async function checkFixpoint(input: Input, callbackChurn: boolean) {
     await act(async () => { view.rerender({ selectedThread: changed, onRefreshNavigation: navigation }); });
     expect(refresh).toHaveBeenCalledTimes(2);
     expect(navigation).toHaveBeenCalledTimes(1);
+    expect(navigation).toHaveBeenLastCalledWith(changed);
     const settled = { ...changed, prs: responsePrs };
     await act(async () => { view.rerender({ selectedThread: settled, onRefreshNavigation: navigation }); });
     await act(async () => { view.rerender({ selectedThread: structuredClone(settled), onRefreshNavigation: navigation }); });

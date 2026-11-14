@@ -1,4 +1,4 @@
-import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
+import { navigationDiagnosticCause, navigationDiagnosticTrigger, safeNavigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope, readNavigationMetadataDependencies } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationMetadataDependencies, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
@@ -272,17 +272,20 @@ export class NavigationWindowQueries {
     this.publish();
   }
 
-  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause, trigger?: string): Promise<void> {
+  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause, trigger?: string, includeDirectoryIndex = false): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
-    return Promise.all(resources.filter((resource) => (!invalidatedOnly || resource.invalidated)
+    // Keep the caller separate from the event that fenced each page: a queued
+    // action can consume a seen/status invalidation without becoming its cause.
+    navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", caller: safeNavigationDiagnosticTrigger(trigger) });
+    return Promise.all(resources.filter((resource) => (!invalidatedOnly || resource.invalidated || (includeDirectoryIndex && resource.value.id === "directory-index"))
       && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget)))).map(async (resource) => {
       if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
       resource.diagnosticTrigger ??= trigger;
       // An unscoped refresh can discover membership missed while hidden or
       // between provider observations. A scoped row refresh already knows
       // exactly why its baseline is stale.
-      if (!invalidatedOnly && !resource.invalidated) resource.membershipUncertain = true;
+      if ((!invalidatedOnly || (includeDirectoryIndex && resource.value.id === "directory-index")) && !resource.invalidated) resource.membershipUncertain = true;
       if (resource.pending) resource.refreshAfterPending = true;
       await this.read(resource, false);
       // A caller awaiting refresh owns the coalesced replacement too, not
@@ -306,7 +309,7 @@ export class NavigationWindowQueries {
         || method === "pullRequest/status/updated";
       const childRowChange = resource.value.state.request.query.kind === "children"
         && (method === "thread/pin/added" || method === "thread/pin/removed"
-          || (method === "navigation/remoteThreadPins/changed" && (typeof pinParams?.threadId === "string" || Array.isArray(pinParams?.rowChanges)))
+          || (method === "navigation/remoteThreadPins/changed" && Array.isArray(pinParams?.rowChanges))
           || method === "pullRequest/status/updated");
       // An instance-only summary notice can discover new mounted children.
       // Its pending replacement cannot use the old membership to exclude a
@@ -370,6 +373,12 @@ export class NavigationWindowQueries {
       rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
+    // The stream acknowledgement repairs direct owner reads. Viewer membership
+    // is published separately by the summary cache after its fenced owner read;
+    // reading the viewer here observes the old cache, then reads it all again
+    // when that publication arrives. The publication still discovers new rows.
+    if (method === "federation/eventStream/changed" && event.federationTarget?.scope === "remote"
+      && request.inventory === "viewer" && request.federationTarget?.scope !== "remote") return false;
     if (request.inventory === "viewer" && request.federationTarget?.scope !== "remote" && !resource.membershipUncertain
       && page?.coverage.state === "complete") {
       if (!this.pageDependencies.has(page)) this.pageDependencies.set(page, readNavigationMetadataDependencies(page.metadataDependencies));
@@ -380,6 +389,11 @@ export class NavigationWindowQueries {
       }
       if (dependencies && method === "pullRequest/status/updated" && typeof params.prKey === "string") {
         return Boolean(resource.prAttachmentsUncertain) || dependencies.prKeys.includes(params.prKey);
+      }
+      if (dependencies && !navigationInvalidationMayChangeMembership(method) && typeof params.threadId === "string") {
+        const ref = { backend: event.backend, threadId: params.threadId,
+          ownerInstanceId: event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined };
+        return dependencies.threadKeys.includes(navigationIdentityKey(ref));
       }
     }
     if (request.query.kind === "directory" && directoryScope && !resource.membershipUncertain
@@ -398,7 +412,8 @@ export class NavigationWindowQueries {
     if (request.query.kind === "children" && !resource.membershipUncertain
       && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
       && (!navigationInvalidationMayChangeMembership(method)
-        || method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed"
+        || method === "thread/pin/added" || method === "thread/pin/removed"
+        || (method === "navigation/remoteThreadPins/changed" && Array.isArray(params.rowChanges))
         || method === "pullRequest/status/updated")) {
       // Pins move roots between directory sections, but do not reparent children.
       // Metadata refreshes preserve this membership proof. Membership changes

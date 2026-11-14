@@ -244,7 +244,8 @@ export function useBoundedNavigationWindow(params: Demand & {
   }, [desktopApi?.onAgentEvent, desktopApi?.onMessagingBindingsChanged]);
 
   const invalidate = useCallback((owners?: readonly FederationTarget[], event?: AgentEvent) => controllerRef.current?.invalidate(undefined, owners, event), []);
-  const refresh = useCallback((owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause) => controllerRef.current?.refresh(undefined, owners, invalidatedOnly, cause) ?? Promise.resolve(), []);
+  const refresh = useCallback((owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause,
+    trigger?: string, includeDirectoryIndex = false) => controllerRef.current?.refresh(undefined, owners, invalidatedOnly, cause, trigger, includeDirectoryIndex) ?? Promise.resolve(), []);
   const loadMore = useCallback((id: string) => controllerRef.current?.loadMore(id) ?? Promise.resolve(), []);
   const rebaseline = useCallback((id: string, anchor: NavigationQueryAnchor) => controllerRef.current?.rebaseline(id, anchor) ?? Promise.resolve(), []);
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);

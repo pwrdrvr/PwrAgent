@@ -131,7 +131,7 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
   } finally { mounted.unmount(); rows.restore(); completions.splice(0).forEach((finish) => finish()); }
 }, 30_000);
 
-it.each([4, 16, 48, 128].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))))("bounds unrelated metadata refresh $kind with $groups expanded mounted roots", async ({ groups, kind }) => {
+it.each([4, 8, 16, 48, 128].flatMap((groups) => [0, 1, 2, 3].map((kind) => ({ groups, kind }))))("bounds unrelated metadata refresh $kind with $groups expanded mounted roots", async ({ groups, kind }) => {
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   const home = { key: "directory:/fixture", kind: "directory" as const, label: "Fixture", path: "/fixture" };
   const target = { scope: "remote" as const, instanceId: "peer" };
@@ -205,10 +205,15 @@ it.each([4, 16, 48, 128].flatMap((groups) => [0, 1].map((kind) => ({ groups, kin
       { backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer",
         rowChanges: [{ backend: "codex", threadId: "offscreen-sibling", ownerInstanceId: "peer" }] } } },
       { backend: "codex", notification: { method: "pullRequest/status/updated", params: { prKey: buildPullRequestStatusKey(pr), pr } } },
+      { backend: "codex", federationTarget: target, notification: { method: "federation/eventStream/changed",
+        params: { instanceId: "peer", epoch: "replacement" } } },
+      { backend: "codex", notification: { method: "navigation/thread/seen", params: { threadId: "offscreen-sibling", seenUpdatedAt: 200 } } },
     ];
     for (const event of [changes[kind]!]) {
       const retainedPins = navigation.pagedNavigation.resources.get(pins)!.state.page;
       expect(retainedPins!.entries).toHaveLength(groups);
+      const ownerPages = [...navigation.pagedNavigation.resources.values()].filter((resource) =>
+        resource.state.request.inventory === "owner" && resource.state.request.federationTarget?.scope === "remote").length;
       read.mockClear(); publish.mockClear(); commits = 0; rowRenders = 0; gated = true;
       await act(async () => {
         for (const listener of listeners) listener(event);
@@ -220,9 +225,10 @@ it.each([4, 16, 48, 128].flatMap((groups) => [0, 1].map((kind) => ({ groups, kin
       console.info("mounted metadata budget", { groups, method: event.notification.method,
         calls: read.mock.calls.length, childCalls, publications: publish.mock.calls.length, commits, rowRenders });
       expect(childCalls).toBe(0);
-      expect(read.mock.calls.length).toBe(0);
-      expect(publish).toHaveBeenCalledTimes(0);
-      expect(commits).toBe(0);
+      expect(read.mock.calls.length).toBe(kind === 2 ? ownerPages : 0);
+      expect(read.mock.calls.every(([sent]) => sent.inventory === "owner")).toBe(true);
+      expect(publish).toHaveBeenCalledTimes(kind === 2 ? 2 * ownerPages + 1 : 0);
+      expect(commits).toBeLessThanOrEqual(kind === 2 ? 2 * ownerPages + 3 : 0);
       expect(rowRenders).toBe(0);
       expect(navigation.pagedNavigation.resources.get(pins)!.state.page).toBe(retainedPins);
     }

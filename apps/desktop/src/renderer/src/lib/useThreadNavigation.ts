@@ -254,6 +254,8 @@ type NavigationState = {
 
 type NavigationRefreshOptions = {
   diagnosticCause?: NavigationDiagnosticCause;
+  diagnosticTrigger?: string;
+  includeDirectoryIndex?: boolean;
   invalidatedOnly?: boolean;
   owners?: FederationTarget[];
   forceRefresh?: boolean;
@@ -3076,6 +3078,7 @@ export function useThreadNavigation(
   providerRefresh?: { state: "checking" | "degraded" | "ready"; failedProviders?: number };
   refreshing: boolean;
   refresh: () => Promise<void>;
+  refreshThreadMetadata: (thread: NavigationThreadSummary) => Promise<void>;
   materializeDirectoryLaunchpad: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
@@ -3692,6 +3695,8 @@ export function useThreadNavigation(
         owners?: FederationTarget[];
         invalidatedOnly?: boolean;
         diagnosticCause?: NavigationDiagnosticCause;
+        diagnosticTrigger?: string;
+        includeDirectoryIndex?: boolean;
       }
     | undefined
   >(undefined);
@@ -4061,7 +4066,8 @@ export function useThreadNavigation(
   ): Promise<void> => {
     if (preferredOptimisticThread) setOptimisticThread(preferredOptimisticThread);
     if (preferredSelectionKey) setSelectedItemKey((current) => forcePreferredSelection || !current ? preferredSelectionKey : current);
-    await refreshBoundedNavigation(options?.owners, options?.invalidatedOnly === true, options?.diagnosticCause);
+    await refreshBoundedNavigation(options?.owners, options?.invalidatedOnly === true, options?.diagnosticCause,
+      options?.diagnosticTrigger, options?.includeDirectoryIndex);
   }, [refreshBoundedNavigation, setSelectedItemKey]);
 
   const refresh = useCallback(
@@ -4073,6 +4079,8 @@ export function useThreadNavigation(
     ): Promise<void> => {
       const initialRequest = {
         diagnosticCause: options?.diagnosticCause,
+        diagnosticTrigger: options?.diagnosticTrigger,
+        includeDirectoryIndex: options?.includeDirectoryIndex,
         forceRefresh: options?.forceRefresh === true,
         forcePreferredSelection,
         preferredOptimisticThread,
@@ -4084,6 +4092,7 @@ export function useThreadNavigation(
       if (refreshInFlightRef.current) {
         const queued = queuedRefreshRef.current;
         queuedRefreshRef.current = { ...initialRequest,
+          includeDirectoryIndex: initialRequest.includeDirectoryIndex || queued?.includeDirectoryIndex,
           invalidatedOnly: initialRequest.invalidatedOnly && (!queued || queued.invalidatedOnly === true), owners: queued
           ? mergeNavigationRefreshOwners(queued.owners, initialRequest.owners) : initialRequest.owners };
         return;
@@ -4101,6 +4110,8 @@ export function useThreadNavigation(
             nextRequest.forcePreferredSelection,
             {
               diagnosticCause: nextRequest.diagnosticCause,
+              diagnosticTrigger: nextRequest.diagnosticTrigger,
+              includeDirectoryIndex: nextRequest.includeDirectoryIndex,
               forceRefresh: nextRequest.forceRefresh,
               owners: nextRequest.owners,
               invalidatedOnly: nextRequest.invalidatedOnly,
@@ -4118,6 +4129,18 @@ export function useThreadNavigation(
     await refresh();
     await Promise.all([refreshSelectedThreadConfiguration(), refreshSelectedLaunchpadConfiguration()]);
   }, [refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
+  const refreshThreadMetadata = useCallback(async (thread: NavigationThreadSummary): Promise<void> => {
+    const target = thread.federation?.ref.target ?? rendererFederationTarget;
+    const owners: FederationTarget[] = [target ?? { scope: "local" }];
+    if (target?.scope === "remote" && rendererFederationTarget?.scope !== "remote") owners.push({ scope: "local" });
+    // PR discovery may finish after selection moved. Revalidate the request's
+    // original identity, including off-page descriptor/count dependencies.
+    invalidateNavigation(owners, { backend: thread.source, federationTarget: target, notification: {
+      method: "navigation/invalidated", params: { sourceMethod: "thread/pullRequests/updated", threadId: thread.id },
+    } });
+    await refresh(undefined, undefined, false, { owners, invalidatedOnly: true,
+      diagnosticTrigger: "action/pull-request-refresh" });
+  }, [invalidateNavigation, refresh, rendererFederationTarget]);
 
   const takePendingDirectoryGitStatus = useCallback(
     (directoryKey: string): NavigationDirectoryGitStatus | null | undefined => {
@@ -4141,6 +4164,8 @@ export function useThreadNavigation(
       const owners = options?.owners ?? [readRendererFederationTarget() ?? { scope: "local" }];
       queuedRefreshRef.current = {
         diagnosticCause: options?.diagnosticCause ?? queuedRefreshRef.current?.diagnosticCause,
+        diagnosticTrigger: options?.diagnosticTrigger ?? queuedRefreshRef.current?.diagnosticTrigger,
+        includeDirectoryIndex: options?.includeDirectoryIndex || queuedRefreshRef.current?.includeDirectoryIndex,
         invalidatedOnly: options?.invalidatedOnly === true && (!queuedRefreshRef.current || queuedRefreshRef.current.invalidatedOnly === true),
         owners: queuedRefreshRef.current ? mergeNavigationRefreshOwners(queuedRefreshRef.current.owners, owners) : owners,
         forceRefresh:
@@ -4168,6 +4193,8 @@ export function useThreadNavigation(
           nextRequest.forcePreferredSelection,
           {
             diagnosticCause: nextRequest.diagnosticCause,
+            diagnosticTrigger: nextRequest.diagnosticTrigger,
+            includeDirectoryIndex: nextRequest.includeDirectoryIndex,
             forceRefresh: nextRequest.forceRefresh,
             owners: nextRequest.owners,
             invalidatedOnly: nextRequest.invalidatedOnly,
@@ -4339,9 +4366,12 @@ export function useThreadNavigation(
       }
       if (method === "navigation/thread/seen" && federationTargetsEqual(event.federationTarget, windowTarget)) {
         const params = event.notification.params as { threadId: string; seenUpdatedAt?: number };
-        setState((current) => ({ ...current, rows: markThreadSeenInLoadedRows(current.rows, {
-          backend: event.backend, federationTarget: event.federationTarget, ...params,
-        }) }));
+        setState((current) => {
+          const rows = markThreadSeenInLoadedRows(current.rows, {
+            backend: event.backend, federationTarget: event.federationTarget, ...params,
+          });
+          return rows === current.rows ? current : { ...current, rows };
+        });
         return;
       }
       if (method === "navigation/directory/seen") {
@@ -6152,7 +6182,8 @@ export function useThreadNavigation(
         return;
       }
       setSelectedItemKey(threadKey);
-      await refresh(threadKey, undefined, true);
+      await refresh(threadKey, undefined, true, { invalidatedOnly: true, includeDirectoryIndex: true,
+        diagnosticTrigger: "action/show-thread" });
     },
     [refresh, selectThread, state.rows, setSelectedItemKey],
   );
@@ -6168,7 +6199,8 @@ export function useThreadNavigation(
       return;
     }
     setSelectedItemKey(draft.parentThreadKey);
-    void refresh(draft.parentThreadKey, undefined, true);
+    void refresh(draft.parentThreadKey, undefined, true, { invalidatedOnly: true, includeDirectoryIndex: true,
+      diagnosticTrigger: "action/select-subthread-parent" });
   }, [refresh, selectThread, state.rows, subthreadLaunchpadDrafts, setSelectedItemKey]);
 
   const selectDirectoryLaunchpad = useCallback((directoryKey: string): void => {
@@ -6278,7 +6310,8 @@ export function useThreadNavigation(
         const selectionKey = buildLaunchpadSelectionKey(directoryKey);
         pendingPickedLaunchpadRef.current.set(directoryKey, launchpad);
         setSelectedItemKey(selectionKey);
-        await refresh(selectionKey, undefined, true);
+        await refresh(selectionKey, undefined, true, { invalidatedOnly: true, includeDirectoryIndex: true,
+          diagnosticTrigger: "action/create-thread" });
         const pendingLaunchpad =
           pendingPickedLaunchpadRef.current.get(directoryKey) ?? launchpad;
         setState((current) => ({
@@ -8538,11 +8571,16 @@ export function useThreadNavigation(
           }));
         }
         try {
+          // Lifecycle and pin notifications own membership invalidation. The
+          // reply discovers directory descriptors and joins those dirty reads;
+          // it must not start a second wave through every expanded collection.
           await refresh(
             shouldSelectMaterializedThread && selectedItemKeyRef.current === nextThreadKey ? nextThreadKey : undefined,
             shouldProjectOptimisticThread && (!shouldSelectMaterializedThread || selectedItemKeyRef.current === nextThreadKey)
               ? namedOptimisticMaterializedThread
               : undefined,
+            false,
+            { invalidatedOnly: true, includeDirectoryIndex: true, diagnosticTrigger: "action/materialize-launchpad" },
           );
         } catch (error) {
           setLaunchpadError(error instanceof Error ? error.message : String(error));
@@ -10280,6 +10318,7 @@ export function useThreadNavigation(
       ? { ...ownerIndexPage.coverage, state: ownerIndexPage.coverage.state === "complete" ? "ready" : ownerIndexPage.coverage.state } : undefined,
     refreshing: state.refreshing,
     refresh: refreshNavigation,
+    refreshThreadMetadata,
     materializeDirectoryLaunchpad,
     newThreadDirectoryLabel,
     launchpadDirectories,

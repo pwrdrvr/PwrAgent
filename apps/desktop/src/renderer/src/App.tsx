@@ -2310,7 +2310,7 @@ function DesktopAppShell(props: {
   );
   const pullRequests = usePullRequestRefresh({
     desktopApi,
-    onRefreshNavigation: navigation.refresh,
+    onRefreshNavigation: navigation.refreshThreadMetadata,
     selectedThread: navigation.selectedThread,
   });
   const gitWorkingState = useThreadGitWorkingStateRefresh({

@@ -42,7 +42,7 @@ type PullRequestLookupTarget = {
  */
 export function usePullRequestRefresh(params: {
   desktopApi?: DesktopApi;
-  onRefreshNavigation?: () => Promise<void>;
+  onRefreshNavigation?: (thread: NavigationThreadSummary) => Promise<void>;
   selectedThread?: NavigationThreadSummary;
 }): { prefetch: (thread: NavigationThreadSummary) => void } {
   const desktopApi = params.desktopApi;
@@ -82,7 +82,7 @@ export function usePullRequestRefresh(params: {
           if (prSummariesEqual(thread.prs, response.prs)) {
             return;
           }
-          void onRefreshNavigationRef.current?.();
+          void onRefreshNavigationRef.current?.(thread);
         })
         .catch(() => {
           // Logged in main — keep the renderer silent.
