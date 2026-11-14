@@ -227,7 +227,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                 >
                   {connection.kind === "sandboxer"
                     ? "Set up in Settings"
-                    : connection.kind === "stdio" ? "Fix in Settings" : "Authorize"}
+                    : connection.kind === "stdio" || connection.kind === "github" ? "Fix in Settings" : "Authorize"}
                 </button>
               ) : null;
               return (
@@ -240,6 +240,16 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                       <span className="mcp-access-panel__detail">
                         {connection.detail
                           ?? formatMcpConnectionState(connection)}
+                      </span>
+                    ) : connection.kind === "github" ? (
+                      // Who it acts as leads: that is the question at the
+                      // moment a thread turns it on. A peer's copy has no
+                      // account, so it says only where the server runs.
+                      <span className="mcp-access-panel__detail">
+                        {[
+                          connection.githubAccount?.login ? `@${connection.githubAccount.login}` : undefined,
+                          connection.github?.server === "local" ? "runs on this computer" : "GitHub-hosted",
+                        ].filter(Boolean).join(" \u00b7 ")}
                       </span>
                     ) : connection.kind === "stdio" ? (
                       // Where it runs is the one thing a thread owner

@@ -15,6 +15,10 @@ import {
   isMcpConnectionToolApproval,
   isLinearMcpServerUrl,
   MCP_STDIO_ENV_NAME_PATTERN,
+  isGithubMcpAccountSource,
+  isGithubMcpServerLocation,
+  normalizeGithubMcpToolsets,
+  type GithubMcpSettings,
   type McpConnectionProjectToolApproval,
   type McpConnectionRecord,
   type McpConnectionToolApproval,
@@ -407,6 +411,38 @@ export class McpConnectionRegistry {
     return connection;
   }
 
+  /**
+   * Add a GitHub connection.
+   *
+   * Like a local command, there is no sign-in step to wait for, so it is
+   * offered to threads at once. A second one is an ordinary setup: two
+   * accounts, or the CLI sign-in beside a narrower token.
+   */
+  createGithub(input: {
+    displayName: string;
+    github: GithubMcpSettings;
+  }): McpConnectionRecord {
+    const displayName = normalizeDisplayName(input.displayName);
+    const current = this.readStoredConnections();
+    const id = this.uniqueId(displayName, current);
+    const now = this.now();
+    const connection: McpConnectionRecord = {
+      id,
+      displayName,
+      serverUrl: githubIdentity(id),
+      authMode: "none",
+      kind: "github",
+      github: cloneGithubSettings(input.github),
+      enabled: true,
+      selectForNewThreads: false,
+      toolApproval: "auto",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.writeStoredConnections([...current, connection]);
+    return connection;
+  }
+
   create(input: {
     displayName: string;
     serverUrl: string;
@@ -462,6 +498,7 @@ export class McpConnectionRegistry {
     displayName?: string;
     serverUrl?: string;
     launch?: McpStdioLaunch;
+    github?: GithubMcpSettings;
   }): { connection: McpConnectionRecord; serverUrlChanged: boolean; launchChanged: boolean } {
     if (isBuiltInMcpConnectionId(input.connectionId)) {
       throw new Error("Built-in MCP connections cannot be edited.");
@@ -472,6 +509,27 @@ export class McpConnectionRegistry {
     );
     if (!target) {
       throw new Error("That MCP connection no longer exists.");
+    }
+    if (target.kind === "github") {
+      if (input.serverUrl !== undefined || input.launch) {
+        throw new Error("A GitHub connection has no URL or command to edit. Change its account or server instead.");
+      }
+      const displayName = input.displayName === undefined
+        ? target.displayName
+        : normalizeDisplayName(input.displayName);
+      const github = input.github ? cloneGithubSettings(input.github) : target.github!;
+      const launchChanged = JSON.stringify(github) !== JSON.stringify(target.github);
+      if (displayName === target.displayName && !launchChanged) {
+        return { connection: target, serverUrlChanged: false, launchChanged: false };
+      }
+      const updated: McpConnectionRecord = { ...target, displayName, github, updatedAt: this.now() };
+      this.writeStoredConnections(
+        current.map((connection) => connection.id === input.connectionId ? updated : connection),
+      );
+      return { connection: updated, serverUrlChanged: false, launchChanged };
+    }
+    if (input.github) {
+      throw new Error("Only a GitHub connection has GitHub settings.");
     }
     if (target.kind === "stdio") {
       if (input.serverUrl !== undefined) {
@@ -617,6 +675,10 @@ export class McpConnectionRegistry {
         if (!next.stdio?.cwd) delete merged.cwd;
         if (!next.stdio?.env.some((entry) => !entry.secret)) delete merged.env;
         if (!next.stdio?.env.some((entry) => entry.secret)) delete merged.secret_env;
+      }
+      if (next.kind === "github") {
+        if (!next.github?.command) delete merged.command;
+        if (!next.github?.readOnly) delete merged.read_only;
       }
       rows.push(merged);
     }
@@ -877,10 +939,97 @@ function isAbsolutePath(value: string): boolean {
   return path.isAbsolute(value) || path.win32.isAbsolute(value);
 }
 
+/**
+ * A GitHub connection's stored identity, as `stdioIdentity` is a local
+ * command's. Not written to the row: with no `server_url`, an older build
+ * skips the row and keeps it on rewrite.
+ */
+function githubIdentity(id: string): string {
+  return `github:${id}`;
+}
+
+function cloneGithubSettings(github: GithubMcpSettings): GithubMcpSettings {
+  return {
+    account: github.account,
+    server: github.server,
+    ...(github.server === "local" && github.command ? { command: github.command } : {}),
+    toolsets: normalizeGithubMcpToolsets(github.toolsets),
+    readOnly: github.readOnly,
+    skills: github.skills,
+  };
+}
+
+/**
+ * The GitHub row shape:
+ *
+ * ```toml
+ * [[mcp_connections.connections]]
+ * id = "github"
+ * display_name = "GitHub"
+ * transport = "github"
+ * account = "gh_cli"          # or "token", stored encrypted, never here
+ * server = "hosted"           # or "local", with command = "/abs/github-mcp-server"
+ * toolsets = ["context", "repos", "issues", "users"]
+ * read_only = true            # only when on
+ * skills = true
+ * ```
+ *
+ * A new row type, not a change to an existing key, so there is no legacy
+ * shape to keep (docs/config-file-evolution.md): a build that predates it
+ * finds no `server_url`, skips the row, and keeps it verbatim on rewrite.
+ */
+function githubConnectionToRow(
+  connection: McpConnectionRecord,
+): Record<string, TomlEditScalar | string[]> {
+  const github = connection.github!;
+  return {
+    id: connection.id,
+    display_name: connection.displayName,
+    transport: "github",
+    account: github.account,
+    server: github.server,
+    ...(github.server === "local" && github.command ? { command: github.command } : {}),
+    toolsets: [...github.toolsets],
+    ...(github.readOnly ? { read_only: true } : {}),
+    skills: github.skills,
+    enabled: connection.enabled,
+    ...(connection.selectForNewThreads ? { select_for_new_threads: true } : {}),
+    ...(readToolApproval(connection.toolApproval) === "auto"
+      ? {}
+      : { tool_approval: readToolApproval(connection.toolApproval) }),
+    created_at: connection.createdAt,
+    updated_at: connection.updatedAt,
+  };
+}
+
+/**
+ * A GitHub row, or undefined when it cannot be read. A row with no toolset
+ * is refused rather than read as GitHub's defaults, which is what the server
+ * would do with an empty list.
+ */
+function githubSettingsFromRow(row: StoredConnectionRow): GithubMcpSettings | undefined {
+  if (!isGithubMcpAccountSource(row.account) || !isGithubMcpServerLocation(row.server)) return undefined;
+  const toolsets = normalizeGithubMcpToolsets(row.toolsets);
+  if (toolsets.length === 0) return undefined;
+  const command = typeof row.command === "string" ? row.command.trim() : "";
+  if (row.server === "local" && (!command || !isAbsolutePath(command))) return undefined;
+  return {
+    account: row.account,
+    server: row.server,
+    ...(row.server === "local" ? { command } : {}),
+    toolsets,
+    readOnly: row.read_only === true,
+    // On unless the row says otherwise: a hand-written row gets GitHub's
+    // workflow skills, as the form's default does.
+    skills: row.skills !== false,
+  };
+}
+
 function connectionToRow(
   connection: McpConnectionRecord,
 ): Record<string, TomlEditScalar | string[]> {
   if (connection.kind === "stdio") return stdioConnectionToRow(connection);
+  if (connection.kind === "github") return githubConnectionToRow(connection);
   return {
     id: connection.id,
     display_name: connection.displayName,
@@ -907,6 +1056,23 @@ function connectionFromRow(
   // field this build does not know -- including another `transport` -- is
   // carried through rewrites by the merge; a row it cannot read at all is
   // skipped here and kept verbatim.
+  if (row.transport === "github") {
+    const github = githubSettingsFromRow(row);
+    if (!CONNECTION_ID_PATTERN.test(id) || !displayName || !github) return undefined;
+    return {
+      id,
+      displayName,
+      serverUrl: githubIdentity(id),
+      authMode: "none",
+      kind: "github",
+      github,
+      enabled: row.enabled !== false,
+      selectForNewThreads: row.select_for_new_threads === true,
+      toolApproval: readToolApproval(row.tool_approval),
+      createdAt: typeof row.created_at === "number" ? row.created_at : 0,
+      updatedAt: typeof row.updated_at === "number" ? row.updated_at : 0,
+    };
+  }
   if (row.transport === "stdio") {
     const launch = stdioLaunchFromRow(row);
     if (!CONNECTION_ID_PATTERN.test(id) || !displayName || !launch) return undefined;

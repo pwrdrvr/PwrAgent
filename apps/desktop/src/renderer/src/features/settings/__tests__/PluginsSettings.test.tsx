@@ -1811,3 +1811,120 @@ describe("PluginsSettings dialogs, keyboard", () => {
     expect(document.activeElement).toBe(more);
   });
 });
+
+describe("PluginsSettings GitHub connection", () => {
+  function githubApi(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      ...createDesktopApi([]),
+      listMcpConnections: vi.fn().mockResolvedValue({ connections: [] }),
+      probeMcpConnection: vi.fn().mockResolvedValue({
+        ok: false,
+        problem: "github_server",
+        message: "That is GitHub's MCP server.",
+      }),
+      inspectGithubMcpSetup: vi.fn().mockResolvedValue({
+        cli: { source: "gh_cli", state: "ready", login: "octo-dev", scopes: ["repo", "read:org", "workflow", "gist"] },
+      }),
+      testGithubMcpConnection: vi.fn().mockResolvedValue({
+        ok: true,
+        account: { source: "gh_cli", state: "ready", login: "octo-dev", scopes: ["repo", "read:org", "workflow", "gist"] },
+        toolCount: 52,
+        skillCount: 14,
+        elapsedMs: 900,
+      }),
+      createMcpConnection: vi.fn().mockResolvedValue({ connection: {} }),
+      ...overrides,
+    } as unknown as DesktopApi;
+  }
+
+  it("offers GitHub for its hosted URL, then tests and adds it with the defaults", async () => {
+    const desktopApi = githubApi();
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    fireEvent.change(await screen.findByPlaceholderText("https://mcp.example.com/mcp"), {
+      target: { value: "https://api.githubcopilot.com/mcp/" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    expect(await screen.findByText("This is GitHub's MCP server. Set it up with your GitHub sign-in instead."))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Set up GitHub" }));
+
+    expect(within(screen.getByRole("radiogroup", { name: "Server type" })).getByRole("radio", { name: /GitHub/ }))
+      .toHaveAttribute("aria-checked", "true");
+    expect(await screen.findByText("Signed in as @octo-dev")).toBeInTheDocument();
+    expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(1);
+    const account = screen.getByRole("radio", { name: /GitHub CLI sign-in/ });
+    expect(account).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: /GitHub-hosted/ })).toHaveAttribute("aria-checked", "true");
+    const pressed = screen.getAllByRole("button", { pressed: true }).map((button) => button.textContent);
+    expect(pressed).toEqual(["context", "repos", "issues", "users"]);
+    expect(screen.getByRole("button", { name: /pull_requests/ })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("switch", { name: "Workflow skills" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Read-only" })).toHaveAttribute("aria-checked", "false");
+
+    // The projects toolset needs a scope gh's default login lacks.
+    fireEvent.click(screen.getByRole("button", { name: "projects" }));
+    expect(screen.getByText(/gh auth refresh -s project/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "projects" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(await screen.findByText(/Read 52 tools and 14 skills, then disconnected/)).toBeInTheDocument();
+    expect(desktopApi.testGithubMcpConnection).toHaveBeenCalledWith({
+      github: {
+        account: "gh_cli",
+        server: "hosted",
+        toolsets: ["context", "repos", "issues", "users"],
+        readOnly: false,
+        skills: true,
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(desktopApi.createMcpConnection).toHaveBeenCalledWith({
+      displayName: "GitHub",
+      github: {
+        account: "gh_cli",
+        server: "hosted",
+        toolsets: ["context", "repos", "issues", "users"],
+        readOnly: false,
+        skills: true,
+      },
+    }));
+  });
+
+  it("names the fix for a signed-out CLI and keeps a pasted token out of everything but the request", async () => {
+    const desktopApi = githubApi({
+      inspectGithubMcpSetup: vi.fn().mockResolvedValue({ cli: { source: "gh_cli", state: "signed_out" } }),
+      testGithubMcpConnection: vi.fn().mockResolvedValue({
+        ok: false,
+        problem: "account",
+        message: "GitHub rejected the token (401). It may have expired or been revoked. Paste a new one.",
+        account: { source: "token", state: "rejected" },
+      }),
+    });
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+    fireEvent.click(within(await screen.findByRole("radiogroup", { name: "Server type" }))
+      .getByRole("radio", { name: /GitHub/ }));
+
+    expect(await screen.findByText("Not signed in")).toBeInTheDocument();
+    expect(screen.getByText(/gh is installed but not signed in to github\.com/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(desktopApi.inspectGithubMcpSetup).toHaveBeenCalledTimes(2));
+
+    // Arrow keys move the choice, as in a radio group.
+    const cli = screen.getByRole("radio", { name: /GitHub CLI sign-in/ });
+    cli.focus();
+    fireEvent.keyDown(cli, { key: "ArrowDown" });
+    const token = screen.getByRole("radio", { name: /Personal access token/ });
+    expect(token).toHaveAttribute("aria-checked", "true");
+    expect(token).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Personal access token"), { target: { value: " ghp_pasted " } });
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("GitHub rejected the token (401).");
+    expect(desktopApi.testGithubMcpConnection).toHaveBeenCalledWith({
+      github: expect.objectContaining({ account: "token", token: "ghp_pasted" }),
+    });
+    expect(desktopApi.createMcpConnection).not.toHaveBeenCalled();
+  });
+});
