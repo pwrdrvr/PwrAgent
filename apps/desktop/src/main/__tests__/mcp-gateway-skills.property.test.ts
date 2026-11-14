@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
-import { gatewayToolRevision, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import { gatewayToolRevision, type McpGatewayCatalog, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import type { McpSkillSummary } from "../mcp-connections/mcp-skills-relay";
 
@@ -11,7 +11,10 @@ import type { McpSkillSummary } from "../mcp-connections/mcp-skills-relay";
  * - the result stays within its byte budget;
  * - a server entry names only its own server's skills, once each, and only
  *   beside the resource route that can read them;
- * - `skillsComplete` is false exactly when the entry leaves a skill out.
+ * - `skillsComplete` is false exactly when the entry leaves a skill out;
+ * - a server with no tools is found by its skills alone.
+ * The search without skills talks to an owner that predates them and
+ * answers with a bare tool list.
  */
 
 const context: AgentToolCallContext = { backend: "codex", threadId: "thread", turnId: "turn", callId: "call", transport: "codex_dynamic_tool" };
@@ -39,7 +42,7 @@ const server = (id: string) => fc.record({
     name: word,
     // Long schemas put the 24 KB result budget under pressure.
     description: fc.integer({ min: 0, max: 9_000 }).map((length) => "x".repeat(length)),
-  }), { minLength: 1, maxLength: 4, selector: (tool) => tool.name }),
+  }), { minLength: 0, maxLength: 4, selector: (tool) => tool.name }),
   published: fc.option(fc.record({
     skills: fc.uniqueArray(skill(id), { minLength: 1, maxLength: 120, selector: (entry) => entry.uri }),
     complete: fc.boolean(),
@@ -48,21 +51,23 @@ const server = (id: string) => fc.record({
 
 const servers = fc.tuple(server("one"), server("two"), server("three"));
 
-function catalog(entry: Server, withSkills: boolean): McpGatewayTool[] {
-  return entry.tools.map((tool, index) => {
+function catalog(entry: Server, withSkills: boolean): McpGatewayTool[] | McpGatewayCatalog {
+  const tools = entry.tools.map((tool): McpGatewayTool => {
     const definition = { name: tool.name, description: tool.description, inputSchema: { type: "object" as const } };
     return {
       connectionId: entry.id, serverName: `Server ${entry.id}`, toolName: tool.name,
       schemaRevision: gatewayToolRevision(entry.id, 1, definition), definition,
-      ...(index === 0 && withSkills && entry.published ? { serverSkills: entry.published } : {}),
     };
   });
+  return withSkills
+    ? { tools, serverName: `Server ${entry.id}`, ...(entry.published ? { serverSkills: entry.published } : {}) }
+    : tools;
 }
 
 async function search(all: Server[], query: string, limit: number, withSkills: boolean) {
   const service = new McpGatewayToolService({
     connections: {
-      requestGatewayToolOperation: async (params) => catalog(all.find((entry) => entry.id === params.connectionId)!, withSkills),
+      requestGatewayToolOperation: async (params) => catalog(all.find((entry) => entry.id === params.connectionId)!, withSkills && params.skills === true),
     },
     approve: async () => false,
     selectedConnections: async () => all.map((entry) => entry.id),

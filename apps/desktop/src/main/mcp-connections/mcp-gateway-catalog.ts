@@ -24,10 +24,22 @@ export type McpGatewayTool = McpGatewaySource & {
    * so a large catalog does not repeat them. Search lifts them out per server.
    */
   serverInstructions?: string;
+};
+
+/**
+ * What `gateway/tools/list` returns to a search that asks for skills. The
+ * server's own facts sit beside its tools rather than on the first one, so
+ * a server that publishes skills and no tools still has somewhere to put
+ * them. Without the request, and from an owner that predates it, the list is
+ * a bare `McpGatewayTool[]`.
+ */
+export type McpGatewayCatalog = {
+  tools: McpGatewayTool[];
+  serverName: string;
+  serverIdentity?: McpGatewayIdentity;
   /**
-   * The workflow skills the server publishes, cleaned by `listedMcpSkills`,
-   * on the catalog's first entry only. Present only when a search asked for
-   * them and the server offers skills and resources.
+   * The workflow skills the server publishes, cleaned by `listedMcpSkills`.
+   * Present only when the server offers skills and resources.
    */
   serverSkills?: { skills: McpSkillSummary[]; complete: boolean };
 };

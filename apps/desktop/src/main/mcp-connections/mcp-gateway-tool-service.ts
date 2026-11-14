@@ -1,7 +1,7 @@
 import type { CallToolResult, ElicitRequestParams, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
-import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource, type McpGatewayIdentity } from "./mcp-gateway-catalog";
+import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayCatalog, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource, type McpGatewayIdentity } from "./mcp-gateway-catalog";
 import {
   MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_TIMEOUT_MS,
@@ -18,7 +18,7 @@ export type McpGatewayApproval = boolean | {
   onInvoked: () => Promise<void>;
 };
 export type McpGatewaySearchResult = {
-  tools: Array<Omit<McpGatewayTool, "serverInstructions" | "serverIdentity" | "serverSkills"> & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
+  tools: Array<Omit<McpGatewayTool, "serverInstructions" | "serverIdentity"> & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
   servers?: Array<McpGatewayIdentity & {
     connectionId: string;
     serverName: string;
@@ -112,7 +112,10 @@ export class McpGatewayToolService {
       const candidates: McpGatewayTool[] = [];
       const identities = new Map<string, McpGatewayIdentity>();
       const instructions = new Map<string, { serverName: string; instructions: string }>();
-      const skills = new Map<string, NonNullable<McpGatewayTool["serverSkills"]>>();
+      const skills = new Map<string, NonNullable<McpGatewayCatalog["serverSkills"]>>();
+      const serverNames = new Map<string, string>();
+      /** Connections with at least one tool, before host policy narrows them. */
+      const listsTools = new Set<string>();
       let candidateBytes = 0;
       const unavailable: McpGatewaySearchResult["unavailable"] = [];
       const resourceTools = context.backend === "codex"
@@ -127,18 +130,26 @@ export class McpGatewayToolService {
           const connectionId = ids[next++];
           try {
             await this.requireSelected(connectionId, context, signal);
-            const tools = await this.options.connections.requestGatewayToolOperation({
+            const listed = await this.options.connections.requestGatewayToolOperation({
               connectionId, scopeKey: this.scopeKey(context), operation: "gateway/tools/list", signal, deadlineAt,
               // A skill is a resource, so only a backend with a resource reader asks.
               ...(resourceTools ? { skills: true } : {}),
-            }) as McpGatewayTool[];
+            }) as McpGatewayTool[] | McpGatewayCatalog;
             await this.requireSelected(connectionId, context, signal);
-            const bytes = Buffer.byteLength(JSON.stringify(tools));
+            const bytes = Buffer.byteLength(JSON.stringify(listed));
             if (candidateBytes + bytes > 8 * 1024 * 1024) throw new Error("Search a specific connectionId to stay within the catalog memory budget.");
             candidateBytes += bytes;
-            for (const { serverInstructions, serverIdentity, serverSkills, ...tool } of tools) {
-              if (serverIdentity) identities.set(connectionId, serverIdentity);
-              if (serverSkills) skills.set(connectionId, serverSkills);
+            // An owner that predates the envelope answers with the bare list.
+            const tools = Array.isArray(listed) ? listed : listed.tools;
+            if (!Array.isArray(listed)) {
+              serverNames.set(connectionId, listed.serverName);
+              if (listed.serverIdentity) identities.set(connectionId, listed.serverIdentity);
+              if (listed.serverSkills) skills.set(connectionId, listed.serverSkills);
+            }
+            if (tools.length > 0) listsTools.add(connectionId);
+            for (const { serverInstructions, serverIdentity, ...tool } of tools) {
+              if (serverIdentity && !identities.has(connectionId)) identities.set(connectionId, serverIdentity);
+              if (!serverNames.has(connectionId)) serverNames.set(connectionId, tool.serverName);
               if (this.options.toolAllowed?.(tool, context) === false) continue;
               if (serverInstructions) {
                 instructions.set(connectionId, { serverName: tool.serverName, instructions: serverInstructions });
@@ -188,11 +199,14 @@ export class McpGatewayToolService {
         if (serverInstructions) result.serverInstructions = serverInstructions;
       }
       // A server whose skills match the query is named even when none of
-      // its tools did: a skill is how a server says which task it is for.
+      // its tools did, or it has none: a skill is how a server says which
+      // task it is for. A server whose every tool host policy hides stays
+      // hidden, since its skills would steer toward those tools.
       for (const [connectionId, published] of [...skills].sort(([left], [right]) => left.localeCompare(right))) {
         if (!current.has(connectionId) || result.servers?.some((entry) => entry.connectionId === connectionId)) continue;
         if (!resourceTools || !published.skills.some((skill) => scoreText(`${skill.name} ${skill.description ?? ""}`) > 0)) continue;
-        const serverName = candidates.find((tool) => tool.connectionId === connectionId)?.serverName;
+        if (listsTools.has(connectionId) && !candidates.some((tool) => tool.connectionId === connectionId)) continue;
+        const serverName = serverNames.get(connectionId);
         const serverNameInAgent = serverName ? this.options.serverNameInAgent?.(connectionId, context) : undefined;
         if (!serverName || !serverNameInAgent) continue;
         const servers = [...(result.servers ?? []), serverEntry(connectionId, serverName, identities.get(connectionId), serverNameInAgent, resourceTools)];
