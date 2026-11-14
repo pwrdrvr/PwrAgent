@@ -59,6 +59,13 @@ function summaryKey(thread: NavigationThreadSummary): string {
     : buildThreadIdentityKey(thread.source, thread.id);
 }
 
+/** Unstamped legacy rows belong to the queried owner. A stamped relay never
+ * answers for a native identity, even when its backend and thread ID match. */
+function isThreadOwnedByPeer(thread: NavigationThreadSummary, instanceId: string): boolean {
+  const owner = thread.federation?.ref.target;
+  return !owner || (owner.scope === "remote" && owner.instanceId === instanceId);
+}
+
 function summaryMembership(thread: NavigationThreadSummary): string {
   // Only known row metadata may differ in an exclusion proof. Retain all
   // other fields, including future fields, directory links and parentage.
@@ -670,10 +677,9 @@ export class RemoteThreadSummaryCache {
     }
     for (const owner of changedOwners) this.invalidate(owner);
     this.notifyPeerInterestChanged();
+    // These sets span owners; per-owner archive and subscription keys do not.
     const directPinKeys = new Set(
-      pins.map((pin) =>
-        buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
-      ),
+      pins.map((pin) => federatedThreadIdentityKey(pin.ref)),
     );
     const selectedKeys = new Set<string>();
 
@@ -687,20 +693,21 @@ export class RemoteThreadSummaryCache {
         fetchFailed = this.refreshFailures.has(instanceId);
       }
       const servedByKey = new Map(
-        (served ?? []).map((thread) => [
+        (served ?? []).filter((thread) => isThreadOwnedByPeer(thread, instanceId)).map((thread) => [
           buildThreadIdentityKey(thread.source, thread.id),
           thread,
         ]),
       );
       for (const pin of group) {
+        const pinKey = federatedThreadIdentityKey(pin.ref);
         const threadKey = buildThreadIdentityKey(
           pin.ref.backend,
           pin.ref.threadId,
         );
         const servedThread = servedByKey.get(threadKey);
         if (servedThread) {
-          if (!selectedKeys.has(threadKey)) {
-            selectedKeys.add(threadKey);
+          if (!selectedKeys.has(pinKey)) {
+            selectedKeys.add(pinKey);
             threads.push(
               fetchFailed ? this.dimDegraded(servedThread) : servedThread,
             );
@@ -719,9 +726,9 @@ export class RemoteThreadSummaryCache {
           archived.push(pin.ref);
           continue;
         }
-        if (!selectedKeys.has(threadKey)) {
+        if (!selectedKeys.has(pinKey)) {
           threads.push(this.fallbackThread(pin, fetchFailed));
-          selectedKeys.add(threadKey);
+          selectedKeys.add(pinKey);
         }
       }
 
@@ -759,7 +766,7 @@ export class RemoteThreadSummaryCache {
           candidate.parentThreadBackend ?? candidate.source,
           parentThreadId,
         );
-        const candidateKey = buildThreadIdentityKey(candidate.source, candidate.id);
+        const candidateKey = federatedThreadIdentityKey(candidateFederation.ref);
         if (
           !pinnedParentKeys.has(parentKey)
           || directPinKeys.has(candidateKey)
@@ -1039,7 +1046,8 @@ export class RemoteThreadSummaryCache {
         const changed = unpublished
           || previous === undefined
           || JSON.stringify(previous) !== JSON.stringify(threads);
-        const returned = new Set(threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+        const returned = new Set(threads.filter((thread) => isThreadOwnedByPeer(thread, instanceId))
+          .map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
         const missing = pins.map((pin) => buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId))
           .filter((key) => !returned.has(key) && !this.provenArchived.get(instanceId)?.has(key)).sort();
         const missingSignature = JSON.stringify(missing);
@@ -1123,7 +1131,8 @@ export class RemoteThreadSummaryCache {
     fresh: readonly NavigationThreadSummary[],
   ): Promise<boolean> {
     const freshKeys = new Set(
-      fresh.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+      fresh.filter((thread) => isThreadOwnedByPeer(thread, target.instanceId))
+        .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
     );
     const missing = pins.filter(
       (pin) => !freshKeys.has(
