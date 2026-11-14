@@ -239,7 +239,7 @@ describe("ACP snapshot archive and restoration", () => {
     await mkdir(path.join(fixture.worktree, "target"));
     await writeFile(path.join(fixture.worktree, "target", "ignored"), "build output");
     const { writes: archiveWrites } = await measureSqliteWrites(async () => {
-      const result = repair ? await first.registry.repairArchivedThreadWorktrees() : await first.registry.archiveThread(acpOwner);
+      const result = repair ? await registryModules(first.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees() : await first.registry.archiveThread(acpOwner);
       expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     });
     expectSqliteWriteBudget({ scenario: repair ? "acp-worktree-repair" : "acp-worktree-archive",
@@ -536,7 +536,7 @@ it("checks archived owners concurrently with bounded work, ordered results and b
   }));
   await Promise.all(threads.map((thread) => mkdir(thread.linkedDirectories[0]!.worktreePath!)));
   type Ownership = { users: AppServerThreadSummary[]; external: boolean };
-  const boundary = registry as unknown as {
+  const boundary = registryModules(registry).threadArchiveCoordinator as unknown as {
     readPacedArchiveCleanupInventory: () => Promise<{ activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] }>;
     maintenanceThreadWorkspace: (thread: AppServerThreadSummary) => Promise<AppServerThreadSummary>;
     readCanonicalArchiveOwnership: (_inventory: unknown, target: string) => Promise<Ownership>;
@@ -627,7 +627,7 @@ describe("archive worktrees across a desktop restart", () => {
     const first = fixture.reopen();
     const { writes: archiveWrites } = await measureSqliteWrites(async () => {
       if (operation === "repair") {
-        expect((await first.registry.repairArchivedThreadWorktrees()).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+        expect((await registryModules(first.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees()).cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
       } else {
         expect((await first.registry.archiveThread(fixture.owners[0]!)).cleanup).toEqual([expect.objectContaining({ removedWorktree: false })]);
         const cleanup = (await first.registry.archiveThread(fixture.owners[1]!)).cleanup;
@@ -676,7 +676,7 @@ describe("archive worktrees across a desktop restart", () => {
   it("rejects a replacement Git checkout even when another owner's saved restore metadata remains", async () => {
     const fixture = await createSharedArchiveFixture("claude", true);
     const instance = fixture.reopen();
-    await instance.registry.repairArchivedThreadWorktrees();
+    await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     await instance.registry.restoreThread(fixture.owners[0]!);
     await fixture.git(fixture.repo, ["worktree", "move", fixture.worktree, path.join(fixture.root, "moved-checkout")]);
     await fixture.git(fixture.repo, ["worktree", "add", "--detach", fixture.worktree, "HEAD"]);
@@ -711,7 +711,7 @@ describe("archive worktrees across a desktop restart", () => {
     await first.store.addLinkedDirectory({ backend: "claude", threadId,
       directory: { id: localPath, kind: "local", label: "local", path: localPath } });
     if (historical) {
-      const result = await first.registry.repairArchivedThreadWorktrees();
+      const result = await registryModules(first.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
       expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true })]);
     } else {
       const completed = new Promise<unknown>((resolve) => first.registry.onEvent((event) => {
@@ -818,7 +818,7 @@ describe("archive worktrees across a desktop restart", () => {
       ArchiveWorktreeTransport.onList = (params) => { if (!params.archived && ++activeReads === 2) addAcpOwner(); };
     } else addAcpOwner();
     await writeFile(path.join(fixture.worktree, "file.txt"), "preserve ACP edits\n");
-    const report = await instance.registry.repairArchivedThreadWorktrees();
+    const report = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(report.cleanup.every((item) => !item.removedWorktree)).toBe(true);
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("preserve ACP edits\n");
     expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"])).toContain(fixture.worktree.split(path.sep).join("/"));
@@ -840,7 +840,7 @@ describe("archive worktrees across a desktop restart", () => {
     ];
     const instance = fixture.reopen();
     await instance.store.addLinkedDirectory({ backend: "codex", threadId: "invalid", directory: { ...fixture.directory, worktreePath: invalid } });
-    const first = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: async () => await instance.registry.repairArchivedThreadWorktrees() });
+    const first = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: async () => await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees() });
     // Windows reports ENOENT below a file; POSIX reports ENOTDIR. Both must
     // retain the file and continue the valid repair. Reported failures keep
     // the pass eligible for another sweep.
@@ -851,7 +851,7 @@ describe("archive worktrees across a desktop restart", () => {
     if (missingBelowFile) expect(first?.missingWorktrees).toBe(1);
     expect(await readFile(replaced, "utf8")).toBe("retain this file\n");
     await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
-    const again = vi.fn(async () => await instance.registry.repairArchivedThreadWorktrees());
+    const again = vi.fn(async () => await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees());
     const second = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: again });
     if (missingBelowFile) {
       expect(second).toBeUndefined();
@@ -887,7 +887,7 @@ describe("archive worktrees across a desktop restart", () => {
       { id: "archived", cwd: fixture.worktree, source: "cli", archived: true },
       { id: "active", cwd: path.join(alias, "worktrees", "id", "another-missing-checkout"), source: "exec" },
     ];
-    const report = await fixture.reopen().registry.repairArchivedThreadWorktrees();
+    const report = await registryModules(fixture.reopen().registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(report.emptyContainerCandidates).toEqual([]);
     expect((await stat(fixture.container)).isDirectory()).toBe(true);
   });
@@ -914,10 +914,10 @@ describe("archive worktrees across a desktop restart", () => {
     // Missing checkout enrichment returns no linked directory. Association
     // comes from the archived provider cwd, not enumeration of root folders.
     const instance = fixture.reopen({ ...fixture.directory, worktreePath: "not-this-cwd" });
-    const dryRun = await instance.registry.repairArchivedThreadWorktrees({ dryRun: true });
+    const dryRun = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees({ dryRun: true });
     expect(dryRun.emptyContainerCandidates).toHaveLength(1);
     expect((await stat(fixture.container)).isDirectory()).toBe(true);
-    const result = await instance.registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.containerCleanup).toEqual([expect.objectContaining({ removed: true })]);
     await expect(stat(fixture.container)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await stat(unrelated)).isDirectory()).toBe(true);
@@ -953,7 +953,7 @@ describe("archive worktrees across a desktop restart", () => {
       };
     }
     const instance = fixture.reopen();
-    const result = await instance.registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.containerCleanup.every((item) => !item.removed)).toBe(true);
     expect((await stat(fixture.container)).isDirectory()).toBe(true);
   });
@@ -966,7 +966,7 @@ describe("archive worktrees across a desktop restart", () => {
     ArchiveWorktreeTransport.onList = (params) => {
       if (!params.archived && ++activeReads === 2) ArchiveWorktreeTransport.threads[0]!.archived = false;
     };
-    const result = await fixture.reopen().registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(fixture.reopen().registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.containerCleanup).toEqual([expect.objectContaining({ removed: false, error: expect.any(String) })]);
     expect((await stat(fixture.container)).isDirectory()).toBe(true);
   });
@@ -987,7 +987,7 @@ describe("archive worktrees across a desktop restart", () => {
       return await original.call(this, worktree, check, identity);
     });
     try {
-      const result = await fixture.reopen().registry.repairArchivedThreadWorktrees();
+      const result = await registryModules(fixture.reopen().registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
       expect(result.containerCleanup).toEqual([
         expect.objectContaining({ removed: false, error: "Access denied" }), expect.objectContaining({ removed: true }),
       ]);
@@ -1010,11 +1010,11 @@ describe("archive worktrees across a desktop restart", () => {
     await writeFile(path.join(fixture.worktree, "untracked.txt"), "new non-ignored work\n");
     await writeFile(path.join(fixture.worktree, "ignored.txt"), "ignored build output\n");
     const instance = fixture.reopen();
-    const dryRun = await instance.registry.repairArchivedThreadWorktrees({ dryRun: true });
+    const dryRun = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees({ dryRun: true });
     expect(dryRun.candidates).toHaveLength(1);
     expect(await fixture.git(fixture.repo, ["for-each-ref", "refs/codex/snapshots/"])).toBe("");
     const { result, writes } = await measureSqliteWrites(async () => await runOneTimeArchivedWorktreeRepair({
-      db: instance.db.raw, repair: async () => await instance.registry.repairArchivedThreadWorktrees(),
+      db: instance.db.raw, repair: async () => await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees(),
     }));
     expect(result?.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     expectSqliteWriteBudget({ scenario: "archived-worktree-repair-shared-snapshot", note: "One-time repair of one dirty checkout shared by two archived threads, including the profile claim and completion; no timer or idle writes.", writes });
@@ -1028,7 +1028,7 @@ describe("archive worktrees across a desktop restart", () => {
     instance.db.close();
     databases.splice(databases.indexOf(instance.db), 1);
     const restarted = fixture.reopen();
-    const repair = vi.fn(async () => await restarted.registry.repairArchivedThreadWorktrees());
+    const repair = vi.fn(async () => await registryModules(restarted.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees());
     expect(await runOneTimeArchivedWorktreeRepair({ db: restarted.db.raw, repair })).toBeUndefined();
     expect(repair).not.toHaveBeenCalled();
     await restarted.registry.restoreThread({ backend: "codex", threadId: "old-target" });
@@ -1045,7 +1045,7 @@ describe("archive worktrees across a desktop restart", () => {
     if (protection === "external") await instance.store.addLinkedDirectory({
       backend: "codex", threadId: "old-target", directory: { ...fixture.directory, worktreeOwnership: "external" },
     });
-    const result = await instance.registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.protectedWorktrees).toBe(1);
     expect(result.candidates).toEqual([]);
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
@@ -1059,7 +1059,7 @@ describe("archive worktrees across a desktop restart", () => {
       if (!params.archived && ++activeReads === 2) ArchiveWorktreeTransport.threads.push({ id: "new-owner", cwd: fixture.worktree, source: "appServer" });
     };
     const instance = fixture.reopen();
-    const result = await instance.registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
     expect(activeReads).toBe(2);
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
@@ -1082,7 +1082,7 @@ describe("archive worktrees across a desktop restart", () => {
       { id: "old-target", cwd: fixture.worktree, source: "cli", archived: true },
     ];
     const instance = fixture.reopen(fixture.directory, false, undefined, [orphanDirectory]);
-    const result = await instance.registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.cleanup).toEqual(expect.arrayContaining([
       expect.objectContaining({ worktreePath: orphan, removedWorktree: false,
         skippedReason: "Its repository no longer exists; the checkout was kept." }),
@@ -1102,7 +1102,7 @@ describe("archive worktrees across a desktop restart", () => {
       { id: "old-target", cwd: fixture.worktree, source: "cli", archived: true },
     ];
     const instance = fixture.reopen(fixture.directory, false, undefined, [secondDirectory]);
-    const registry = instance.registry as unknown as { archivedAcpWorktreeBlocker: (worktreePath: string, inventory: unknown) => string | undefined };
+    const registry = registryModules(instance.registry).threadArchiveCoordinator as unknown as { archivedAcpWorktreeBlocker: (worktreePath: string, inventory: unknown) => string | undefined };
     const original = registry.archivedAcpWorktreeBlocker.bind(registry);
     let thrown = false;
     vi.spyOn(registry, "archivedAcpWorktreeBlocker").mockImplementation((worktreePath, inventory) => {
@@ -1112,7 +1112,7 @@ describe("archive worktrees across a desktop restart", () => {
       }
       return original(worktreePath, inventory);
     });
-    const result = await instance.registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.cleanup).toEqual(expect.arrayContaining([
       expect.objectContaining({ worktreePath: second, removedWorktree: false, error: "EACCES: permission denied" }),
       expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
@@ -1125,14 +1125,14 @@ describe("archive worktrees across a desktop restart", () => {
     ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.repo, source: "cli", archived: true }];
     const primary = { ...fixture.directory, path: fixture.repo, worktreePath: fixture.repo };
     const instance = fixture.reopen(primary);
-    const result = await instance.registry.repairArchivedThreadWorktrees();
+    const result = await registryModules(instance.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
     expect(result.cleanup[0]?.error).toContain("primary checkout");
     expect((await stat(fixture.repo)).isDirectory()).toBe(true);
     ArchiveWorktreeTransport.threads[0]!.cwd = fixture.worktree;
     await fixture.git(fixture.repo, ["worktree", "remove", fixture.worktree]);
     const restarted = fixture.reopen();
-    const missing = await restarted.registry.repairArchivedThreadWorktrees();
+    const missing = await registryModules(restarted.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees();
     expect(missing.missingWorktrees).toBe(1);
     expect(missing.cleanup).toEqual([]);
   });
@@ -1287,7 +1287,7 @@ describe("archive worktrees across a desktop restart", () => {
     await writeFile(path.join(fixture.worktree, "file.txt"), "dirty parent edit\n");
     await writeFile(path.join(fixture.worktree, "notes.txt"), "untracked parent notes\n");
     const first = fixture.reopen();
-    const result = repair ? await first.registry.repairArchivedThreadWorktrees()
+    const result = repair ? await registryModules(first.registry).threadArchiveCoordinator.repairArchivedThreadWorktrees()
       : await first.registry.archiveThread({ backend: "codex", threadId: "reviewed-parent" });
     expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
@@ -1646,7 +1646,7 @@ describe("archive cleanup and finished helper threads", () => {
 
     expect(result.removed).toEqual([{ worktreePath: fixture.worktree }]);
     expect(archive.mock.calls.map(([options]) => options.maxSnapshotBytes)).toEqual([1_000_000]);
-    const held = (instance.registry as unknown as { reviewedSnapshotLimits: Map<string, { bytes: number }> }).reviewedSnapshotLimits;
+    const held = (registryModules(instance.registry).threadArchiveCoordinator as unknown as { reviewedSnapshotLimits: Map<string, { bytes: number }> }).reviewedSnapshotLimits;
     expect([...held.values()].map((approval) => approval.bytes)).toEqual([7]);
   }, 30_000);
 

@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary, DesktopCheckoutHibernationPolicy } from "@pwragent/shared";
@@ -121,8 +121,9 @@ describe("hibernation pass budgets", () => {
 
   it("asks nothing of the registry for candidates the thread rules keep", async () => {
     const owner = registry();
-    const busy = vi.spyOn(owner as unknown as { autoArchiveCandidateIsBusy: (candidate: ThreadArchiveCandidate) => boolean },
-      "autoArchiveCandidateIsBusy");
+    const busy = vi.spyOn(registryModules(owner).threadArchiveCoordinator as unknown as {
+      autoArchiveCandidateIsBusy: (candidate: ThreadArchiveCandidate) => boolean;
+    }, "autoArchiveCandidateIsBusy");
     const internals = CheckoutPathOwners.prototype as unknown as { index: () => unknown };
     const indexed = vi.spyOn(internals, "index");
     const asked = vi.spyOn(CheckoutPathOwners.prototype, "sharedWithAnotherThread");

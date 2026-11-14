@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { stat, realpath, mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
@@ -37,6 +37,8 @@ type CleanupBoundary = {
   completeArchivedThreadCleanup(params: { backend: "codex"; threadId: string; archivedAt: number;
     codexRolloutMissing: boolean; messagingCleanup: { error?: string }; context: ArchiveCleanupContext }): Promise<{ cleanup: Array<{ removedWorktree: boolean }> }>;
   findThreadForArchiveCleanup(params: { backend: "codex"; threadId: string; context: ArchiveCleanupContext }): Promise<{ thread: AppServerThreadSummary }>;
+};
+type RegistryInternals = {
   worktreeArchiveService: WorktreeArchiveService;
   claudeBackend: { listThreads(params: { archived: boolean }): Promise<AppServerThreadSummary[]> };
 };
@@ -103,13 +105,14 @@ async function fixture(noise: Noise[], roots = 1, overlayOnly = false, real?: { 
     acpWorktreeRepositoryResolver: async () => { effects.workspace += 1; return undefined; },
   });
   registries.push(registry);
-  const boundary = registry as unknown as CleanupBoundary;
-  vi.spyOn(boundary.claudeBackend, "listThreads").mockImplementation(async ({ archived }) => claude[archived ? "archived" : "active"]);
+  const boundary = registryModules(registry).threadArchiveCoordinator as unknown as CleanupBoundary;
+  const internals = registry as unknown as RegistryInternals;
+  vi.spyOn(internals.claudeBackend, "listThreads").mockImplementation(async ({ archived }) => claude[archived ? "archived" : "active"]);
   let checkpoints = 0;
   const context: ArchiveCleanupContext = { batch: {}, assertCurrent() {}, checkpoint: async () => { checkpoints += 1; }, settleCheckpoint: async () => {} };
   const cleanup = async () => await boundary.completeArchivedThreadCleanup({ backend: "codex", threadId: "target", archivedAt: 1,
     codexRolloutMissing: false, messagingCleanup: {}, context });
-  return { registry, boundary, client, transport, rows, claude, overlays, effects, inspected, archive, context, cleanup, snapshots,
+  return { registry, boundary, internals, client, transport, rows, claude, overlays, effects, inspected, archive, context, cleanup, snapshots,
     get removed() { return removed; }, get checkpoints() { return checkpoints; } };
 }
 
@@ -290,7 +293,7 @@ it("uses real Git and canonical paths as the snapshot/removal oracle at the chan
       if (kind === "locked") await git(repo, "worktree", "lock", checkout);
       const run = await fixture([], 1, false, { cwd: target, repositoryPath: repo });
       const previousRefs = new Set((await git(repo, "for-each-ref", "--format=%(refname)", "refs/codex/snapshots/")).split("\n"));
-      const service = run.boundary.worktreeArchiveService;
+      const service = run.internals.worktreeArchiveService;
       const archive = service.archive.bind(service);
       vi.spyOn(service, "archive").mockImplementation(async (params) => await archive({ ...params, beforeRemove: async () => {
         const refs = (await git(repo, "for-each-ref", "--format=%(refname)", "refs/codex/snapshots/")).split("\n").filter((ref) => !previousRefs.has(ref));
@@ -370,7 +373,7 @@ it("automatically completes once after the last owner releases while unrelated e
         await run.registry.publishLocalEvent({ backend: "codex", notification: { method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["unrelated"] } } });
         await scheduler.schedule(Promise.resolve(), "paced cleanup with unrelated activity");
       } };
-      Object.assign(run.registry, { archiveCleanupQueue: scheduledQueue(context) });
+      Object.assign(registryModules(run.registry).threadArchiveCoordinator, { archiveCleanupQueue: scheduledQueue(context) });
       let completions = 0;
       let finish!: () => void;
       const completed = new Promise<void>((resolve) => { finish = resolve; });

@@ -3597,7 +3597,7 @@ describe("DesktopBackendRegistry", () => {
     const row: AgentEvent = { backend: "codex", notification: {
       method: "thread/backgroundTasks/updated", params: { threadId: "hidden", tasks: [] },
     } };
-    const internal = registry as unknown as {
+    const internal = registryModules(registry).threadArchiveCoordinator as unknown as {
       prepareArchiveReferenceChanges(...args: unknown[]): Promise<void> | undefined;
     };
     let finish!: () => void;
@@ -16747,7 +16747,6 @@ describe("DesktopBackendRegistry", () => {
       startAcpSession: () => Promise<{ threadId: string }>;
       emit: (event: AgentEvent) => Promise<void>;
       pendingStartedThreads: Map<string, AppServerThreadSummary>;
-      withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T>;
     };
     const submit = backend === "claude"
       ? vi.spyOn(internal.claudeBackend, "startThread").mockResolvedValue({ threadId: "same:thread" })
@@ -16759,8 +16758,8 @@ describe("DesktopBackendRegistry", () => {
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
     if (failure === "workspace") {
-      const admit = internal.withArchiveWorkspaceWrite.bind(registry);
-      vi.spyOn(internal, "withArchiveWorkspaceWrite").mockImplementation(async (paths, work) => {
+      const admit = registry.withArchiveWorkspaceWrite.bind(registry);
+      vi.spyOn(registry, "withArchiveWorkspaceWrite").mockImplementation(async (paths, work) => {
         await admit(paths, work);
         throw new Error("creation workspace release rejected");
       });
@@ -57373,8 +57372,10 @@ script = "printf setup"
       const handoff = vi
         .spyOn(registry, "handoffThreadWorkspace")
         .mockResolvedValue({} as HandoffThreadWorkspaceResponse);
+      // mutate_thread reaches restore through the inspection tools' host,
+      // which delegates to the archive coordinator.
       const restore = vi
-        .spyOn(registry, "restoreThread")
+        .spyOn(registryModules(registry).threadArchiveCoordinator, "restoreThread")
         .mockImplementation(async (request) => ({
           backend: request.backend,
           threadId: request.threadId,
@@ -65173,7 +65174,7 @@ script = "printf setup"
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
     // The tray must survive the foreground mutation, even while expensive
     // worktree cleanup has not reached its child-ungrouping stage.
-    const cleanup = vi.spyOn(registry as unknown as {
+    const cleanup = vi.spyOn(registryModules(registry).threadArchiveCoordinator as unknown as {
       ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
     }, "ungroupChildrenOfArchivedThread").mockResolvedValue();
     try {
@@ -65232,7 +65233,7 @@ script = "printf setup"
         }
       });
       // Keep cleanup from masking the foreground promotion result.
-      const cleanup = vi.spyOn(registry as unknown as {
+      const cleanup = vi.spyOn(registryModules(registry).threadArchiveCoordinator as unknown as {
         ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
       }, "ungroupChildrenOfArchivedThread").mockResolvedValue();
       try {
@@ -66331,7 +66332,7 @@ script = "printf setup"
       flushAll: vi.fn(async () => {}),
       archiveThread: vi.fn(async () => { throw new Error("fixture retention failure"); }),
     } });
-    const internals = registry as unknown as {
+    const internals = registryModules(registry).threadArchiveCoordinator as unknown as {
       ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
       archiveThreadWorktrees(params: unknown): Promise<unknown[]>;
     };
@@ -66459,7 +66460,7 @@ script = "printf setup"
     });
 
     const restoreWorktrees = vi.fn(async () => []);
-    Object.assign(registry, { restoreThreadWorktrees: restoreWorktrees });
+    Object.assign(registryModules(registry).threadArchiveCoordinator, { restoreThreadWorktrees: restoreWorktrees });
     const restoreTokenMiser = vi.fn(async () => { throw new Error("fixture restore retention failure"); });
     Object.assign(registry, { tokenMiserStore: {
       flushAll: vi.fn(async () => {}),
@@ -73678,7 +73679,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     let settled = false;
     const settlement = promise.then(() => { settled = true; }, () => { settled = true; });
     for (;;) {
-      await Promise.race([settlement, registry.whenArchiveCleanupCheckpointPendingForTests()]);
+      await Promise.race([settlement, registryModules(registry).threadArchiveCoordinator.whenArchiveCleanupCheckpointPendingForTests()]);
       if (settled) return await promise;
       await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
     }

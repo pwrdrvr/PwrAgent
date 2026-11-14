@@ -778,7 +778,7 @@ describe("Thread maintenance's hibernate step", () => {
   it("splits checkout owners exactly as the shared-checkout index counts them (model property)", async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
-    const inventory = (candidates: ThreadArchiveCandidate[]) => (registry as unknown as {
+    const inventory = (candidates: ThreadArchiveCandidate[]) => (registryModules(registry).threadArchiveCoordinator as unknown as {
       maintenanceOwnershipInventory: (rows: ThreadArchiveCandidate[]) => { activeThreads: AppServerThreadSummary[] };
     }).maintenanceOwnershipInventory(candidates);
     const outsider = { thread: { id: "outsider", source: "codex" as const, linkedDirectories: [] } };
@@ -848,7 +848,7 @@ describe("Thread maintenance's hibernate step", () => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
     const candidate = (await registry.listAutoArchiveCandidates())[0]!;
-    const fullDiscovery = vi.spyOn(registry, "listAutoArchiveCandidates");
+    const fullDiscovery = vi.spyOn(registryModules(registry).threadArchiveCoordinator, "listAutoArchiveCandidates");
     const stages: string[] = [];
     expect(await registry.hibernateReviewedCheckout(candidate, { ...ON, enabled: true }, (stage) => stages.push(stage))).toBe(true);
     expect(fullDiscovery).not.toHaveBeenCalled();
@@ -1101,7 +1101,7 @@ describe("Thread maintenance's hibernate step", () => {
     await git(repo, ["worktree", "add", worktree, "owned"]);
     const current = { ...old, ...await inspectRegisterableWorktree(worktree) };
     const owner = (await registry.listAutoArchiveCandidates()).find((candidate) => candidate.thread.id === THREAD_ID)!.thread;
-    const admission = registry as unknown as {
+    const admission = registryModules(registry).threadArchiveCoordinator as unknown as {
       isManagedArchiveCheckout: (inventory: { activeThreads: AppServerThreadSummary[]; archivedThreads: AppServerThreadSummary[] },
         worktreePath: string) => Promise<boolean>;
     };
@@ -1165,7 +1165,7 @@ describe("Thread maintenance's hibernate step", () => {
     signal.throwIfAborted();
     let cancelled!: () => void;
     const cancellation = new Promise<void>((resolve) => { cancelled = resolve; });
-    const lifecycle = registry as unknown as { cancelAutomaticArchive: (backend: "codex", threadId: string) => void };
+    const lifecycle = registryModules(registry).threadArchiveCoordinator;
     const cancel = lifecycle.cancelAutomaticArchive.bind(lifecycle);
     vi.spyOn(lifecycle, "cancelAutomaticArchive").mockImplementation((backend, threadId) => {
       cancel(backend, threadId);

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { emptyTokenMiserGateAccountingTotals, totalTokenMiserGateAccountings, type AppServerReadThreadRequest, type AppServerReadThreadResponse, type ThreadUsageLineRecord, type ThreadSubAgentSummary, type AgentEvent } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { archiveCoordinatorStandIn } from "./helpers/archive-coordinator-stand-in";
 import { usageLedgerStandIn } from "./helpers/usage-ledger-stand-in";
 import { projectThreadDisplay, readThreadSubAgentPanel } from "../app-server/thread-display";
 import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
@@ -399,7 +400,7 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
   };
   const subAgentMonitorService = { liveCodexNativeSubAgentUsageRecords: new Map() };
   const registry: DesktopBackendRegistry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
-    automaticArchiveReservations: new Map(),
+    threadArchiveCoordinator: archiveCoordinatorStandIn({ registry: () => registry, overlayStore }),
     overlayStore,
     assertNotBootstrap: () => {},
     resolveCodexLocalModelIdsFn: () => [],
@@ -452,7 +453,7 @@ it("swaps a live gate's accounting for its stored version in the savings total",
   };
   const subAgentMonitorService = { liveCodexNativeSubAgentUsageRecords: new Map() };
   const registry: DesktopBackendRegistry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
-    automaticArchiveReservations: new Map(),
+    threadArchiveCoordinator: archiveCoordinatorStandIn({ registry: () => registry, overlayStore }),
     overlayStore,
     assertNotBootstrap: () => {},
     resolveCodexLocalModelIdsFn: () => [],

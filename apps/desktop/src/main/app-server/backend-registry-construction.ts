@@ -6,6 +6,7 @@ import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
 import type { SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
+import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -57,7 +58,6 @@ import type { AcpAvailableCommandsStorage } from "@pwragent/owner-core/acp-stora
 import type { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import type { WorktreeArchiveService } from "./worktree-archive-service";
 import type { WorktreeRecoveryService } from "./worktree-recovery-service";
-import type { WorktreeContainerService } from "./worktree-container-service";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import type { ProviderId } from "../settings/config-store/config-domains";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
@@ -210,16 +210,13 @@ export interface RegistryDependencies {
   managedReviewService: ManagedReviewService;
   subAgentMonitorService: SubAgentMonitorService;
   threadUsageLedger: ThreadUsageLedger;
+  threadArchiveCoordinator: ThreadArchiveCoordinator;
   ownerAdmission?: ThreadOwnerAdmission;
-  managedMaintenanceRoots: () => Promise<string[]>;
-  readThreadArchivePolicy: () => DesktopThreadArchivePolicy;
-  readCheckoutHibernationPolicy: () => DesktopCheckoutHibernationPolicy;
   configStore?: Pick<
     DesktopConfigStore,
     "read" | "subscribe"
   >;
   runtimeInstanceId: string;
-  archiveCleanupCheckpointStore?: ArchiveCleanupCheckpointStorage;
   projectHeldWakeupStore?: ProjectHeldWakeupStoreLike;
   restartContinuationStore?: RestartContinuationStoreLike;
   restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
@@ -296,7 +293,6 @@ export interface RegistryDependencies {
   gitWorkingStateService: GitWorkingStateService;
   worktreeArchiveService: WorktreeArchiveService;
   worktreeRecoveryService: WorktreeRecoveryService;
-  worktreeContainerService: WorktreeContainerService;
   pdfToolMcpServer?: AgentToolMcpServerLike;
   claudeAgentToolMcpServer?: AgentToolMcpServerLike;
   claudeBackend: ClaudeBackend;
