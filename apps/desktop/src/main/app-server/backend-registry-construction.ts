@@ -7,6 +7,7 @@ import type { ManagedReviewService } from "./managed-review-service";
 import type { SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
+import type { ThreadWorkspaceService } from "./thread-workspace-service";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -211,6 +212,7 @@ export interface RegistryDependencies {
   subAgentMonitorService: SubAgentMonitorService;
   threadUsageLedger: ThreadUsageLedger;
   threadArchiveCoordinator: ThreadArchiveCoordinator;
+  threadWorkspaceService: ThreadWorkspaceService;
   ownerAdmission?: ThreadOwnerAdmission;
   configStore?: Pick<
     DesktopConfigStore,
@@ -302,7 +304,6 @@ export interface RegistryDependencies {
   messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   appManagementHandler?: PwrAgentAppManagementHandler;
   starMapHandler?: PwrAgentStarMapHandler;
-  gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   resolveAcpHelperWorkspace: () => Promise<string>;
   createScratchProjectDirectory: () => Promise<string>;
   createScheduledThreadActionFn?: (

@@ -6,8 +6,8 @@ import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-r
 export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadListingOverlayStates"
   | "getThreadMetadata" | "updateThreadMetadata" | "setThreadMcpConnectionIds" | "setThreadModelSettings"
-  | "setThreadForkOrigin"
-> & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadParent">>;
+  | "setThreadForkOrigin" | "setThreadHandoffOrigin"
+> & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadParent" | "updateSubthreadOrder">>;
 
 // The overlay store requires upsertThreadUsageLine and readThreadPricing, but
 // the wiring's getters return undefined for a store without them, and their
@@ -29,6 +29,7 @@ export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
 export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadGitWorkingStateCache" | "writeThreadGitWorkingStateCacheEntry"
   | "acknowledgeThreadEnvironmentFailure" | "setThreadCodexEnvironmentRuntime"
+  | "listDirectoryLaunchpads"
 >;
 
 export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike,

@@ -84,7 +84,6 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "clearAcceptedToolCallsForEndedTurn",
     "adoptThreadBranchChangeFromActiveTurn",
     "clearCodexReviewInterruptMappingForTurn",
-    "drainPendingThreadWorkspaceMovesForTerminalTurn",
     "scheduleQueuedAgentChange",
     "flushQueuedExecutionModeIfPresent",
     "maybeRestartCodexForManagedRuntimeChange",
@@ -92,7 +91,6 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
     "flushQueuedAcpRuntimeOptionIfPresent",
     "appendTurnFailure",
     "threadHasActiveCodexReviewTurn",
-    "drainPendingThreadWorkspaceMovesForTurnIds",
     "refreshCodexBackgroundTerminalsAfterTurn",
     "notifyForAttentionRequired",
     "notifyForTerminalOutcome",
@@ -147,6 +145,14 @@ const HUB_HOOKS: Array<{ name: string; owner: (registry: Members) => Members | u
   ].map((name) => ({
     name,
     owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).threadUsageLedger as unknown as Members,
+  })),
+  // Moved to the thread workspace service (PWR-146).
+  ...[
+    "drainPendingThreadWorkspaceMovesForTerminalTurn",
+    "drainPendingThreadWorkspaceMovesForTurnIds",
+  ].map((name) => ({
+    name,
+    owner: (registry: Members) => registryModules(registry as unknown as DesktopBackendRegistry).threadWorkspaceService as unknown as Members,
   })),
   ...([
     ["overlayStore", ["getThreadMetadata", "updateThreadMetadata", "completeThreadUsageTurn", "getThreadOverlayState"]],

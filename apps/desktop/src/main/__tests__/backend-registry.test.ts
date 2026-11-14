@@ -57369,8 +57369,10 @@ script = "printf setup"
         markThreadSeen,
         setThreadParent,
       });
+      // mutate_thread reaches handoff through the inspection tools' host,
+      // which delegates to the workspace service.
       const handoff = vi
-        .spyOn(registry, "handoffThreadWorkspace")
+        .spyOn(registryModules(registry).threadWorkspaceService, "handoffThreadWorkspace")
         .mockResolvedValue({} as HandoffThreadWorkspaceResponse);
       // mutate_thread reaches restore through the inspection tools' host,
       // which delegates to the archive coordinator.

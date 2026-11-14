@@ -104,6 +104,7 @@ import { ManagedReviewService } from "./managed-review-service";
 import { SubAgentMonitorService } from "./subagent-monitor-service";
 import { ThreadUsageLedger } from "./thread-usage-ledger";
 import { ThreadArchiveCoordinator, type ThreadArchiveCoordinatorDependencies } from "./thread-archive-coordinator";
+import { ThreadWorkspaceService } from "./thread-workspace-service";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolAdvertisedLocally, localAgentToolRefusal } from "../member-containment";
@@ -125,6 +126,7 @@ export interface RegistryModules {
   readonly subAgentMonitorService: SubAgentMonitorService;
   readonly threadUsageLedger: ThreadUsageLedger;
   readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
+  readonly threadWorkspaceService: ThreadWorkspaceService;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -1317,6 +1319,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // The coordinator tests for setThreadParent before calling it, as the
         // registry did; a getter keeps a missing method missing.
         get setThreadParent() { return overlayStore.setThreadParent?.bind(overlayStore); },
+        setThreadHandoffOrigin: (...args) => overlayStore.setThreadHandoffOrigin(...args),
+        // The workspace service tests for updateSubthreadOrder before calling
+        // it, as the registry did; a getter keeps a missing method missing.
+        get updateSubthreadOrder() { return overlayStore.updateSubthreadOrder?.bind(overlayStore); },
       },
       usage: {
         // The store requires upsertThreadUsageLine and readThreadPricing, but
@@ -1355,6 +1361,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get writeThreadGitWorkingStateCacheEntry() { return overlayStore.writeThreadGitWorkingStateCacheEntry?.bind(overlayStore); },
         get acknowledgeThreadEnvironmentFailure() { return overlayStore.acknowledgeThreadEnvironmentFailure?.bind(overlayStore); },
         get setThreadCodexEnvironmentRuntime() { return overlayStore.setThreadCodexEnvironmentRuntime?.bind(overlayStore); },
+        listDirectoryLaunchpads: (...args) => overlayStore.listDirectoryLaunchpads(...args),
       },
       toolAccounting: {
         // The ledger tests for readThreadToolAccounting before calling it, as
@@ -1431,6 +1438,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     archiveCleanupCheckpointStore,
     worktreeContainerService,
   }, handlers, () => ports);
+  const threadWorkspaceService = new ThreadWorkspaceService(context, {
+    threadArchiveCoordinator,
+    gitWorkspaceHandoffService,
+  }, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
@@ -1441,6 +1452,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     subAgentMonitorService,
     threadUsageLedger,
     threadArchiveCoordinator,
+    threadWorkspaceService,
     handlers,
     ownerAdmission,
     configStore,
@@ -1516,7 +1528,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     messagingArchiveCleaner,
     appManagementHandler,
     starMapHandler,
-    gitWorkspaceHandoffService,
     resolveAcpHelperWorkspace,
     createScratchProjectDirectory,
     createScheduledThreadActionFn,
@@ -1541,6 +1552,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     subAgentMonitorService,
     threadUsageLedger,
     threadArchiveCoordinator,
+    threadWorkspaceService,
   });
   return registry;
 }
