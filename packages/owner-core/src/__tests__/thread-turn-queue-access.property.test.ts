@@ -33,6 +33,8 @@ type ModelMessage = {
   approved: boolean;
   /** The target's stored mode when this text was last submitted. */
   modeAtSubmission: ThreadExecutionMode;
+  /** Send order. A replacement keeps the place of the text it replaces. */
+  order: number;
 };
 
 const step: fc.Arbitrary<Step> = fc.oneof(
@@ -94,10 +96,11 @@ async function runModel(initialMode: ThreadExecutionMode, steps: Step[]): Promis
       }
       const sender = SENDERS[next.sender]!;
       if (next.kind === "send") {
-        const message = { sender, override: next.override, approved: next.approved, modeAtSubmission: mode };
+        const order = sequence++;
+        const message = { sender, override: next.override, approved: next.approved, modeAtSubmission: mode, order };
         // A refused message never reaches the queue.
         if (!withinCeiling(message, mode)) continue;
-        const text = `message-${sequence++}`;
+        const text = `message-${order}`;
         waiting.set(text, message);
         await queue.submitGroupedSteer({
           ...THREAD,
@@ -158,6 +161,14 @@ async function runModel(initialMode: ThreadExecutionMode, steps: Step[]): Promis
       // mode its own submission saw.
       expect(withinCeiling(message, own.modeAtSubmission)).toBe(true);
     }
+    // Each sender's messages run in the order it sent them.
+    for (const sender of SENDERS) {
+      const orders = delivered.flatMap(message => {
+        const own = waiting.get(message.text)!;
+        return own.sender === sender ? [own.order] : [];
+      });
+      expect({ sender, orders }).toEqual({ sender, orders: [...orders].sort((left, right) => left - right) });
+    }
   } finally {
     queue.close();
   }
@@ -182,6 +193,14 @@ it("does not refuse an approved to-do because an agent message joined its batch"
   await runModel("default", [
     { kind: "send", sender: 0, approved: false },
     { kind: "send", sender: 1, override: "full-access", approved: true },
+  ]);
+});
+
+it("runs a sender's message after its earlier message with other settings", async () => {
+  await runModel("full-access", [
+    { kind: "send", sender: 0, approved: false },
+    { kind: "send", sender: 0, override: "auto", approved: false },
+    { kind: "send", sender: 0, approved: false },
   ]);
 });
 

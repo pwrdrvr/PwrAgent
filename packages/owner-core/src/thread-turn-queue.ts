@@ -288,11 +288,15 @@ export function replacedAgentMessageOrigin(
   sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
 ): AppServerThreadMessageOrigin | undefined {
   if (!entry.agentMessages) return entry.messageOrigin;
-  return entry.agentMessages.find(message => {
-    const source = message.origin?.sourceThread;
-    return source?.backend === sender.backend && source.threadId === sender.threadId
-      && source.instanceId === sender.instanceId;
-  })?.origin;
+  return entry.agentMessages.find(message => sentBy(message.origin?.sourceThread, sender))?.origin;
+}
+
+function sentBy(
+  source: AppServerThreadMessageOrigin["sourceThread"],
+  sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
+): boolean {
+  return source?.backend === sender.backend && source.threadId === sender.threadId
+    && source.instanceId === sender.instanceId;
 }
 
 function groupedAgentInput(messages: QueuedAgentMessage[]): AppServerTurnInputItem[] {
@@ -407,13 +411,15 @@ export class ThreadTurnQueue {
       const key = this.keyFor(input);
       const queue = this.queueFor(key);
       // A paused batch keeps the messages it has; a new one starts beside it.
-      // So does a batch whose turn settings or operator approval differ: the
-      // owner checked each message's override as it was submitted, and no
-      // message may run under another's override or approval.
-      const index = queue.findIndex((entry) =>
+      // So does the newest open batch when its turn settings or operator
+      // approval differ: the owner checked each message's override as it was
+      // submitted, and no message may run under another's override or
+      // approval. Joining an older batch would run this message ahead of
+      // ones its sender sent before it.
+      const open = queue.findLastIndex((entry) =>
         entry.delivery === "queued-steer" && entry.agentMessages !== undefined && !entry.paused
-        && sharesTurnTerms(entry, input)
       );
+      const index = open >= 0 && sharesTurnTerms(queue[open]!, input) ? open : -1;
       const current = index >= 0 ? queue[index] : undefined;
       const messages = [...(current?.agentMessages ?? []), message];
       const holdReason = this.holdReasonFor(key);
@@ -991,9 +997,7 @@ export class ThreadTurnQueue {
     return await this.withDispatchSuspended(found.entry, async () => {
       const current = this.findQueuedEntry(entryId, sender);
       if (!current || this.closed || (current.entry.agentMessageOrigins && !current.entry.agentMessages)) return undefined;
-      const owns = (source: AppServerThreadMessageOrigin["sourceThread"]) => source
-        && source.backend === sender.backend && source.threadId === sender.threadId
-        && source.instanceId === sender.instanceId;
+      const owns = (source: AppServerThreadMessageOrigin["sourceThread"]) => sentBy(source, sender);
       const entry = current.entry;
       if (entry.messageOrigin?.kind !== "agent") return undefined;
       // The operator approved the text they saw. A replacement can neither
