@@ -308,6 +308,36 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("delivers distinct navigation and detail representations of one owner update with the same identity", () => {
+    const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const owner = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    viewer.localInstanceId = "viewer_one";
+    owner.localInstanceId = "owner_one";
+    viewer.router = new FederationRouter({ localInstanceId: "viewer_one" });
+    owner.router = new FederationRouter({ localInstanceId: "owner_one" });
+    const capabilities: FederationCapability[] = ["event_subscriptions", "thread_navigation", "thread_detail"];
+    const published = vi.fn();
+    const invalidated = vi.fn();
+    viewer.setAgentEventPublisher(published);
+    viewer.remoteThreadSummaryCache = { invalidate: invalidated };
+    viewer.router.registerConnection(createConnection({ peerId: "owner_one", capabilities,
+      sendEnvelope: (envelope) => { owner.applyEventSubscription(envelope, "viewer_one"); } }));
+    owner.router.registerConnection(createConnection({ peerId: "viewer_one", capabilities,
+      sendEnvelope: (envelope) => { viewer.publishRemoteBackendEvent(envelope, "owner_one"); } }));
+    viewer.setRendererEventSubscriptions(7, "thread-view", [{ sourceInstanceId: "owner_one",
+      eventClasses: ["navigation", "transcript"], threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "same" }] } }]);
+    published.mockClear(); invalidated.mockClear();
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: { method: "thread/status/changed",
+      params: { threadId: "same", status: { type: "active" } } } });
+    expect(published.mock.calls.map(([event]) => event.notification)).toEqual([
+      { method: "navigation/invalidated", params: { sourceMethod: "thread/status/changed", threadId: "same" } },
+      { method: "thread/status/changed", params: { threadId: "same", status: { type: "active" } } },
+    ]);
+    expect(published.mock.calls.every(([event]) => event.backend === "codex"
+      && event.federationTarget?.instanceId === "owner_one")).toBe(true);
+    expect(invalidated).toHaveBeenCalledTimes(2);
+  });
+
   it("identifies local and disconnected navigation owners and falls back to the exact peer ID", () => {
     const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService").mockReturnValue({
       readFederationConfig: () => ({ instanceLabel: "Fixture Desktop" }),

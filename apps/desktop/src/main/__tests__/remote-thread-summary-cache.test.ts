@@ -1782,6 +1782,8 @@ it.each(["initial", "updated"])("publishes %s rows after invalidation overlaps a
     archiveReads.shift()!([]);
     for (let i = 0; i < 3; i++) await settle();
     expect(refreshed).toHaveBeenCalledTimes(1);
+    expect(refreshed.mock.calls[0]).toEqual(phase === "initial" ? ["peer"]
+      : ["peer", [{ backend: "codex", threadId: "root", ownerInstanceId: "peer" }]]);
     const resolved = await cache.resolvePinnedThreads(pins);
     expect(resolved.threads.find((thread) => thread.id === "root")?.title).toBe("After");
     expect(resolved.archived).toEqual([]);

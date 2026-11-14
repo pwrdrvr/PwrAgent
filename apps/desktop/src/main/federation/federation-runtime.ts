@@ -3845,13 +3845,13 @@ export class DesktopFederationRuntime {
       // Pinned-summary refreshes land in the background (the snapshot
       // merge never awaits a peer) — poke the renderer so its next
       // navigation refresh serves the fresh rows.
-      onPinnedSummariesRefreshed: (instanceId) => {
+      onPinnedSummariesRefreshed: (instanceId, rowChanges) => {
         void getDesktopBackendRegistry()
           .publishLocalEvent({
             backend: "codex",
             notification: {
               method: "navigation/remoteThreadPins/changed",
-              params: { instanceId },
+              params: { instanceId, ...(rowChanges ? { rowChanges } : {}) },
             },
           })
           .catch((error: unknown) => {
