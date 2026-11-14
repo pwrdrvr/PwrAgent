@@ -27,6 +27,9 @@ type ServiceInternals = {
   startTaskMonitorRecoveryTurn(params: { record: TaskMonitorDelegationRecord; terminalStatus: string }): Promise<void>;
   synthesizeTaskMonitorFallbackCompletion(params: { record: TaskMonitorDelegationRecord; reason: string }): Promise<void>;
   interruptManagedTaskMonitor(record: TaskMonitorDelegationRecord): Promise<void>;
+  scheduleCodexNativeSubAgentReconciliation(params: { delayMs: number; parentThreadId: string; receiverThreadId: string }): void;
+  clearCodexNativeSubAgentReconciliation(receiverThreadId: string): void;
+  reconcileCodexNativeSubAgent(receiverThreadId: string): Promise<void>;
 };
 
 function monitorRecord(overrides: Partial<TaskMonitorDelegationRecord> = {}): TaskMonitorDelegationRecord {
@@ -145,7 +148,7 @@ describe("SubAgentMonitorService", () => {
   });
 
   it("keeps the registry's sub-agent members as facades that forward every argument and the module's result", async () => {
-    const { registry } = createRegistry();
+    const { registry, db } = createRegistry();
     try {
       const monitors = registryModules(registry).subAgentMonitorService;
       const stopped = Promise.resolve({ backend: "codex" as const, threadId: "parent-thread", monitorId: "monitor-1", status: "cancelled" as const });
@@ -182,11 +185,12 @@ describe("SubAgentMonitorService", () => {
       expect(recordCards).toHaveBeenLastCalledWith(cards);
     } finally {
       await registry.close();
+      db.close();
     }
   });
 
   it("lets the registry read the monitor and native worker state only through the module's views", async () => {
-    const { registry } = createRegistry();
+    const { registry, db } = createRegistry();
     try {
       const monitors = registryModules(registry).subAgentMonitorService;
       const internals = monitors as unknown as ServiceInternals;
@@ -204,12 +208,13 @@ describe("SubAgentMonitorService", () => {
         .toEqual({ backend: "codex", isSubAgent: true, threadId: "parent" });
     } finally {
       await registry.close();
+      db.close();
     }
   });
 
   it("releases its monitor and reconciliation state when the registry closes, in the registry's close order", async () => {
     vi.useFakeTimers();
-    const { registry } = createRegistry();
+    const { registry, db } = createRegistry();
     const monitors = registryModules(registry).subAgentMonitorService;
     const internals = monitors as unknown as ServiceInternals;
     const fired = vi.fn();
@@ -222,6 +227,7 @@ describe("SubAgentMonitorService", () => {
     const persist = vi.spyOn(monitors, "persistLiveCodexNativeSubAgentUsage");
     const cancel = vi.spyOn(monitors, "cancelCodexNativeSubAgentReconciliations");
     await registry.close();
+    db.close();
     expect(clear).toHaveBeenCalledOnce();
     expect(persist).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledOnce();
@@ -487,6 +493,81 @@ describe("SubAgentMonitorService startup reconciliation", () => {
         }]);
       }
       expect(invalidated).toHaveBeenCalledTimes(expected[0] === "reconcile" && repaired > 0 ? 1 : 0);
+    }), { numRuns: 200 });
+  });
+});
+
+// ---- Native worker reconciliation timers ------------------------------------
+
+type ReconcileCommand =
+  | { kind: "schedule"; worker: string; parent: string; delayMs: number }
+  | { kind: "clear"; worker: string }
+  | { kind: "advance"; ms: number };
+
+const WORKERS = ["worker-a", "worker-b", "worker-c"];
+
+const reconcileCommand: fc.Arbitrary<ReconcileCommand> = fc.oneof(
+  fc.record({
+    kind: fc.constant("schedule" as const),
+    worker: fc.constantFrom(...WORKERS),
+    parent: fc.constantFrom("parent-1", "parent-2"),
+    delayMs: fc.integer({ min: 1, max: 5 }).map((seconds) => seconds * 1_000),
+  }),
+  fc.record({ kind: fc.constant("clear" as const), worker: fc.constantFrom(...WORKERS) }),
+  fc.record({ kind: fc.constant("advance" as const), ms: fc.integer({ min: 0, max: 6_000 }) }),
+);
+
+describe("SubAgentMonitorService native worker reconciliation", () => {
+  it("keeps one pending reconciliation per worker, and runs each scheduled one once unless replaced or cleared", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(reconcileCommand, { maxLength: 30 }), async (commands) => {
+      vi.useFakeTimers();
+      try {
+        const { internals } = createService();
+        const fired: string[] = [];
+        vi.spyOn(internals, "reconcileCodexNativeSubAgent").mockImplementation(async (worker) => { fired.push(worker); });
+        // The model: a worker's record lives from its first schedule until it
+        // is cleared, keeps its first start time, and has at most one deadline.
+        const model = new Map<string, { parent: string; startedAt: number; deadline?: number }>();
+        const expectedFired: string[] = [];
+        for (const command of commands) {
+          if (command.kind === "schedule") {
+            const now = Date.now();
+            const existing = model.get(command.worker);
+            model.set(command.worker, {
+              parent: command.parent,
+              startedAt: existing?.startedAt ?? now,
+              deadline: now + command.delayMs,
+            });
+            internals.scheduleCodexNativeSubAgentReconciliation({
+              delayMs: command.delayMs,
+              parentThreadId: command.parent,
+              receiverThreadId: command.worker,
+            });
+          } else if (command.kind === "clear") {
+            model.delete(command.worker);
+            internals.clearCodexNativeSubAgentReconciliation(command.worker);
+          } else {
+            const until = Date.now() + command.ms;
+            for (const [worker, entry] of model) {
+              if (entry.deadline !== undefined && entry.deadline <= until) {
+                expectedFired.push(worker);
+                entry.deadline = undefined;
+              }
+            }
+            await vi.advanceTimersByTimeAsync(command.ms);
+          }
+          expect([...fired].sort()).toEqual([...expectedFired].sort());
+          expect([...internals.codexNativeSubAgentReconciliations.keys()].sort()).toEqual([...model.keys()].sort());
+          for (const [worker, entry] of model) {
+            const actual = internals.codexNativeSubAgentReconciliations.get(worker)!;
+            expect(actual.parentThreadId).toBe(entry.parent);
+            expect(actual.startedAt).toBe(entry.startedAt);
+            expect(actual.timer !== undefined, worker).toBe(entry.deadline !== undefined);
+          }
+        }
+      } finally {
+        vi.useRealTimers();
+      }
     }), { numRuns: 200 });
   });
 });

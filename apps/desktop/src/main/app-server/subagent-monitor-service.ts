@@ -440,7 +440,7 @@ export class SubAgentMonitorService {
   }
 
   /** Native worker usage by parent thread, then monitor id, for the registry's reads. */
-  get liveCodexNativeSubAgentUsageRecords(): ReadonlyMap<string, Map<string, LiveCodexNativeSubAgentUsage>> {
+  get liveCodexNativeSubAgentUsageRecords(): ReadonlyMap<string, ReadonlyMap<string, LiveCodexNativeSubAgentUsage>> {
     return this.liveCodexNativeSubAgentUsage;
   }
 
