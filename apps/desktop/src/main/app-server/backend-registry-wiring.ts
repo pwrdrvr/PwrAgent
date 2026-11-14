@@ -101,6 +101,7 @@ import { ForgeToolBridge } from "./forge-tool-bridge";
 import { ThreadInspectionTools } from "./thread-inspection-tools";
 import { ThreadMcpConnections } from "./thread-mcp-connections";
 import { ManagedReviewService } from "./managed-review-service";
+import { SubAgentMonitorService } from "./subagent-monitor-service";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolAdvertisedLocally, localAgentToolRefusal } from "../member-containment";
@@ -119,6 +120,7 @@ export interface RegistryModules {
   readonly threadInspectionTools: ThreadInspectionTools;
   readonly threadMcpConnections: ThreadMcpConnections;
   readonly managedReviewService: ManagedReviewService;
+  readonly subAgentMonitorService: SubAgentMonitorService;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -1306,14 +1308,19 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       threads: {
         getThreadOverlayState: (...args) => overlayStore.getThreadOverlayState(...args),
         getThreadOverlayStates: (...args) => overlayStore.getThreadOverlayStates(...args),
+        get getThreadListingOverlayStates() { return overlayStore.getThreadListingOverlayStates?.bind(overlayStore); },
         get getThreadMetadata() { return overlayStore.getThreadMetadata?.bind(overlayStore); },
         get updateThreadMetadata() { return overlayStore.updateThreadMetadata?.bind(overlayStore); },
         setThreadMcpConnectionIds: (...args) => overlayStore.setThreadMcpConnectionIds(...args),
         setThreadModelSettings: (...args) => overlayStore.setThreadModelSettings(...args),
       },
       usage: {
+        // The store requires upsertThreadUsageLine and readThreadPricing, but
+        // their callers test for each before calling it. A getter keeps a
+        // missing method missing, as the store's own did.
+        get upsertThreadUsageLine() { return overlayStore.upsertThreadUsageLine?.bind(overlayStore); },
         get upsertThreadUsageLines() { return overlayStore.upsertThreadUsageLines?.bind(overlayStore); },
-        readThreadPricing: (...args) => overlayStore.readThreadPricing(...args),
+        get readThreadPricing() { return overlayStore.readThreadPricing?.bind(overlayStore); },
         get completeThreadUsageTurn() { return overlayStore.completeThreadUsageTurn?.bind(overlayStore); },
         get completeThreadUsageTurns() { return overlayStore.completeThreadUsageTurns?.bind(overlayStore); },
         get readThreadUsageActivities() { return overlayStore.readThreadUsageActivities?.bind(overlayStore); },
@@ -1324,7 +1331,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get reconcileOrphanedThreadSubAgents() { return overlayStore.reconcileOrphanedThreadSubAgents?.bind(overlayStore); },
         get moveLegacyThreadSubAgents() { return overlayStore.moveLegacyThreadSubAgents?.bind(overlayStore); },
         getThreadSubAgent: (...args) => overlayStore.getThreadSubAgent(...args),
+        getThreadSubAgents: (...args) => overlayStore.getThreadSubAgents(...args),
         listThreadSubAgents: (...args) => overlayStore.listThreadSubAgents(...args),
+        listThreadSubAgentsByMonitorIdPrefix: (...args) => overlayStore.listThreadSubAgentsByMonitorIdPrefix(...args),
         upsertThreadSubAgent: (...args) => overlayStore.upsertThreadSubAgent(...args),
       },
       workspaces: {
@@ -1366,6 +1375,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   }, () => ports);
   const threadMcpConnections = new ThreadMcpConnections(context, { forgeToolBridge }, () => ports);
   const managedReviewService = new ManagedReviewService(context, () => ports);
+  const subAgentMonitorService = new SubAgentMonitorService(context, {
+    forgeToolBridge,
+    managedReviewService,
+    threadMcpConnections,
+  }, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
@@ -1373,6 +1387,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadInspectionTools,
     threadMcpConnections,
     managedReviewService,
+    subAgentMonitorService,
     handlers,
     ownerAdmission,
     managedMaintenanceRoots,
@@ -1470,6 +1485,12 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ports = connected;
     for (const run of initialize) run();
   });
-  registryModulesByRegistry.set(registry, { forgeToolBridge, threadInspectionTools, threadMcpConnections, managedReviewService });
+  registryModulesByRegistry.set(registry, {
+    forgeToolBridge,
+    threadInspectionTools,
+    threadMcpConnections,
+    managedReviewService,
+    subAgentMonitorService,
+  });
   return registry;
 }

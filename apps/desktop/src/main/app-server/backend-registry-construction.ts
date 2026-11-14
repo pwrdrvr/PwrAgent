@@ -4,6 +4,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import type { SubAgentMonitorService } from "./subagent-monitor-service";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -206,6 +207,7 @@ export interface RegistryDependencies {
   threadInspectionTools: ThreadInspectionTools;
   threadMcpConnections: ThreadMcpConnections;
   managedReviewService: ManagedReviewService;
+  subAgentMonitorService: SubAgentMonitorService;
   ownerAdmission?: ThreadOwnerAdmission;
   managedMaintenanceRoots: () => Promise<string[]>;
   readThreadArchivePolicy: () => DesktopThreadArchivePolicy;

@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
@@ -492,12 +492,7 @@ describe("sqlite write metrics", () => {
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
     });
-    const internal = registry as unknown as {
-      recordClaudeSubAgents(params: { threadId: string; subAgents: Array<{
-        monitorId: string; taskId: string; task: string; status: ThreadSubAgentSummary["status"];
-        agentName?: string; lastMessage?: string; startedAt?: number;
-      }> }): Promise<void>;
-    };
+    const internal = registryModules(registry).subAgentMonitorService;
     const card = { monitorId: "claude-native:agent-1", taskId: "agent-1", task: "Audit the SDK", agentName: "Explore", startedAt: 1 };
     try {
       const { writes } = await measureSqliteWrites(async () => {
@@ -1819,9 +1814,8 @@ describe("sqlite write metrics", () => {
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
-    const recordActivity = (registry as unknown as {
-      recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void>;
-    }).recordCodexNativeSubAgentActivity.bind(registry);
+    const recordActivity = async (event: AgentEvent) =>
+      await registryModules(registry).subAgentMonitorService.recordCodexNativeSubAgentActivity(event);
     const resolved = { model: "resolved-model", reasoningEffort: "high" };
     const activity = (kind: string, reported = metadata === "reported"): AgentEvent => ({
       backend: "codex",
@@ -1892,7 +1886,6 @@ describe("sqlite write metrics", () => {
       overlayStore: store as never,
     });
     const internal = registry as unknown as {
-      codexNativeSubAgentParents: Map<string, string>;
       emit(event: AgentEvent): Promise<void>;
       mergeLiveTokenMiserSubAgents(
         threadId: string,
@@ -1903,7 +1896,7 @@ describe("sqlite write metrics", () => {
         threadId: string;
       }): Promise<{ lines: ThreadUsageLineRecord[] }>;
     };
-    internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+    registryModules(registry).subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "thread-parent");
     const usage = (total: number): AgentEvent => ({
       backend: "codex",
       notification: {
@@ -2006,14 +1999,13 @@ describe("sqlite write metrics", () => {
         overlayStore: store as never,
       });
       const internal = registry as unknown as {
-        codexNativeSubAgentParents: Map<string, string>;
         emit(event: AgentEvent): Promise<void>;
         readThreadPricingWithLiveTokenMiser(params: {
           backend: "codex";
           threadId: string;
         }): Promise<{ lines: ThreadUsageLineRecord[] }>;
       };
-      internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+      registryModules(registry).subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "thread-parent");
       return { registry, internal };
     };
     const storedWorkerLine = async () =>
@@ -2152,10 +2144,9 @@ describe("sqlite write metrics", () => {
       overlayStore: store as never,
     });
     const internal = registry as unknown as {
-      codexNativeSubAgentParents: Map<string, string>;
       emit(event: AgentEvent): Promise<void>;
     };
-    internal.codexNativeSubAgentParents.set("worker-review", "thread-parent");
+    registryModules(registry).subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "thread-parent");
     try {
       await internal.emit({
         backend: "codex",
@@ -2229,9 +2220,7 @@ describe("sqlite write metrics", () => {
       codexClient: stub as never,
       overlayStore: store as never,
     });
-    const internal = registry as unknown as {
-      restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
-    };
+    const internal = registryModules(registry).subAgentMonitorService;
     try {
       const { writes } = await measureSqliteWrites(async () => {
         for (let index = 0; index < 3; index += 1) {
@@ -2286,10 +2275,7 @@ describe("sqlite write metrics", () => {
       }] }),
       overlayStore: store as never,
     });
-    const internal = registry as unknown as {
-      restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
-      reconcilePersistedCodexNativeSubAgents(threads: AppServerThreadSummary[], nativeCardsByThreadId: Record<string, ThreadSubAgentSummary[]>): Promise<void>;
-    };
+    const internal = registryModules(registry).subAgentMonitorService;
     const nativeCards = await store.listThreadSubAgentsByMonitorIdPrefix({
       backend: "codex", threadIds: [parent.id], monitorIdPrefix: "codex-native:",
     });
@@ -2677,6 +2663,8 @@ describe("sqlite write metrics", () => {
     };
     const internal = registry as unknown as {
       persistThreadMessageOrigin(params: { backend: "acp:kimi"; threadId: string; messageId: string; origin: AppServerThreadMessageOrigin }): Promise<void>;
+    };
+    const monitors = registryModules(registry).subAgentMonitorService as unknown as {
       completedTaskMonitorsByThread: Map<string, typeof monitorRecord>;
       injectTaskMonitorProgress(
         caller: {
@@ -2696,20 +2684,20 @@ describe("sqlite write metrics", () => {
       ): Promise<void>;
       taskMonitorDelegations: Map<string, typeof monitorRecord>;
     };
-    internal.taskMonitorDelegations.set(monitorRecord.monitorId, monitorRecord);
+    monitors.taskMonitorDelegations.set(monitorRecord.monitorId, monitorRecord);
 
     try {
       const { writes } = await measureSqliteWrites(async () => {
         // Every ACP monitor brief persists its origin, causal or not.
         await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
           messageId: `user:${monitorRecord.monitorTurnId}`, origin: { kind: "sub-agent", ...monitorRecord.causalContext } });
-        await internal.persistTaskMonitorSubAgent(monitorRecord, {
+        await monitors.persistTaskMonitorSubAgent(monitorRecord, {
           status: "running",
         });
         // Four polls per minute for 30 minutes used to mean 120 sqlite
         // commits. Routine same-status heartbeats now stay transient.
         for (let index = 0; index < 120; index += 1) {
-          await internal.injectTaskMonitorProgress(
+          await monitors.injectTaskMonitorProgress(
             {
               backend: "acp:kimi",
               threadId: monitorRecord.monitorThreadId,
@@ -2722,14 +2710,14 @@ describe("sqlite write metrics", () => {
             },
           );
         }
-        await internal.persistTaskMonitorSubAgent(monitorRecord, {
+        await monitors.persistTaskMonitorSubAgent(monitorRecord, {
           completedAt: 1_800_001_800_000,
           lastMessage: "External operation completed.",
           outcome: "success",
           status: "success",
         });
-        internal.taskMonitorDelegations.delete(monitorRecord.monitorId);
-        internal.completedTaskMonitorsByThread.set(
+        monitors.taskMonitorDelegations.delete(monitorRecord.monitorId);
+        monitors.completedTaskMonitorsByThread.set(
           "acp:kimi:monitor-thread",
           monitorRecord,
         );
@@ -2779,7 +2767,7 @@ describe("sqlite write metrics", () => {
         scenario: causal ? "messaging-causal-monitor-lifecycle" : "acp-task-monitor-lifecycle",
         writes,
       });
-      expect(internal.completedTaskMonitorsByThread.size).toBe(0);
+      expect(monitors.completedTaskMonitorsByThread.size).toBe(0);
     } finally {
       await registry.close();
     }
@@ -2812,7 +2800,7 @@ describe("sqlite write metrics", () => {
       startupTimeoutSeconds: 45,
       task: "Wait for one bounded external operation.",
     };
-    const internal = registry as unknown as {
+    const internal = registryModules(registry).subAgentMonitorService as unknown as {
       startTaskMonitorRecoveryTurn(params: {
         record: typeof monitorRecord;
         terminalStatus: "completed";

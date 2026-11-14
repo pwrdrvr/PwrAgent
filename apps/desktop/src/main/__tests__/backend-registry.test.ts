@@ -122,8 +122,6 @@ import type {
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
   PrSummary,
-  TaskMonitorRequest,
-  TaskMonitorResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
   ThreadPullRequestWatchSummary,
@@ -3157,16 +3155,13 @@ async function callRegistryMcpTool(params: {
   args: Record<string, unknown>;
 }) {
   const internal = params.registry as unknown as {
-    handleAgentTaskMonitorRequest(
-      request: TaskMonitorRequest,
-    ): Promise<TaskMonitorResponse>;
     threadOrchestrationHandler: (
       request: PwrAgentThreadOrchestrationRequest,
     ) => Promise<PwrAgentThreadOrchestrationResponse>;
   };
   const catalogs = resolveAgentToolCatalogs({
     taskMonitorHandler: async (request) =>
-      await internal.handleAgentTaskMonitorRequest(request),
+      await registryModules(params.registry).subAgentMonitorService.handleAgentTaskMonitorRequest(request),
     threadOrchestrationHandler: internal.threadOrchestrationHandler,
   }, { taskMonitorRole: "all" });
   const router = catalogs
@@ -6261,6 +6256,8 @@ describe("DesktopBackendRegistry", () => {
       activeTurnKeys: Set<string>;
       codexBackgroundTerminals: Map<string, unknown[]>;
       liveCodexToolItemsByThread: Map<string, Map<string, unknown>>;
+    };
+    const subAgents = registryModules(registry).subAgentMonitorService as unknown as {
       liveCodexNativeSubAgentUsage: Map<string, Map<string, unknown>>;
     };
 
@@ -6283,9 +6280,9 @@ describe("DesktopBackendRegistry", () => {
     expect(isThreadBusy("thread-1")).toBe(true);
     internals.liveCodexToolItemsByThread.clear();
     // A parent whose turn ended while its sub-agent workers still run.
-    internals.liveCodexNativeSubAgentUsage.set("thread-1", new Map([["worker-1", {}]]));
+    subAgents.liveCodexNativeSubAgentUsage.set("thread-1", new Map([["worker-1", {}]]));
     expect(isThreadBusy("thread-1")).toBe(true);
-    internals.liveCodexNativeSubAgentUsage.clear();
+    subAgents.liveCodexNativeSubAgentUsage.clear();
     expect(isThreadBusy("thread-1")).toBe(false);
 
     await registry.close();
@@ -33162,7 +33159,7 @@ command = "pnpm dev"
       });
       const steer = vi.spyOn(registry, "steerTurn");
       if (scenario.monitor) {
-        (registry as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
+        (registryModules(registry).subAgentMonitorService as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
           .completedTaskMonitorsByThread.set("codex:thread-1", {});
       }
       if (!scenario.active) vi.spyOn(registry, "getActiveTurnForThread").mockReturnValue(undefined);
@@ -33235,7 +33232,7 @@ command = "pnpm dev"
       expect(registry.getActiveTurnForThread({ backend, threadId })?.turnId).toBe(turn.turnId);
       const steer = vi.spyOn(registry, "steerTurn");
       if (scenario.monitor) {
-        (registry as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
+        (registryModules(registry).subAgentMonitorService as unknown as { completedTaskMonitorsByThread: Map<string, unknown> })
           .completedTaskMonitorsByThread.set(`${backend}:${threadId}`, {});
       }
       const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
@@ -36935,7 +36932,7 @@ command = "pnpm dev"
     registry.onEvent((event) => {
       events.push(event);
     });
-    (registry as unknown as {
+    (registryModules(registry).subAgentMonitorService as unknown as {
       taskMonitorDelegations: Map<string, {
         backend: "codex";
         monitorThreadId: string;
@@ -38775,7 +38772,7 @@ command = "pnpm dev"
         codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/read"] } }),
         overlayStore,
       });
-      const internals = registry as unknown as {
+      const internals = registryModules(registry).subAgentMonitorService as unknown as {
         completedTaskMonitorsByThread: Map<string, Record<string, unknown>>;
         recordTaskMonitorUsage: (event: AgentEvent) => Promise<void>;
       };
@@ -59651,9 +59648,7 @@ script = "printf setup"
       type: "result", subtype: "success", is_error: false, result: "Watching.", num_turns: 8, stop_reason: "end_turn",
     } as ClaudeMessage;
     const monitorRecord = (registry: DesktopBackendRegistry, monitorId: string) =>
-      (registry as unknown as {
-        taskMonitorDelegations: Map<string, { awaitingClaudeTaskWake?: boolean }>;
-      }).taskMonitorDelegations.get(monitorId);
+      registryModules(registry).subAgentMonitorService.taskMonitorDelegationRecords.get(monitorId);
     const userMessageCount = async (registry: DesktopBackendRegistry, threadId: string) =>
       (await registry.readThread({ backend: "claude", threadId })).replay.messages
         .filter((message) => message.role === "user").length;
@@ -59736,7 +59731,7 @@ script = "printf setup"
         },
       });
       const checkStale = (now: number) =>
-        (registry as unknown as { checkStaleTaskMonitors(now: number): Promise<void> }).checkStaleTaskMonitors(now);
+        registryModules(registry).subAgentMonitorService.checkStaleTaskMonitors(now);
       const tasks = async (threadId: string) =>
         (await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals;
       try {
@@ -61453,9 +61448,7 @@ script = "printf setup"
     })).resolves.toMatchObject({
       subAgents: [expect.objectContaining({ status: "pending" })],
     });
-    const monitorRecord = (registry as unknown as {
-      taskMonitorDelegations: Map<string, { finalizationStarted?: boolean }>;
-    }).taskMonitorDelegations.get(monitorId);
+    const monitorRecord = registryModules(registry).subAgentMonitorService.taskMonitorDelegationRecords.get(monitorId);
     expect(monitorRecord).toBeDefined();
     monitorRecord!.finalizationStarted = true;
     await expect(registry.stopSubAgent({
@@ -61902,9 +61895,8 @@ script = "printf setup"
     const unsubscribeEvents = registry.onEvent((event) => {
       events.push(event);
     });
-    const checkStaleTaskMonitors = (registry as unknown as {
-      checkStaleTaskMonitors: (now?: number) => Promise<void>;
-    }).checkStaleTaskMonitors.bind(registry);
+    const checkStaleTaskMonitors = async (now?: number) =>
+      await registryModules(registry).subAgentMonitorService.checkStaleTaskMonitors(now);
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {

@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { installTestOwnerHost } from "../shell/testing/owner-host-fixture";
 import fc from "fast-check";
 import type { AgentEvent, ThreadSubAgentStatus } from "@pwragent/shared";
@@ -76,9 +76,8 @@ describe("Claude sub-agent cards", () => {
   afterAll(async () => { await registry.close(); });
 
   it("ends a running card on Stop when Claude no longer runs its task", async () => {
-    const record = (registry as unknown as {
-      recordClaudeSubAgents(params: { threadId: string; subAgents: ClaudeSubAgentCard[] }): Promise<void>;
-    }).recordClaudeSubAgents.bind(registry);
+    const record = async (params: { threadId: string; subAgents: ClaudeSubAgentCard[] }) =>
+      await registryModules(registry).subAgentMonitorService.recordClaudeSubAgents(params);
     const threadId = "claude-orphaned-card";
     const monitorId = "claude-native:agent-9";
     await record({ threadId, subAgents: [cardFor(9, { card: 9, status: "running", task: "Audit the SDK" })] });
@@ -92,9 +91,8 @@ describe("Claude sub-agent cards", () => {
   });
 
   it("keeps an ended card's end and notifies only real changes", async () => {
-    const record = (registry as unknown as {
-      recordClaudeSubAgents(params: { threadId: string; subAgents: ClaudeSubAgentCard[] }): Promise<void>;
-    }).recordClaudeSubAgents.bind(registry);
+    const record = async (params: { threadId: string; subAgents: ClaudeSubAgentCard[] }) =>
+      await registryModules(registry).subAgentMonitorService.recordClaudeSubAgents(params);
     let run = 0;
 
     await fc.assert(fc.asyncProperty(fc.array(report, { minLength: 1, maxLength: 12 }), async (reports) => {

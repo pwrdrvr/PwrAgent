@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -56,11 +56,11 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
     const internals = registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
       repairCodexThreadDirectoryRelationship(): Promise<void>;
-      restoreCodexNativeSubAgentsFromReplay(): Promise<void>;
       emitThreadPricingUpdated(): Promise<void>;
     };
     vi.spyOn(internals, "repairCodexThreadDirectoryRelationship").mockImplementation(async () => { await delay(20); });
-    vi.spyOn(internals, "restoreCodexNativeSubAgentsFromReplay").mockImplementation(async () => { await delay(20); });
+    vi.spyOn(registryModules(registry).subAgentMonitorService, "restoreCodexNativeSubAgentsFromReplay")
+      .mockImplementation(async () => { await delay(20); });
     vi.spyOn(internals, "emitThreadPricingUpdated").mockImplementation(async () => { await delay(40); });
     const connections = Array.from({ length: 6 }, (_, index) => `fixture-${index}`);
     try {

@@ -456,7 +456,7 @@ describe("NavigationDetailService", () => {
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
       hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
       liveTokenMiserSubAgents: new Map([[selected.id, liveAgents]]),
-      liveCodexNativeSubAgentUsage: new Map(),
+      subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
       mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype["mergeLiveTokenMiserSubAgents"],
       listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
       readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,

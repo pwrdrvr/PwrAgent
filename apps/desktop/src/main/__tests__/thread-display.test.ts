@@ -403,7 +403,7 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
     getActiveTurnForThread: () => ({ turnId: parent.turnId }),
     liveTokenMiserUsageLines: new Map([["fixture", new Map(gates.map((gate) => [gate.usageLineId, gate]))]]),
     liveTokenMiserSubAgents: new Map([["fixture", new Map(agents.map((agent) => [agent.monitorId, agent]))]]),
-    liveCodexNativeSubAgentUsage: new Map(),
+    subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
   }) as DesktopBackendRegistry;
   const display = { resource: "pricing" as const, limit: 20, deferPricingGates };
   const first = await registry.readThread({ threadId: "fixture", display });
@@ -449,7 +449,7 @@ it("swaps a live gate's accounting for its stored version in the savings total",
     getActiveTurnForThread: () => undefined,
     liveTokenMiserUsageLines: new Map(),
     liveTokenMiserSubAgents: new Map([["fixture", new Map(live.map((card) => [card.monitorId, card]))]]),
-    liveCodexNativeSubAgentUsage: new Map(),
+    subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
     // An empty ledger asks Codex for a pricing snapshot; there is none here.
     withCodexThreadClient: async () => undefined,
   }) as DesktopBackendRegistry;
