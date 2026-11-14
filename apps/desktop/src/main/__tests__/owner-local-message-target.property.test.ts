@@ -74,9 +74,6 @@ async function withOwner(
     if (!request.instanceId && request.resolutionMode !== "discover_only") return undefined;
     const peer = enrolled(request.instanceId, request.threadId, remoteSends);
     if (!peer) return undefined;
-    if (!owner.peers.includes(peer)) {
-      throw new Error(`Federation instance ${request.instanceId}, the known owner of thread ${request.threadId}, is not enrolled.`);
-    }
     return {
       backend: request.backend, threadId: request.threadId, turnId: "remote-turn",
       instanceId: peer, instanceLabel: peer, title: "Peer thread",
@@ -213,6 +210,46 @@ describe("owner-local to-do message targets", () => {
           expect(located.instanceId).toBe(route);
         }
         expect(located).toMatchObject({ backend: "codex", threadId: "target" });
+      })), { numRuns: 25 });
+  });
+
+  // Rule: a card raised for a thread named by this instance is not
+  // re-addressed to a peer that happens to report the same thread id.
+  it("never re-addresses a card that names this instance to a peer", async () => {
+    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
+      withOwner({ localInstanceId, peers }, async (fixture) => {
+        const located = await fixture.registry.locateThreadTodoMessageTarget(
+          { backend: "codex", threadId: "sender" }, { ...messageTarget(named), threadId: "elsewhere" },
+        );
+        const route = expectedRoute(localInstanceId, named);
+        if (route === "local" && named) {
+          expect(located).not.toHaveProperty("instanceId");
+          expect(fixture.remoteReads).toEqual([]);
+        } else if (route === "local") {
+          expect(fixture.remoteReads).toEqual(["discover"]);
+        } else {
+          expect(located.instanceId).toBe(route);
+        }
+      })), { numRuns: 25 });
+  });
+
+  it("points a card naming its own thread by this owner's id at Do it here", async () => {
+    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
+      withOwner({ localInstanceId, peers }, async (fixture) => {
+        const sent = fixture.registry.sendThreadTodoMessage({
+          sourceBackend: "codex", sourceThreadId: "sender",
+          target: { ...messageTarget(named), threadId: "sender" },
+          prompt: "Pick up the shutdown evidence", todo: { id: "todo", title: "Send evidence" },
+        });
+        if (expectedRoute(localInstanceId, named) === "local") {
+          // Without an instance the card's own guard says Do it here first;
+          // this layer keeps its own refusal for that case.
+          await expect(sent).rejects.toThrow(named ? /Do it here/ : /another thread/);
+          expect(fixture.remoteSends).toEqual([]);
+        } else {
+          await sent;
+        }
+        expect(fixture.submit).not.toHaveBeenCalled();
       })), { numRuns: 25 });
   });
 

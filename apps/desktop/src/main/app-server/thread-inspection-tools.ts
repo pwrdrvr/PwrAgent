@@ -223,12 +223,6 @@ export interface ThreadInspectionToolsHost {
 }
 
 /**
- * The thread inspection domain of the backend registry: the agent tools that
- * search, read and report on threads, mutate a thread's settings, grouping
- * and lifecycle, run thread maintenance, and dispatch the PR, dependency and
- * project-read tools to their owners.
- */
-/**
  * The operations that route a named instanceId through federation. Each takes
  * includeRemote, which widens it beyond this instance. mark_project_read
  * resolves this instance's own id itself.
@@ -237,6 +231,12 @@ const ROUTED_OPERATIONS: ReadonlySet<PwrAgentThreadInspectionRequest["operation"
   "search_threads", "get_thread_status", "read_thread", "mutate_thread",
 ]);
 
+/**
+ * The thread inspection domain of the backend registry: the agent tools that
+ * search, read and report on threads, mutate a thread's settings, grouping
+ * and lifecycle, run thread maintenance, and dispatch the PR, dependency and
+ * project-read tools to their owners.
+ */
 export class ThreadInspectionTools {
   private readonly context: RegistryContext;
   private readonly host: RegistryHost<ThreadInspectionToolsHost>;

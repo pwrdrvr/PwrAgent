@@ -499,7 +499,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     }),
   );
   getDesktopBackendRegistry().setLocalFederationInstanceId(
-    () => getDesktopFederationRuntime().messagingSourceInstanceId(),
+    () => getDesktopFederationRuntime().knownLocalInstanceId(),
   );
   getDesktopBackendRegistry().setFederatedThreadInspectionHandler(
     createFederatedThreadInspectionHandler({

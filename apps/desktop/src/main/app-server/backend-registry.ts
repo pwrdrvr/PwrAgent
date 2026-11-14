@@ -32421,12 +32421,22 @@ export class DesktopBackendRegistry {
     prompt: string;
     todo: { id: string; title?: string };
   }): Promise<void> {
+    // A viewer, or the card itself, can name this owner's thread by this
+    // owner's id; delivery treats that thread as local here. A card stored
+    // that way can name its own raising thread, which the card's own guard
+    // only recognizes without an instance.
+    const local = this.ownerRelativeTarget(params.target);
+    if (
+      local !== params.target
+      && local.backend === params.sourceBackend
+      && local.threadId === params.sourceThreadId
+    ) {
+      throw new ThreadTodoError("invalid_arguments", "Use Do it here for this card's own thread.");
+    }
     const response = await this.deliverMessageToThread({
       operation: "send_message_to_thread",
       context: { backend: params.sourceBackend, threadId: params.sourceThreadId },
       args: {
-        // A viewer, or the card itself, can name this owner's thread by this
-        // owner's id; delivery treats that thread as local here.
         ...params.target,
         // A card raised without its owner still names one thread: a thread
         // this instance does not own is looked for on connected peers.
@@ -32449,6 +32459,8 @@ export class DesktopBackendRegistry {
   ): Promise<ThreadTodoMessageTarget> {
     // A card names its owner's own threads without an instance.
     const target = this.ownerRelativeTarget(named);
+    // Naming this instance means this instance only: no peer is searched.
+    const namesThisInstance = target !== named;
     if (target.instanceId) {
       await this.validateRemoteMessageTarget(target);
       if (target.instanceLabel && target.title) return target;
@@ -32460,7 +32472,7 @@ export class DesktopBackendRegistry {
       const archived = await this.readArchivedMessageTarget(target).catch(() => undefined);
       if (archived) throw new ThreadTodoError("invalid_arguments", archivedThreadMessageRefusal(archived));
     }
-    if (!this.federationHandler) return target;
+    if (namesThisInstance || !this.federationHandler) return target;
     const response = await Promise.resolve(this.federationHandler({
       operation: "search_federation_threads",
       context: source,
