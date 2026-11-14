@@ -74,8 +74,8 @@ function decodeQueueCursor(value: string): QueueCursor {
   }
 }
 
-/** The registry members detail reads use. Narrowed so a stand-in that misses
- * one fails typecheck, including in opt-in suites CI never runs. */
+/** The registry members detail reads use. Narrowed so a stand-in typed
+ * against it fails typecheck when the service starts calling another one. */
 export type NavigationDetailRegistry = Pick<
   DesktopBackendRegistry,
   | "canonicalizeNavigationThreadPullRequests"

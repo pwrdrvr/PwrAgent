@@ -2,7 +2,7 @@ import { createDesktopBackendRegistry } from "../app-server/backend-registry-wir
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
 import { NavigationDetailService, type NavigationDetailRegistry } from "../app-server/navigation-detail-service";
@@ -13,7 +13,13 @@ import { openInMemoryStateDb } from "./sqlite-test-utils";
 // Opt-in, real-clock dependency experiment, not a production latency claim.
 // Keep the same service delays before/after a scheduling change. Cold means
 // the first request on a fresh registry; warm reuses it, its DB and caches.
-describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async critical path profile", () => {
+// Without PWRAGENT_PROFILE_CRITICAL_PATHS=1 the same paths run with zero
+// delays and print nothing, so CI fails when a stand-in falls behind the code
+// it stands in for instead of the profile rotting unseen.
+const PROFILING = process.env.PWRAGENT_PROFILE_CRITICAL_PATHS === "1";
+const delay = (ms: number) => sleep(PROFILING ? ms : 0);
+
+describe("async critical path profile", () => {
   it.each(["send", "first-send"])("reports %s acceptance, first token, transcript and detail independently", async (operation) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-critical-path-"));
     const db = openInMemoryStateDb();
@@ -111,10 +117,10 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
       };
       vi.spyOn(store, "projectNavigationThreadDetail").mockResolvedValue(selected);
       const gitCache = new Map<string, { currentBranch: string }>();
-      // Typed without a cast: typecheck covers this opt-in file, so a member
-      // the service starts calling fails CI here instead of rotting unseen.
-      // Only the summary and the timed Git probes are fixture-controlled; the
-      // rest is the real registry's own state.
+      // Typed without a cast, so a member the service starts calling fails
+      // typecheck here as well as the smoke run. Only the summary and the
+      // timed Git probes are fixture-controlled; the rest is the real
+      // registry's own state.
       const detailRegistry: NavigationDetailRegistry = {
         getCachedThreadSummary: () => selected,
         resolveThread: (params) => registry.resolveThread(params),
@@ -138,7 +144,7 @@ describe.skipIf(process.env.PWRAGENT_PROFILE_CRITICAL_PATHS !== "1")("async crit
         samples.push({ operation: "detail", temperature, clickToDetailMs: performance.now() - clickedAt });
         expect(result.workspaceDirectories).toHaveLength(12);
       }
-      console.info("CRITICAL_PATH_PROFILE", JSON.stringify(samples));
+      if (PROFILING) console.info("CRITICAL_PATH_PROFILE", JSON.stringify(samples));
     } finally {
       await registry.close();
       resetDesktopOverlayStoreForTests();
