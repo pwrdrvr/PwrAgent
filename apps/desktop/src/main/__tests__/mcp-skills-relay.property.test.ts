@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   MAX_SKILLS_INDEX_CHARS,
-  isMcpSkillsMethod,
+  SKILLS_INDEX_INCOMPLETE as MORE,
   offersMcpSkills,
   skillsAwareInstructions,
 } from "../mcp-connections/mcp-skills-relay";
@@ -22,12 +22,13 @@ const entry = fc.oneof(
   { weight: 1, arbitrary: fc.record({ uri: skillUri }) },
   { weight: 1, arbitrary: fc.anything() },
 );
+// Overlapping pages repeat entries, so some lists carry the same skill twice.
+const skillList = fc.array(entry, { maxLength: 80 })
+  .chain((skills) => fc.shuffledSubarray(skills).map((repeats) => [...skills, ...repeats]));
 const listed = fc.record(
-  { skills: fc.array(entry, { maxLength: 80 }), nextCursor: fc.option(fc.string({ maxLength: 8 }), { nil: undefined }) },
+  { skills: skillList, nextCursor: fc.option(fc.string({ maxLength: 8 }), { nil: undefined }) },
   { requiredKeys: ["skills"] },
 );
-
-const MORE = "More skills are listed by skills/list.";
 
 function namedUris(skills: unknown[]): Set<string> {
   const uris = new Set<string>();
@@ -70,6 +71,15 @@ describe("skills-aware instructions", () => {
     }));
   });
 
+  it("names each skill at most once", () => {
+    fc.assert(fc.property(listed, (page) => {
+      const uris = (skillsAwareInstructions({ listed: page }) ?? "").split("\n")
+        .map((line) => /\((skill:\/\/\S+)\)$/u.exec(line)?.[1])
+        .filter((uri) => uri !== undefined);
+      expect(new Set(uris).size).toBe(uris.length);
+    }));
+  });
+
   it("says more skills exist exactly when the index is partial", () => {
     fc.assert(fc.property(listed, (page) => {
       const index = skillsAwareInstructions({ listed: page });
@@ -79,11 +89,7 @@ describe("skills-aware instructions", () => {
         return;
       }
       const shown = index.split("\n").filter((line) => line.startsWith("- ")).length;
-      const validEntries = page.skills.filter((skill) => {
-        const uri = (skill as { uri?: unknown } | null)?.uri;
-        return typeof uri === "string" && valid.has(uri);
-      }).length;
-      const partial = shown < validEntries || (typeof page.nextCursor === "string" && page.nextCursor !== "");
+      const partial = shown < valid.size || (typeof page.nextCursor === "string" && page.nextCursor !== "");
       expect(index.endsWith(`\n${MORE}`)).toBe(partial);
     }));
   });
@@ -102,8 +108,4 @@ describe("skills extension detection", () => {
     expect(offersMcpSkills(undefined)).toBe(false);
   });
 
-  it("recognizes the extension's three methods and nothing else", () => {
-    expect(["skills/list", "skills/get", "resources/directory/read"].every(isMcpSkillsMethod)).toBe(true);
-    expect(["resources/read", "tools/call", "skills/delete", undefined].some(isMcpSkillsMethod)).toBe(false);
-  });
 });

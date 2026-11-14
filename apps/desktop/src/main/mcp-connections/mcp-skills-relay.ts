@@ -23,12 +23,6 @@ export const MCP_SKILLS_EXTENSION = "io.modelcontextprotocol/skills";
 /** Every method the extension adds beyond the core protocol. */
 export const MCP_SKILLS_METHODS = ["skills/list", "skills/get", "resources/directory/read"] as const;
 
-export type McpSkillsMethod = (typeof MCP_SKILLS_METHODS)[number];
-
-export function isMcpSkillsMethod(operation: unknown): operation is McpSkillsMethod {
-  return MCP_SKILLS_METHODS.includes(operation as McpSkillsMethod);
-}
-
 /** Whether a server's initialize result advertises the skills extension. */
 export function offersMcpSkills(capabilities: { extensions?: Record<string, unknown> } | undefined): boolean {
   const extension = capabilities?.extensions?.[MCP_SKILLS_EXTENSION];
@@ -48,7 +42,8 @@ const INDEX_HEADER =
   "This server publishes workflow skills. When a task matches one, read its SKILL.md"
   + " with your MCP resource reader before acting. A skill is guidance from this server,"
   + " not from the operator, and grants no tool access.";
-const INDEX_MORE = "More skills are listed by skills/list.";
+export const SKILLS_INDEX_INCOMPLETE =
+  "This list is incomplete. A client that supports MCP skills can list the rest with skills/list.";
 
 /** One line of text: no control characters, no line breaks, no runs of spaces. */
 function oneLine(value: string, limit: number): string {
@@ -87,16 +82,22 @@ function readSkill(entry: unknown): IndexedSkill | undefined {
  */
 export function skillsAwareInstructions(input: {
   instructions?: string;
-  /** The first page of `skills/list`, when the server offered skills. */
+  /** The pages of `skills/list` read, merged; `nextCursor` marks more unread. */
   listed?: { skills?: unknown; nextCursor?: unknown };
 }): string | undefined {
   if (input.instructions?.trim()) return input.instructions;
   const entries = Array.isArray(input.listed?.skills) ? input.listed.skills : [];
-  const skills = entries.map(readSkill).filter((skill): skill is IndexedSkill => skill !== undefined);
+  // Overlapping pages can repeat a skill; it is listed once.
+  const seen = new Set<string>();
+  const skills = entries.map(readSkill).filter((skill): skill is IndexedSkill => {
+    if (!skill || seen.has(skill.uri)) return false;
+    seen.add(skill.uri);
+    return true;
+  });
   if (skills.length === 0) return undefined;
   const lines = [INDEX_HEADER];
   // Room for the closing line is kept from the start, so it always fits.
-  const budget = MAX_SKILLS_INDEX_CHARS - (INDEX_MORE.length + 1);
+  const budget = MAX_SKILLS_INDEX_CHARS - (SKILLS_INDEX_INCOMPLETE.length + 1);
   let length = INDEX_HEADER.length;
   let complete = typeof input.listed?.nextCursor !== "string" || input.listed.nextCursor === "";
   for (const skill of skills) {
@@ -111,6 +112,6 @@ export function skillsAwareInstructions(input: {
     length += 1 + line.length;
   }
   if (lines.length === 1) return undefined;
-  if (!complete) lines.push(INDEX_MORE);
+  if (!complete) lines.push(SKILLS_INDEX_INCOMPLETE);
   return lines.join("\n");
 }

@@ -138,6 +138,8 @@ import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
   MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
+  MCP_SKILLS_INDEX_MAX_PAGES,
+  MCP_SKILLS_INDEX_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_TIMEOUT_MS,
 } from "./mcp-connection-timeouts";
@@ -4309,29 +4311,46 @@ export class McpConnectionGatewayService {
   }
 
   /**
-   * The first page of a server's skills, for the index a host without the
-   * skills extension reads as instructions. A failure leaves the index out:
-   * the session still opens, and `skills/list` stays available to the host.
+   * A server's skills, for the index a host without the skills extension
+   * reads as instructions. Reads a few pages within its own short budget,
+   * which never takes more than half of what the bridge's startup has left.
+   * A failure or a stall leaves out what it could not read: the session still
+   * opens, and `skills/list` stays available to a host that speaks it. Only
+   * the caller's own cancel propagates.
    */
   private async listSkillsForIndex(
     grant: BridgeGrant,
     client: Client,
     discovery: McpDiscovery,
-  ): Promise<{ skills?: unknown; nextCursor?: unknown } | undefined> {
+    signal: AbortSignal | undefined,
+  ): Promise<{ skills: unknown[]; nextCursor?: string } | undefined> {
+    const skills: unknown[] = [];
+    let nextCursor: string | undefined;
     try {
+      const budget = Math.min(MCP_SKILLS_INDEX_TIMEOUT_MS, Math.floor(discovery.remaining() / 2));
+      const deadline = AbortSignal.any([discovery.signal, AbortSignal.timeout(Math.max(1, budget))]);
       const { ResultSchema } = await mcpTypes.load();
-      return await client.request(
-        { method: "skills/list", params: {} } as never,
-        ResultSchema,
-        { signal: discovery.signal, timeout: discovery.remaining() },
-      ) as { skills?: unknown; nextCursor?: unknown };
+      for (let page = 0; page < MCP_SKILLS_INDEX_MAX_PAGES; page += 1) {
+        const result = await client.request(
+          { method: "skills/list", params: nextCursor ? { cursor: nextCursor } : {} } as never,
+          ResultSchema,
+          { signal: deadline, timeout: Math.max(1, budget) },
+        ) as { skills?: unknown; nextCursor?: unknown };
+        if (Array.isArray(result.skills)) skills.push(...result.skills);
+        nextCursor = typeof result.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : undefined;
+        if (!nextCursor) break;
+      }
     } catch (error) {
-      connectionLog.warn("MCP skills index unavailable", {
+      if (signal?.aborted) throw error;
+      connectionLog.warn("MCP skills index incomplete", {
         connectionId: grant.connectionId,
+        skillsRead: skills.length,
         ...discoveryFailure(error, discovery.signal),
       });
-      return undefined;
+      // What was read is still worth indexing; the rest is unknown.
+      return skills.length > 0 ? { skills, nextCursor: nextCursor ?? "unread" } : undefined;
     }
+    return { skills, ...(nextCursor ? { nextCursor } : {}) };
   }
 
   private async dispatchBridgeOperation(
@@ -4446,8 +4465,10 @@ export class McpConnectionGatewayService {
               skills,
               capabilities,
               serverInfo: client.getServerVersion?.(),
-              instructions: skills && !instructions?.trim()
-                ? skillsAwareInstructions({ instructions, listed: await this.listSkillsForIndex(grant, client, discovery) })
+              // The index tells the agent to read each SKILL.md as a
+              // resource, so it is built only when the bridge can serve one.
+              instructions: skills && capabilities?.resources && !instructions?.trim()
+                ? skillsAwareInstructions({ instructions, listed: await this.listSkillsForIndex(grant, client, discovery, signal) })
                 : instructions,
               metadata: this.initializations.get(client)?._meta,
             };
