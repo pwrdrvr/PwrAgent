@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
+import type { NavigationThreadSummary, ThreadTodo } from "@pwragent/shared";
 import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -26,7 +26,8 @@ import {
 } from "../operator-requests/operator-waits";
 import { useOperatorWaitsContext } from "../operator-requests/useOperatorRequests";
 import {
-  useThreadDependencyIndicator,
+  readThreadDependencyIndicator,
+  type ThreadDependencyIndicator,
   useThreadDependencyIndicatorsContext,
 } from "../thread-dependencies/useThreadDependencyIndicators";
 import { InstanceChip } from "../federation/InstanceGlyph";
@@ -89,7 +90,41 @@ type ThreadMetaChipsProps = {
   thread: NavigationThreadSummary;
 };
 
-export function ThreadMetaChips({
+type ThreadMetaChipItems = {
+  waits: OperatorWait[];
+  openWait?: (wait: OperatorWait) => void;
+  openTodos: ThreadTodo[];
+  unreadItemCount: number;
+  dependency?: ThreadDependencyIndicator;
+  openContinueAfter?: (thread: NavigationThreadSummary) => void;
+};
+
+export function ThreadMetaChips(props: ThreadMetaChipsProps) {
+  const itemThreadKey = threadSummaryIdentityKey(props.thread);
+  const openTodos = useThreadTodosForKey(itemThreadKey);
+  const context = useOperatorWaitsContext();
+  const waits = context?.waitsByThreadKey.get(itemThreadKey) ?? NO_WAITS;
+  const dependencies = useThreadDependencyIndicatorsContext();
+  // Seen keys belong to the whole operator queue. A different thread becoming
+  // seen changes no chip here. Project freshness before the memo boundary;
+  // keep the actual waits, cards and actions so their updates still propagate.
+  let unreadItemCount = 0;
+  if (context) {
+    for (const wait of waits) if (!context.seenKeys.has(wait.key)) unreadItemCount++;
+    for (const todo of openTodos) if (!context.seenKeys.has(operatorTodoItemKey(todo.id))) unreadItemCount++;
+  }
+  return <ThreadMetaChipsContent
+    {...props}
+    waits={waits}
+    openWait={context?.openWait}
+    openTodos={openTodos}
+    unreadItemCount={unreadItemCount}
+    dependency={readThreadDependencyIndicator(dependencies, props.thread)}
+    openContinueAfter={dependencies?.open}
+  />;
+}
+
+const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
   hasApprovalRequest = false,
   hasUnsentDraft = false,
   hasIntegratedTerminal = false,
@@ -101,7 +136,13 @@ export function ThreadMetaChips({
   prChips,
   chipVisibility,
   thread,
-}: ThreadMetaChipsProps) {
+  waits,
+  openWait,
+  openTodos,
+  unreadItemCount,
+  dependency,
+  openContinueAfter,
+}: ThreadMetaChipsProps & ThreadMetaChipItems) {
   const providerChipNeeded = useProviderChipNeeded(thread.source, thread.model);
   const providerLabel = useThreadProviderLabel(thread);
   const showProvider = (chipVisibility?.provider ?? true) && providerChipNeeded;
@@ -115,21 +156,14 @@ export function ThreadMetaChips({
   // the Star Map layer would paint over one anyway.
   const draftTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const todoTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const itemThreadKey = threadSummaryIdentityKey(thread);
-  const openTodos = useThreadTodosForKey(itemThreadKey);
   const revealTodos = useThreadTodoReveal();
   const waitTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // Queue entries carry the same owner identity as navigation. The session's
   // own approval and input flags still show when the queue has no matching wait.
-  const waitsContext = useOperatorWaitsContext();
-  const waitsKnown = Boolean(waitsContext);
-  const waits = waitsKnown
-    ? waitsContext?.waitsByThreadKey.get(itemThreadKey) ?? NO_WAITS
-    : NO_WAITS;
   const leadWait = leadingOperatorWait(waits);
   // Questions rank after every blocking wait, so a question lead means the
   // thread waits only on questions, and the lead is the newest.
-  const openQuestion = leadWait?.kind === "question" ? waitsContext?.openWait : undefined;
+  const openQuestion = leadWait?.kind === "question" ? openWait : undefined;
   const waitTooltipText = (): string => openQuestion
     ? `${formatWaitTooltip(waits)}\nClick to show the latest question`
     : formatWaitTooltip(waits);
@@ -144,8 +178,6 @@ export function ThreadMetaChips({
   };
   // Continue After registrations on this thread. The chip opens the dialog
   // wherever one can open, and is a plain status marker elsewhere.
-  const dependency = useThreadDependencyIndicator(thread);
-  const openContinueAfter = useThreadDependencyIndicatorsContext()?.open;
   const dependencyTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const dependencyTooltipText = dependency
     ? openContinueAfter ? `${dependency.tooltip}\nClick to manage` : dependency.tooltip
@@ -153,10 +185,6 @@ export function ThreadMetaChips({
   const openItemCount = openTodos.length + waits.length;
   // "to-do" while only cards are open, so the chip names what it counts.
   const openItemNoun = waits.length === 0 ? "to-do" : "item";
-  const unreadItemCount = waitsKnown && waitsContext
-    ? waits.filter((wait) => !waitsContext.seenKeys.has(wait.key)).length
-      + openTodos.filter((todo) => !waitsContext.seenKeys.has(operatorTodoItemKey(todo.id))).length
-    : 0;
   // The row would open the thread as it was left; the chip also brings its
   // cards into view, as a collapsed stack or another rail lens would hide them.
   const openTodoCards = revealTodos ? (event: SyntheticEvent): void => {
@@ -626,7 +654,7 @@ export function ThreadMetaChips({
       {gitStateTooltip.tooltipNode}
     </>
   );
-}
+});
 
 function formatDirtyFileFallback(
   gitWorking: NonNullable<NavigationThreadSummary["gitWorkingState"]>,

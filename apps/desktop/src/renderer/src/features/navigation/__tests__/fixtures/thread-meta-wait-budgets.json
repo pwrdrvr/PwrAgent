@@ -1,0 +1,4 @@
+{
+  "20": { "broadcasts": 20, "ownerReads": 20, "contextProjections": 400, "tooltipHooks": 0, "waitFilterArrays": 0 },
+  "40": { "broadcasts": 20, "ownerReads": 20, "contextProjections": 800, "tooltipHooks": 0, "waitFilterArrays": 0 }
+}
