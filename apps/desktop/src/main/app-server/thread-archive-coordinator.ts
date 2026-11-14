@@ -448,6 +448,10 @@ export class ThreadArchiveCoordinator {
 
   private readonly pendingArchiveCleanupIntents = new Map<string, ArchiveCleanupIntent>();
 
+  /** Recovered jobs whose discovery failed. Checkpoint for the next startup,
+   * without treating them as running quit work or retrying in this process. */
+  private readonly archiveCleanupRetryIntents = new Map<string, ArchiveCleanupIntent>();
+
   private archiveCleanupResumeStarted = false;
 
   private archivedWorktreeRepair?: Promise<ArchivedWorktreeRepairReport>;
@@ -1693,7 +1697,8 @@ export class ThreadArchiveCoordinator {
   }
 
   checkpointArchiveCleanupsForQuit(): void {
-    const intents = new Map(this.archiveWorktreeReferences.intents().map((intent) => [buildThreadIdentityKey(intent.backend, intent.threadId), intent]));
+    const intents = new Map(this.archiveCleanupRetryIntents);
+    for (const intent of this.archiveWorktreeReferences.intents()) intents.set(buildThreadIdentityKey(intent.backend, intent.threadId), intent);
     for (const [key, intent] of this.pendingArchiveCleanupIntents) {
       const deferred = intents.get(key)?.deferredWorktrees;
       intents.set(key, intent.deferredWorktrees && deferred ? { ...intent, deferredWorktrees: deferred } : intent);
@@ -1722,6 +1727,7 @@ export class ThreadArchiveCoordinator {
   }
 
   cancelArchiveCleanups(key: string): void {
+    this.archiveCleanupRetryIntents.delete(key);
     this.cancelArchiveCleanupOverflow(key);
     this.archiveCleanupQueue.cancel(key);
     for (const [job, owner] of this.archiveRepairOwners) if (owner === key) this.archiveCleanupQueue.cancel(job);
@@ -1731,6 +1737,7 @@ export class ThreadArchiveCoordinator {
     this.cancelArchiveCleanupOverflow(key);
     await Promise.all([key, ...[...this.archiveRepairOwners].filter(([, owner]) => owner === key).map(([job]) => job)]
       .map(async (job) => { await this.archiveCleanupQueue.cancelAndWait(job); }));
+    this.archiveCleanupRetryIntents.delete(key);
   }
 
   private drainArchiveCleanupOverflow(): void {
@@ -1758,6 +1765,7 @@ export class ThreadArchiveCoordinator {
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
     const existing = this.archiveCleanupQueue.pending(key) ?? this.archiveCleanupOverflow.get(key)?.promise;
     if (existing) return existing;
+    this.archiveCleanupRetryIntents.delete(key);
     if (!this.context.lifecycle.closed && this.archiveCleanupQueue.availableSlots <= 0) {
       // A bulk archive can outrun the physical queue. Hold the intent rather
       // than refuse its cleanup; a freed slot admits it in arrival order.
@@ -1782,6 +1790,7 @@ export class ThreadArchiveCoordinator {
     if (!resuming && this.pendingArchiveCleanupIntents.get(key) !== intent) this.archiveCleanupIntentAdditions += 1;
     this.pendingArchiveCleanupIntents.set(key, intent);
     let startedAt: number | undefined;
+    let metadataUnavailable = false;
     const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
       let scopedIntent = intent;
       if (intent.deferredWorktrees) {
@@ -1792,6 +1801,7 @@ export class ThreadArchiveCoordinator {
       startedAt = Date.now();
       backendRegistryLog.info("archive cleanup started", { ...logFields, startedAt, queueWaitMs: startedAt - queuedAt });
       return await this.completeArchivedThreadCleanup({ ...scopedIntent, context,
+        onMetadataUnavailable: () => { metadataUnavailable = true; },
         // A saved archive intent cannot authorize deleting a restored thread.
         // Recovery requires current archived membership, including for formerly
         // missing rollouts; it never repeats the provider archive operation.
@@ -1806,7 +1816,10 @@ export class ThreadArchiveCoordinator {
         archiveAgeMs: completedAt - intent.archivedAt, worktreeCount: response.cleanup.length,
       });
       for (const outcome of response.cleanup) backendRegistryLog.info("archive cleanup worktree outcome", { ...logFields, ...outcome });
-      if (this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+      if (this.pendingArchiveCleanupIntents.get(key) === intent) {
+        if (resuming && metadataUnavailable) this.archiveCleanupRetryIntents.set(key, intent);
+        this.pendingArchiveCleanupIntents.delete(key);
+      }
       // Persist only reference-wait boundaries, not every successful archive.
       if (this.archiveCleanupQueue.pendingKeys().length === 1
         && (this.archiveWorktreeReferences.hasOwners || intent.deferredWorktrees)) this.tryCheckpointArchiveCleanupsForQuit("reference-change");
@@ -1819,7 +1832,10 @@ export class ThreadArchiveCoordinator {
         cancelled: error instanceof ArchiveCleanupCancelledError, error: error instanceof Error ? error.message : String(error),
       });
       if (!(this.context.lifecycle.closed && error instanceof ArchiveCleanupCancelledError)
-        && this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+        && this.pendingArchiveCleanupIntents.get(key) === intent) {
+        if (resuming && !(error instanceof ArchiveCleanupCancelledError)) this.archiveCleanupRetryIntents.set(key, intent);
+        this.pendingArchiveCleanupIntents.delete(key);
+      }
     });
     return completion;
   }
@@ -1930,6 +1946,7 @@ export class ThreadArchiveCoordinator {
     context: ArchiveCleanupContext;
     requireArchived?: boolean;
     deferredWorktrees?: ArchiveCleanupIntent["deferredWorktrees"];
+    onMetadataUnavailable?: () => void;
   }): Promise<ArchiveThreadResponse> {
     const { backend, archivedAt, codexRolloutMissing, messagingCleanup, context } = params;
     const result = { threadId: params.threadId };
@@ -1982,6 +1999,7 @@ export class ThreadArchiveCoordinator {
     } catch (error) {
       context.assertCurrent();
       cleanupMetadataError = error instanceof Error ? error.message : String(error);
+      params.onMetadataUnavailable?.();
       backendRegistryLog.warn("archive cleanup metadata lookup failed", { backend, threadId: result.threadId, error: cleanupMetadataError });
     }
     const finish = async (): Promise<ArchiveThreadResponse> => {
@@ -4431,6 +4449,7 @@ export class ThreadArchiveCoordinator {
     } else if (notification.method === "thread/archived" || notification.method === "thread/deleted") {
       work = this.observeReleasedArchiveReference(backend, notification.params.threadId, true);
     } else if (notification.method === "thread/unarchived") {
+      this.archiveCleanupRetryIntents.delete(buildThreadIdentityKey(backend, notification.params.threadId));
       this.archiveWorktreeReferences.forgetOwner(buildThreadIdentityKey(backend, notification.params.threadId));
       this.tryCheckpointArchiveCleanupsForQuit("reference-change");
       work = this.observeReleasedArchiveReference(backend, notification.params.threadId, false);

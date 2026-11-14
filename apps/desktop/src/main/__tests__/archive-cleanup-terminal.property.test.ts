@@ -56,16 +56,24 @@ async function fixture(outcomes: Outcome[], deferred: boolean) {
       worktreePath: directories[index]!.worktreePath, blockers: [`codex:blocker-${index}`] }] } : {}),
   }));
   checkpoint.save("previous-process", intents);
-  const client = new CodexAppServerClient({ directoryResolver: async (cwd) => directories.filter((directory) => directory.worktreePath === cwd) });
-  const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: store,
-    archiveCleanupCheckpointStore: checkpoint, runtimeInstanceId: "resumed-process", resolveLiveProfileRuntimeInstanceIds: () => [],
+  let generation = 0;
+  const open = () => createDesktopBackendRegistry({ codexClient: new CodexAppServerClient({ directoryResolver: async (cwd) =>
+    directories.filter((directory) => directory.worktreePath === cwd) }), overlayStore: store,
+    archiveCleanupCheckpointStore: checkpoint, runtimeInstanceId: `resumed-process-${++generation}`, resolveLiveProfileRuntimeInstanceIds: () => [],
     messagingStore: null, threadTitleGenerationService: null,
   });
+  let registry = open();
   // Persist the marker as a workspace overlay too, as real adopted checkouts do.
   for (let index = 0; index < outcomes.length; index += 1) {
     await store.replaceWorkspaceLinkedDirectory({ backend: "codex", threadId: `archived-${index}`, directory: directories[index]! });
   }
-  return { registry, db, checkpoint, async close() {
+  return { get registry() { return registry; }, db, store, checkpoint,
+    savedIntents: () => (db.raw.prepare("SELECT value FROM meta WHERE key GLOB 'archive_cleanup_checkpoint_v2:*'")
+      .all() as Array<{ value: string }>).map((row) => (JSON.parse(row.value) as { intent: ArchiveCleanupIntent }).intent),
+    async restart() {
+      await registry.close();
+      registry = open();
+    }, async close() {
     await registry.close();
     db.close();
     removeTempStateDbDir(temp.tempDir);
@@ -73,6 +81,52 @@ async function fixture(outcomes: Outcome[], deferred: boolean) {
 }
 
 describe("terminal archive cleanup recovery", () => {
+  // Rule: failed discovery cannot prove cleanup finished. Its saved intent
+  // survives both recovery drain and clean quit until discovery succeeds.
+  it("retains unresolved requests through transient metadata failures and retires them after successful discovery", async () => {
+    vi.useFakeTimers();
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 3 }), fc.boolean(), fc.constantFrom("provider", "overlay"),
+      async (failures, deferred, source) => {
+        const test = await fixture(["absent"], deferred);
+        const original = test.savedIntents();
+        const fail = source === "provider"
+          ? vi.spyOn(CodexAppServerClient.prototype, "listArchiveCleanupThreadsPage").mockRejectedValue(new Error("Provider temporarily unavailable"))
+          : vi.spyOn(test.store, "getArchiveCleanupOverlayStates").mockRejectedValue(new Error("Overlay temporarily unavailable"));
+        try {
+          for (let attempt = 0; attempt < failures; attempt += 1) {
+            await drivePacer(test.registry, test.registry.resumeArchiveCleanupsAtStartup());
+            expect(test.savedIntents()).toEqual(original);
+            expect(test.registry.getArchiveCleanupCountForQuit()).toBe(0);
+            await test.restart();
+            expect(test.savedIntents()).toEqual(original);
+          }
+          fail.mockRestore();
+          await drivePacer(test.registry, test.registry.resumeArchiveCleanupsAtStartup());
+          expect(test.savedIntents()).toEqual([]);
+          await test.restart();
+          await drivePacer(test.registry, test.registry.resumeArchiveCleanupsAtStartup());
+          expect(test.savedIntents()).toEqual([]);
+        } finally {
+          fail.mockRestore();
+          await test.close();
+        }
+      }), { numRuns: 25, examples: [[1, false, "provider"]] });
+  });
+
+  it("preserves a plain recovered request when provider discovery fails", async () => {
+    vi.useFakeTimers();
+    const test = await fixture(["absent"], false);
+    const original = test.savedIntents();
+    const fail = vi.spyOn(CodexAppServerClient.prototype, "listArchiveCleanupThreadsPage").mockRejectedValue(new Error("Provider temporarily unavailable"));
+    try {
+      await drivePacer(test.registry, test.registry.resumeArchiveCleanupsAtStartup());
+      expect(test.savedIntents()).toEqual(original);
+    } finally {
+      fail.mockRestore();
+      await test.close();
+    }
+  });
+
   // Rule: the durable backlog after recovery contains only checkouts that
   // still need a retry, regardless of completion order or other held owners.
   it("retires terminal outcomes while preserving active checkout references", async () => {
