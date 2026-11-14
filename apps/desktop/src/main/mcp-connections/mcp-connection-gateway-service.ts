@@ -28,7 +28,8 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import { isMcpError, loadedMcpTypes, mcpClient, mcpClientStreamableHttp, mcpTypes } from "./mcp-sdk";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
-import { McpDiscovery, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { McpDiscovery, discoveryFailure, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
 import { SandboxerConnection } from "./sandboxer-connection";
 import {
   McpStdioLaunchError,
@@ -4307,6 +4308,32 @@ export class McpConnectionGatewayService {
     return tools;
   }
 
+  /**
+   * The first page of a server's skills, for the index a host without the
+   * skills extension reads as instructions. A failure leaves the index out:
+   * the session still opens, and `skills/list` stays available to the host.
+   */
+  private async listSkillsForIndex(
+    grant: BridgeGrant,
+    client: Client,
+    discovery: McpDiscovery,
+  ): Promise<{ skills?: unknown; nextCursor?: unknown } | undefined> {
+    try {
+      const { ResultSchema } = await mcpTypes.load();
+      return await client.request(
+        { method: "skills/list", params: {} } as never,
+        ResultSchema,
+        { signal: discovery.signal, timeout: discovery.remaining() },
+      ) as { skills?: unknown; nextCursor?: unknown };
+    } catch (error) {
+      connectionLog.warn("MCP skills index unavailable", {
+        connectionId: grant.connectionId,
+        ...discoveryFailure(error, discovery.signal),
+      });
+      return undefined;
+    }
+  }
+
   private async dispatchBridgeOperation(
     token: string,
     grant: BridgeGrant,
@@ -4410,13 +4437,18 @@ export class McpConnectionGatewayService {
           }
           case "describe": {
             const capabilities = client.getServerCapabilities();
+            const skills = offersMcpSkills(capabilities);
+            const instructions = client.getInstructions?.();
             return {
               tools: Boolean(capabilities?.tools),
               resources: Boolean(capabilities?.resources),
               prompts: Boolean(capabilities?.prompts),
+              skills,
               capabilities,
               serverInfo: client.getServerVersion?.(),
-              instructions: client.getInstructions?.(),
+              instructions: skills && !instructions?.trim()
+                ? skillsAwareInstructions({ instructions, listed: await this.listSkillsForIndex(grant, client, discovery) })
+                : instructions,
               metadata: this.initializations.get(client)?._meta,
             };
           }
@@ -4469,6 +4501,21 @@ export class McpConnectionGatewayService {
               values as Parameters<Client["getPrompt"]>[0],
               cancelOnly(signal),
             );
+          case "skills/list":
+          case "skills/get":
+          case "resources/directory/read": {
+            // Only to a server that offered the extension. The SDK's request
+            // union has no skills methods, so the result passes through whole.
+            if (!offersMcpSkills(client.getServerCapabilities())) {
+              throw new McpError(ErrorCode.MethodNotFound, "This MCP server does not offer skills.");
+            }
+            const { ResultSchema } = await mcpTypes.load();
+            return await client.request(
+              { method: operation, params: values } as never,
+              ResultSchema,
+              cancelOnly(signal),
+            );
+          }
           default:
             throw new Error("unsupported MCP operation");
         }

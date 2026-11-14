@@ -10,6 +10,7 @@ import {
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
+  RequestSchema,
   SubscribeRequestSchema,
   UnsubscribeRequestSchema,
   type Implementation,
@@ -27,16 +28,21 @@ import {
   type ElicitationRoute,
 } from "./mcp-elicitation-relay.js";
 import { mcpTypes } from "./mcp-sdk.js";
+import { MCP_SKILLS_EXTENSION, MCP_SKILLS_METHODS } from "./mcp-skills-relay.js";
+import { z } from "zod";
 
 type BridgeDescription = {
   name?: string;
   serverInfo?: Implementation;
   capabilities?: ServerCapabilities;
+  /** Includes the skills index when the server sent no instructions of its own. */
   instructions?: string;
   metadata?: InitializeResult["_meta"];
   tools?: boolean;
   resources?: boolean;
   prompts?: boolean;
+  /** The server offers the skills extension. */
+  skills?: boolean;
 };
 
 function logStderr(message: string, extra?: unknown): void {
@@ -92,6 +98,9 @@ async function main(): Promise<void> {
     ...(description.tools ? { tools: description.capabilities?.tools ?? {} } : {}),
     ...(description.resources ? { resources: description.capabilities?.resources ?? {} } : {}),
     ...(description.prompts ? { prompts: description.capabilities?.prompts ?? {} } : {}),
+    ...(description.skills
+      ? { extensions: { [MCP_SKILLS_EXTENSION]: description.capabilities?.extensions?.[MCP_SKILLS_EXTENSION] ?? {} } }
+      : {}),
   };
   if (closed) throw new Error("The upstream MCP session ended during startup. Reconnect explicitly.");
   server = new Server(
@@ -196,6 +205,15 @@ async function main(): Promise<void> {
     server.setRequestHandler(GetPromptRequestSchema, async (request, extra) =>
       await rpc.request("prompts/get", request.params, extra.signal) as never,
     );
+  }
+  if (description.skills) {
+    // The SDK's request union has no skills methods. Parameters and results
+    // pass through whole; the owner checks the server offered skills.
+    for (const method of MCP_SKILLS_METHODS) {
+      server.setRequestHandler(RequestSchema.extend({ method: z.literal(method) }), async (request, extra) =>
+        await rpc.request(method, request.params, extra.signal) as never,
+      );
+    }
   }
 
   await server.connect(new McpInitializationTransport(new StdioServerTransport(), description.metadata));

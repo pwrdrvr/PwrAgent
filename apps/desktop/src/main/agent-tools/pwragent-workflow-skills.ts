@@ -11,7 +11,7 @@ import outpostPushRepo from "./skills/outpost-security-research/scripts/push-rep
 import outpostPullBranch from "./skills/outpost-security-research/scripts/pull-branch.sh?raw";
 import outpostDepsHelper from "./skills/outpost-security-research/scripts/deps-helper.sh?raw";
 
-export const PWRAGENT_SKILLS_EXTENSION = "io.modelcontextprotocol/skills";
+export { MCP_SKILLS_EXTENSION as PWRAGENT_SKILLS_EXTENSION } from "../mcp-connections/mcp-skills-relay";
 
 type BundledSkillFile = {
   /** Path inside the skill folder, with forward slashes. */

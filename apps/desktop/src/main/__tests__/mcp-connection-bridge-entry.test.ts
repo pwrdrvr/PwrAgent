@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitationCompleteNotificationSchema, ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
+import { ElicitationCompleteNotificationSchema, ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, ResultSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
 import type { McpBridgeEvent } from "../mcp-connections/mcp-connection-rpc-client";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -411,6 +411,49 @@ describe("desktop-owned native bridge discovery", () => {
     await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
     await expect(client.listTools()).rejects.toThrow();
     expect(bridge.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("native bridge skills", () => {
+  const SKILLS = "io.modelcontextprotocol/skills";
+  const listSkills = async (client: Client, params: Record<string, unknown> = {}) =>
+    await client.request({ method: "skills/list", params } as never, ResultSchema);
+
+  // GitHub's server drops its instructions when it turns skills on. Before
+  // the relay, the host saw neither the instructions nor the skills.
+  it("offers a skills server's extension and relays all three methods with their parameters", async () => {
+    const page = { skills: [{ uri: "skill://fixture.dev/triage/SKILL.md", frontmatter: { name: "triage", description: "Sort issues." } }], nextCursor: "page-2" };
+    bridge.request.mockImplementation(async (operation: string) => {
+      if (operation === "describe") return {
+        tools: true, resources: true, skills: true,
+        instructions: "- triage: Sort issues. (skill://fixture.dev/triage/SKILL.md)",
+        capabilities: { tools: {}, resources: {}, extensions: { [SKILLS]: { revision: 3 } } },
+      };
+      if (operation === "skills/list") return page;
+      if (operation === "skills/get") return { skill: page.skills[0] };
+      if (operation === "resources/directory/read") return { resources: [{ uri: "skill://fixture.dev/triage/SKILL.md", name: "SKILL.md" }] };
+      return tail;
+    });
+    const client = await openBridge();
+    expect(client.getServerCapabilities()?.extensions).toEqual({ [SKILLS]: { revision: 3 } });
+    expect(client.getInstructions()).toContain("skill://fixture.dev/triage/SKILL.md");
+    expect(await listSkills(client, { cursor: "page-1" })).toMatchObject(page);
+    expect(await client.request({ method: "skills/get", params: { uri: page.skills[0].uri } } as never, ResultSchema))
+      .toMatchObject({ skill: page.skills[0] });
+    expect(await client.request({ method: "resources/directory/read", params: { uri: "skill://fixture.dev/triage/" } } as never, ResultSchema))
+      .toMatchObject({ resources: [{ name: "SKILL.md" }] });
+    expect(bridge.request).toHaveBeenCalledWith("skills/list", { cursor: "page-1" }, expect.any(AbortSignal));
+    expect(bridge.request).toHaveBeenCalledWith("skills/get", { uri: page.skills[0].uri }, expect.any(AbortSignal));
+    expect(bridge.request).toHaveBeenCalledWith("resources/directory/read", { uri: "skill://fixture.dev/triage/" }, expect.any(AbortSignal));
+  });
+
+  it("offers no skills for a server without them, and never asks the owner", async () => {
+    bridge.request.mockImplementation(async (operation: string) =>
+      operation === "describe" ? { tools: true, capabilities: { tools: {} } } : tail);
+    const client = await openBridge();
+    expect(client.getServerCapabilities()?.extensions).toBeUndefined();
+    await expect(listSkills(client)).rejects.toThrow(/Method not found/u);
+    expect(bridge.request).not.toHaveBeenCalledWith("skills/list", expect.anything(), expect.anything());
   });
 });
 
