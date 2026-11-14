@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type { AppServerBackendKind, TaskMonitorRequest, TaskMonitorResponse } from "@pwragent/shared";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type {
   CodexNativeSubAgentReconciliation,
@@ -27,6 +27,22 @@ type ServiceInternals = {
   startTaskMonitorRecoveryTurn(params: { record: TaskMonitorDelegationRecord; terminalStatus: string }): Promise<void>;
   synthesizeTaskMonitorFallbackCompletion(params: { record: TaskMonitorDelegationRecord; reason: string }): Promise<void>;
   interruptManagedTaskMonitor(record: TaskMonitorDelegationRecord): Promise<void>;
+  handleTaskMonitorRequest(request: TaskMonitorRequest): Promise<TaskMonitorResponse>;
+  startManagedTaskMonitor(params: { monitorId: string; monitorBackend: AppServerBackendKind }): Promise<{
+    executionMode: string;
+    threadId: string;
+    turnId: string;
+  }>;
+  resolveTaskMonitorModelSettings(params: unknown): Promise<{
+    monitorBackend: AppServerBackendKind;
+    preferredModel: string;
+    preferredReasoningEffort: string;
+    runtimeModel?: string;
+  }>;
+  persistTaskMonitorSubAgent(record: TaskMonitorDelegationRecord, patch?: { status?: string }): Promise<void>;
+  injectTaskMonitorCompletionMessage(params: unknown): Promise<void>;
+  emitTaskMonitorCompletionState(params: unknown): Promise<void>;
+  emitTaskMonitorUsageActivity(params: unknown): Promise<void>;
   scheduleCodexNativeSubAgentReconciliation(params: { delayMs: number; parentThreadId: string; receiverThreadId: string }): void;
   clearCodexNativeSubAgentReconciliation(receiverThreadId: string): void;
   reconcileCodexNativeSubAgent(receiverThreadId: string): Promise<void>;
@@ -57,18 +73,24 @@ function monitorRecord(overrides: Partial<TaskMonitorDelegationRecord> = {}): Ta
 /**
  * A service over a fixture context and host. `claudeTasks` is what the Claude
  * provider reports running for each monitor thread; `reviews` are the managed
- * review service's live review sub-agents.
+ * review service's live review sub-agents. `claude` and `dependencies` add to
+ * the Claude provider and the service's collaborators.
  */
 function createService(options: {
   claudeTasks?: ReadonlyMap<string, number>;
   reviews?: ReadonlyMap<string, ReviewSubAgentRecord>;
   host?: Partial<SubAgentMonitorServiceHost>;
   stores?: Record<string, unknown>;
+  claude?: Record<string, unknown>;
+  dependencies?: Record<string, unknown>;
 } = {}) {
   const context = {
     stores: { subAgents: {}, threads: {}, usage: {}, ...options.stores },
     providers: {
-      claude: { activeTaskCount: (threadId: string) => options.claudeTasks?.get(threadId) ?? 0 },
+      claude: {
+        activeTaskCount: (threadId: string) => options.claudeTasks?.get(threadId) ?? 0,
+        ...options.claude,
+      },
     },
     lifecycle: { closed: false },
     emit: async () => {},
@@ -77,6 +99,7 @@ function createService(options: {
     forgeToolBridge: {},
     threadMcpConnections: {},
     managedReviewService: { activeReviewSubAgentRecords: options.reviews ?? new Map() },
+    ...options.dependencies,
   } as unknown as SubAgentMonitorServiceDependencies;
   const host = {
     invalidateThreadListCache: () => {},
@@ -567,6 +590,308 @@ describe("SubAgentMonitorService native worker reconciliation", () => {
         }
       } finally {
         vi.useRealTimers();
+      }
+    }), { numRuns: 200 });
+  });
+});
+
+// ---- Task monitor lifecycle -------------------------------------------------
+
+type MonitorBackend = "codex" | "claude";
+type TerminalStatus = "completed" | "failed" | "cancelled";
+
+type LifecycleCommand =
+  | { kind: "create"; parent: string; backend: MonitorBackend; startFails: boolean }
+  | { kind: "complete"; pick: number; outcome: "success" | "failure"; triggerParentTurn: boolean }
+  | { kind: "cancel"; pick: number; interruptFails: boolean }
+  | {
+      kind: "terminal";
+      pick: number;
+      status: TerminalStatus;
+      turn: "current" | "stale" | "none";
+      watcherRunning: boolean;
+      recoveryStartFails: boolean;
+    };
+
+const MONITOR_PARENTS = ["parent-0", "parent-1"];
+
+const lifecycleCommand: fc.Arbitrary<LifecycleCommand> = fc.oneof(
+  fc.record({
+    kind: fc.constant("create" as const),
+    parent: fc.constantFrom(...MONITOR_PARENTS),
+    backend: fc.constantFrom("codex" as const, "claude" as const),
+    startFails: fc.constantFrom(false, false, false, true),
+  }),
+  fc.record({
+    kind: fc.constant("complete" as const),
+    pick: fc.nat(),
+    outcome: fc.constantFrom("success" as const, "failure" as const),
+    triggerParentTurn: fc.boolean(),
+  }),
+  fc.record({
+    kind: fc.constant("cancel" as const),
+    pick: fc.nat(),
+    interruptFails: fc.constantFrom(false, false, true),
+  }),
+  fc.record({
+    kind: fc.constant("terminal" as const),
+    pick: fc.nat(),
+    status: fc.constantFrom("completed" as const, "failed" as const, "cancelled" as const),
+    turn: fc.constantFrom("current" as const, "current" as const, "stale" as const, "none" as const),
+    watcherRunning: fc.boolean(),
+    recoveryStartFails: fc.constantFrom(false, false, true),
+  }),
+);
+
+/** The model's view of one live delegation. */
+type ModelMonitor = {
+  monitorId: string;
+  parentThreadId: string;
+  backend: MonitorBackend;
+  threadId: string;
+  turnId: string;
+  cancelling: boolean;
+  recoveryAttempted: boolean;
+  awaitingWake: boolean;
+};
+
+const flushLifecycle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+describe("SubAgentMonitorService task monitor lifecycle", () => {
+  it("keeps a delegation live exactly until it finishes, and every lookup agrees with the model at each step", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(lifecycleCommand, { minLength: 1, maxLength: 24 }), async (commands) => {
+      // Fixture switches each command sets before it runs.
+      let nextTurnId = "turn-0";
+      let failInterrupt = false;
+      let failRecoveryStart = false;
+      let claudeTaskCount = 0;
+      const parentWakes: string[] = [];
+      const lastStatus = new Map<string, string | undefined>();
+      const turnStart = async (params: { threadId: string }) => {
+        if (failRecoveryStart) throw new Error("fixture recovery start failure");
+        return { threadId: params.threadId, turnId: nextTurnId };
+      };
+      const interrupt = async () => {
+        if (failInterrupt) throw new Error("fixture interrupt failure");
+      };
+      const { service, internals } = createService({
+        claude: {
+          activeTaskCount: () => claudeTaskCount,
+          readThread: async () => ({ entries: [] }),
+          releaseEphemeralThread: () => {},
+        },
+        dependencies: {
+          threadMcpConnections: { taskMonitorMcpAccess: async () => ({ connectionIds: [] }) },
+        },
+        stores: {
+          subAgents: { getThreadSubAgent: async () => undefined },
+          threads: { getThreadOverlayState: async () => undefined },
+        },
+        host: {
+          bindStartingTurnOrigin: () => {},
+          canStartThreadTurnImmediately: () => false,
+          dropStartingTurnOrigin: () => {},
+          getClient: () => ({ interruptTurn: interrupt, startTurn: turnStart }) as never,
+          interruptTurn: interrupt as never,
+          persistStartingTurnOrigin: async () => {},
+          readCausalMessagingContext: (async () => undefined) as never,
+          readDelegatedTurnAncestry: async () => ({}),
+          readThreadLock: async () => undefined,
+          resolvePausedThreadProject: () => undefined,
+          shutdownRequested: false,
+          startTurnWithoutHandoff: turnStart as never,
+          stoppingRunningTurnsForShutdown: false,
+          submitTurn: (async (wake: { threadId: string }) => {
+            parentWakes.push(wake.threadId);
+            return { status: "started", turnId: "parent-wake", entry: { id: "wake-entry" } };
+          }) as never,
+        },
+      });
+      let startFails = false;
+      let startedThreadId = "";
+      vi.spyOn(internals, "resolveTaskMonitorModelSettings").mockImplementation(async (params) => ({
+        monitorBackend: (params as { backend: MonitorBackend }).backend === "claude" ? "claude" : "codex",
+        preferredModel: "gpt-fixture",
+        preferredReasoningEffort: "low",
+      }));
+      vi.spyOn(internals, "startManagedTaskMonitor").mockImplementation(async () => {
+        if (startFails) throw new Error("fixture start failure");
+        return { executionMode: "default", threadId: startedThreadId, turnId: nextTurnId };
+      });
+      vi.spyOn(internals, "persistTaskMonitorSubAgent").mockImplementation(async (record, patch) => {
+        lastStatus.set(record.monitorId, patch?.status);
+      });
+      vi.spyOn(internals, "injectTaskMonitorCompletionMessage").mockResolvedValue(undefined);
+      vi.spyOn(internals, "emitTaskMonitorCompletionState").mockResolvedValue(undefined);
+      vi.spyOn(internals, "emitTaskMonitorUsageActivity").mockResolvedValue(undefined);
+
+      // The model. A finished monitor's thread stays a monitor thread only
+      // when the monitor reported its own result, until that thread's final
+      // turn reports its end.
+      const live = new Map<string, ModelMonitor>();
+      const completed = new Map<string, string>();
+      const created: Array<{ monitorId: string; backend: MonitorBackend; threadId: string; turnId: string }> = [];
+      const outcomes = new Map<string, string>();
+      const expectedWakes: string[] = [];
+      const cancelCalls: Array<{ monitorId: string; settled?: TaskMonitorResponse }> = [];
+      const expectedCancels: string[] = [];
+      const unknown = { monitorId: "monitor-unknown", backend: "codex" as const, threadId: "monitor-thread-unknown", turnId: "turn-unknown" };
+      const pick = (index: number) => index % (created.length + 1) < created.length
+        ? created[index % (created.length + 1)]!
+        : unknown;
+      const finish = (monitor: ModelMonitor, outcome: string, wakesParent: boolean) => {
+        live.delete(monitor.monitorId);
+        outcomes.set(monitor.monitorId, outcome);
+        if (wakesParent) expectedWakes.push(monitor.parentThreadId);
+        expectedCancels.forEach((state, index) => {
+          if (state === "pending" && cancelCalls[index]!.monitorId === monitor.monitorId) expectedCancels[index] = "cancelled";
+        });
+      };
+
+      for (const [step, command] of commands.entries()) {
+        nextTurnId = `turn-${step}`;
+        if (command.kind === "create") {
+          startFails = command.startFails;
+          startedThreadId = `monitor-thread-${step}`;
+          const response = await internals.handleTaskMonitorRequest({
+            operation: "create_monitor_delegation",
+            context: { backend: command.backend, threadId: command.parent, turnId: `${command.parent}-turn` },
+            args: { task: `Watch job ${step}` },
+          });
+          expect(response.ok, JSON.stringify(response)).toBe(!command.startFails);
+          if (response.ok && response.operation === "create_monitor_delegation") {
+            const monitor: ModelMonitor = {
+              monitorId: response.data.monitorId,
+              parentThreadId: command.parent,
+              backend: command.backend,
+              threadId: startedThreadId,
+              turnId: nextTurnId,
+              cancelling: false,
+              recoveryAttempted: false,
+              awaitingWake: false,
+            };
+            live.set(monitor.monitorId, monitor);
+            created.push(monitor);
+          }
+        } else if (command.kind === "complete") {
+          const target = pick(command.pick);
+          const monitor = live.get(target.monitorId);
+          const response = await internals.handleTaskMonitorRequest({
+            operation: "complete_monitoring",
+            context: { backend: target.backend, threadId: target.threadId, turnId: target.turnId },
+            args: {
+              monitorId: target.monitorId,
+              outcome: command.outcome,
+              summary: "Fixture result.",
+              triggerParentTurn: command.triggerParentTurn,
+            },
+          });
+          const accepted = Boolean(monitor && !monitor.cancelling);
+          expect(response.ok).toBe(accepted);
+          if (monitor && accepted) {
+            finish(monitor, command.outcome, command.triggerParentTurn);
+            completed.set(taskMonitorThreadKey(monitor.backend, monitor.threadId), monitor.turnId);
+          }
+        } else if (command.kind === "cancel") {
+          const target = pick(command.pick);
+          const monitor = live.get(target.monitorId);
+          failInterrupt = command.interruptFails;
+          const call: { monitorId: string; settled?: TaskMonitorResponse } = { monitorId: target.monitorId };
+          cancelCalls.push(call);
+          void internals.handleTaskMonitorRequest({
+            operation: "cancel_monitor_delegation",
+            // Each fixture monitor runs on its parent's provider.
+            context: { backend: target.backend, threadId: monitor?.parentThreadId ?? "parent-0", turnId: "parent-turn" },
+            args: { monitorId: target.monitorId },
+          }).then((response) => { call.settled = response; });
+          await flushLifecycle();
+          if (!monitor) {
+            expectedCancels.push("not_found");
+          } else if (monitor.cancelling) {
+            // A second request shares the first one's interrupt and result.
+            expectedCancels.push("pending");
+          } else if (command.interruptFails) {
+            expectedCancels.push("internal_error");
+          } else {
+            expectedCancels.push("pending");
+            monitor.cancelling = true;
+            // A Claude monitor waiting on its watcher has no turn to end.
+            if (monitor.awaitingWake) finish(monitor, "cancelled", false);
+          }
+        } else {
+          const target = pick(command.pick);
+          const key = taskMonitorThreadKey(target.backend, target.threadId);
+          const monitor = [...live.values()].find((candidate) => candidate.monitorId === target.monitorId);
+          const currentTurn = monitor?.turnId ?? completed.get(key) ?? target.turnId;
+          const turnId = command.turn === "current" ? currentTurn : command.turn === "stale" ? `${target.threadId}:stale` : undefined;
+          claudeTaskCount = command.watcherRunning ? 1 : 0;
+          failRecoveryStart = command.recoveryStartFails;
+          await service.handleTaskMonitorTerminalNotification(target.backend, {
+            method: `turn/${command.status}`,
+            params: { threadId: target.threadId, ...(turnId ? { turn: { id: turnId } } : {}) },
+          } as never);
+          await flushLifecycle();
+          const fallbackOutcome = command.status === "cancelled" ? "cancelled" : "failure";
+          if (completed.has(key) && (!turnId || completed.get(key) === turnId)) {
+            completed.delete(key);
+          } else if (!monitor || (turnId && monitor.turnId !== turnId)) {
+            // Not this monitor's turn.
+          } else if (monitor.cancelling) {
+            if (turnId) finish(monitor, "cancelled", false);
+          } else if (
+            monitor.backend === "claude"
+            && !monitor.recoveryAttempted
+            && command.status === "completed"
+            && command.watcherRunning
+          ) {
+            monitor.awaitingWake = true;
+          } else if (!monitor.recoveryAttempted) {
+            monitor.recoveryAttempted = true;
+            if (command.recoveryStartFails) finish(monitor, fallbackOutcome, true);
+            else monitor.turnId = nextTurnId;
+          } else {
+            finish(monitor, fallbackOutcome, true);
+          }
+        }
+
+        // The service agrees with the model.
+        expect([...internals.taskMonitorDelegations.keys()].sort(), `step ${step}`).toEqual([...live.keys()].sort());
+        for (const monitor of live.values()) {
+          const record = internals.taskMonitorDelegations.get(monitor.monitorId)!;
+          expect(record.monitorThreadId).toBe(monitor.threadId);
+          expect(record.monitorTurnId).toBe(monitor.turnId);
+          expect(Boolean(record.cancellation)).toBe(monitor.cancelling);
+          expect(Boolean(record.recoveryAttempted)).toBe(monitor.recoveryAttempted);
+        }
+        expect([...internals.completedTaskMonitorsByThread.keys()].sort(), `step ${step}`).toEqual([...completed.keys()].sort());
+        for (const thread of [...created, unknown]) {
+          for (const backend of ["codex", "claude"] as const) {
+            const context = { backend, threadId: thread.threadId };
+            const expected =
+              [...live.values()].some((monitor) => monitor.backend === backend && monitor.threadId === thread.threadId)
+              || completed.has(taskMonitorThreadKey(backend, thread.threadId));
+            expect(service.isTaskMonitorThread(context), `${backend}:${thread.threadId}`).toBe(expected);
+          }
+        }
+        for (const parent of MONITOR_PARENTS) {
+          for (const backend of ["codex", "claude"] as const) {
+            const expected = [...live.values()]
+              .filter((monitor) => monitor.backend === backend && monitor.parentThreadId === parent && !monitor.cancelling)
+              .map((monitor) => monitor.monitorId)
+              .sort();
+            const actual = service.listPendingTaskMonitorWakes({ backend, threadId: parent }).map((wake) => wake.monitorId).sort();
+            expect(actual, `${backend}:${parent}`).toEqual(expected);
+          }
+        }
+        for (const [monitorId, outcome] of outcomes) {
+          expect(lastStatus.get(monitorId), monitorId).toBe(outcome);
+        }
+        expect(parentWakes).toEqual(expectedWakes);
+        expect(cancelCalls.map((call) => !call.settled
+          ? "pending"
+          : call.settled.ok
+            ? (call.settled.data as { outcome?: string }).outcome
+            : call.settled.error.code)).toEqual(expectedCancels);
       }
     }), { numRuns: 200 });
   });

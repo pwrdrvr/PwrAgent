@@ -1058,6 +1058,18 @@ export class SubAgentMonitorService {
     });
   }
 
+  /** Native worker reconciliation must write each line it repairs: a store
+   * without the method fails the repair, as calling it always did, so the
+   * card is not written over unrecorded pricing. */
+  private async upsertRequiredThreadUsageLine(
+    line: ThreadUsageLineRecord,
+  ): Promise<{ line: ThreadUsageLineRecord }> {
+    if (typeof this.context.stores.usage.upsertThreadUsageLine !== "function") {
+      throw new TypeError("thread usage store cannot write usage lines");
+    }
+    return await this.context.stores.usage.upsertThreadUsageLine({ line });
+  }
+
   async reconcileDiscoveredCodexNativeSubAgents(params: {
     nativeCardsByThreadId: Record<string, ThreadSubAgentSummary[]>;
     nativeThreads: AppServerThreadSummary[];
@@ -1328,11 +1340,11 @@ export class SubAgentMonitorService {
           // its durable usage snapshot if a prior pricing write failed.
           if (needsPricingWrite && pricingLine) {
             logUnpricedThreadUsageLine(pricingLine);
-            await this.context.stores.usage.upsertThreadUsageLine({ line: pricingLine });
+            await this.upsertRequiredThreadUsageLine(pricingLine);
             parentPricingLines.push(pricingLine);
           }
           for (const line of modelRepairs) {
-            const { line: repaired } = await this.context.stores.usage.upsertThreadUsageLine({ line });
+            const { line: repaired } = await this.upsertRequiredThreadUsageLine(line);
             logUnpricedThreadUsageLine(repaired);
             const index = parentPricingLines.findIndex(
               (candidate) => candidate.usageLineId === repaired.usageLineId,
