@@ -6753,6 +6753,8 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    // The drain records turn-2 as active only after its start resolves.
+    await harness.controller.whenQueuedTurnDrainsSettled();
     await expect(
       harness.controller.handlePwrAgentMessagingRequest({
         operation: "get_current_messaging_surface",
@@ -17672,6 +17674,20 @@ describe("MessagingController", () => {
       queuedActions.some((action) => action.id.startsWith("queued-turn:cancel:")),
     ).toBe(true);
 
+    // The queued turn drains on its own task after completion, and its notice
+    // is retired only once the backend accepts the start. Hold that start open,
+    // as a loaded machine can, so the gap between the call and the retirement
+    // is always present rather than only under load.
+    const queuedStartAccepted = createDeferred<void>();
+    harness.startTurn.mockImplementationOnce(async (request: StartTurnRequest) => {
+      await queuedStartAccepted.promise;
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-2",
+      };
+    });
+
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -17688,7 +17704,11 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
+    // The second call proves the drain has begun, so the controller now
+    // tracks it, but its notice is retired only after the start resolves.
     await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    queuedStartAccepted.resolve();
+    await harness.controller.whenQueuedTurnDrainsSettled();
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [
@@ -17854,7 +17874,13 @@ describe("MessagingController", () => {
       : undefined;
     expect(cancelAction).toBeDefined();
 
-    harness.startTurn.mockRejectedValueOnce(new Error("provider unavailable"));
+    // Hold the rejection open, as a loaded machine can: the drain reports the
+    // failure only after the start settles.
+    const queuedStartRejected = createDeferred<void>();
+    harness.startTurn.mockImplementationOnce(async () => {
+      await queuedStartRejected.promise;
+      throw new Error("provider unavailable");
+    });
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -17873,6 +17899,8 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    queuedStartRejected.resolve();
+    await harness.controller.whenQueuedTurnDrainsSettled();
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         kind: "error",
@@ -18063,6 +18091,8 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(2));
+    // The drain renders the post-start status only after its start resolves.
+    await harness.controller.whenQueuedTurnDrainsSettled();
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [

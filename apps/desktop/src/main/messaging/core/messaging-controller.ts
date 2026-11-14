@@ -8916,11 +8916,21 @@ export class MessagingController {
 
   /**
    * Resolves once the tool-update batches that a flush timer already started
-   * have finished delivering, including their store writes. dispose() is
+   * have finished delivering, including their store writes, and then once
+   * every queued-turn drain already begun has finished. dispose() is
    * synchronous and only stops new batches.
    */
   async whenToolUpdatesSettled(): Promise<void> {
     await this.toolUpdatePolicy.whenIdle();
+    await this.whenQueuedTurnDrainsSettled();
+  }
+
+  /**
+   * Resolves once every queued-turn drain that has already begun has finished,
+   * including the start it submits and the queued notice it retires. A drain
+   * scheduled but not yet begun is not awaited.
+   */
+  async whenQueuedTurnDrainsSettled(): Promise<void> {
     await Promise.allSettled([...this.queuedTurnDrains.values()]);
   }
 
