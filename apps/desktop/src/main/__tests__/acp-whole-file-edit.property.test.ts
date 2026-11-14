@@ -198,6 +198,24 @@ describe("whole-file ACP edit diffs", () => {
     expect(fileDiff?.originalLength).toBeGreaterThan(256 * 1024);
   });
 
+  it("still draws an exact diff when a whole file is too changed for a shortest diff", () => {
+    // Every line changes, so the shortest diff needs about 3,000 steps of
+    // edit distance and runs out of budget; the coarse diff must still apply.
+    const oldLines = Array.from({ length: 1_500 }, (_, index) => `a${index}`);
+    const newLines = Array.from({ length: 1_500 }, (_, index) => `b${index}`);
+    oldLines[0] = "shared first";
+    newLines[0] = "shared first";
+    const fileDiff = fileDiffOf(replay("acp:qwen", wholeFileEditFrames({
+      id: "call-coarse",
+      oldText: `${oldLines.join("\n")}\n`,
+      newText: `${newLines.join("\n")}\n`,
+    })));
+    expect(fileDiff).toMatchObject({ kind: "update", additions: 1_499, removals: 1_499 });
+    expect(fileDiff?.diff).not.toBe("");
+    expect(applyUnifiedDiff(oldLines, fileDiff!.diff)).toEqual(newLines);
+    expect(parseHunks(fileDiff!.diff)).toHaveLength(1);
+  });
+
   it("draws no diff for Kimi's snippet, which has no position", () => {
     const [activity] = activities(replay("acp:kimi", snippetEditFrames({
       id: "call-kimi",

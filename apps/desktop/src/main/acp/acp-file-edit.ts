@@ -269,8 +269,11 @@ function lineHunks(
   let oldBefore = 0;
   let newBefore = 0;
   while (index < ops.length) {
-    const firstChange = ops.findIndex((op, at) => at >= index && op.type !== " ");
-    if (firstChange < 0) {
+    let firstChange = index;
+    while (firstChange < ops.length && ops[firstChange]!.type === " ") {
+      firstChange += 1;
+    }
+    if (firstChange === ops.length) {
       break;
     }
     // The hunk starts up to CONTEXT_LINES unchanged lines before the change.
@@ -290,9 +293,15 @@ function lineHunks(
       }
     }
     const to = Math.min(ops.length, lastChange + 1 + CONTEXT_LINES);
-    const lines = ops.slice(from, to).map((op) => `${op.type}${op.line}`);
-    const oldCount = lines.filter((line) => !line.startsWith("+")).length;
-    const newCount = lines.filter((line) => !line.startsWith("-")).length;
+    const lines: string[] = [];
+    let oldCount = 0;
+    let newCount = 0;
+    for (let at = from; at < to; at += 1) {
+      const op = ops[at]!;
+      lines.push(`${op.type}${op.line}`);
+      if (op.type !== "+") oldCount += 1;
+      if (op.type !== "-") newCount += 1;
+    }
     hunks.push({
       // Unified diff names the line before an empty side, so a pure insertion
       // after line N starts at N, and insertion into an empty file at 0.
@@ -309,8 +318,12 @@ function lineHunks(
   return hunks;
 }
 
-/** Comparisons a line diff may make before it settles for a coarser one. */
-const LINE_DIFF_BUDGET = 4_000_000;
+/**
+ * Comparisons a line diff may make before it settles for a coarser one. The
+ * walk-back keeps about two entries per comparison, so this also bounds its
+ * memory (~8 MB), and whole-file diffs are rebuilt on every replay.
+ */
+const LINE_DIFF_BUDGET = 1_000_000;
 
 /**
  * A shortest line diff (Myers), with each run of changes written as its
