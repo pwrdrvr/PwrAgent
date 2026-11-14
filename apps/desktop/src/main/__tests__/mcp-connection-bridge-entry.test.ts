@@ -1,10 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitationCompleteNotificationSchema, ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
+import { ElicitationCompleteNotificationSchema, ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, ResultSchema, ServerCapabilitiesSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
 import type { McpBridgeEvent } from "../mcp-connections/mcp-connection-rpc-client";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ElicitationRoute } from "../mcp-connections/mcp-elicitation-relay";
+import { BRIDGE_CAPABILITIES, RELAYED_MCP_EXTENSIONS, unrelayedMcpCapabilities } from "../mcp-connections/mcp-bridge-capabilities";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({
@@ -411,6 +412,76 @@ describe("desktop-owned native bridge discovery", () => {
     await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
     await expect(client.listTools()).rejects.toThrow();
     expect(bridge.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("native bridge skills", () => {
+  const SKILLS = "io.modelcontextprotocol/skills";
+  const listSkills = async (client: Client, params: Record<string, unknown> = {}) =>
+    await client.request({ method: "skills/list", params } as never, ResultSchema);
+
+  // GitHub's server drops its instructions when it turns skills on. Before
+  // the relay, the host saw neither the instructions nor the skills.
+  it("offers a skills server's extension and relays all three methods with their parameters", async () => {
+    const page = { skills: [{ uri: "skill://fixture.dev/triage/SKILL.md", frontmatter: { name: "triage", description: "Sort issues." } }], nextCursor: "page-2" };
+    bridge.request.mockImplementation(async (operation: string) => {
+      if (operation === "describe") return {
+        tools: true, resources: true, skills: true,
+        instructions: "- triage: Sort issues. (skill://fixture.dev/triage/SKILL.md)",
+        capabilities: { tools: {}, resources: {}, extensions: { [SKILLS]: { revision: 3 } } },
+      };
+      if (operation === "skills/list") return page;
+      if (operation === "skills/get") return { skill: page.skills[0] };
+      if (operation === "resources/directory/read") return { resources: [{ uri: "skill://fixture.dev/triage/SKILL.md", name: "SKILL.md" }] };
+      return tail;
+    });
+    const client = await openBridge();
+    expect(client.getServerCapabilities()?.extensions).toEqual({ [SKILLS]: { revision: 3 } });
+    expect(client.getInstructions()).toContain("skill://fixture.dev/triage/SKILL.md");
+    expect(await listSkills(client, { cursor: "page-1" })).toMatchObject(page);
+    expect(await client.request({ method: "skills/get", params: { uri: page.skills[0].uri } } as never, ResultSchema))
+      .toMatchObject({ skill: page.skills[0] });
+    expect(await client.request({ method: "resources/directory/read", params: { uri: "skill://fixture.dev/triage/" } } as never, ResultSchema))
+      .toMatchObject({ resources: [{ name: "SKILL.md" }] });
+    expect(bridge.request).toHaveBeenCalledWith("skills/list", { cursor: "page-1" }, expect.any(AbortSignal));
+    expect(bridge.request).toHaveBeenCalledWith("skills/get", { uri: page.skills[0].uri }, expect.any(AbortSignal));
+    expect(bridge.request).toHaveBeenCalledWith("resources/directory/read", { uri: "skill://fixture.dev/triage/" }, expect.any(AbortSignal));
+  });
+
+  it("offers no skills for a server without them, and never asks the owner", async () => {
+    bridge.request.mockImplementation(async (operation: string) =>
+      operation === "describe" ? { tools: true, capabilities: { tools: {} } } : tail);
+    const client = await openBridge();
+    expect(client.getServerCapabilities()?.extensions).toBeUndefined();
+    await expect(listSkills(client)).rejects.toThrow(/Method not found/u);
+    expect(bridge.request).not.toHaveBeenCalledWith("skills/list", expect.anything(), expect.anything());
+  });
+});
+
+describe("native bridge capability oracle", () => {
+  // A capability the bridge drops reaches no agent and raises no error. For
+  // a server that advertises everything, what the bridge declares and what
+  // the table calls unrelayed must split the server's list exactly, so a
+  // relay that goes missing (as skills once did) fails here.
+  it("declares exactly what the capability table relays, for a server that advertises everything", async () => {
+    const upstream: Record<string, unknown> = Object.fromEntries(
+      Object.keys(ServerCapabilitiesSchema.shape).map((name) => [name, { probe: true }]),
+    );
+    upstream.extensions = { ...Object.fromEntries(RELAYED_MCP_EXTENSIONS.map((id) => [id, { probe: true }])), "com.example/future": {} };
+    upstream.resources = { subscribe: true, listChanged: true };
+    bridge.request.mockImplementation(async (operation: string) => operation === "describe"
+      ? { tools: true, resources: true, prompts: true, skills: true, capabilities: upstream }
+      : tail);
+    const client = await openBridge();
+    const declared = client.getServerCapabilities() ?? {};
+    const names = (capabilities: Record<string, unknown>) => Object.entries(capabilities).flatMap(([name, value]) =>
+      name === "extensions" ? Object.keys(value as object).map((id) => `extensions:${id}`) : [name]);
+    const advertised = names(upstream).sort();
+    const relayed = names(declared as Record<string, unknown>);
+    expect([...relayed, ...unrelayedMcpCapabilities(upstream)].sort()).toEqual(advertised);
+    for (const name of Object.keys(declared)) {
+      expect(BRIDGE_CAPABILITIES[name as keyof typeof BRIDGE_CAPABILITIES]?.relayed, name).toBe(true);
+    }
   });
 });
 

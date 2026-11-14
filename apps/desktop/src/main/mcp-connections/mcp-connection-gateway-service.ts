@@ -28,7 +28,9 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import { isMcpError, loadedMcpTypes, mcpClient, mcpClientStreamableHttp, mcpTypes } from "./mcp-sdk";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
-import { McpDiscovery, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { McpDiscovery, discoveryFailure, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
+import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import {
   McpStdioLaunchError,
@@ -137,6 +139,8 @@ import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
   MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
+  MCP_SKILLS_INDEX_MAX_PAGES,
+  MCP_SKILLS_INDEX_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_TIMEOUT_MS,
 } from "./mcp-connection-timeouts";
@@ -4307,6 +4311,68 @@ export class McpConnectionGatewayService {
     return tools;
   }
 
+  /** Connections whose unrelayed capabilities were already logged, by list. */
+  private readonly loggedUnrelayedCapabilities = new Map<string, string>();
+
+  /**
+   * Name, once per connection and list, what a server advertised that its
+   * threads will not see. A capability the bridge drops fails silently
+   * otherwise; this line is how the next one gets noticed.
+   */
+  private logUnrelayedCapabilities(grant: BridgeGrant, capabilities: Record<string, unknown> | undefined): void {
+    const unrelayed = unrelayedMcpCapabilities(capabilities);
+    const key = unrelayed.join(",");
+    if (unrelayed.length === 0 || this.loggedUnrelayedCapabilities.get(grant.connectionId) === key) return;
+    this.loggedUnrelayedCapabilities.set(grant.connectionId, key);
+    connectionLog.warn("MCP server advertises capabilities threads will not see", {
+      connectionId: grant.connectionId,
+      unrelayed,
+    });
+  }
+
+  /**
+   * A server's skills, for the index a host without the skills extension
+   * reads as instructions. Reads a few pages within its own short budget,
+   * which never takes more than half of what the bridge's startup has left.
+   * A failure or a stall leaves out what it could not read: the session still
+   * opens, and `skills/list` stays available to a host that speaks it. Only
+   * the caller's own cancel propagates.
+   */
+  private async listSkillsForIndex(
+    grant: BridgeGrant,
+    client: Client,
+    discovery: McpDiscovery,
+    signal: AbortSignal | undefined,
+  ): Promise<{ skills: unknown[]; nextCursor?: string } | undefined> {
+    const skills: unknown[] = [];
+    let nextCursor: string | undefined;
+    try {
+      const budget = Math.min(MCP_SKILLS_INDEX_TIMEOUT_MS, Math.floor(discovery.remaining() / 2));
+      const deadline = AbortSignal.any([discovery.signal, AbortSignal.timeout(Math.max(1, budget))]);
+      const { ResultSchema } = await mcpTypes.load();
+      for (let page = 0; page < MCP_SKILLS_INDEX_MAX_PAGES; page += 1) {
+        const result = await client.request(
+          { method: "skills/list", params: nextCursor ? { cursor: nextCursor } : {} } as never,
+          ResultSchema,
+          { signal: deadline, timeout: Math.max(1, budget) },
+        ) as { skills?: unknown; nextCursor?: unknown };
+        if (Array.isArray(result.skills)) skills.push(...result.skills);
+        nextCursor = typeof result.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : undefined;
+        if (!nextCursor) break;
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      connectionLog.warn("MCP skills index incomplete", {
+        connectionId: grant.connectionId,
+        skillsRead: skills.length,
+        ...discoveryFailure(error, discovery.signal),
+      });
+      // What was read is still worth indexing; the rest is unknown.
+      return skills.length > 0 ? { skills, nextCursor: nextCursor ?? "unread" } : undefined;
+    }
+    return { skills, ...(nextCursor ? { nextCursor } : {}) };
+  }
+
   private async dispatchBridgeOperation(
     token: string,
     grant: BridgeGrant,
@@ -4410,13 +4476,21 @@ export class McpConnectionGatewayService {
           }
           case "describe": {
             const capabilities = client.getServerCapabilities();
+            const skills = offersMcpSkills(capabilities);
+            const instructions = client.getInstructions?.();
+            this.logUnrelayedCapabilities(grant, capabilities);
             return {
               tools: Boolean(capabilities?.tools),
               resources: Boolean(capabilities?.resources),
               prompts: Boolean(capabilities?.prompts),
+              skills,
               capabilities,
               serverInfo: client.getServerVersion?.(),
-              instructions: client.getInstructions?.(),
+              // The index tells the agent to read each SKILL.md as a
+              // resource, so it is built only when the bridge can serve one.
+              instructions: skills && capabilities?.resources && !instructions?.trim()
+                ? skillsAwareInstructions({ instructions, listed: await this.listSkillsForIndex(grant, client, discovery, signal) })
+                : instructions,
               metadata: this.initializations.get(client)?._meta,
             };
           }
@@ -4469,6 +4543,21 @@ export class McpConnectionGatewayService {
               values as Parameters<Client["getPrompt"]>[0],
               cancelOnly(signal),
             );
+          case "skills/list":
+          case "skills/get":
+          case "resources/directory/read": {
+            // Only to a server that offered the extension. The SDK's request
+            // union has no skills methods, so the result passes through whole.
+            if (!offersMcpSkills(client.getServerCapabilities())) {
+              throw new McpError(ErrorCode.MethodNotFound, "This MCP server does not offer skills.");
+            }
+            const { ResultSchema } = await mcpTypes.load();
+            return await client.request(
+              { method: operation, params: values } as never,
+              ResultSchema,
+              cancelOnly(signal),
+            );
+          }
           default:
             throw new Error("unsupported MCP operation");
         }

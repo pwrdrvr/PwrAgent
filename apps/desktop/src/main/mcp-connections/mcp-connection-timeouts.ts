@@ -56,6 +56,11 @@ export const MCP_CONNECTION_PROBE_TIMEOUT_MS = 8_000;
 // One end-to-end discovery budget: registration, initialize, and every page.
 export const MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS = 60_000;
 export const MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS = MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS;
+// The skills index is optional, so it never spends the bridge's startup
+// budget: at most this long, and at most half of what remains.
+export const MCP_SKILLS_INDEX_TIMEOUT_MS = 5_000;
+// Pages read for the index; the index budget fills well before this.
+export const MCP_SKILLS_INDEX_MAX_PAGES = 4;
 // The owner enforces the deadline. Leave time to return its phase diagnostic
 // before the local RPC/search safety timer replaces it with a generic timeout.
 export const MCP_DISCOVERY_RESPONSE_GRACE_MS = 1_000;
