@@ -13,6 +13,32 @@ describe("SubAgentTranscriptWindow", () => {
     vi.restoreAllMocks();
   });
 
+  it("opens a Claude child transcript instead of rejecting its address", async () => {
+    const readThread = vi.fn(async () => ({
+      backend: "claude" as const,
+      fetchedAt: 123,
+      threadId: "claude-child-1",
+      replay: {
+        entries: [], messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    }));
+    (window as Window & { pwragent?: unknown }).pwragent = { readThread };
+    window.location.hash = "#sub-agent/claude/claude-child-1/Map%20messaging%20card%20patterns";
+
+    render(<SubAgentTranscriptWindow />);
+
+    expect(readThread).toHaveBeenCalledWith({
+      backend: "claude",
+      threadId: "claude-child-1",
+      limit: THREAD_HISTORY_PAGE_LIMIT,
+      viewOnly: true,
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Map messaging card patterns" })).toBeInTheDocument();
+    });
+  });
+
   it("reads a native Codex child directly without requiring navigation membership", async () => {
     const readThread = vi.fn(async () => ({
       backend: "codex" as const,
