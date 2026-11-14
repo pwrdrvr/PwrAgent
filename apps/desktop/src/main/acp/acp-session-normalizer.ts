@@ -27,7 +27,11 @@ import {
   readFirstLocationPath,
 } from "./acp-command-extraction.js";
 import { readAcpFileEdit } from "./acp-file-edit.js";
-import { type AcpFileRead, readAcpFileRead } from "./acp-file-read.js";
+import {
+  type AcpFileRead,
+  fileBaseName,
+  readAcpFileRead,
+} from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 
 export type AcpSessionUpdate = {
@@ -311,6 +315,7 @@ export class AcpSessionReplayNormalizer {
     // A call's identity matters only while its updates arrive. Keeping every
     // call's for the whole session would grow without bound.
     this.providerTools.clear();
+    this.fileReads.clear();
     this.upsertMessage({
       id,
       role: "user",
@@ -788,12 +793,11 @@ export class AcpSessionReplayNormalizer {
     const providerTool = toolCallId
       ? this.providerTools.get(toolCallId)
       : declared;
-    let fileRead = toolCallId ? this.fileReads.get(toolCallId) : undefined;
-    if (!fileRead) {
-      fileRead = readAcpFileRead(update.update, providerTool);
-      if (toolCallId && fileRead) {
-        this.fileReads.set(toolCallId, fileRead);
-      }
+    const fileRead =
+      (toolCallId ? this.fileReads.get(toolCallId) : undefined)
+      ?? readAcpFileRead(update.update, providerTool);
+    if (toolCallId && fileRead) {
+      this.fileReads.set(toolCallId, fileRead);
     }
     this.upsertActivity(
       toolActivity(update, kind, createdAt, providerTool, fileRead),
@@ -1775,10 +1779,6 @@ function readToolActivityStatus(
     : status === "pending"
       ? "in_progress"
       : undefined;
-}
-
-function fileBaseName(filePath: string): string {
-  return filePath.split(/[\\/]/u).filter(Boolean).at(-1) ?? filePath;
 }
 
 function sameLabel(value: string, other: string | undefined): boolean {

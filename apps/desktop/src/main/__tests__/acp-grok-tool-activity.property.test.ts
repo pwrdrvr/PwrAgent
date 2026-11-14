@@ -510,6 +510,17 @@ describe("Grok tool activity", () => {
     });
   });
 
+  it("names a URL read by its file, without the query, and by its host when it has no path", () => {
+    const image = "https://images.example.test/media/board%20photo.jpg?name=large#top";
+    const [imageRow] = activities(applyFrames(readFileFrames({ id: "call-url", target: image })));
+    expect(imageRow?.summary).toBe("Read board photo.jpg");
+    expect(imageRow?.details[0]?.path).toBe(image);
+
+    const site = "https://docs.example.test/";
+    const [siteRow] = activities(applyFrames(readFileFrames({ id: "call-site", target: site })));
+    expect(siteRow?.summary).toBe("Read docs.example.test");
+  });
+
   it("property: a read or listing keeps its own label whatever Grok's later frames carry", () => {
     const segment = fc.stringMatching(/^[a-z][a-z0-9_.-]{0,10}$/u);
     const scenario = fc.record({

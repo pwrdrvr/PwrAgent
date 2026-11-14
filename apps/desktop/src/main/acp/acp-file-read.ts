@@ -10,6 +10,7 @@ import type { AcpProviderTool } from "./acp-command-extraction.js";
  * line `limit`, and `pages` for documents; `list_dir` input is
  * `target_directory`. The completing update can omit both the input and the
  * tool identity, so the caller remembers the first read it derives.
+ * `target_file` can also be an http(s) URL, which Grok fetches.
  */
 export type AcpFileRead = {
   path: string;
@@ -26,7 +27,7 @@ export function readAcpFileRead(
   }
   if (providerTool.name === "list_dir") {
     const path = readString(rawInput, "target_directory");
-    return path ? { path, label: `Listed ${baseName(path)}` } : undefined;
+    return path ? { path, label: `Listed ${targetName(path)}` } : undefined;
   }
   if (providerTool.name !== "read_file") {
     return undefined;
@@ -38,7 +39,7 @@ export function readAcpFileRead(
   const range = readRange(rawInput);
   return {
     path,
-    label: `Read ${baseName(path)}${range ? ` (${range})` : ""}`,
+    label: `Read ${targetName(path)}${range ? ` (${range})` : ""}`,
   };
 }
 
@@ -58,8 +59,33 @@ function readRange(rawInput: Record<string, unknown>): string | undefined {
     : undefined;
 }
 
-function baseName(filePath: string): string {
+export function fileBaseName(filePath: string): string {
   return filePath.split(/[\\/]/u).filter(Boolean).at(-1) ?? filePath;
+}
+
+/**
+ * The last segment of a file path, or of a URL's path without its query or
+ * fragment, falling back to the URL's host.
+ */
+function targetName(target: string): string {
+  if (/^https?:\/\//iu.test(target)) {
+    try {
+      const url = new URL(target);
+      const segment = url.pathname.split("/").filter(Boolean).at(-1);
+      return segment ? decodeSegment(segment) : url.host;
+    } catch {
+      return target;
+    }
+  }
+  return fileBaseName(target);
+}
+
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 function readPositiveInteger(
