@@ -62,8 +62,11 @@ describe("bundled skill root", () => {
     const skillFile = path.join(root, skill.name, "SKILL.md");
     const past = new Date(Date.now() - 60_000);
     await fs.utimes(skillFile, past, past);
+    // utimes passes seconds as a double, so the stored mtime can miss `past`
+    // by a fraction of a millisecond. Compare with what the filesystem kept.
+    const { mtimeMs: pastMtimeMs } = await fs.stat(skillFile);
     await materializeBundledSkills(root);
-    expect((await fs.stat(skillFile)).mtimeMs).toBe(past.getTime());
+    expect((await fs.stat(skillFile)).mtimeMs).toBe(pastMtimeMs);
   });
 
   // Two PwrAgent processes, or two Codex clients in one, can materialize the
@@ -100,7 +103,10 @@ describe("bundled skill root", () => {
           await fs.writeFile(file, "partial");
           const at = new Date(now - item.ageMs);
           await fs.utimes(file, at, at);
-          planted.set(file, item.kind === "staged" && item.ageMs < STAGED_FILE_GRACE_MS);
+          // Judge age from the stored mtime, which can miss `at` by a
+          // fraction of a millisecond (see the unchanged-file check above).
+          const ageMs = now - (await fs.stat(file)).mtimeMs;
+          planted.set(file, item.kind === "staged" && ageMs < STAGED_FILE_GRACE_MS);
         }
         await materializeBundledSkills(root, PWRAGENT_CODEX_SKILLS, now);
         for (const [file, survives] of planted) {
