@@ -1701,7 +1701,7 @@ export class ThreadArchiveCoordinator {
     this.archiveCleanupCheckpointStore?.save(this.host().runtimeInstanceId, [...intents.values()]);
   }
 
-  tryCheckpointArchiveCleanupsForQuit(phase: "before-drain" | "after-drain" | "reference-change"): void {
+  tryCheckpointArchiveCleanupsForQuit(phase: "before-drain" | "after-drain" | "reference-change" | "recovery-drain"): void {
     // A release or removal only shrinks the backlog, and recovery rereads every
     // recovered row, so a reference boundary persists only what was added.
     // Rewriting the remaining backlog after each release was quadratic.
@@ -1849,6 +1849,10 @@ export class ThreadArchiveCoordinator {
       // admitted jobs before taking another chunk of the durable backlog.
       await Promise.allSettled(this.archiveCleanupQueue.pendingKeys().map((key) => this.archiveCleanupQueue.pending(key)!));
     }
+    // Recovery claims every saved intent before dispatch. Retire completed
+    // claims once the batch drains, even when none retained a reference row;
+    // otherwise a crash before clean quit replays those terminal outcomes.
+    if (!this.context.lifecycle.closed) this.tryCheckpointArchiveCleanupsForQuit("recovery-drain");
   }
 
   private async observeArchiveCleanupCompletion(completion: Promise<ArchiveThreadResponse>, params: {
@@ -4107,6 +4111,7 @@ export class ThreadArchiveCoordinator {
         }
         if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))
           && !await this.isManagedArchiveCheckout(params, candidate.worktreePath)) {
+          await this.archiveWorktreeReferences.forget(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath);
           return {
             worktreePath: candidate.worktreePath,
             removedWorktree: false,
@@ -4115,8 +4120,11 @@ export class ThreadArchiveCoordinator {
           };
         }
         const ownership = await this.readCanonicalArchiveOwnership(params, candidate.worktreePath);
-        if (ownership.external) return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
-          skippedReason: "Externally managed worktree; thread archive leaves this checkout in place." };
+        if (ownership.external) {
+          await this.archiveWorktreeReferences.forget(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath);
+          return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
+            skippedReason: "Externally managed worktree; thread archive leaves this checkout in place." };
+        }
         const activeUsers = ownership.users.filter((thread) => thread.id !== params.thread.id || thread.source !== params.backend);
         if (activeUsers.length > 0) {
           const blockers = activeUsers.map((thread) => buildThreadIdentityKey(thread.source, thread.id));
@@ -4306,6 +4314,7 @@ export class ThreadArchiveCoordinator {
         };
       } catch (error) {
         if (error instanceof MissingArchiveWorktreeError) {
+          await this.archiveWorktreeReferences.forget(buildThreadIdentityKey(params.backend, params.thread.id), candidate.worktreePath);
           backendRegistryLog.debug("archive thread worktree cleanup skipped: missing worktree", {
             backend: params.backend,
             threadId: params.thread.id,
