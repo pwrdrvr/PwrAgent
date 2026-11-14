@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isAppServerBackendKind } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
@@ -343,8 +344,4 @@ function subAgentTranscriptTargetFromHash(): SubAgentTranscriptTarget | undefine
   } catch {
     return undefined;
   }
-}
-
-function isAppServerBackendKind(value: string): value is AppServerBackendKind {
-  return value === "codex" || value.startsWith("acp:");
 }
