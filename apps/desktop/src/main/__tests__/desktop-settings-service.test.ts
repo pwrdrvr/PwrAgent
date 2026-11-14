@@ -6028,4 +6028,18 @@ describe("OpenAI Decisions settings", () => {
     expect(service.resolveOpenAIDecisionsSettings()).toEqual({});
     expect(fs.readFileSync(configPath, "utf8")).not.toContain("organization_id");
   });
+
+  it("takes the key from PWRAGENT_OPENAI_DECISIONS_API_KEY first, as pnpm dev:op supplies it", async () => {
+    const envKey = "sk-test-openai-decisions-env-0123456789";
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: { PWRAGENT_OPENAI_DECISIONS_API_KEY: envKey },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    await service.replaceSecret("openaiDecisionsApiKey", "sk-test-openai-decisions-saved-0123456789").catch(() => undefined);
+    await expect(service.resolveOpenAIDecisionsApiKey()).resolves.toBe(envKey);
+    const projection = await service.readSettingsProjection();
+    expect(projection.models.openaiDecisions?.apiKey).toMatchObject({ configured: true, source: "env", overriddenByEnv: true });
+    expect(JSON.stringify(projection)).not.toContain(envKey);
+  });
 });

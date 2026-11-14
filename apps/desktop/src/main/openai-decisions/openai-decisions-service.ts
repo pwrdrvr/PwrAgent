@@ -25,6 +25,7 @@ import {
   type OpenAIDecisionVersionRecord,
 } from "../storage/openai-decision-store";
 import { codexModelProviderAccountKey } from "../usage-account-identity";
+import { OpenAIDecisionsUsageBatcher } from "./openai-decisions-usage-batcher";
 import {
   postOpenAIDecision,
   type OpenAIDecisionsAttempt,
@@ -67,7 +68,11 @@ export type OpenAIDecisionsServiceOptions = {
   readApiKey: () => Promise<string | undefined>;
   readAccountSettings: () => { organizationId?: string; projectId?: string };
   profileId: () => string;
-  recordUsageLine: (line: ThreadUsageLineRecord) => Promise<void>;
+  /** Writes a batch of summed usage lines in one transaction. */
+  recordUsageLines: (lines: ThreadUsageLineRecord[]) => Promise<void>;
+  /** Usage batching window and size; see OpenAIDecisionsUsageBatcher. */
+  usageFlushMs?: number;
+  usageFlushCount?: number;
   fetch?: typeof globalThis.fetch;
   endpoint?: string;
   sleep?: OpenAIDecisionsHttpOptions["sleep"];
@@ -90,8 +95,25 @@ const TARGET_KEYS = new Set(["name", "decisionId"]);
  */
 export class OpenAIDecisionsService {
   private readonly lanes = new Map<string, { active: boolean; waiters: Array<() => void> }>();
+  private readonly usage: OpenAIDecisionsUsageBatcher;
 
-  constructor(private readonly options: OpenAIDecisionsServiceOptions) {}
+  constructor(private readonly options: OpenAIDecisionsServiceOptions) {
+    this.usage = new OpenAIDecisionsUsageBatcher({
+      write: options.recordUsageLines,
+      ...(options.usageFlushMs !== undefined ? { flushAfterMs: options.usageFlushMs } : {}),
+      ...(options.usageFlushCount !== undefined ? { flushAtCount: options.usageFlushCount } : {}),
+      onWriteError: (error, lines, requests) => options.log?.warn("decision usage batch not recorded", {
+        lines,
+        requests,
+        error: error instanceof Error ? error.name : "unknown",
+      }),
+    });
+  }
+
+  /** Writes pending usage now. The owner calls this at shutdown. */
+  async flushUsage(): Promise<void> {
+    await this.usage.flush();
+  }
 
   register(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
     const parsed = parseOpenAIDecisionRegistration(args);
@@ -288,7 +310,18 @@ export class OpenAIDecisionsService {
     const accountKey = codexModelProviderAccountKey(OPENAI_DECISIONS_ORIGIN, apiKey);
     for (const attempt of result.attempts) {
       if (attempt.usage === undefined) continue;
-      await this.recordUsage(caller, record, attempt, accountKey);
+      this.usage.add(
+        { decisionId: record.decisionId, version: record.version },
+        buildOpenAIDecisionsUsageLine({
+          caller,
+          decisionId: record.decisionId,
+          version: record.version,
+          attempt,
+          accountKey,
+          now: this.now(),
+          fallbackId: randomUUID(),
+        }),
+      );
     }
     const last = result.attempts.at(-1);
     this.options.log?.[result.ok ? "info" : "warn"]("decision request finished", {
@@ -323,31 +356,6 @@ export class OpenAIDecisionsService {
       response,
       usage: usageSummary(usage, price),
     };
-  }
-
-  private async recordUsage(
-    caller: OpenAIDecisionCaller,
-    record: OpenAIDecisionVersionRecord,
-    attempt: OpenAIDecisionsAttempt,
-    accountKey: string,
-  ): Promise<void> {
-    const line = buildOpenAIDecisionsUsageLine({
-      caller,
-      decisionId: record.decisionId,
-      version: record.version,
-      attempt,
-      accountKey,
-      now: this.now(),
-      fallbackId: randomUUID(),
-    });
-    try {
-      await this.options.recordUsageLine(line);
-    } catch (error) {
-      this.options.log?.warn("decision usage line not recorded", {
-        ...logFields(record),
-        error: error instanceof Error ? error.name : "unknown",
-      });
-    }
   }
 
   private resolveTarget(
@@ -427,7 +435,8 @@ export class OpenAIDecisionsService {
 }
 
 /**
- * One finalized ledger row for one HTTP attempt that returned usage. The
+ * One HTTP attempt's usage as a finalized ledger row. The batcher sums these
+ * per thread and decision version before anything is written. The
  * provider and account are the OpenAI API project, never the Codex
  * subscription: provider `openai_decisions`, scope `monitor`, no turn id, so
  * the parent turn's `thread_usage_turns` counters and the thread's latest

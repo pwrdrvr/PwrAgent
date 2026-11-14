@@ -21,7 +21,7 @@ beforeEach(() => {
     readApiKey: async () => TEST_KEY,
     readAccountSettings: () => ({}),
     profileId: () => "test-profile",
-    recordUsageLine: async () => undefined,
+    recordUsageLines: async () => undefined,
     fetch: async () => {
       fetches += 1;
       return new Response(JSON.stringify({ error: { message: `bad key ${TEST_KEY}` } }), {

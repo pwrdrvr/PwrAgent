@@ -2762,13 +2762,21 @@ export class DesktopBackendRegistry {
    * OpenAI API project), so no parent-turn counter or Codex subscription
    * estimate moves.
    */
-  async recordOpenAIDecisionsUsageLine(line: ThreadUsageLineRecord): Promise<void> {
-    if (typeof this.overlayStore.upsertThreadUsageLine !== "function") return;
-    await this.overlayStore.upsertThreadUsageLine({ line });
-    await this.threadUsageLedger.emitThreadPricingUpdated({
-      backend: line.backend as AppServerBackendKind,
-      threadId: line.parentThreadId ?? line.threadId,
-    });
+  async recordOpenAIDecisionsUsageLines(lines: ThreadUsageLineRecord[]): Promise<void> {
+    if (lines.length === 0 || typeof this.overlayStore.upsertThreadUsageLines !== "function") return;
+    // One transaction for the whole batch.
+    await this.overlayStore.upsertThreadUsageLines({ lines });
+    const threads = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+    for (const line of lines) {
+      const threadId = line.parentThreadId ?? line.threadId;
+      threads.set(JSON.stringify([line.backend, threadId]), {
+        backend: line.backend as AppServerBackendKind,
+        threadId,
+      });
+    }
+    for (const thread of threads.values()) {
+      await this.threadUsageLedger.emitThreadPricingUpdated(thread);
+    }
   }
 
   /**

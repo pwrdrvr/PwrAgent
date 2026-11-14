@@ -231,6 +231,7 @@ import {
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
+  OPENAI_DECISIONS_API_KEY_ENV,
   TELEGRAM_ENABLED_ENV,
   TELEGRAM_STREAMING_RESPONSES_ENV,
   readEnvBoolean,
@@ -885,7 +886,7 @@ export class DesktopSettingsService {
     );
     const openaiDecisionsApiKey = await this.readSecretState(
       "openaiDecisionsApiKey",
-      undefined,
+      OPENAI_DECISIONS_API_KEY_ENV,
       secretStorage.available,
     );
     const codexModelProviderKeyIds = secretStorage.available && config.models?.codex?.providers?.length
@@ -3400,9 +3401,14 @@ export class DesktopSettingsService {
     return this.readModelsConfig().openaiDecisions ?? {};
   }
 
-  /** The OpenAI Decisions key. Only the decisions service calls this, per request. */
+  /**
+   * The OpenAI Decisions key: the env override first, as for messaging
+   * tokens, then the saved secret. Only the decisions service calls this,
+   * once per request.
+   */
   async resolveOpenAIDecisionsApiKey(): Promise<string | undefined> {
-    return await this.options.secretStore.getSecret("openaiDecisionsApiKey");
+    return readEnvString(this.env, OPENAI_DECISIONS_API_KEY_ENV)
+      ?? await this.options.secretStore.getSecret("openaiDecisionsApiKey");
   }
 
   async resolveDecisionApiKey(provider: DecisionProviderId): Promise<string | undefined> {
@@ -4973,9 +4979,10 @@ function secretEnvironmentKey(
     case "mcpStdioConnectionSecrets":
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
-    case "openaiDecisionsApiKey":
     case "codexModelProviderKeys":
       return undefined;
+    case "openaiDecisionsApiKey":
+      return OPENAI_DECISIONS_API_KEY_ENV;
   }
 }
 
