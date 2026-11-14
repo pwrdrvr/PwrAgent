@@ -1352,6 +1352,33 @@ roots:
 `acp-runtime-override-launch.test.ts` is the worked example of the ACP seams,
 and `acp-instance-discovery.test.ts` of plain probe injection.
 
+## No Git Against the Checkout in Vitest
+
+[`src/main/__tests__/setup/checkout-git-spawn-guard.ts`](src/main/__tests__/setup/checkout-git-spawn-guard.ts)
+fails a `desktop-main` test that runs Git against the repository checkout the
+suite runs in, whether through `-C <path>`, a `cwd` inside it, `--git-dir` or
+`--work-tree`. `init` and `clone` are judged by the directory they write.
+
+A thread started with `cwd: process.cwd()` did this without anyone asking.
+`startThread` ran `git rev-parse --abbrev-ref HEAD` whenever the head-branch
+file probe could not prove the layout, and a linked worktree is enough for
+that. `get_thread_status` read the working state with ten commands across the
+whole tree, about a second per call on a GitHub runner and under 100 ms on a
+warm local worktree. A property test made 30 such calls and timed out on CI
+only (#3687). The results also depended on the checkout's branch and dirty
+files.
+
+Fix a failure without widening the guard:
+
+- A test whose subject is not Git: start the thread in an empty
+  `mkdtemp` directory (`nonRepositoryCwd` in `backend-registry.test.ts`), or
+  inject `gitWorkingStateService` / `gitDirectoryService`.
+- A test of Git itself: build its own repository under `os.tmpdir()`.
+
+Like the agent-CLI guard it hooks `ChildProcess.prototype.spawn`, records and
+throws, and does not see sync launches. `checkout-git-spawn-guard.test.ts`
+checks the classifier against Git's own `rev-parse --show-toplevel`.
+
 ## No Network and No Operator State in Vitest
 
 Two more suite-wide guards, both pure test infrastructure. Production code has

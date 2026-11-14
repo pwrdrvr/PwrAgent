@@ -480,8 +480,18 @@ const gitTestEnv: NodeJS.ProcessEnv = {
   GCM_INTERACTIVE: "Never",
 };
 
+// The directory for a thread whose subject is not Git. Starting a thread in
+// the suite's own checkout ran `git rev-parse --abbrev-ref HEAD` against it
+// whenever the head-branch file probe could not prove the layout (a linked
+// worktree, for one), and reading its working state ran ten more commands
+// across the whole tree: about a second per call on a CI runner. An empty
+// directory under the temp dir is provably not a repository, so the probe
+// answers from the filesystem and nothing is spawned.
+const nonRepositoryCwd = mkdtempSync(path.join(os.tmpdir(), "pwragent-registry-cwd-"));
+
 afterAll(() => {
   rmSync(gitConfigDir, { force: true, recursive: true });
+  rmSync(nonRepositoryCwd, { force: true, recursive: true });
 });
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -7855,7 +7865,7 @@ describe("DesktopBackendRegistry", () => {
         const tools = pwragentDynamicTools(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools);
         expect(tools.some((tool) => tool.name === "attach_thread_here")).toBe(true);
         expect(tools.some((tool) => tool.name === "tool_search")).toBe(discovery);
-        await registry.startThread({ backend: "codex", cwd: process.cwd(), agent });
+        await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd, agent });
         expect(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools).toEqual(codexClient.lastStartThreadParams?.dynamicTools);
         await start();
         expect(await codexClient.emitRequest(call)).toMatchObject({ success: true });
@@ -8045,7 +8055,7 @@ describe("DesktopBackendRegistry", () => {
       await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
       await registry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
         executionMode: "auto",
       });
       expect(
@@ -8067,7 +8077,7 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     try {
-      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
       expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name)).toContain("read_tool_guide");
       const call = {
         method: "item/tool/call",
@@ -8093,11 +8103,11 @@ describe("DesktopBackendRegistry", () => {
       resolveCodexToolDiscovery: () => enabled,
     });
     try {
-      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
       const initial = pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools);
       expect(initial.some((tool) => tool.name === "tool_search")).toBe(false);
       enabled = true;
-      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
       const deferred = pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools);
       expect(deferred.find((tool) => tool.name === "tool_search")).toMatchObject({ deferLoading: false });
       expect(deferred.filter((tool) => tool.name !== "tool_search").every((tool) => (tool as { deferLoading?: boolean }).deferLoading)).toBe(true);
@@ -8310,7 +8320,7 @@ describe("DesktopBackendRegistry", () => {
         const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
         try {
           const threadExpected = policy.sandboxByMode[threadMode];
-          const thread = registry.startThread({ backend: "codex", cwd: process.cwd(), executionMode: threadMode,
+          const thread = registry.startThread({ backend: "codex", cwd: nonRepositoryCwd, executionMode: threadMode,
             approvalPolicy: "never", sandbox: threadSandbox });
           if (threadSandbox !== undefined && threadSandbox !== threadExpected) {
             await expect(thread).rejects.toThrow();
@@ -8352,7 +8362,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await registry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
       });
       expect(codexClient.lastStartThreadParams?.defaultModeRequestUserInput).toBe(
         true,
@@ -8518,7 +8528,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await registry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
         tokenMiserEnabled: true,
       });
 
@@ -8560,14 +8570,14 @@ describe("DesktopBackendRegistry", () => {
     try {
       await registry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
       });
       expect(prepare).not.toHaveBeenCalled();
       expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
 
       await registry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
         tokenMiserEnabled: true,
       });
       expect(prepare).toHaveBeenCalledTimes(1);
@@ -8646,7 +8656,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await registry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
       });
 
       expect(prepare).toHaveBeenCalledTimes(1);
@@ -8737,7 +8747,7 @@ describe("DesktopBackendRegistry", () => {
     vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
 
     try {
-      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
       expect(codexClient.lastStartThreadParams?.pwrdrvrTokenMiser).toEqual({
         version: 1,
         enabled: true,
@@ -8819,7 +8829,7 @@ describe("DesktopBackendRegistry", () => {
     await selectionListener?.({ enabled: false, reason: "availability" });
     expect(codexClient.closeCallCount).toBe(0);
     try {
-      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
       expect(
         codexClient.lastStartThreadParams?.pwrdrvrTokenMiser,
       ).toBeUndefined();
@@ -8892,7 +8902,7 @@ describe("DesktopBackendRegistry", () => {
     vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
 
     try {
-      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
       expect(
         codexClient.lastStartThreadParams?.pwrdrvrTokenMiser,
       ).toBeUndefined();
@@ -9097,7 +9107,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await expect(registry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
       })).resolves.toMatchObject({ backend: "codex" });
 
       expect(prepare).toHaveBeenCalledTimes(1);
@@ -9777,7 +9787,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await defaultRegistry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
       });
       expect(
         (await defaultOverlayStore.getThreadOverlayState({
@@ -9788,7 +9798,7 @@ describe("DesktopBackendRegistry", () => {
 
       await disabledRegistry.startThread({
         backend: "codex",
-        cwd: process.cwd(),
+        cwd: nonRepositoryCwd,
       });
       expect(
         (await disabledOverlayStore.getThreadOverlayState({
@@ -16654,7 +16664,7 @@ describe("DesktopBackendRegistry", () => {
       revoke: vi.fn(() => { effects.push(`revoke:${i}`); if (reject) throw new Error("fixture revoke refused"); }),
     }));
     const rollback = vi.fn(async () => { effects.push("rollback"); });
-    vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: process.cwd(), workMode: "worktree", rollback });
+    vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: nonRepositoryCwd, workMode: "worktree", rollback });
     const connections = createDeferred<unknown[]>();
     const inventory = createDeferred<string[] | undefined>();
     vi.spyOn(mcp, "registerMcpConnections").mockImplementation(async () => await connections.promise as never);
@@ -16666,7 +16676,7 @@ describe("DesktopBackendRegistry", () => {
     if (failure === "config") vi.spyOn(internal, "buildSupportedCodexTokenMiserConfig").mockRejectedValue(refusal);
     const provider = vi.spyOn(client, "startThread");
     try {
-      const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", mcpConnectionIds: ["fixture"], mcpProviderServersEnabled: false })
+      const outcome = registry.startThread({ backend: "codex", cwd: nonRepositoryCwd, workMode: "worktree", mcpConnectionIds: ["fixture"], mcpProviderServersEnabled: false })
         .then(() => undefined, (error: unknown) => error);
       await waitForCondition(() => effects.includes("inventory"));
       if (failure === "inventory") inventory.reject(refusal);
@@ -16707,14 +16717,14 @@ describe("DesktopBackendRegistry", () => {
       };
       const runtime = createDeferred<void>();
       const rollback = vi.fn(async () => {});
-      vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: process.cwd(), workMode: "worktree", rollback });
+      vi.spyOn(internal.gitDirectoryService, "prepareLaunchpadWorkspace").mockResolvedValue({ cwd: nonRepositoryCwd, workMode: "worktree", rollback });
       vi.spyOn(internal, "resolveTokenMiserEnabledForOverride").mockReturnValue(true);
       const prepareRuntime = vi.spyOn(internal, "prepareTokenMiserRuntime").mockReturnValue(runtime.promise);
       const refusal = new Error("fixture catalog preparation refused");
       const catalog = vi.spyOn(registryModules(registry).forgeToolBridge, "resolveForgeToolPolicy").mockImplementation(() => { throw refusal; });
       let settled = false;
       try {
-        const outcome = registry.startThread({ backend: "codex", cwd: process.cwd(), workMode: "worktree", tokenMiserEnabled: true })
+        const outcome = registry.startThread({ backend: "codex", cwd: nonRepositoryCwd, workMode: "worktree", tokenMiserEnabled: true })
           .then(() => undefined, (error: unknown) => { settled = true; return error; });
         await waitForCondition(() => catalog.mock.calls.length === 1);
         expect(prepareRuntime).toHaveBeenCalledOnce();
@@ -16766,7 +16776,7 @@ describe("DesktopBackendRegistry", () => {
     }
     try {
       // A provider-created identity remains accepted; unrelated finalizers still run.
-      await expect(registry.startThread({ backend, cwd: process.cwd(), parentThreadId: "parent", agent: { name: "Fixture" } }))
+      await expect(registry.startThread({ backend, cwd: nonRepositoryCwd, parentThreadId: "parent", agent: { name: "Fixture" } }))
         .resolves.toMatchObject({ backend, threadId: "same:thread", executionMode: "default" });
       expect(submit).toHaveBeenCalledTimes(1);
       expect(agent).toHaveBeenCalledOnce();

@@ -250,6 +250,9 @@ export default defineConfig({
             // Fails a test that probes an agent CLI installed on the machine
             // running the suite instead of its own fixtures.
             "apps/desktop/src/main/__tests__/setup/agent-cli-spawn-guard.ts",
+            // Fails a test that runs Git against this repository checkout
+            // instead of a temporary directory or repository.
+            "apps/desktop/src/main/__tests__/setup/checkout-git-spawn-guard.ts",
             "apps/desktop/src/main/__tests__/setup/owner-host-fixture.ts",
             // Fails a test that makes a real outbound HTTP request — the step
             // that runs *before* the probe the guard above catches.
