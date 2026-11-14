@@ -18,10 +18,26 @@ export const PROJECT_CRUMB_WHOLE_MAX_CHARS = 20;
 
 export type ProjectCrumbFit = "whole" | "floor";
 
+/**
+ * East Asian wide and fullwidth characters, and emoji, draw about twice as
+ * wide as a Latin letter, so each counts as two columns. Without that, a
+ * 20-character CJK name stayed whole at about twice the intended width.
+ */
+const WIDE_CHARACTER =
+  /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6\u{20000}-\u{3FFFD}]|\p{Extended_Pictographic}/u;
+
+/** The label's width in Latin-letter columns, by code point. */
+export function projectCrumbColumns(label: string): number {
+  let columns = 0;
+  for (const character of label) {
+    columns += WIDE_CHARACTER.test(character) ? 2 : 1;
+  }
+  return columns;
+}
+
 /** `whole`: never truncate. `floor`: truncate, but not below the floor. */
 export function projectCrumbFit(label: string): ProjectCrumbFit {
-  // Code points, not UTF-16 units, so an emoji counts as one character.
-  return Array.from(label).length <= PROJECT_CRUMB_WHOLE_MAX_CHARS
+  return projectCrumbColumns(label) <= PROJECT_CRUMB_WHOLE_MAX_CHARS
     ? "whole"
     : "floor";
 }

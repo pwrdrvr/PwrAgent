@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { cssRuleBody } from "../../../styles/__tests__/css-rule-body";
 import { ThreadHeader } from "../ThreadHeader";
-import { PROJECT_CRUMB_WHOLE_MAX_CHARS, projectCrumbFit } from "../project-crumb-fit";
+import { ThreadPlaceholderHeader } from "../ThreadPlaceholderHeader";
+import {
+  PROJECT_CRUMB_WHOLE_MAX_CHARS,
+  projectCrumbColumns,
+  projectCrumbFit,
+} from "../project-crumb-fit";
 
 afterEach(() => {
   cleanup();
@@ -22,13 +27,25 @@ const thread: NavigationThreadSummary = {
   inbox: { inInbox: true },
 };
 
-// Printable, non-blank labels: the header renders no crumb for an empty one.
+// Non-blank labels from Latin, CJK and emoji: the header renders no crumb
+// for an empty one, and wide characters count double.
+const character = fc.oneof(
+  fc.string({ minLength: 1, maxLength: 1, unit: "grapheme-ascii" }),
+  fc.constantFrom("项", "目", "ｃ", "한", "🚀", "é"),
+);
 const label = fc
-  .string({ minLength: 1, maxLength: 48, unit: "grapheme-ascii" })
+  .array(character, { minLength: 1, maxLength: 32 })
+  .map((parts) => parts.join(""))
   .filter((value) => value.trim().length > 0);
 
+// Independent oracle for the column count: the fixed wide samples above.
+const WIDE_SAMPLES = new Set(["项", "目", "ｃ", "한", "🚀"]);
+function oracleColumns(value: string): number {
+  return Array.from(value).reduce((sum, ch) => sum + (WIDE_SAMPLES.has(ch) ? 2 : 1), 0);
+}
+
 function crumbOf(projectLabel: string, linked: boolean): HTMLElement {
-  render(
+  const { container } = render(
     <ThreadHeader
       projectLabel={projectLabel}
       project={
@@ -39,10 +56,11 @@ function crumbOf(projectLabel: string, linked: boolean): HTMLElement {
       thread={thread}
     />,
   );
-  const eyebrow = linked
-    ? screen.getByRole("button", { name: `Show ${projectLabel} in Directories` })
-        .parentElement
-    : screen.getByTitle(projectLabel);
+  // By class, not accessible name: Testing Library trims and collapses the
+  // whitespace an arbitrary label may carry.
+  const eyebrow = container.querySelector<HTMLElement>(".thread-header__eyebrow");
+  // The linked crumb really is the link's eyebrow, not a plain label.
+  expect(eyebrow?.querySelector("button") !== null).toBe(linked);
   if (!eyebrow) throw new Error("no project eyebrow");
   return eyebrow;
 }
@@ -56,7 +74,7 @@ describe("thread header project crumb fit", () => {
       fc.property(label, fc.boolean(), (projectLabel, linked) => {
         const fit = crumbOf(projectLabel, linked).dataset.fit;
         cleanup();
-        const short = Array.from(projectLabel).length <= PROJECT_CRUMB_WHOLE_MAX_CHARS;
+        const short = oracleColumns(projectLabel) <= PROJECT_CRUMB_WHOLE_MAX_CHARS;
         expect(fit).toBe(short ? "whole" : "floor");
       }),
     );
@@ -66,8 +84,20 @@ describe("thread header project crumb fit", () => {
     expect(crumbOf("codex", true)).toHaveAttribute("data-fit", "whole");
   });
 
-  it("counts characters, not UTF-16 units", () => {
-    expect(projectCrumbFit("🚀".repeat(PROJECT_CRUMB_WHOLE_MAX_CHARS))).toBe("whole");
+  it("counts characters, not UTF-16 units, and wide ones double", () => {
+    expect(projectCrumbColumns("é".repeat(PROJECT_CRUMB_WHOLE_MAX_CHARS))).toBe(
+      PROJECT_CRUMB_WHOLE_MAX_CHARS,
+    );
+    const half = PROJECT_CRUMB_WHOLE_MAX_CHARS / 2;
+    expect(projectCrumbFit("🚀".repeat(half))).toBe("whole");
+    expect(projectCrumbFit("项".repeat(half + 1))).toBe("floor");
+  });
+
+  it("marks the loading placeholder's crumb the same way", () => {
+    render(
+      <ThreadPlaceholderHeader projectLabel="codex" title="Loading a long thread title" />,
+    );
+    expect(screen.getByTitle("codex")).toHaveAttribute("data-fit", "whole");
   });
 
   it("floors each fit in the stylesheet", () => {

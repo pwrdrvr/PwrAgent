@@ -13,6 +13,7 @@ import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
+import { projectCrumbFit } from "./project-crumb-fit";
 
 type ThreadPlaceholderLayoutControls = {
   sidebarOpen: boolean;
@@ -90,6 +91,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
                 <>
                   <span
                     className="thread-header__eyebrow"
+                    data-fit={projectCrumbFit(props.projectLabel)}
                     title={props.projectLabel}
                   >
                     {props.projectLabel}
