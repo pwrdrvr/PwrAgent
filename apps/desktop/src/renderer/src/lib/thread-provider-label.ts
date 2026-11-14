@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo } from "react";
+import { createContext, useCallback, useContext, useMemo } from "react";
 import {
   codexModelProviderLabels,
   codexProviderIdOfModel,
@@ -81,6 +81,20 @@ export function useThreadProviderCatalogs(
 
 export function useThreadProviderLabel(thread: ThreadProviderSubject): string {
   return formatThreadProviderLabel(thread, useContext(ThreadProviderCatalogsContext));
+}
+
+/**
+ * `formatThreadProviderLabel` for a surface that names several runs or
+ * sub-agents of one owner, such as a list or a ledger.
+ */
+export function useProviderLabelFormatter(
+  federation?: ThreadProviderSubject["federation"],
+): (backend: AppServerBackendKind, model: string | undefined) => string {
+  const catalogs = useContext(ThreadProviderCatalogsContext);
+  return useCallback(
+    (backend, model) => formatThreadProviderLabel({ source: backend, model, federation }, catalogs),
+    [catalogs, federation],
+  );
 }
 
 /**

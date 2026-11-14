@@ -42,17 +42,25 @@ async function openPicker() {
 }
 
 describe("to-do dispatch model picker", () => {
-  it("titles a Codex model provider's models by provider, as the composer's launchpad does", async () => {
+  it("offers a Codex model provider by its own name, as the composer's launchpad does", async () => {
     const settings: ThreadTodoModelSettings = { backend: "codex", model: "gpt-6.1-sol" };
     const todo = { ...base, dispatchDefaults: { thread: settings } };
-    setup(todo, [], [{ ...backends[1]!, launchpadOptions: { models: codexCatalogModels() } }]);
+    const { onRun } = setup(todo, [], [{ ...backends[1]!, launchpadOptions: { models: codexCatalogModels() } }]);
     await openPicker();
     fireEvent.click(screen.getByRole("menuitem", { name: "To-do model: GPT-6.1-Sol" }));
-    const list = screen.getByRole("listbox", { name: /^To-do model/ });
-    expect(composerDropdownOptionLabels(list)).toEqual([
-      ...CURRENT_CODEX_MODEL_LABELS, "Other", PROVIDER_MODEL.label,
-    ]);
-    expect(within(list).getByRole("group", { name: PROVIDER_MODEL.providerLabel })).toBeTruthy();
+    expect(composerDropdownOptionLabels(screen.getByRole("listbox", { name: /^To-do model/ })))
+      .toEqual([...CURRENT_CODEX_MODEL_LABELS, "Other"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^To-do provider:/ }));
+    const providers = screen.getByRole("listbox", { name: /^To-do provider/ });
+    expect(composerDropdownOptionLabels(providers)).toEqual(["Codex", PROVIDER_MODEL.providerLabel]);
+    await act(async () => {
+      fireEvent.click(within(providers).getByRole("option", {
+        name: (name) => name.startsWith(PROVIDER_MODEL.providerLabel!),
+      }));
+    });
+    expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).getAttribute("aria-label"))
+      .toBe(`Model for the new thread: ${PROVIDER_MODEL.providerLabel}, ${PROVIDER_MODEL.label}`);
+    expect(onRun).not.toHaveBeenCalled();
   });
 
   it("shares the composer's current models and keeps a selected legacy model under Other", async () => {

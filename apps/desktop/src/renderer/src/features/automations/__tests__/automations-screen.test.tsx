@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { AutomationsScreen } from "../AutomationsScreen";
+import { ThreadProviderCatalogsContext } from "../../../lib/thread-provider-label";
 
 const thread: NavigationThreadSummary = {
   agent: {
@@ -569,6 +570,37 @@ describe("row runtime and actions", () => {
     expect(await screen.findByText("Gemini")).toBeInTheDocument();
     expect(screen.getByText("gemini-3-pro · medium")).toBeInTheDocument();
     expect(screen.getByText(/\$0\.052/)).toBeInTheDocument();
+  });
+
+  it("names a Codex model provider's run by the provider, not OpenAI", async () => {
+    render(
+      <ThreadProviderCatalogsContext.Provider value={{ window: new Map([["mathos", "MathOS"]]), owners: new Map() }}>
+        <AutomationsScreen
+          desktopApi={
+            {
+              listAutomations: vi.fn(async () => ({ automations: [automation] })),
+              listAutomationRuns: vi.fn(async () => ({
+                runs: [{ ...automationRun, backend: "codex", usage: { model: "@mathos/gpt-oss-120b" } }],
+              })),
+              onAgentEvent: () => () => undefined,
+            } as unknown as DesktopApi
+          }
+          threads={[thread]}
+          onClose={() => undefined}
+        />
+      </ThreadProviderCatalogsContext.Provider>,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+
+    expect(await screen.findByText("MathOS")).toBeInTheDocument();
+    const run = document.querySelector(".automation-run-history__item");
+    expect(run).toHaveTextContent("MathOS");
+    expect(run).not.toHaveTextContent("OpenAI");
   });
 
   it("only caps run-history height when an automation follows it", async () => {

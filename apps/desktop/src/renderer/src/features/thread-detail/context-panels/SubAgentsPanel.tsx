@@ -10,7 +10,7 @@ import {
   type NavigationThreadSummary,
   type ThreadSubAgentSummary,
 } from "@pwragent/shared";
-import { formatBackendLabel } from "../../../lib/backend-label";
+import { useProviderLabelFormatter } from "../../../lib/thread-provider-label";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useSubAgents } from "./useSubAgents";
 import {
@@ -58,6 +58,7 @@ const SUB_AGENT_LENSES: Array<{
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
+  const formatProvider = useProviderLabelFormatter(props.thread.federation);
   const { onDetailsModalOpenChange } = props;
   const lensControlId = useId();
   const lensPanelId = `${lensControlId}-panel`;
@@ -289,7 +290,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
                 </p>
                 <p className="rail-card__runtime">
                   <span className="rail-card__provider-chip">
-                    {formatBackendLabel(backend)}
+                    {formatProvider(backend, model)}
                   </span>
                   {runtimeDetails.length > 0 ? (
                     <span className="rail-card__model">
