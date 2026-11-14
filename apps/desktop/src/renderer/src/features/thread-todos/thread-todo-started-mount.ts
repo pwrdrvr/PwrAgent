@@ -30,13 +30,16 @@ export function threadTodoStartedMountRequest(
 }
 
 /**
- * Runs a card's action and mounts the thread it started in this window.
+ * Runs a card's action and mounts the thread it started on this machine.
  *
  * The operator started that thread from here, so it belongs in this
- * window's lists like a fork or a launchpad thread made on a peer. Before
+ * machine's lists like a fork or a launchpad thread made on a peer. Before
  * this, a Start thread on a peer's card left the new thread on the peer
- * only, reachable through the card's link. A remote viewer window already
- * lists its owner's threads and mounts nothing.
+ * only, reachable through the card's link.
+ *
+ * A remote viewer window lists its owner's threads, so a thread started
+ * there needs no mount. One started on any other peer is mounted into this
+ * machine's main window, which is the list that window cannot show.
  *
  * The thread exists once the run resolves, so a failed mount is reported
  * and the run still succeeds: failing it would invite a duplicate start.
@@ -46,15 +49,15 @@ export async function runThreadTodoAndMountStarted(
   api: Pick<DesktopApi, "addRemoteThreadPin" | "hasRemoteThreadPin"> | undefined,
   context: {
     localInstanceId: string | undefined;
-    isRemoteViewer: boolean;
+    /** The peer a remote viewer window shows; absent in the main window. */
+    windowOwnerInstanceId: string | undefined;
     instanceLabel: (instanceId: string) => string | undefined;
   },
 ): Promise<ThreadTodo | undefined> {
   const todo = await run();
-  const request = todo && !context.isRemoteViewer
-    ? threadTodoStartedMountRequest(todo, context.localInstanceId)
-    : undefined;
-  if (!todo || !request || !api || !request.federationTarget) return todo;
+  const request = todo ? threadTodoStartedMountRequest(todo, context.localInstanceId) : undefined;
+  if (!todo || !request || !api || !request.federationTarget
+    || request.federationTarget.instanceId === context.windowOwnerInstanceId) return todo;
   const instanceId = request.federationTarget.instanceId;
   const label = (todo.startedThread?.instanceId === instanceId ? todo.startedThread.instanceLabel : undefined)
     ?? context.instanceLabel(instanceId);

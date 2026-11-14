@@ -3002,7 +3002,7 @@ function DesktopAppShell(props: {
           desktopApi,
           {
             localInstanceId: todoLocalMachine.instanceId,
-            isRemoteViewer: Boolean(readRendererFederationTarget()),
+            windowOwnerInstanceId: readRendererFederationTarget()?.instanceId,
             // The full label, as every other mount of that owner stores it.
             instanceLabel: (instanceId) =>
               federationMachines.find((machine) => machine.instanceId === instanceId)?.label,

@@ -18,6 +18,7 @@
     "getDesktopBackendRegistry().setPwrAgentAppManagementHandler",
     "getDesktopBackendRegistry().setPwrAgentStarMapHandler",
     "getDesktopBackendRegistry().setPwrAgentFederationHandler",
+    "getDesktopBackendRegistry().setAgentCreatedThreadObserver",
     "getDesktopBackendRegistry().setStarMapIntakeFederationHandlerFactory",
     "getDesktopBackendRegistry().setFederatedThreadMessageHandler",
     "getDesktopBackendRegistry().setFederatedThreadInspectionHandler",

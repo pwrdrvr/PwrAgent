@@ -497,6 +497,20 @@ export type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTit
   canGenerateTitle?: (backend: AppServerBackendKind) => boolean;
 };
 
+/**
+ * A thread an agent tool created on this instance, reported with the
+ * calling turn. The parent, when the thread is grouped, is on this instance.
+ */
+export type AgentCreatedThreadObserver = (
+  turn: { backend: AppServerBackendKind; threadId: string; turnId?: string },
+  created: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    title?: string;
+    parent?: { backend: AppServerBackendKind; threadId: string };
+  },
+) => void;
+
 export type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
   context: PwrAgentThreadInspectionRequest["context"],

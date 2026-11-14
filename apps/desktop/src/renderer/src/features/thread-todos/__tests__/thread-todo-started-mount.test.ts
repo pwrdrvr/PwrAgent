@@ -27,34 +27,40 @@ function card(owner: CardOwner, startedOn: StartedOn): ThreadTodo {
   } as ThreadTodo;
 }
 
+type WindowKind = "main" | typeof OWNER;
+
 /**
  * The rule, stated without the implementation: the operator started this
- * thread from this window, so a main window lists it unless it already lives
- * on this machine. The card's owner records its own start with no instance.
- * An instance named by the owner can be compared only with this machine's
- * known id.
+ * thread from this machine, so this machine lists it. A thread on this
+ * machine is listed already, and so is one on the peer a remote viewer
+ * window shows. The card's owner records its own start with no instance. An
+ * instance named by the owner can be compared only with this machine's known
+ * id.
  */
 function expectedMountOwner(params: {
   owner: CardOwner;
   startedOn: StartedOn;
-  remoteViewer: boolean;
+  window: WindowKind;
   localKnown: boolean;
 }): string | undefined {
-  if (params.remoteViewer) return undefined;
-  if (params.startedOn === "unset") return params.owner === "here" ? undefined : params.owner;
-  if (!params.localKnown) return undefined;
-  return params.startedOn === LOCAL ? undefined : params.startedOn;
+  const livesOn = params.startedOn === "unset"
+    ? (params.owner === "here" ? LOCAL : params.owner)
+    : (params.localKnown ? params.startedOn : undefined);
+  if (!livesOn || livesOn === LOCAL || livesOn === params.window) return undefined;
+  return livesOn;
 }
 
 describe("runThreadTodoAndMountStarted", () => {
   const owners: CardOwner[] = ["here", OWNER];
   const starts: StartedOn[] = ["unset", LOCAL, OWNER, THIRD];
+  // A remote viewer window shows only its owner's cards.
+  const windows = (owner: CardOwner): WindowKind[] => owner === "here" ? ["main"] : ["main", OWNER];
   const cases = owners.flatMap((owner) => starts.flatMap((startedOn) =>
-    [false, true].flatMap((remoteViewer) => [true, false].map((localKnown) =>
-      ({ owner, startedOn, remoteViewer, localKnown })))));
+    windows(owner).flatMap((window) => [true, false].map((localKnown) =>
+      ({ owner, startedOn, window, localKnown })))));
 
   it.each(cases)(
-    "card owned by $owner, started on $startedOn, remote viewer $remoteViewer, local id known $localKnown",
+    "card owned by $owner, started on $startedOn, in the $window window, local id known $localKnown",
     async (params) => {
       const todo = card(params.owner, params.startedOn);
       const hasRemoteThreadPin = vi.fn(async () => false);
@@ -64,7 +70,7 @@ describe("runThreadTodoAndMountStarted", () => {
         { hasRemoteThreadPin, addRemoteThreadPin },
         {
           localInstanceId: params.localKnown ? LOCAL : undefined,
-          isRemoteViewer: params.remoteViewer,
+          windowOwnerInstanceId: params.window === "main" ? undefined : params.window,
           instanceLabel: (instanceId) => `${instanceId} from peers`,
         },
       );
@@ -92,7 +98,7 @@ describe("runThreadTodoAndMountStarted", () => {
     const todo = { ...card(OWNER, "unset"), action: { type: "start_thread", prompt: "Go", title: "Registry split" } } as ThreadTodo;
     await runThreadTodoAndMountStarted(async () => todo,
       { hasRemoteThreadPin: async () => false, addRemoteThreadPin },
-      { localInstanceId: LOCAL, isRemoteViewer: false, instanceLabel: () => undefined });
+      { localInstanceId: LOCAL, windowOwnerInstanceId: undefined, instanceLabel: () => undefined });
     expect(addRemoteThreadPin).toHaveBeenCalledWith(expect.objectContaining({
       summary: expect.objectContaining({ title: "Registry split", id: "started" }),
     }));
@@ -104,7 +110,7 @@ describe("runThreadTodoAndMountStarted", () => {
     const addRemoteThreadPin = vi.fn();
     await runThreadTodoAndMountStarted(async () => card(OWNER, "unset"),
       { hasRemoteThreadPin: async () => true, addRemoteThreadPin },
-      { localInstanceId: LOCAL, isRemoteViewer: false, instanceLabel: () => undefined });
+      { localInstanceId: LOCAL, windowOwnerInstanceId: undefined, instanceLabel: () => undefined });
     expect(addRemoteThreadPin).not.toHaveBeenCalled();
   });
 
@@ -113,7 +119,7 @@ describe("runThreadTodoAndMountStarted", () => {
     const todo = card(OWNER, "unset");
     await expect(runThreadTodoAndMountStarted(async () => todo,
       { hasRemoteThreadPin: async () => false, addRemoteThreadPin: async () => { throw new Error("offline"); } },
-      { localInstanceId: LOCAL, isRemoteViewer: false, instanceLabel: () => undefined })).resolves.toBe(todo);
+      { localInstanceId: LOCAL, windowOwnerInstanceId: undefined, instanceLabel: () => undefined })).resolves.toBe(todo);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -122,7 +128,7 @@ describe("runThreadTodoAndMountStarted", () => {
     const addRemoteThreadPin = vi.fn();
     await expect(runThreadTodoAndMountStarted(async () => { throw new Error("refused"); },
       { hasRemoteThreadPin: async () => false, addRemoteThreadPin },
-      { localInstanceId: LOCAL, isRemoteViewer: false, instanceLabel: () => undefined })).rejects.toThrow("refused");
+      { localInstanceId: LOCAL, windowOwnerInstanceId: undefined, instanceLabel: () => undefined })).rejects.toThrow("refused");
     expect(addRemoteThreadPin).not.toHaveBeenCalled();
   });
 });
