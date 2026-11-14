@@ -6,15 +6,14 @@ import {
   type ContinueThreadEnvironmentStartupRequest,
   type ContinueThreadEnvironmentStartupResponse,
 } from "@pwragent/shared";
-import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import type { RegistryContext } from "../app-server/registry-context";
+import { registryModules } from "../app-server/backend-registry-wiring";
 import {
   ThreadDirectoryService,
   type ThreadDirectoryServiceDependencies,
 } from "../app-server/thread-directory-service";
-import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import type { StateDb } from "../state/state-db";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { registryContextStandIn } from "./helpers/registry-context-stand-in";
+import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";
 
 const databases: StateDb[] = [];
 afterEach(() => {
@@ -33,18 +32,9 @@ function directoryService(params: {
   emit?: () => Promise<void>;
   dependencies?: Partial<ThreadDirectoryServiceDependencies>;
 } = {}): ThreadDirectoryService {
-  const store = params.overlayStore ?? {};
-  const context = {
-    stores: {
-      threads: store, usage: store, subAgents: store, workspaces: store, toolAccounting: store,
-      pullRequests: store, reviews: store, archive: store, messaging: store, launchpads: store, directories: store,
-    },
-    providers: {},
-    lifecycle: params.lifecycle ?? { closed: false },
-    emit: params.emit ?? (async () => {}),
-  };
+  const context = registryContextStandIn({ overlayStore: params.overlayStore, lifecycle: params.lifecycle, emit: params.emit });
   const host = params.host;
-  return new ThreadDirectoryService(context as unknown as RegistryContext, {
+  return new ThreadDirectoryService(context, {
     threadArchiveCoordinator: {} as never,
     threadWorkspaceService: {} as never,
     threadInspectionTools: {} as never,
@@ -211,8 +201,8 @@ describe("Codex environment runtime lock", () => {
             return index;
           });
         });
-        await Promise.resolve();
-        await Promise.resolve();
+        // Let every admitted task start, however the lock chains its promises.
+        await new Promise<void>((resolve) => { setImmediate(resolve); });
         // Before anything is released, exactly the first task of each thread runs.
         const firstOfKey = new Map<string, number>();
         backends.forEach((backend, index) => {
@@ -292,21 +282,7 @@ describe("shutdown and construction", () => {
 });
 
 describe("registry facades and ports", () => {
-  function registryFixture() {
-    const db = openInMemoryStateDb();
-    databases.push(db);
-    return createDesktopBackendRegistry({
-      overlayStore: new SqliteOverlayStore(db),
-      codexClient: {
-        close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
-        listThreads: async () => [], onNotification: () => () => {}, onPendingRequest: () => () => {},
-        readConfiguredMcpServerNames: async () => [], listModels: async () => [],
-      } as never,
-      archiveCleanupCheckpointStore: null,
-      isBootstrapMode: () => false,
-      resolveTokenMiserEnabled: () => false,
-    });
-  }
+  const registryFixture = () => registryWithInMemoryStore(databases);
 
   it("returns the service's own result for each importer-facing member", async () => {
     const registry = registryFixture();
