@@ -56,6 +56,15 @@ function oneLine(value: string, limit: number): string {
 
 type IndexedSkill = { name: string; description: string; uri: string };
 
+/** One skill as a gateway search result names it. */
+export type McpSkillSummary = { name: string; description?: string; uri: string };
+
+/**
+ * A gateway search names a server's skills in this many bytes of JSON at
+ * most, the same room the instructions index gets.
+ */
+export const MAX_GATEWAY_SKILLS_BYTES = MAX_SKILLS_INDEX_CHARS;
+
 function readSkill(entry: unknown): IndexedSkill | undefined {
   if (!entry || typeof entry !== "object") return undefined;
   const { uri, frontmatter } = entry as { uri?: unknown; frontmatter?: unknown };
@@ -69,6 +78,53 @@ function readSkill(entry: unknown): IndexedSkill | undefined {
   if (!cleanName) return undefined;
   const cleanDescription = typeof description === "string" ? oneLine(description, MAX_DESCRIPTION_CHARS) : "";
   return { name: cleanName, description: cleanDescription, uri };
+}
+
+/**
+ * The skills a server listed that can be named: each one has a `skill://`
+ * URI and a name, cleaned to one line. A skill repeated across overlapping
+ * pages is kept once, in the order first listed.
+ */
+function cleanListedSkills(listed: { skills?: unknown } | undefined): IndexedSkill[] {
+  const entries = Array.isArray(listed?.skills) ? listed.skills : [];
+  const seen = new Set<string>();
+  return entries.map(readSkill).filter((skill): skill is IndexedSkill => {
+    if (!skill || seen.has(skill.uri)) return false;
+    seen.add(skill.uri);
+    return true;
+  });
+}
+
+function listedEverything(listed: { nextCursor?: unknown } | undefined): boolean {
+  return typeof listed?.nextCursor !== "string" || listed.nextCursor === "";
+}
+
+/**
+ * A server's skills as structured data, for a thread that reaches the server
+ * through the gateway and never sees its instructions. The entries follow
+ * the index's rules: only listed skills with a `skill://` URI and a name, one
+ * line each, each once. They fill at most `maxBytes` of JSON, and `complete`
+ * is false when any listed skill, or an unread page, is left out.
+ */
+export function listedMcpSkills(
+  listed: { skills?: unknown; nextCursor?: unknown } | undefined,
+  maxBytes = MAX_GATEWAY_SKILLS_BYTES,
+): { skills: McpSkillSummary[]; complete: boolean } {
+  const skills: McpSkillSummary[] = [];
+  let complete = listedEverything(listed);
+  // "[]" is the empty list's own two bytes.
+  let bytes = 2;
+  for (const { name, description, uri } of cleanListedSkills(listed)) {
+    const summary = description ? { name, description, uri } : { name, uri };
+    const size = Buffer.byteLength(JSON.stringify(summary)) + (skills.length > 0 ? 1 : 0);
+    if (bytes + size > maxBytes) {
+      complete = false;
+      break;
+    }
+    skills.push(summary);
+    bytes += size;
+  }
+  return { skills, complete };
 }
 
 /**
@@ -86,20 +142,13 @@ export function skillsAwareInstructions(input: {
   listed?: { skills?: unknown; nextCursor?: unknown };
 }): string | undefined {
   if (input.instructions?.trim()) return input.instructions;
-  const entries = Array.isArray(input.listed?.skills) ? input.listed.skills : [];
-  // Overlapping pages can repeat a skill; it is listed once.
-  const seen = new Set<string>();
-  const skills = entries.map(readSkill).filter((skill): skill is IndexedSkill => {
-    if (!skill || seen.has(skill.uri)) return false;
-    seen.add(skill.uri);
-    return true;
-  });
+  const skills = cleanListedSkills(input.listed);
   if (skills.length === 0) return undefined;
   const lines = [INDEX_HEADER];
   // Room for the closing line is kept from the start, so it always fits.
   const budget = MAX_SKILLS_INDEX_CHARS - (SKILLS_INDEX_INCOMPLETE.length + 1);
   let length = INDEX_HEADER.length;
-  let complete = typeof input.listed?.nextCursor !== "string" || input.listed.nextCursor === "";
+  let complete = listedEverything(input.listed);
   for (const skill of skills) {
     const line = skill.description
       ? `- ${skill.name}: ${skill.description} (${skill.uri})`

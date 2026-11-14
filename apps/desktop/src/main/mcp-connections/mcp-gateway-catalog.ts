@@ -3,6 +3,7 @@ import type { Tool, Implementation, InitializeResult } from "@modelcontextprotoc
 import { lazyModule } from "../lazy-module";
 import { mcpTypes } from "./mcp-sdk";
 import type { McpConnectionToolApproval } from "@pwragent/shared";
+import type { McpSkillSummary } from "./mcp-skills-relay";
 
 export type McpGatewaySource = {
   connectionId: string;
@@ -23,6 +24,24 @@ export type McpGatewayTool = McpGatewaySource & {
    * so a large catalog does not repeat them. Search lifts them out per server.
    */
   serverInstructions?: string;
+};
+
+/**
+ * What `gateway/tools/list` returns to a search that asks for skills. The
+ * server's own facts sit beside its tools rather than on the first one, so
+ * a server that publishes skills and no tools still has somewhere to put
+ * them. Without the request, and from an owner that predates it, the list is
+ * a bare `McpGatewayTool[]`.
+ */
+export type McpGatewayCatalog = {
+  tools: McpGatewayTool[];
+  serverName: string;
+  serverIdentity?: McpGatewayIdentity;
+  /**
+   * The workflow skills the server publishes, cleaned by `listedMcpSkills`.
+   * Present only when the server offers skills and resources.
+   */
+  serverSkills?: { skills: McpSkillSummary[]; complete: boolean };
 };
 
 export type McpGatewayInvocation = McpGatewaySource & {

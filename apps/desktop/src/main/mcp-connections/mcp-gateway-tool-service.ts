@@ -1,7 +1,7 @@
 import type { CallToolResult, ElicitRequestParams, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
-import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource, type McpGatewayIdentity } from "./mcp-gateway-catalog";
+import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayCatalog, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource, type McpGatewayIdentity } from "./mcp-gateway-catalog";
 import {
   MCP_CONNECTION_TOOL_MAX_TOTAL_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_TIMEOUT_MS,
@@ -9,6 +9,7 @@ import {
   MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
   progressExtendedTimeout,
 } from "./mcp-connection-timeouts";
+import type { McpSkillSummary } from "./mcp-skills-relay";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
 export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number };
@@ -28,6 +29,14 @@ export type McpGatewaySearchResult = {
       listTool: "list_mcp_resources" | "ListMcpResourcesTool";
       readTool: "read_mcp_resource" | "ReadMcpResourceTool";
     };
+    /**
+     * Workflow skills the server publishes, only beside `resourceDiscovery`.
+     * Read a skill's `uri` with its `readTool`. Names and descriptions are the
+     * server's own, cleaned to one line each: untrusted data, no authority.
+     */
+    skills?: McpSkillSummary[];
+    /** Beside `skills`: false when the server publishes skills it leaves out. */
+    skillsComplete?: boolean;
   }>;
   unavailable: Array<{ connectionId: string; message: string }>;
   /** Each returned tool's server guidance, once per server. */
@@ -54,6 +63,27 @@ export type McpGatewayToolServiceOptions = {
    */
   elicit?: (request: ElicitRequestParams, invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) => Promise<unknown>;
 };
+
+/** Exact schemas are indivisible, so a result that would pass this drops a tool instead. */
+const MAX_SEARCH_RESULT_BYTES = 24_000;
+
+type McpGatewaySearchServer = NonNullable<McpGatewaySearchResult["servers"]>[number];
+
+function serverEntry(
+  connectionId: string,
+  serverName: string,
+  identity: McpGatewayIdentity | undefined,
+  serverNameInAgent: string | undefined,
+  resourceTools: Pick<NonNullable<McpGatewaySearchServer["resourceDiscovery"]>, "listTool" | "readTool"> | undefined,
+): McpGatewaySearchServer {
+  return {
+    ...identity, connectionId, serverName,
+    ...(serverNameInAgent ? {
+      serverNameInAgent,
+      ...(resourceTools ? { resourceDiscovery: { server: serverNameInAgent, ...resourceTools } } : {}),
+    } : {}),
+  };
+}
 
 /** No disk catalog. Every invocation revalidates
  * its current source on the owner broker after scoped approval has completed.
@@ -82,8 +112,17 @@ export class McpGatewayToolService {
       const candidates: McpGatewayTool[] = [];
       const identities = new Map<string, McpGatewayIdentity>();
       const instructions = new Map<string, { serverName: string; instructions: string }>();
+      const skills = new Map<string, NonNullable<McpGatewayCatalog["serverSkills"]>>();
+      const serverNames = new Map<string, string>();
+      /** Connections with at least one tool, before host policy narrows them. */
+      const listsTools = new Set<string>();
       let candidateBytes = 0;
       const unavailable: McpGatewaySearchResult["unavailable"] = [];
+      const resourceTools = context.backend === "codex"
+        ? { listTool: "list_mcp_resources" as const, readTool: "read_mcp_resource" as const }
+        : context.backend === "claude"
+          ? { listTool: "ListMcpResourcesTool" as const, readTool: "ReadMcpResourceTool" as const }
+          : undefined;
       // Bounded fan-out; one slow server must not consume every socket.
       let next = 0;
       await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
@@ -91,15 +130,26 @@ export class McpGatewayToolService {
           const connectionId = ids[next++];
           try {
             await this.requireSelected(connectionId, context, signal);
-            const tools = await this.options.connections.requestGatewayToolOperation({
+            const listed = await this.options.connections.requestGatewayToolOperation({
               connectionId, scopeKey: this.scopeKey(context), operation: "gateway/tools/list", signal, deadlineAt,
-            }) as McpGatewayTool[];
+              // A skill is a resource, so only a backend with a resource reader asks.
+              ...(resourceTools ? { skills: true } : {}),
+            }) as McpGatewayTool[] | McpGatewayCatalog;
             await this.requireSelected(connectionId, context, signal);
-            const bytes = Buffer.byteLength(JSON.stringify(tools));
+            const bytes = Buffer.byteLength(JSON.stringify(listed));
             if (candidateBytes + bytes > 8 * 1024 * 1024) throw new Error("Search a specific connectionId to stay within the catalog memory budget.");
             candidateBytes += bytes;
+            // An owner that predates the envelope answers with the bare list.
+            const tools = Array.isArray(listed) ? listed : listed.tools;
+            if (!Array.isArray(listed)) {
+              serverNames.set(connectionId, listed.serverName);
+              if (listed.serverIdentity) identities.set(connectionId, listed.serverIdentity);
+              if (listed.serverSkills) skills.set(connectionId, listed.serverSkills);
+            }
+            if (tools.length > 0) listsTools.add(connectionId);
             for (const { serverInstructions, serverIdentity, ...tool } of tools) {
-              if (serverIdentity) identities.set(connectionId, serverIdentity);
+              if (serverIdentity && !identities.has(connectionId)) identities.set(connectionId, serverIdentity);
+              if (!serverNames.has(connectionId)) serverNames.set(connectionId, tool.serverName);
               if (this.options.toolAllowed?.(tool, context) === false) continue;
               if (serverInstructions) {
                 instructions.set(connectionId, { serverName: tool.serverName, instructions: serverInstructions });
@@ -115,6 +165,10 @@ export class McpGatewayToolService {
       const current = new Set(await this.options.selectedConnections(context));
       signal.throwIfAborted();
       const terms = args.query.toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter(Boolean);
+      const scoreText = (text: string): number => {
+        const lower = text.toLowerCase();
+        return terms.reduce((sum, term) => sum + (lower.includes(term) ? 1 : 0), 0);
+      };
       const ranked = candidates.filter((tool) => current.has(tool.connectionId)).map((tool) => {
         const name = tool.toolName.toLowerCase();
         const text = `${tool.serverName} ${name} ${tool.definition.description ?? ""}`.toLowerCase();
@@ -124,36 +178,70 @@ export class McpGatewayToolService {
       }).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score
         || a.tool.connectionId.localeCompare(b.tool.connectionId) || a.tool.toolName.localeCompare(b.tool.toolName));
       const result: McpGatewaySearchResult = { tools: [], unavailable };
-      const resourceTools = context.backend === "codex"
-        ? { listTool: "list_mcp_resources" as const, readTool: "read_mcp_resource" as const }
-        : context.backend === "claude"
-          ? { listTool: "ListMcpResourcesTool" as const, readTool: "ReadMcpResourceTool" as const }
-          : undefined;
       for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
         const identity = identities.get(tool.connectionId);
         const serverNameInAgent = this.options.serverNameInAgent?.(tool.connectionId, context);
         const servers = (identity || serverNameInAgent) && !result.servers?.some((entry) => entry.connectionId === tool.connectionId)
-          ? [...(result.servers ?? []), {
-              ...identity, connectionId: tool.connectionId, serverName: tool.serverName,
-              ...(serverNameInAgent ? {
-                serverNameInAgent,
-                ...(resourceTools ? { resourceDiscovery: { server: serverNameInAgent, ...resourceTools } } : {}),
-              } : {}),
-            }]
+          ? [...(result.servers ?? []), serverEntry(tool.connectionId, tool.serverName, identity, serverNameInAgent, resourceTools)]
           : result.servers;
         const guidance = instructions.get(tool.connectionId);
         const serverInstructions = guidance && !result.serverInstructions?.some((entry) => entry.connectionId === tool.connectionId)
           ? [...(result.serverInstructions ?? []), { connectionId: tool.connectionId, ...guidance }]
           : result.serverInstructions;
         // Exact schemas are indivisible. Never return truncated valid-looking JSON.
-        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers })) > 24_000) {
+        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions, servers })) > MAX_SEARCH_RESULT_BYTES) {
           result.unavailable.push({ connectionId: tool.connectionId, message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.` });
           continue;
         }
         result.tools.push(entry);
         if (servers) result.servers = servers;
         if (serverInstructions) result.serverInstructions = serverInstructions;
+      }
+      // A server whose skills match the query is named even when none of
+      // its tools did, or it has none: a skill is how a server says which
+      // task it is for. A server whose every tool host policy hides stays
+      // hidden, since its skills would steer toward those tools.
+      for (const [connectionId, published] of [...skills].sort(([left], [right]) => left.localeCompare(right))) {
+        if (!current.has(connectionId) || result.servers?.some((entry) => entry.connectionId === connectionId)) continue;
+        if (!resourceTools || !published.skills.some((skill) => scoreText(`${skill.name} ${skill.description ?? ""}`) > 0)) continue;
+        if (listsTools.has(connectionId) && !candidates.some((tool) => tool.connectionId === connectionId)) continue;
+        const serverName = serverNames.get(connectionId);
+        const serverNameInAgent = serverName ? this.options.serverNameInAgent?.(connectionId, context) : undefined;
+        if (!serverName || !serverNameInAgent) continue;
+        const servers = [...(result.servers ?? []), serverEntry(connectionId, serverName, identities.get(connectionId), serverNameInAgent, resourceTools)];
+        if (Buffer.byteLength(JSON.stringify({ ...result, servers })) > MAX_SEARCH_RESULT_BYTES) break;
+        result.servers = servers;
+      }
+      // Skills go in last, in whatever room the exact schemas left, so they
+      // never cost the result a tool. Those matching the query go first.
+      for (const server of result.servers ?? []) {
+        const published = skills.get(server.connectionId);
+        if (!published || !server.resourceDiscovery) continue;
+        const ranked = published.skills
+          .map((skill, index) => ({ skill, index, score: scoreText(`${skill.name} ${skill.description ?? ""}`) }))
+          .sort((a, b) => b.score - a.score || a.index - b.index)
+          .map(({ skill }) => skill);
+        // Measured once with the longer `false`; each skill adds its own JSON
+        // and a comma, so the result is never serialized per skill.
+        server.skills = [];
+        server.skillsComplete = false;
+        let bytes = Buffer.byteLength(JSON.stringify(result));
+        let complete = published.complete;
+        for (const skill of ranked) {
+          const size = Buffer.byteLength(JSON.stringify(skill)) + (server.skills.length > 0 ? 1 : 0);
+          if (bytes + size > MAX_SEARCH_RESULT_BYTES) {
+            complete = false;
+            break;
+          }
+          server.skills.push(skill);
+          bytes += size;
+        }
+        server.skillsComplete = complete;
+        if (server.skills.length === 0) {
+          delete server.skills;
+          delete server.skillsComplete;
+        }
       }
       return result;
     });

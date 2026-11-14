@@ -1,8 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  MAX_GATEWAY_SKILLS_BYTES,
   MAX_SKILLS_INDEX_CHARS,
   SKILLS_INDEX_INCOMPLETE as MORE,
+  listedMcpSkills,
   offersMcpSkills,
   skillsAwareInstructions,
 } from "../mcp-connections/mcp-skills-relay";
@@ -97,6 +99,50 @@ describe("skills-aware instructions", () => {
   it("has nothing to say when there are neither instructions nor skills", () => {
     expect(skillsAwareInstructions({})).toBeUndefined();
     expect(skillsAwareInstructions({ instructions: "  \n", listed: { skills: [] } })).toBeUndefined();
+  });
+});
+
+/*
+ * A gateway thread gets the same skills as structured data. The index is the
+ * oracle: whatever both have room for, they name the same skills in the same
+ * order, cleaned by the same rules.
+ */
+describe("structured skills for gateway search", () => {
+  const indexUris = (index: string | undefined): string[] => (index ?? "").split("\n")
+    .map((line) => /\((skill:\/\/\S+)\)$/u.exec(line)?.[1])
+    .filter((uri) => uri !== undefined);
+
+  it("agrees with the instructions index on which skills come first", () => {
+    fc.assert(fc.property(listed, (page) => {
+      const structured = listedMcpSkills(page).skills.map((skill) => skill.uri);
+      const indexed = indexUris(skillsAwareInstructions({ listed: page }));
+      const shared = Math.min(structured.length, indexed.length);
+      expect(structured.slice(0, shared)).toEqual(indexed.slice(0, shared));
+    }));
+  });
+
+  it("names only listed skills, once each, on one clean line", () => {
+    fc.assert(fc.property(listed, (page) => {
+      const { skills } = listedMcpSkills(page);
+      const valid = namedUris(page.skills);
+      expect(new Set(skills.map((skill) => skill.uri)).size).toBe(skills.length);
+      for (const skill of skills) {
+        expect(valid.has(skill.uri)).toBe(true);
+        expect(skill.name).not.toBe("");
+        for (const value of [skill.name, skill.description ?? ""]) {
+          expect(value).not.toMatch(/[\p{Cc}\p{Zl}\p{Zp}]/u);
+        }
+      }
+    }));
+  });
+
+  it("fits its byte budget and says when it left a skill out", () => {
+    fc.assert(fc.property(listed, fc.integer({ min: 2, max: MAX_GATEWAY_SKILLS_BYTES }), (page, maxBytes) => {
+      const { skills, complete } = listedMcpSkills(page, maxBytes);
+      expect(Buffer.byteLength(JSON.stringify(skills))).toBeLessThanOrEqual(maxBytes);
+      const unread = typeof page.nextCursor === "string" && page.nextCursor !== "";
+      expect(complete).toBe(!unread && skills.length === namedUris(page.skills).size);
+    }));
   });
 });
 
