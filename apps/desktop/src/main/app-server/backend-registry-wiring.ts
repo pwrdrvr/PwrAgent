@@ -1355,6 +1355,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         listThreadSubAgentsByMonitorIdPrefix: (...args) => overlayStore.listThreadSubAgentsByMonitorIdPrefix(...args),
         upsertThreadSubAgent: (...args) => overlayStore.upsertThreadSubAgent(...args),
         listActiveThreadSubAgents: (...args) => overlayStore.listActiveThreadSubAgents(...args),
+        listArchiveActiveSubAgentThreadIds: (...args) => overlayStore.listArchiveActiveSubAgentThreadIds(...args),
       },
       workspaces: {
         get readThreadGitWorkingStateCache() { return overlayStore.readThreadGitWorkingStateCache?.bind(overlayStore); },

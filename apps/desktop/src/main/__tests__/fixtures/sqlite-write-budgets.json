@@ -1,4 +1,7 @@
 {
+  "archive-candidates-cold-200": {"commits": 0, "note": "Complete active and archived candidate discovery; read-only batches, 0 commits and 0 MB/day at any sweep cadence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "archive-candidates-double-400": {"commits": 0, "note": "Complete active and archived candidate discovery; read-only batches, 0 commits and 0 MB/day at any sweep cadence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "archive-candidates-unchanged-200": {"commits": 0, "note": "Complete active and archived candidate discovery; read-only batches, 0 commits and 0 MB/day at any sweep cadence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "mcp-thread-reconnect": {"commits": 0, "note": "Explicit operator reconnect changes in-memory grants and consent only: zero commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-pr-polling-settings-observations": {"commits": 0, "note": "Repair-budget settings observations use the existing read-only projection and preserve the durable pause/refill anchor: zero commits or WAL, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "acp-shared-worktree-archive": {"commits": 6, "note": "Archive two ACP owners, retain the active checkout until both archive, then save both recovery snapshots; boundary writes only.", "observedWalBytes": 82400, "rowsChanged": 6, "statements": 6},

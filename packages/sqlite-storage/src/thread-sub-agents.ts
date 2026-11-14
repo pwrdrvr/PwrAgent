@@ -689,6 +689,32 @@ export class ThreadSubAgentTable {
       ORDER BY created_at DESC, monitor_id`).all(storageKey) as CardRow[]);
   }
 
+  /** Same attention membership, projected to parent identities. No card JSON
+   * or card history crosses the SQLite boundary. The caller owns statuses. */
+  listAttentionThreadKeys(storageKeys: readonly string[], statuses: readonly string[]): string[] {
+    if (storageKeys.length === 0) return [];
+    const rows = this.db.prepare(`SELECT requested.value AS storage_key FROM json_each(?) AS requested
+      WHERE EXISTS (SELECT 1 FROM thread_sub_agents INDEXED BY thread_sub_agents_attention
+        WHERE thread_id = requested.value AND (completed_at IS NULL OR status IN ('failed', 'failure'))
+          AND status IN (SELECT value FROM json_each(?)))`).all(JSON.stringify(storageKeys), JSON.stringify(statuses)) as Array<{ storage_key: string }>;
+    const found = new Set(rows.map((row) => row.storage_key));
+    // Before the existing background migration finishes, legacy cards must
+    // still protect their parents. Observe them without triggering lazy
+    // per-thread migration writes from a read-only housekeeping pass.
+    if (!this.move.isComplete()) {
+      const legacy = this.db.prepare(`SELECT threads.thread_id AS storage_key
+        FROM json_each(?) AS requested JOIN threads ON threads.thread_id = requested.value
+        WHERE instr(threads.payload, '"subAgents"') > 0 AND EXISTS (
+          SELECT 1 FROM json_each(threads.payload, '$.subAgents') AS card
+          WHERE json_type(card.value, '$.monitorId') = 'text'
+            AND json_extract(card.value, '$.completedAt') IS NULL
+            AND json_extract(card.value, '$.status') IN (SELECT value FROM json_each(?)))`
+      ).all(JSON.stringify(storageKeys), JSON.stringify(statuses)) as Array<{ storage_key: string }>;
+      for (const row of legacy) found.add(row.storage_key);
+    }
+    return [...found];
+  }
+
   /** Unfinished cards across every thread, for startup orphan repair. */
   listIncomplete(): Array<{ storageKey: string; card: ThreadSubAgentSummary }> {
     const rows = this.db.prepare(`SELECT thread_id, card FROM thread_sub_agents INDEXED BY thread_sub_agents_attention

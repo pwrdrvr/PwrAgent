@@ -55,7 +55,7 @@ type SweeperDeps = {
     onProgress: (status: NonNullable<DesktopThreadArchiveSweepStatus["worktrees"]>) => void;
     onFailure: (error: unknown, details?: SweepFailureDetails) => void;
   }) => Promise<void>;
-  listCandidates: () => Promise<ThreadArchiveCandidate[]>;
+  listCandidates: (signal: AbortSignal) => Promise<ThreadArchiveCandidate[]>;
   onError: (error: unknown, threadId?: string) => void;
   onStatus?: (status: DesktopThreadArchiveSweepStatus) => void;
   /** Idle checkout hibernation, the sweep's last phase. Absent: no phase. */
@@ -395,7 +395,7 @@ export class ThreadArchiveSweeper {
     }
     const keep = (reason: string) => { hibernation.kept[reason] = (hibernation.kept[reason] ?? 0) + 1; };
     let candidates: ThreadArchiveCandidate[];
-    try { candidates = await this.deps.listCandidates(); }
+    try { candidates = await this.deps.listCandidates(this.abort.signal); }
     catch (error) {
       if (!this.abort.signal.aborted) this.fail(tally, "hibernation", error);
       hibernation.skipped = "Threads could not be listed";

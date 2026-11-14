@@ -4400,6 +4400,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return this.subAgentTable.listAttention(storageKey);
   }
 
+  async listArchiveActiveSubAgentThreadIds(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+    statuses: readonly string[];
+  }): Promise<string[]> {
+    if (params.threadIds.length > 25) throw new Error("Archive subagent slice exceeded 25 identities.");
+    const keys = params.threadIds.map((threadId) => ({ threadId,
+      storageKey: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, threadId)),
+    }));
+    const active = new Set(this.subAgentTable.listAttentionThreadKeys(keys.map((key) => key.storageKey), params.statuses));
+    return keys.filter((key) => active.has(key.storageKey)).map((key) => key.threadId);
+  }
+
   /** Changes on every card write, without reading or hashing any card. */
   async readThreadSubAgentRevision(params: {
     backend: ThreadOverlayState["backend"];
@@ -12575,6 +12588,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadSubAgent"
   | "listThreadSubAgents"
   | "listActiveThreadSubAgents"
+  | "listArchiveActiveSubAgentThreadIds"
   | "readThreadSubAgentRevision"
   | "listThreadSubAgentsByMonitorIdPrefix"
   | "getThreadSubAgents"

@@ -35,6 +35,14 @@ import { inspectRegisterableWorktree } from "../app-server/worktree-maintenance-
 
 const probeHook = vi.hoisted(() => ({ onInspect: undefined as undefined | ((call: number) => void), calls: 0, identities: 0 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
+// These fixtures verify real Git ownership and removal, not elapsed rest
+// time. Keep host turns; the discovery property suite budgets the pacing.
+vi.mock("../app-server/archive-candidate-discovery", async (original) => {
+  const actual = await original<typeof import("../app-server/archive-candidate-discovery")>();
+  return { ...actual, archiveCandidateCheckpoint: (assertCurrent: () => void) => actual.archiveCandidateCheckpoint(assertCurrent, {
+    now: () => performance.now(), rest: async () => { await new Promise<void>((resolve) => setImmediate(resolve)); },
+  }) };
+});
 vi.mock("../codex-app-server/stdio-transport", async () => ({
   StdioJsonRpcTransport: (await import("./fixtures/archive-worktree-transport")).ArchiveWorktreeTransport,
 }));
@@ -863,6 +871,54 @@ describe("Thread maintenance's hibernate step", () => {
     expect(await git(fixture.repo, ["show", `${snapshot.snapshotRef}:file.txt`])).toBe("original\n");
   });
 
+  it.each(["cli", "subAgentThreadSpawn"])("fresh hibernation admission sees a new %s owner while exploratory discovery is pending", async (source) => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open();
+    const candidate = (await registry.listAutoArchiveCandidates())[0]!;
+    const coordinator = registryModules(registry).threadArchiveCoordinator;
+    const client = (registry as unknown as { codexClient: CodexAppServerClient }).codexClient;
+    const listPage = client.listArchiveCleanupThreadsPage.bind(client);
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const reading = new Promise<void>((resolve) => { entered = resolve; });
+    releases.push(release);
+    vi.spyOn(client, "listArchiveCleanupThreadsPage").mockImplementationOnce(async (params) => {
+      const oldPage = await listPage(params);
+      entered();
+      await held;
+      return oldPage;
+    });
+    const exploratory = registry.listAutoArchiveCandidates();
+    await reading;
+    ArchiveWorktreeTransport.threads.push({ id: "new-owner", cwd: fixture.worktree, source,
+      ...(source === "subAgentThreadSpawn" ? { parentThreadId: "parent-on-another-machine" } : {}),
+      status: { type: "notLoaded" } });
+    // If admission accidentally joins the exploratory API, return its old
+    // membership immediately: the test must detect unsafe removal, not hang.
+    const sharedRead = vi.spyOn(coordinator, "listAutoArchiveCandidates").mockResolvedValue([candidate]);
+    try {
+      const boundary = coordinator as unknown as { hibernateIdleCheckout(candidate: ThreadArchiveCandidate,
+        policy: DesktopCheckoutHibernationPolicy): Promise<boolean | string> };
+      expect(await boundary.hibernateIdleCheckout(candidate, ON)).toBe("Shared with another thread");
+      expect(sharedRead).not.toHaveBeenCalled();
+      expect(await exists(fixture.worktree)).toBe(true);
+    } finally { release(); await exploratory; }
+  });
+
+  it("keeps a checkout when fresh admission cannot read a possible owner's state", async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    const candidate = (await registry.listAutoArchiveCandidates())[0]!;
+    ArchiveWorktreeTransport.threads.push({ id: "unknown-owner", cwd: fixture.repo, source: "cli", status: { type: "notLoaded" } });
+    vi.spyOn(store, "listArchiveActiveSubAgentThreadIds").mockRejectedValue(new Error("State unavailable"));
+    const boundary = registryModules(registry).threadArchiveCoordinator as unknown as {
+      hibernateIdleCheckout(candidate: ThreadArchiveCandidate, policy: DesktopCheckoutHibernationPolicy): Promise<boolean | string>;
+    };
+    expect(await boundary.hibernateIdleCheckout(candidate, ON)).toBe("Thread state unreadable");
+    expect(await exists(fixture.worktree)).toBe(true);
+  });
+
   it.each(["merged", "closed"] as const)("uses the latest saved PR lifecycle for a locked thread's stale %s watch", async (lifecycleState) => {
     const fixture = await createFixture();
     const { registry, store } = fixture.open({ ...ON, enabled: false });
@@ -1411,6 +1467,23 @@ describe("Thread maintenance's hibernate step", () => {
         kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
       })]);
     }), { numRuns: 8, examples: [[1]] });
+  });
+
+  it("observes Git metadata again on the next pass when a checkout path is replaced (oracle)", async () => {
+    const fixture = await createFixture();
+    const { registry } = fixture.open();
+    expect((await registry.listAutoArchiveCandidates())[0]!.thread.linkedDirectories)
+      .toContainEqual(expect.objectContaining({ kind: "worktree", worktreePath: fixture.worktree }));
+    await git(fixture.repo, ["worktree", "remove", fixture.worktree]);
+    const replacement = path.join(fixture.root, "replacement");
+    await mkdir(replacement);
+    await git(replacement, ["init", "-b", "main"]);
+    await git(replacement, ["commit", "--allow-empty", "-m", "replacement"]);
+    await git(replacement, ["worktree", "add", "-b", "new-owner", fixture.worktree]);
+    expect((await git(fixture.worktree, ["rev-parse", "--git-common-dir"])).trim().replace(/\\/g, "/"))
+      .toBe(path.join(replacement, ".git").replace(/\\/g, "/"));
+    const next = (await registry.listAutoArchiveCandidates())[0]!;
+    expect(next.thread.linkedDirectories).toContainEqual(expect.objectContaining({ kind: "worktree", path: replacement, worktreePath: fixture.worktree }));
   });
 
   function maintenance(registry: DesktopBackendRegistry) {

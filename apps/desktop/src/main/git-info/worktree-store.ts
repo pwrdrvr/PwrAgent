@@ -5,7 +5,8 @@ import { GitReadCache } from "./read-cache";
 
 const cache = new GitReadCache<LinkedDirectorySummary | undefined>({ ttlMs: 5_000 });
 
-export function resolveWorktreeRepositoryDirectory(cwd: string): Promise<LinkedDirectorySummary | undefined> {
+export function resolveWorktreeRepositoryDirectory(cwd: string, options?: { fresh?: boolean }): Promise<LinkedDirectorySummary | undefined> {
   const key = path.resolve(cwd);
+  if (options?.fresh) return probe(key);
   return cache.read(key, () => probe(key));
 }
