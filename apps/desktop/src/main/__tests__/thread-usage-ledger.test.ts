@@ -79,8 +79,8 @@ function outputDelta(invocationId: string, outputChars: number, outputLines: num
     itemId: invocationId,
     invocationId,
     toolName: "exec_command",
-    category: "command",
-    status: "running",
+    category: "build-test",
+    status: "in_progress",
     observedAt: 1,
     updatedAt: 1,
     outputChars,
@@ -92,7 +92,7 @@ function outputDelta(invocationId: string, outputChars: number, outputLines: num
     debugLines: 0,
     outputTruncated: false,
     noisy: false,
-  } as ThreadToolInvocationRecord;
+  };
 }
 
 function gate(params: {
