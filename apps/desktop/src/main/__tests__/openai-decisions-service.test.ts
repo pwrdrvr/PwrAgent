@@ -100,6 +100,7 @@ let db: StateDb;
 let server: MockDecisionsServer;
 let logs: string[];
 let usageLines: ThreadUsageLineRecord[];
+let usageBatches: number;
 let secret: string | undefined;
 let sleeps: number[];
 
@@ -110,7 +111,7 @@ function makeService(overrides: Partial<OpenAIDecisionsServiceOptions> = {}, sta
     readApiKey: async () => secret,
     readAccountSettings: () => ({ projectId: "proj_test" }),
     profileId: () => "test-profile",
-    recordUsageLine: async (line) => { usageLines.push(line); },
+    recordUsageLines: async (lines) => { usageBatches += 1; usageLines.push(...lines); },
     endpoint: server.endpoint,
     sleep: async (ms) => { sleeps.push(ms); },
     now: () => 1_700_000_000_000,
@@ -139,6 +140,7 @@ beforeEach(async () => {
   await server.start();
   logs = [];
   usageLines = [];
+  usageBatches = 0;
   secret = TEST_KEY;
   sleeps = [];
 });
@@ -405,14 +407,20 @@ describe("invoke", () => {
     expect(calls).toBe(5);
   });
 
-  it("records one usage line per attempt that returned usage, on the API project account", async () => {
+  it("sums usage per decision version in memory and writes it as one batch, on the API project account", async () => {
     const service = makeService();
     service.register(CODEX, ROUTE_DEFINITION);
     server.responses.push(
       { status: 429, headers: { "retry-after": "1", "x-request-id": "req_slow" }, body: { error: { code: "slow_down" } } },
-      successResponse(undefined, "req_ok"),
+      successResponse(undefined, "req_ok_1"),
+      successResponse(undefined, "req_ok_2"),
     );
     await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "x" } });
+    await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "y" } });
+    // Nothing reaches the ledger per request.
+    expect(usageBatches).toBe(0);
+    await service.flushUsage();
+    expect(usageBatches).toBe(1);
     expect(usageLines).toHaveLength(1);
     const [line] = usageLines;
     expect(line).toMatchObject({
@@ -423,41 +431,59 @@ describe("invoke", () => {
       backend: "codex",
       threadId: "thread-a",
       parentThreadId: "thread-a",
-      sourceItemId: "decision-1:1:req_ok",
       model: "gpt-6-luna",
-      inputTokens: 1000,
-      cachedInputTokens: 400,
-      cacheWriteInputTokens: 100,
-      uncachedInputTokens: 600,
-      outputTokens: 7,
-      reasoningOutputTokens: 7,
+      inputTokens: 2000,
+      cachedInputTokens: 800,
+      cacheWriteInputTokens: 200,
+      uncachedInputTokens: 1200,
+      outputTokens: 14,
+      reasoningOutputTokens: 14,
       priceStatus: "priced",
       pricingBasis: "decisions-output-uncharged",
-      uncachedInputCostMicros: 50,
-      cachedInputCostMicros: 4,
-      cacheWriteInputCostMicros: 13,
+      pricingRateId: "gpt-6-luna-decisions-input-lte-272k",
+      uncachedInputCostMicros: 100,
+      cachedInputCostMicros: 8,
+      cacheWriteInputCostMicros: 26,
       outputCostMicros: 0,
-      totalCostMicros: 67,
+      totalCostMicros: 134,
       accountKey: codexModelProviderAccountKey("https://api.openai.com", TEST_KEY),
     });
+    expect(line!.sourceItemId).toMatch(/^decision-1:1:batch:/);
     expect(line!.turnId).toBeUndefined();
     expect(line!.reasoningEffort).toBeUndefined();
     expect(line!.serviceTier).toBeUndefined();
     expect(JSON.stringify(line)).not.toContain(TEST_KEY);
+    // Request ids stay in the log for reconciliation.
+    expect(logs.join("\n")).toContain("req_ok_2");
 
+    // An inconsistent usage object is its own unpriced group, never added to a priced sum.
     usageLines.length = 0;
     server.responses.push(successResponse({
       input_tokens: 100,
       input_tokens_details: { cached_tokens: 90, cache_write_tokens: 20 },
       output_tokens: 0,
-    }, "req_bad"));
+    }, "req_bad"), successResponse(undefined, "req_ok_3"));
     const result = await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "x" } });
+    await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "z" } });
     expect(result.usage).toMatchObject({ priceStatus: "unavailable" });
-    expect(usageLines[0]).toMatchObject({
-      priceStatus: "unpriced",
-      priceUnavailableReason: "insufficient-token-breakdown",
-      totalCostMicros: 0,
-    });
+    await service.flushUsage();
+    expect(usageBatches).toBe(2);
+    expect(usageLines.map((usage) => [usage.priceStatus, usage.totalCostMicros])).toEqual(
+      expect.arrayContaining([["unpriced", 0], ["priced", 67]]),
+    );
+    expect(usageLines.find((usage) => usage.priceStatus === "unpriced"))
+      .toMatchObject({ priceUnavailableReason: "insufficient-token-breakdown" });
+  });
+
+  it("writes a batch once the pending request count reaches the threshold", async () => {
+    const service = makeService({ usageFlushCount: 3 });
+    service.register(CODEX, ROUTE_DEFINITION);
+    for (const ticket of ["a", "b"]) await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket } });
+    expect(usageBatches).toBe(0);
+    await service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "c" } });
+    await service.flushUsage();
+    expect(usageBatches).toBe(1);
+    expect(usageLines[0]).toMatchObject({ inputTokens: 3000, totalCostMicros: 201 });
   });
 });
 

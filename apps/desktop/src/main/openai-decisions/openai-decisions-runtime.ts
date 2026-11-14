@@ -8,6 +8,13 @@ import { OpenAIDecisionsService } from "./openai-decisions-service";
 
 const openAIDecisionsLog = getMainLogger("pwragent:openai-decisions");
 
+let flushPendingUsage: (() => Promise<void>) | undefined;
+
+/** Writes batched decision usage before the profile database closes. */
+export async function flushOpenAIDecisionsUsage(): Promise<void> {
+  await flushPendingUsage?.();
+}
+
 /**
  * Builds the decisions tool handler for this owner. The key is read from the
  * settings secret store on each invoke, inside the service, after local
@@ -18,7 +25,7 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     resolveOpenAIDecisionsApiKey: () => Promise<string | undefined>;
     resolveOpenAIDecisionsSettings: () => { organizationId?: string; projectId?: string };
   };
-  recordUsageLine: (line: ThreadUsageLineRecord) => Promise<void>;
+  recordUsageLines: (lines: ThreadUsageLineRecord[]) => Promise<void>;
 }): PwrAgentOpenAIDecisionsHandler {
   // Opened on first tool call, so installing the handler never touches the
   // profile database during boot.
@@ -38,12 +45,13 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     readApiKey: async () => await params.settings.resolveOpenAIDecisionsApiKey(),
     readAccountSettings: () => params.settings.resolveOpenAIDecisionsSettings(),
     profileId: () => resolveActiveProfileName(),
-    recordUsageLine: params.recordUsageLine,
+    recordUsageLines: params.recordUsageLines,
     log: {
       info: (message, fields) => openAIDecisionsLog.info(message, fields),
       warn: (message, fields) => openAIDecisionsLog.warn(message, fields),
     },
   });
+  flushPendingUsage = async () => await service.flushUsage();
   return {
     register: (caller, args) => service.register(caller, args),
     list: (caller, args) => service.list(caller, args),
