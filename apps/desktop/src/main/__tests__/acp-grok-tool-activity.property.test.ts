@@ -228,8 +228,78 @@ describe("Grok tool activity", () => {
     ]);
     const [activity] = activities(normalizer);
     expect(activity?.summary).toBe("Wrote checkers.md");
-    expect(activity?.details[0]?.fileDiff).toMatchObject({ additions: 2, removals: 0 });
-    expect(activity?.details[0]?.fileDiff?.diff).toContain("@@ -0,0 +1,2 @@\n+one\n+two");
+    expect(activity?.details[0]?.fileDiff).toMatchObject({
+      kind: "add",
+      additions: 2,
+      removals: 0,
+    });
+    expect(activity?.details[0]?.fileDiff?.diff).toContain(
+      "--- /dev/null\n+++ b/work/notes/checkers.md\n@@ -0,0 +1,2 @@\n+one\n+two",
+    );
+  });
+
+  it("reads context_after as the lines after the edited line, not the rest of it", () => {
+    // Grok 1.0.45 replacing line 39 of a workflow. The match ends at the end
+    // of its line, and context_after starts with line 40.
+    const normalizer = applyFrames(searchReplaceFrames({
+      id: "call-eol",
+      oldString: "          node-version: 24.x",
+      newString: "          node-version: 24.18.0",
+      oldLine: 39,
+      newLine: 39,
+      contextAfter: "          cache-electron: \"true\"\n\n      - name: Check release metadata\n",
+    }));
+    expect(activities(normalizer)[0]?.details[0]?.fileDiff?.diff).toBe([
+      "diff --git a/work/notes/checkers.md b/work/notes/checkers.md",
+      "--- a/work/notes/checkers.md",
+      "+++ b/work/notes/checkers.md",
+      "@@ -39,1 +39,1 @@",
+      "-          node-version: 24.x",
+      "+          node-version: 24.18.0",
+    ].join("\n"));
+  });
+
+  it("keeps a failed edit's reason", () => {
+    const [opening] = searchReplaceFrames({
+      id: "call-failed",
+      oldString: "missing",
+      newString: "b",
+      oldLine: 1,
+      newLine: 1,
+    });
+    const reason = "The string to replace was not found in the file.";
+    const normalizer = applyFrames([
+      opening!,
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-failed",
+        kind: "edit",
+        status: "failed",
+        locations: [{ path: filePath }],
+        content: [{ type: "content", content: { type: "text", text: reason } }],
+      },
+    ]);
+    const [activity] = activities(normalizer);
+    expect(activity?.status).toBe("failed");
+    expect(activity?.details[0]?.command?.output).toContain(reason);
+  });
+
+  it("draws no diff when the call's content names another file", () => {
+    const normalizer = applyFrames([{
+      sessionUpdate: "tool_call",
+      toolCallId: "call-two-files",
+      kind: "edit",
+      status: "completed",
+      title: "Edit two files",
+      locations: [{ path: "/work/a.ts" }],
+      content: [
+        { type: "diff", path: "/work/a.ts", oldText: null, newText: "a\n" },
+        { type: "diff", path: "/work/b.ts", oldText: null, newText: "b\n" },
+      ],
+    }]);
+    const [activity] = activities(normalizer);
+    expect(activity?.summary).toBe("Edited a.ts");
+    expect(activity?.details[0]?.fileDiff).toBeUndefined();
   });
 
   it("property: a tool's internal name never outlives a descriptive title", () => {
@@ -291,42 +361,83 @@ describe("Grok tool activity", () => {
     );
   });
 
+  // Grok's positions, as the captured rollouts show them: `line_prefix` is
+  // the text before the match on its line, the match ends at the end of a
+  // line or right after a newline, and `context_after` is the whole lines
+  // after the line the match ends on.
+  function grokReplacement(text: string, from: number, to: number) {
+    const lineStart = text.lastIndexOf("\n", from - 1) + 1;
+    const atLineStart = to === 0 || text[to - 1] === "\n";
+    const following = atLineStart ? text.slice(to) : text.slice(to + 1);
+    const secondBreak = following.indexOf("\n", following.indexOf("\n") + 1);
+    return {
+      oldString: text.slice(from, to),
+      oldLine: text.slice(0, from).split("\n").length,
+      linePrefix: text.slice(lineStart, from),
+      contextAfter: secondBreak < 0 ? following : following.slice(0, secondBreak + 1),
+    };
+  }
+
+  /** Offsets where a Grok match can end: a line's end or a line's start. */
+  function matchEnds(text: string): number[] {
+    const ends = new Set<number>([0, text.length]);
+    for (let index = 0; index < text.length; index += 1) {
+      if (text[index] === "\n") {
+        ends.add(index);
+        ends.add(index + 1);
+      }
+    }
+    return [...ends].sort((left, right) => left - right);
+  }
+
   it("property: applying the transcript diff to the old file yields the new file", () => {
     const line = fc.stringMatching(/^[a-c ]{0,6}$/u);
     const scenario = fc
       .record({
         lines: fc.array(line, { minLength: 1, maxLength: 12 }),
+        finalNewline: fc.boolean(),
         replacement: fc.array(line, { maxLength: 4 }).map((lines) => lines.join("\n")),
+        replacementNewline: fc.boolean(),
         start: fc.nat(),
-        length: fc.nat({ max: 30 }),
+        end: fc.nat(),
       })
-      .map(({ lines, replacement, start, length }) => {
-        const text = `${lines.join("\n")}\n`;
-        const from = start % (text.length + 1);
-        const to = Math.min(text.length, from + length);
-        return { text, from, to, replacement };
+      .map(({ lines, finalNewline, replacement, replacementNewline, start, end }) => {
+        const text = `${lines.join("\n")}${finalNewline ? "\n" : ""}`;
+        const ends = matchEnds(text);
+        const to = ends[end % ends.length]!;
+        const from = start % (to + 1);
+        return {
+          text,
+          from,
+          to,
+          replacement: `${replacement}${replacementNewline ? "\n" : ""}`,
+        };
       })
-      .filter(({ text, from, to, replacement }) => text.slice(from, to) !== replacement);
+      .filter(({ text, from, to, replacement }) => text.slice(from, to) !== replacement)
+      // Emptying the last line of a file with no final newline ("a" to "")
+      // reports exactly what emptying it in "a\n" does: nothing follows
+      // either match. The transcript keeps the emptied line, as in the
+      // common case of a file that ends with a newline.
+      .filter(({ text, from, to, replacement }) => {
+        const lineStart = text.lastIndexOf("\n", from - 1) + 1;
+        const emptiedLastLine = `${text.slice(lineStart, from)}${replacement}`
+          .split("\n")
+          .at(-1) === "";
+        return !(to === text.length && !text.endsWith("\n") && emptiedLastLine);
+      });
 
     fc.assert(
       fc.property(scenario, ({ text, from, to, replacement }) => {
-        const oldString = text.slice(from, to);
         const newText = `${text.slice(0, from)}${replacement}${text.slice(to)}`;
-        const lineStart = text.lastIndexOf("\n", from - 1) + 1;
-        const oldLine = text.slice(0, from).split("\n").length;
-        // Grok's context_after starts right after the match and runs a few
-        // whole lines; an edit at the end of the file has none.
-        const rest = text.slice(to);
-        const secondBreak = rest.indexOf("\n", rest.indexOf("\n") + 1);
-        const contextAfter = secondBreak < 0 ? rest : rest.slice(0, secondBreak + 1);
+        const position = grokReplacement(text, from, to);
         const frames = searchReplaceFrames({
           id: "call-diff",
-          oldString,
+          oldString: position.oldString,
           newString: replacement,
-          oldLine,
-          newLine: oldLine,
-          linePrefix: text.slice(lineStart, from),
-          contextAfter,
+          oldLine: position.oldLine,
+          newLine: position.oldLine,
+          linePrefix: position.linePrefix,
+          contextAfter: position.contextAfter,
         });
 
         const fileDiff = activities(applyFrames(frames))[0]?.details[0]?.fileDiff;
@@ -340,6 +451,83 @@ describe("Grok tool activity", () => {
         expect(fileDiff!.removals).toBe(changed.filter((row) => row.startsWith("-")).length);
       }),
       { numRuns: 500 },
+    );
+  });
+
+  it("property: one call's replacements apply together to yield the new file", () => {
+    // replace_all and multi-edit calls report one detail per replacement,
+    // each positioned in the file before (old_line) and after (new_line).
+    const line = fc.stringMatching(/^[a-c]{1,4}$/u);
+    const scenario = fc.record({
+      lines: fc.array(line, { minLength: 2, maxLength: 16 }),
+      edits: fc.array(
+        fc.record({
+          at: fc.nat(),
+          span: fc.integer({ min: 1, max: 3 }),
+          lines: fc.array(fc.stringMatching(/^[x-z]{1,3}$/u), { maxLength: 3 }),
+        }),
+        { minLength: 1, maxLength: 4 },
+      ),
+    });
+
+    fc.assert(
+      fc.property(scenario, ({ lines, edits }) => {
+        // Whole-line replacements over disjoint, ordered ranges, with a line
+        // left between ranges so no two hunks share a line.
+        const ranges: { start: number; end: number; lines: string[] }[] = [];
+        let next = 0;
+        for (const edit of edits) {
+          const start = next + (edit.at % 3);
+          const end = Math.min(lines.length, start + edit.span);
+          if (start >= lines.length) break;
+          ranges.push({ start, end, lines: edit.lines });
+          next = end + 1;
+        }
+        if (ranges.length === 0) return;
+        const text = `${lines.join("\n")}\n`;
+        const newLines = [...lines];
+        let shift = 0;
+        const details = ranges.map((range) => {
+          const oldString = `${lines.slice(range.start, range.end).join("\n")}\n`;
+          const newString = range.lines.length ? `${range.lines.join("\n")}\n` : "";
+          const lineOffset = lines.slice(0, range.start).join("\n").length
+            + (range.start > 0 ? 1 : 0);
+          const position = grokReplacement(text, lineOffset, lineOffset + oldString.length);
+          const detail = {
+            old_string: oldString,
+            old_line: range.start + 1,
+            new_string: newString,
+            new_line: range.start + 1 + shift,
+            context_before: "",
+            context_after: position.contextAfter,
+            line_prefix: "",
+          };
+          newLines.splice(range.start + shift, range.end - range.start, ...range.lines);
+          shift += range.lines.length - (range.end - range.start);
+          return detail;
+        });
+
+        const normalizer = applyFrames([{
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call-many",
+          kind: "edit",
+          status: "completed",
+          rawInput: { file_path: filePath, replace_all: true },
+          content: [{
+            type: "diff",
+            path: filePath,
+            oldText: "",
+            newText: "",
+            _meta: { details },
+          }],
+        }]);
+        const fileDiff = activities(normalizer)[0]?.details[0]?.fileDiff;
+        const changed = details.some((detail) => detail.old_string !== detail.new_string);
+        if (!changed) return;
+        expect(fileDiff).toBeDefined();
+        expect(applyUnifiedDiff(lines, fileDiff!.diff)).toEqual(newLines);
+      }),
+      { numRuns: 300 },
     );
   });
 });

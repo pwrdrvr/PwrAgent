@@ -24,6 +24,7 @@ import {
   readAcpToolInvocation,
   readAcpWebFetchUrl,
   readAcpWebSearch,
+  readFirstLocationPath,
 } from "./acp-command-extraction.js";
 import { readAcpFileEdit } from "./acp-file-edit.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
@@ -301,6 +302,9 @@ export class AcpSessionReplayNormalizer {
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
     this.knownToolCallIds.clear();
+    // A call's identity matters only while its updates arrive. Keeping every
+    // call's for the whole session would grow without bound.
+    this.providerTools.clear();
     this.upsertMessage({
       id,
       role: "user",
@@ -1648,6 +1652,10 @@ function toolActivity(
   if (fileEdit) {
     const label = `${fileEdit.verb} ${fileBaseName(fileEdit.path)}`;
     const status = readToolActivityStatus(update.update);
+    // A failed edit's text content is the agent's reason.
+    const failure = status === "failed"
+      ? readToolOutput(update.update)
+      : undefined;
     return {
       type: "activity",
       id,
@@ -1661,6 +1669,15 @@ function toolActivity(
           label,
           path: fileEdit.path,
           ...(fileEdit.fileDiff ? { fileDiff: fileEdit.fileDiff } : {}),
+          ...(failure
+            ? {
+                command: {
+                  displayCommand: label,
+                  source: "tool" as const,
+                  output: failure,
+                },
+              }
+            : {}),
         },
       ],
     };
@@ -1958,23 +1975,6 @@ function toolDetailKind(
     return "read";
   }
   return path ? "read" : "command";
-}
-
-function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
-  const locations = record.locations;
-  if (!Array.isArray(locations)) {
-    return undefined;
-  }
-  for (const location of locations) {
-    if (!location || typeof location !== "object" || Array.isArray(location)) {
-      continue;
-    }
-    const path = (location as Record<string, unknown>).path;
-    if (typeof path === "string" && path.trim()) {
-      return path;
-    }
-  }
-  return undefined;
 }
 
 type AcpSubAgentState = {

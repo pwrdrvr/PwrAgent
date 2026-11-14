@@ -340,6 +340,23 @@ function readAcpToolMetadata(
   return asRecord(asRecord(record._meta)?.["x.ai/tool"]);
 }
 
+/** The first file an ACP tool call lists in `locations`. */
+export function readFirstLocationPath(
+  record: Record<string, unknown>,
+): string | undefined {
+  const locations = record.locations;
+  if (!Array.isArray(locations)) {
+    return undefined;
+  }
+  for (const location of locations) {
+    const path = asRecord(location)?.path;
+    if (typeof path === "string" && path.trim()) {
+      return path;
+    }
+  }
+  return undefined;
+}
+
 export type AcpProviderTool = {
   /** The agent's internal tool name, such as `search_replace`. */
   name?: string;

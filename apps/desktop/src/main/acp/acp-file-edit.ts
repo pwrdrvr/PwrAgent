@@ -1,5 +1,12 @@
 import type { AppServerThreadFileDiff } from "@pwragent/shared";
-import { readAcpProviderTool } from "./acp-command-extraction.js";
+import {
+  renderUnifiedFileDiff,
+  type UnifiedDiffHunk,
+} from "../../shared/unified-file-diff.js";
+import {
+  readAcpProviderTool,
+  readFirstLocationPath,
+} from "./acp-command-extraction.js";
 
 /**
  * File edits made through an ACP tool call: the file, the verb, and, once the
@@ -16,7 +23,6 @@ export type AcpFileEdit = {
   fileDiff?: AppServerThreadFileDiff;
 };
 
-const MAX_DIFF_CHARS = 256 * 1024;
 const CONTEXT_LINES = 3;
 
 export function readAcpFileEdit(
@@ -117,13 +123,7 @@ function isLineNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
 }
 
-type Hunk = {
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-  lines: string[];
-};
+type Hunk = UnifiedDiffHunk;
 
 /**
  * A diff is drawn only where the agent said where the edit landed. Without
@@ -135,11 +135,16 @@ function buildFileDiff(
   path: string,
   diffs: AcpDiffContent[],
 ): AppServerThreadFileDiff | undefined {
+  // One row is one file. Content naming another file would be drawn under
+  // this file's header, so such a call shows no diff.
+  if (diffs.length === 0 || diffs.some((diff) => diff.path && diff.path !== path)) {
+    return undefined;
+  }
   const hunks: Hunk[] = [];
-  let created = diffs.length > 0;
+  let created = true;
   for (const diff of diffs) {
     if (diff.replacements) {
-      created = false;
+      created &&= diff.replacements.every(isWholeFileCreation);
       hunks.push(...diff.replacements.flatMap(replacementHunk));
     } else if (diff.oldText === null) {
       hunks.push(...lineHunk([], splitLines(diff.newText), 0, 1));
@@ -151,59 +156,60 @@ function buildFileDiff(
     return undefined;
   }
   const name = path.replace(/\\/g, "/").replace(/^[A-Za-z]:/, "").replace(/^\/+/, "");
-  let additions = 0;
-  let removals = 0;
-  const body: string[] = [];
-  for (const hunk of hunks) {
-    body.push(
-      `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
-    );
-    for (const line of hunk.lines) {
-      if (line.startsWith("+")) additions += 1;
-      else if (line.startsWith("-")) removals += 1;
-      body.push(line);
-    }
-  }
-  const diff = [
-    `diff --git a/${name} b/${name}`,
-    created ? "--- /dev/null" : `--- a/${name}`,
-    `+++ b/${name}`,
-    ...body,
-  ].join("\n");
-  const kind = created ? "add" : "update";
-  if (diff.length > MAX_DIFF_CHARS) {
-    return {
-      kind,
-      diff: "",
-      additions,
-      removals,
-      omittedReason: "This diff is too large to show.",
-      originalLength: diff.length,
-    };
-  }
-  return { kind, diff, additions, removals };
+  return renderUnifiedFileDiff({ name, created, hunks }).fileDiff;
 }
 
 /**
- * A replacement can start and end mid-line. `line_prefix` is the text before
- * it on its first line and `context_after` starts right after it, so the
- * whole lines it touched are the prefix, the string, and the rest of its last
- * line.
+ * Grok reports a write to a new file as one replacement of nothing, at line
+ * 1, with no text before or after it.
+ */
+function isWholeFileCreation(replacement: AcpReplacement): boolean {
+  return replacement.oldString === ""
+    && replacement.oldLine === 1
+    && replacement.linePrefix === ""
+    && replacement.contextAfter === "";
+}
+
+/**
+ * The whole lines a replacement touched, before and after.
+ *
+ * `line_prefix` is the text before the match on its first line. Grok's
+ * `context_after` is the whole lines after the line the match ends on, not
+ * the text right after the match: replacing `node-version: 24.x` on line 39
+ * reports line 40 (`cache-electron: "true"`) as its context. Every edit in the
+ * captured rollouts that could still be checked against its file ended at the
+ * end of a line or right after a newline, so the rest of the last line is
+ * taken to be empty.
  */
 function replacementHunk(replacement: AcpReplacement): Hunk[] {
-  const tail = replacement.contextAfter.split("\n")[0] ?? "";
-  const oldBlock = `${replacement.linePrefix}${replacement.oldString}${tail}`;
-  const newBlock = `${replacement.linePrefix}${replacement.newString}${tail}`;
-  // Short of the end of the file, the block runs from the start of its first
-  // line to the end of its last, so every piece between newlines is a line,
-  // an empty one included. At the end of the file (no context after it), a
-  // final newline ends the last line rather than starting another.
-  const blockLines = replacement.contextAfter === ""
-    ? splitLines
-    : (block: string) => block.replace(/\r\n?/g, "\n").split("\n");
+  const oldBlock = `${replacement.linePrefix}${replacement.oldString}`;
+  const newBlock = `${replacement.linePrefix}${replacement.newString}`;
+  const endsAtLineStart = oldBlock === "" || oldBlock.endsWith("\n");
+  if (!endsAtLineStart) {
+    // The match ends at the end of a line, so the last piece of each block
+    // is a line, even when the replacement leaves it empty.
+    return lineHunk(
+      exactLines(oldBlock),
+      exactLines(newBlock),
+      replacement.oldLine,
+      replacement.newLine,
+    );
+  }
+  const newJoinsNextLine = newBlock !== "" && !newBlock.endsWith("\n");
+  if (newJoinsNextLine && replacement.contextAfter !== "") {
+    // The match ended at the start of a line and the replacement does not,
+    // so its last line runs into the line after the match.
+    const next = replacement.contextAfter.split("\n")[0] ?? "";
+    return lineHunk(
+      exactLines(`${oldBlock}${next}`),
+      exactLines(`${newBlock}${next}`),
+      replacement.oldLine,
+      replacement.newLine,
+    );
+  }
   return lineHunk(
-    blockLines(oldBlock),
-    blockLines(newBlock),
+    splitLines(oldBlock),
+    newJoinsNextLine ? exactLines(newBlock) : splitLines(newBlock),
     replacement.oldLine,
     replacement.newLine,
   );
@@ -274,18 +280,9 @@ function splitLines(text: string): string[] {
   return normalized.replace(/\n$/, "").split("\n");
 }
 
-function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
-  const locations = record.locations;
-  if (!Array.isArray(locations)) {
-    return undefined;
-  }
-  for (const location of locations) {
-    const path = asRecord(location)?.path;
-    if (typeof path === "string" && path.trim()) {
-      return path;
-    }
-  }
-  return undefined;
+/** Every piece between newlines, a trailing empty one included. */
+function exactLines(text: string): string[] {
+  return text.replace(/\r\n?/g, "\n").split("\n");
 }
 
 function readString(

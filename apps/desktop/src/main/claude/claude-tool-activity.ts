@@ -4,12 +4,10 @@ import type {
   AppServerThreadPlanStep,
 } from "@pwragent/shared";
 import { formatToolIdentifier, formatToolInvocation } from "../../shared/tool-activity";
+import { renderUnifiedFileDiff } from "../../shared/unified-file-diff";
 
 /** Claude's checklist tool. Its calls are the turn's plan, not tool rows. */
 export const CLAUDE_TODO_TOOL = "TodoWrite";
-
-/** Larger diffs keep their counts, not their text. */
-const MAX_DIFF_CHARS = 256 * 1024;
 
 type ActivityStatus = AppServerThreadActivityEntry["status"];
 
@@ -223,28 +221,7 @@ export function claudeFileDiff(result: unknown, cwd: string): { diff: string; fi
   const relative = path.relative(cwd, filePath);
   const name = (relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : filePath)
     .split(path.sep).join("/").replace(/^[A-Za-z]:/, "").replace(/^\/+/, "");
-  let additions = 0;
-  let removals = 0;
-  const body: string[] = [];
-  for (const hunk of hunks) {
-    body.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
-    for (const line of hunk.lines) {
-      if (line.startsWith("+")) additions += 1;
-      else if (line.startsWith("-")) removals += 1;
-      body.push(line);
-    }
-  }
-  const diff = [
-    `diff --git a/${name} b/${name}`,
-    created ? "--- /dev/null" : `--- a/${name}`,
-    `+++ b/${name}`,
-    ...body,
-  ].join("\n");
-  const kind = created ? "add" : "update";
-  if (diff.length > MAX_DIFF_CHARS) {
-    return { diff: "", fileDiff: { kind, diff: "", additions, removals, omittedReason: "This diff is too large to show.", originalLength: diff.length } };
-  }
-  return { diff, fileDiff: { kind, diff, additions, removals } };
+  return renderUnifiedFileDiff({ name, created, hunks });
 }
 
 /**
