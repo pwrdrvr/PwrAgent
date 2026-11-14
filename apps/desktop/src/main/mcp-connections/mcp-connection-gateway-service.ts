@@ -26,7 +26,7 @@ import type {
   Progress,
   Root,
 } from "@modelcontextprotocol/sdk/types.js";
-import { isMcpError, loadedMcpTypes, mcpClient, mcpClientStreamableHttp, mcpTypes } from "./mcp-sdk";
+import { isMcpError, isStreamableHttpError, loadedMcpTypes, mcpClient, mcpClientStreamableHttp, mcpTypes } from "./mcp-sdk";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, discoveryFailure, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
 import { offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
@@ -91,6 +91,22 @@ import {
   type McpStdioLaunchInput,
   type TestMcpStdioConnectionRequest,
   type TestMcpStdioConnectionResponse,
+  GITHUB_MCP_HOSTED_URL,
+  GITHUB_MCP_LOCAL_PROGRAM,
+  GITHUB_MCP_TOKEN_ENV,
+  describeGithubMcpAccount,
+  githubMcpAccountUsable,
+  githubMcpLocalArgs,
+  isGithubMcpAccountSource,
+  isGithubMcpServerLocation,
+  normalizeGithubMcpToolsets,
+  type GithubMcpAccountCheck,
+  type GithubMcpSettings,
+  type GithubMcpSettingsInput,
+  type InspectGithubMcpSetupRequest,
+  type InspectGithubMcpSetupResponse,
+  type TestGithubMcpConnectionRequest,
+  type TestGithubMcpConnectionResponse,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
   type OpenSandboxerLinkResponse,
@@ -132,6 +148,17 @@ import {
   type PwrSuiteRelayApp,
 } from "./pwrsuite-relay";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
+import {
+  GithubMcpAccountStatusCache,
+  checkGithubMcpAccount,
+  githubMcpHostedFetch,
+  normalizeGithubMcpToken,
+  readGithubMcpToken,
+  type GithubMcpTokenSources,
+} from "./github-mcp-account";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { discoverGhCommands } from "../settings/gh-discovery";
+import { readGithubDotComAuthToken } from "../pr-status/github-graphql-client";
 import { PwrSnapMediaLinks, readPwrSnapImageContents, type PwrSnapMediaRead } from "./pwrsnap-media-links";
 import { RelaySessionPool } from "./mcp-relay-session-pool";
 import { createMcpIpcTransport, normalizeMcpIpcBearerToken } from "./mcp-ipc-http";
@@ -346,6 +373,10 @@ export type McpConnectionGatewayServiceOptions = {
   resolveStdioSearchEnv?: () => Promise<NodeJS.ProcessEnv>;
   /** How long a Settings test waits for a local command to answer. */
   stdioTestTimeoutMs?: number;
+  /** Test seam: the `gh` executable, or undefined when none is installed. */
+  findGh?: () => Promise<string | undefined>;
+  /** Test seam: `gh`'s github.com token. Null or a throw means signed out. */
+  readGhToken?: (command: string) => Promise<string | null>;
   /**
    * Records a sandbox a thread created through the built-in Sandboxer
    * connection, so PwrAgent can release exactly that one when the thread's
@@ -747,6 +778,10 @@ export class McpConnectionGatewayService {
   private readonly stdioSpawn?: StdioSpawn;
   private readonly resolveStdioSearchEnv: () => Promise<NodeJS.ProcessEnv>;
   private readonly stdioTestTimeoutMs: number;
+  private readonly findGh: () => Promise<string | undefined>;
+  private readonly readGhToken: (command: string) => Promise<string | null>;
+  /** The account line each GitHub row shows. A connect never reads it. */
+  private readonly githubAccounts = new GithubMcpAccountStatusCache();
   /** Live local command processes, per connection, on this machine. */
   private readonly stdioProcessCounts = new Map<string, number>();
   /** Settings tests in flight, so shutdown can stop them too. */
@@ -831,6 +866,14 @@ export class McpConnectionGatewayService {
     this.resolveStdioSearchEnv = options.resolveStdioSearchEnv
       ?? (async () => await getDesktopSettingsService().resolveCodexSpawnEnvAsync());
     this.stdioTestTimeoutMs = options.stdioTestTimeoutMs ?? STDIO_TEST_TIMEOUT_MS;
+    this.findGh = options.findGh ?? (async () => {
+      const discovery = await discoverGhCommands({
+        configuredCommand: getDesktopSettingsService().resolveGhCommandPreference(),
+        env: buildPwrAgentChildProcessEnv(process.env),
+      });
+      return discovery.selectedCommand ?? undefined;
+    });
+    this.readGhToken = options.readGhToken ?? (async (command) => await readGithubDotComAuthToken(command));
   }
 
   async readStatus(): Promise<PwrSnapConnectionStatus> {
@@ -969,6 +1012,26 @@ export class McpConnectionGatewayService {
         request,
       ));
     }
+    if (request.github !== undefined) {
+      if (request.serverUrl !== undefined || request.stdio !== undefined || request.ipcBearerToken !== undefined) {
+        throw new Error("Add a GitHub connection on its own, without a URL or command.");
+      }
+      const { github, token } = await this.prepareGithubSettings(request.github);
+      if (github.account === "token" && !token) {
+        throw new McpStdioLaunchError("invalid", "Paste a personal access token.");
+      }
+      const connection = this.registry.createGithub({ displayName: request.displayName, github });
+      if (token) {
+        try {
+          await this.stdioSecrets.write(connection.id, { [GITHUB_MCP_TOKEN_ENV]: token });
+        } catch (error) {
+          // A token source with no token could only ever fail to connect.
+          this.registry.remove(connection.id);
+          throw error;
+        }
+      }
+      return this.announced(await this.connectionStatus(connection));
+    }
     if (request.stdio !== undefined) {
       if (request.ipcBearerToken !== undefined) throw new Error("Session bearer tokens require a local IPC URL.");
       if (request.serverUrl !== undefined) {
@@ -1102,6 +1165,222 @@ export class McpConnectionGatewayService {
   }
 
   /**
+   * Read the GitHub CLI sign-in and look for `github-mcp-server`, for the
+   * add form's account and server options. Nothing is written, and the
+   * token is read only to ask GitHub whose it is.
+   */
+  async inspectGithubSetup(
+    request: InspectGithubMcpSetupRequest = {},
+  ): Promise<InspectGithubMcpSetupResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<InspectGithubMcpSetupResponse>(
+        ownership.holder,
+        "broker/github-inspect",
+        request,
+      );
+    }
+    const [{ check }, localCommand] = await Promise.all([
+      checkGithubMcpAccount("gh_cli", this.githubTokenSources(), this.fetchFn),
+      this.resolveGithubLocalCommand(typeof request.command === "string" ? request.command : undefined)
+        .catch(() => undefined),
+    ]);
+    return { cli: check, ...(localCommand ? { localCommand } : {}) };
+  }
+
+  /**
+   * Sign in, list the tools and skills, and disconnect, before anything is
+   * saved. A local server is started once and stopped on every path out.
+   */
+  async testGithubConnection(
+    request: TestGithubMcpConnectionRequest,
+  ): Promise<TestGithubMcpConnectionResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<TestGithubMcpConnectionResponse>(
+        ownership.holder,
+        "broker/github-test",
+        request,
+      );
+    }
+    if (!this.gatewayEnabled()) {
+      return { ok: false, problem: "gateway_off", message: GATEWAY_OFF_ERROR };
+    }
+    const existing = request.connectionId ? this.requireConnection(request.connectionId) : undefined;
+    if (existing && existing.kind !== "github") {
+      return { ok: false, problem: "invalid", message: "That connection is not a GitHub connection." };
+    }
+    const startedAt = Date.now();
+    let prepared: { github: GithubMcpSettings; token?: string };
+    try {
+      prepared = await this.prepareGithubSettings(request.github);
+    } catch (error) {
+      const problem = error instanceof McpStdioLaunchError
+        && (error.problem === "not_found" || error.problem === "not_executable") ? "not_found" : "invalid";
+      return { ok: false, problem, message: error instanceof Error ? error.message : String(error) };
+    }
+    const { github } = prepared;
+    const { check, token } = await checkGithubMcpAccount(
+      github.account,
+      this.githubTokenSources(existing?.id),
+      this.fetchFn,
+      prepared.token ? { pastedToken: prepared.token } : {},
+    );
+    if (existing && github.account === existing.github?.account) {
+      this.githubAccounts.remember(existing.id, github.account, check);
+    }
+    if (!token || !githubMcpAccountUsable(check.state)) {
+      return { ok: false, problem: "account", message: describeGithubMcpAccount(check), account: check };
+    }
+    const connection: McpConnectionRecord = {
+      id: existing?.id ?? "",
+      displayName: existing?.displayName ?? "GitHub",
+      serverUrl: GITHUB_MCP_HOSTED_URL,
+      authMode: "none",
+      kind: "github",
+      github,
+      enabled: true,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const discovery = new McpDiscovery(connection.id || "github-test", Date.now() + this.stdioTestTimeoutMs);
+    let session: UpstreamSession | undefined;
+    try {
+      session = await this.openGithubSession(connection, token, {
+        clientName: "pwragent-settings-test",
+        discovery,
+        recordFailure: false,
+      });
+      const client = session.client;
+      let toolCount = 0;
+      let cursor: string | undefined;
+      const cursors = new Set<string>();
+      for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+        const result = await client.listTools(cursor ? { cursor } : undefined, {
+          timeout: discovery.remaining(), signal: discovery.signal,
+        });
+        toolCount += result.tools.length;
+        cursor = result.nextCursor;
+        if (!cursor || cursors.has(cursor)) break;
+        cursors.add(cursor);
+      }
+      const skillCount = await this.countMcpSkills(client, discovery);
+      const version = client.getServerVersion();
+      return {
+        ok: true,
+        account: check,
+        ...(github.command ? { command: github.command } : {}),
+        ...(version?.version ? { serverVersion: version.version } : {}),
+        toolCount,
+        ...(skillCount === undefined ? {} : { skillCount }),
+        elapsedMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      const failure = error instanceof McpStdioLaunchError ? error : undefined;
+      return {
+        ok: false,
+        problem: failure?.problem === "not_found" || failure?.problem === "not_executable" ? "not_found" : "failed",
+        message: githubSessionFailureMessage(error, github),
+        account: check,
+        ...(failure?.output ? { output: failure.output } : {}),
+      };
+    } finally {
+      discovery.close();
+      if (session) {
+        await session.client.close().catch(async () => {
+          await session!.transport.close().catch(() => undefined);
+        });
+      }
+    }
+  }
+
+  /**
+   * How many skills a session offers, or undefined when it does not offer
+   * the skills extension. Pages are counted within the caller's budget; a
+   * failure reads as none offered rather than failing the listing.
+   */
+  private async countMcpSkills(client: Client, discovery: McpDiscovery): Promise<number | undefined> {
+    try {
+      if (!offersMcpSkills(client.getServerCapabilities?.())) return undefined;
+      const { ResultSchema } = await mcpTypes.load();
+      let count = 0;
+      let cursor: string | undefined;
+      for (let page = 0; page < MCP_SKILLS_INDEX_MAX_PAGES; page += 1) {
+        const result = await client.request(
+          { method: "skills/list", params: cursor ? { cursor } : {} } as never,
+          ResultSchema,
+          { signal: discovery.signal, timeout: discovery.remaining() },
+        ) as { skills?: unknown; nextCursor?: unknown };
+        if (Array.isArray(result.skills)) count += result.skills.length;
+        cursor = typeof result.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : undefined;
+        if (!cursor) break;
+      }
+      return count;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Where a GitHub connection's token comes from. `connectionId` names the
+   * stored token, for the token account; the CLI is asked fresh each time.
+   */
+  private githubTokenSources(connectionId?: string): GithubMcpTokenSources {
+    return {
+      findGh: this.findGh,
+      readGhToken: this.readGhToken,
+      readStoredToken: async () => {
+        if (!connectionId) return undefined;
+        const stored = await this.stdioSecrets.read(connectionId);
+        return Object.hasOwn(stored, GITHUB_MCP_TOKEN_ENV) ? stored[GITHUB_MCP_TOKEN_ENV] : undefined;
+      },
+    };
+  }
+
+  /** `github-mcp-server`'s absolute path, resolved on the login PATH. */
+  private async resolveGithubLocalCommand(command: string | undefined): Promise<string> {
+    return await resolveStdioExecutable(command?.trim() || GITHUB_MCP_LOCAL_PROGRAM, await this.readStdioSearchEnv());
+  }
+
+  /**
+   * Validate a submitted GitHub connection. The local server's program is
+   * resolved now and stored as an absolute path, as a local command's is.
+   */
+  private async prepareGithubSettings(
+    input: GithubMcpSettingsInput | undefined,
+  ): Promise<{ github: GithubMcpSettings; token?: string }> {
+    if (!input || typeof input !== "object") {
+      throw new McpStdioLaunchError("invalid", "Choose an account and a server for GitHub.");
+    }
+    if (!isGithubMcpAccountSource(input.account) || !isGithubMcpServerLocation(input.server)) {
+      throw new McpStdioLaunchError("invalid", "Choose an account and a server for GitHub.");
+    }
+    const toolsets = normalizeGithubMcpToolsets(input.toolsets);
+    // GitHub reads an empty list as its own defaults, so none is not "none".
+    if (toolsets.length === 0) throw new McpStdioLaunchError("invalid", "Choose at least one toolset.");
+    let token: string | undefined;
+    try {
+      token = input.account === "token" ? normalizeGithubMcpToken(input.token) : undefined;
+    } catch (error) {
+      throw new McpStdioLaunchError("invalid", error instanceof Error ? error.message : String(error));
+    }
+    const command = input.server === "local"
+      ? await this.resolveGithubLocalCommand(typeof input.command === "string" ? input.command : undefined)
+      : undefined;
+    return {
+      github: {
+        account: input.account,
+        server: input.server,
+        ...(command ? { command } : {}),
+        toolsets,
+        readOnly: input.readOnly === true,
+        skills: input.skills !== false,
+      },
+      ...(token ? { token } : {}),
+    };
+  }
+
+  /**
    * Validate a submitted launch and resolve everything it names.
    *
    * The executable is looked up now and stored as an absolute path; the
@@ -1226,6 +1505,12 @@ export class McpConnectionGatewayService {
     }
     if (connection.kind === "stdio") {
       throw new Error(`${connection.displayName} is a local command. It has nothing to sign in to.`);
+    }
+    if (connection.kind === "github") {
+      // The sign-in lives in gh or in the stored token. Re-reading it is
+      // the one thing "authorize" can mean here.
+      this.githubAccounts.forget(connection.id);
+      return this.announced(await this.connectionStatus(connection));
     }
     if (isPwrSuiteRelayKind(connection.kind)) {
       // The app approves each session in its own window, so there is nothing
@@ -1364,6 +1649,12 @@ export class McpConnectionGatewayService {
     if (existing.kind === "stdio") {
       return this.announced(await this.updateStdioConnection(existing, request));
     }
+    if (existing.kind === "github") {
+      return this.announced(await this.updateGithubConnection(existing, request));
+    }
+    if (request.github !== undefined) {
+      throw new Error("Only a GitHub connection has GitHub settings.");
+    }
     if (request.stdio !== undefined) {
       throw new Error("A remote server has no command. Remove it and add a local command instead.");
     }
@@ -1386,6 +1677,54 @@ export class McpConnectionGatewayService {
       this.invalidateConnectionTools(connection.id);
     }
     return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
+   * Rename a GitHub connection or change its account, server or toolsets.
+   *
+   * Any change but a rename closes its sessions, so a thread's next call
+   * connects with what Settings now shows. A token typed in the form
+   * replaces the stored one; switching to the CLI sign-in deletes it.
+   */
+  private async updateGithubConnection(
+    existing: McpConnectionRecord,
+    request: UpdateMcpConnectionRequest,
+  ): Promise<McpConnectionStatus> {
+    if (request.serverUrl !== undefined || request.stdio !== undefined) {
+      throw new Error("A GitHub connection has no URL or command to edit. Change its account or server instead.");
+    }
+    const prepared = request.github ? await this.prepareGithubSettings(request.github) : undefined;
+    const github = prepared?.github;
+    if (github?.account === "token" && !prepared?.token) {
+      // Switching to a token needs one; keeping a token account keeps its own.
+      const stored = await this.githubTokenSources(existing.id).readStoredToken().catch(() => undefined);
+      if (!stored) throw new McpStdioLaunchError("invalid", "Paste a personal access token.");
+    }
+    const { connection, launchChanged } = this.registry.update({
+      connectionId: existing.id,
+      ...(request.displayName === undefined ? {} : { displayName: request.displayName }),
+      ...(github ? { github } : {}),
+    });
+    let tokenChanged = false;
+    try {
+      if (prepared?.token) {
+        await this.stdioSecrets.write(existing.id, { [GITHUB_MCP_TOKEN_ENV]: prepared.token });
+        tokenChanged = true;
+      } else if (github?.account === "gh_cli" && existing.github?.account === "token") {
+        await this.stdioSecrets.delete(existing.id);
+        tokenChanged = true;
+      }
+    } catch (error) {
+      this.registry.update({ connectionId: existing.id, displayName: existing.displayName, github: existing.github! });
+      throw error;
+    }
+    if (launchChanged || tokenChanged) {
+      await this.closeConnectionSessions(existing.id);
+      this.invalidateConnectionTools(existing.id);
+      this.discoveryHealth.delete(existing.id);
+      this.githubAccounts.forget(existing.id);
+    }
+    return await this.connectionStatus(connection);
   }
 
   /**
@@ -1809,9 +2148,11 @@ export class McpConnectionGatewayService {
         }
         cursors.add(cursor);
       }
+      const skillCount = await this.countMcpSkills(session.client, discovery);
       const inventory: ListMcpConnectionToolsResponse = {
         connectionId: connection.id,
         tools,
+        ...(skillCount ? { skillCount } : {}),
         fetchedAt: Date.now(),
       };
       if ((this.toolInventoryCacheGenerations.get(connection.id) ?? 0) === generation) {
@@ -1846,9 +2187,10 @@ export class McpConnectionGatewayService {
     }
     const connection = this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
-    if (connection.kind === "stdio") {
+    if (connection.kind === "stdio" || connection.kind === "github") {
       this.invalidateConnectionTools(connectionId);
       this.discoveryHealth.delete(connectionId);
+      this.githubAccounts.forget(connectionId);
       // Secrets first: if storage refuses, the row stays and Remove can be
       // tried again, rather than leaving a token with no row to reach it.
       await this.stdioSecrets.delete(connectionId);
@@ -2650,6 +2992,7 @@ export class McpConnectionGatewayService {
       };
     }
     if (connection.kind === "stdio") return await this.stdioConnectionStatus(connection);
+    if (connection.kind === "github") return await this.githubConnectionStatus(connection, cachedLocalStatus);
     if (isPwrSuiteRelayKind(connection.kind)) {
       // Configured means this machine has an install with the relay. Whether
       // the app is open is the New thread card's question, asked live.
@@ -2673,6 +3016,65 @@ export class McpConnectionGatewayService {
       state: configured ? coordinator.state : "disconnected",
       ...(coordinator.detail ? { detail: coordinator.detail } : {}),
     };
+  }
+
+  /**
+   * A GitHub connection is configured while its account can be used: the
+   * CLI is installed and signed in, or a token is stored, and GitHub did not
+   * reject it. The check behind the row is cached for a minute; a connect
+   * never uses it.
+   *
+   * New-thread defaults read with `cachedOnly` under a two-second budget. A
+   * cold cache then reads in the background and reports the connection as
+   * usable meanwhile, as Sandboxer's cold cache does; the background read
+   * announces what it found.
+   */
+  private async githubConnectionStatus(
+    connection: McpConnectionRecord,
+    cachedOnly = false,
+  ): Promise<McpConnectionStatus> {
+    const github = connection.github!;
+    const read = async (): Promise<GithubMcpAccountCheck> => (await checkGithubMcpAccount(
+      github.account,
+      this.githubTokenSources(connection.id),
+      this.fetchFn,
+    )).check;
+    let account = this.githubAccounts.cached(connection.id, github.account);
+    if (!account && cachedOnly) {
+      void this.githubAccounts.read(connection.id, github.account, read)
+        .then(() => this.announceChanged([connection.id]), () => undefined);
+    } else if (!account) {
+      account = await this.githubAccounts.read(connection.id, github.account, read);
+    }
+    const configured = account ? githubMcpAccountUsable(account.state) : true;
+    const running = this.stdioProcessCounts.get(connection.id) ?? 0;
+    return {
+      ...connection,
+      configured,
+      state: "ready",
+      ...(account ? { githubAccount: account } : {}),
+      ...(account && !configured ? { detail: describeGithubMcpAccount(account) } : {}),
+      ...(running > 0 ? { localProcesses: running } : {}),
+      discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
+    };
+  }
+
+  /**
+   * The token one GitHub session connects with, read from its source now.
+   * A failure updates the row and names the fix in the error, which is what
+   * a thread sees instead of tools until it is fixed.
+   */
+  private async readGithubConnectToken(connection: McpConnectionRecord): Promise<string> {
+    const source = connection.github!.account;
+    const read = await readGithubMcpToken(source, this.githubTokenSources(connection.id));
+    if (read.ok) return read.token;
+    const check: GithubMcpAccountCheck = { source, state: read.state };
+    if (this.githubAccounts.cached(connection.id, source)?.state !== read.state) {
+      this.githubAccounts.remember(connection.id, source, check);
+      this.announceChanged([connection.id]);
+    }
+    // PwrAgent's own sentence, so discovery passes it to the thread intact.
+    throw new McpStdioLaunchError("secret_unavailable", `${connection.displayName}: ${describeGithubMcpAccount(check)}`);
   }
 
   /**
@@ -3025,11 +3427,28 @@ export class McpConnectionGatewayService {
       /** A thread's session, counted in a local command's running total. */
       threadSession?: boolean;
       handlers?: UpstreamSessionHandlers;
+      /** A GitHub token already read, for a Settings test. Else read now. */
+      githubToken?: string;
+      /** False for a Settings test, which must not mark the row failed. */
+      recordFailure?: boolean;
     },
   ): Promise<UpstreamSession> {
     let transport: Transport;
     if (connection.kind === "stdio") {
       return await this.connectStdioClient(connection, connection.stdio, options);
+    }
+    let githubToken: string | undefined;
+    if (connection.kind === "github") {
+      // Read on every connect and never kept: `gh auth refresh` or a switch
+      // of account applies to the next session.
+      githubToken = options.githubToken ?? await this.readGithubConnectToken(connection);
+      if (connection.github!.server === "local") {
+        return await this.connectStdioClient(connection, githubLocalLaunch(connection.github!), {
+          ...options,
+          secretValues: { [GITHUB_MCP_TOKEN_ENV]: githubToken },
+          failureName: "github-mcp-server",
+        });
+      }
     }
     if (isPwrSuiteRelayKind(connection.kind)) {
       return await this.connectStdioClient(connection, this.relayLaunch(connection.kind), options);
@@ -3044,6 +3463,15 @@ export class McpConnectionGatewayService {
       const status = await this.sandboxer.readStatus();
       if (!status.configured) throw new Error(status.detail);
       transport = await this.sandboxer.createTransport();
+    } else if (connection.kind === "github") {
+      const { StreamableHTTPClientTransport } = await mcpClientStreamableHttp.load();
+      transport = new StreamableHTTPClientTransport(new URL(GITHUB_MCP_HOSTED_URL), {
+        fetch: githubMcpHostedFetch(
+          createMcpSafeFetch({ fetchFn: this.fetchFn, ...(connection.id ? { connectionId: connection.id } : {}) }),
+          githubToken!,
+          connection.github!,
+        ),
+      });
     } else {
       const coordinator = this.coordinatorFor(connection);
       if (!(await coordinator.configured())) {
@@ -3075,6 +3503,15 @@ export class McpConnectionGatewayService {
     return { client, transport };
   }
 
+  /** A GitHub session for a Settings test, with a token already read. */
+  private async openGithubSession(
+    connection: McpConnectionRecord,
+    token: string,
+    options: { clientName: string; discovery: McpDiscovery; recordFailure: boolean },
+  ): Promise<UpstreamSession> {
+    return await this.connectUpstreamClient(connection, { ...options, githubToken: token });
+  }
+
   /**
    * Start a local command and complete the MCP handshake with it.
    *
@@ -3092,6 +3529,11 @@ export class McpConnectionGatewayService {
       discovery: McpDiscovery;
       threadSession?: boolean;
       handlers?: UpstreamSessionHandlers;
+      /** Secret values to use instead of the stored ones, such as a GitHub token. */
+      secretValues?: Record<string, string>;
+      /** The program's name in a failure, when not the connection's. */
+      failureName?: string;
+      recordFailure?: boolean;
     },
   ): Promise<UpstreamSession> {
     if (!launch) throw new Error(`${connection.displayName} has no command to run.`);
@@ -3101,8 +3543,8 @@ export class McpConnectionGatewayService {
     options.discovery.signal.addEventListener("abort", abort, { once: true });
     try {
       const secretNames = launch.env.filter((entry) => entry.secret);
-      let secretValues: Record<string, string> = {};
-      if (secretNames.length > 0) {
+      let secretValues: Record<string, string> = options.secretValues ?? {};
+      if (secretNames.length > 0 && !options.secretValues) {
         try {
           secretValues = await this.stdioSecrets.read(connection.id);
         } catch {
@@ -3138,11 +3580,12 @@ export class McpConnectionGatewayService {
       const failure = describeStdioStartFailure({
         error,
         transport,
-        displayName: connection.displayName,
+        displayName: options.failureName ?? connection.displayName,
         command: launch.command,
         timedOut: options.discovery.signal.aborted
           || (isMcpError(error) && error.code === loadedMcpTypes().ErrorCode.RequestTimeout),
       });
+      if (options.recordFailure === false || !connection.id) throw failure;
       this.discoveryHealth.set(connection.id, {
         ...this.discoveryHealth.get(connection.id),
         state: "failed",
@@ -3929,7 +4372,7 @@ export class McpConnectionGatewayService {
     if (operation === "broker/create") {
       if (
         typeof values.displayName !== "string"
-        || (typeof values.serverUrl !== "string" && values.stdio === undefined)
+        || (typeof values.serverUrl !== "string" && values.stdio === undefined && values.github === undefined)
       ) {
         throw new Error("Invalid MCP connection create request.");
       }
@@ -3939,6 +4382,17 @@ export class McpConnectionGatewayService {
         ...(values.ipcBearerToken !== undefined ? { ipcBearerToken: values.ipcBearerToken as string } : {}),
         // Validated field by field in prepareStdioLaunch.
         ...(values.stdio !== undefined ? { stdio: values.stdio as McpStdioLaunchInput } : {}),
+        // Validated field by field in prepareGithubSettings.
+        ...(values.github !== undefined ? { github: values.github as GithubMcpSettingsInput } : {}),
+      });
+    }
+    if (operation === "broker/github-inspect") {
+      return await this.inspectGithubSetup(typeof values.command === "string" ? { command: values.command } : {});
+    }
+    if (operation === "broker/github-test") {
+      return await this.testGithubConnection({
+        github: values.github as GithubMcpSettingsInput,
+        ...(typeof values.connectionId === "string" ? { connectionId: values.connectionId } : {}),
       });
     }
     if (operation === "broker/test-stdio") {
@@ -4003,6 +4457,7 @@ export class McpConnectionGatewayService {
           : {}),
         ...(values.ipcBearerToken !== undefined ? { ipcBearerToken: values.ipcBearerToken as string } : {}),
         ...(values.stdio !== undefined ? { stdio: values.stdio as McpStdioLaunchInput } : {}),
+        ...(values.github !== undefined ? { github: values.github as GithubMcpSettingsInput } : {}),
       });
     }
     if (operation === "broker/probe") {
@@ -4118,7 +4573,8 @@ export class McpConnectionGatewayService {
       const status = await this.connectionStatus(connection);
       if (!status.configured) {
         throw new Error(
-          connection.authMode === "local_cli" || connection.kind === "stdio" ? status.detail
+          connection.authMode === "local_cli" || connection.kind === "stdio" || connection.kind === "github"
+            ? status.detail
             : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
         );
       }
@@ -4664,6 +5120,33 @@ export class McpConnectionGatewayService {
  * The thread a grant serves. A thread's own bridge carries the bare id; the
  * gateway search/call path carries `["gateway", backend, threadId]`.
  */
+/** What PwrAgent runs for a GitHub connection's local server. */
+function githubLocalLaunch(github: GithubMcpSettings): McpStdioLaunch {
+  return {
+    command: github.command ?? GITHUB_MCP_LOCAL_PROGRAM,
+    args: githubMcpLocalArgs(github),
+    // The token is the one variable, and it is a secret: its value never
+    // reaches config.toml and is masked in the server's output.
+    env: [{ name: GITHUB_MCP_TOKEN_ENV, secret: true }],
+  };
+}
+
+/** One sentence for a GitHub session that did not open. */
+function githubSessionFailureMessage(error: unknown, github: GithubMcpSettings): string {
+  if (isStreamableHttpError(error) && error.code === 401) {
+    return github.account === "gh_cli"
+      ? "GitHub's MCP server rejected the GitHub CLI sign-in (401). Run gh auth login again."
+      : "GitHub's MCP server rejected the token (401). It may have expired or been revoked. Paste a new one.";
+  }
+  if (isStreamableHttpError(error) && error.code === 403) {
+    return "GitHub's MCP server refused this account (403). An organization may restrict this token, or Copilot may be off for the account.";
+  }
+  if (error instanceof McpStdioLaunchError) return error.message;
+  return github.server === "hosted"
+    ? `PwrAgent could not connect to GitHub's MCP server. ${error instanceof Error ? error.message : String(error)}`
+    : error instanceof Error ? error.message : String(error);
+}
+
 function grantThreadId(grant: BridgeGrant): string | undefined {
   if (!grant.threadId) return undefined;
   if (!grant.threadId.startsWith("[")) return grant.threadId;

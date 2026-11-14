@@ -3,6 +3,7 @@ import {
   isSandboxerAccountLimited,
   type McpConnectionStatus,
 } from "./contracts/mcp-connections";
+import { describeGithubMcpAccount, githubMcpAccountHeadline } from "./github-mcp";
 
 /**
  * One wording for the Codex MCP sign-in enum, shared by every surface that
@@ -94,7 +95,7 @@ export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
  * PwrAgent here, Codex there.
  */
 export function describeMcpConnectionAuth(
-  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "kind" | "sandboxerCliState" | "detail">>,
+  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "kind" | "sandboxerCliState" | "detail" | "github" | "githubAccount">>,
 ): McpAuthStatusPresentation {
   if (connection.kind === "pwrsnap" || connection.kind === "pwrgit") {
     // PwrAgent starts the app's bundled relay, and the app asks the operator
@@ -111,6 +112,27 @@ export function describeMcpConnectionAuth(
       : {
           label: "Update needed",
           description: connection.detail ?? `Update ${app}, then turn on Local Agent Access.`,
+          tone: "warn",
+          canSignIn: false,
+        };
+  }
+  if (connection.kind === "github") {
+    // PwrAgent signs in to nothing itself: the GitHub CLI holds the login,
+    // or the operator pasted a token.
+    const cli = connection.github?.account !== "token";
+    return connection.configured
+      ? {
+          label: cli ? "GitHub CLI sign-in" : "Personal access token",
+          description: cli
+            ? "PwrAgent asks gh for its token each time the server connects and never stores it."
+            : "The token is stored encrypted in this profile and never shown again.",
+          tone: "ok",
+          canSignIn: false,
+        }
+      : {
+          label: connection.githubAccount ? githubMcpAccountHeadline(connection.githubAccount) : "Not signed in",
+          description: connection.detail
+            ?? (connection.githubAccount ? describeGithubMcpAccount(connection.githubAccount) : "Check this connection's GitHub account."),
           tone: "warn",
           canSignIn: false,
         };

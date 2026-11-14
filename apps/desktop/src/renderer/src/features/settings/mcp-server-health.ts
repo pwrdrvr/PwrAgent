@@ -103,7 +103,7 @@ const READY_NO_TOOLS = "ready — no tools published";
  */
 export type ManagedMcpToolInventory =
   | { status: "loading" }
-  | { status: "loaded"; tools: string[]; fetchedAt: number }
+  | { status: "loaded"; tools: string[]; skillCount?: number; fetchedAt: number }
   | { status: "failed"; error: string }
   /** This build cannot ask. Saying "reading tools" would never end. */
   | { status: "unavailable" };
@@ -171,7 +171,10 @@ export function describeManagedMcpConnectionTools(
   if (!inventory || inventory.status === "loading") return "reading tools…";
   if (inventory.status === "unavailable") return "no tools reported";
   if (inventory.status === "failed") return "no tools — could not list them";
+  const skills = inventory.skillCount
+    ? ` \u00b7 ${inventory.skillCount} ${inventory.skillCount === 1 ? "skill" : "skills"}`
+    : "";
   return inventory.tools.length > 0
-    ? formatMcpToolCount(inventory.tools.length)
+    ? `${formatMcpToolCount(inventory.tools.length)}${skills}`
     : READY_NO_TOOLS;
 }

@@ -63,6 +63,7 @@ export * from "./contracts/thread-system-messages";
 export * from "./contracts/thread-search";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
+export * from "./github-mcp";
 export * from "./mcp-auth-status";
 export * from "./mcp-ipc-url";
 export * from "./profile-menu";
