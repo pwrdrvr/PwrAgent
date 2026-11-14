@@ -3327,7 +3327,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): Promise<string | undefined> {
-    return await this.resolveThreadEnvironmentCwd(backend, threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+    return await this.resolveThreadEnvironmentCwd(backend, threadId, overlay);
   }
 
   /**
@@ -3462,13 +3463,16 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The linked directory a thread's project is filed under: its first link,
-   * as the Directories lens and the Star Map read it.
+   * The committed handoff owns the thread's project even while a cached
+   * provider summary still names its previous workspace.
    */
   async resolveThreadPrimaryDirectory(
     backend: AppServerBackendKind,
     threadId: string,
   ): Promise<LinkedDirectorySummary | undefined> {
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+    const handoff = overlay?.extraLinkedDirectories.find(isHandoffDirectory);
+    if (handoff) return handoff;
     const pending = this.pendingStartedThreads.get(
       buildThreadIdentityKey(backend, threadId),
     );
