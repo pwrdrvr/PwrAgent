@@ -2137,6 +2137,7 @@ export class DesktopBackendRegistry {
   private federatedThreadMessageHandler:
     | PwrAgentFederatedThreadMessageHandler
     | undefined;
+  private localFederationInstanceId: (() => string | undefined) | undefined;
   private federatedThreadControlHandler:
     | PwrAgentFederatedThreadControlHandler
     | undefined;
@@ -2629,6 +2630,7 @@ export class DesktopBackendRegistry {
       get modelCatalog() { return current().modelCatalog; },
       observeLiveThreadContextReplay: (...args: Parameters<typeof this.observeLiveThreadContextReplay>) => this.observeLiveThreadContextReplay(...args),
       get overlayStore() { return current().overlayStore; },
+      ownerRelativeInstanceId: (...args: Parameters<typeof this.ownerRelativeInstanceId>) => this.ownerRelativeInstanceId(...args),
       get pendingServerRequests() { return current().pendingServerRequests; },
       get pendingStartedThreads() { return current().pendingStartedThreads; },
       get pendingTokenMiserInterceptions() { return current().pendingTokenMiserInterceptions; },
@@ -3486,6 +3488,50 @@ export class DesktopBackendRegistry {
     handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
   ): void {
     this.federatedThreadMessageHandler = handler ?? undefined;
+  }
+
+  /**
+   * This instance's own federation id. A viewer, a card, or an agent can name
+   * a thread by its owner's id while asking that owner itself, and only this
+   * id says the target is local rather than a peer's.
+   */
+  setLocalFederationInstanceId(resolve: (() => string | undefined) | null | undefined): void {
+    this.localFederationInstanceId = resolve ?? undefined;
+  }
+
+  /**
+   * The instance a target names, relative to this owner: nothing for a thread
+   * this instance owns, so the send stays local instead of routing to a peer
+   * with its own id, which is never enrolled.
+   */
+  private ownerRelativeInstanceId(instanceId: string | undefined): string | undefined {
+    const named = instanceId?.trim();
+    if (!named) return undefined;
+    let local: string | undefined;
+    try {
+      local = this.localFederationInstanceId?.()?.trim();
+    } catch (error) {
+      backendRegistryLog.warn("Could not read this instance's federation id", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return named === local ? undefined : named;
+  }
+
+  private ownerRelativeTarget<T extends { instanceId?: string; instanceLabel?: string }>(target: T): T {
+    if (!target.instanceId || this.ownerRelativeInstanceId(target.instanceId)) return target;
+    const { instanceId: _instanceId, instanceLabel: _instanceLabel, ...local } = target;
+    return local as T;
+  }
+
+  /**
+   * Naming this instance still means this instance only, so no peer is asked.
+   * includeRemote false with an instanceId is refused whoever it names.
+   */
+  private ownerRelativeRequest<R extends { args: { instanceId?: string; includeRemote?: boolean } }>(request: R): R {
+    if (request.args.includeRemote === false) return request;
+    const args = this.ownerRelativeTarget(request.args);
+    return args === request.args ? request : { ...request, args: { ...args, includeRemote: false } };
   }
 
   // Federation needs the registry before it can supply routed owner bindings.
@@ -32379,6 +32425,8 @@ export class DesktopBackendRegistry {
       operation: "send_message_to_thread",
       context: { backend: params.sourceBackend, threadId: params.sourceThreadId },
       args: {
+        // A viewer, or the card itself, can name this owner's thread by this
+        // owner's id; delivery treats that thread as local here.
         ...params.target,
         // A card raised without its owner still names one thread: a thread
         // this instance does not own is looked for on connected peers.
@@ -32397,8 +32445,10 @@ export class DesktopBackendRegistry {
    */
   async locateThreadTodoMessageTarget(
     source: { backend: AppServerBackendKind; threadId: string },
-    target: ThreadTodoMessageTarget,
+    named: ThreadTodoMessageTarget,
   ): Promise<ThreadTodoMessageTarget> {
+    // A card names its owner's own threads without an instance.
+    const target = this.ownerRelativeTarget(named);
     if (target.instanceId) {
       await this.validateRemoteMessageTarget(target);
       if (target.instanceLabel && target.title) return target;
@@ -32457,8 +32507,10 @@ export class DesktopBackendRegistry {
   }
 
   private async sendMessageToThread(
-    request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+    named: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
+    // Before the paused-project gate, which leaves a peer's thread to its peer.
+    const request = this.ownerRelativeRequest(named);
     const sourceTurnId = request.context.turnId?.trim();
     if (
       !sourceTurnId ||
@@ -32507,7 +32559,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     instanceId?: string;
   }): string | undefined {
-    if (args.instanceId?.trim() || !isAppServerBackendKind(args.backend)) return undefined;
+    if (this.ownerRelativeInstanceId(args.instanceId) || !isAppServerBackendKind(args.backend)) return undefined;
     const threadId = args.threadId.trim();
     return threadId
       ? this.projectPausedThreadMessageRefusal({ backend: args.backend, threadId })
@@ -32515,10 +32567,11 @@ export class DesktopBackendRegistry {
   }
 
   private async deliverMessageToThread(
-    request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
+    named: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
     /** Set only by the operator's to-do dispatch, never from tool arguments. */
     options?: { threadTodo?: { id: string; title?: string }; operatorApproved?: boolean },
   ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const request = this.ownerRelativeRequest(named);
     const backend = request.args.backend;
     if (!isAppServerBackendKind(backend)) {
       return threadOrchestrationFailure(
@@ -32892,8 +32945,9 @@ export class DesktopBackendRegistry {
   }
 
   private async performThreadTurnControlWithFallback(
-    request: PwrAgentThreadOrchestrationRequest<"steer_thread" | "stop_thread">,
+    named: PwrAgentThreadOrchestrationRequest<"steer_thread" | "stop_thread">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const request = this.ownerRelativeRequest(named);
     const controlled = await this.performThreadTurnControl(request);
     if (
       request.operation !== "steer_thread"

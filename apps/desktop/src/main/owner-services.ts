@@ -498,6 +498,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       targetStore: getDesktopOverlayStore(),
     }),
   );
+  getDesktopBackendRegistry().setLocalFederationInstanceId(
+    () => getDesktopFederationRuntime().messagingSourceInstanceId(),
+  );
   getDesktopBackendRegistry().setFederatedThreadInspectionHandler(
     createFederatedThreadInspectionHandler({
       targetStore: getDesktopOverlayStore(),
