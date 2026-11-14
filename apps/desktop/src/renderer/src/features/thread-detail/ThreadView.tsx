@@ -120,6 +120,7 @@ import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup, PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer, type ComposerProps } from "../composer/Composer";
 import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
@@ -4461,8 +4462,10 @@ export function ThreadView(props: ThreadViewProps) {
     <ThreadPlaceholderHeader
       {...headerChrome}
       backend={composerLaunchpad.backend}
-      backendLabel={formatBackendLabel(
+      model={composerLaunchpad.model}
+      backendLabel={formatOwnerProviderLabel(
         composerLaunchpad.backend,
+        composerLaunchpad.model,
         props.backends,
       )}
       projectLabel={composerLaunchpad.directoryLabel}

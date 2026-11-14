@@ -11,7 +11,7 @@ import {
   TodoIcon,
   WorktreeIcon,
 } from "../../icons";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { useProviderChipNeeded } from "./provider-chip-visibility";
 import { copyText } from "../../lib/copy-text";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -102,7 +102,8 @@ export function ThreadMetaChips({
   chipVisibility,
   thread,
 }: ThreadMetaChipsProps) {
-  const providerChipNeeded = useProviderChipNeeded(thread.source);
+  const providerChipNeeded = useProviderChipNeeded(thread.source, thread.model);
+  const providerLabel = useThreadProviderLabel(thread);
   const showProvider = (chipVisibility?.provider ?? true) && providerChipNeeded;
   const showBranch = chipVisibility?.branch ?? true;
   const maxLinkedDirectories = chipVisibility?.maxLinkedDirectories;
@@ -321,7 +322,7 @@ export function ThreadMetaChips({
 
       {showProvider ? (
         <span className="thread-row__chip thread-row__chip--backend">
-          {formatBackendLabel(thread.source)}
+          {providerLabel}
         </span>
       ) : null}
 

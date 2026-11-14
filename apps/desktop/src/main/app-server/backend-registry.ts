@@ -18898,6 +18898,15 @@ export class DesktopBackendRegistry {
     return await this.overlayStore.setLaunchpadDefaults(resolvedDefaults);
   }
 
+  /**
+   * Each registered Codex model provider and what its catalog read found,
+   * read after the model list so the two describe the same read.
+   */
+  private codexModelProviderCatalogStates(): Pick<BackendSummary, "codexModelProviders"> {
+    const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
+    return states.length ? { codexModelProviders: states } : {};
+  }
+
   private readCodexDefaultModelsOnce(
     callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendModelOption[]> {
@@ -21107,6 +21116,7 @@ export class DesktopBackendRegistry {
       methods,
       capabilities,
       launchpadOptions: buildLaunchpadOptions("codex", discoveredModels),
+      ...this.codexModelProviderCatalogStates(),
       executionModes: [
         {
           mode: "default",

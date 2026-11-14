@@ -53,18 +53,23 @@ export function ModelDropdown(
     ...dropdown
   } = props;
   const menu = buildModelMenu({ kind, models, thread });
+  // A menu scoped to one provider sits beside a Provider pill that already
+  // names it, so the closed pill shows the model alone.
+  const toOption = thread
+    ? (model: BackendModelOption): ComposerDropdownOption => ({ label: model.label ?? model.id, value: model.id })
+    : modelDropdownOption;
   const groups: ComposerDropdownGroup[] = menu.providerGroups.map((group) => ({
     label: group.label,
-    options: group.models.map(modelDropdownOption),
+    options: group.models.map(toOption),
   }));
-  const options = [...leadingOptions, ...menu.primary.map(modelDropdownOption)];
+  const options = [...leadingOptions, ...menu.primary.map(toOption)];
   return (
     <ComposerDropdown
       {...dropdown}
       options={models.length === 0 && emptyOptions ? [...leadingOptions, ...emptyOptions] : options}
       optionsLabel={kind ? formatBackendLabel(kind) : undefined}
       groups={groups}
-      otherOptions={menu.other.map(modelDropdownOption)}
+      otherOptions={menu.other.map(toOption)}
       otherLabel={modelMenuOtherLabel(kind)}
     />
   );

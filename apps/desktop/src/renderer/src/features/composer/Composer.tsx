@@ -1,5 +1,14 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
-import { codexProviderIdOfModel, type BackendModelOption } from "@pwragent/shared";
+import {
+  buildProviderPickerEntries,
+  codexModelProviderCatalogNote,
+  codexProviderIdOfModel,
+  describeCodexModelProviderEntry,
+  parseProviderPickerValue,
+  providerPickerValue,
+  type BackendModelOption,
+} from "@pwragent/shared";
+import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { ModelDropdown } from "./ModelDropdown";
 import { ThreadHandoffComposerBand } from "../federation/ThreadHandoffProgress";
 import { mayContainLinearPastedImages } from "@pwragent/shared";
@@ -11097,7 +11106,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     ? modelOptions.find((model) => model.providerId === threadModelProvider)?.providerLabel
       ?? threadModelProvider
     : "Codex";
-  const modelMenuFootnote = backend?.kind === "codex"
+  const threadModelMenuFootnote = backend?.kind === "codex"
     && props.thread
     && !props.launchpad
     && (threadModelProvider || modelOptions.some((model) => model.providerId))
@@ -11182,6 +11191,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     props.backends?.filter(
       (candidate) => candidate.available && candidate.capabilities.createThread
     ) ?? [];
+  // Each Codex model provider is its own entry, named the way the owner
+  // named it. It still starts a `codex` thread; its models carry the
+  // provider in their qualified ids.
+  const providerPickerEntries = buildProviderPickerEntries(providerOptions);
+  // A new chat's Model menu offers the chosen provider's models only.
+  const launchpadModelScope = props.launchpad && backend?.kind === "codex"
+    ? { model: selectedModelOption?.id ?? props.launchpad.model }
+    : undefined;
+  const scopedCodexProviderId = backend?.kind === "codex"
+    ? codexProviderIdOfModel(launchpadModelScope?.model ?? (props.launchpad ? undefined : props.thread?.model))
+    : undefined;
+  const modelMenuFootnote = [
+    threadModelMenuFootnote,
+    scopedCodexProviderId
+      ? codexModelProviderCatalogNote(
+          backend?.codexModelProviders?.find((state) => state.id === scopedCodexProviderId),
+        )
+      : undefined,
+  ].filter(Boolean).join(" ") || undefined;
   // Backends we can hand a review to. `reviewRunner` doubles as the feature
   // probe for reviewer overrides: an instance that predates them never sets
   // it, so a viewer federated to an older owner finds no eligible reviewers
@@ -14532,16 +14560,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               id="composer-provider"
               ariaLabel="Provider"
               disabled={launchpadSubmitting}
-              value={props.launchpad.backend}
-              options={providerOptions.map((candidate) => ({
-                label: formatBackendLabel(candidate.kind, props.backends),
-                value: candidate.kind,
-              }))}
+              value={providerPickerValue(props.launchpad.backend, props.launchpad.model)}
+              options={providerPickerEntries.map((entry) => entry.codexModelProviderId
+                ? {
+                    label: entry.label ?? entry.codexModelProviderId,
+                    value: entry.value,
+                    ...describeCodexModelProviderEntry(entry),
+                  }
+                : {
+                    label: formatBackendLabel(entry.backend, props.backends),
+                    value: entry.value,
+                  })}
               onChange={(value) => {
                 if (!props.launchpad) {
                   return;
                 }
-                const nextBackend = value as NavigationLaunchpadDraft["backend"];
+                const picked = parseProviderPickerValue(value);
+                const nextBackend = picked.backend as NavigationLaunchpadDraft["backend"];
+                const pickedEntry = providerPickerEntries.find((entry) => entry.value === value);
                 const hasRememberedModel = Boolean(
                   props.launchpad.providerSettings?.[nextBackend]?.model,
                 );
@@ -14563,10 +14599,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 }
                 const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
                 const remembered = props.launchpad.providerSettings?.[nextBackend];
-                const ownerModels = nextSummary?.launchpadOptions?.models ?? [];
+                // A Codex entry, OpenAI's own or a model provider's, offers
+                // only that provider's models, so its model is chosen there.
+                const ownerModels = nextBackend === "codex"
+                  ? pickedEntry?.models ?? []
+                  : nextSummary?.launchpadOptions?.models ?? [];
+                const defaultOption = getDefaultModelOption(nextSummary);
                 const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
                   ?? ownerModels.find((candidate) => candidate.id === nextSummary?.modelDefaults?.model)
-                  ?? getDefaultModelOption(nextSummary);
+                  ?? (nextBackend === "codex"
+                    ? ownerModels.find((candidate) => candidate.id === defaultOption?.id) ?? ownerModels[0]
+                    : defaultOption);
                 const ownerEffort = ownerModel
                   ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
                     ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
@@ -14574,7 +14617,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   : undefined;
                 handleLaunchpadPatch({
                   backend: nextBackend,
-                  ...(filesystemFederationTarget?.scope === "remote" ? {
+                  // A Codex choice names its provider through the model id,
+                  // so moving between Codex entries must set the model.
+                  ...(filesystemFederationTarget?.scope === "remote" || nextBackend === "codex" ? {
                     model: ownerModel?.id,
                     reasoningEffort: ownerModel?.supportsReasoning
                       ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
@@ -14590,7 +14635,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             />
           ) : props.thread ? (
             <span className="composer__fixed-value" aria-label="Provider">
-              {formatBackendLabel(props.thread.source, props.backends)}
+              {formatOwnerProviderLabel(props.thread.source, props.thread.model, props.backends)}
             </span>
           ) : null}
 
@@ -14901,7 +14946,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               value={selectedModelOption?.id ?? ""}
               kind={backend.kind}
               models={modelOptions}
-              thread={props.launchpad ? undefined : props.thread}
+              thread={props.launchpad ? launchpadModelScope : props.thread}
               leadingOptions={selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
                 ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
                     description: "This model is absent from this provider's catalog. Choose an available model." }]

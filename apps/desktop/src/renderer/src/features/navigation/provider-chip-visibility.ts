@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo } from "react";
-import type { AppServerBackendKind } from "@pwragent/shared";
+import { codexProviderIdOfModel, type AppServerBackendKind } from "@pwragent/shared";
 
 /**
  * The providers that own at least one thread, from the owner's directory
@@ -26,10 +26,20 @@ export function providerChipNeeded(
   return providers.length === 1 && providers[0] !== backend;
 }
 
-/** An unnamed provider keeps its chip: there is nothing to compare. */
-export function useProviderChipNeeded(backend: AppServerBackendKind | undefined): boolean {
+/**
+ * An unnamed provider keeps its chip: there is nothing to compare. So does a
+ * Codex thread on a registered model provider (`@mathos/…`): the owner's
+ * index counts it as `codex`, so a row of MathOS among OpenAI rows would
+ * otherwise lose the one chip that tells it apart.
+ */
+export function useProviderChipNeeded(
+  backend: AppServerBackendKind | undefined,
+  model?: string,
+): boolean {
   const providers = useContext(ThreadProvidersContext);
-  return backend === undefined || providerChipNeeded(providers, backend);
+  return backend === undefined
+    || (backend === "codex" && Boolean(codexProviderIdOfModel(model)))
+    || providerChipNeeded(providers, backend);
 }
 
 /**
