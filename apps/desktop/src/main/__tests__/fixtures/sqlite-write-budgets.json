@@ -76,6 +76,7 @@
   "agent-thread-named-environment-start": {"commits": 5, "note": "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.", "observedWalBytes": 74160, "rowsChanged": 5, "statements": 5},
   "all-pinned-project-thread-creation": {"commits": 4, "note": "One new thread including its automatic pin: 4 commits, ~0.054 MB/thread and ~5.4 MB/day at 100 starts/day; 0 MB/day idle.", "observedWalBytes": 53560, "rowsChanged": 4, "statements": 4},
   "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint writing one row per intent, one recovery claim, one drained deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and about 210 KB WAL per cycle, about 2.1 MB/day; idle is 0 MB/day.", "observedWalBytes": 210152, "rowsChanged": 520, "statements": 520},
+  "archive-cleanup-16-terminal-recovery": {"commits": 18, "note": "Recover 15 absent and one external checkout: one claim and one drained deletion plus 16 existing archive-overlay commits; no per-item checkpoint or idle writes. At 10 launches/day and about 272 KB WAL per launch, about 2.72 MB/day.", "observedWalBytes": 271920, "rowsChanged": 64, "statements": 64},
   "archive-cleanup-read-only-inventory": {
     "commits": 0,
     "note": "One ownership projection and three ACP identity pages: zero SQLite writes; pacing and queue state add 0 MB/day.",
