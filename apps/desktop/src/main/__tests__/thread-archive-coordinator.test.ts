@@ -10,6 +10,7 @@ import {
   type WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import { ArchiveCleanupCancelledError } from "../app-server/archive-cleanup-queue";
 import { isArchivedCheckoutCandidate } from "../app-server/checkout-hibernation";
 import type { ThreadArchiveCoordinator } from "../app-server/thread-archive-coordinator";
 import type { ThreadArchiveCandidate } from "../app-server/thread-archive-sweeper";
@@ -395,8 +396,20 @@ describe("registry-facing accessors", () => {
     await send;
     expect(fixture.coordinator.checkoutRestoreRecords.size).toBe(0);
     expect(fixture.coordinator.threadLifecycleMutationCountRecords.size).toBe(0);
-    expect(fixture.coordinator.archiveCleanupOverflowRecords.size).toBe(0);
-    expect(fixture.coordinator.archiveWorktreeRemovalAdmissionRecords.size).toBe(0);
+  });
+
+  it("shows the registry the overflow and removal admissions it holds", () => {
+    const coordinator = archiveCoordinatorStandIn({});
+    const internals = coordinator as unknown as {
+      archiveCleanupOverflow: Map<string, unknown>;
+      archiveWorktreeRemovalAdmissions: Set<unknown>;
+    };
+    const overflow = { intent: intent("waiting") };
+    const admission = { scope: { isReserved: false } };
+    internals.archiveCleanupOverflow.set("codex:waiting", overflow);
+    internals.archiveWorktreeRemovalAdmissions.add(admission);
+    expect([...coordinator.archiveCleanupOverflowRecords]).toEqual([["codex:waiting", overflow]]);
+    expect([...coordinator.archiveWorktreeRemovalAdmissionRecords]).toEqual([admission]);
   });
 
   it("reads the cleanup read generation and advances it with each invalidation", () => {
@@ -406,19 +419,46 @@ describe("registry-facing accessors", () => {
     expect(coordinator.archiveCleanupReadGeneration("codex")).toBeGreaterThan(before);
   });
 
-  it("advances the workspace revision and lets a turn start through an unowned workspace", () => {
+  it("advances the workspace revision", () => {
     const coordinator = archiveCoordinatorStandIn({});
     const revision = () => (coordinator as unknown as { archiveWorkspaceRevision: number }).archiveWorkspaceRevision;
     const before = revision();
     coordinator.advanceArchiveWorkspaceRevision();
     expect(revision()).toBe(before + 1);
+  });
+
+  // Rule: a turn start refuses a thread whose workspace a reserved removal
+  // admission covers, even when that thread owns the admission.
+  it("refuses a turn start only through a reserved removal's workspace", () => {
+    const coordinator = archiveCoordinatorStandIn({});
+    const admissions = (coordinator as unknown as { archiveWorktreeRemovalAdmissions: Set<unknown> }).archiveWorktreeRemovalAdmissions;
+    const scope = { isReserved: true, ownerKey: key, intersects: (candidate: string) => candidate === key };
+    admissions.add({ scope });
+    expect(() => coordinator.assertArchiveWorkspaceUsable(key)).toThrow(/reserved by archive cleanup/);
+    expect(() => coordinator.assertArchiveWorkspaceUsable("codex:elsewhere")).not.toThrow();
+    scope.isReserved = false;
     expect(() => coordinator.assertArchiveWorkspaceUsable(key)).not.toThrow();
   });
 
-  it("closes its queue and stops its sweeper at shutdown", async () => {
+  it("closes its queue to new cleanups at shutdown", async () => {
+    const coordinator = archiveCoordinatorStandIn({ registry: () => ({ runtimeInstanceId: "runtime-test" }) });
+    const queue = (coordinator as unknown as {
+      archiveCleanupQueue: { enqueue(key: string, work: () => Promise<unknown>): Promise<unknown> };
+    }).archiveCleanupQueue;
+    await coordinator.closeArchiveCleanupQueue();
+    const work = vi.fn(async () => "ran");
+    await expect(queue.enqueue("codex:late", work)).rejects.toBeInstanceOf(ArchiveCleanupCancelledError);
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it("stops its sweeper at shutdown, and has nothing to stop before one starts", async () => {
     const coordinator = archiveCoordinatorStandIn({});
     expect(coordinator.stopThreadArchiveSweeper()).toBeUndefined();
-    await expect(coordinator.closeArchiveCleanupQueue()).resolves.toBeUndefined();
+    const stopped = Promise.resolve();
+    const stop = vi.fn(() => stopped);
+    (coordinator as unknown as { threadArchiveSweeper: { stop: () => Promise<void> } }).threadArchiveSweeper = { stop };
+    expect(coordinator.stopThreadArchiveSweeper()).toBe(stopped);
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 
   it("reads neither its host nor its stores while it is constructed", () => {
