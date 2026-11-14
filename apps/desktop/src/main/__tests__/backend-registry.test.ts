@@ -76119,6 +76119,81 @@ describe("agent tool access ceiling", () => {
       await registry.close();
     });
 
+    // Property: a sender's replacement of its queued message is submitted
+    // again under the override the entry keeps, so it meets the target's
+    // stored mode as it stands then. It can neither take nor drop the
+    // operator's approval of the text it replaces.
+    it("checks a sender's replacement against the target's current mode and keeps approval with its text", async () => {
+      const sourceThread = { backend: "codex" as const, instanceId: "pwr_peer", threadId: "peer-thread" };
+      const origin = (approved: boolean) => ({
+        kind: "agent" as const,
+        sourceThread,
+        ...(approved ? { operatorApproved: true } : {}),
+      });
+      for (const submittedMode of MODES) {
+        for (const executionMode of MODES) {
+          for (const currentMode of MODES) {
+            for (const originalApproved of [false, true]) {
+              for (const replacementApproved of [false, true]) {
+                if (!originalApproved && rank(executionMode) > rank(submittedMode)) continue;
+                const { codexClient, overlayStore, registry } = await startCaller({
+                  callerMode: "full-access",
+                  targetMode: submittedMode,
+                });
+                const target = { backend: "codex" as const, threadId: "target-thread" };
+                await registry.submitHeldTurn({
+                  ...target,
+                  queueEntryId: "queued-1",
+                  input: [{ type: "text", text: "Original" }],
+                  holdReason: "locked",
+                  messageOrigin: origin(originalApproved),
+                  executionMode,
+                });
+                await overlayStore.setThreadExecutionMode({ ...target, executionMode: currentMode });
+                const scenario = { submittedMode, executionMode, currentMode, originalApproved, replacementApproved };
+                const replacing = registry.replaceQueuedAgentMessage({
+                  ...target,
+                  queueEntryId: "queued-1",
+                  input: [{ type: "text", text: "Replacement" }],
+                  messageOrigin: origin(replacementApproved),
+                });
+                const queue = (registry as unknown as {
+                  threadTurnQueue: import("@pwragent/owner-core/thread-turn-queue").ThreadTurnQueue;
+                }).threadTurnQueue;
+                const queued = () => queue.getQueuedEntries(target).map((entry) => ({
+                  text: entry.input.map((item) => item.type === "text" ? item.text : "").join(""),
+                  executionMode: entry.executionMode,
+                  approved: Boolean(entry.messageOrigin?.operatorApproved),
+                }));
+                if (replacementApproved !== originalApproved) {
+                  await expect(replacing, JSON.stringify(scenario))
+                    .rejects.toThrow("cannot change whether the operator approved");
+                  expect({ ...scenario, queued: queued() }).toEqual({
+                    ...scenario,
+                    queued: [{ text: "Original", executionMode, approved: originalApproved }],
+                  });
+                } else if (!replacementApproved && rank(executionMode) > rank(currentMode)) {
+                  await expect(replacing, JSON.stringify(scenario)).rejects.toThrow(/An agent cannot raise access/);
+                  expect({ ...scenario, queued: queued() }).toEqual({
+                    ...scenario,
+                    queued: [{ text: "Original", executionMode, approved: originalApproved }],
+                  });
+                } else {
+                  await expect(replacing, JSON.stringify(scenario)).resolves.toMatchObject({ queueStatus: "queued" });
+                  expect({ ...scenario, queued: queued() }).toEqual({
+                    ...scenario,
+                    queued: [{ text: "Replacement", executionMode, approved: originalApproved }],
+                  });
+                }
+                expect(codexClient.startTurnCalls.filter((turn) => turn.threadId === "target-thread")).toHaveLength(0);
+                await registry.close();
+              }
+            }
+          }
+        }
+      }
+    });
+
     it("never raises a target with a raw sandbox override alone", async () => {
       for (const callerMode of MODES) {
         for (const targetMode of MODES) {

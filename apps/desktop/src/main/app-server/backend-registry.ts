@@ -648,6 +648,7 @@ import {
 } from "./codex-environment-runtime";
 import { type CodexEnvironmentHydrationStoreLike } from "../storage/codex-environment-hydration-store";
 import {
+  replacedAgentMessageOrigin,
   ThreadTurnQueue,
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueLifecycleEvent,
@@ -2857,9 +2858,10 @@ export class DesktopBackendRegistry {
    * so it may keep or lower the thread's access, never raise it; raising a
    * thread's stored mode stays with mutate_thread. Runs on the thread's
    * owner, for local and federated sends alike, as the turn is submitted:
-   * a queued turn is checked now, not when it is released. The caller's own
-   * ceiling is checked on its instance before the send. Operator,
-   * messaging-app, PwrAgent and operator-approved to-do deliveries pass.
+   * a queued turn is checked now, not when it is released, and again when
+   * its sender replaces it. The caller's own ceiling is checked on its
+   * instance before the send. Operator, messaging-app, PwrAgent and
+   * operator-approved to-do deliveries pass.
    */
   private async assertAgentMessageWithinThreadAccess(params: {
     backend: AppServerBackendKind;
@@ -11033,6 +11035,25 @@ export class DesktopBackendRegistry {
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
+    // The operator approved the text they saw, so its approval stays with it.
+    if (
+      Boolean(request.messageOrigin.operatorApproved)
+      !== Boolean(replacedAgentMessageOrigin(entry, sender)?.operatorApproved)
+    ) {
+      throw new Error(
+        "A replacement cannot change whether the operator approved the queued message. Send a new message instead.",
+      );
+    }
+    // The replacement is submitted again under the settings the entry keeps,
+    // so it meets the thread's access as it stands now.
+    await this.assertAgentMessageWithinThreadAccess({
+      backend: request.backend,
+      threadId: request.threadId,
+      executionMode: entry.executionMode,
+      approvalPolicy: entry.approvalPolicy,
+      sandbox: entry.sandbox,
+      messageOrigin: request.messageOrigin,
+    });
     const updated = await this.threadTurnQueue.replaceQueuedAgentInput(request.queueEntryId, input, sender, request.messageOrigin);
     if (!updated) throw new Error("The sender's queued message is no longer waiting.");
     return {
