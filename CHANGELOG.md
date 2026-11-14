@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4.2 - 2026-11-13
+
+- Outpost Federation - Let trusted Outposts participate as full federation members, with the same owner-side agent tools and cross-instance operations as desktop instances. Outposts remain contained by default; full membership is an explicit operator choice, separate from Full Access execution mode.
+- Outpost Approvals - Review and answer Outpost approval requests from an authorized desktop viewer. Approvals now default to ask; choose never for unattended operation, where commands needing approval fail instead of waiting. Contained Auto turns require human review rather than letting their own model approve escalations.
+- Federation Containment - Set "Contain this instance" and manage peer roles in Settings. Gateways can assign containment that survives reconnects and restarts, and agents refresh their available tool catalogs when containment changes. A contained member cannot lift the role its peer assigned it.
+- Contained Research Outposts - Run the Outpost, model-key proxy, and restricted egress relay as one Docker Compose stack, with automatic restart after a crash or reboot. Keep real model credentials outside the research container and move repositories and dependencies in through the supplied operator scripts.
+- Agent Edit Diffs - Show Grok edits and Gemini/Qwen whole-file edits as readable file diffs, with workspace-relative paths. Name Grok commands, file reads, and directory listings by the work they perform instead of generic tool labels.
+- Remote Threads and Search - Open remote search results in the current window and mount newly started or handed-off threads in the viewer that requested them, rather than an unrelated window.
+- To-do Projects - Use the committed workspace handoff to choose a To-do's project and working directory instead of stale provider metadata.
+- Review Status - Keep completed review cards from reverting to running when stale status arrives.
+
+Outpost upgrade: Set PWRAGENT_OUTPOST_APPROVALS=never if the Outpost must run without an operator answering approval requests. Full federation membership uses PWRAGENT_OUTPOST_FEDERATION_ROLE=full, but peers that already assigned contained must be changed by their own operator; older peers without role-declaration support retain their invite-time role. Full Access remains unsandboxed and exposes the container's files and keys. Do not grant full federation membership to an identity used by untrusted models; re-enroll it first.
+
 ## v1.4.1 - 2026-11-12
 
 - Outpost Permissions - Let the operator enable Full Access and agent network access when starting an Outpost. Default remains read-only, Auto remains workspace-write, and network access stays off unless explicitly enabled. Agents cannot widen the owner's configured execution modes or sandbox policy.
