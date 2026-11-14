@@ -97,6 +97,7 @@ export class ArchiveWorktreeReferences {
   /** Drop one owner's row for a checkout that no retry can clean. Counted as
    * an addition so the next checkpoint rewrites the backlog without it. */
   async forget(ownerKey: string, worktreePath: string): Promise<void> {
+    if (!this.owners.has(ownerKey)) return;
     const checkouts = this.retainedKeys(worktreePath);
     checkouts.add(await canonicalWorktreePaths()(worktreePath).catch(() => referencePath(worktreePath)));
     let removed = false;
