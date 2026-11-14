@@ -6,7 +6,7 @@ import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-r
 export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadListingOverlayStates"
   | "getThreadMetadata" | "updateThreadMetadata" | "setThreadMcpConnectionIds" | "setThreadModelSettings"
-  | "setThreadForkOrigin" | "setThreadHandoffOrigin"
+  | "setThreadForkOrigin" | "setThreadHandoffOrigin" | "setThreadScheduledStart"
 > & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadParent" | "updateSubthreadOrder">>;
 
 // The overlay store requires upsertThreadUsageLine and readThreadPricing, but
@@ -30,7 +30,10 @@ export type RegistryWorkspaceStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadGitWorkingStateCache" | "writeThreadGitWorkingStateCacheEntry"
   | "acknowledgeThreadEnvironmentFailure" | "setThreadCodexEnvironmentRuntime"
   | "listDirectoryLaunchpads"
->;
+> & Partial<Pick<BackendRegistryOverlayStoreLike,
+  "dropThreadCodexEnvironmentActionLiveOutput" | "flushThreadCodexEnvironmentActionLiveOutputs"
+  | "setThreadCodexEnvironmentActionLiveOutput"
+>>;
 
 export type RegistryPullRequestStore = Pick<BackendRegistryOverlayStoreLike,
   "addThreadPullRequestReference" | "listActiveThreadPrStatusWatches" | "listAllActivePrStatusWatches"
@@ -47,6 +50,15 @@ export type RegistryArchiveStore = Pick<BackendRegistryOverlayStoreLike,
 >;
 
 export type RegistryMessagingStore = Pick<BackendRegistryOverlayStoreLike, "appendMessagingBindingTransition">;
+
+export type RegistryLaunchpadStore = Pick<BackendRegistryOverlayStoreLike,
+  "getDirectoryLaunchpad" | "getLaunchpadDefaults" | "upsertDirectoryLaunchpad" | "resetDirectoryLaunchpad"
+  | "setLaunchpadDefaults"
+> & Partial<Pick<BackendRegistryOverlayStoreLike, "adoptLegacyRemoteDirectoryLaunchpad">>;
+
+export type RegistryDirectoryStore = Pick<BackendRegistryOverlayStoreLike,
+  "addLinkedDirectory" | "removeLinkedDirectory" | "replaceWorkspaceLinkedDirectory"
+> & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadWorktreeRegistration">>;
 
 export type RegistryToolAccountingStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadToolAccounting" | "persistThreadToolInvocationBoundary"
@@ -82,6 +94,8 @@ export interface RegistryContext {
     readonly reviews: RegistryReviewStore;
     readonly archive: RegistryArchiveStore;
     readonly messaging: RegistryMessagingStore;
+    readonly launchpads: RegistryLaunchpadStore;
+    readonly directories: RegistryDirectoryStore;
   };
   readonly providers: {
     readonly codex: BackendClient;

@@ -8,6 +8,7 @@ import type { SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import type { ThreadWorkspaceService } from "./thread-workspace-service";
+import type { ThreadDirectoryService } from "./thread-directory-service";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -213,6 +214,7 @@ export interface RegistryDependencies {
   threadUsageLedger: ThreadUsageLedger;
   threadArchiveCoordinator: ThreadArchiveCoordinator;
   threadWorkspaceService: ThreadWorkspaceService;
+  threadDirectoryService: ThreadDirectoryService;
   ownerAdmission?: ThreadOwnerAdmission;
   configStore?: Pick<
     DesktopConfigStore,
@@ -273,8 +275,6 @@ export interface RegistryDependencies {
     codexEnv: NodeJS.ProcessEnv;
   }>;
   codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
-  codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
-  codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
   localFilePrivateStorageRoots: readonly string[];
   codexClient: BackendClient;
   tokenMiserDiagnostics?: TokenMiserDiagnostics;

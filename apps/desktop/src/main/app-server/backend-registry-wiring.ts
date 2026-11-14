@@ -105,6 +105,7 @@ import { SubAgentMonitorService } from "./subagent-monitor-service";
 import { ThreadUsageLedger } from "./thread-usage-ledger";
 import { ThreadArchiveCoordinator, type ThreadArchiveCoordinatorDependencies } from "./thread-archive-coordinator";
 import { ThreadWorkspaceService } from "./thread-workspace-service";
+import { ThreadDirectoryService, type ThreadDirectoryServiceDependencies } from "./thread-directory-service";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolAdvertisedLocally, localAgentToolRefusal } from "../member-containment";
@@ -127,6 +128,7 @@ export interface RegistryModules {
   readonly threadUsageLedger: ThreadUsageLedger;
   readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
   readonly threadWorkspaceService: ThreadWorkspaceService;
+  readonly threadDirectoryService: ThreadDirectoryService;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -160,8 +162,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let resolveCodexRuntimeCommandFn: RegistryDependencies["resolveCodexRuntimeCommandFn"];
   let resolveTokenMiserCodexRuntimeFn: RegistryDependencies["resolveTokenMiserCodexRuntimeFn"];
   let codexEnvironmentCommandEnv: RegistryDependencies["codexEnvironmentCommandEnv"];
-  let codexEnvironmentCommandRunner: RegistryDependencies["codexEnvironmentCommandRunner"];
-  let codexEnvironmentHydrationStore: RegistryDependencies["codexEnvironmentHydrationStore"];
+  let codexEnvironmentCommandRunner: ThreadDirectoryServiceDependencies["codexEnvironmentCommandRunner"];
+  let codexEnvironmentHydrationStore: ThreadDirectoryServiceDependencies["codexEnvironmentHydrationStore"];
   let tokenMiserDiagnostics: RegistryDependencies["tokenMiserDiagnostics"];
   let tokenMiserStore: RegistryDependencies["tokenMiserStore"];
   let tokenMiserServiceValue: RegistryDependencies["tokenMiserService"];
@@ -1323,6 +1325,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // The workspace service tests for updateSubthreadOrder before calling
         // it, as the registry did; a getter keeps a missing method missing.
         get updateSubthreadOrder() { return overlayStore.updateSubthreadOrder?.bind(overlayStore); },
+        setThreadScheduledStart: (...args) => overlayStore.setThreadScheduledStart(...args),
       },
       usage: {
         // The store requires upsertThreadUsageLine and readThreadPricing, but
@@ -1362,6 +1365,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get acknowledgeThreadEnvironmentFailure() { return overlayStore.acknowledgeThreadEnvironmentFailure?.bind(overlayStore); },
         get setThreadCodexEnvironmentRuntime() { return overlayStore.setThreadCodexEnvironmentRuntime?.bind(overlayStore); },
         listDirectoryLaunchpads: (...args) => overlayStore.listDirectoryLaunchpads(...args),
+        // The directory service tests for each live-output method before
+        // calling it, as the registry did; a getter keeps a missing one missing.
+        get dropThreadCodexEnvironmentActionLiveOutput() { return overlayStore.dropThreadCodexEnvironmentActionLiveOutput?.bind(overlayStore); },
+        get flushThreadCodexEnvironmentActionLiveOutputs() { return overlayStore.flushThreadCodexEnvironmentActionLiveOutputs?.bind(overlayStore); },
+        get setThreadCodexEnvironmentActionLiveOutput() { return overlayStore.setThreadCodexEnvironmentActionLiveOutput?.bind(overlayStore); },
       },
       toolAccounting: {
         // The ledger tests for readThreadToolAccounting before calling it, as
@@ -1399,6 +1407,24 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       },
       messaging: {
         appendMessagingBindingTransition: (...args) => overlayStore.appendMessagingBindingTransition(...args),
+      },
+      launchpads: {
+        getDirectoryLaunchpad: (...args) => overlayStore.getDirectoryLaunchpad(...args),
+        getLaunchpadDefaults: (...args) => overlayStore.getLaunchpadDefaults(...args),
+        upsertDirectoryLaunchpad: (...args) => overlayStore.upsertDirectoryLaunchpad(...args),
+        resetDirectoryLaunchpad: (...args) => overlayStore.resetDirectoryLaunchpad(...args),
+        setLaunchpadDefaults: (...args) => overlayStore.setLaunchpadDefaults(...args),
+        // The directory service tests for it before calling it, as the
+        // registry did; a getter keeps a missing method missing.
+        get adoptLegacyRemoteDirectoryLaunchpad() { return overlayStore.adoptLegacyRemoteDirectoryLaunchpad?.bind(overlayStore); },
+      },
+      directories: {
+        addLinkedDirectory: (...args) => overlayStore.addLinkedDirectory(...args),
+        removeLinkedDirectory: (...args) => overlayStore.removeLinkedDirectory(...args),
+        replaceWorkspaceLinkedDirectory: (...args) => overlayStore.replaceWorkspaceLinkedDirectory(...args),
+        // The directory service tests for it before calling it, as the
+        // registry did; a getter keeps a missing method missing.
+        get setThreadWorktreeRegistration() { return overlayStore.setThreadWorktreeRegistration?.bind(overlayStore); },
       },
     },
     providers: { codex: codexClient, claude: claudeBackend, acp: acpBackend },
@@ -1442,6 +1468,14 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadArchiveCoordinator,
     gitWorkspaceHandoffService,
   }, () => ports);
+  const threadDirectoryService = new ThreadDirectoryService(context, {
+    threadArchiveCoordinator,
+    threadWorkspaceService,
+    threadInspectionTools,
+    threadMcpConnections,
+    codexEnvironmentCommandRunner,
+    codexEnvironmentHydrationStore,
+  }, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
@@ -1453,6 +1487,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadUsageLedger,
     threadArchiveCoordinator,
     threadWorkspaceService,
+    threadDirectoryService,
     handlers,
     ownerAdmission,
     configStore,
@@ -1499,8 +1534,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveCodexRuntimeCommandFn,
     resolveTokenMiserCodexRuntimeFn,
     codexEnvironmentCommandEnv,
-    codexEnvironmentCommandRunner,
-    codexEnvironmentHydrationStore,
     localFilePrivateStorageRoots,
     codexClient,
     tokenMiserDiagnostics,
@@ -1553,6 +1586,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadUsageLedger,
     threadArchiveCoordinator,
     threadWorkspaceService,
+    threadDirectoryService,
   });
   return registry;
 }

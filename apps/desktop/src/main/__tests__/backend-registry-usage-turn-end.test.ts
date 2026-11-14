@@ -172,12 +172,9 @@ describe("DesktopBackendRegistry usage turn ends", () => {
 
   it.each([false, true])("returns the transcript before optional metadata repairs and drains them on close (directory failure: %s)", async (directoryFails) => {
     const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
-    const privateRegistry = registry as unknown as {
-      repairCodexThreadDirectoryRelationship(): Promise<void>;
-    };
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
-    const directory = vi.spyOn(privateRegistry, "repairCodexThreadDirectoryRelationship").mockImplementation(async () => {
+    const directory = vi.spyOn(registryModules(registry).threadDirectoryService, "repairCodexThreadDirectoryRelationship").mockImplementation(async () => {
       if (directoryFails) throw new Error("directory repair failed");
       await pending;
     });
