@@ -490,6 +490,7 @@ import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-ag
 import {
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
+import type { PwrAgentOpenAIDecisionsHandler } from "../agent-tools/pwragent-openai-decisions-agent-tools";
 import { ThreadTodoError } from "../thread-todos/thread-todo-service";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 
@@ -1337,6 +1338,7 @@ export class DesktopBackendRegistry {
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
+  private openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly changingCodexAgentThreadIds = new Set<string>();
@@ -2231,6 +2233,7 @@ export class DesktopBackendRegistry {
       get threadPrAutoDispatchHandler() { return current().threadPrAutoDispatchHandler; },
       get threadStarts() { return current().threadStarts; },
       get threadTodoHandler() { return current().threadTodoHandler; },
+      get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
       get tokenMiserDiagnostics() { return current().tokenMiserDiagnostics; },
@@ -2701,6 +2704,36 @@ export class DesktopBackendRegistry {
     handler: PwrAgentThreadTodoHandler | null | undefined,
   ): void {
     this.threadTodoHandler = handler ?? undefined;
+  }
+
+  // Installed by the owner once the profile state database is open.
+  setPwrAgentOpenAIDecisionsHandler(
+    handler: PwrAgentOpenAIDecisionsHandler | null | undefined,
+  ): void {
+    this.openAIDecisionsHandler = handler ?? undefined;
+  }
+
+  /**
+   * Persists one OpenAI Decisions usage line and refreshes the calling
+   * thread's pricing card. The line is its own provider and account (the
+   * OpenAI API project), so no parent-turn counter or Codex subscription
+   * estimate moves.
+   */
+  async recordOpenAIDecisionsUsageLines(lines: ThreadUsageLineRecord[]): Promise<void> {
+    if (lines.length === 0 || typeof this.overlayStore.upsertThreadUsageLines !== "function") return;
+    // One transaction for the whole batch.
+    await this.overlayStore.upsertThreadUsageLines({ lines });
+    const threads = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+    for (const line of lines) {
+      const threadId = line.parentThreadId ?? line.threadId;
+      threads.set(JSON.stringify([line.backend, threadId]), {
+        backend: line.backend as AppServerBackendKind,
+        threadId,
+      });
+    }
+    for (const thread of threads.values()) {
+      await this.threadUsageLedger.emitThreadPricingUpdated(thread);
+    }
   }
 
   /**
@@ -8583,6 +8616,7 @@ export class DesktopBackendRegistry {
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
+      openAIDecisionsHandler: this.openAIDecisionsHandler,
     });
     const pdfMcpPreparation = resources.track(
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -17741,6 +17775,7 @@ export class DesktopBackendRegistry {
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
+        openAIDecisionsHandler: this.openAIDecisionsHandler,
       }),
     ), discoveryEnabled, eagerTools);
     // Tool search reads this catalog too, so it must not name refused tools.
@@ -21690,6 +21725,7 @@ export class DesktopBackendRegistry {
         tokenMiserFocused: this.tokenMiserService?.focused,
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
+        openAIDecisionsHandler: this.openAIDecisionsHandler,
       }, { taskMonitorRole: "all" });
       const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
       // These adapters retain the historical namespace normalization and

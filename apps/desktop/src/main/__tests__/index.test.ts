@@ -182,6 +182,7 @@ const setMessagingArchiveCleanerMock = vi.fn();
 const setMessagingAgentToolServiceMock = vi.fn();
 const setPwrAgentAppManagementHandlerMock = vi.fn();
 const setPwrAgentStarMapHandlerMock = vi.fn();
+const setPwrAgentOpenAIDecisionsHandlerMock = vi.fn();
 const setPwrAgentFederationHandlerMock = vi.fn();
 const setStarMapIntakeFederationHandlerFactoryMock = vi.fn();
 const setFederatedThreadMessageHandlerMock = vi.fn();
@@ -747,6 +748,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
     setPwrAgentStarMapHandler: setPwrAgentStarMapHandlerMock,
+    setPwrAgentOpenAIDecisionsHandler: setPwrAgentOpenAIDecisionsHandlerMock,
     setPwrAgentFederationHandler: setPwrAgentFederationHandlerMock,
     setAgentCreatedThreadObserver: vi.fn(),
     setStarMapIntakeFederationHandlerFactory:
@@ -1144,6 +1146,7 @@ describe("bootstrapApp", () => {
     setMessagingAgentToolServiceMock.mockReset();
     setPwrAgentAppManagementHandlerMock.mockReset();
     setPwrAgentStarMapHandlerMock.mockReset();
+    setPwrAgentOpenAIDecisionsHandlerMock.mockReset();
     setPwrAgentFederationHandlerMock.mockReset();
     setStarMapIntakeFederationHandlerFactoryMock.mockReset();
     setFederatedThreadMessageHandlerMock.mockReset();

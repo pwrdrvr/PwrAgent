@@ -25,6 +25,7 @@ describe("agent tool contracts", () => {
       "token_miser",
       "star_map",
       "thread_todos",
+      "openai_decisions",
     ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);
     expect(isAgentToolCatalogId("app_management")).toBe(true);

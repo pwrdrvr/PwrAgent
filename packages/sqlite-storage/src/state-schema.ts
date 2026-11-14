@@ -77,3 +77,41 @@ CREATE TABLE IF NOT EXISTS thread_sandboxes (
 CREATE INDEX IF NOT EXISTS idx_thread_sandboxes_pending
   ON thread_sandboxes(thread_id) WHERE status IN ('active', 'stopped');
 `;
+
+/**
+ * Registered OpenAI Decisions. One row per stored version; OpenAI has no
+ * registry, so `decision_id` is a local UUID. Exactly one version of a live
+ * decision is `active`; earlier versions are `superseded` and stay invokable
+ * by pinned version until the decision is `deleted`. No secret column and no
+ * raw HTTP response body.
+ *
+ * Active names are unique per scope: per owning thread for `thread`, per
+ * profile for `profile` (whatever backend registered it). Written once per
+ * register, update or delete tool call; never per turn, event, or timer.
+ */
+export const OPENAI_DECISION_VERSIONS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS openai_decision_versions (
+  decision_id       TEXT NOT NULL,
+  version           INTEGER NOT NULL,
+  name              TEXT NOT NULL,
+  scope             TEXT NOT NULL CHECK (scope IN ('profile', 'thread')),
+  owner_backend     TEXT NOT NULL,
+  owner_thread_id   TEXT,
+  status            TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'deleted')),
+  questions_json    TEXT NOT NULL,
+  prefix_text       TEXT,
+  input_schema_json TEXT NOT NULL,
+  prompt_cache_key  TEXT NOT NULL,
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (decision_id, version),
+  CHECK (scope = 'profile' OR owner_thread_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_openai_decision_versions_active_name
+  ON openai_decision_versions(
+    name,
+    scope,
+    CASE scope WHEN 'thread' THEN owner_backend ELSE '' END,
+    CASE scope WHEN 'thread' THEN owner_thread_id ELSE '' END
+  )
+  WHERE status = 'active';
+`;

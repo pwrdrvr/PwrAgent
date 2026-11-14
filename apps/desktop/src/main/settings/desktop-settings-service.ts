@@ -231,6 +231,7 @@ import {
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
+  OPENAI_DECISIONS_API_KEY_ENV,
   TELEGRAM_ENABLED_ENV,
   TELEGRAM_STREAMING_RESPONSES_ENV,
   readEnvBoolean,
@@ -881,6 +882,11 @@ export class DesktopSettingsService {
     const typesafeJevApiKey = await this.readSecretState(
       "typesafeJevApiKey",
       undefined,
+      secretStorage.available,
+    );
+    const openaiDecisionsApiKey = await this.readSecretState(
+      "openaiDecisionsApiKey",
+      OPENAI_DECISIONS_API_KEY_ENV,
       secretStorage.available,
     );
     const codexModelProviderKeyIds = secretStorage.available && config.models?.codex?.providers?.length
@@ -1686,6 +1692,10 @@ export class DesktopSettingsService {
         taskMonitorModels: config.models?.taskMonitorModels ?? {},
         decisionModels: config.models?.decisionModels ?? {},
         decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
+        openaiDecisions: {
+          ...(config.models?.openaiDecisions ?? {}),
+          apiKey: openaiDecisionsApiKey,
+        },
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
@@ -3386,6 +3396,21 @@ export class DesktopSettingsService {
     return this.readModelsConfig().decisionModels ?? {};
   }
 
+  /** Dashboard ids for OpenAI Decisions requests. Not secrets. */
+  resolveOpenAIDecisionsSettings(): { organizationId?: string; projectId?: string } {
+    return this.readModelsConfig().openaiDecisions ?? {};
+  }
+
+  /**
+   * The OpenAI Decisions key: the env override first, as for messaging
+   * tokens, then the saved secret. Only the decisions service calls this,
+   * once per request.
+   */
+  async resolveOpenAIDecisionsApiKey(): Promise<string | undefined> {
+    return readEnvString(this.env, OPENAI_DECISIONS_API_KEY_ENV)
+      ?? await this.options.secretStore.getSecret("openaiDecisionsApiKey");
+  }
+
   async resolveDecisionApiKey(provider: DecisionProviderId): Promise<string | undefined> {
     return await this.options.secretStore.getSecret(
       provider === "local" ? "decisionLocalApiKey" : "typesafeJevApiKey",
@@ -4956,6 +4981,8 @@ function secretEnvironmentKey(
     case "typesafeJevApiKey":
     case "codexModelProviderKeys":
       return undefined;
+    case "openaiDecisionsApiKey":
+      return OPENAI_DECISIONS_API_KEY_ENV;
   }
 }
 

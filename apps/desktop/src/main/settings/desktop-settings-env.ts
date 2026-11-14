@@ -19,6 +19,12 @@ export const TELEGRAM_STREAMING_RESPONSES_ENV =
   "PWRAGENT_MESSAGING_TELEGRAM_STREAMING_RESPONSES";
 export const TELEGRAM_BOT_TOKEN_ENV =
   "PWRAGENT_MESSAGING_TELEGRAM_BOT_TOKEN";
+/**
+ * Overrides the saved OpenAI Decisions key, like the messaging tokens.
+ * `pnpm dev:op` fills it from a same-named field on the 1Password item.
+ */
+export const OPENAI_DECISIONS_API_KEY_ENV =
+  "PWRAGENT_OPENAI_DECISIONS_API_KEY";
 export const TELEGRAM_AUTHORIZED_USER_IDS_ENV =
   "PWRAGENT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS";
 export const TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV =

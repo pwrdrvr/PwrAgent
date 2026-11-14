@@ -914,6 +914,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               tokenMiserFocused: ports.tokenMiserService?.focused,
               starMapHandler: ports.starMapHandler,
               threadTodoHandler: ports.threadTodoHandler,
+              openAIDecisionsHandler: ports.openAIDecisionsHandler,
             }, { taskMonitorRole: "all" }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
