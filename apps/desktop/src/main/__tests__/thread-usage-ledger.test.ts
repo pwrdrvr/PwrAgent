@@ -32,6 +32,7 @@ type LedgerInternals = {
     previousOutputChars: number;
   };
   persistTokenMiserLedgerEntries(entries: readonly TokenMiserObjectMetadata[]): Promise<void>;
+  publishLiveTokenMiserLedgerEntry(entry: TokenMiserObjectMetadata): Promise<void>;
 };
 
 /** A ledger over a fixture context and host; nothing here touches SQLite. */
@@ -502,13 +503,13 @@ describe("ThreadUsageLedger", () => {
     );
     const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
     await fc.assert(fc.asyncProperty(fc.array(command, { maxLength: 30 }), async (commands) => {
-      const { ledger } = createLedger();
+      const { ledger, internals } = createLedger();
       const failing = new Set<string>();
       const inFlight: { objectId: string; settle: () => void }[] = [];
       const started: string[] = [];
       const settled: string[] = [];
       let maxInFlight = 0;
-      vi.spyOn(ledger, "publishLiveTokenMiserLedgerEntry").mockImplementation((entry) => {
+      vi.spyOn(internals, "publishLiveTokenMiserLedgerEntry").mockImplementation((entry) => {
         started.push(entry.objectId);
         return new Promise<void>((resolve, reject) => {
           inFlight.push({

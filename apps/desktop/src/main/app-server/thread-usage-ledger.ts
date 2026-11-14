@@ -3505,7 +3505,7 @@ export class ThreadUsageLedger {
     return publish;
   }
 
-  async publishLiveTokenMiserLedgerEntry(
+  private async publishLiveTokenMiserLedgerEntry(
     entry: TokenMiserObjectMetadata,
   ): Promise<void> {
     if (this.context.lifecycle.closed) {
