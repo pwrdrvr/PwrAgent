@@ -93,6 +93,9 @@ describe("PwrAgent tool discovery", () => {
     expect(used.filter((name) => !VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
     expect(forbidden.filter((name) => VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
     expect(onDemand.filter((name) => VOICE_MANAGER_EAGER_TOOLS.has(name))).toEqual([]);
+    // The manager's one route to a thread with more access than its own: a
+    // card the operator starts. Without it the refusal is a dead end.
+    expect(onDemand).toEqual(["add_todo"]);
     // Every eager tool earns its per-turn cost by being one the instructions use.
     expect([...VOICE_MANAGER_EAGER_TOOLS].filter((name) => !used.includes(name))).toEqual([]);
   });

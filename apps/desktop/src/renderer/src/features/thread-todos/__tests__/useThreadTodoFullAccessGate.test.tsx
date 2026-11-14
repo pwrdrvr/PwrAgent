@@ -27,7 +27,7 @@ function handoffTodo(executionMode?: ThreadExecutionMode): ThreadTodo {
     },
     createdAt: 1,
     updatedAt: 1,
-  } as ThreadTodo;
+  };
 }
 
 function Host(props: {

@@ -53,9 +53,7 @@ export function useThreadTodoFullAccessGate(params: {
     },
     // The card's new thread does not exist yet, so nothing is at Full Access.
     currentExecutionMode: "default",
-    ...(params.desktopApi ? { desktopApi: params.desktopApi } : {}),
-    ...(params.dismissed !== undefined ? { dismissed: params.dismissed } : {}),
-    ...(params.onDismiss ? { onDismiss: params.onDismiss } : {}),
+    ...params,
   });
   const gateRun = useCallback(<T,>(
     todo: ThreadTodo,
