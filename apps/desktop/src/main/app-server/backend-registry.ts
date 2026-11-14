@@ -851,6 +851,7 @@ import {
   type RecentlyCompletedThreadUsageTurn,
   type ReportedCompactionRequestBoundary,
   type RestartContinuationStoreLike,
+  type AgentCreatedThreadObserver,
   type StartingTurnOrigin,
   type StartupProviderThreadRefresh,
   type TaskMonitorTokenUsageBreakdown,
@@ -2133,6 +2134,7 @@ export class DesktopBackendRegistry {
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
   private federationHandler: PwrAgentFederationHandler | undefined;
+  private agentCreatedThreadObserver: AgentCreatedThreadObserver | undefined;
   private starMapIntakeFederationHandlerFactory:
     | ((attachments: AppServerTurnInputItem[]) => PwrAgentFederationHandler)
     | undefined;
@@ -3260,6 +3262,16 @@ export class DesktopBackendRegistry {
     handler: PwrAgentFederationHandler | null | undefined,
   ): void {
     this.federationHandler = handler ?? undefined;
+  }
+
+  /**
+   * Told about each thread an agent tool creates on this instance, with the
+   * calling turn, so the viewers that sent that turn input can mount it.
+   */
+  setAgentCreatedThreadObserver(
+    observer: AgentCreatedThreadObserver | null | undefined,
+  ): void {
+    this.agentCreatedThreadObserver = observer ?? undefined;
   }
 
   /**
@@ -31109,7 +31121,25 @@ export class DesktopBackendRegistry {
       return await this.detachThreadDirectory(request);
     }
     if (request.operation === "handoff_task") {
-      return await this.handoffTaskToThread(request);
+      const response = await this.handoffTaskToThread(request);
+      if (response.ok && this.agentCreatedThreadObserver) {
+        const created = response.data as HandoffTaskResult;
+        try {
+          this.agentCreatedThreadObserver(request.context, {
+            backend: created.backend,
+            threadId: created.threadId,
+            ...(created.title ? { title: created.title } : {}),
+            ...(created.groupedUnderThreadId
+              ? { parent: { backend: request.context.backend, threadId: created.groupedUnderThreadId } }
+              : {}),
+          });
+        } catch (error) {
+          backendRegistryLog.warn("Could not report a handed-off thread to its viewers", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return response;
     }
     if (request.operation === "move_thread_workspace") {
       return await this.moveThreadWorkspace(request);

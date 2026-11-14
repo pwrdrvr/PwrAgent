@@ -735,6 +735,24 @@ async function createInstanceThread(
         },
       )
     : "none";
+  // The operator who asked this turn for a thread sees it in their own
+  // window, wherever it was created. Not awaited: a slow viewer must not hold
+  // the agent's tool call, and the mount never fails it.
+  const createdOn = instance.isLocal ? localInstanceId ?? (await runtime.health()).instanceId : instance.instanceId;
+  if (createdOn) {
+    void runtime.mountCreatedThreadOnTurnViewers({
+      turn: context,
+      created: {
+        backend: response.backend,
+        threadId: response.threadId,
+        instanceId: createdOn,
+        instanceLabel: instance.label,
+        title: directory.label,
+        ...(groupingParent ? { parent: groupingParent } : {}),
+      },
+      ...(mountDisposition === "remote" && groupingParent ? { alreadyMountedOn: groupingParent.instanceId } : {}),
+    });
+  }
   if (!instance.isLocal) {
     const remoteTarget = {
       instanceId: instance.instanceId,

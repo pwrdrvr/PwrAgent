@@ -1,4 +1,5 @@
 import { registerNavigationBackendHandlers, type NavigationBackendOperations } from "./federation-navigation-handlers";
+import { startTurnInputOutcome, steerInputOutcome, type TurnInputOutcome } from "./turn-input-viewers";
 import type { ManageThreadDependenciesRequest, ManageThreadDependenciesResponse } from "@pwragent/shared";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 import {
@@ -954,7 +955,28 @@ export function registerFederationBackendHandlers(params: {
     targetInstanceId: string,
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
+  /**
+   * A peer's start or steer was accepted. The owner keeps the authenticated
+   * sender beside the turn so a thread an agent creates during it can be
+   * mounted where the operator asked for it.
+   */
+  onTurnInputAccepted?: (
+    sourceInstanceId: FederationInstanceId,
+    thread: { backend: AppServerBackendKind; threadId: string },
+    outcome: TurnInputOutcome,
+  ) => void;
 }): void {
+  const turnInputAccepted = (
+    sourceInstanceId: FederationInstanceId,
+    thread: { backend: AppServerBackendKind; threadId: string },
+    outcome: TurnInputOutcome,
+  ): void => {
+    try {
+      params.onTurnInputAccepted?.(sourceInstanceId, thread, outcome);
+    } catch {
+      // Bookkeeping for a later mount must never fail the accepted input.
+    }
+  };
   if (params.durableTurnRequests) {
     const service = params.durableTurnRequests;
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitTurnRequest, async (envelope) => {
@@ -1483,11 +1505,14 @@ export function registerFederationBackendHandlers(params: {
         request.input,
         envelope.sourceInstanceId,
       );
-      return await params.backend.startTurn({
+      const response = await params.backend.startTurn({
         ...request,
         input,
         ...(messageOrigin ? { messageOrigin } : {}),
       });
+      turnInputAccepted(envelope.sourceInstanceId, { backend: response.backend, threadId: response.threadId },
+        startTurnInputOutcome(response));
+      return response;
     },
   );
   params.router.registerHandler(
@@ -1724,11 +1749,16 @@ export function registerFederationBackendHandlers(params: {
               envelope.sourceInstanceId,
             )
           : undefined;
-        return await params.backend.controlActiveTurn!({
+        const response = await params.backend.controlActiveTurn!({
           ...request,
           ...(input ? { input } : {}),
           ...(messageOrigin ? { messageOrigin } : {}),
         });
+        if (request.operation === "steer") {
+          turnInputAccepted(envelope.sourceInstanceId, { backend: response.backend, threadId: response.threadId },
+            steerInputOutcome(response));
+        }
+        return response;
       },
     );
   }
@@ -1755,10 +1785,14 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.steerTurn,
-    async (envelope) =>
-      await params.backend.steerTurn(
+    async (envelope) => {
+      const response = await params.backend.steerTurn(
         envelope.params as SteerTurnRequest,
-      ),
+      );
+      turnInputAccepted(envelope.sourceInstanceId, { backend: response.backend, threadId: response.threadId },
+        steerInputOutcome(response));
+      return response;
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadExecutionMode,

@@ -461,6 +461,11 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   getDesktopBackendRegistry().setPwrAgentFederationHandler(
     federationAgentToolsHandler,
   );
+  // A thread handoff_task creates here is mounted on the viewers whose input
+  // the calling turn carried, as create_instance_thread's threads are.
+  getDesktopBackendRegistry().setAgentCreatedThreadObserver((turn, created) => {
+    void getDesktopFederationRuntime().mountCreatedThreadOnTurnViewers({ turn, created });
+  });
   // The same tools, for the Star Map [+] intake agent — built per intake
   // rather than once, because two of its options are properties of the one
   // request rather than of the machine:

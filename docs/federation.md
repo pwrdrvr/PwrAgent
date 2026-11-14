@@ -415,6 +415,19 @@ project on the same instance inherits the caller's environment. Otherwise a
 cross-project `handoff_task` child has none. Each result has an `environment` field that
 names the environment and its setup outcome, including a failed setup.
 
+A thread an agent creates appears where the operator asked for it. The owner
+keeps, in memory, the authenticated sender of each peer's start or steer, per
+turn; a queued input joins the turn its queue entry starts. When a turn calls
+`create_instance_thread` or `handoff_task`, the owner asks each of those
+viewers to mount the new thread with `mountRemoteChild`, unless the thread
+lives on that viewer or the viewer already mounted it as its grouping root.
+Input sent from another instance's thread counts as that instance's input.
+Turns started on the owner itself, by its operator, an automation or
+messaging, mount nothing elsewhere. The mount is best effort and never fails
+the tool call. A to-do card's **Start thread** follows the same rule in the
+window that ran it: a thread started on a peer is mounted into this machine's
+main window, unless a remote viewer window already shows that peer's threads.
+
 Prefer `steer_thread` for cross-thread guidance. Both it and the default
 `send_message_to_thread` delivery group pending guidance at the recipient into
 one queued steer, preserving each sender, receipt time, and complete input.

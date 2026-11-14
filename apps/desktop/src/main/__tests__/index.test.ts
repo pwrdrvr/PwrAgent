@@ -748,6 +748,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
     setPwrAgentStarMapHandler: setPwrAgentStarMapHandlerMock,
     setPwrAgentFederationHandler: setPwrAgentFederationHandlerMock,
+    setAgentCreatedThreadObserver: vi.fn(),
     setStarMapIntakeFederationHandlerFactory:
       setStarMapIntakeFederationHandlerFactoryMock,
     setFederatedThreadMessageHandler: setFederatedThreadMessageHandlerMock,

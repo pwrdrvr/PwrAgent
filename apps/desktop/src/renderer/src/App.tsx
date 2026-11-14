@@ -8,6 +8,7 @@ import { XrayMode } from "./features/navigation/XrayBadge";
 import { ThreadRowDensityContext } from "./features/navigation/thread-row-density";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
+import { runThreadTodoAndMountStarted } from "./features/thread-todos/thread-todo-started-mount";
 import { formatBackendLabel } from "./lib/backend-label";
 import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
@@ -2996,16 +2997,27 @@ function DesktopAppShell(props: {
       setItemChecked: (todo, itemId, checked) =>
         threadTodoController.setItemChecked(todo.id, itemId, checked),
       run: (todo, options) => {
+        const runAndMount = () => runThreadTodoAndMountStarted(
+          () => threadTodoController.runAction(todo.id, options),
+          desktopApi,
+          {
+            localInstanceId: todoLocalMachine.instanceId,
+            windowOwnerInstanceId: readRendererFederationTarget()?.instanceId,
+            // The full label, as every other mount of that owner stores it.
+            instanceLabel: (instanceId) =>
+              federationMachines.find((machine) => machine.instanceId === instanceId)?.label,
+          },
+        );
         if (
           todo.action?.type !== "start_thread"
           || options?.messageTarget !== undefined
           || todo.action.executionMode !== "full-access"
         ) {
-          return threadTodoController.runAction(todo.id, options);
+          return runAndMount();
         }
         return new Promise((resolve, reject) => {
           pendingFullAccessTodoRunRef.current = () => {
-            threadTodoController.runAction(todo.id, options).then(resolve, reject);
+            runAndMount().then(resolve, reject);
           };
           requestTodoExecutionMode("full-access");
         });
@@ -3050,6 +3062,8 @@ function DesktopAppShell(props: {
     };
   }, [
     configuredMergeMethod,
+    desktopApi,
+    federationMachines,
     listThreadTodos,
     localThreadProjects,
     localThreadTitles,

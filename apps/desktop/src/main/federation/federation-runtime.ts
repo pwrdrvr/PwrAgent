@@ -355,6 +355,13 @@ import { isAppStateInitialized } from "../storage/desktop-runtime-storage";
 import { desktopFederationState, createFederationStorage, createDurableTurnRequestStorage, type FederationStorage } from "../storage/desktop-federation-storage";
 import { DurableTurnRequestService, DurableTurnRequestError } from "@pwragent/owner-core/durable-turn-request-service";
 import { durableFederationCallerScope, authenticateMessageOrigin } from "./federation-backend-bridge";
+import {
+  TurnInputViewers,
+  mountCreatedThreadOnTurnViewers,
+  startTurnInputOutcome,
+  steerInputOutcome,
+  type CreatedThread,
+} from "./turn-input-viewers";
 import type { SubmitDurableTurnRequest, GetDurableTurnRequest, DurableTurnReceipt, SubmitDurableSteerRequest, DurableSteerReceipt } from "@pwragent/shared";
 import {
   getExistingRuntimeFederationLeaseCoordinator,
@@ -1169,6 +1176,8 @@ export class DesktopFederationRuntime {
   }
   private durableTurnRequests?: DurableTurnRequestService;
   private unsubscribeDurableTurnEvents?: () => void;
+  /** Which peer viewers sent input to each running turn on this owner. */
+  private readonly turnViewers = new TurnInputViewers();
 
   /** Adapter must authenticate callerScope and check its grants on every call.
    * Target is the original owner recorded in the client's outbox, never discovery.
@@ -1238,19 +1247,30 @@ export class DesktopFederationRuntime {
           const resolved = await backend.resolveThread({ backend: request.backend, threadId: request.threadId });
           if (!resolved.thread) throw new DurableTurnRequestError("request_destination_unavailable");
         },
-        dispatch: (request, scope) => backend.startTurn({
-          ...request,
-          messageOrigin: authenticateMessageOrigin({
-            messageOrigin: request.messageOrigin,
-            sourceInstanceId: (JSON.parse(scope) as string[])[1]!,
-            resolveSourceInstance: (instanceId) => this.resolveThreadMessageOriginInstance(instanceId),
-          }),
-        }),
+        dispatch: async (request, scope) => {
+          const sourceInstanceId = (JSON.parse(scope) as string[])[1]!;
+          const response = await backend.startTurn({
+            ...request,
+            messageOrigin: authenticateMessageOrigin({
+              messageOrigin: request.messageOrigin,
+              sourceInstanceId,
+              resolveSourceInstance: (instanceId) => this.resolveThreadMessageOriginInstance(instanceId),
+            }),
+          });
+          this.turnViewers.accepted(sourceInstanceId, { backend: response.backend, threadId: response.threadId },
+            startTurnInputOutcome(response));
+          return response;
+        },
         isQueued: async (receipt) => {
           await backend.readQueuedTurn({ backend: receipt.backend, threadId: receipt.threadId, queueEntryId: receipt.queueEntryId });
           return true;
         },
-        steer: (request) => backend.controlActiveTurn!({ ...request, operation: "steer" }),
+        steer: async (request, scope) => {
+          const response = await backend.controlActiveTurn!({ ...request, operation: "steer" });
+          this.turnViewers.accepted((JSON.parse(scope) as string[])[1]!,
+            { backend: response.backend, threadId: response.threadId }, steerInputOutcome(response));
+          return response;
+        },
       });
       const service = this.durableTurnRequests;
       this.unsubscribeDurableTurnEvents = getDesktopBackendRegistry().onEvent((event) => {
@@ -1259,6 +1279,7 @@ export class DesktopFederationRuntime {
             threadId: string; queueEntryId: string; status: string; turnId?: string; terminalStatus?: string;
           };
           service.observeQueueEvent({ backend: event.backend, ...params });
+          this.turnViewers.queueEntryChanged({ backend: event.backend, ...params });
         }
       });
     }
@@ -4220,6 +4241,9 @@ export class DesktopFederationRuntime {
       onEnvironmentSetupProgress: (event, targetInstanceId) => {
         this.sendEnvironmentSetupProgress(event, targetInstanceId);
       },
+      onTurnInputAccepted: (sourceInstanceId, thread, outcome) => {
+        this.turnViewers.accepted(sourceInstanceId, thread, outcome);
+      },
     });
     this.filePushReceiver = new FederationFilePushReceiver({
       allowed: () => this.receiverPermissions().filePush,
@@ -5888,6 +5912,49 @@ export class DesktopFederationRuntime {
     if (!this.canOriginateNotification(FEDERATION_CELESTIAL_ICONS_METHOD)) return false;
     if (!isAppStateInitialized()) return true;
     return !desktopFederationState.read("gatewayInstanceId");
+  }
+
+  /**
+   * Mounts a thread an agent created during `turn` on each peer viewer that
+   * sent that turn input, so the operator who asked for it sees it in their
+   * own window. Best effort, and never fails the call that created it.
+   */
+  async mountCreatedThreadOnTurnViewers(params: {
+    turn: { backend: AppServerBackendKind; threadId: string; turnId?: string };
+    /** Without an instance, the thread or its parent is on this owner. */
+    created: Omit<CreatedThread, "instanceId" | "instanceLabel" | "parent">
+      & Partial<Pick<CreatedThread, "instanceId" | "instanceLabel">>
+      & { parent?: Omit<NonNullable<CreatedThread["parent"]>, "instanceId"> & { instanceId?: FederationInstanceId } };
+    alreadyMountedOn?: FederationInstanceId;
+  }): Promise<FederationInstanceId[]> {
+    let localInstanceId: FederationInstanceId;
+    let localLabel: string;
+    try {
+      localInstanceId = this.ensureLocalInstanceId();
+      localLabel = this.readRuntimeConfig().instanceLabel || defaultInstanceLabel();
+    } catch {
+      return [];
+    }
+    const { parent, ...created } = params.created;
+    const createdOn = created.instanceId ?? localInstanceId;
+    return await mountCreatedThreadOnTurnViewers({
+      viewers: this.turnViewers,
+      turn: params.turn,
+      created: {
+        ...created,
+        instanceId: createdOn,
+        instanceLabel: created.instanceLabel ?? (createdOn === localInstanceId ? localLabel : createdOn),
+        ...(parent ? { parent: { ...parent, instanceId: parent.instanceId ?? localInstanceId } } : {}),
+      },
+      localInstanceId,
+      ...(params.alreadyMountedOn ? { alreadyMountedOn: params.alreadyMountedOn } : {}),
+      mount: (viewer, request) => this.remoteBackend({ scope: "remote", instanceId: viewer }).mountRemoteChild(request),
+      onError: (viewer, error) => log.warn("failed to mount a created thread on the viewer that asked for it", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.created.threadId,
+        viewerInstanceId: viewer,
+      }),
+    });
   }
 
   /** This instance's durable federation identity (creates one if absent). */

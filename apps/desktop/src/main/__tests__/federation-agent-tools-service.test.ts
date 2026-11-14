@@ -128,7 +128,7 @@ function buildRuntime(overrides: Partial<DesktopFederationRuntime>): () =>
       return { protocol: 2, revision: "detail", ref: request.ref, readiness: "ready", identity: thread ? "present" : "unresolved", thread };
     },
   });
-  return () => ({ ...overrides,
+  return () => ({ mountCreatedThreadOnTurnViewers: async () => [], ...overrides,
     ...(overrides.localBackend ? { localBackend: () => wrap(overrides.localBackend!()) } : {}),
     ...(overrides.remoteBackend ? { remoteBackend: (target) => wrap(overrides.remoteBackend!(target)),
       remoteNavigationQueryPage: (target, request) => wrap(overrides.remoteBackend!(target)).getNavigationQueryPage!(request),
@@ -1592,6 +1592,58 @@ describe("federation agent tools service", () => {
       data: {
         groupingMode: "subthread",
         groupedUnderThreadId: "group-root",
+      },
+    });
+  });
+
+  it("mounts a thread an agent creates on the viewer whose turn asked for it", async () => {
+    // The operator on pwr_viewer sent turn-1 to thread-1 here. The agent
+    // creates a sub-thread on this owner, which pwr_viewer lists only once
+    // it is mounted there.
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "created-child",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+    const mountCreatedThreadOnTurnViewers = vi.fn(async () => ["pwr_viewer"]);
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        mountCreatedThreadOnTurnViewers,
+        localBackend: (() => ({
+          readPopulation: async () => buildSnapshot({
+            directories: [{
+              key: "dir:/repo", kind: "directory", label: "PwrAgent", path: "/repo",
+              threadKeys: [], needsAttentionCount: 0,
+            }] as NavigationSnapshot["directories"],
+            threads: [{
+              source: "codex", id: "thread-1", title: "Caller", titleSource: "derived",
+              linkedDirectories: [], inbox: { inInbox: false },
+            }] as NavigationSnapshot["threads"],
+          }),
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_local", projectKey: "dir:/repo", groupingMode: "subthread", workMode: "local" },
+    });
+
+    expect(response).toMatchObject({ ok: true, data: { isLocal: true, threadId: "created-child" } });
+    expect(mountCreatedThreadOnTurnViewers).toHaveBeenCalledWith({
+      turn: context,
+      created: {
+        backend: "codex",
+        threadId: "created-child",
+        instanceId: "pwr_local",
+        instanceLabel: "Local Mac",
+        title: "PwrAgent",
+        parent: { backend: "codex", threadId: "thread-1", instanceId: "pwr_local" },
       },
     });
   });

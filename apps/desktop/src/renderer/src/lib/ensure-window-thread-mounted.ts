@@ -10,6 +10,8 @@ export async function ensureWindowThreadMounted(
   isRemoteViewer: boolean,
   /** The owner's display name, kept on a new pin for when the peer is unreachable. */
   instanceLabel?: string,
+  /** The row a new pin shows until the owner's snapshot reaches it. */
+  summary?: NavigationThreadSummary,
 ): Promise<void> {
   const target = request.federationTarget;
   if (!target || isRemoteViewer || threads.some((thread) =>
@@ -23,5 +25,6 @@ export async function ensureWindowThreadMounted(
   await api.addRemoteThreadPin({
     ref,
     ...(instanceLabel ? { instanceLabel } : {}),
+    ...(summary ? { summary } : {}),
   });
 }
