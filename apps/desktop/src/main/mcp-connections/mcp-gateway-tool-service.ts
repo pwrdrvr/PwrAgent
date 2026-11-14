@@ -169,6 +169,7 @@ export class McpGatewayToolService {
         const lower = text.toLowerCase();
         return terms.reduce((sum, term) => sum + (lower.includes(term) ? 1 : 0), 0);
       };
+      const skillScore = (skill: McpSkillSummary): number => scoreText(`${skill.name} ${skill.description ?? ""}`);
       const ranked = candidates.filter((tool) => current.has(tool.connectionId)).map((tool) => {
         const name = tool.toolName.toLowerCase();
         const text = `${tool.serverName} ${name} ${tool.definition.description ?? ""}`.toLowerCase();
@@ -204,13 +205,13 @@ export class McpGatewayToolService {
       // hidden, since its skills would steer toward those tools.
       for (const [connectionId, published] of [...skills].sort(([left], [right]) => left.localeCompare(right))) {
         if (!current.has(connectionId) || result.servers?.some((entry) => entry.connectionId === connectionId)) continue;
-        if (!resourceTools || !published.skills.some((skill) => scoreText(`${skill.name} ${skill.description ?? ""}`) > 0)) continue;
+        if (!resourceTools || !published.skills.some((skill) => skillScore(skill) > 0)) continue;
         if (listsTools.has(connectionId) && !candidates.some((tool) => tool.connectionId === connectionId)) continue;
         const serverName = serverNames.get(connectionId);
         const serverNameInAgent = serverName ? this.options.serverNameInAgent?.(connectionId, context) : undefined;
         if (!serverName || !serverNameInAgent) continue;
         const servers = [...(result.servers ?? []), serverEntry(connectionId, serverName, identities.get(connectionId), serverNameInAgent, resourceTools)];
-        if (Buffer.byteLength(JSON.stringify({ ...result, servers })) > MAX_SEARCH_RESULT_BYTES) break;
+        if (Buffer.byteLength(JSON.stringify({ ...result, servers })) > MAX_SEARCH_RESULT_BYTES) continue;
         result.servers = servers;
       }
       // Skills go in last, in whatever room the exact schemas left, so they
@@ -219,7 +220,7 @@ export class McpGatewayToolService {
         const published = skills.get(server.connectionId);
         if (!published || !server.resourceDiscovery) continue;
         const ranked = published.skills
-          .map((skill, index) => ({ skill, index, score: scoreText(`${skill.name} ${skill.description ?? ""}`) }))
+          .map((skill, index) => ({ skill, index, score: skillScore(skill) }))
           .sort((a, b) => b.score - a.score || a.index - b.index)
           .map(({ skill }) => skill);
         // Measured once with the longer `false`; each skill adds its own JSON

@@ -94,6 +94,21 @@ describe("fixed MCP gateway tools", () => {
     expect(f.requestGatewayToolOperation.mock.calls.every(([call]) => call.operation === "gateway/tools/list")).toBe(true);
   });
 
+  // A server's skills steer the agent toward its tools, so a server whose
+  // every tool host policy hides shows none of its skills either.
+  it("names no skills for a server whose every tool host policy hides", async () => {
+    const f = fixture();
+    const serverSkills = { skills: [{ name: "lookup-guide", uri: "skill://one/lookup/SKILL.md" }], complete: true };
+    const listed = { tools: [tool()], serverName: "one", serverSkills };
+    const search = async (allowed: boolean) => await new McpGatewayToolService({
+      connections: { requestGatewayToolOperation: async () => listed }, approve: f.approve,
+      selectedConnections: async () => ["one"], serverNameInAgent: () => "pwragent_one_native",
+      toolAllowed: () => allowed,
+    }).search({ query: "guide" }, context);
+    expect((await search(true)).servers).toEqual([expect.objectContaining({ connectionId: "one", skills: serverSkills.skills })]);
+    expect(await search(false)).toEqual({ tools: [], unavailable: [] });
+  });
+
   it("drops resource routes when selection changes during discovery", async () => {
     const f = fixture();
     const serverNameInAgent = vi.fn(() => "pwragent_one_native");

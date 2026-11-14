@@ -10,7 +10,7 @@ import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registr
 import { ConnectionRpcClient } from "../mcp-connections/mcp-connection-rpc-client";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import { buildCodexConnectionMcpServerName } from "../app-server/codex-thread-config";
-import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import type { McpGatewayCatalog, McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpStdioSecretVault } from "../mcp-connections/mcp-stdio-secret-vault";
 import { pwrSuiteRelayPath } from "../mcp-connections/pwrsuite-relay";
 import { pwrSuiteInstall, removePwrSuiteInstalls } from "./helpers/pwrsuite-install-fixture";
@@ -850,6 +850,37 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     }
     // A query no skill matches names nothing, and asks for no tools.
     expect(await gateway.search({ query: "whoami" }, caller)).toEqual({ tools: [], unavailable: [] });
+    // Settings reads the same server as healthy with no tools, not as broken.
+    expect(await service.listConnectionTools({ connectionId: guides.id })).toMatchObject({ tools: [] });
+    expect(await service.testStdioConnection({ stdio: launch(fixture, [
+      { name: "FIXTURE_MODE", secret: false, value: "skills-notools" },
+    ]) })).toMatchObject({ ok: true, toolCount: 0 });
+  });
+
+  // A stalled skills/list once held up every search for its whole budget.
+  it("leaves a stalled server's skills out of the next search instead of waiting again", async () => {
+    const fixture = makeFixture();
+    let id = "";
+    const { service } = createService(fixture, { readGatewaySelection: async () => [id] });
+    id = (await service.createConnection({ displayName: "Stalled", stdio: launch(fixture, [
+      { name: "FIXTURE_MODE", secret: false, value: "skills-stall" },
+    ]) })).id;
+    const list = async () => {
+      const started = Date.now();
+      const listed = await service.requestGatewayToolOperation({
+        connectionId: id, scopeKey: JSON.stringify(["gateway", "codex", "stalled-search"]),
+        operation: "gateway/tools/list", skills: true, signal: new AbortController().signal, deadlineAt: Date.now() + 4_000,
+      }) as McpGatewayCatalog;
+      return { listed, elapsed: Date.now() - started };
+    };
+    const first = await list();
+    expect(first.listed.tools.map((tool) => tool.toolName)).toEqual(["whoami", "echo"]);
+    expect(first.listed.serverSkills).toBeUndefined();
+    expect(first.elapsed).toBeGreaterThanOrEqual(1_000);
+    const second = await list();
+    expect(second.listed.tools.map((tool) => tool.toolName)).toEqual(["whoami", "echo"]);
+    expect(second.listed.serverSkills).toBeUndefined();
+    expect(second.elapsed).toBeLessThan(1_000);
   });
 
   // The index is optional. A stalled skills/list used to spend the bridge's

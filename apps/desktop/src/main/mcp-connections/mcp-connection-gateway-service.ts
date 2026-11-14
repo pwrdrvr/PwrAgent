@@ -176,6 +176,20 @@ const MAX_BRIDGE_ATTACHMENTS = 1_024;
 const MAX_TOOL_LIST_PAGES = 20;
 const MAX_SERVER_INSTRUCTIONS_CHARS = 2_000;
 /**
+ * After a session's skills/list fails or stalls, searches leave its skills
+ * out for this long rather than wait out the read again on every search.
+ */
+const MCP_SKILLS_SEARCH_RETRY_MS = 60_000;
+
+/**
+ * A server may offer only skills and resources. One whose capabilities name
+ * no tools is not asked for them, as its native bridge advertises none; the
+ * method may not exist there at all. Unknown capabilities still list.
+ */
+function serverListsTools(capabilities: { tools?: unknown } | undefined): boolean {
+  return !capabilities || Boolean(capabilities.tools);
+}
+/**
  * How long a Settings test waits for a local command to answer the MCP
  * handshake and list its tools. A first `npx -y` run downloads the package,
  * so this is longer than the URL probe.
@@ -1054,7 +1068,8 @@ export class McpConnectionGatewayService {
         let toolCount = 0;
         let cursor: string | undefined;
         const cursors = new Set<string>();
-        for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+        const listsTools = serverListsTools(client.getServerCapabilities());
+        for (let page = 0; listsTools && page < MAX_TOOL_LIST_PAGES; page += 1) {
           const result = await client.listTools(cursor ? { cursor } : undefined, {
             timeout: this.stdioTestTimeoutMs,
             signal: controller.signal,
@@ -1796,7 +1811,8 @@ export class McpConnectionGatewayService {
       const tools: string[] = [];
       const cursors = new Set<string>();
       let cursor: string | undefined;
-      for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+      const listsTools = serverListsTools(session.client.getServerCapabilities?.());
+      for (let page = 0; listsTools && page < MAX_TOOL_LIST_PAGES; page += 1) {
         const result = await discovery.phase("tools/list", async () => await session!.client.listTools(
           cursor ? { cursor } : undefined,
           { timeout: discovery.remaining(), signal: discovery.signal },
@@ -4263,10 +4279,8 @@ export class McpConnectionGatewayService {
     const cursors = new Set<string>();
     let cursor: string | undefined;
     let bytes = 0;
-    // A server may offer only skills and resources. One that says it has no
-    // tools is not asked for them; the method may not exist there at all.
     const capabilities = client.getServerCapabilities?.();
-    const listsTools = !capabilities || Boolean(capabilities.tools);
+    const listsTools = serverListsTools(capabilities);
     for (let page = 0; listsTools && page < MAX_TOOL_LIST_PAGES; page += 1) {
       const result = await discovery.phase("tools/list", async () => await client.listTools(
         cursor ? { cursor } : undefined, { signal: discovery.signal, timeout: discovery.remaining() },
@@ -4297,9 +4311,15 @@ export class McpConnectionGatewayService {
     // A gateway thread never sees a third-party server's instructions, so
     // the skills index they would have carried reaches it as data instead.
     // Read once per search, never stored. Only for a server whose resources
-    // the thread can read, since every skill file is one.
+    // the thread can read, since every skill file is one. A session whose
+    // read just failed is skipped for a while, so a stalled skills/list does
+    // not hold up every search.
+    const failedAt = this.skillsSearchFailures.get(client);
     const serverSkills = skills && offersMcpSkills(capabilities) && capabilities?.resources
-      ? listedMcpSkills(await this.listSkillsForIndex(grant, client, discovery, skills.signal))
+      && (failedAt === undefined || Date.now() - failedAt >= MCP_SKILLS_SEARCH_RETRY_MS)
+      ? listedMcpSkills(await this.listSkillsForIndex(grant, client, discovery, skills.signal, () => {
+        this.skillsSearchFailures.set(client, Date.now());
+      }))
       : undefined;
     await this.requireGatewaySelection(grant);
     discovery.remaining();
@@ -4334,6 +4354,9 @@ export class McpConnectionGatewayService {
     };
   }
 
+  /** When each upstream session's last search-time skills/list failed. */
+  private readonly skillsSearchFailures = new WeakMap<Client, number>();
+
   /** Connections whose unrelayed capabilities were already logged, by list. */
   private readonly loggedUnrelayedCapabilities = new Map<string, string>();
 
@@ -4366,6 +4389,8 @@ export class McpConnectionGatewayService {
     client: Client,
     discovery: McpDiscovery,
     signal: AbortSignal | undefined,
+    /** Told when the read fails or stalls, not when the caller cancels. */
+    onIncomplete?: () => void,
   ): Promise<{ skills: unknown[]; nextCursor?: string } | undefined> {
     const skills: unknown[] = [];
     let nextCursor: string | undefined;
@@ -4385,6 +4410,7 @@ export class McpConnectionGatewayService {
       }
     } catch (error) {
       if (signal?.aborted) throw error;
+      onIncomplete?.();
       connectionLog.warn("MCP skills index incomplete", {
         connectionId: grant.connectionId,
         skillsRead: skills.length,
