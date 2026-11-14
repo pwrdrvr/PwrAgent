@@ -13,16 +13,20 @@ import type {
 import { formatWebSearchLabel } from "@pwragent/shared";
 import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import {
+  type AcpProviderTool,
   isGenericShellToolTitle,
   readAcpCodeSearch,
   readAcpMcpToolName,
+  readAcpProviderTool,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolDescription,
   readAcpToolInvocation,
   readAcpWebFetchUrl,
   readAcpWebSearch,
+  readFirstLocationPath,
 } from "./acp-command-extraction.js";
+import { readAcpFileEdit } from "./acp-file-edit.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 
 export type AcpSessionUpdate = {
@@ -265,6 +269,12 @@ export class AcpSessionReplayNormalizer {
   private assistantMessageSequence = 0;
   private generatedMessageSequence = 0;
   private readonly knownToolCallIds = new Set<string>();
+  /**
+   * The tool identity each call declared. Grok opens every call with its
+   * internal tool name as the title and sends the descriptive title later,
+   * on updates that do not always repeat the identity.
+   */
+  private readonly providerTools = new Map<string, AcpProviderTool>();
   /** The retry run whose row is still in progress, if any. */
   private openRetry?: { id: string; attempts: number };
   /** The automatic compaction whose row is still in progress, if any. */
@@ -292,6 +302,9 @@ export class AcpSessionReplayNormalizer {
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
     this.knownToolCallIds.clear();
+    // A call's identity matters only while its updates arrive. Keeping every
+    // call's for the whole session would grow without bound.
+    this.providerTools.clear();
     this.upsertMessage({
       id,
       role: "user",
@@ -551,11 +564,11 @@ export class AcpSessionReplayNormalizer {
           this.endActiveAssistantMessage();
         }
         this.removeCurrentAgentWaitingActivity();
-        this.upsertActivity(toolActivity(update, kind, createdAt));
+        this.upsertToolActivity(update, kind, createdAt, toolCallId);
       } else if (kind === "file" || kind === "terminal") {
         this.endActiveAssistantMessage();
         this.removeCurrentAgentWaitingActivity();
-        this.upsertActivity(toolActivity(update, kind, createdAt));
+        this.upsertToolActivity(update, kind, createdAt, toolCallId);
       } else if (kind === "turn_started") {
         this.endActiveAssistantMessage();
         this.knownToolCallIds.clear();
@@ -753,7 +766,34 @@ export class AcpSessionReplayNormalizer {
     this.upsertEntry(plan);
   }
 
-  private upsertActivity(activity: AppServerThreadActivityEntry): void {
+  private upsertToolActivity(
+    update: AcpSessionUpdate,
+    kind: string,
+    createdAt: number,
+    toolCallId: string | undefined,
+  ): void {
+    const declared = readAcpProviderTool(update.update);
+    if (toolCallId && declared) {
+      this.providerTools.set(toolCallId, {
+        ...this.providerTools.get(toolCallId),
+        ...declared,
+      });
+    }
+    const providerTool = toolCallId
+      ? this.providerTools.get(toolCallId)
+      : declared;
+    this.upsertActivity(
+      toolActivity(update, kind, createdAt, providerTool),
+      providerTool
+        ? (label) => isProviderToolPlaceholder(label, providerTool)
+        : undefined,
+    );
+  }
+
+  private upsertActivity(
+    activity: AppServerThreadActivityEntry,
+    isPlaceholderLabel?: (label: string) => boolean,
+  ): void {
     const activityWithTurn = this.withCurrentTurn(activity);
     const index = this.typedEntryIndexes.get(`activity:${activityWithTurn.id}`);
     if (index === undefined) {
@@ -763,6 +803,7 @@ export class AcpSessionReplayNormalizer {
     this.entries[index] = mergeActivity(
       this.entries[index] as AppServerThreadActivityEntry,
       activityWithTurn,
+      isPlaceholderLabel,
     );
   }
 
@@ -1528,6 +1569,7 @@ function toolActivity(
   update: AcpSessionUpdate,
   kind: string,
   createdAt: number,
+  providerTool?: AcpProviderTool,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -1606,25 +1648,65 @@ function toolActivity(
       ],
     };
   }
+  const fileEdit = readAcpFileEdit(update.update);
+  if (fileEdit) {
+    const label = `${fileEdit.verb} ${fileBaseName(fileEdit.path)}`;
+    const status = readToolActivityStatus(update.update);
+    // A failed edit's text content is the agent's reason.
+    const failure = status === "failed"
+      ? readToolOutput(update.update)
+      : undefined;
+    return {
+      type: "activity",
+      id,
+      createdAt,
+      summary: label,
+      ...(status ? { status } : {}),
+      details: [
+        {
+          id: `${id}:detail`,
+          kind: "write",
+          label,
+          path: fileEdit.path,
+          ...(fileEdit.fileDiff ? { fileDiff: fileEdit.fileDiff } : {}),
+          ...(failure
+            ? {
+                command: {
+                  displayCommand: label,
+                  source: "tool" as const,
+                  output: failure,
+                },
+              }
+            : {}),
+        },
+      ],
+    };
+  }
   const rawCommand = readAcpToolCommand(update.update);
   const description = rawCommand
     ? readAcpToolDescription(update.update)
     : undefined;
   const invocation = readAcpToolInvocation(update.update);
   const displayCommand = rawCommand ?? invocation;
-  const labelCandidate =
+  const titleCandidate =
     readAcpMcpToolName(update.update) ??
     description ??
     readString(update.update, "title") ??
     readString(update.update, "name") ??
     readString(update.update, "kind") ??
     kind.replaceAll("_", " ");
+  // An internal tool name is a placeholder; the agent's display name for the
+  // tool reads better until a descriptive title arrives.
+  const labelCandidate =
+    providerTool?.label && sameLabel(titleCandidate, providerTool.name)
+      ? providerTool.label
+      : titleCandidate;
   const label = webFetchUrl
     ? `Fetched ${webFetchUrl}`
     : displayCommand && isGenericShellToolTitle(labelCandidate)
       ? displayCommand
       : labelCandidate;
-  const status = readString(update.update, "status");
+  const status = readToolActivityStatus(update.update);
   const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
   const output = readToolOutput(update.update);
   const exitCode = readNumber(update.update, "exitCode");
@@ -1639,16 +1721,7 @@ function toolActivity(
     id,
     createdAt,
     summary: label,
-    status:
-      status === "completed" ||
-      status === "failed" ||
-      status === "cancelled" ||
-      status === "in_progress" ||
-      status === "pending"
-        ? status === "pending"
-          ? "in_progress"
-          : status
-        : undefined,
+    status,
     details: [
       {
         id: `${id}:detail`,
@@ -1670,6 +1743,40 @@ function toolActivity(
   };
 }
 
+/** The status an update reports, or undefined when it reports none. */
+function readToolActivityStatus(
+  record: Record<string, unknown>,
+): AppServerThreadActivityEntry["status"] {
+  const status = readString(record, "status");
+  return status === "completed"
+    || status === "failed"
+    || status === "cancelled"
+    || status === "in_progress"
+    ? status
+    : status === "pending"
+      ? "in_progress"
+      : undefined;
+}
+
+function fileBaseName(filePath: string): string {
+  return filePath.split(/[\\/]/u).filter(Boolean).at(-1) ?? filePath;
+}
+
+function sameLabel(value: string, other: string | undefined): boolean {
+  return other !== undefined && value.toLowerCase() === other.toLowerCase();
+}
+
+/**
+ * Whether a label only names the tool, by its internal name or its display
+ * name, so that any descriptive title an update brings should replace it.
+ */
+function isProviderToolPlaceholder(
+  label: string,
+  providerTool: AcpProviderTool,
+): boolean {
+  return sameLabel(label, providerTool.name) || sameLabel(label, providerTool.label);
+}
+
 function normalizeToolActivityStatus(
   status: string | undefined,
 ): AppServerThreadActivityEntry["status"] {
@@ -1684,9 +1791,14 @@ function normalizeToolActivityStatus(
 function mergeActivity(
   existing: AppServerThreadActivityEntry,
   incoming: AppServerThreadActivityEntry,
+  isPlaceholderLabel: (label: string) => boolean = () => false,
 ): AppServerThreadActivityEntry {
   const status = incoming.status ?? existing.status;
-  const details = mergeActivityEntryDetails(existing.details, incoming.details)
+  const details = mergeActivityEntryDetails(
+    existing.details,
+    incoming.details,
+    isPlaceholderLabel,
+  )
     .map((detail) => ({
       ...detail,
       label: settledSearchLabel(detail.label, status),
@@ -1695,7 +1807,7 @@ function mergeActivity(
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
     summary: settledSearchLabel(
-      preferSpecificLabel(existing.summary, incoming.summary),
+      preferSpecificLabel(existing.summary, incoming.summary, isPlaceholderLabel),
       status,
     ),
     status,
@@ -1718,6 +1830,7 @@ function settledSearchLabel(
 function mergeActivityEntryDetails(
   existing: AppServerThreadActivityEntry["details"],
   incoming: AppServerThreadActivityEntry["details"],
+  isPlaceholderLabel: (label: string) => boolean,
 ): AppServerThreadActivityEntry["details"] {
   const merged = [...existing];
   for (const incomingDetail of incoming) {
@@ -1736,11 +1849,15 @@ function mergeActivityEntryDetails(
       ...existingDetail,
       ...incomingDetail,
       kind:
-        isGenericActivityLabel(incomingDetail.label)
-        && !isGenericActivityLabel(existingDetail.label)
+        isWeakLabel(incomingDetail.label, isPlaceholderLabel)
+        && !isWeakLabel(existingDetail.label, isPlaceholderLabel)
           ? existingDetail.kind
           : incomingDetail.kind,
-      label: preferSpecificLabel(existingDetail.label, incomingDetail.label),
+      label: preferSpecificLabel(
+        existingDetail.label,
+        incomingDetail.label,
+        isPlaceholderLabel,
+      ),
       path: incomingDetail.path ?? existingDetail.path,
       command:
         existingDetail.command || incomingDetail.command
@@ -1782,16 +1899,32 @@ function mergeActivityEntryDetails(
   return merged;
 }
 
-function preferSpecificLabel(existing: string, incoming: string): string {
+function preferSpecificLabel(
+  existing: string,
+  incoming: string,
+  isPlaceholderLabel: (label: string) => boolean = () => false,
+): string {
   if (
     existing.toLowerCase().startsWith("searching web")
     && incoming.toLowerCase().startsWith("searched web")
   ) {
     return incoming;
   }
-  return isGenericActivityLabel(existing) && incoming
-    ? incoming
-    : existing || incoming;
+  if (!isWeakLabel(existing, isPlaceholderLabel) || !incoming) {
+    return existing || incoming;
+  }
+  // A placeholder gives way to a descriptive title, not to another
+  // placeholder or to a generic word such as "tool call update".
+  return isPlaceholderLabel(existing) && isWeakLabel(incoming, isPlaceholderLabel)
+    ? existing
+    : incoming;
+}
+
+function isWeakLabel(
+  value: string,
+  isPlaceholderLabel: (label: string) => boolean,
+): boolean {
+  return isGenericActivityLabel(value) || isPlaceholderLabel(value);
 }
 
 function isGenericActivityLabel(value: string): boolean {
@@ -1842,23 +1975,6 @@ function toolDetailKind(
     return "read";
   }
   return path ? "read" : "command";
-}
-
-function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
-  const locations = record.locations;
-  if (!Array.isArray(locations)) {
-    return undefined;
-  }
-  for (const location of locations) {
-    if (!location || typeof location !== "object" || Array.isArray(location)) {
-      continue;
-    }
-    const path = (location as Record<string, unknown>).path;
-    if (typeof path === "string" && path.trim()) {
-      return path;
-    }
-  }
-  return undefined;
 }
 
 type AcpSubAgentState = {
