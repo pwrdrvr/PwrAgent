@@ -15,9 +15,11 @@ const hosts = [DesktopStateDb, SharedStateDb, StateDb];
 function schema(db: StateDb, beforeAdditiveMigrations = false): { sha256: string; objects: number; userVersion: number } {
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string }>;
   // Keep the extraction oracle frozen at v80, excluding only the explicitly
-  // additive owner-job and search-key migrations that followed it.
+  // additive owner-job, search-key and OpenAI Decisions registry migrations
+  // that followed it.
   const compared = beforeAdditiveMigrations ? rows.filter(row =>
     row.tbl_name !== "owner_jobs"
+    && row.tbl_name !== "openai_decision_versions"
     && row.tbl_name !== "thread_search_fts_rows"
     && row.name !== "idx_thread_usage_lines_identity"
   ) : rows;

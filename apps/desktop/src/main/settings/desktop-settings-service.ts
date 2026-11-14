@@ -883,6 +883,11 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
+    const openaiDecisionsApiKey = await this.readSecretState(
+      "openaiDecisionsApiKey",
+      undefined,
+      secretStorage.available,
+    );
     const codexModelProviderKeyIds = secretStorage.available && config.models?.codex?.providers?.length
       ? await this.readCodexModelProviderKeyIds()
       : new Set<string>();
@@ -1686,6 +1691,10 @@ export class DesktopSettingsService {
         taskMonitorModels: config.models?.taskMonitorModels ?? {},
         decisionModels: config.models?.decisionModels ?? {},
         decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
+        openaiDecisions: {
+          ...(config.models?.openaiDecisions ?? {}),
+          apiKey: openaiDecisionsApiKey,
+        },
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
@@ -3386,6 +3395,16 @@ export class DesktopSettingsService {
     return this.readModelsConfig().decisionModels ?? {};
   }
 
+  /** Dashboard ids for OpenAI Decisions requests. Not secrets. */
+  resolveOpenAIDecisionsSettings(): { organizationId?: string; projectId?: string } {
+    return this.readModelsConfig().openaiDecisions ?? {};
+  }
+
+  /** The OpenAI Decisions key. Only the decisions service calls this, per request. */
+  async resolveOpenAIDecisionsApiKey(): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret("openaiDecisionsApiKey");
+  }
+
   async resolveDecisionApiKey(provider: DecisionProviderId): Promise<string | undefined> {
     return await this.options.secretStore.getSecret(
       provider === "local" ? "decisionLocalApiKey" : "typesafeJevApiKey",
@@ -4954,6 +4973,7 @@ function secretEnvironmentKey(
     case "mcpStdioConnectionSecrets":
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
+    case "openaiDecisionsApiKey":
     case "codexModelProviderKeys":
       return undefined;
   }

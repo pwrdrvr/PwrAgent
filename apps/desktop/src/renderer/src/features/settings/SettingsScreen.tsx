@@ -1655,6 +1655,11 @@ function SettingsSectionBody(props: {
           models: { decisionModels },
         });
       }}
+      onSaveOpenAIDecisions={async (openaiDecisions) => {
+        return await props.settings.writeConfig({
+          models: { openaiDecisions },
+        });
+      }}
       onSaveCodexFastAllowed={async (allowFast) => {
         return await props.settings.writeConfig({
           models: {

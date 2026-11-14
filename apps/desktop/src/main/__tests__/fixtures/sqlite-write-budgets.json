@@ -1622,5 +1622,9 @@
   "federation.peerRole.change": {"commits": 1, "note": "One operator role change: 1 commit, about 0.00824 MB/day at one change/day.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "federation.peerRole.refusals": {"commits": 0, "note": "1000 role reads and payload-free refusal journal entries: 0 SQLite commits, 0 MB/day of SQLite WAL.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "gateway-assigned-member-role-change": {"commits": 2, "note": "A member first hears its gateway assign contained: the assignment and its audit row. Only a gateway operator's role change causes it: about 0.02 MB/day at one change/day.", "observedWalBytes": 20600, "rowsChanged": 2, "statements": 2},
-  "gateway-assigned-member-role-reconnects": {"commits": 0, "note": "20 reconnects that hear the same gateway assignment: 0 commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+  "gateway-assigned-member-role-reconnects": {"commits": 0, "note": "20 reconnects that hear the same gateway assignment: 0 commits, 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "openai-decisions-register": {"commits": 1, "note": "one decisions_register tool call. Agent-initiated, never per turn or timer: ~1.2 MB/day at 100 registrations/day.", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
+  "openai-decisions-update": {"commits": 1, "note": "one decisions_update tool call (supersede + insert, one transaction): ~1.2 MB/day at 100 updates/day.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
+  "openai-decisions-invoke": {"commits": 1, "note": "one decisions_invoke tool call that returned usage: the registry read plus one usage line and its turn row, the same ledger write as any helper monitor line. ~7 MB/day at 100 invokes/day, ~70 MB/day at 1,000.", "observedWalBytes": 70040, "rowsChanged": 3, "statements": 3},
+  "openai-decisions-delete": {"commits": 1, "note": "one decisions_delete tool call (every version soft-deleted in one statement): ~0.8 MB/day at 100 deletes/day.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 1}
 }

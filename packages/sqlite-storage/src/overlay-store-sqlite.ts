@@ -12007,7 +12007,11 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
   // aggregate token count may span multiple context bands, so applying one
   // catalog entry to the whole row would destroy the exact cost. Provider
   // estimates likewise include rates and fees the local catalog cannot infer.
-  if (line.pricingBasis === "request-components" || line.pricingBasis === "provider-reported") {
+  if (
+    line.pricingBasis === "request-components"
+    || line.pricingBasis === "provider-reported"
+    || line.pricingBasis === "decisions-output-uncharged"
+  ) {
     return line;
   }
 

@@ -725,6 +725,8 @@ export type DesktopSettingsSecretName =
   | "pwrgitMcpCredential"
   | "decisionLocalApiKey"
   | "typesafeJevApiKey"
+  /** OpenAI platform API key for registered OpenAI Decisions (POST /v1/decisions). */
+  | "openaiDecisionsApiKey"
   /** Codex model provider API keys, one JSON object keyed by provider id. */
   | "codexModelProviderKeys";
 
@@ -772,10 +774,22 @@ export function isMessagingRuntimeSecret(
     case "pwrgitMcpCredential":
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
+    case "openaiDecisionsApiKey":
     case "codexModelProviderKeys":
       return false;
   }
 }
+
+/** Optional OpenAI dashboard ids sent as OpenAI-Organization / OpenAI-Project. Not keys. */
+export type DesktopOpenAIDecisionsSettings = {
+  organizationId?: string;
+  projectId?: string;
+};
+
+export type DesktopOpenAIDecisionsSettingsSnapshot = DesktopOpenAIDecisionsSettings & {
+  /** Presence only. The key never leaves the main process. */
+  apiKey: DesktopSettingsSecretState;
+};
 
 export type DesktopSettingsSecretState = {
   configured: boolean;
@@ -1608,6 +1622,12 @@ export type DesktopSettingsSnapshot = {
       localApiKey: DesktopSettingsSecretState;
       jevApiKey: DesktopSettingsSecretState;
     };
+    /**
+     * Registered OpenAI Decisions. Separate from decisionModels (Clef and
+     * Jev): an OpenAI platform API key billed to an API project, never a
+     * ChatGPT or Codex sign-in. Absent on older builds.
+     */
+    openaiDecisions?: DesktopOpenAIDecisionsSettingsSnapshot;
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
@@ -1963,6 +1983,8 @@ export type DesktopSettingsConfigPatch = {
     taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     /** Replaces the whole decision model section. */
     decisionModels?: DesktopDecisionModelSettings;
+    /** Replaces the OpenAI Decisions account ids. Omit a field to clear it. */
+    openaiDecisions?: DesktopOpenAIDecisionsSettings;
     codex?: {
       path?: string;
       profile?: string;
