@@ -138,6 +138,10 @@ import type {
   UpdateMcpConnectionRequest,
   ProbeMcpConnectionRequest,
   TestMcpStdioConnectionRequest,
+  InspectGithubMcpSetupRequest,
+  InspectGithubMcpSetupResponse,
+  TestGithubMcpConnectionRequest,
+  TestGithubMcpConnectionResponse,
   TestMcpStdioConnectionResponse,
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
@@ -713,6 +717,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   testMcpStdioConnection?: (
     request: TestMcpStdioConnectionRequest,
   ) => Promise<TestMcpStdioConnectionResponse>;
+  /** The GitHub CLI sign-in and whether github-mcp-server is installed. Saves nothing. */
+  inspectGithubMcpSetup?: (
+    request?: InspectGithubMcpSetupRequest,
+  ) => Promise<InspectGithubMcpSetupResponse>;
+  /** Sign in to GitHub's MCP server, read its tools and skills, and disconnect. Saves nothing. */
+  testGithubMcpConnection?: (
+    request: TestGithubMcpConnectionRequest,
+  ) => Promise<TestGithubMcpConnectionResponse>;
   setMcpConnectionEnabled?: (
     request: SetMcpConnectionEnabledRequest,
   ) => Promise<MutateMcpConnectionResponse>;

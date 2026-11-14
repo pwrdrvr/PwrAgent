@@ -13,7 +13,9 @@ import type {
   McpConnectionStatus,
   McpConnectionToolApproval,
   SandboxerTransport,
+  InspectGithubMcpSetupResponse,
   ProbeMcpConnectionResponse,
+  TestGithubMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
   TestMcpStdioConnectionResponse,
@@ -74,6 +76,15 @@ import {
   sandboxerNeedsSetup,
 } from "./SandboxerConnectionSetup";
 import { McpProjectToolApprovals } from "./McpProjectToolApprovals";
+import {
+  GithubConnectionFields,
+  GithubConnectionTestResult,
+  emptyGithubConnectionDraft,
+  githubConnectionDraftFromSettings,
+  githubConnectionDraftReady,
+  githubConnectionInput,
+  type GithubConnectionDraft,
+} from "./GithubConnectionForm";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 import { shortenCodexHome } from "./shorten-codex-home";
@@ -112,8 +123,11 @@ type ConnectionPendingAction = {
   connectionId?: string;
 };
 
-/** What the add form adds: a URL PwrAgent signs in to, or a program it runs. */
-type ConnectionAddKind = "remote" | "local";
+/**
+ * What the add form adds: a URL PwrAgent signs in to, a program it runs, or
+ * GitHub's MCP server, which neither of those can sign in to by itself.
+ */
+type ConnectionAddKind = "remote" | "local" | "github";
 
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
@@ -139,6 +153,11 @@ type ConnectionEditDraft = {
    * that was never touched.
    */
   originalServerUrl: string;
+  /** Present for a GitHub connection, which has an account instead of a URL. */
+  github?: {
+    draft: GithubConnectionDraft;
+    runningIn: number;
+  };
   /** Present for a local command, which has a launch instead of a URL. */
   local?: {
     draft: LocalCommandDraft;
@@ -148,7 +167,7 @@ type ConnectionEditDraft = {
 };
 
 function editDraftRepointsServer(draft: ConnectionEditDraft): boolean {
-  if (draft.local) return false;
+  if (draft.local || draft.github) return false;
   return draft.serverUrl.trim() !== draft.originalServerUrl.trim();
 }
 
@@ -299,6 +318,12 @@ export function PluginsSettings(props: {
   );
   /** The last Test of `localDraft`, cleared by any edit to it. */
   const [localTest, setLocalTest] = useState<TestMcpStdioConnectionResponse>();
+  const [githubDraft, setGithubDraft] = useState<GithubConnectionDraft>(emptyGithubConnectionDraft);
+  /** The last Test of `githubDraft`, cleared by any edit to it. */
+  const [githubTest, setGithubTest] = useState<TestGithubMcpConnectionResponse>();
+  const [githubInspect, setGithubInspect] = useState<InspectGithubMcpSetupResponse>();
+  const [githubInspecting, setGithubInspecting] = useState(false);
+  const [githubEditTest, setGithubEditTest] = useState<TestGithubMcpConnectionResponse>();
   const [connectionEditTest, setConnectionEditTest] =
     useState<TestMcpStdioConnectionResponse>();
   const [connectionEdit, setConnectionEdit] = useState<ConnectionEditDraft>();
@@ -1079,6 +1104,106 @@ export function PluginsSettings(props: {
     }
   };
 
+  /**
+   * Read the GitHub CLI sign-in and look for github-mcp-server. Runs when the
+   * GitHub option opens and on Check again; nothing is saved.
+   */
+  const inspectGithub = useCallback(async () => {
+    const inspect = props.desktopApi?.inspectGithubMcpSetup;
+    if (!inspect) return;
+    setGithubInspecting(true);
+    try {
+      setGithubInspect(await inspect());
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setGithubInspecting(false);
+    }
+  }, [props.desktopApi]);
+
+  // Inspected once, when a GitHub form first opens. Check again re-reads;
+  // an edit to the form must not run gh again.
+  const showGithubForm = connectionAddKind === "github" || Boolean(connectionEdit?.github);
+  const githubInspectedRef = useRef(false);
+  useEffect(() => {
+    if (!showGithubForm || githubInspectedRef.current) return;
+    githubInspectedRef.current = true;
+    void inspectGithub();
+  }, [inspectGithub, showGithubForm]);
+
+  /** Sign in, read the tools and skills, and disconnect. Saves nothing. */
+  const testGithubConnection = async () => {
+    if (connectionPending || !props.desktopApi?.testGithubMcpConnection) return;
+    setConnectionPending({ kind: "testLocal" });
+    setConnectionNotice(undefined);
+    try {
+      const result = await props.desktopApi.testGithubMcpConnection({
+        github: githubConnectionInput(githubDraft),
+      });
+      setGithubTest(result);
+      if (!connectionName.trim()) setConnectionName("GitHub");
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  const createGithubConnection = async () => {
+    if (connectionPending || !props.desktopApi?.createMcpConnection) return;
+    const name = connectionName.trim() || "GitHub";
+    setConnectionPending({ kind: "create" });
+    setConnectionNotice({ kind: "working", text: `Adding ${name}...` });
+    try {
+      await props.desktopApi.createMcpConnection({
+        displayName: name,
+        github: githubConnectionInput(githubDraft),
+      });
+      setConnectionName("");
+      setGithubDraft(emptyGithubConnectionDraft());
+      setGithubTest(undefined);
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: `${name} was added. Offer it to threads, or turn it on in a thread's MCP panel.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  /** Test an edited GitHub connection, with its stored token when the field is blank. */
+  const testGithubEdit = async () => {
+    const draft = connectionEdit;
+    if (!draft?.github || connectionPending || !props.desktopApi?.testGithubMcpConnection) return;
+    setConnectionPending({ kind: "testLocal", connectionId: draft.connectionId });
+    try {
+      setGithubEditTest(await props.desktopApi.testGithubMcpConnection({
+        github: githubConnectionInput(draft.github.draft),
+        connectionId: draft.connectionId,
+      }));
+    } catch (error) {
+      setGithubEditTest({
+        ok: false,
+        problem: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   /** Test an edited local command, with the stored secrets for blank fields. */
   const testConnectionEdit = async () => {
     const draft = connectionEdit;
@@ -1109,6 +1234,7 @@ export function PluginsSettings(props: {
   const closeConnectionEdit = () => {
     setConnectionEdit(undefined);
     setConnectionEditTest(undefined);
+    setGithubEditTest(undefined);
   };
 
   const saveConnectionEdit = async () => {
@@ -1118,7 +1244,13 @@ export function PluginsSettings(props: {
     }
     setConnectionPending({ kind: "update", connectionId: draft.connectionId });
     try {
-      await props.desktopApi.updateMcpConnection(draft.local
+      await props.desktopApi.updateMcpConnection(draft.github
+        ? {
+            connectionId: draft.connectionId,
+            displayName: draft.displayName,
+            github: githubConnectionInput(draft.github.draft),
+          }
+        : draft.local
         ? {
             connectionId: draft.connectionId,
             displayName: draft.displayName,
@@ -1142,7 +1274,7 @@ export function PluginsSettings(props: {
         // rather than letting the row look merely renamed.
         text: editDraftRepointsServer(draft)
           ? `${draft.displayName} now points at a different server.${isMcpIpcUrl(draft.serverUrl) ? " Approve a new session in the server app if required." : " Authorize it again."}`
-          : draft.local && draft.local.runningIn > 0
+          : (draft.local?.runningIn ?? draft.github?.runningIn ?? 0) > 0
             ? `${draft.displayName} was updated. Threads using it get the new version on their next tool call.`
             : `${draft.displayName} was updated.`,
       });
@@ -1597,6 +1729,14 @@ export function PluginsSettings(props: {
                             },
                           }
                         : {}),
+                      ...(connection.github
+                        ? {
+                            github: {
+                              draft: githubConnectionDraftFromSettings(connection.github),
+                              runningIn: connection.localProcesses ?? 0,
+                            },
+                          }
+                        : {}),
                     })
                   }
                   onNotice={setConnectionNotice}
@@ -1616,6 +1756,11 @@ export function PluginsSettings(props: {
                 else void testLocalConnection();
                 return;
               }
+              if (connectionAddKind === "github") {
+                if (githubTest?.ok) void createGithubConnection();
+                else void testGithubConnection();
+                return;
+              }
               void createConnection();
             }}
           >
@@ -1626,6 +1771,9 @@ export function PluginsSettings(props: {
               options={[
                 { label: "Server URL", meta: "HTTP over network or local IPC", value: "remote" },
                 { label: "Local command", meta: "Runs on this computer", value: "local" },
+                ...(props.desktopApi?.testGithubMcpConnection
+                  ? [{ label: "GitHub", meta: "Signs in with your GitHub CLI", value: "github" as const }]
+                  : []),
               ]}
               value={connectionAddKind}
               onChange={(kind) => {
@@ -1719,7 +1867,9 @@ export function PluginsSettings(props: {
                       // points it here; this screen offers the conversion.
                       : probe.problem === "looks_like_stdio"
                         ? "That looks like a command, not a URL. PwrAgent can run it as a local command."
-                        : probe.message}
+                        : probe.problem === "github_server"
+                          ? "This is GitHub's MCP server. Set it up with your GitHub sign-in instead."
+                          : probe.message}
                   </p>
                 ) : null}
                 {probe && !probe.ok && probe.problem === "looks_like_stdio" ? (
@@ -1742,6 +1892,90 @@ export function PluginsSettings(props: {
                     </button>
                   </div>
                 ) : null}
+                {probe && !probe.ok && probe.problem === "github_server" && props.desktopApi?.testGithubMcpConnection ? (
+                  <div className="settings-mcp-create__convert">
+                    <button
+                      className="button button--secondary"
+                      disabled={Boolean(connectionPending)}
+                      type="button"
+                      onClick={() => {
+                        setConnectionUrl("");
+                        setProbe(undefined);
+                        setGithubTest(undefined);
+                        if (!connectionName.trim()) setConnectionName("GitHub");
+                        setConnectionAddKind("github");
+                      }}
+                    >
+                      Set up GitHub
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : connectionAddKind === "github" ? (
+              <>
+                <p className="settings-mcp-create__constraint">
+                  GitHub&rsquo;s MCP server, signed in with the account your GitHub CLI uses or a
+                  token you paste. Test signs in, lists the tools and skills, and disconnects.
+                </p>
+                <div className="settings-mcp-local">
+                  <label className="settings-mcp-local__field">
+                    <span className="settings-mcp-local__label">Name</span>
+                    <span className="settings-mcp-local__control">
+                      <input
+                        className="settings-input"
+                        disabled={Boolean(connectionPending)}
+                        placeholder="GitHub"
+                        value={connectionName}
+                        onChange={(event) => setConnectionName(event.target.value)}
+                      />
+                    </span>
+                  </label>
+                </div>
+                <GithubConnectionFields
+                  disabled={Boolean(connectionPending)}
+                  draft={githubDraft}
+                  inspect={githubInspect}
+                  inspecting={githubInspecting}
+                  test={githubTest}
+                  onChange={(next) => {
+                    setGithubDraft(next);
+                    // A test describes one setup, as a probe does one URL.
+                    // Only the toolset disclosure changes nothing tested.
+                    if (next.showAllToolsets === githubDraft.showAllToolsets) setGithubTest(undefined);
+                  }}
+                  onRecheck={() => void inspectGithub()}
+                />
+                {githubTest ? (
+                  <GithubConnectionTestResult result={githubTest} skillsRequested={githubDraft.skills} />
+                ) : null}
+                <div className="settings-mcp-local__actions">
+                  {githubTest?.ok ? (
+                    <button
+                      className="button button--ghost"
+                      disabled={Boolean(connectionPending)}
+                      type="button"
+                      onClick={() => void testGithubConnection()}
+                    >
+                      Test again
+                    </button>
+                  ) : null}
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      Boolean(connectionPending)
+                      || !githubConnectionDraftReady(githubDraft)
+                    }
+                    type="submit"
+                  >
+                    {connectionPending?.kind === "testLocal"
+                      ? "Testing..."
+                      : connectionPending?.kind === "create"
+                        ? "Adding..."
+                        : githubTest?.ok
+                          ? "Add"
+                          : "Test"}
+                  </button>
+                </div>
               </>
             ) : (
               <>
@@ -1987,7 +2221,7 @@ export function PluginsSettings(props: {
             aria-labelledby="edit-managed-mcp-heading"
             aria-modal="true"
             className={`settings-confirm-dialog${
-              connectionEdit.local ? " settings-confirm-dialog--local-command" : ""
+              connectionEdit.local || connectionEdit.github ? " settings-confirm-dialog--local-command" : ""
             }`}
             role="dialog"
             onSubmit={(event) => {
@@ -2011,7 +2245,7 @@ export function PluginsSettings(props: {
                   }
                 />
               </label>
-              {connectionEdit.local ? null : (
+              {connectionEdit.local || connectionEdit.github ? null : (
                 <label>
                   <span>MCP server URL</span>
                   <input
@@ -2029,7 +2263,7 @@ export function PluginsSettings(props: {
                   />
                 </label>
               )}
-              {!connectionEdit.local && isMcpIpcUrl(connectionEdit.serverUrl) ? (
+              {!connectionEdit.local && !connectionEdit.github && isMcpIpcUrl(connectionEdit.serverUrl) ? (
                 <label>
                   <span>New session bearer token (leave blank to keep)</span>
                   <input className="settings-input" type="password" autoComplete="off"
@@ -2040,6 +2274,41 @@ export function PluginsSettings(props: {
                 </label>
               ) : null}
             </div>
+            {connectionEdit.github ? (
+              <>
+                <GithubConnectionFields
+                  disabled={Boolean(connectionPending)}
+                  draft={connectionEdit.github.draft}
+                  inspect={githubInspect}
+                  inspecting={githubInspecting}
+                  test={githubEditTest}
+                  onChange={(next) => {
+                    const previous = connectionEdit.github!.draft;
+                    setConnectionEdit({
+                      ...connectionEdit,
+                      github: { ...connectionEdit.github!, draft: next },
+                    });
+                    if (next.showAllToolsets === previous.showAllToolsets) setGithubEditTest(undefined);
+                  }}
+                  onRecheck={() => void inspectGithub()}
+                />
+                {githubEditTest ? (
+                  <GithubConnectionTestResult
+                    result={githubEditTest}
+                    skillsRequested={connectionEdit.github.draft.skills}
+                  />
+                ) : null}
+                {connectionEdit.github.runningIn > 0 ? (
+                  <p>
+                    Saving a change stops the{" "}
+                    {connectionEdit.github.runningIn === 1
+                      ? "session"
+                      : `${connectionEdit.github.runningIn} sessions`}{" "}
+                    using it now. Threads reconnect with the change when they next use it.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
             {connectionEdit.local ? (
               <>
                 <LocalCommandFields
@@ -2078,6 +2347,19 @@ export function PluginsSettings(props: {
               </p>
             ) : null}
             <div className="settings-confirm-dialog__actions">
+              {connectionEdit.github && props.desktopApi?.testGithubMcpConnection ? (
+                <button
+                  className="button button--ghost settings-confirm-dialog__leading"
+                  disabled={
+                    Boolean(connectionPending)
+                    || !githubConnectionDraftReady(connectionEdit.github.draft)
+                  }
+                  type="button"
+                  onClick={() => void testGithubEdit()}
+                >
+                  {connectionPending?.kind === "testLocal" ? "Testing..." : "Test"}
+                </button>
+              ) : null}
               {connectionEdit.local && props.desktopApi?.testMcpStdioConnection ? (
                 <button
                   className="button button--ghost settings-confirm-dialog__leading"
@@ -2104,7 +2386,9 @@ export function PluginsSettings(props: {
                 disabled={
                   Boolean(connectionPending)
                   || !connectionEdit.displayName.trim()
-                  || (connectionEdit.local
+                  || (connectionEdit.github
+                    ? !githubConnectionDraftReady(connectionEdit.github.draft)
+                    : connectionEdit.local
                     ? !localCommandDraftReady(connectionEdit.local.draft)
                     : !connectionEdit.serverUrl.trim())
                 }
@@ -2301,6 +2585,7 @@ function useManagedConnectionTools(params: {
       setInventory({
         status: "loaded",
         tools: response.tools,
+        ...(response.skillCount ? { skillCount: response.skillCount } : {}),
         fetchedAt: response.fetchedAt,
       });
       if (testing) setTestResult({ status: "passed", elapsedMs: performance.now() - startedAt, toolCount: response.tools.length });
@@ -2390,6 +2675,7 @@ function ManagedMcpConnectionRow(props: {
   const localSandboxer = sandboxer && connection.authMode === "local_cli";
   const [transportBusy, setTransportBusy] = useState(false);
   const stdio = connection.kind === "stdio";
+  const github = connection.kind === "github";
   const ipc = isMcpIpcUrl(connection.serverUrl);
   const app = connection.kind === "pwrgit"
     ? "PwrGit"
@@ -2428,22 +2714,24 @@ function ManagedMcpConnectionRow(props: {
   // point at the wrong one. Credentials held from before still say something.
   // A local command has no sign-in; its chip only ever reports a secret
   // that encrypted storage could not hand back.
-  const showAuthChip = stdio || ipc
+  const showAuthChip = stdio || ipc || github
     ? !connection.configured
     : connection.configured
       || (setup.state !== "app_not_installed" && setup.state !== "app_not_running");
-  const runningIn = stdio ? connection.localProcesses ?? 0 : 0;
+  const runningIn = stdio || github ? connection.localProcesses ?? 0 : 0;
   const lastFailure = connection.discovery?.state === "failed"
     ? connection.discovery.lastFailure
     : undefined;
   // The server's own words, kept only while they explain the failure on
   // screen: a later successful read retires both.
-  const failureOutput = stdio
+  // A GitHub connection on this computer is a local process too.
+  const localProcess = stdio || (github && connection.github?.server === "local");
+  const failureOutput = localProcess
     && inventory?.status === "failed"
     && lastFailure?.message === inventory.error
     ? lastFailure.output
     : undefined;
-  const couldNotStart = stdio && listable && inventory?.status === "failed";
+  const couldNotStart = localProcess && listable && inventory?.status === "failed";
   const selectedForNewThreads =
     connection.enabled && connection.selectForNewThreads === true;
   // Whether seeding would take it today, asked of the same predicate the
@@ -2524,7 +2812,9 @@ function ManagedMcpConnectionRow(props: {
               ? listable ? `remote Linux compute \u00b7 ${toolsMeta}` : "remote Linux compute"
               : stdio
                 ? listable ? `local command \u00b7 ${toolsMeta}` : "local command"
-                : toolsMeta}
+                : github
+                  ? `${connection.github?.server === "local" ? "on this computer" : "GitHub-hosted"}${listable ? ` \u00b7 ${toolsMeta}` : ""}`
+                  : toolsMeta}
           </span>
         </button>
         <div className="settings-mcp-row__chips">
@@ -2618,7 +2908,7 @@ function ManagedMcpConnectionRow(props: {
                   onChanged={refreshStatus}
                   onNotice={props.onNotice}
                 />
-              ) : stdio || ipc ? null : (
+              ) : stdio || ipc || github ? null : (
                 <button
                   className="button button--secondary"
                   disabled={props.disabled}
@@ -2654,7 +2944,7 @@ function ManagedMcpConnectionRow(props: {
                   Disconnect
                 </button>
               ) : null}
-              {connection.kind === "remote" || stdio ? (
+              {connection.kind === "remote" || stdio || github ? (
                 <>
                   {/*
                     * A connection's URL is not a write-once field. `create`
@@ -2669,7 +2959,9 @@ function ManagedMcpConnectionRow(props: {
                       ? "button--secondary"
                       : "button--ghost"}`}
                     disabled={props.disabled}
-                    title={stdio
+                    title={github
+                      ? `Rename ${connection.displayName}, or change its account, server, toolsets or skills. Threads using it reconnect with the change.`
+                      : stdio
                       ? `Rename ${connection.displayName}, or change its command, arguments, folder or environment. Threads running it restart with the change.`
                       : `Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
                     type="button"
@@ -2680,7 +2972,9 @@ function ManagedMcpConnectionRow(props: {
                   <button
                     className="button button--ghost settings-mcp-row__remove"
                     disabled={props.disabled}
-                    title={stdio
+                    title={github
+                      ? `Delete ${connection.displayName} from PwrAgent entirely -- the row and any stored token. Your GitHub CLI sign-in is not touched.`
+                      : stdio
                       ? `Delete ${connection.displayName} from PwrAgent entirely -- the row, its command, and its stored secrets. Threads running it stop it.`
                       : `Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
                     type="button"
@@ -2719,7 +3013,7 @@ function ManagedMcpConnectionRow(props: {
                 label={`${connection.displayName} command`}
                 value={formatMcpCommandLine(connection.stdio)}
               />
-            ) : connection.kind === "pwrsnap" || connection.kind === "pwrgit" ? null : (
+            ) : connection.kind === "pwrsnap" || connection.kind === "pwrgit" || github ? null : (
               // PwrSnap and PwrGit have no URL: PwrAgent starts the relay
               // inside the app's own install.
               <SettingsCopyValue

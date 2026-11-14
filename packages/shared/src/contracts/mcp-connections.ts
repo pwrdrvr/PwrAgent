@@ -2,6 +2,14 @@ import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationRemoteTarget } from "./federation";
 import { isAcpBackendId } from "./navigation";
 import { forgeRuleRepositoryMatchKey, normalizeForgeRuleRepository } from "./forge-agent-tools";
+import {
+  describeGithubMcpAccount,
+  githubMcpAccountHeadline,
+  githubMcpAccountUsable,
+  type GithubMcpAccountCheck,
+  type GithubMcpSettings,
+  type GithubMcpSettingsInput,
+} from "../github-mcp";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
@@ -124,8 +132,11 @@ export type BuiltInMcpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
  */
 export type McpConnectionAuthMode = "oauth" | "local_cli" | "none";
 
-/** `stdio` is an operator-configured local command (an MCP stdio server). */
-export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer" | "stdio";
+/**
+ * `stdio` is an operator-configured local command (an MCP stdio server).
+ * `github` is GitHub's MCP server, signed in with the GitHub CLI or a token.
+ */
+export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer" | "stdio" | "github";
 
 /** One environment variable a local command server receives. */
 export type McpStdioEnvironmentEntry = {
@@ -199,6 +210,11 @@ export type McpConnectionRecord = {
    * variables belong to the machine that runs it.
    */
   stdio?: McpStdioLaunch;
+  /**
+   * A `github` connection's account source, server and toolsets. Absent for
+   * every other kind. A federation peer's copy has no local `command`.
+   */
+  github?: GithubMcpSettings;
   enabled: boolean;
   /**
    * Whether a new thread starts with this connection already selected.
@@ -390,6 +406,12 @@ export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
   sandboxerCliState?: SandboxerCliState;
   sandboxerAccount?: SandboxerAccountSummary;
+  /**
+   * A `github` connection's account as last checked: its state, login and
+   * scopes. Shown in Settings only; federation strips it, as it does the
+   * Sandboxer account.
+   */
+  githubAccount?: GithubMcpAccountCheck;
   configured: boolean;
   detail?: string;
   /**
@@ -421,7 +443,16 @@ export type McpConnectionStatus = McpConnectionRecord & {
 export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpConnectionStatus[] {
   // A local command's executable path, folder and variables describe the
   // owner's machine; a peer only ever needs the name and the switch.
-  return connections.map(({ sandboxerAccount: _account, stdio: _stdio, ...connection }) => {
+  return connections.map(({
+    sandboxerAccount: _account,
+    githubAccount: _githubAccount,
+    stdio: _stdio,
+    ...connection
+  }) => {
+    if (connection.github?.command) {
+      const { command: _command, ...github } = connection.github;
+      connection = { ...connection, github };
+    }
     const failure = connection.discovery?.lastFailure;
     if (!failure?.output) return connection;
     const { output: _output, ...lastFailure } = failure;
@@ -465,7 +496,8 @@ export type McpConnectionsChangedEvent = {
 
 /**
  * Add a connection. Exactly one of `serverUrl` (network HTTP with OAuth or
- * verified local HTTP IPC) or `stdio` (a local command) is given.
+ * verified local HTTP IPC), `stdio` (a local command) or `github` (GitHub's
+ * MCP server) is given.
  */
 export type CreateMcpConnectionRequest = {
   displayName: string;
@@ -473,6 +505,7 @@ export type CreateMcpConnectionRequest = {
   /** IPC only; encrypted on the owning instance and never returned. */
   ipcBearerToken?: string;
   stdio?: McpStdioLaunchInput;
+  github?: GithubMcpSettingsInput;
 };
 
 export type CreateMcpConnectionResponse = {
@@ -628,6 +661,11 @@ export type ListMcpConnectionToolsResponse = {
   connectionId: McpConnectionId;
   /** Tool names, in the order the server listed them. */
   tools: string[];
+  /**
+   * How many skills the server offers through the MCP skills extension.
+   * Absent when it offers none, and from an older owner broker.
+   */
+  skillCount?: number;
   /** When the gateway read this list from the server, in epoch ms. */
   fetchedAt: number;
 };
@@ -802,6 +840,8 @@ export function canIsolateMcpProviderServers(
 
 /** A built-in connection reached through a local application or CLI. */
 export function isLocalMcpConnectionKind(kind: McpConnectionKind): boolean {
+  // Not `github`: its account lives in the GitHub CLI or a stored token,
+  // not in a local PwrSuite app.
   return kind === "pwrsnap" || kind === "pwrgit" || kind === "sandboxer";
 }
 
@@ -969,6 +1009,32 @@ export function resolveMcpConnectionSetup(
     );
   }
 
+  if (connection.kind === "github") {
+    const account = connection.githubAccount;
+    if (!configured) {
+      return build(
+        "login_required",
+        account ? githubMcpAccountHeadline(account) : "Not signed in",
+        connection.detail ?? (account ? describeGithubMcpAccount(account) : "Check this connection's GitHub account."),
+        "warn",
+      );
+    }
+    if (!connection.enabled) {
+      return build(
+        "parked",
+        "Parked",
+        "Kept, but no thread can reach it until you offer it to threads again.",
+        "warn",
+      );
+    }
+    return build(
+      "ready",
+      account && !githubMcpAccountUsable(account.state) ? githubMcpAccountHeadline(account) : "Ready",
+      connection.detail ?? describeGithubMcpConnection(connection),
+      "ok",
+    );
+  }
+
   if (localAvailability === "not_installed") {
     return build(
       "app_not_installed",
@@ -1039,6 +1105,23 @@ export function resolveMcpConnectionSetup(
 }
 
 /**
+ * The detail line of a GitHub connection: who it acts as, through what, and
+ * which toolsets it loads. "Who will this act as" leads, because it is the
+ * question at the moment a thread turns it on.
+ */
+export function describeGithubMcpConnection(
+  connection: Pick<McpConnectionStatus, "github" | "githubAccount">,
+): string {
+  const github = connection.github;
+  const login = connection.githubAccount?.login;
+  const source = github?.account === "token" ? "a stored personal access token" : "your GitHub CLI sign-in";
+  const who = login ? `Acts as @${login} through ${source}.` : `Acts through ${source}.`;
+  if (!github) return who;
+  const toolsets = `Toolsets: ${github.toolsets.join(", ")}${github.readOnly ? ", read-only" : ""}.`;
+  return `${who} ${toolsets}`;
+}
+
+/**
  * Counts for the section chip.
  *
  * The shipped chip read `${enabled} of ${total} on`, which counted the
@@ -1087,6 +1170,8 @@ export type UpdateMcpConnectionRequest = {
   serverUrl?: string;
   /** Replaces a local command's launch. Restarts its running copies. */
   stdio?: McpStdioLaunchInput;
+  /** Replaces a GitHub connection's settings. Restarts its sessions. */
+  github?: GithubMcpSettingsInput;
 };
 
 /**
@@ -1209,6 +1294,8 @@ export type McpConnectionProbeProblem =
   | "not_a_url"
   /** Looks like a command line for a stdio server: add it as a local command. */
   | "looks_like_stdio"
+  /** GitHub's hosted MCP server: set it up with the GitHub option instead. */
+  | "github_server"
   /** Reachable, but it is not an MCP endpoint. */
   | "not_mcp"
   /** An MCP endpoint that does not offer OAuth, which is all the gateway holds. */

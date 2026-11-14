@@ -701,3 +701,95 @@ endpoint = "wss://example.com/mcp"
     expect(fs.readFileSync(target, "utf8")).toContain(future.trim());
   });
 });
+
+describe("McpConnectionRegistry GitHub connections", () => {
+  const github = {
+    account: "gh_cli" as const,
+    server: "hosted" as const,
+    toolsets: ["context", "repos", "issues", "users"] as Array<"context" | "repos" | "issues" | "users">,
+    readOnly: false,
+    skills: true,
+  };
+
+  it("stores a GitHub row with no URL and no token, and reads it back as written", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target, now: () => 7 });
+    const created = registry.createGithub({ displayName: "GitHub", github });
+    expect(created).toMatchObject({ id: "github", kind: "github", authMode: "none", serverUrl: "github:github", enabled: true });
+    const source = fs.readFileSync(target, "utf8");
+    expect(source).toContain('transport = "github"');
+    expect(source).toContain('account = "gh_cli"');
+    expect(source).toContain('toolsets = ["context", "repos", "issues", "users"]');
+    // An older build reads a row with no server_url as unreadable, skips it
+    // and keeps it; writing one would make it a broken remote connection.
+    expect(source).not.toContain("server_url");
+    expect(source).not.toContain("read_only");
+    expect(new McpConnectionRegistry({ configPath: target }).get("github")).toEqual(created);
+  });
+
+  it("rewrites optional keys off, and keeps a local server's resolved path", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    const created = registry.createGithub({
+      displayName: "GitHub local",
+      github: { ...github, server: "local", command: "/opt/homebrew/bin/github-mcp-server", readOnly: true },
+    });
+    expect(fs.readFileSync(target, "utf8")).toContain('command = "/opt/homebrew/bin/github-mcp-server"');
+    const { connection, launchChanged } = registry.update({ connectionId: created.id, github });
+    expect(launchChanged).toBe(true);
+    const source = fs.readFileSync(target, "utf8");
+    expect(source).not.toContain("command =");
+    expect(source).not.toContain("read_only");
+    expect(new McpConnectionRegistry({ configPath: target }).get(created.id)).toEqual(connection);
+    expect(registry.update({ connectionId: created.id, displayName: "Renamed" }).launchChanged).toBe(false);
+    expect(() => registry.update({ connectionId: created.id, serverUrl: "https://example.com/mcp" })).toThrow(/no URL/);
+  });
+
+  it("skips a hand-written GitHub row it cannot trust, and keeps it on rewrite", () => {
+    const target = configPath();
+    fs.writeFileSync(target, [
+      "[[mcp_connections.connections]]",
+      'id = "no-toolsets"',
+      'display_name = "Empty"',
+      'transport = "github"',
+      'account = "gh_cli"',
+      'server = "hosted"',
+      "toolsets = []",
+      "",
+      "[[mcp_connections.connections]]",
+      'id = "relative"',
+      'display_name = "Relative"',
+      'transport = "github"',
+      'account = "token"',
+      'server = "local"',
+      'command = "bin/github-mcp-server"',
+      'toolsets = ["repos"]',
+      "",
+    ].join("\n"));
+    const registry = new McpConnectionRegistry({ configPath: target });
+    // An empty list would be GitHub's defaults, not "none"; a relative
+    // program is relative to nothing PwrAgent knows.
+    expect(registry.get("no-toolsets")).toBeUndefined();
+    expect(registry.get("relative")).toBeUndefined();
+    registry.createGithub({ displayName: "GitHub", github });
+    const source = fs.readFileSync(target, "utf8");
+    expect(source).toContain('id = "no-toolsets"');
+    expect(source).toContain('id = "relative"');
+  });
+
+  it("reads skills as on unless a row turns them off", () => {
+    const target = configPath();
+    fs.writeFileSync(target, [
+      "[[mcp_connections.connections]]",
+      'id = "gh"',
+      'display_name = "GitHub"',
+      'transport = "github"',
+      'account = "gh_cli"',
+      'server = "hosted"',
+      'toolsets = ["repos", "nonsense", "repos"]',
+      "",
+    ].join("\n"));
+    expect(new McpConnectionRegistry({ configPath: target }).get("gh")?.github)
+      .toEqual({ account: "gh_cli", server: "hosted", toolsets: ["repos"], readOnly: false, skills: true });
+  });
+});

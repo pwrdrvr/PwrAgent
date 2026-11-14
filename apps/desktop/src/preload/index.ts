@@ -130,6 +130,10 @@ import type {
   ProbeMcpConnectionRequest,
   TestMcpStdioConnectionRequest,
   TestMcpStdioConnectionResponse,
+  InspectGithubMcpSetupRequest,
+  InspectGithubMcpSetupResponse,
+  TestGithubMcpConnectionRequest,
+  TestGithubMcpConnectionResponse,
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
@@ -1002,6 +1006,8 @@ import {
   MCP_CONNECTION_UPDATE_CHANNEL,
   MCP_CONNECTION_PROBE_CHANNEL,
   MCP_CONNECTION_TEST_STDIO_CHANNEL,
+  MCP_CONNECTION_GITHUB_INSPECT_CHANNEL,
+  MCP_CONNECTION_GITHUB_TEST_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -1377,6 +1383,14 @@ const desktopApi = Object.freeze({
     request: TestMcpStdioConnectionRequest,
   ): Promise<TestMcpStdioConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_TEST_STDIO_CHANNEL, request),
+  inspectGithubMcpSetup: async (
+    request: InspectGithubMcpSetupRequest = {},
+  ): Promise<InspectGithubMcpSetupResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_GITHUB_INSPECT_CHANNEL, request),
+  testGithubMcpConnection: async (
+    request: TestGithubMcpConnectionRequest,
+  ): Promise<TestGithubMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_GITHUB_TEST_CHANNEL, request),
   setMcpConnectionEnabled: async (
     request: SetMcpConnectionEnabledRequest,
   ): Promise<MutateMcpConnectionResponse> =>

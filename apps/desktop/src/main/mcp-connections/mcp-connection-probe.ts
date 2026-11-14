@@ -2,7 +2,7 @@ import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/cl
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ProbeMcpConnectionResponse } from "@pwragent/shared";
 import { MCP_CONNECTION_PROBE_TIMEOUT_MS } from "./mcp-connection-timeouts";
-import { isMcpIpcUrl } from "@pwragent/shared";
+import { isGithubMcpServerUrl, isMcpIpcUrl } from "@pwragent/shared";
 import { createMcpIpcTransport } from "./mcp-ipc-http";
 import { isStreamableHttpError, mcpClient, mcpClientAuth } from "./mcp-sdk";
 
@@ -211,6 +211,17 @@ export async function probeMcpConnectionUrl(
       problem: "looks_like_stdio",
       message:
         "That is a command, not a URL. Add it as a local command instead; a person sets those up in Settings → Plugins.",
+    };
+  }
+  if (isGithubMcpServerUrl(serverUrl)) {
+    // Discovery finds GitHub's sign-in server, which has no dynamic client
+    // registration, and a bearer header is not something a Server URL
+    // connection can send. The GitHub option signs in with gh or a token.
+    return {
+      ok: false,
+      problem: "github_server",
+      message:
+        "That is GitHub's MCP server. A person sets it up with the GitHub option in Settings → Plugins, which signs in with the GitHub CLI or a token.",
     };
   }
   const url = parseProbeUrl(serverUrl);
