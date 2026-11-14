@@ -261,6 +261,40 @@ function sameAcceptance(left: ThreadTurnQueueEntry, right: ThreadTurnQueueEntry)
   );
 }
 
+const TURN_SETTING_FIELDS = [
+  "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode",
+  "serviceTier", "reasoningEffort", "fastMode",
+] as const;
+
+/**
+ * Whether a message can join a batch: a batch runs under one set of turn
+ * settings and one operator approval, so every message in it must ask for
+ * the same ones.
+ */
+function sharesTurnTerms(
+  batch: ThreadTurnQueueEntry,
+  message: Pick<ThreadTurnQueueEntry, (typeof TURN_SETTING_FIELDS)[number] | "messageOrigin">,
+): boolean {
+  return TURN_SETTING_FIELDS.every(field => isDeepStrictEqual(batch[field], message[field]))
+    && Boolean(batch.messageOrigin?.operatorApproved) === Boolean(message.messageOrigin?.operatorApproved);
+}
+
+/**
+ * The origin of the queued message a sender's replacement would replace in
+ * this entry: the sender's first message in a batch, else the entry's own.
+ */
+export function replacedAgentMessageOrigin(
+  entry: Pick<ThreadTurnQueueEntry, "agentMessages" | "messageOrigin">,
+  sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
+): AppServerThreadMessageOrigin | undefined {
+  if (!entry.agentMessages) return entry.messageOrigin;
+  return entry.agentMessages.find(message => {
+    const source = message.origin?.sourceThread;
+    return source?.backend === sender.backend && source.threadId === sender.threadId
+      && source.instanceId === sender.instanceId;
+  })?.origin;
+}
+
 function groupedAgentInput(messages: QueuedAgentMessage[]): AppServerTurnInputItem[] {
   if (messages.length === 1) return structuredClone(messages[0]!.input);
   return messages.flatMap((message, index) => {
@@ -373,8 +407,12 @@ export class ThreadTurnQueue {
       const key = this.keyFor(input);
       const queue = this.queueFor(key);
       // A paused batch keeps the messages it has; a new one starts beside it.
+      // So does a batch whose turn settings or operator approval differ: the
+      // owner checked each message's override as it was submitted, and no
+      // message may run under another's override or approval.
       const index = queue.findIndex((entry) =>
         entry.delivery === "queued-steer" && entry.agentMessages !== undefined && !entry.paused
+        && sharesTurnTerms(entry, input)
       );
       const current = index >= 0 ? queue[index] : undefined;
       const messages = [...(current?.agentMessages ?? []), message];
@@ -958,6 +996,10 @@ export class ThreadTurnQueue {
         && source.instanceId === sender.instanceId;
       const entry = current.entry;
       if (entry.messageOrigin?.kind !== "agent") return undefined;
+      // The operator approved the text they saw. A replacement can neither
+      // take that approval nor drop it from the batch it shares.
+      if (origin && Boolean(origin.operatorApproved)
+        !== Boolean(replacedAgentMessageOrigin(entry, sender)?.operatorApproved)) return undefined;
       const replacementId = `thread-turn:${randomUUID()}`;
       let replaced = false;
       const messages = entry.agentMessages?.flatMap((message) => {
