@@ -52,6 +52,7 @@ export class OpenAIDecisionsUsageBatcher {
   private pendingRequests = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private writing: Promise<void> = Promise.resolve();
+  private closed = false;
 
   constructor(private readonly options: {
     /** Writes every line in one transaction. */
@@ -86,7 +87,10 @@ export class OpenAIDecisionsUsageBatcher {
       this.pending.set(key, { group, line: { ...line }, requests: 1 });
     }
     this.pendingRequests += 1;
-    if (this.pendingRequests >= (this.options.flushAtCount ?? OPENAI_DECISIONS_USAGE_FLUSH_COUNT)) {
+    if (
+      this.closed
+      || this.pendingRequests >= (this.options.flushAtCount ?? OPENAI_DECISIONS_USAGE_FLUSH_COUNT)
+    ) {
       void this.flush();
     } else if (!this.timer) {
       this.timer = setTimeout(() => { void this.flush(); }, this.options.flushAfterMs ?? OPENAI_DECISIONS_USAGE_FLUSH_MS);
@@ -96,6 +100,16 @@ export class OpenAIDecisionsUsageBatcher {
 
   get pendingRequestCount(): number {
     return this.pendingRequests;
+  }
+
+  /**
+   * Writes what is pending and, from then on, writes each request as it
+   * lands. Requests still in flight at shutdown finish after this flush; a
+   * window timer would never fire before exit.
+   */
+  close(): Promise<void> {
+    this.closed = true;
+    return this.flush();
   }
 
   /** Writes everything pending in one transaction. Resolves after the write. */

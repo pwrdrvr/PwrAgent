@@ -407,6 +407,31 @@ describe("invoke", () => {
     expect(calls).toBe(5);
   });
 
+  it("lets a cancelled caller leave the queue instead of holding a slot", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const service = makeService({
+      queueLimit: 1,
+      fetch: async (...args) => {
+        await gate;
+        return await globalThis.fetch(...args);
+      },
+    });
+    service.register(CODEX, ROUTE_DEFINITION);
+    const invoke = (signal?: AbortSignal) =>
+      service.invoke(CODEX, { name: "route_support_ticket", input: { ticket: "x" } }, signal);
+    const running = invoke();
+    const cancelled = new AbortController();
+    const waiting = invoke(cancelled.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    cancelled.abort();
+    expect((await captureError(() => waiting)).code).toBe("upstream_error");
+    // The slot is free again, so a live caller queues instead of getting busy.
+    const live = invoke();
+    release();
+    await Promise.all([running, live]);
+  });
+
   it("sums usage per decision version in memory and writes it as one batch, on the API project account", async () => {
     const service = makeService();
     service.register(CODEX, ROUTE_DEFINITION);

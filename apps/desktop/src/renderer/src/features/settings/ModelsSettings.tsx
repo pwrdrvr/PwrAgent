@@ -100,6 +100,7 @@ import {
 import {
   OPENAI_DECISIONS_FOCUS,
   OpenAIDecisionsScreen,
+  openAIDecisionsKeyLabel,
   openAIDecisionsKeyState,
 } from "./OpenAIDecisionsSettings";
 import {
@@ -941,7 +942,7 @@ export function ModelsSettings(props: {
           <SettingsIndexRow
             name="OpenAI Decisions"
             meta="Registered decisions on gpt-6-luna"
-            chip={openAIDecisionsKeyState(props.snapshot).configured ? "Key saved" : "No API key"}
+            chip={openAIDecisionsKeyLabel(openAIDecisionsKeyState(props.snapshot))}
             chipKind={openAIDecisionsKeyState(props.snapshot).configured ? "ok" : "muted"}
             onOpen={() => props.onFocusChange?.(OPENAI_DECISIONS_FOCUS)}
           />

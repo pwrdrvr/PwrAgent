@@ -6,7 +6,6 @@ import {
   OPENAI_DECISIONS_PRICING_CATALOG_VERSION,
   OPENAI_DECISIONS_PROVIDER,
   buildOpenAIDecisionsRequestBody,
-  findCredentialProperty,
   openAIDecisionPromptCacheMaterial,
   openAIDecisionSafetyMaterial,
   parseOpenAIDecisionRegistration,
@@ -110,9 +109,14 @@ export class OpenAIDecisionsService {
     });
   }
 
-  /** Writes pending usage now. The owner calls this at shutdown. */
+  /** Writes pending usage now. */
   async flushUsage(): Promise<void> {
     await this.usage.flush();
+  }
+
+  /** At owner shutdown: writes pending usage, then writes later usage at once. */
+  async closeUsage(): Promise<void> {
+    await this.usage.close();
   }
 
   register(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
@@ -237,13 +241,6 @@ export class OpenAIDecisionsService {
     for (const key of Object.keys(args)) {
       if (!INVOKE_KEYS.has(key)) throw new OpenAIDecisionsError("invalid_input", `Unknown property "${key}".`);
     }
-    const credential = findCredentialProperty(args);
-    if (credential) {
-      throw new OpenAIDecisionsError(
-        "invalid_input",
-        `Property "${credential}" is not allowed. The host attaches the OpenAI key itself.`,
-      );
-    }
     if (!("input" in args)) throw new OpenAIDecisionsError("invalid_input", "input is required.");
     if (
       args.version !== undefined
@@ -273,7 +270,7 @@ export class OpenAIDecisionsService {
         "No OpenAI Decisions API key is saved. Add one in Settings → AI Providers → OpenAI Decisions.",
       );
     }
-    return await this.inLane(record.decisionId, async () =>
+    return await this.inLane(record.decisionId, signal, async () =>
       await this.post(caller, record, input.value, apiKey, signal));
   }
 
@@ -400,7 +397,11 @@ export class OpenAIDecisionsService {
     return match;
   }
 
-  private async inLane<T>(decisionId: string, work: () => Promise<T>): Promise<T> {
+  private async inLane<T>(
+    decisionId: string,
+    signal: AbortSignal | undefined,
+    work: () => Promise<T>,
+  ): Promise<T> {
     let lane = this.lanes.get(decisionId);
     if (!lane) {
       lane = { active: false, waiters: [] };
@@ -413,7 +414,25 @@ export class OpenAIDecisionsService {
           "This decision already has one request in flight and four waiting. Try again shortly.",
         );
       }
-      await new Promise<void>((resolve) => lane!.waiters.push(resolve));
+      // A cancelled caller leaves the queue at once instead of holding a slot.
+      await new Promise<void>((resolve, reject) => {
+        const waiters = lane!.waiters;
+        const onAbort = () => {
+          const index = waiters.indexOf(wake);
+          if (index >= 0) waiters.splice(index, 1);
+          reject(new OpenAIDecisionsError("upstream_error", "upstream_error: The request was cancelled."));
+        };
+        const wake = () => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
+        waiters.push(wake);
+      });
     }
     lane.active = true;
     try {

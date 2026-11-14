@@ -10,7 +10,10 @@ const openAIDecisionsLog = getMainLogger("pwragent:openai-decisions");
 
 let flushPendingUsage: (() => Promise<void>) | undefined;
 
-/** Writes batched decision usage before the profile database closes. */
+/**
+ * Writes batched decision usage before the profile database closes, and
+ * writes any request still in flight as soon as it finishes.
+ */
 export async function flushOpenAIDecisionsUsage(): Promise<void> {
   await flushPendingUsage?.();
 }
@@ -51,7 +54,7 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
       warn: (message, fields) => openAIDecisionsLog.warn(message, fields),
     },
   });
-  flushPendingUsage = async () => await service.flushUsage();
+  flushPendingUsage = async () => await service.closeUsage();
   return {
     register: (caller, args) => service.register(caller, args),
     list: (caller, args) => service.list(caller, args),

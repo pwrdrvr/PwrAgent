@@ -82,21 +82,20 @@ export async function postOpenAIDecision(
         redirect: "error",
       });
     } catch (error) {
-      const timedOut = timeout.aborted && !options.signal?.aborted;
       return {
         ok: false,
         code: "upstream_error",
-        detail: timedOut
-          ? "The request timed out."
-          : options.signal?.aborted
-            ? "The request was cancelled."
-            : redactOpenAIDecisionsText(errorText(error), [options.apiKey]),
+        detail: abortDetail(timeout, options.signal)
+          ?? redactOpenAIDecisionsText(errorText(error), [options.apiKey]),
         attempts,
       };
     }
     const requestId = response.headers.get("x-request-id") ?? undefined;
     const parsed: unknown = await response.json().catch(() => undefined);
     const body = isRecord(parsed) ? parsed : undefined;
+    // A stalled body is aborted by the same signal; say so rather than
+    // blaming the response format.
+    const bodyAborted = !body ? abortDetail(timeout, options.signal) : undefined;
     attempts.push({
       status: response.status,
       ...(requestId ? { requestId } : {}),
@@ -110,7 +109,7 @@ export async function postOpenAIDecision(
           code: "upstream_error",
           status: response.status,
           ...(requestId ? { requestId } : {}),
-          detail: "The response was not a JSON object.",
+          detail: bodyAborted ?? "The response was not a JSON object.",
           attempts,
         };
       }
@@ -140,7 +139,8 @@ export async function postOpenAIDecision(
       try {
         await sleep(retryAfterMs, options.signal);
       } catch {
-        return { ok: false, code: response.status === 429 ? "rate_limited" : "overloaded", ...failure };
+        // Only the caller's signal ends a sleep early: the call was cancelled.
+        return { ...failure, ok: false, code: "upstream_error", detail: "The request was cancelled." };
       }
       continue;
     }
@@ -178,6 +178,13 @@ export function parseRetryAfterMs(value: string | null, now = Date.now()): numbe
   const at = Date.parse(trimmed);
   if (Number.isNaN(at)) return undefined;
   return Math.max(0, at - now);
+}
+
+/** Why the signal ended the request, or undefined when it did not. */
+function abortDetail(timeout: AbortSignal, caller: AbortSignal | undefined): string | undefined {
+  if (caller?.aborted) return "The request was cancelled.";
+  if (timeout.aborted) return "The request timed out.";
+  return undefined;
 }
 
 function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {

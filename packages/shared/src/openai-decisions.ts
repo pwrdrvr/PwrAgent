@@ -663,17 +663,13 @@ export function buildOpenAIDecisionsRequestBody(params: {
         : []),
       { role: "user" as const, content: userContent },
     ],
-    questions: params.questions.map((question) => structuredCloneQuestion(question)),
+    questions: [...params.questions],
     prompt_cache_key: params.promptCacheKey,
     ...(prefix
       ? { prompt_cache_options: { mode: "explicit" as const, ttl: OPENAI_DECISIONS_CACHE_TTL } }
       : {}),
     safety_identifier: params.safetyIdentifier,
   };
-}
-
-function structuredCloneQuestion(question: OpenAIDecisionQuestion): OpenAIDecisionQuestion {
-  return JSON.parse(JSON.stringify(question)) as OpenAIDecisionQuestion;
 }
 
 /**

@@ -150,3 +150,19 @@ it("flushes on its own once the window passes after the first pending request", 
   await vi.advanceTimersByTimeAsync(1);
   expect(batches).toHaveLength(1);
 });
+
+it("writes usage that lands after close at once, so a request in flight at shutdown is kept", async () => {
+  const batches: ThreadUsageLineRecord[][] = [];
+  const batcher = new OpenAIDecisionsUsageBatcher({
+    write: async (lines) => { batches.push(lines); },
+    flushAfterMs: FLUSH_MS,
+    flushAtCount: FLUSH_COUNT,
+  });
+  await batcher.close();
+  expect(batches).toHaveLength(0);
+  const { group, line } = lineFor({ thread: 0, decision: 0, version: 1, input: 10, cached: 0, writes: 0, output: 0 }, 1);
+  batcher.add(group, line);
+  await batcher.flush();
+  expect(batches).toHaveLength(1);
+  expect(batcher.pendingRequestCount).toBe(0);
+});

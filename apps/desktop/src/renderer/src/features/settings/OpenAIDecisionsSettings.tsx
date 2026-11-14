@@ -16,6 +16,12 @@ export function openAIDecisionsKeyState(snapshot: DesktopSettingsSnapshot): Desk
   return snapshot.models.openaiDecisions?.apiKey ?? UNSET_SECRET;
 }
 
+/** Where the key comes from: an env override is not a saved key. */
+export function openAIDecisionsKeyLabel(state: DesktopSettingsSecretState): string {
+  if (!state.configured) return "No API key";
+  return state.source === "env" ? "Key from environment" : "Key saved";
+}
+
 /** OpenAI dashboard ids are short and contain no whitespace. They are not keys. */
 export function openAIDecisionsIdProblem(value: string): string | undefined {
   return value.length > 64 || /\s/.test(value)
@@ -51,7 +57,7 @@ export function OpenAIDecisionsScreen(props: {
       <SettingsSection
         title="Connection"
         sectionId="openai-decisions-connection"
-        chip={keyState.configured ? "Key saved" : "No API key"}
+        chip={openAIDecisionsKeyLabel(keyState)}
         chipKind={keyState.configured ? "ok" : "muted"}
       >
         <div className="settings-fields">
