@@ -72,8 +72,8 @@ type ThreadRowProps = {
    * "Scheduled"/"Queued" chip. Absent key = no pending send.
    */
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
-  /** Threads with unsent composer text, keyed like the maps above. */
-  draftThreadKeys?: Record<string, boolean>;
+  /** This row's draft presence, projected before the memo boundary. */
+  hasUnsentDraft?: boolean;
   /**
    * Identity key of the card the open composer was spawned from. When it
    * matches this row, the row renders as the orange "composing" source.
@@ -233,7 +233,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       : pinAction;
   const pinTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
   const lockTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
-  const hasUnsentDraft = props.draftThreadKeys?.[threadKey] === true;
+  const hasUnsentDraft = props.hasUnsentDraft === true;
   const threadLock = props.thread.lock;
   const lockLabel = threadLock
     ? threadLock.note ? `Locked: ${threadLock.note}` : "Locked"

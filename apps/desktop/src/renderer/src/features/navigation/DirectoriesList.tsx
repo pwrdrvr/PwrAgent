@@ -1285,7 +1285,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 terminalThreadKeys={props.terminalThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
                 queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-                draftThreadKeys={props.draftThreadKeys}
+                hasUnsentDraft={props.draftThreadKeys?.[childKey] === true}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 actionsMenuOpen={childKey === props.actionsMenuThreadKey}
                 renaming={isRenamingRow(props.renamingRow, childKey, directory.key)}
@@ -1453,7 +1453,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             terminalThreadKeys={props.terminalThreadKeys}
             inputRequestThreadKeys={props.inputRequestThreadKeys}
             queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-            draftThreadKeys={props.draftThreadKeys}
+            hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
             composerSourceThreadKey={props.composerSourceThreadKey}
             actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
             renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
@@ -1783,7 +1783,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           terminalThreadKeys={props.terminalThreadKeys}
                           inputRequestThreadKeys={props.inputRequestThreadKeys}
                           queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-                          draftThreadKeys={props.draftThreadKeys}
+                          hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
                           renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
