@@ -7,7 +7,11 @@ import type {
   PullRequestTerminalDetails,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import {
+  buildPullRequestStatusKey,
+  describeMergeQueueRemoval,
+  mergeQueueNoun,
+} from "@pwragent/shared";
 import type {
   PrStatusWatchStorage,
   PrStatusWatchClaim,
@@ -34,6 +38,21 @@ type PrStatusWatchRegistry = {
 };
 
 export type PrStatusWatchOutcome = "success" | "failure";
+
+/**
+ * What a merge/close watch wakes on. `dequeued`: the forge removed the PR
+ * from its merge queue, so the merge the watch waits for will not happen
+ * without a new attempt.
+ */
+export type PrTerminalWakeOutcome = "merged" | "closed" | "dequeued";
+
+export function terminalWakeOutcomeOf(pr: PrSummary): PrTerminalWakeOutcome | undefined {
+  const terminal = terminalOutcomeOf(pr);
+  if (terminal) return terminal;
+  return pr.mergeQueue?.state === "removed" && pr.mergeQueue.removedAt !== undefined
+    ? "dequeued"
+    : undefined;
+}
 
 /** Terminal details are immutable once read; keep a few for busy retries. */
 const TERMINAL_DETAILS_CACHE_LIMIT = 32;
@@ -86,11 +105,13 @@ export class PrStatusWatchCoordinator {
   ): Promise<number> {
     if (this.options.isBackgroundPollingEnabled?.() === false) return 0;
     const terminal = terminalOutcomeOf(pr) !== undefined;
-    // The terminal branch prepares claims itself.
-    const dispatched = terminal
+    // The terminal branch prepares claims itself, and so does a merge queue
+    // removal, which wakes merge watches the same way.
+    const wakesMergeWatches = terminalWakeOutcomeOf(pr) !== undefined;
+    const dispatched = wakesMergeWatches
       ? await this.handleTerminalSnapshot(pr, observedAt)
       : 0;
-    if (!terminal) await this.options.prepareClaims?.();
+    if (!wakesMergeWatches) await this.options.prepareClaims?.();
     const headSha = pr.headSha?.trim();
     if (!headSha) return dispatched;
 
@@ -137,7 +158,8 @@ export class PrStatusWatchCoordinator {
   }
 
   /**
-   * Wake every thread whose merge/close watch matches this terminal PR.
+   * Wake every thread whose merge/close watch matches this terminal PR, or
+   * whose merge watch waited on a PR the merge queue removed.
    * Called from each status snapshot, and with cached status after a busy
    * thread goes idle or the app restarts, because the poller stops fetching
    * a PR once it is merged or closed.
@@ -148,13 +170,21 @@ export class PrStatusWatchCoordinator {
     options: { fromSavedObservation?: boolean; pendingOnly?: boolean } = {},
   ): Promise<number> {
     if (this.options.isBackgroundPollingEnabled?.() === false) return 0;
-    const outcome = terminalOutcomeOf(pr);
+    const outcome = terminalWakeOutcomeOf(pr);
     if (!outcome) return 0;
     await this.options.prepareClaims?.();
     const now = this.now();
     const retired = options.pendingOnly ? []
-      : await this.options.store.observeThreadPrTerminalWatches({ pr, observedAt, outcome, now });
+      : outcome === "dequeued"
+        ? await this.options.store.observeThreadPrQueueRemovalWatches({
+          pr, observedAt, removedAt: pr.mergeQueue!.removedAt!, now,
+        })
+        : await this.options.store.observeThreadPrTerminalWatches({ pr, observedAt, outcome, now });
     await this.notifyWatchesChanged(retired);
+    // A removed PR stays open and is polled on every round. Claim only when
+    // this round armed a wake; a wake a busy thread put back is retried when
+    // that thread goes idle, from its saved observation.
+    if (outcome === "dequeued" && !options.pendingOnly && retired.length === 0) return 0;
     const claimed = await this.options.store.claimThreadPrTerminalWatches({
       prKey: buildPullRequestStatusKey(pr),
       now,
@@ -189,6 +219,11 @@ export class PrStatusWatchCoordinator {
       const detailReads = new Map<string, Promise<PullRequestTerminalDetails | undefined>>();
       const wakes = await Promise.all(claims.map(async (claim) => {
         const observation = claim.terminalObservation ?? { pr, observedAt };
+        // The PR is still open: there are no merge details to read, and
+        // nothing this thread made for the PR is done with yet.
+        if (terminalWakeOutcomeOf(observation.pr) === "dequeued") {
+          return { observation, details: undefined, extraLines: [] };
+        }
         const key = JSON.stringify(observation);
         let read = detailReads.get(key);
         if (!read) {
@@ -283,9 +318,9 @@ export class PrStatusWatchCoordinator {
     if (!await this.claimIsActive(claim)) return;
     const release = async (spendAttempt: boolean) =>
       await this.releaseClaim(claim, spendAttempt);
-    const outcome = terminalOutcomeOf(pr);
+    const outcome = terminalWakeOutcomeOf(pr);
     if (
-      !details
+      (!details && outcome !== "dequeued")
       || !outcome
       || this.options.isBackgroundPollingEnabled?.() === false
       || this.options.allowsWatchDispatch?.(claim.watch) === false
@@ -299,7 +334,9 @@ export class PrStatusWatchCoordinator {
         threadId: claim.watch.threadId,
         input: [{
           type: "text",
-          text: buildPrTerminalWatchPrompt({ details, observedAt, extraLines }),
+          text: outcome === "dequeued" || !details
+            ? buildPrQueueRemovalWatchPrompt({ pr, observedAt })
+            : buildPrTerminalWatchPrompt({ details, observedAt, extraLines }),
         }],
         origin: "automation",
         messageOrigin: {
@@ -311,7 +348,7 @@ export class PrStatusWatchCoordinator {
             ...(claim.watch.prTitle
               ? { prTitle: claim.watch.prTitle }
               : {}),
-            headSha: details.headSha ?? claim.watch.headSha,
+            headSha: details?.headSha ?? pr.headSha ?? claim.watch.headSha,
             outcome,
           },
         },
@@ -475,6 +512,30 @@ export function getPrStatusWatchOutcome(
   if (checkState === "failing") return "failure";
   if (checkState === "passing") return "success";
   return undefined;
+}
+
+/** The wake a merge watch sends when the merge queue removes its PR. */
+export function buildPrQueueRemovalWatchPrompt(params: {
+  pr: PrSummary;
+  observedAt: number;
+}): string {
+  const queue = params.pr.mergeQueue;
+  const noun = mergeQueueNoun(queue?.kind);
+  const name = `${params.pr.org}/${params.pr.repo}#${params.pr.number}`;
+  const base = params.pr.baseRefName ? ` for ${params.pr.baseRefName}` : "";
+  return [
+    `PwrAgent resumed this thread because its pull request watch saw ${name} removed from the ${noun}${base}. It has not merged.`,
+    "",
+    "Pull request notification",
+    `- Pull request: ${params.pr.url}`,
+    ...(params.pr.title ? [`- Title: ${params.pr.title}`] : []),
+    `- Reason: ${describeMergeQueueRemoval(queue) ?? `Removed from the ${noun}.`}`,
+    ...(queue?.removedAt ? [`- Removed at: ${new Date(queue.removedAt).toISOString()}`] : []),
+    ...(params.pr.headSha ? [`- Head: ${params.pr.headSha}`] : []),
+    `- Observed at: ${new Date(params.observedAt).toISOString()}`,
+    "",
+    `The merge watch has ended. Report the removal. Fix the cause only if the operator's prior request covers it; then add the PR to the ${noun} again with merge_pull_request and arm a new merge watch. Do not poll the PR or create a monitor thread.`,
+  ].join("\n");
 }
 
 export function buildPrTerminalWatchPrompt(params: {

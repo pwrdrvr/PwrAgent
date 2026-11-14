@@ -94,6 +94,7 @@ export type { IconProps } from "./icon-types";
 export { TodoIcon } from "./TodoIcon";
 export { ContinueAfterIcon } from "./ContinueAfterIcon";
 export { MergeIcon } from "./MergeIcon";
+export { MergeQueueIcon } from "./MergeQueueIcon";
 export { ReviewIcon } from "./ReviewIcon";
 export { HandoffIcon } from "./HandoffIcon";
 export { HourglassIcon } from "./HourglassIcon";

@@ -19,6 +19,7 @@ import {
   redactDisplayValue,
   readMcpApprovalPersistence,
   readMcpMergeMethods,
+  readMcpMergeQueue,
   readMcpProjectApprovalOffer,
   readMcpRememberOptions,
   updateMcpFieldValue,
@@ -63,10 +64,14 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   // A merge names its method, as a to-do merge card does, and its menu
   // offers the other methods the forge accepts.
   const mergeMethods = readMcpMergeMethods(props.state);
+  // A queue picks its own method, so the merge adds the PR to it instead.
+  const mergeQueue = readMcpMergeQueue(props.state);
   // Every tool on this server for the thread's project, kept in Settings.
   const projectOffer = url ? undefined : readMcpProjectApprovalOffer(props.state);
   const primaryLabel = url
     ? "Open in browser"
+    : mergeQueue
+      ? "Add to queue"
     : mergeMethods
       ? THREAD_TODO_MERGE_METHOD_LABELS[mergeMethods.selected].button
     : serverApproval

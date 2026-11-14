@@ -7,6 +7,8 @@ import {
   type ForgePrToolContext, type Payload,
 } from "./forge-pr-tool-shared";
 import { GitLabReadError, type GitLabPrFetcher, type GitLabWriteMethod } from "./gitlab-pr-fetcher";
+import { gitlabMergeTrainStatus } from "./pr-merge-queue";
+import { describeMergeQueueState, isMergeQueueActive } from "@pwragent/shared";
 
 const object = (value: unknown) => payloadObject(value, "GitLab");
 const items = (value: unknown) => payloadItems(value, "GitLab");
@@ -101,7 +103,8 @@ function noteSummary(r: ForgeRepository, p: Payload, fallback: string) {
  */
 export class GitlabPrToolClient {
   constructor(private readonly options: {
-    gitlab: Pick<GitLabPrFetcher, "readApi" | "writeApi" | "uploadProjectFile">;
+    gitlab: Pick<GitLabPrFetcher, "readApi" | "writeApi" | "uploadProjectFile">
+      & Partial<Pick<GitLabPrFetcher, "mergeTrainsEnabled">>;
     tempRoots?: string[];
   }) {}
 
@@ -114,6 +117,24 @@ export class GitlabPrToolClient {
     } catch (error) {
       return error instanceof GitLabReadError && error.status === 404 ? false : undefined;
     }
+  }
+
+  /** Whether the project merges through merge trains (GitLab Premium). */
+  async mergeQueueRequirement(r: ForgeRepository, number: number, signal?: AbortSignal): Promise<{ kind: "merge_train"; baseRef?: string } | undefined> {
+    if (r.provider !== "gitlab" || await this.mergeTrainsEnabled(r) !== true) return undefined;
+    const base = `projects/${encodeURIComponent(`${r.owner}/${r.repo}`)}`;
+    const mr = object(await this.options.gitlab.readApi<unknown>(r.host, `${base}/merge_requests/${number}`, signal));
+    const baseRef = str(mr.target_branch, 255);
+    return { kind: "merge_train", ...(baseRef ? { baseRef } : {}) };
+  }
+
+  /**
+   * The project's merge trains setting, read once per project and shared
+   * with the status poll. Unknown reads as no train, so a project that has
+   * none merges exactly as before.
+   */
+  private async mergeTrainsEnabled(r: ForgeRepository): Promise<boolean | undefined> {
+    return await this.options.gitlab.mergeTrainsEnabled?.(r.host, `${r.owner}/${r.repo}`).catch(() => undefined);
   }
 
   async execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown> {
@@ -421,6 +442,52 @@ export class GitlabPrToolClient {
       }
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
+        // A project with merge trains takes no direct merge: the MR joins
+        // the train, which merges it with the project's method. A project
+        // whose setting cannot be read merges as before.
+        if (await this.mergeTrainsEnabled(r) === true) {
+          const mr = await readMergeRequest(args.number!);
+          if (mr.state !== "opened") throw new ForgeReadError("invalid_arguments", `Merge request !${args.number} is not open.`);
+          if (args.expectedHeadSha && str(mr.sha, 64) !== args.expectedHeadSha) {
+            throw new ForgeReadError("head_changed", `The merge request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
+          }
+          const baseRef = str(mr.target_branch, 255);
+          const url = forgeWebUrl(r, mr.web_url, `/-/merge_requests/${args.number}`);
+          const nextStep = "Nothing has merged yet. watch_thread_pull_request with notifyOn [\"merged\"] wakes this thread when the train lands the merge request.";
+          let car: Payload | undefined;
+          try {
+            car = object(await get(`/merge_trains/merge_requests/${args.number}`));
+          } catch (error) {
+            if (!(error instanceof GitLabReadError && error.status === 404)) throw error;
+          }
+          const current = gitlabMergeTrainStatus({
+            lifecycle: "open", enabled: true,
+            car: car ? { status: str(car.status, 40) ?? null, createdAt: str(car.created_at, 40) ?? null } : null,
+          });
+          if (isMergeQueueActive(current)) {
+            return writeResult({
+              merged: false, queued: true, alreadyQueued: true, number: args.number,
+              mergeQueue: { kind: "merge_train", state: current!.state, ...(baseRef ? { baseRef } : {}), description: describeMergeQueueState(current) },
+              note: "The merge request is already on the merge train. Nothing was changed.", url, nextStep,
+            });
+          }
+          const pipeline = mr.head_pipeline && typeof mr.head_pipeline === "object" ? str((mr.head_pipeline as Payload).status, 40) : undefined;
+          // GitLab adds an MR whose pipeline has not succeeded once it does.
+          const waitForPipeline = pipeline !== "success";
+          await write("POST", `/merge_trains/merge_requests/${args.number}`, {
+            ...(args.expectedHeadSha ? { sha: args.expectedHeadSha } : {}),
+            ...(waitForPipeline ? { auto_merge: true } : {}),
+          });
+          const where = baseRef ? `${baseRef} merges through a merge train.` : "The project merges through merge trains.";
+          return writeResult({
+            merged: false, queued: !waitForPipeline, ...(waitForPipeline ? { autoMergeEnabled: true } : {}), number: args.number,
+            mergeQueue: { kind: "merge_train", state: waitForPipeline ? "not_queued" : "queued", ...(baseRef ? { baseRef } : {}) },
+            note: waitForPipeline
+              ? `${where} The pipeline has not succeeded yet, so GitLab adds the merge request to the train when it does.`
+              : `${where} The merge request was added to the train, which merges it with the project's method.`,
+            url, nextStep,
+          });
+        }
         const method = args.method ?? ctx.defaultMergeMethod();
         if (method === "rebase") throw new ForgeReadError("unsupported_operation", "GitLab merges with the project's merge method. Use merge or squash.");
         // GitLab takes one commit message; the title is its first line.

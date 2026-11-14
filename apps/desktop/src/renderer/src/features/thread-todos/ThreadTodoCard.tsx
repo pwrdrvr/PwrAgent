@@ -2,7 +2,7 @@ import { mergeHoldingDependencies, useThreadDependencyList } from "../thread-dep
 import { conditionName } from "../thread-dependencies/dependency-labels";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { TodoDispatchFacts, useTodoDispatchTarget } from "./TodoDispatchFacts";
-import { TodoPullRequestChip } from "./TodoPullRequestChip";
+import { TodoPullRequestChip, useTodoLivePullRequest } from "./TodoPullRequestChip";
 import { todoDispatchPickKey, useTodoDispatchContext, type TodoDispatchChoices } from "./TodoDispatchProvider";
 import {
   useEffect,
@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  PrMergeQueueStatus,
   ThreadReviewItem,
   ThreadTodo,
   ThreadTodoItem,
@@ -25,6 +26,10 @@ import type {
   ThreadTodoResolution,
 } from "@pwragent/shared";
 import {
+  describeMergeQueueRemoval,
+  describeMergeQueueState,
+  isMergeQueueActive,
+  mergeQueueNoun,
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
   THREAD_TODO_MERGE_METHOD_LABELS,
@@ -47,6 +52,7 @@ import {
   CopyIcon,
   HandoffIcon,
   MergeIcon,
+  MergeQueueIcon,
   ReviewIcon,
   type IconProps,
 } from "../../icons";
@@ -684,11 +690,23 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     action?.type === "merge_pull_request" ? action.pullRequest : undefined,
   );
   const blockingMergeHolds = mergeHoldingDependencies(mergeHolds.data);
+  // A base branch with a merge queue takes no direct merge: the card adds the
+  // PR to the queue, with the queue's own method, and follows it there.
+  const mergePullRequest = useTodoLivePullRequest(
+    todo,
+    action?.type === "merge_pull_request" && todo.status === "open" ? action.pullRequest : undefined,
+  );
+  const mergeQueue = mergePullRequest?.mergeQueue && mergePullRequest.mergeQueue.state !== "merged_by_queue"
+    && mergePullRequest.lifecycleState !== "merged" && mergePullRequest.lifecycleState !== "closed"
+    ? mergePullRequest.mergeQueue
+    : undefined;
   const mergeHeld = blockingMergeHolds.length > 0;
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" || action?.type === "send_message" ? action.prompt : undefined;
   const hasFacts = action?.type === "merge_pull_request";
-  const runningLabel = sendingMessage ? "Sending…" : action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
+  const runningLabel = sendingMessage ? "Sending…"
+    : action?.type === "merge_pull_request" ? mergeQueue ? "Adding to queue…" : "Merging…"
+    : "Starting…";
   const progress = threadTodoItemProgress(todo);
   const prerequisites = threadTodoPrerequisites(todo);
   const blocking = threadTodoBlockingItems(todo);
@@ -876,13 +894,34 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                   });
                 }}
               >
-                <MergeIcon size={12} />
-                {THREAD_TODO_MERGE_METHOD_LABELS[confirmingMerge.method].verb}
+                {mergeQueue ? <MergeQueueIcon size={12} /> : <MergeIcon size={12} />}
+                {mergeQueue ? "Add to queue" : THREAD_TODO_MERGE_METHOD_LABELS[confirmingMerge.method].verb}
               </button>
             </>
           );
         }
         const method = resolveThreadTodoMergeMethod(todo, props.mergeMethods);
+        if (mergeQueue) {
+          // The queue's ruleset picks the method, so there is no method menu.
+          const inQueue = isMergeQueueActive(mergeQueue);
+          return (
+            <>
+              {done}
+              <button
+                type="button"
+                className="button button--primary thread-todo-card__button"
+                disabled={inQueue}
+                onClick={() => setConfirmingMerge({ method, remember: false })}
+              >
+                <MergeQueueIcon size={12} />
+                {inQueue ? `In ${mergeQueueNoun(mergeQueue.kind)}`
+                  : todo.error ? "Retry"
+                  : mergeQueue.state === "removed" ? `Add to ${mergeQueueNoun(mergeQueue.kind)} again`
+                  : `Add to ${mergeQueueNoun(mergeQueue.kind)}`}
+              </button>
+            </>
+          );
+        }
         return (
           <>
             {done}
@@ -1132,7 +1171,16 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       {confirmingMerge && action?.type === "merge_pull_request" ? (
         <p className="thread-todo-card__confirm">
           {openSteps > 0 ? `${openStepsText} ` : ""}
-          {confirmMergeText(action.pullRequest, confirmingMerge.method, todo.targetProject?.label)}
+          {mergeQueue
+            ? confirmQueueText(action.pullRequest, mergeQueue.kind, mergePullRequest?.baseRefName, todo.targetProject?.label)
+            : confirmMergeText(action.pullRequest, confirmingMerge.method, todo.targetProject?.label)}
+        </p>
+      ) : mergeQueue && action?.type === "merge_pull_request" && !stepsConfirmation ? (
+        <p
+          role="status"
+          className={`thread-todo-card__queue${mergeQueue.state === "removed" ? " is-removed" : ""}`}
+        >
+          {mergeQueueLine(mergeQueue, mergePullRequest?.baseRefName)}
         </p>
       ) : null}
       {stepsConfirmation ? (
@@ -1446,6 +1494,31 @@ function confirmMergeText(
   const target = /^\d+$/.test(pullRequest) ? `#${pullRequest}` : "this pull request";
   const where = projectLabel ? ` in ${projectLabel}` : "";
   return `${THREAD_TODO_MERGE_METHOD_LABELS[method].verb} ${target}${where}? This cannot be undone here.`;
+}
+
+function confirmQueueText(
+  pullRequest: string,
+  kind: PrMergeQueueStatus["kind"],
+  baseRef: string | undefined,
+  projectLabel: string | undefined,
+): string {
+  const target = /^\d+$/.test(pullRequest) ? `#${pullRequest}` : "this pull request";
+  const where = projectLabel ? ` in ${projectLabel}` : "";
+  return `Add ${target}${where} to the ${mergeQueueNoun(kind)}${baseRef ? ` for ${baseRef}` : ""}?`;
+}
+
+/** What the queue means for this card, under its facts. */
+function mergeQueueLine(queue: PrMergeQueueStatus, baseRef: string | undefined): string {
+  const noun = mergeQueueNoun(queue.kind);
+  if (queue.state === "removed") {
+    return `Removed from the ${noun}. ${describeMergeQueueRemoval(queue) ?? ""}`.trim();
+  }
+  if (isMergeQueueActive(queue)) {
+    const state = describeMergeQueueState(queue) ?? `in ${noun}`;
+    return `${state.charAt(0).toUpperCase()}${state.slice(1)}.`;
+  }
+  const base = baseRef ?? "The base branch";
+  return `${base} requires a ${noun}. The queue tests the PR again and merges it with its own method.`;
 }
 
 export function formatTodoAge(createdAt: number, now = Date.now()): string {

@@ -259,10 +259,22 @@ export interface PrStatusWatchStorage {
     outcome: "merged" | "closed";
     now: number;
   }): Promise<PrStatusWatchThreadRef[]>;
+  /**
+   * The forge removed the PR from its merge queue. Every merge watch armed
+   * before `removedAt` becomes pending, as a terminal outcome would make it,
+   * because the merge it waits for will not happen without a new attempt.
+   * CI watches keep waiting: the PR is still open.
+   */
+  observeThreadPrQueueRemovalWatches(params: {
+    pr: PrSummary;
+    observedAt: number;
+    removedAt: number;
+    now: number;
+  }): Promise<PrStatusWatchThreadRef[]>;
   finishThreadPrTerminalWatch(params: {
     watchId: string;
     ownerId: string;
-    outcome: "merged" | "closed";
+    outcome: "merged" | "closed" | "dequeued";
     now: number;
   }): Promise<void>;
   isThreadPrStatusWatchClaimActive(params: { watchId: string; ownerId: string }): Promise<boolean>;

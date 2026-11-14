@@ -7,7 +7,7 @@ import {
   type MouseEvent,
 } from "react";
 import type { PrSummary } from "@pwragent/shared";
-import { CloseIcon, EyeIcon } from "../../icons";
+import { CloseIcon, EyeIcon, MergeQueueIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { sidebarPrCardBridge, type BridgedHoverCard } from "../../lib/hover-card-bridge";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -20,6 +20,7 @@ import {
   prChipModifierClasses,
   prStatusLabel,
   resolvePrChipPresentation,
+  resolvePrChipQueueBadge,
 } from "./pr-chip-state";
 import { PrStatusCard } from "./PrStatusCard";
 import { prNumberLabel } from "./pr-rollup";
@@ -255,6 +256,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   // composer's Tiptap-rendered chip reaches the same classes from the same
   // reading of the PR.
   const isDraft = presentation.isDraft;
+  const queueBadge = resolvePrChipQueueBadge(pr);
   const className = ["pr-chip", ...prChipModifierClasses(presentation)].join(" ");
 
   // role="button" span (not a real <button>) so the chip is legal HTML
@@ -372,6 +374,18 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
           ref={presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
         />
         <span className="pr-chip__label">{label}</span>
+        {queueBadge ? (
+          // The chip's name already says it in words (`prStatusLabel`).
+          <span
+            aria-hidden="true"
+            className={`pr-chip__queue pr-chip__queue--${queueBadge.state}`}
+          >
+            <MergeQueueIcon size={11} />
+            {queueBadge.state === "removed"
+              ? <CloseIcon size={9} />
+              : queueBadge.position ?? null}
+          </span>
+        ) : null}
         {props.watch?.ci ? (
           // Not a target: the chip is the control, and the card explains it.
           <span className="pr-chip__watch" aria-hidden="true">

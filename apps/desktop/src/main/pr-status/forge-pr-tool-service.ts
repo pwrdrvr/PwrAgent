@@ -18,12 +18,19 @@ export type ForgePrToolPreparedCall = {
    * holds every method the forge accepts, so the approval can offer the rest.
    */
   mergeMethods?: { offered: ThreadTodoMergeMethod[] };
+  /**
+   * The base branch requires a merge queue (GitHub) or merge train (GitLab):
+   * the merge enqueues, with the queue's own method, so no method is offered.
+   */
+  mergeQueue?: { kind: "merge_queue" | "merge_train"; baseRef?: string };
 };
 
 type ProviderClient = {
   execute(operation: ForgePrToolOperation, args: ForgePrToolArgs, ctx: ForgePrToolContext): Promise<unknown>;
   /** Whether a branch exists on the forge. Undefined when that cannot be told. */
   headBranchExists?(repository: ForgeRepository, head: string, signal?: AbortSignal): Promise<boolean | undefined>;
+  /** Whether a merge of this PR goes through a merge queue or train. */
+  mergeQueueRequirement?(repository: ForgeRepository, number: number, signal?: AbortSignal): Promise<{ kind: "merge_queue" | "merge_train"; baseRef?: string } | undefined>;
 };
 
 /** Picks the one GitHub or GitLab repository a call acts in, then runs it with that provider's client. */
@@ -59,6 +66,16 @@ export class ForgePrToolService {
   ): Promise<ForgePrToolPreparedCall> {
     const repository = this.resolveRepository(args, scope);
     if (operation === "merge_pull_request") {
+      // A queue merges with its own method, so the approval asks to add the
+      // PR to the queue and offers no method. Unknown reads as no queue: the
+      // execute step reads the queue again and never merges past one.
+      const queue = args.number
+        ? await this.options.clients[repository.provider].mergeQueueRequirement?.(repository, args.number, signal).catch(() => undefined)
+        : undefined;
+      if (queue) {
+        const { method: _method, ...rest } = args;
+        return { repository, args: rest, mergeQueue: queue };
+      }
       // The method is settled here, as a to-do card settles it, so the card
       // names the merge it approves and every surface merges the same way.
       const offered = forgeMergeMethods(repository.provider);

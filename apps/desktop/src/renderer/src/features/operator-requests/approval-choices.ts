@@ -12,6 +12,7 @@ import {
   buildMcpElicitationResponse,
   readMcpApprovalPersistence,
   readMcpMergeMethods,
+  readMcpMergeQueue,
   readMcpProjectApprovalOffer,
   readMcpRememberOptions,
   type McpApprovalPersistence,
@@ -145,7 +146,9 @@ function mcpApprovalChoices(wait: OperatorWait): ApprovalChoices | undefined {
   }
   alternatives.push(choice("cancel", "Cancel turn", "Cancelling…", "cancel"));
   return {
-    accept: mergeMethods
+    accept: readMcpMergeQueue(mcp)
+      ? choice("accept", "Add to queue", "Adding…", "accept")
+      : mergeMethods
       ? choice("accept", THREAD_TODO_MERGE_METHOD_LABELS[mergeMethods.selected].button, "Merging…", "accept")
       : choice("accept", "Allow", "Allowing…", "accept"),
     decline,

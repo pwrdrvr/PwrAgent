@@ -6,11 +6,13 @@ import {
   isSecretFieldName,
   mcpElicitationPurpose,
   readForgeApprovalMergeMethods,
+  readForgeApprovalMergeQueue,
   readForgeApprovalRememberOptions,
   readMcpProjectToolApprovalOffer,
   type AppServerMcpElicitationRequestNotification,
   type AppServerMcpElicitationResponse,
   type ForgeApprovalMergeMethods,
+  type ForgeApprovalMergeQueue,
   type ForgeApprovalRememberOption,
   type ForgeApprovalRememberOptionId,
   type McpElicitationPurpose,
@@ -177,6 +179,12 @@ export function readMcpProjectApprovalOffer(state: PendingMcpInteractionState): 
 export function readMcpMergeMethods(state: PendingMcpInteractionState): ForgeApprovalMergeMethods | undefined {
   if (state.mode !== "form" || state._meta?.pwragent_approval_kind !== "mcp_tool_call") return undefined;
   return readForgeApprovalMergeMethods(state._meta);
+}
+
+/** A merge whose base branch requires a merge queue or train: it enqueues. */
+export function readMcpMergeQueue(state: PendingMcpInteractionState): ForgeApprovalMergeQueue | undefined {
+  if (state.mode !== "form" || state._meta?.pwragent_approval_kind !== "mcp_tool_call") return undefined;
+  return readForgeApprovalMergeQueue(state._meta);
 }
 
 /** Permission to run a tool, not a request for data. */

@@ -820,7 +820,8 @@ export type AppServerThreadMessageOrigin = {
     failedCheckUrl?: string;
     headSha: string;
     eventKinds?: ThreadPrAutoDispatchEventKind[];
-    outcome?: "success" | "failure" | "merged" | "closed";
+    /** `dequeued`: the merge queue removed the PR its merge watch waited on. */
+    outcome?: "success" | "failure" | "merged" | "closed" | "dequeued";
   };
 };
 

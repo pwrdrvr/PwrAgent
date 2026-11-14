@@ -4949,6 +4949,7 @@ function threadMessagePrAutomationOriginFromUnknown(
       || record.outcome === "failure"
       || record.outcome === "merged"
       || record.outcome === "closed"
+      || record.outcome === "dequeued"
       ? { outcome: record.outcome }
       : {}),
   };

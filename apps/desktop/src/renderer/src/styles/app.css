@@ -8420,6 +8420,31 @@ a.button {
   background: var(--status-error);
 }
 
+/* Where the PR stands in its merge queue (GitHub) or merge train (GitLab).
+   It rides beside the dot, as the draft bar does: the dot stays the head's
+   CI, the badge says the queue. Shape tells the states apart as well as hue:
+   a place number, no number while merging, a cross once removed. */
+.pr-chip__queue {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -2px;
+  color: var(--text-secondary);
+}
+
+.pr-chip__queue--group_checks_running,
+.pr-chip__queue--unmergeable {
+  color: var(--status-warning-text);
+}
+
+.pr-chip__queue--merging {
+  color: var(--brand-purple);
+}
+
+.pr-chip__queue--removed {
+  color: var(--status-error);
+}
+
 .pr-chip__detach {
   display: inline-flex;
   align-items: center;
@@ -26249,6 +26274,19 @@ a.button {
   color: var(--text-primary);
   font-size: 12px;
   line-height: 17px;
+}
+
+/* A merge card on a branch with a merge queue says what the queue means for
+   it: the queue picks the method, where the PR stands, or why it left. */
+.thread-todo-card__queue {
+  margin: 8px 8px 0 22px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.thread-todo-card__queue.is-removed {
+  color: var(--danger-text);
 }
 
 .thread-todo-card__footer {

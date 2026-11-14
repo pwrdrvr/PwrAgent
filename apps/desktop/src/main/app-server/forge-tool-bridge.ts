@@ -4,6 +4,7 @@ import {
   FORGE_AGENT_RULE_APPROVAL_SOURCE,
   FORGE_AGENT_TOOL_GROUP_LABELS,
   FORGE_APPROVAL_MERGE_METHODS_META_KEY,
+  FORGE_APPROVAL_MERGE_QUEUE_META_KEY,
   FORGE_APPROVAL_REMEMBER_OPTIONS_META_KEY,
   buildForgeApprovalRememberOptions,
   forgeAgentRuleAgentKey,
@@ -37,6 +38,7 @@ import {
   type ForgeAgentToolPolicy,
   type ForgeAgentToolRuleGroup,
   type ForgeApprovalMergeMethods,
+  type ForgeApprovalMergeQueue,
   type ForgeApprovalRememberOptionId,
   type NavigationSnapshot,
   type PrSummary,
@@ -286,7 +288,7 @@ export class ForgeToolBridge {
       const prepared = this.forgePrToolPreflight ? await this.forgePrToolPreflight(operation, args, context) : undefined;
       const repository = prepared?.repository ?? args.repository;
       let settled = prepared?.args ?? args;
-      const approval = await this.approveForgeToolWrite(operation, settled, context, group, repository, prepared?.mergeMethods);
+      const approval = await this.approveForgeToolWrite(operation, settled, context, group, repository, prepared?.mergeMethods, prepared?.mergeQueue);
       notes = approval.notes;
       // The operator's pick from the merge menu replaces the settled method.
       if (approval.mergeMethod) settled = { ...settled, method: approval.mergeMethod };
@@ -418,6 +420,7 @@ export class ForgeToolBridge {
     group: ForgeAgentToolGroup,
     repository?: ForgeRepository,
     mergeMethods?: ForgePrToolPreflightResult["mergeMethods"],
+    mergeQueue?: ForgePrToolPreflightResult["mergeQueue"],
   ): Promise<{ notes?: ForgeWriteApprovalNotes; mergeMethod?: ThreadTodoMergeMethod }> {
     if (this.isForgePlanTurn(context)) {
       throw new ForgeReadError("plan_mode", claudePlanTurnRefusal(operation));
@@ -480,7 +483,7 @@ export class ForgeToolBridge {
         requestId,
         serverName: forge,
         mode: "form",
-        message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github"),
+        message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github", mergeQueue),
         requestedSchema: { type: "object", properties: {} },
         _meta: meta,
       },
@@ -543,7 +546,10 @@ export class ForgeToolBridge {
     const offeredMergeMethods = mergeMethods && args.method && mergeMethods.offered.includes(args.method)
       ? mergeMethods.offered
       : undefined;
-    if (offeredMergeMethods && args.method) {
+    // A queue picks its own method: the card asks to add the PR to it instead.
+    if (mergeQueue) {
+      meta[FORGE_APPROVAL_MERGE_QUEUE_META_KEY] = mergeQueue satisfies ForgeApprovalMergeQueue;
+    } else if (offeredMergeMethods && args.method) {
       meta[FORGE_APPROVAL_MERGE_METHODS_META_KEY] = {
         selected: args.method,
         methods: offeredMergeMethods,
