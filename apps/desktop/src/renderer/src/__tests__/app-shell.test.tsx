@@ -6713,7 +6713,9 @@ describe("App", () => {
       name: remoteThread.title,
     })).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open thread Local planning thread" }));
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Open thread Local planning thread" }));
+    });
     expect(addRemoteThreadPin).toHaveBeenCalledTimes(1);
     expect(openFederationWindow).toHaveBeenCalledTimes(1);
     await screen.findByRole("heading", { level: 2, name: localThread.title });

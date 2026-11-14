@@ -47,10 +47,12 @@ it("carries invalidation cause through a coalesced refresh without changing dema
     params: { sourceMethod: "turn/completed", threadId: "PRIVATE THREAD" } } } as AgentEvent;
   controller.invalidate(undefined, undefined, event);
   controller.invalidate(undefined, undefined, event);
-  await controller.refresh(undefined, undefined, true);
+  await controller.refresh(undefined, undefined, true, undefined, "action/materialize-launchpad");
   const next = read.mock.calls.at(-1)![0];
   expect(next.diagnostic).toMatchObject({ view: 77, effect: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 });
   expect(JSON.stringify(next.diagnostic)).not.toContain("PRIVATE");
+  expect(navigationListingDiagnostics.snapshot().events.filter((event) => event.view === 77 && event.phase === "refresh").at(-1))
+    .toMatchObject({ caller: "action/materialize-launchpad" });
   expect(navigationDemandKey(next)).toBe(navigationDemandKey({ ...next, diagnostic: undefined }));
   await controller.refresh(undefined, undefined, false, "timer");
   expect(read.mock.calls.at(-1)![0].diagnostic?.cause).toBe("timer");

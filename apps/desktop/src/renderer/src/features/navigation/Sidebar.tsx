@@ -908,8 +908,16 @@ export function Sidebar(props: SidebarProps) {
   const listResources = lensResources.filter((resource) => resource.id !== PINNED_GROUP_RESOURCE_ID);
   const directoryIndexResource = props.pagedNavigation?.resources.get("directory-index");
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
-  const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
-    .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  const sidebarSnapshot = useMemo(() => {
+    const resources = [...props.pagedNavigation?.resources.values() ?? []]
+      .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:")
+        : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
+    const keys = new Set(resources.flatMap((resource) => resource.state.page?.entries ?? [])
+      .map((entry) => navigationThreadSelectionKey(entry.row.ref)));
+    return { directories: props.directories, threads: props.threads,
+      visibleKeys: [...keys].filter((key) => rowsByKey.has(key)),
+      order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()) };
+  }, [props.directories, props.threads, props.pagedNavigation?.resources, props.browseMode, pinnedGroupShown, rowsByKey]);
   // One hydrator per Sidebar instance: it holds the previous hydrated result
   // so a render that changes nothing hands the rows back their existing
   // object identities, which is what lets the memoized rows bail out while
@@ -944,12 +952,7 @@ export function Sidebar(props: SidebarProps) {
         .map((resource) => resource.id),
       ...props.pagesAwaitingRows ?? [],
     ],
-    value: {
-      directories: props.directories,
-      threads: props.threads,
-      visibleKeys: visibleThreads.map(threadSummaryIdentityKey),
-      order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()),
-    },
+    value: sidebarSnapshot,
   });
   const creationRevision = JSON.stringify((props.pendingLaunchpadCreations ?? [])
     .map((creation) => [creation.operationId, creation.threadKey]));

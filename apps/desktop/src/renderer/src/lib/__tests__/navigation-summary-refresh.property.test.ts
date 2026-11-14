@@ -38,6 +38,151 @@ const prEvent = (group: number): AgentEvent => ({ backend: "codex", notification
 async function advance() { for (let i = 0; i < 160; i++) await Promise.resolve(); }
 const idle = (queries: NavigationWindowQueries) => [...queries.getSnapshot().resources.values()].every((r) => !r.loading);
 
+it("a named remote mount cannot use old complete child membership to exclude a new child", async () => {
+  let threads = population(2);
+  const read = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, { threads }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(demand(2));
+  try {
+    await advance(); read.mockClear();
+    const parent = threads.find((row) => row.id === "parent-0" && row.federation)!;
+    threads = [...threads, { ...parent, id: "discovered", parentThreadId: parent.id, parentThreadBackend: "codex",
+      federation: { ...parent.federation!, ref: { ...parent.federation!.ref, threadId: "discovered" } } }];
+    queries.invalidate(undefined, undefined, { backend: "codex", notification: { method: "navigation/remoteThreadPins/changed",
+      params: { instanceId: "peer", threadId: "discovered", pinned: true } } });
+    await queries.refresh(undefined, undefined, true);
+    expect(queries.getSnapshot().resources.get("remote-0")?.state.page?.entries.some(({ row }) => row.id === "discovered")).toBe(true);
+  } finally { queries.dispose(); }
+});
+
+it("a stream replacement reads the owner and waits for summary publication to discover viewer membership", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 24 }), fc.boolean(), async (groups, partial) => {
+    let threads = population(groups);
+    const read = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, { threads }));
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    const requests = demand(groups, partial);
+    requests.set("owner", { protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: target,
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "parent-0", ownerInstanceId: "peer" }] } });
+    queries.setDemand(requests);
+    try {
+      await advance(); expect(idle(queries)).toBe(true); read.mockClear();
+      queries.invalidate(undefined, undefined, { backend: "codex", federationTarget: target,
+        notification: { method: "federation/eventStream/changed", params: { instanceId: "peer", epoch: "new" } } });
+      await queries.refresh(undefined, undefined, true);
+      expect(read.mock.calls.map(([sent]) => sent.inventory)).toEqual(["owner"]);
+      // The cache now publishes a previously unknown child of a mounted root.
+      // No identity in the old complete page could have proved it irrelevant.
+      const parent = threads.find((row) => row.id === "parent-0" && row.federation)!;
+      threads = [...threads, { ...parent, id: "discovered", parentThreadId: parent.id, parentThreadBackend: "codex",
+        federation: { ...parent.federation!, ref: { ...parent.federation!.ref, threadId: "discovered" } } }];
+      read.mockClear();
+      queries.invalidate(undefined, [{ scope: "local" }], { backend: "codex", notification: {
+        method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer" },
+      } });
+      await queries.refresh(undefined, undefined, true);
+      expect(read).toHaveBeenCalledTimes(groups * 2);
+      const resource = queries.getSnapshot().resources.get("remote-0")!;
+      if (partial) await queries.loadMore("remote-0");
+      expect(queries.getSnapshot().resources.get("remote-0")?.state.page?.entries).toEqual(
+        navigationQueryFixture({ ...resource.state.request, pageSize: 100 }, { threads }).entries);
+      expect(queries.getSnapshot().resources.get("remote-0")?.state.page?.entries.some(({ row }) => row.id === "discovered")).toBe(true);
+    } finally { queries.dispose(); }
+  }), { numRuns: 25 });
+});
+
+it("row events use the owner's complete off-page viewer dependencies across unrelated directories", async () => {
+  // The owner's dependency set covers counts and descendants before paging.
+  // A row can be absent from every loaded root and still affect this directory.
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 24 }), fc.boolean(), fc.boolean(),
+    async (groups, remote, partial) => {
+      const threads = population(groups);
+      const requests = new Map(Array.from({ length: groups }, (_, i) => [`directory-${i}`, {
+        protocol: 2, consumer: "main-sidebar", inventory: "viewer", pageSize: partial ? 1 : 100,
+        query: { kind: "directory", directoryKey: `directory-${i}`, roots: "unpinned" },
+      } as NavigationQueryRequest]));
+      const read = vi.fn(async (request: NavigationQueryRequest) => {
+        const group = request.query.kind === "directory" ? Number(request.query.directoryKey.slice(10)) : -1;
+        const members = threads.filter((row) => row.id === `parent-${group}` || row.id.startsWith(`child-${group}-`));
+        return { ...navigationQueryFixture(request, { threads, directories: [{ key: `directory-${group}`, kind: "directory",
+          label: "Project", threadKeys: members.map((row) => row.federation ? `remote:peer:${row.source}:${row.id}` : `${row.source}:${row.id}`) }] }),
+          metadataDependencies: { version: 1 as const, prKeys: [], threadKeys: threads.filter((row) =>
+            row.id === `parent-${group}` || row.id.startsWith(`child-${group}-`)).map((row) =>
+              JSON.stringify([row.federation ? "peer" : null, row.source, row.id])) } };
+      });
+      const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+      queries.setDemand(requests);
+      try {
+        await advance(); expect(idle(queries)).toBe(true); read.mockClear();
+        const change: AgentEvent = { backend: "codex", ...(remote ? { federationTarget: target } : {}),
+          notification: { method: "navigation/thread/seen", params: { threadId: "child-0-1", seenUpdatedAt: 200 } } };
+        queries.invalidate(undefined, undefined, change);
+        await queries.refresh(undefined, undefined, true);
+        expect(read.mock.calls.map(([sent]) => sent.query)).toEqual([requests.get("directory-0")!.query]);
+        // Same text ID on another backend is not this owner's identity.
+        read.mockClear();
+        queries.invalidate(undefined, undefined, { ...change, backend: "claude" });
+        await queries.refresh(undefined, undefined, true);
+        expect(read).not.toHaveBeenCalled();
+      } finally { queries.dispose(); }
+    }), { numRuns: 25 });
+});
+
+it("fences each dispatched generation when discovery and row events overtake an action's index read", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), async (partial, newestFirst, finishBeforeMetadata) => {
+    let threads = population(2);
+    let generation = 0;
+    let gated = false;
+    const replies: Array<() => void> = [];
+    const observations = new Set<string>();
+    const read = vi.fn(async (request: NavigationQueryRequest) => {
+      const page = { ...navigationQueryFixture(request, { threads }), countsRevision: String(generation) };
+      if (gated) {
+        const observation = JSON.stringify([request.query, generation]);
+        expect(observations.has(observation)).toBe(false);
+        observations.add(observation);
+        await new Promise<void>((resolve) => replies.push(resolve));
+      }
+      return page;
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    const requests = demand(2, partial);
+    requests.set("directory-index", { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "directory-index" } });
+    queries.setDemand(requests);
+    const finish = () => (newestFirst ? replies.pop() : replies.shift())?.();
+    try {
+      await advance(); gated = true; read.mockClear();
+      const action = queries.refresh(undefined, undefined, true, undefined, "action/materialize-launchpad", true);
+      await advance();
+      expect(read).toHaveBeenCalledTimes(1);
+      const parent = threads.find((row) => row.id === "parent-0" && row.federation)!;
+      threads = [...threads, { ...parent, id: "discovered", parentThreadId: parent.id, parentThreadBackend: "codex",
+        federation: { ...parent.federation!, ref: { ...parent.federation!.ref, threadId: "discovered" } } }];
+      generation += 1;
+      queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+        method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", threadId: "discovered", pinned: true },
+      } });
+      const discovery = queries.refresh(undefined, undefined, true);
+      await advance();
+      if (finishBeforeMetadata) { finish(); await advance(); }
+      threads = threads.map((row) => row.id === "discovered" ? { ...row, title: "Fresh owner title" } : row);
+      generation += 1;
+      queries.invalidate(undefined, undefined, { backend: "codex", federationTarget: target,
+        notification: { method: "thread/name/updated", params: { threadId: "discovered", threadName: "Fresh owner title" } } });
+      const metadata = queries.refresh(undefined, undefined, true);
+      for (let step = 0; step < 50 && !idle(queries); step++) { finish(); await advance(); }
+      await Promise.all([action, discovery, metadata]);
+      expect(idle(queries)).toBe(true);
+      for (const resource of queries.getSnapshot().resources.values()) {
+        const expected = navigationQueryFixture(resource.state.request, { threads });
+        expect(resource.state.page?.entries).toEqual(expected.entries);
+        expect(resource.state.page?.counts).toEqual(expected.counts);
+        expect(resource.state.stale).toBe(false);
+        expect(resource.state.error).toBeUndefined();
+      }
+    } finally { queries.dispose(); replies.splice(0).forEach((reply) => reply()); }
+  }), { numRuns: 25 });
+});
+
 it("metadata refresh reads exactly the complete child collections containing the changed owner row or PR", async () => {
   // Oracle: the full viewer population owns identity and PR attachment. Local
   // and remote rows deliberately reuse IDs; PR status applies to both owners.

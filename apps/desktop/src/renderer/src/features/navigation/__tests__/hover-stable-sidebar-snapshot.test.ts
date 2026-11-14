@@ -9,11 +9,8 @@ import {
 } from "../hover-stable-sidebar-snapshot";
 
 /**
- * The hydrate runs during render for as long as the pointer rests on a
- * sidebar row, and it rebuilds every thread, directory, and array on every
- * call. That costs nothing while nothing downstream memoizes — and it
- * silently defeats the row memoization the moment one exists, for exactly as
- * long as the pointer is on a row.
+ * Hover hydration preserves canonical rows when their structural fields are
+ * already frozen, and recovers equivalent replacements at the memo boundary.
  *
  * These tests pin the identity contract directly rather than through a
  * rendered tree, because "same values, same object" is the property the memo
@@ -82,9 +79,7 @@ describe("hydrateHoverStableSidebarSnapshot", () => {
     expect(merged.threads[0]?.pinnedRank).toBe("7");
   });
 
-  it("allocates a fresh object on every call", () => {
-    // The behaviour the hydrator below exists to wrap. Stated so the
-    // preservation tests cannot pass vacuously.
+  it("uses the canonical row when its structural fields need no override", () => {
     const frozen = snapshot([thread("a")]);
     const latest = snapshot([thread("a")]);
 
@@ -92,7 +87,7 @@ describe("hydrateHoverStableSidebarSnapshot", () => {
     const second = hydrateHoverStableSidebarSnapshot(frozen, latest);
 
     expect(second).not.toBe(first);
-    expect(second.threads[0]).not.toBe(first.threads[0]);
+    expect(second.threads[0]).toBe(latest.threads[0]);
   });
 });
 

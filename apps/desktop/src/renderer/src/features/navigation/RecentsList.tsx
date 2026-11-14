@@ -443,7 +443,7 @@ export function RecentsList(props: RecentsListProps) {
               nested
               nestedDepth={trays.depth(childKey)}
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
-              selectedThreadKey={props.selectedThreadKey}
+              selectedThreadKey={props.selectedThreadKey === childKey ? childKey : undefined}
               selected={props.selectedThreadKeys?.has(childKey)}
               subthreadCount={childSubthreadCount}
               subthreadsCollapsed={isSubthreadSectionCollapsed(child) && !trays.heldOpen(childKey)}
@@ -556,7 +556,7 @@ export function RecentsList(props: RecentsListProps) {
       onCommitRename: props.onCommitRenameThread,
       includeLinkedDirectories: true,
       revealSelectedThreadRequest: props.revealSelectedThreadRequest,
-      selectedThreadKey: props.selectedThreadKey,
+      selectedThreadKey: props.selectedThreadKey === key ? key : undefined,
       selected: props.selectedThreadKeys?.has(key),
       thinkingThreadKeys: props.thinkingThreadKeys,
       agentCommandThreadKeys: props.agentCommandThreadKeys,
