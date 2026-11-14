@@ -2908,6 +2908,11 @@ export type AppServerNotification =
          */
         threadId?: string;
         pinned?: boolean;
+        /** Complete changed-row set from a published summary refresh whose
+         * membership and placement are unchanged. Absent for pin mutations,
+         * discovery, archive proofs and availability transitions. Only complete
+         * child collections may use it as an exclusion proof. */
+        rowChanges?: Array<{ backend: AppServerBackendKind; threadId: string; ownerInstanceId: string }>;
       };
     }
   | {

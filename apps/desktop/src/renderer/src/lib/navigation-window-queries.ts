@@ -1,6 +1,6 @@
 import { navigationDiagnosticCause, navigationDiagnosticTrigger, type NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { createNavigationDiagnosticView, navigationDiagnosticOrigin, navigationListingDiagnostics } from "./navigation-listing-diagnostics";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, buildPullRequestStatusKey, navigationInvalidationMayChangeMembership, navigationWorkingStatePath, readNavigationDirectoryScope } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
@@ -51,6 +51,8 @@ type Resource = {
   invalidated: boolean;
   /** Row metadata can be stale while complete membership still excludes unrelated events. */
   membershipUncertain?: boolean;
+  /** Complete child identity does not prove PR attachments during their replacement. */
+  prAttachmentsUncertain?: boolean;
   released: boolean;
   anchor?: NavigationQueryAnchor;
   /** Explicit continuation demand survives a short final page and later growth. */
@@ -298,9 +300,16 @@ export class NavigationWindowQueries {
       if (event && !this.eventAffectsResource(resource, event, directoryScope)) continue;
       const method = event?.notification.method === "navigation/invalidated"
         ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event?.notification.method;
-      const childPin = resource.value.state.request.query.kind === "children"
-        && (method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed");
-      if (!childPin && navigationInvalidationMayChangeMembership(method)) resource.membershipUncertain = true;
+      const pinParams = event?.notification.params as { threadId?: unknown; rowChanges?: unknown } | undefined;
+      const childRowChange = resource.value.state.request.query.kind === "children"
+        && (method === "thread/pin/added" || method === "thread/pin/removed"
+          || (method === "navigation/remoteThreadPins/changed" && (typeof pinParams?.threadId === "string" || Array.isArray(pinParams?.rowChanges)))
+          || method === "pullRequest/status/updated");
+      // An instance-only summary notice can discover new mounted children.
+      // Its pending replacement cannot use the old membership to exclude a
+      // subsequent metadata change to one of those newly discovered rows.
+      if (!childRowChange && navigationInvalidationMayChangeMembership(method)) resource.membershipUncertain = true;
+      if (method === "thread/pullRequests/updated" || method === "navigation/remoteThreadPins/changed") resource.prAttachmentsUncertain = true;
       // Pinning moves a root between two independent directory queries. Its
       // old section must stop using it as an anchor before the next read,
       // including when another event has already invalidated that section.
@@ -354,7 +363,8 @@ export class NavigationWindowQueries {
 
   private eventAffectsResource(resource: Resource, event: AgentEvent, directoryScope?: readonly string[]): boolean {
     const request = resource.value.state.request;
-    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string };
+    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string; prKey?: string;
+      rowChanges?: Array<{ backend: AgentEvent["backend"]; threadId: string; ownerInstanceId: string }> };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
     if (request.query.kind === "directory" && directoryScope && !resource.membershipUncertain
@@ -373,7 +383,8 @@ export class NavigationWindowQueries {
     if (request.query.kind === "children" && !resource.membershipUncertain
       && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
       && (!navigationInvalidationMayChangeMembership(method)
-        || method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed")) {
+        || method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed"
+        || method === "pullRequest/status/updated")) {
       // Pins move roots between directory sections, but do not reparent children.
       // Metadata refreshes preserve this membership proof. Membership changes
       // withdraw it until their replacement is accepted, even while queued.
@@ -382,6 +393,20 @@ export class NavigationWindowQueries {
       // Unknown membership events still discover newly created/reparented children.
       const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
         : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
+      if (method === "pullRequest/status/updated" && typeof params.prKey === "string") {
+        // Status is keyed by PR across owners and backends, and cannot attach
+        // a new PR or reparent a child. Partial membership still reads broadly.
+        return Boolean(resource.prAttachmentsUncertain)
+          || page.entries.some(({ row }) => row.prs?.some((pr) => buildPullRequestStatusKey(pr) === params.prKey));
+      }
+      if (method === "navigation/remoteThreadPins/changed" && params.rowChanges && params.instanceId
+        && event.federationTarget?.scope !== "remote" && request.federationTarget?.scope !== "remote") {
+        // The cache compared complete published populations, including
+        // placement. Ordinary pin mutations and new members carry no proof.
+        const parent = request.query.parent;
+        return params.rowChanges.some((ref) => navigationIdentitiesEqual(parent, ref)
+          || page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref, ref)));
+      }
       if (typeof params?.threadId === "string") {
         const ref = { backend: event.backend, threadId: params.threadId, ownerInstanceId };
         return navigationIdentitiesEqual(request.query.parent, ref)
@@ -709,6 +734,7 @@ export class NavigationWindowQueries {
         }
         this.acceptState(resource, next);
         resource.membershipUncertain = false;
+        resource.prAttachmentsUncertain = false;
       } catch (error) {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };

@@ -2,6 +2,7 @@ import { Profiler } from "react";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationThreadSummary } from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { ThreadRow } from "../../features/navigation/ThreadRow";
 import * as order from "../../features/navigation/navigation-presentation-order";
@@ -9,6 +10,7 @@ import { memoRenderObserver } from "../../test/memo-render-observer";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
+import { NavigationWindowQueries } from "../navigation-window-queries";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -127,4 +129,93 @@ it("bounds IPC, row, child projection and byte-sizing work for a small burst in 
     expect(pageSizes).toBeLessThanOrEqual(read.mock.calls.length);
     expect(sizedBytes).toBe(incomingBytes);
   } finally { mounted.unmount(); rows.restore(); completions.splice(0).forEach((finish) => finish()); }
+}, 30_000);
+
+it.each([4, 16, 48].flatMap((groups) => [0, 1].map((kind) => ({ groups, kind }))))("bounds unrelated metadata refresh $kind with $groups expanded mounted roots", async ({ groups, kind }) => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  const home = { key: "directory:/fixture", kind: "directory" as const, label: "Fixture", path: "/fixture" };
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const threads: NavigationThreadSummary[] = Array.from({ length: groups }, (_, i) => {
+    const parent: NavigationThreadSummary = { id: `parent-${i}`, source: "codex", title: `Parent ${i}`, titleSource: "explicit",
+      pinnedRank: String(i + 1), createdAt: groups - i, inbox: { inInbox: false },
+      linkedDirectories: [{ id: home.key, kind: "local", label: home.label, path: home.path }],
+      federation: { ref: { backend: "codex", threadId: `parent-${i}`, target }, instanceLabel: "Peer", peerStatus: "connected" },
+    };
+    return [parent, { ...parent, id: `child-${i}`, title: `Child ${i}`, pinnedRank: undefined,
+      parentThreadId: parent.id, parentThreadBackend: "codex" as const,
+      federation: { ...parent.federation!, ref: { ...parent.federation!.ref, threadId: `child-${i}` } } }];
+  }).flat();
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const tasks = new Set<() => void>();
+  const replies: Array<() => void> = [];
+  let gated = false;
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+    const page = navigationQueryFixture(request, { directories: [home], threads });
+    if (gated) await new Promise<void>((resolve) => replies.push(resolve));
+    return page;
+  });
+  const api: DesktopApi = { getNavigationQueryPage: read, releaseNavigationQuery: async () => undefined,
+    onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  };
+  let navigation!: ReturnType<typeof useThreadNavigation>;
+  let commits = 0;
+  let rowRenders = 0;
+  const rows = memoRenderObserver<{ thread: NavigationThreadSummary }>(ThreadRow, "ThreadRow");
+  rows.install(() => { rowRenders += 1; });
+  const publish = vi.spyOn(NavigationWindowQueries.prototype as unknown as { publish: () => void }, "publish");
+  function Window() {
+    navigation = useThreadNavigation(api, { scheduleNavigationRefresh: (task) => {
+      tasks.add(task); return () => { tasks.delete(task); };
+    } });
+    return <Profiler id="mounted-navigation" onRender={() => { commits += 1; }}>
+      <Sidebar backends={[]} browseMode={navigation.browseMode} directories={navigation.directories}
+        directoryDisclosure={navigation.directoryDisclosure} threads={navigation.threads} inboxThreads={navigation.inboxThreads}
+        pagedNavigation={navigation.pagedNavigation} loading={navigation.loading} selectedItemKey={navigation.selectedItemKey}
+        selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
+        onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
+        onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />
+    </Profiler>;
+  }
+  const mounted = render(<Window />);
+  const idle = () => [...navigation.pagedNavigation.resources.values()].every((resource) => !resource.loading);
+  try {
+    await waitFor(() => expect(navigation.threads.length).toBeGreaterThan(0));
+    await act(async () => {
+      navigation.setBrowseMode("directories");
+      navigation.directoryDisclosure.setExpandedByKey({ [home.key]: true });
+    });
+    await waitFor(() => expect(idle()).toBe(true));
+    const pins = `directory-pins:${home.key}`;
+    if (!navigation.pagedNavigation.resources.get(pins)?.state.page?.complete) {
+      await act(async () => { await navigation.pagedNavigation.loadMore(pins); });
+    }
+    await waitFor(() => {
+      expect([...navigation.pagedNavigation.resources.values()].filter((resource) => resource.state.request.query.kind === "children")).toHaveLength(groups);
+      expect(idle()).toBe(true);
+    });
+    const pr = { provider: "github" as const, org: "fixture", repo: "unrelated", number: 1,
+      url: "https://github.com/fixture/unrelated/pull/1", state: "passing" as const };
+    const changes: AgentEvent[] = [
+      { backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer",
+        rowChanges: [{ backend: "codex", threadId: "offscreen-sibling", ownerInstanceId: "peer" }] } } },
+      { backend: "codex", notification: { method: "pullRequest/status/updated", params: { prKey: buildPullRequestStatusKey(pr), pr } } },
+    ];
+    for (const event of [changes[kind]!]) {
+      read.mockClear(); publish.mockClear(); commits = 0; rowRenders = 0; gated = true;
+      await act(async () => {
+        for (const listener of listeners) listener(event);
+        const scheduled = [...tasks]; tasks.clear(); scheduled.forEach((task) => task());
+      });
+      for (let i = 0; i < 200 && !idle(); i++) await act(async () => { replies.shift()?.(); });
+      expect(idle()).toBe(true);
+      const childCalls = read.mock.calls.filter(([sent]) => sent.query.kind === "children").length;
+      console.info("mounted metadata budget", { groups, method: event.notification.method,
+        calls: read.mock.calls.length, childCalls, publications: publish.mock.calls.length, commits, rowRenders });
+      expect(childCalls).toBe(0);
+      expect(read.mock.calls.length).toBe(groups > 10 ? 5 : 4);
+      expect(publish).toHaveBeenCalledTimes(9);
+      expect(commits).toBeLessThanOrEqual(10);
+      expect(rowRenders).toBe(0);
+    }
+  } finally { mounted.unmount(); rows.restore(); replies.splice(0).forEach((reply) => reply()); }
 }, 30_000);

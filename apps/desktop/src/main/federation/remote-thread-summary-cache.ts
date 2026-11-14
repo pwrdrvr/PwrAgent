@@ -49,6 +49,26 @@ export type RemoteThreadName = {
   titleSource?: NavigationThreadSummary["titleSource"];
 };
 
+type SummaryRowChanges = NonNullable<Extract<AgentEvent["notification"], {
+  method: "navigation/remoteThreadPins/changed";
+}>["params"]["rowChanges"]>;
+type PublishedSummaryRows = Map<string, string>;
+
+function summaryKey(thread: NavigationThreadSummary): string {
+  return thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
+    : buildThreadIdentityKey(thread.source, thread.id);
+}
+
+function summaryMembership(thread: NavigationThreadSummary): string {
+  // Only known row metadata may differ in an exclusion proof. Retain all
+  // other fields, including future fields, directory links and parentage.
+  const { title: _title, titleSource: _titleSource, updatedAt: _updatedAt,
+    threadStatus: _threadStatus, model: _model, reasoningEffort: _reasoningEffort,
+    serviceTier: _serviceTier, fastMode: _fastMode, executionMode: _executionMode,
+    prs: _prs, inbox: _inbox, reactions: _reactions, ...membership } = thread;
+  return JSON.stringify(membership);
+}
+
 export type ResolvedRemotePins = {
   /** One stamped row per pin: fresh from the peer when reachable, else the
    *  cached payload stamped with the peer's current (non-connected) status. */
@@ -161,6 +181,7 @@ export class RemoteThreadSummaryCache {
   private readonly pinnedRefreshes = new Set<string>();
   private readonly uncertainPinnedMembership = new Set<string>();
   private readonly unpublishedPinnedRows = new Set<string>();
+  private readonly publishedPinnedRows = new Map<string, PublishedSummaryRows>();
   private readonly pinnedReadStates = new Map<string, PinnedNavigationReadState>();
   private readonly archivedCache = new Map<
     string,
@@ -266,7 +287,7 @@ export class RemoteThreadSummaryCache {
        * archived, a failing peer recovered, or a peer failed for the first
        * time (rows must dim).
        */
-      onPinnedSummariesRefreshed?: (instanceId: string) => void;
+      onPinnedSummariesRefreshed?: (instanceId: string, rowChanges?: SummaryRowChanges) => void;
       onPinnedRefreshProblem?: (problem: {
         instanceId: string;
         requestedCount: number;
@@ -373,6 +394,7 @@ export class RemoteThreadSummaryCache {
     this.pinnedReadStates.clear();
     this.uncertainPinnedMembership.clear();
     this.unpublishedPinnedRows.clear();
+    this.publishedPinnedRows.clear();
     this.missingPinSignatures.clear();
     if (hadPeerInterest) {
       this.options.onPeerInterestChanged?.([]);
@@ -642,6 +664,9 @@ export class RemoteThreadSummaryCache {
         this.pinnedReadStates.delete(owner);
         this.uncertainPinnedMembership.delete(owner);
       }
+    }
+    for (const owner of this.publishedPinnedRows.keys()) {
+      if (!this.hasMountedDemand(owner)) this.publishedPinnedRows.delete(owner);
     }
     for (const owner of changedOwners) this.invalidate(owner);
     this.notifyPeerInterestChanged();
@@ -947,6 +972,7 @@ export class RemoteThreadSummaryCache {
       } else {
         this.pinnedReadStates.delete(instanceId);
         this.uncertainPinnedMembership.delete(instanceId);
+        this.publishedPinnedRows.delete(instanceId);
       }
     }
     this.notifyPeerInterestChanged();
@@ -1023,7 +1049,7 @@ export class RemoteThreadSummaryCache {
             missingCount: missing.length, threadKeys: missing.slice(0, 10).map((key) => key.slice(0, 200)) });
         }
         if (failedBefore || changed || provedArchived) {
-          this.options.onPinnedSummariesRefreshed?.(instanceId);
+          this.publishPinnedSummaries(instanceId, threads, failedBefore || provedArchived);
         }
       },
       (error: unknown) => {
@@ -1033,6 +1059,7 @@ export class RemoteThreadSummaryCache {
           this.options.onPinnedRefreshProblem?.({ instanceId, requestedCount: refs.length,
             threadKeys: refs.slice(0, 10).map((ref) => buildThreadIdentityKey(ref.backend, ref.threadId).slice(0, 200)),
             error: (error instanceof Error ? error.message : String(error)).slice(0, 1000) });
+          this.publishedPinnedRows.delete(instanceId);
           this.options.onPinnedSummariesRefreshed?.(instanceId);
         }
       },
@@ -1043,6 +1070,44 @@ export class RemoteThreadSummaryCache {
         this.refreshPeerSummariesInBackground(target);
       }
     });
+  }
+
+  private publishPinnedSummaries(instanceId: string, threads: NavigationThreadSummary[], broad: boolean): void {
+    if (!this.options.onPinnedSummariesRefreshed) return;
+    // Protocol-2 pinned reads verify complete coverage across every page.
+    // Legacy snapshot readers do not provide that membership guarantee.
+    if (!this.options.fetchPinnedSnapshot) {
+      this.options.onPinnedSummariesRefreshed(instanceId);
+      return;
+    }
+    const previous = this.publishedPinnedRows.get(instanceId);
+    const next: PublishedSummaryRows = new Map(threads.map((thread) => [
+      summaryKey(thread), JSON.stringify(thread),
+    ]));
+    // Compare to publication, not cache commitment: archive verification can
+    // be superseded after committing rows but before notifying the viewer.
+    // A later identical read still owes every change since the last notice.
+    let rowChanges: SummaryRowChanges | undefined;
+    if (!broad && previous && next.size === threads.length && previous.size === next.size
+      && [...next.keys()].every((key) => previous.has(key))) {
+      const changed = threads.filter((thread) => {
+        const key = summaryKey(thread);
+        return previous.get(key) !== next.get(key);
+      });
+      // Unchanged rows already carry the same proof. Inspect placement only
+      // for changed rows, rather than serializing every membership again.
+      const sameMembership = changed.every((thread) => summaryMembership(thread) === summaryMembership(
+        JSON.parse(previous.get(summaryKey(thread))!) as NavigationThreadSummary,
+      ));
+      if (sameMembership) rowChanges = changed.map((thread) => ({ backend: thread.source, threadId: thread.id,
+        ownerInstanceId: thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : instanceId }));
+      // Notifications stay bounded independently of expanded pin capacity.
+      // Larger changes use the established instance-wide refresh path.
+      if (rowChanges && (rowChanges.length > 100 || Buffer.byteLength(JSON.stringify(rowChanges), "utf8") > 16 * 1024)) rowChanges = undefined;
+    }
+    this.publishedPinnedRows.set(instanceId, next);
+    if (rowChanges) this.options.onPinnedSummariesRefreshed(instanceId, rowChanges);
+    else this.options.onPinnedSummariesRefreshed(instanceId);
   }
 
   /**
