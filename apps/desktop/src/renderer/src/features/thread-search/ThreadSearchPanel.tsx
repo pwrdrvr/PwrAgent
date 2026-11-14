@@ -29,7 +29,7 @@ import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeade
 import { AgentThreadChip } from "../navigation/AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { ProjectSearchInput } from "./ProjectSearchInput";
 import { mergeAgentMatches, mergePrNumberMatches } from "./thread-match";
 import { BranchIcon, FolderIcon, PopoutIcon, SearchIcon, WorktreeIcon } from "../../icons";
@@ -188,7 +188,12 @@ function ThreadSearchResultRow(props: {
   hasRemoteViewer: boolean;
 }): ReactElement {
   const { result, query } = props;
-  const showProvider = useProviderChipNeeded(result.backend);
+  const showProvider = useProviderChipNeeded(result.backend, result.model);
+  const providerLabel = useThreadProviderLabel({
+    source: result.backend,
+    model: result.model,
+    federation: result.federation,
+  });
   const directory = result.linkedDirectories[0];
   // `projectKey` is often a full checkout/worktree path (Codex keys projects by
   // cwd), so collapse whatever we resolve down to its final path segment — the
@@ -208,7 +213,7 @@ function ThreadSearchResultRow(props: {
         <span className="thread-search-result__title">{result.title}</span>
         <span className="thread-search-result__meta">
           {showProvider ? (
-            <span className="chip chip--backend">{formatBackendLabel(result.backend)}</span>
+            <span className="chip chip--backend">{providerLabel}</span>
           ) : null}
           {props.isAgent ? <AgentThreadChip /> : null}
           {result.federation ? (

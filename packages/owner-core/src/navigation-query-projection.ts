@@ -1,4 +1,4 @@
-import { sortSubthreadSummaries } from "@pwragent/shared";
+import { sortSubthreadSummaries, threadProviderIdentity } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import type {
   AppServerBackendKind,
@@ -257,10 +257,15 @@ function countsForThreads(
     if (threadUnread && !threadActive) review += 1;
   }
   // Provider chips need to know whether every thread shares one provider.
+  // `providers` tells a Codex model provider (MathOS) apart from OpenAI;
+  // `backends` stays for viewers that predate it.
   const backends = options.backends
     ? [...new Set<AppServerBackendKind>(
         [...distinct.values()].map((thread) => thread.source),
       )].sort()
+    : undefined;
+  const providers = options.backends
+    ? [...new Set([...distinct.values()].map((thread) => threadProviderIdentity(thread.source, thread.model)))].sort()
     : undefined;
   return {
     total: distinct.size,
@@ -270,6 +275,7 @@ function countsForThreads(
     unread,
     review,
     ...(backends ? { backends } : {}),
+    ...(providers ? { providers } : {}),
   };
 }
 

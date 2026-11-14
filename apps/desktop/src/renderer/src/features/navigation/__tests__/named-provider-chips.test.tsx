@@ -4,7 +4,6 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codexModelProviderLabels,
-  type AppServerBackendKind,
   type NavigationThreadSummary,
   type ProviderPickerBackend,
 } from "@pwragent/shared";
@@ -66,7 +65,7 @@ function thread(model: string | undefined, federation?: NavigationThreadSummary[
   };
 }
 
-function withContexts(providers: readonly AppServerBackendKind[], children: ReactNode) {
+function withContexts(providers: readonly string[], children: ReactNode) {
   return (
     <ThreadProviderCatalogsContext.Provider value={catalogs}>
       <ThreadProvidersContext.Provider value={providers}>{children}</ThreadProvidersContext.Provider>
@@ -86,11 +85,21 @@ describe("a thread on a named Codex model provider", () => {
     expect(header.container.querySelector(".chip--backend")).toHaveTextContent("MathOS");
   });
 
-  it("keeps its chip when every thread is a Codex thread, because it is not OpenAI", () => {
+  it("keeps its chip for an owner that reports only backend kinds, because it is not OpenAI", () => {
     const { container } = render(withContexts(["codex"], (
       <ThreadRow thread={thread("@refuseless/gpt-oss-120b")} onOpenContextMenu={vi.fn()} onSelectThread={vi.fn()} />
     )));
     expect(container.querySelector(".thread-row__chip--backend")).toHaveTextContent("Refuseless");
+  });
+
+  it("hides its chip when every thread runs on that provider, and shows it beside OpenAI threads", () => {
+    const row = (providers: readonly string[]) => render(withContexts(providers, (
+      <ThreadRow thread={thread("@mathos/gpt-oss-120b")} onOpenContextMenu={vi.fn()} onSelectThread={vi.fn()} />
+    )));
+    expect(row(["codex:@mathos"]).container.querySelector(".thread-row__chip--backend")).toBeNull();
+    cleanup();
+    expect(row(["codex", "codex:@mathos"]).container.querySelector(".thread-row__chip--backend"))
+      .toHaveTextContent("MathOS");
   });
 
   it("leaves an OpenAI thread named OpenAI, and hidden when it tells no threads apart", () => {

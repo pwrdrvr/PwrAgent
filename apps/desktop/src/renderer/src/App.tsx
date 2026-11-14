@@ -2754,8 +2754,9 @@ function DesktopAppShell(props: {
     remoteSidebarBackends,
     windowFederationTarget?.scope === "remote" ? windowFederationTarget.instanceId : undefined,
   );
+  const directoryIndexCounts = navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts;
   const threadProviders = useStableThreadProviders(
-    navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts.backends,
+    directoryIndexCounts?.providers ?? directoryIndexCounts?.backends,
   );
   const localThreadTitles = useMemo(() => {
     const titles = new Map<string, string>();

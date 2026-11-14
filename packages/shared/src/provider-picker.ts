@@ -191,3 +191,29 @@ export function codexModelProviderCatalogNote(
   }
   return undefined;
 }
+
+/**
+ * The provider a thread runs on, as one comparable string: its backend kind,
+ * or `codex:@<provider>` for a Codex thread on a registered model provider.
+ * An OpenAI thread and a MathOS thread are then two providers.
+ */
+export function threadProviderIdentity(backend: string, model: string | undefined): string {
+  const providerId = backend === "codex" ? codexProviderIdOfModel(model) : undefined;
+  return providerId ? `codex:@${providerId}` : backend;
+}
+
+/**
+ * A provider chip only helps when it tells threads apart. `providers` is
+ * the owner's list of provider identities in use (`NavigationCounts.providers`,
+ * or `backends` from an owner that predates it). The chip hides while every
+ * thread shares `identity`'s provider, and shows for a provider no thread
+ * uses yet. An unknown list shows it.
+ */
+export function providerChipNeeded(
+  providers: readonly string[] | undefined,
+  identity: string,
+): boolean {
+  if (!providers) return true;
+  if (providers.length > 1) return true;
+  return providers.length === 1 && providers[0] !== identity;
+}

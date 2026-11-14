@@ -357,13 +357,27 @@ function describeErrorBody(text: string): string {
   }
 }
 
+/** A word of error text, masking characters and ellipses included. */
+const ERROR_TEXT_TOKEN = /[\p{L}\p{N}_*.\u2026-]+/gu;
+
 /**
- * An endpoint's error text can quote the key it was sent. Remove the key,
- * and any API-key-shaped token, before the text reaches a window, a peer or
- * a log.
+ * An endpoint's error text can quote the key it was sent: whole, cut short,
+ * or masked (`abcd****wxyz`, `...wxyz9`). Before the text reaches a window,
+ * a peer or a log, every word that holds any 4-character run of the key
+ * becomes `[key]`, as does any word shaped like an API key.
  */
 function redactSecret(text: string, apiKey: string | undefined): string {
-  let redacted = apiKey && apiKey.length >= 4 ? text.split(apiKey).join("[key]") : text;
+  let redacted = text;
+  if (apiKey && apiKey.length >= 4) {
+    redacted = redacted.split(apiKey).join("[key]");
+    const runs = new Set(Array.from({ length: apiKey.length - 3 }, (_, index) => apiKey.slice(index, index + 4)));
+    redacted = redacted.replace(ERROR_TEXT_TOKEN, (word) => {
+      for (let index = 0; index + 4 <= word.length; index += 1) {
+        if (runs.has(word.slice(index, index + 4))) return "[key]";
+      }
+      return word;
+    });
+  }
   redacted = redacted.replace(/\b(?:sk|pk|rk|key)-[A-Za-z0-9_*.-]{6,}/gu, "[key]");
   return redacted.slice(0, MAX_ERROR_LENGTH);
 }

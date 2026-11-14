@@ -1,45 +1,34 @@
 import { createContext, useContext, useMemo } from "react";
-import { codexProviderIdOfModel, type AppServerBackendKind } from "@pwragent/shared";
+import {
+  providerChipNeeded,
+  threadProviderIdentity,
+  type AppServerBackendKind,
+} from "@pwragent/shared";
+
+export { providerChipNeeded };
 
 /**
  * The providers that own at least one thread, from the owner's directory
- * index (it counts every thread, not one loaded page). Undefined until that
- * index arrives, and from an owner too old to report it.
+ * index (it counts every thread, not one loaded page): its provider
+ * identities (`NavigationCounts.providers`), or its backend kinds from an
+ * owner that predates them. Undefined until that index arrives, and from an
+ * owner too old to report either.
  */
-export const ThreadProvidersContext = createContext<
-  readonly AppServerBackendKind[] | undefined
->(undefined);
+export const ThreadProvidersContext = createContext<readonly string[] | undefined>(undefined);
 
 /**
- * A provider chip only helps when it tells threads apart. With every thread
- * on one provider, "OpenAI" on each row and header is noise, so it hides
- * until a second provider has a thread. A provider no thread uses yet (a
- * launchpad set to Claude while every thread is OpenAI) still shows. An
- * unknown list shows the chip, which is the behavior before this rule.
- */
-export function providerChipNeeded(
-  providers: readonly AppServerBackendKind[] | undefined,
-  backend: AppServerBackendKind,
-): boolean {
-  if (!providers) return true;
-  if (providers.length > 1) return true;
-  return providers.length === 1 && providers[0] !== backend;
-}
-
-/**
- * An unnamed provider keeps its chip: there is nothing to compare. So does a
- * Codex thread on a registered model provider (`@mathos/…`): the owner's
- * index counts it as `codex`, so a row of MathOS among OpenAI rows would
- * otherwise lose the one chip that tells it apart.
+ * An unnamed provider keeps its chip: there is nothing to compare. A Codex
+ * thread on a registered model provider (`@mathos/…`) is compared as that
+ * provider, so a MathOS row among OpenAI rows keeps its chip and a list of
+ * MathOS rows alone drops it. An owner that reports only backend kinds lists
+ * `codex`, which a MathOS row never equals, so the chip stays on there.
  */
 export function useProviderChipNeeded(
   backend: AppServerBackendKind | undefined,
   model?: string,
 ): boolean {
   const providers = useContext(ThreadProvidersContext);
-  return backend === undefined
-    || (backend === "codex" && Boolean(codexProviderIdOfModel(model)))
-    || providerChipNeeded(providers, backend);
+  return backend === undefined || providerChipNeeded(providers, threadProviderIdentity(backend, model));
 }
 
 /**
@@ -47,13 +36,11 @@ export function useProviderChipNeeded(
  * so a refreshed page does not re-render every chip that reads the context.
  */
 export function useStableThreadProviders(
-  providers: readonly AppServerBackendKind[] | undefined,
-): readonly AppServerBackendKind[] | undefined {
+  providers: readonly string[] | undefined,
+): readonly string[] | undefined {
   const key = providers?.join("\n");
   return useMemo(
-    () => key === undefined
-      ? undefined
-      : key.split("\n").filter(Boolean) as AppServerBackendKind[],
+    () => key === undefined ? undefined : key.split("\n").filter(Boolean),
     [key],
   );
 }
