@@ -2275,6 +2275,7 @@ export class AcpBackendAdapter {
       this.acpRolloutStore?.readReplay({
         backendId: session.backendId,
         sessionId: session.sessionId,
+        cwd: session.cwd,
       }) ?? new AcpSessionReplayNormalizer().replay();
     this.logSessionReplaySource({
       backend: session.backendId,
@@ -2297,7 +2298,7 @@ export class AcpBackendAdapter {
       return inferAcpReplayTurns(replay);
     }
     const normalizer = new AcpSessionReplayNormalizer(
-      acpSessionReplayNormalizerOptions(session.backendId),
+      acpSessionReplayNormalizerOptions(session.backendId, session.cwd),
     );
     let syntheticUpdateCount = 0;
     for (const record of this.acpRolloutStore.readUpdates({
@@ -2344,6 +2345,7 @@ export class AcpBackendAdapter {
         this.acpRolloutStore?.readReplay({
           backendId: session.backendId,
           sessionId: session.sessionId,
+          cwd: session.cwd,
         }) ?? new AcpSessionReplayNormalizer().replay();
       if (rolloutReplay.entries.length > 0) {
         this.logSessionReplaySource({
@@ -2390,6 +2392,7 @@ export class AcpBackendAdapter {
       this.acpRolloutStore?.readReplay({
         backendId: session.backendId,
         sessionId: session.sessionId,
+        cwd: session.cwd,
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length === 0) {
       this.logSessionReplaySource({
@@ -2426,6 +2429,7 @@ export class AcpBackendAdapter {
       this.acpRolloutStore?.readReplay({
         backendId: params.session.backendId,
         sessionId: params.session.sessionId,
+        cwd: params.session.cwd,
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length > 0) {
       this.logSessionReplaySource({

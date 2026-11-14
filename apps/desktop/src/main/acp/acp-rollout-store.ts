@@ -96,9 +96,11 @@ export class AcpRolloutStore {
   readReplay(params: {
     backendId: AcpBackendId;
     sessionId: string;
+    /** The session's workspace, which edit diffs name files relative to. */
+    cwd?: string;
   }): AppServerThreadReplay {
     const normalizer = new AcpSessionReplayNormalizer(
-      acpSessionReplayNormalizerOptions(params.backendId),
+      acpSessionReplayNormalizerOptions(params.backendId, params.cwd),
     );
     for (const record of this.readUpdates(params)) {
       normalizer.apply({

@@ -61,6 +61,36 @@ describe("AcpRolloutStore", () => {
     ]);
   });
 
+  it("names a restored edit's diff relative to the session's workspace", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+    const cwd = "/Users/someone/.pwragent/worktrees/x/repo";
+    const edited = `${cwd}/docs/a.md`;
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        kind: "edit",
+        status: "completed",
+        locations: [{ path: edited }],
+        content: [{ type: "diff", path: edited, oldText: null, newText: "a\n" }],
+      },
+    });
+
+    const header = (sessionCwd?: string) => {
+      const replay = store.readReplay({ backendId, sessionId: "session-1", cwd: sessionCwd });
+      const activity = replay.entries.find((entry) => entry.type === "activity");
+      const detail = activity?.type === "activity" ? activity.details[0] : undefined;
+      expect(detail?.path).toBe(edited);
+      return detail?.fileDiff?.diff.split("\n")[0];
+    };
+    expect(header(cwd)).toBe("diff --git a/docs/a.md b/docs/a.md");
+    expect(header()).toBe(`diff --git a${edited} b${edited}`);
+  });
+
   it("stores ACP rollouts under readable backend directory names", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:grok" as AcpBackendId;

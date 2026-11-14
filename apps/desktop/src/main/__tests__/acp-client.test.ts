@@ -3538,6 +3538,39 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("names a live edit's diff relative to the session's workspace", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "tool_call",
+      toolCallId: "write-1",
+      kind: "edit",
+      status: "completed",
+      locations: [{ path: "/repo/docs/a.md" }],
+      content: [{ type: "diff", path: "/repo/docs/a.md", oldText: null, newText: "a\n" }],
+    });
+
+    const activity = client
+      .readReplay(session.sessionId)
+      .entries.find((entry) => entry.type === "activity");
+    const detail = activity?.type === "activity" ? activity.details[0] : undefined;
+    expect(detail?.path).toBe("/repo/docs/a.md");
+    expect(detail?.fileDiff?.diff.split("\n")[0]).toBe(
+      "diff --git a/docs/a.md b/docs/a.md",
+    );
+  });
+
   it("persists ACP topic updates as session titles", async () => {
     const transport = new FakeAcpAgentTransport();
     const titleUpdates: string[] = [];
