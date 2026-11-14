@@ -108,7 +108,6 @@ import {
   USAGE_TURN_REPAIR_PEER_QUIET_MS,
 } from "./backend-registry-runtime-helpers";
 import {
-  ActiveTurnKeySet,
   buildReviewSubAgentKey,
   parseActiveTurnKey,
   taskMonitorThreadKey,
@@ -165,7 +164,7 @@ export interface ThreadUsageLedgerDependencies {
  * the Codex account summary: capturing a turn's usage account can update it.
  */
 export interface ThreadUsageLedgerHost {
-  readonly activeTurnKeys: ActiveTurnKeySet;
+  readonly activeTurnKeys: ReadonlySet<string>;
   readonly codexBackendSummary: BackendSummary | undefined;
   readonly registrySessionId: string;
   readonly registrySessionStartedAt: number;

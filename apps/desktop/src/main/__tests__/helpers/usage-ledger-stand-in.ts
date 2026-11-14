@@ -18,7 +18,12 @@ export function usageLedgerStandIn(params: {
   subAgents?: Map<string, Map<string, ThreadSubAgentSummary>>;
 }): ThreadUsageLedger {
   const store = params.overlayStore ?? {};
-  const context = { stores: { threads: store, usage: store, subAgents: store, toolAccounting: store } };
+  const context = {
+    stores: { threads: store, usage: store, subAgents: store, toolAccounting: store },
+    providers: {},
+    lifecycle: { closed: false },
+    emit: async () => {},
+  };
   const ledger = new ThreadUsageLedger(context as unknown as RegistryContext, {
     managedReviewService: {} as never,
     subAgentMonitorService: params.subAgentMonitorService as never,

@@ -206,9 +206,13 @@ describe("Token Miser parent model resolution", () => {
     db = StateDb.open(temp.dbPath);
     store = new SqliteOverlayStore(db);
     registry = createRegistry(store);
-    // The new registry's startup repairs write to this database; let them
-    // settle on the empty ledger so the measurement holds only the read.
-    await (registry as unknown as { usageTurnStartupRepair: Promise<void> }).usageTurnStartupRepair;
+    // The new registry's startup repairs and legacy moves write to this
+    // database; let them settle on the empty ledger so the measurement holds
+    // only the read. The legacy usage-activity move runs synchronously in a
+    // reaction the constructor chained on the sub-agent reconciliation, ahead
+    // of this one.
+    const startup = registry as unknown as { subAgentStartupReconciliation: Promise<void>; usageTurnStartupRepair: Promise<void> };
+    await Promise.all([startup.subAgentStartupReconciliation, startup.usageTurnStartupRepair]);
     seed(db, [{ id: "unpriced", model: "gpt-6-astra", createdAt: Date.UTC(2026, 9, 17), priceStatus: "unpriced" }]);
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
     const { result, writes } = await measureSqliteWrites(resolve);

@@ -125,6 +125,10 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       } as never,
       overlayStore: store,
     });
+    // Its startup repairs and legacy moves write to this database; let them
+    // settle so the budget measures only the focused inference.
+    const startup = registry as unknown as { subAgentStartupReconciliation: Promise<void>; usageTurnStartupRepair: Promise<void> };
+    await Promise.all([startup.subAgentStartupReconciliation, startup.usageTurnStartupRepair]);
     const internals = registryModules(registry).threadUsageLedger as unknown as {
       recordTokenMiserFocusedInference: NonNullable<TokenMiserServiceOptions["onFocusedInference"]>;
       buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; replays: ReturnType<typeof indexTokenMiserCachedReplays> }): Promise<{ gateCostMicros: number; savingsMicros: number }>;

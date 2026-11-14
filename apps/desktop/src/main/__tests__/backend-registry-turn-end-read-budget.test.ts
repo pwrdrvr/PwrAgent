@@ -180,7 +180,7 @@ describe("turn end read budget", () => {
     });
     for (let index = 0; index < FINAL_TURN_GATES; index += 1) {
       const entry = gateEntry(100_000 + index, FINAL_TURN_ID);
-      ledgerInternals(registry).pendingTokenMiserInterceptions.set(entry.objectId, entry);
+      registryModules(registry).threadUsageLedger.rememberPendingTokenMiserInterception(entry);
     }
     return { internals, ledgerSize, registry, store };
   }
