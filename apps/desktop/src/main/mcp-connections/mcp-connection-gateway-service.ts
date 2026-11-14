@@ -30,6 +30,7 @@ import { isMcpError, loadedMcpTypes, mcpClient, mcpClientStreamableHttp, mcpType
 import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, discoveryFailure, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
 import { offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
+import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import {
   McpStdioLaunchError,
@@ -4310,6 +4311,25 @@ export class McpConnectionGatewayService {
     return tools;
   }
 
+  /** Connections whose unrelayed capabilities were already logged, by list. */
+  private readonly loggedUnrelayedCapabilities = new Map<string, string>();
+
+  /**
+   * Name, once per connection and list, what a server advertised that its
+   * threads will not see. A capability the bridge drops fails silently
+   * otherwise; this line is how the next one gets noticed.
+   */
+  private logUnrelayedCapabilities(grant: BridgeGrant, capabilities: Record<string, unknown> | undefined): void {
+    const unrelayed = unrelayedMcpCapabilities(capabilities);
+    const key = unrelayed.join(",");
+    if (unrelayed.length === 0 || this.loggedUnrelayedCapabilities.get(grant.connectionId) === key) return;
+    this.loggedUnrelayedCapabilities.set(grant.connectionId, key);
+    connectionLog.warn("MCP server advertises capabilities threads will not see", {
+      connectionId: grant.connectionId,
+      unrelayed,
+    });
+  }
+
   /**
    * A server's skills, for the index a host without the skills extension
    * reads as instructions. Reads a few pages within its own short budget,
@@ -4458,6 +4478,7 @@ export class McpConnectionGatewayService {
             const capabilities = client.getServerCapabilities();
             const skills = offersMcpSkills(capabilities);
             const instructions = client.getInstructions?.();
+            this.logUnrelayedCapabilities(grant, capabilities);
             return {
               tools: Boolean(capabilities?.tools),
               resources: Boolean(capabilities?.resources),

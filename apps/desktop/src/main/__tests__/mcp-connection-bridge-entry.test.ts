@@ -1,10 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ElicitationCompleteNotificationSchema, ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, ResultSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
+import { ElicitationCompleteNotificationSchema, ElicitRequestSchema, ToolListChangedNotificationSchema, PromptListChangedNotificationSchema, ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchema, ResultSchema, ServerCapabilitiesSchema, type ElicitRequestParams, type InitializeResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
 import type { McpBridgeEvent } from "../mcp-connections/mcp-connection-rpc-client";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ElicitationRoute } from "../mcp-connections/mcp-elicitation-relay";
+import { BRIDGE_CAPABILITIES, RELAYED_MCP_EXTENSIONS, unrelayedMcpCapabilities } from "../mcp-connections/mcp-bridge-capabilities";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({
@@ -454,6 +455,33 @@ describe("native bridge skills", () => {
     expect(client.getServerCapabilities()?.extensions).toBeUndefined();
     await expect(listSkills(client)).rejects.toThrow(/Method not found/u);
     expect(bridge.request).not.toHaveBeenCalledWith("skills/list", expect.anything(), expect.anything());
+  });
+});
+
+describe("native bridge capability oracle", () => {
+  // A capability the bridge drops reaches no agent and raises no error. For
+  // a server that advertises everything, what the bridge declares and what
+  // the table calls unrelayed must split the server's list exactly, so a
+  // relay that goes missing (as skills once did) fails here.
+  it("declares exactly what the capability table relays, for a server that advertises everything", async () => {
+    const upstream: Record<string, unknown> = Object.fromEntries(
+      Object.keys(ServerCapabilitiesSchema.shape).map((name) => [name, { probe: true }]),
+    );
+    upstream.extensions = { ...Object.fromEntries(RELAYED_MCP_EXTENSIONS.map((id) => [id, { probe: true }])), "com.example/future": {} };
+    upstream.resources = { subscribe: true, listChanged: true };
+    bridge.request.mockImplementation(async (operation: string) => operation === "describe"
+      ? { tools: true, resources: true, prompts: true, skills: true, capabilities: upstream }
+      : tail);
+    const client = await openBridge();
+    const declared = client.getServerCapabilities() ?? {};
+    const names = (capabilities: Record<string, unknown>) => Object.entries(capabilities).flatMap(([name, value]) =>
+      name === "extensions" ? Object.keys(value as object).map((id) => `extensions:${id}`) : [name]);
+    const advertised = names(upstream).sort();
+    const relayed = names(declared as Record<string, unknown>);
+    expect([...relayed, ...unrelayedMcpCapabilities(upstream)].sort()).toEqual(advertised);
+    for (const name of Object.keys(declared)) {
+      expect(BRIDGE_CAPABILITIES[name as keyof typeof BRIDGE_CAPABILITIES]?.relayed, name).toBe(true);
+    }
   });
 });
 
