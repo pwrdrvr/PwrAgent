@@ -3003,8 +3003,9 @@ function DesktopAppShell(props: {
           {
             localInstanceId: todoLocalMachine.instanceId,
             isRemoteViewer: Boolean(readRendererFederationTarget()),
+            // The full label, as every other mount of that owner stores it.
             instanceLabel: (instanceId) =>
-              todoHandoffInstances.find((instance) => instance.instanceId === instanceId)?.label,
+              federationMachines.find((machine) => machine.instanceId === instanceId)?.label,
           },
         );
         if (
@@ -3062,6 +3063,7 @@ function DesktopAppShell(props: {
   }, [
     configuredMergeMethod,
     desktopApi,
+    federationMachines,
     listThreadTodos,
     localThreadProjects,
     localThreadTitles,

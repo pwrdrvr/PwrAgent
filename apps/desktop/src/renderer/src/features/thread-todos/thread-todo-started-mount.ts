@@ -1,4 +1,4 @@
-import type { ThreadTodo } from "@pwragent/shared";
+import type { NavigationThreadSummary, ThreadTodo } from "@pwragent/shared";
 import type { WindowShowThreadRequest } from "../../../../shared/window-show-thread";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ensureWindowThreadMounted } from "../../lib/ensure-window-thread-mounted";
@@ -54,13 +54,24 @@ export async function runThreadTodoAndMountStarted(
   const request = todo && !context.isRemoteViewer
     ? threadTodoStartedMountRequest(todo, context.localInstanceId)
     : undefined;
-  if (!request || !api || !request.federationTarget) return todo;
+  if (!todo || !request || !api || !request.federationTarget) return todo;
   const instanceId = request.federationTarget.instanceId;
-  const label = (todo?.startedThread?.instanceId === instanceId ? todo.startedThread.instanceLabel : undefined)
+  const label = (todo.startedThread?.instanceId === instanceId ? todo.startedThread.instanceLabel : undefined)
     ?? context.instanceLabel(instanceId);
+  // Until the owner's snapshot arrives, the row is named for the card rather
+  // than by its thread id. Its parent is left to that snapshot: a start for
+  // another project is not grouped, and the card does not say which it was.
+  const summary: NavigationThreadSummary = {
+    source: request.backend,
+    id: request.threadId,
+    title: (todo.action?.type === "start_thread" ? todo.action.title : undefined) ?? todo.title,
+    titleSource: "fallback",
+    linkedDirectories: [],
+    inbox: { inInbox: false },
+  };
   try {
     // Loaded rows only speed up the check; the persisted membership decides.
-    await ensureWindowThreadMounted(api, request, [], false, label);
+    await ensureWindowThreadMounted(api, request, [], false, label, summary);
   } catch (error) {
     console.warn("Could not add the started thread to this thread list:", error);
   }

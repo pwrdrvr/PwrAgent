@@ -79,9 +79,26 @@ describe("runThreadTodoAndMountStarted", () => {
       expect(addRemoteThreadPin).toHaveBeenCalledWith({
         ref: { backend: "claude", threadId: "started", target: { scope: "remote", instanceId: owner } },
         instanceLabel: startedLabel ?? `${owner} from peers`,
+        summary: {
+          source: "claude", id: "started", title: "Hand off", titleSource: "fallback",
+          linkedDirectories: [], inbox: { inInbox: false },
+        },
       });
     },
   );
+
+  it("names the pinned row for the card's thread title until the owner's snapshot arrives", async () => {
+    const addRemoteThreadPin = vi.fn(async () => ({}) as never);
+    const todo = { ...card(OWNER, "unset"), action: { type: "start_thread", prompt: "Go", title: "Registry split" } } as ThreadTodo;
+    await runThreadTodoAndMountStarted(async () => todo,
+      { hasRemoteThreadPin: async () => false, addRemoteThreadPin },
+      { localInstanceId: LOCAL, isRemoteViewer: false, instanceLabel: () => undefined });
+    expect(addRemoteThreadPin).toHaveBeenCalledWith(expect.objectContaining({
+      summary: expect.objectContaining({ title: "Registry split", id: "started" }),
+    }));
+    const [pinned] = addRemoteThreadPin.mock.calls[0] as unknown as [{ summary: object }];
+    expect(pinned.summary).not.toHaveProperty("parentThreadId");
+  });
 
   it("leaves an already mounted thread alone", async () => {
     const addRemoteThreadPin = vi.fn();
