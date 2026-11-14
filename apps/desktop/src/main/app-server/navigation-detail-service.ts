@@ -74,9 +74,26 @@ function decodeQueueCursor(value: string): QueueCursor {
   }
 }
 
+/** The registry members detail reads use. Narrowed so a stand-in typed
+ * against it fails typecheck when the service starts calling another one. */
+export type NavigationDetailRegistry = Pick<
+  DesktopBackendRegistry,
+  | "canonicalizeNavigationThreadPullRequests"
+  | "getCachedThreadSummary"
+  | "getQueuedExecutionModeForThread"
+  | "hydrateThreadGitWorkingStates"
+  | "iterateQueuedTurnSummaries"
+  | "listLiveTokenMiserSubAgents"
+  | "mergeLiveTokenMiserSubAgents"
+  | "readCheckoutHibernation"
+  | "readLiveSubAgentRevisionSource"
+  | "readSelectedWorkspaceGitStatus"
+  | "resolveThread"
+>;
+
 export class NavigationDetailService {
   constructor(
-    private readonly registry: DesktopBackendRegistry = getDesktopBackendRegistry(),
+    private readonly registry: NavigationDetailRegistry = getDesktopBackendRegistry(),
   ) {}
 
   async readLaunchpadConfig(
