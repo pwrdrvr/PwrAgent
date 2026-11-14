@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.4 - 2026-11-14
+
+- Codex Model Providers - Show configured providers by name in provider pickers and discover their model catalogs across desktop, messaging, connected instances, and agent tools. Keep manually listed models available when discovery fails, show catalog status, and test endpoint compatibility from Settings.
+- MCP Server Skills - Relay workflow skills published by connected MCP servers to thread agents, including skill files and directory reads. Name matching skills in gateway search results so agents can find the server's guidance even when no tool name matches. Existing tool-access and approval rules still apply.
+- Sidebar Responsiveness - Limit refreshes to affected collections and rows. Draft edits, PR chip freshness, and unchanged session indicators no longer cause unrelated sidebar rows to update.
+- Remote Thread Identity - Keep pinned threads and observed names tied to their owning instance, avoiding collisions between identically named thread IDs on different machines.
+- Archive Discovery - Share concurrent candidate scans and pace provider and database work instead of repeating large discovery passes. Keep progress and cancellation scoped to each reader without cancelling another reader's scan.
+
+Provider connection checks send a short model request and may be billed by the provider. A passing check does not verify a complete PwrAgent turn.
+
 ## v1.4.3 - 2026-11-14
 
 - Thread Search - Stop pruning cached search documents when a provider returns a partial or unavailable thread list. Preserve the index for later searches, reduce database work, and yield during indexing so cancellation remains responsive.
