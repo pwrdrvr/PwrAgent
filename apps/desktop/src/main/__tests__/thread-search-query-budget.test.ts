@@ -50,7 +50,7 @@ it.each([100, 1000, 10000].flatMap((n) => [false, true].map((analyzed) => ({ n, 
   } finally { db.close(); }
 });
 
-it.each([100, 1000, 10000])("uses inventory-key seeks before matching/limiting search with %i omitted matches", (n) => {
+it.each([100, 1000, 10000])("filters inventory before limiting search with %i omitted matches", (n) => {
   const db = openInMemoryStateDb();
   try {
     const store = new ThreadSearchStore(db);
@@ -75,14 +75,16 @@ it.each([100, 1000, 10000])("uses inventory-key seeks before matching/limiting s
       expect(store.search({ query, limit: 1, identityKeys: ["codex:current", "codex:current"] }).map((r) => r.threadId)).toEqual(["current"]);
       expect(store.search({ query, limit: 1, identityKeys: [] })).toEqual([]);
     }
-    expect(calls).toBe(4);
+    expect(calls).toBe(2);
     for (const plan of plans) {
       expect(plan.join("\n")).toMatch(/SEARCH d USING INDEX .* \(identity_key=\?\)/);
       expect(plan.join("\n")).not.toMatch(/SCAN d\b/);
     }
-    for (const plan of [plans[2], plans[3]]) {
-      expect(plan.join("\n")).toMatch(/VIRTUAL TABLE INDEX \d+:.*=/);
-      expect(plan.join("\n")).toMatch(/SEARCH k USING COVERING INDEX .* \(identity_key=\?\)/);
+    for (const plan of [plans[1]]) {
+      const match = plan.findIndex((row) => /SCAN thread_search_fts VIRTUAL TABLE INDEX \d+:.*M/.test(row));
+      const document = plan.findIndex((row) => /SEARCH d USING INDEX/.test(row));
+      expect(match).toBeGreaterThanOrEqual(0);
+      expect(match).toBeLessThan(document);
     }
   } finally { db.close(); }
 });

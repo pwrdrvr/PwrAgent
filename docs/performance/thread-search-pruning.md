@@ -75,9 +75,30 @@ observation does not establish an unavoidable usage scan. The new index gives
 both direct and automation usage a covering two-key seek in either condition.
 FTS changes from unconstrained virtual-table scan to rowid equality.
 
-Scoped search drives document, mapping and FTS rowid seeks from the inventory,
-so large numbers of omitted matching documents cannot drive the FTS result
-loop. Filter-only searches also seek document identities before limiting.
+Ranked search iterates FTS MATCH once and checks inventory membership before
+ranking limits, then looks documents up by identity. Driving MATCH by each
+inventory rowid restarts ranking statistics and becomes quadratic for dense
+visible matches. Filter-only searches still seek inventory document identities.
+
+A value-preserving probe on the MATCH right-hand side counts native cursor
+openings. At review head `048d4e7`, dense LIMIT-10 searches showed:
+
+| Visible matching titles | Before | Correction | MATCH cursor opens |
+|---|---:|---:|---:|
+| 1,000 | 46.10 ms | 2.75 ms | 1,000 → 1 |
+| 2,000 | 139.77 ms | 4.07 ms | 2,000 → 1 |
+| 4,000 | 545.89 ms | 7.39 ms | 4,000 → 1 |
+| 8,000 | 2,011.35 ms | 14.63 ms | 8,000 → 1 |
+
+These timings include the test probe and are observations. The gate counts
+cursor opens, and a generated oracle checks that full ranked results filtered
+by inventory, before LIMIT, equal the scoped results. Ranked work is linear in
+matching index entries plus membership preparation, including omitted entries.
+
+Current/newer partial profiles also converge the mapping and usage index.
+Rebuilding old-format FTS invalidates its surviving rowid mapping; repair drops
+and backfills that derived mapping in the same schema transaction. Healthy
+reopens do not scan/backfill FTS or add SQLite writes (0 MB/day).
 
 ## Operation and write budgets
 
@@ -85,8 +106,11 @@ Tests assert plans and operation counts rather than elapsed-time thresholds:
 
 - Ten unchanged searches over 100/1,000 omitted document and ledger rows:
   at most 20 prepared operations, no pruning, zero commits/write statements.
-- Metadata and FTS searches over 100/1,000/10,000 omitted matches: inventory
-  drives keyed document access; FTS access includes rowid equality.
+- Searches over 100/1,000/10,000 omitted matches: filter-only inventory seeks,
+  one outer ranked MATCH cursor, keyed document access, membership before LIMIT.
+- Empty inventories: no SQL query.
+- Dense 1,000/2,000/4,000/8,000-match inventories: one ranked cursor opening;
+  generated inventory/archive/backend cases agree with the full ranking oracle.
 - Ten cleanup calls over 100/1,000/10,000 fully retained documents: exactly
   ten indexed range reads, at most 640 returned/inspected documents total.
 - Sweeps of 1,000 document/ledger rows with M = 0/1/63/64/65/200 stale
@@ -130,11 +154,17 @@ ACP identities including colons/percent/Unicode, replacements and rowid reuse,
 legacy writers, superseded-only and automation execution usage, and bounded
 cleanup sweeps. File-backed tests verify v81 migration, reopen and `VACUUM`.
 
+Against review head `048d4e7`, the ranked-search property shrank to two visible
+matching threads and a limit of one: MATCH opened twice. Partial-profile repair
+failed with a missing mapping table, and rebuilding old-format FTS with a
+surviving sparse mapping failed the rowid-pair oracle. The corrected properties
+also cover current/newer schema versions and zero-write healthy reopens.
+
 Run from the repository root:
 
 ```sh
 pnpm test thread-search
-THREAD_SEARCH_BENCHMARK=1 pnpm test apps/desktop/src/main/__tests__/thread-search-query-budget.test.ts apps/desktop/src/main/__tests__/thread-search-maintenance.property.test.ts --silent=false
+THREAD_SEARCH_BENCHMARK=1 pnpm test apps/desktop/src/main/__tests__/thread-search-query-budget.test.ts apps/desktop/src/main/__tests__/thread-search-maintenance.property.test.ts apps/desktop/src/main/__tests__/thread-search-ranked.property.test.ts --silent=false
 pnpm test:sqlite-writes thread-search sqlite-write-metrics voice-navigation-write-budget owner-content-search-persistence overlay-store-usage-pricing state-db.test
 ```
 

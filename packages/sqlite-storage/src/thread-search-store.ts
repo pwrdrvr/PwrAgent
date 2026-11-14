@@ -278,6 +278,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
   }
 
   search(request: ThreadSearchProjectionSearchRequest): ThreadSearchResult[] {
+    if (request.identityKeys?.length === 0) return [];
     const ftsQuery = buildThreadSearchFtsQuery(request.query);
     const backendClause = request.backend ? " AND d.backend = @backend" : "";
     const archivedClause = request.includeArchived ? "" : " AND d.archived_at IS NULL";
@@ -307,19 +308,19 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         .map((row) => this.rowToResult(row as ThreadSearchDocumentRow, 0, null));
     }
 
+    // MATCH/ranking must have one cursor for the whole result set. Driving
+    // FTS by inventory rowid restarts its corpus statistics for every identity.
+    // Membership stays in WHERE, before ranking and LIMIT.
     return this.db
       .prepare(
         `SELECT d.*,
                 bm25(thread_search_fts) AS rank_value,
                 snippet(thread_search_fts, 1, '', '', '...', 16) AS snippet_text
-           ` + (request.identityKeys
-             ? scopedDocuments + `
-               CROSS JOIN thread_search_fts_rows k ON k.identity_key = d.identity_key
-               CROSS JOIN thread_search_fts ON thread_search_fts.rowid = k.fts_rowid
-                 AND thread_search_fts.identity_key = k.identity_key`
-             : `FROM thread_search_fts
-                JOIN thread_search_documents d ON d.identity_key = thread_search_fts.identity_key`) + `
-          WHERE thread_search_fts MATCH @query` + backendClause + archivedClause + filterWhere.sql + `
+           FROM thread_search_fts
+           CROSS JOIN thread_search_documents d ON d.identity_key = thread_search_fts.identity_key
+          WHERE thread_search_fts MATCH @query`
+          + (request.identityKeys ? " AND d.identity_key IN (SELECT value FROM json_each(@identityKeys))" : "")
+          + backendClause + archivedClause + filterWhere.sql + `
           ORDER BY rank_value ASC, COALESCE(d.updated_at, d.created_at, 0) DESC
           LIMIT @limit`,
       )
