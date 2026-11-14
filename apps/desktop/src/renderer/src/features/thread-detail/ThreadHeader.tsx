@@ -27,6 +27,7 @@ import {
   ThreadHeaderProjectCrumb,
   type ThreadHeaderProject,
 } from "./ThreadHeaderProjectCrumb";
+import { projectCrumbFit } from "./project-crumb-fit";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { InlineRenameInput } from "../navigation/InlineRenameInput";
 import { threadSupportsRename } from "../navigation/thread-action-hotkeys";
@@ -191,7 +192,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                       project={props.project}
                     />
                   ) : (
-                    <span className="thread-header__eyebrow" title={projectLabel}>
+                    <span
+                      className="thread-header__eyebrow"
+                      data-fit={projectCrumbFit(projectLabel)}
+                      title={projectLabel}
+                    >
                       {projectLabel}
                     </span>
                   )}

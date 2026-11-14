@@ -24985,6 +24985,19 @@ a.button {
   overflow-clip-margin: 4px;
 }
 
+/* The project name's floor, so the title takes the squeeze. Without one the
+   name shrank beside the title and `codex` came out as `cod…`, an ellipsis
+   as wide as what it hid. A short name (`projectCrumbFit` in
+   project-crumb-fit.ts) never truncates; a long one keeps about a dozen
+   characters. Both outrank the `max-width` above, as `min-width` does. */
+.thread-header__eyebrow[data-fit="whole"] {
+  min-width: max-content;
+}
+
+.thread-header__eyebrow[data-fit="floor"] {
+  min-width: 12ch;
+}
+
 /* Underlined where the title is not: the eyebrow is already accent-coloured,
    and brightening it alone is too slight a change to read as a link. */
 .thread-header__project-button:hover {
