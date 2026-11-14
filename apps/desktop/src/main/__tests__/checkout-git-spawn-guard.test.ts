@@ -78,6 +78,42 @@ describe("checkout Git spawn guard", () => {
     expect(target(["clone", "--branch", "main", outside, `${outside}-clone`])).toBeUndefined();
     expect(target(["init"])).toBe(REPOSITORY_ROOT);
     expect(target(["init", "nested"])).toBe(path.join(REPOSITORY_ROOT, "nested"));
+    // Cloning from the checkout reads its whole object store.
+    expect(target(["clone", "--no-local", REPOSITORY_ROOT, outside])).toBe(REPOSITORY_ROOT);
+    expect(target(["clone", "https://example.invalid/repo.git", outside])).toBeUndefined();
+  });
+
+  it("follows the repository named by the child's environment and option values", () => {
+    const outside = path.join(os.tmpdir(), "fixture-repo");
+    const target = (args: string[], env?: Record<string, string>) => checkoutGitTarget(
+      { args: ["git", ...args], cwd: outside, env, file: "git" },
+      { parentCwd: outside, repositoryRoot: REPOSITORY_ROOT, resolve: (entry) => entry },
+    );
+    const gitDir = path.join(REPOSITORY_ROOT, ".git");
+
+    expect(target(["status"], { GIT_DIR: gitDir })).toBe(gitDir);
+    expect(target(["status"], { GIT_WORK_TREE: REPOSITORY_ROOT })).toBe(REPOSITORY_ROOT);
+    expect(target(["status"], { GIT_DIR: path.join(outside, ".git") })).toBeUndefined();
+    // `--exec-path` alone takes no value, so the `-C` after it still counts.
+    expect(target(["--exec-path", "-C", REPOSITORY_ROOT, "status"])).toBe(REPOSITORY_ROOT);
+    // `--attr-source` takes one, which is not the subcommand.
+    expect(target(["--attr-source", "HEAD", "-C", REPOSITORY_ROOT, "status"])).toBe(REPOSITORY_ROOT);
+    // A child whose name starts with two dots is still inside the checkout.
+    const dotted = path.join(REPOSITORY_ROOT, "..scratch");
+    expect(target(["-C", dotted, "status"])).toBe(dotted);
+  });
+
+  it("blocks Git that reaches the checkout through GIT_DIR alone", async () => {
+    const directory = makeTempDir();
+    const gitDir = path.join(REPOSITORY_ROOT, ".git");
+
+    await captureSpawnError(() => execFile("git", ["-C", directory, "rev-parse", "HEAD"], {
+      env: { ...process.env, GIT_DIR: gitDir },
+    }));
+
+    expect(drainViolations()).toEqual([
+      expect.objectContaining({ target: gitDir }),
+    ]);
   });
 
   // Oracle: Git itself decides which repository a launch opens. In a tree of
@@ -112,7 +148,17 @@ describe("checkout Git spawn guard", () => {
       process.platform === "win32" ? value?.toLowerCase() : value;
     const root = resolve(checkout);
     // Git must not walk above the tree into whatever holds the temp dir.
-    const env = { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(tree) };
+    // A run under `git rebase -x` or a hook inherits variables that point Git
+    // at the outer repository whatever the cwd; Node drops undefined keys.
+    const env = {
+      ...process.env,
+      GIT_CEILING_DIRECTORIES: path.dirname(tree),
+      GIT_COMMON_DIR: undefined,
+      GIT_DIR: undefined,
+      GIT_INDEX_FILE: undefined,
+      GIT_OBJECT_DIRECTORY: undefined,
+      GIT_WORK_TREE: undefined,
+    };
 
     const directoryArb = fc.constantFrom(...directories);
     const relativeArb = fc.constantFrom(".", "..", "apps", "desktop", "nested", "elsewhere", "checkout");

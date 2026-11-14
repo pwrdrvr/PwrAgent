@@ -1356,8 +1356,10 @@ and `acp-instance-discovery.test.ts` of plain probe injection.
 
 [`src/main/__tests__/setup/checkout-git-spawn-guard.ts`](src/main/__tests__/setup/checkout-git-spawn-guard.ts)
 fails a `desktop-main` test that runs Git against the repository checkout the
-suite runs in, whether through `-C <path>`, a `cwd` inside it, `--git-dir` or
-`--work-tree`. `init` and `clone` are judged by the directory they write.
+suite runs in, whether through `-C <path>`, a `cwd` inside it, `--git-dir`,
+`--work-tree`, or `GIT_DIR` / `GIT_WORK_TREE` in the child's environment.
+`init` and `clone` are judged by the directory they write, and a local `clone`
+by its source too.
 
 A thread started with `cwd: process.cwd()` did this without anyone asking.
 `startThread` ran `git rev-parse --abbrev-ref HEAD` whenever the head-branch
@@ -1376,7 +1378,8 @@ Fix a failure without widening the guard:
 - A test of Git itself: build its own repository under `os.tmpdir()`.
 
 Like the agent-CLI guard it hooks `ChildProcess.prototype.spawn`, records and
-throws, and does not see sync launches. `checkout-git-spawn-guard.test.ts`
+throws, and does not see sync launches or, on Windows, `ownProcessTree`
+launches, which start the PowerShell job wrapper rather than Git. `checkout-git-spawn-guard.test.ts`
 checks the classifier against Git's own `rev-parse --show-toplevel`.
 
 ## No Network and No Operator State in Vitest

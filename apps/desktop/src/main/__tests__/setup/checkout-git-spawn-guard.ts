@@ -16,10 +16,13 @@
 //
 // Like `agent-cli-spawn-guard.ts`, the hook is `ChildProcess.prototype.spawn`:
 // every async launch funnels through it, however a module imported
-// `child_process`. Production Git always launches asynchronously as
+// `child_process`. Production Git launches asynchronously as
 // `git -C <directory> …` from the temp dir; `checkout-git-spawn.ts` also
-// follows a plain `cwd`, relative and chained `-C`, `--git-dir` and
-// `--work-tree`. Sync launches (`execFileSync`) are not covered.
+// follows a plain `cwd`, relative and chained `-C`, `--git-dir`,
+// `--work-tree`, and `GIT_DIR` / `GIT_WORK_TREE` in the child's environment.
+// Not covered: sync launches (`execFileSync`), and on Windows an
+// `ownProcessTree` launch, which starts the PowerShell job wrapper rather than
+// Git itself.
 //
 // It records and throws. The throw keeps Git from starting; the record fails
 // the test, because callers such as the working-state reader catch a failed
@@ -36,7 +39,8 @@ const REPOSITORY_ROOT = realpathOrSelf(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../.."),
 );
 
-type SpawnOptions = { args?: string[]; cwd?: string; file?: string };
+/** `envPairs` is the child's environment as `KEY=value` strings. */
+type SpawnOptions = { args?: string[]; cwd?: string; envPairs?: string[]; file?: string };
 
 /** `ChildProcess#spawn` is internal to Node and absent from `@types/node`. */
 type SpawnableChildProcess = ChildProcess & {
@@ -68,7 +72,7 @@ if (guardGlobal[INSTALLED] !== true) {
   ) {
     const args = options?.args ?? [];
     const target = checkoutGitTarget(
-      { args, cwd: options?.cwd, file: options?.file ?? "" },
+      { args, cwd: options?.cwd, env: envFromPairs(options?.envPairs), file: options?.file ?? "" },
       { parentCwd: process.cwd(), repositoryRoot: REPOSITORY_ROOT, resolve: realpathOrSelf },
     );
     if (target !== undefined) {
@@ -109,6 +113,25 @@ function reportRecordedViolations(subject: string): void {
       ].join("\n"),
     );
   }
+}
+
+/**
+ * Node normalizes `env` to `envPairs` before this hook runs; without one the
+ * child inherits `process.env`. Windows keeps hidden `=C:=C:\…` entries, so
+ * the separator search starts after the first character.
+ */
+function envFromPairs(pairs: string[] | undefined): Record<string, string> | NodeJS.ProcessEnv {
+  if (!pairs) {
+    return process.env;
+  }
+  const env: Record<string, string> = {};
+  for (const pair of pairs) {
+    const separator = pair.indexOf("=", 1);
+    if (separator > 0) {
+      env[pair.slice(0, separator)] = pair.slice(separator + 1);
+    }
+  }
+  return env;
 }
 
 function realpathOrSelf(target: string): string {
