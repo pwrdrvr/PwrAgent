@@ -85,6 +85,7 @@ import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activit
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
+import { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
 
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
@@ -232,6 +233,7 @@ import {
   type BackendModelOption,
   type BackendRateLimitSummary,
   type BackendSummary,
+  type CodexModelProviderCatalogState,
   type CodexAppServerRestartResult,
   type CodexAppServerRestartStatus,
   type DesktopProviderModelDefaults,
@@ -1760,6 +1762,9 @@ export class DesktopBackendRegistry {
   private readonly resolveCodexModelProvidersFn: () => CodexModelProviderSettings[];
   private readonly resolveCodexModelProviderKeysFn: () => Promise<Record<string, string>>;
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
+  private readonly codexProviderCatalogRetry = new CodexProviderCatalogRetry({
+    refresh: () => this.refreshCodexProviderCatalogs(),
+  });
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly acpSessionIdleCloseMs: number;
@@ -17142,6 +17147,7 @@ export class DesktopBackendRegistry {
 
   close(): Promise<void> {
     this.shutdownRequested = true;
+    this.codexProviderCatalogRetry.close();
     this.launchpadCreationOperations.cancelAll();
     for (const timer of this.restartGateTimers) clearTimeout(timer);
     this.restartGateTimers.clear();
@@ -18103,6 +18109,38 @@ export class DesktopBackendRegistry {
     }
 
     return await this.overlayStore.setLaunchpadDefaults(resolvedDefaults);
+  }
+
+  /**
+   * Each registered Codex model provider and what its catalog read found,
+   * read after the model list so the two describe the same read.
+   */
+  private codexModelProviderCatalogStates(): Pick<BackendSummary, "codexModelProviders"> {
+    const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
+    this.codexProviderCatalogRetry.observe(states);
+    return states.length ? { codexModelProviders: states } : {};
+  }
+
+  /**
+   * Re-read the Codex model list after a provider's catalog read failed, and
+   * publish it on the cached Codex summary. It runs Codex's own `model/list`
+   * again, through the model catalog, and no provider discovery. Windows
+   * re-read summaries on `backend/providerStatus/updated`.
+   */
+  private async refreshCodexProviderCatalogs(): Promise<readonly CodexModelProviderCatalogState[]> {
+    const generation = this.codexBackendGeneration;
+    this.modelCatalog.invalidate("codex");
+    const models = await this.modelCatalog.readModels("codex", "provider-catalog-retry");
+    const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
+    if (generation !== this.codexBackendGeneration || !this.codexBackendSummary) return states;
+    const { codexModelProviders: _previous, ...summary } = this.codexBackendSummary;
+    this.codexBackendSummary = {
+      ...summary,
+      launchpadOptions: buildLaunchpadOptions("codex", models),
+      ...(states.length ? { codexModelProviders: states } : {}),
+    };
+    await this.emit({ backend: "codex", notification: { method: "backend/providerStatus/updated", params: { backend: "codex" } } });
+    return states;
   }
 
   private readCodexDefaultModelsOnce(
@@ -20314,6 +20352,7 @@ export class DesktopBackendRegistry {
       methods,
       capabilities,
       launchpadOptions: buildLaunchpadOptions("codex", discoveredModels),
+      ...this.codexModelProviderCatalogStates(),
       executionModes: [
         {
           mode: "default",

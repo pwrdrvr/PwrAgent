@@ -36,6 +36,7 @@ import {
 } from "../../chrome/ChipContextMenu";
 import { MoreVerticalIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { useProviderLabelFormatter } from "../../../lib/thread-provider-label";
 import { readRendererFederationLabel, readRendererFederationTarget } from "../../../lib/federation-window";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
@@ -467,6 +468,7 @@ const PricingUsageRow = memo(function PricingUsageRowCard(props: {
 }) {
   const { line, lineTotals, rowCompactions, subAgent, isActive, turnFailure } = props.row;
   const { displayOptions } = props;
+  const formatProvider = useProviderLabelFormatter();
   const renderGroup = () => <TokenMiserTurnGroup {...props} />;
   if (props.row.orphan) {
     return (props.row.gateSummary ? props.row.gateSummary.gateCount > props.row.gateSummary.unpricedCount
@@ -485,7 +487,7 @@ const PricingUsageRow = memo(function PricingUsageRowCard(props: {
   const reasoningEffort = line.reasoningEffort
     ?? subAgent?.preferredReasoningEffort
     ?? props.row.threadReasoningEffort;
-  const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
+  const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent, formatProvider);
   const runtimeModel = resolveUsageLineModel(line, subAgent);
 
   return (
@@ -1347,18 +1349,21 @@ function formatUsageLineTitle(
 
 function formatUsageLineRuntimeLabel(
   line: PricingUsageLine,
-  subAgent?: PricingSubAgent,
+  subAgent: PricingSubAgent | undefined,
+  formatProvider: (backend: AppServerBackendKind, model: string | undefined) => string,
 ): string {
   if (line.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG) return "Local";
+  // A Codex model provider's line carries its qualified model
+  // (`@mathos/…`), which names the provider it ran on.
   if (subAgent?.backend) {
-    return formatBackendLabel(subAgent.backend);
+    return formatProvider(subAgent.backend, line.model);
   }
   // Monitor rows are stored under their parent thread backend so its ledger
   // can aggregate them. Without a loaded sub-agent summary, the pricing
   // provider is the truthful runtime identity.
   return line.scope === "monitor"
     ? formatPricingProviderLabel(line.provider)
-    : formatBackendLabel(line.backend as AppServerBackendKind);
+    : formatProvider(line.backend as AppServerBackendKind, line.model);
 }
 
 function formatPricingProviderLabel(provider: string): string {

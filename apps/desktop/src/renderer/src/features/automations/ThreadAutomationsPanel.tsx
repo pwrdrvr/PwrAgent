@@ -9,7 +9,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { ChevronRightIcon } from "../../icons";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { useProviderLabelFormatter } from "../../lib/thread-provider-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
@@ -192,6 +192,7 @@ function AutomationSummary(props: {
   onPauseResume: () => Promise<void>;
   onRunNow: () => Promise<void>;
 }) {
+  const formatProvider = useProviderLabelFormatter();
   const [busy, setBusy] = useState<string>();
   const runAction = async (
     action: string,
@@ -232,7 +233,7 @@ function AutomationSummary(props: {
         <p className="automation-row__schedule">{props.automation.scheduleSummary}</p>
         <p className="automation-row__runtime">
           <span className="automation-runtime__provider">
-            {formatBackendLabel(profile?.backend ?? props.automation.backend)}
+            {formatProvider(profile?.backend ?? props.automation.backend, profile?.model)}
           </span>
           <span className="automation-runtime__model">
             {runtimeDetails || "Agent default"}
@@ -363,6 +364,7 @@ export function AutomationRunHistoryItem(props: {
   );
   const runAt =
     props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt;
+  const formatProvider = useProviderLabelFormatter();
   const usageLine = formatAutomationRunUsage(props.run.usage);
   const runtimeLine = formatAutomationRunRuntime(props.run.usage);
   return (
@@ -404,7 +406,7 @@ export function AutomationRunHistoryItem(props: {
             editing the automation never rewrites its history. */}
         {props.run.backend ? (
           <span className="automation-runtime__provider">
-            {formatBackendLabel(props.run.backend)}
+            {formatProvider(props.run.backend, props.run.usage?.model)}
           </span>
         ) : null}
         {runtimeLine ? (

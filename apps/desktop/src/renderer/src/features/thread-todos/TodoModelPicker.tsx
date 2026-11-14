@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { BackendSummary, ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
-import { resolveThreadTodoModelSettings, sameThreadTodoModelSettings } from "@pwragent/shared";
+import {
+  buildProviderPickerEntries,
+  describeCodexModelProviderEntry,
+  providerPickerValue,
+  resolveThreadTodoModelSettings,
+  sameThreadTodoModelSettings,
+} from "@pwragent/shared";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
@@ -117,6 +123,8 @@ export function TodoModelPicker(props: MachinePickerProps) {
     </button>
   );
   const providers = backends.filter((backend) => backend.available && backend.capabilities.createThread);
+  // Each Codex model provider is its own entry, as in the composer.
+  const providerEntries = buildProviderPickerEntries(providers);
   const backend = backends.find((entry) => entry.kind === selection.settings.backend);
   const models = backend?.launchpadOptions?.models ?? [];
   const model = models.find((entry) => entry.id === selection.settings.model);
@@ -144,13 +152,22 @@ export function TodoModelPicker(props: MachinePickerProps) {
           <div className="composer-dropdown__group-label">Custom</div>
           <div className="todo-model-picker__custom" role="presentation">
             <ComposerDropdown ariaLabel="To-do provider" triggerRole="menuitem" menuPlacement="below"
-              options={providers.map((entry) => ({ value: entry.kind, label: formatBackendLabel(entry.kind, backends) }))}
-              value={selection.settings.backend} onChange={(value) => {
-                const next = providers.find((entry) => entry.kind === value);
-                if (next) props.onPick(customTodoDispatchSettings(next));
+              options={providerEntries.map((entry) => entry.codexModelProviderId
+                ? { value: entry.value, label: entry.label ?? entry.codexModelProviderId, ...describeCodexModelProviderEntry(entry) }
+                : { value: entry.value, label: formatBackendLabel(entry.backend, backends) })}
+              value={providerPickerValue(selection.settings.backend, selection.settings.model)} onChange={(value) => {
+                const entry = providerEntries.find((candidate) => candidate.value === value);
+                const next = providers.find((candidate) => candidate.kind === entry?.backend);
+                if (!entry || !next) return;
+                // A Codex entry names its provider through the model id.
+                const codexModel = next.kind === "codex"
+                  ? (entry.models.find((candidate) => candidate.current) ?? entry.models[0])?.id
+                  : undefined;
+                props.onPick(customTodoDispatchSettings(next, codexModel));
               }} />
             <ModelDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below" disabled={models.length === 0}
               kind={backend?.kind} models={models} emptyOptions={[{ value: "", label: "Default model" }]}
+              thread={backend?.kind === "codex" ? { model: selection.settings.model } : undefined}
               value={selection.settings.model ?? ""} onChange={(value) => {
                 if (backend) props.onPick(customTodoDispatchSettings(backend, value));
               }} />

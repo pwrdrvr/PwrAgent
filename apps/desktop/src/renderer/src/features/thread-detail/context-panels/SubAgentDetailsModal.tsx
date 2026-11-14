@@ -12,7 +12,7 @@ import {
   isCodexNativeSubAgent,
 } from "@pwragent/shared";
 import { CloseIcon } from "../../../icons";
-import { formatBackendLabel } from "../../../lib/backend-label";
+import { useProviderLabelFormatter } from "../../../lib/thread-provider-label";
 import { copyText } from "../../../lib/copy-text";
 import { useDesktopApi } from "../../../lib/desktop-api";
 import { useModalDialog } from "../../../lib/useModalDialog";
@@ -54,6 +54,7 @@ type SubAgentDetailsModalProps = {
  */
 export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const { onClose, subAgent } = props;
+  const formatProvider = useProviderLabelFormatter();
   // Close explicitly, not the first control: the header's timing line is
   // tabbable once the run settles (its duration carries the exact end
   // timestamp), and it precedes the actions in DOM order. Taking the first
@@ -87,7 +88,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
       subAgent.monitorThreadId !== props.parentThreadId
       ? subAgent.monitorThreadId
       : undefined;
-  const backendLabel = formatBackendLabel(subAgent.backend ?? props.defaultBackend);
+  const backendLabel = formatProvider(subAgent.backend ?? props.defaultBackend, model);
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
         displayOptions: props.pricingDisplayOptions,

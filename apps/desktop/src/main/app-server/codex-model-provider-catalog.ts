@@ -1,6 +1,7 @@
 import {
   formatCodexProviderModelId,
   type BackendModelOption,
+  type CodexModelProviderCatalogState,
   type CodexModelProviderSettings,
   type CodexModelProviderTestResult,
 } from "@pwragent/shared";
@@ -10,15 +11,35 @@ const DISCOVERY_TTL_MS = 10 * 60_000;
 const DISCOVERY_FAILURE_TTL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const MAX_DISCOVERED_MODELS = 200;
+/**
+ * A `/models` page carries per-model metadata (descriptions, pricing,
+ * architecture), so a few hundred models from an aggregator can exceed 1 MiB.
+ */
+const MAX_MODELS_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_DISCOVERED_MODELS = 2_000;
+const MAX_MODEL_PAGES = 20;
+const MAX_ERROR_LENGTH = 200;
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+type DiscoveredModel = { id: string; label?: string };
+
+type Discovery = {
+  models: DiscoveredModel[];
+  /** The endpoint had more models than `MAX_DISCOVERED_MODELS`. */
+  truncated: boolean;
+  /** Pages read, for Test connection. */
+  pages: number;
+};
 
 type DiscoveryState = {
   fingerprint: string;
   expiresAt: number;
-  models: Array<{ id: string; label?: string }>;
-  promise?: Promise<Array<{ id: string; label?: string }>>;
+  /** The last read, when it succeeded. */
+  discovery?: Discovery;
+  /** Why the last read failed, already redacted. */
+  error?: string;
+  promise?: Promise<void>;
 };
 
 /**
@@ -26,10 +47,13 @@ type DiscoveryState = {
  * backend. Every surface that lists Codex models (the composer, federation
  * peers, messaging pickers and the Agent tools) reads them from there.
  *
- * Discovery reads the provider's OpenAI-compatible `GET /models`. It is
- * bounded: one request per provider per ten minutes, an eight-second timeout,
- * a 1 MiB response, no redirects. A failed read falls back to the ids the
- * operator listed, so a provider that is down still shows its known models.
+ * Discovery reads the provider's OpenAI-compatible `GET /models` with that
+ * provider's own base URL and key. It follows OpenAI list pagination
+ * (`has_more` plus `after=<last id>`) and is bounded: one read per provider
+ * per ten minutes (one minute after a failure), an eight-second timeout per
+ * page, 8 MiB per page, 20 pages, 2,000 models, no redirects. A failed read
+ * falls back to the ids the operator listed, so a provider that is down still
+ * shows its known models, and `catalogStates` says why the rest are missing.
  */
 export class CodexModelProviderCatalog {
   private readonly discovery = new Map<string, DiscoveryState>();
@@ -53,7 +77,7 @@ export class CodexModelProviderCatalog {
     const perProvider = await Promise.all(providers.map(async (provider) => {
       const discovered = provider.discoverModels === false
         ? []
-        : await this.discover(provider, keys[provider.id]).catch(() => []);
+        : (await this.discover(provider, keys[provider.id])).discovery?.models ?? [];
       const labels = new Map(discovered.map((model) => [model.id, model.label]));
       const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
       return ids.map((model): BackendModelOption => ({
@@ -70,53 +94,96 @@ export class CodexModelProviderCatalog {
     return perProvider.flat();
   }
 
+  /**
+   * What each configured provider's last catalog read found, in configured
+   * order. It never reads an endpoint itself; `listModelOptions` does.
+   */
+  catalogStates(): CodexModelProviderCatalogState[] {
+    return this.options.resolveProviders().map((provider): CodexModelProviderCatalogState => {
+      const base = { id: provider.id, name: provider.name, listedCount: provider.models?.length ?? 0 };
+      if (provider.discoverModels === false) return { ...base, status: "off" };
+      const state = this.discovery.get(provider.id);
+      // A read of a base URL the provider no longer has says nothing about it.
+      if (!state?.fingerprint.startsWith(`${provider.baseUrl}\u0000`)) {
+        return { ...base, status: "pending" };
+      }
+      if (state.error !== undefined) return { ...base, status: "unavailable", error: state.error };
+      if (!state.discovery) return { ...base, status: "pending" };
+      return {
+        ...base,
+        status: "ready",
+        discoveredCount: state.discovery.models.length,
+        ...(state.discovery.truncated ? { truncated: true } : {}),
+      };
+    });
+  }
+
   private async discover(
     provider: CodexModelProviderSettings,
     apiKey: string | undefined,
-  ): Promise<Array<{ id: string; label?: string }>> {
+  ): Promise<DiscoveryState> {
     const now = this.options.now?.() ?? Date.now();
     const fingerprint = `${provider.baseUrl}\u0000${apiKey ? "key" : ""}`;
     const cached = this.discovery.get(provider.id);
     if (cached?.fingerprint === fingerprint) {
-      if (cached.promise) return await cached.promise;
-      if (cached.expiresAt > now) return cached.models;
+      if (cached.promise) {
+        await cached.promise;
+        return cached;
+      }
+      if (cached.expiresAt > now) return cached;
     }
-    const state: DiscoveryState = { fingerprint, expiresAt: 0, models: cached?.models ?? [] };
+    const state: DiscoveryState = { fingerprint, expiresAt: 0 };
     state.promise = this.fetchModels(provider.baseUrl, apiKey)
-      .then((models) => {
-        state.models = models;
+      .then((discovery) => {
+        state.discovery = discovery;
         state.expiresAt = now + DISCOVERY_TTL_MS;
-        return models;
-      })
-      .catch((error: unknown) => {
+      }, (error: unknown) => {
+        // A failed read offers only the listed models, as the picker says.
+        state.error = redactSecret(errorMessage(error), apiKey);
         state.expiresAt = now + DISCOVERY_FAILURE_TTL_MS;
-        throw error;
       })
       .finally(() => {
         state.promise = undefined;
       });
     this.discovery.set(provider.id, state);
-    return await state.promise;
+    await state.promise;
+    return state;
   }
 
-  private async fetchModels(
-    baseUrl: string,
-    apiKey: string | undefined,
-  ): Promise<Array<{ id: string; label?: string }>> {
-    const body = await this.requestJson(`${baseUrl}/models`, { method: "GET" }, apiKey);
-    const data = body && typeof body === "object" && Array.isArray((body as { data?: unknown }).data)
-      ? (body as { data: unknown[] }).data
-      : Array.isArray(body) ? body : [];
-    const models: Array<{ id: string; label?: string }> = [];
-    for (const entry of data) {
-      const record = entry && typeof entry === "object" ? entry as Record<string, unknown> : undefined;
-      const id = typeof record?.id === "string" ? record.id.trim() : "";
-      if (!id || id.length > 256 || id.startsWith("@") || /[\0\r\n]/.test(id)) continue;
-      const name = typeof record?.name === "string" ? record.name.trim().slice(0, 120) : undefined;
-      models.push({ id, ...(name && name !== id ? { label: name } : {}) });
-      if (models.length >= MAX_DISCOVERED_MODELS) break;
+  private async fetchModels(baseUrl: string, apiKey: string | undefined): Promise<Discovery> {
+    const models: DiscoveredModel[] = [];
+    const seen = new Set<string>();
+    let after: string | undefined;
+    let pages = 0;
+    for (;;) {
+      pages += 1;
+      const url = after ? `${baseUrl}/models?after=${encodeURIComponent(after)}` : `${baseUrl}/models`;
+      const body = await this.requestJson(url, { method: "GET" }, apiKey, MAX_MODELS_RESPONSE_BYTES);
+      const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : undefined;
+      const data = Array.isArray(record?.data) ? record.data : Array.isArray(body) ? body : [];
+      let added = 0;
+      let lastId: string | undefined;
+      for (const entry of data) {
+        const item = entry && typeof entry === "object" ? entry as Record<string, unknown> : undefined;
+        const id = typeof item?.id === "string" ? item.id.trim() : "";
+        if (id) lastId = id;
+        if (!id || id.length > 256 || id.startsWith("@") || /[\0\r\n]/.test(id) || seen.has(id)) continue;
+        if (models.length >= MAX_DISCOVERED_MODELS) return { models, truncated: true, pages };
+        seen.add(id);
+        const name = typeof item?.name === "string" ? item.name.trim().slice(0, 120) : undefined;
+        models.push({ id, ...(name && name !== id ? { label: name } : {}) });
+        added += 1;
+      }
+      const hasMore = record?.has_more === true;
+      const next = typeof record?.last_id === "string" && record.last_id ? record.last_id : lastId;
+      // A page that adds nothing new, or names the cursor it was asked for,
+      // would loop. Stop there and keep what was read.
+      if (!hasMore || !next || added === 0 || next === after) return { models, truncated: false, pages };
+      if (models.length >= MAX_DISCOVERED_MODELS || pages >= MAX_MODEL_PAGES) {
+        return { models, truncated: true, pages };
+      }
+      after = next;
     }
-    return models;
   }
 
   /**
@@ -129,18 +196,21 @@ export class CodexModelProviderCatalog {
     apiKey: string | undefined,
   ): Promise<CodexModelProviderTestResult> {
     const startedAt = this.options.now?.() ?? Date.now();
-    let models: Array<{ id: string; label?: string }> = [];
+    let models: DiscoveredModel[] = [];
+    let modelPages: Pick<Discovery, "pages" | "truncated"> | undefined;
     let modelsError: string | undefined;
     try {
-      models = await this.fetchModels(provider.baseUrl, apiKey);
+      const discovery = await this.fetchModels(provider.baseUrl, apiKey);
+      models = discovery.models;
+      modelPages = { pages: discovery.pages, truncated: discovery.truncated };
     } catch (error) {
-      modelsError = errorMessage(error);
+      modelsError = redactSecret(errorMessage(error), apiKey);
     }
     const reachedAfterMs = (this.options.now?.() ?? Date.now()) - startedAt;
     const probeModel = provider.models?.[0] ?? models[0]?.id;
     if (!probeModel) {
       return {
-        models: { ok: !modelsError, count: models.length, ...(modelsError ? { error: modelsError } : {}) },
+        models: modelsTestResult(models.length, modelPages, modelsError),
         responses: { ok: false, skipped: true, error: "No model to try. List one, or let the endpoint list its models." },
         latencyMs: reachedAfterMs,
       };
@@ -181,18 +251,23 @@ export class CodexModelProviderCatalog {
         throw new Error("The endpoint did not return a completed text response. Compatibility with Codex was not confirmed.");
       }
     } catch (error) {
-      responsesError = errorMessage(error);
+      responsesError = redactSecret(errorMessage(error), apiKey);
     } finally {
       await runtime?.close();
     }
     return {
-      models: { ok: !modelsError, count: models.length, ...(modelsError ? { error: modelsError } : {}) },
+      models: modelsTestResult(models.length, modelPages, modelsError),
       responses: { ok: !responsesError, model: probeModel, ...(responsesError ? { error: responsesError } : {}) },
       latencyMs: reachedAfterMs,
     };
   }
 
-  private async requestJson(url: string, init: RequestInit, apiKey: string | undefined): Promise<unknown> {
+  private async requestJson(
+    url: string,
+    init: RequestInit,
+    apiKey: string | undefined,
+    maxBytes = MAX_RESPONSE_BYTES,
+  ): Promise<unknown> {
     const fetchImpl = this.options.fetch ?? globalThis.fetch;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -207,7 +282,7 @@ export class CodexModelProviderCatalog {
           ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
         },
       });
-      const text = await readBoundedText(response);
+      const text = await readBoundedText(response, maxBytes);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}${describeErrorBody(text)}`);
       }
@@ -216,6 +291,20 @@ export class CodexModelProviderCatalog {
       clearTimeout(timer);
     }
   }
+}
+
+function modelsTestResult(
+  count: number,
+  pages: Pick<Discovery, "pages" | "truncated"> | undefined,
+  error: string | undefined,
+): CodexModelProviderTestResult["models"] {
+  return {
+    ok: !error,
+    count,
+    ...(pages && pages.pages > 1 ? { pages: pages.pages } : {}),
+    ...(pages?.truncated ? { truncated: true } : {}),
+    ...(error ? { error } : {}),
+  };
 }
 
 function hasCompletedTextResponse(value: unknown): boolean {
@@ -234,9 +323,10 @@ function hasCompletedTextResponse(value: unknown): boolean {
   });
 }
 
-async function readBoundedText(response: Response): Promise<string> {
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  const tooLarge = `The response was larger than ${maxBytes / (1024 * 1024)} MiB.`;
   const length = Number(response.headers.get("content-length") ?? "0");
-  if (length > MAX_RESPONSE_BYTES) throw new Error("The response was larger than 1 MiB.");
+  if (length > maxBytes) throw new Error(tooLarge);
   const reader = response.body?.getReader();
   if (!reader) return "";
   const chunks: Uint8Array[] = [];
@@ -245,9 +335,9 @@ async function readBoundedText(response: Response): Promise<string> {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_RESPONSE_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel();
-      throw new Error("The response was larger than 1 MiB.");
+      throw new Error(tooLarge);
     }
     chunks.push(value);
   }
@@ -265,6 +355,31 @@ function describeErrorBody(text: string): string {
   } catch {
     return "";
   }
+}
+
+/** A word of error text, masking characters and ellipses included. */
+const ERROR_TEXT_TOKEN = /[\p{L}\p{N}_*.\u2026-]+/gu;
+
+/**
+ * An endpoint's error text can quote the key it was sent: whole, cut short,
+ * or masked (`abcd****wxyz`, `...wxyz9`). Before the text reaches a window,
+ * a peer or a log, every word that holds any 4-character run of the key
+ * becomes `[key]`, as does any word shaped like an API key.
+ */
+function redactSecret(text: string, apiKey: string | undefined): string {
+  let redacted = text;
+  if (apiKey && apiKey.length >= 4) {
+    redacted = redacted.split(apiKey).join("[key]");
+    const runs = new Set(Array.from({ length: apiKey.length - 3 }, (_, index) => apiKey.slice(index, index + 4)));
+    redacted = redacted.replace(ERROR_TEXT_TOKEN, (word) => {
+      for (let index = 0; index + 4 <= word.length; index += 1) {
+        if (runs.has(word.slice(index, index + 4))) return "[key]";
+      }
+      return word;
+    });
+  }
+  redacted = redacted.replace(/\b(?:sk|pk|rk|key)-[A-Za-z0-9_*.-]{6,}/gu, "[key]");
+  return redacted.slice(0, MAX_ERROR_LENGTH);
 }
 
 function errorMessage(error: unknown): string {

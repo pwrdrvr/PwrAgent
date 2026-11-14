@@ -1,7 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { useProviderChipNeeded } from "./provider-chip-visibility";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import type {
@@ -71,7 +71,11 @@ export function StartingThreadRow(props: {
   const { creation } = props;
   const title = pendingThreadTitleLine(creation.title) || "New thread";
   const worktree = creation.launchpad.workMode === "worktree";
-  const showProvider = useProviderChipNeeded(creation.launchpad.backend);
+  const showProvider = useProviderChipNeeded(creation.launchpad.backend, creation.launchpad.model);
+  const providerLabel = useThreadProviderLabel({
+    source: creation.launchpad.backend,
+    model: creation.launchpad.model,
+  });
   const branchName = creation.launchpad.branchName?.trim();
   const nested = props.nestedDepth !== undefined;
   const shellRef = useRef<HTMLDivElement>(null);
@@ -128,7 +132,7 @@ export function StartingThreadRow(props: {
         <span aria-hidden="true" className="thread-row__chips">
           {showProvider ? (
             <span className="thread-row__chip thread-row__chip--backend">
-              {formatBackendLabel(creation.launchpad.backend)}
+              {providerLabel}
             </span>
           ) : null}
           <span

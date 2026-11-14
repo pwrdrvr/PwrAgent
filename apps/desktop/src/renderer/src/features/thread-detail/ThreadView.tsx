@@ -120,8 +120,9 @@ import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup, PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
-import { Composer, type ComposerProps } from "../composer/Composer";
+import { Composer, getDefaultModelOption, type ComposerProps } from "../composer/Composer";
 import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
@@ -4444,6 +4445,12 @@ export function ThreadView(props: ThreadViewProps) {
             : {}),
         }
       : undefined;
+  // The header names the provider of the model the composer shows, which is
+  // the backend's default while the launchpad has chosen none.
+  const launchpadHeaderModel = composerLaunchpad
+    ? composerLaunchpad.model
+      ?? getDefaultModelOption(props.backends?.find((backend) => backend.kind === composerLaunchpad.backend))?.id
+    : undefined;
   const header = pendingForkEnvironmentSetup ? (
     <ThreadPlaceholderHeader
       {...headerChrome}
@@ -4461,8 +4468,10 @@ export function ThreadView(props: ThreadViewProps) {
     <ThreadPlaceholderHeader
       {...headerChrome}
       backend={composerLaunchpad.backend}
-      backendLabel={formatBackendLabel(
+      model={launchpadHeaderModel}
+      backendLabel={formatOwnerProviderLabel(
         composerLaunchpad.backend,
+        launchpadHeaderModel,
         props.backends,
       )}
       projectLabel={composerLaunchpad.directoryLabel}

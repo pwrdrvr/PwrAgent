@@ -30035,6 +30035,57 @@ command = "pnpm dev"
     }
   });
 
+  it("re-reads a Codex model provider's catalog on its own after a failed read, and stops once it recovers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let down = true;
+    const providerFetch = vi.fn(async () => down
+      ? new Response(JSON.stringify({ error: { message: "maintenance" } }), { status: 503 })
+      : new Response(JSON.stringify({ data: [{ id: "mathos-coder" }] })));
+    const codexClient = new MockBackendClient({ models: [{ id: "gpt-5.4", label: "GPT-5.4", supportsReasoning: true }] });
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+      resolveCodexModelProviders: () => [{ id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1" }],
+      resolveCodexModelProviderKeys: async () => ({}),
+      codexModelProviderFetch: providerFetch,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    const codexSummary = async () => (await registry.listBackends({ includeUnavailable: true }))
+      .backends.find((backend) => backend.kind === "codex");
+    try {
+      await registry.listBackends(
+        { includeUnavailable: true, refreshModels: "codex" },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      expect((await codexSummary())?.codexModelProviders).toMatchObject([{ id: "mathos", status: "unavailable" }]);
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+
+      // Still down at the first retry: one more read, and another retry later.
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+      expect((await codexSummary())?.codexModelProviders).toMatchObject([{ id: "mathos", status: "unavailable" }]);
+
+      down = false;
+      await vi.advanceTimersByTimeAsync(150_000);
+      expect(providerFetch).toHaveBeenCalledTimes(3);
+      const recovered = await codexSummary();
+      expect(recovered?.codexModelProviders).toMatchObject([{ id: "mathos", status: "ready", discoveredCount: 1 }]);
+      expect(recovered?.launchpadOptions?.models?.map((model) => model.id)).toEqual(["gpt-5.4", "@mathos/mathos-coder"]);
+      expect(events.some((event) => event.backend === "codex"
+        && event.notification.method === "backend/providerStatus/updated")).toBe(true);
+
+      // A healthy provider schedules nothing more.
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(providerFetch).toHaveBeenCalledTimes(3);
+    } finally {
+      unsubscribe();
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("reads unknown Codex provider ownership before admitting a matching model override", async () => {
     let provider: string | undefined;
     const model = "@fixture-provider/custom";
