@@ -2,7 +2,7 @@ import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { StateDb } from "@pwragent/sqlite-storage/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "@pwragent/sqlite-storage/state-db";
 import { AppRuntimeInstanceStore } from "@pwragent/sqlite-storage/app-runtime-instance-store";
 import { ThreadTodoStore } from "@pwragent/sqlite-storage/thread-todo-store";
 import { SqliteThreadReviewStorage } from "@pwragent/sqlite-storage/thread-review-storage-sqlite";
@@ -281,7 +281,7 @@ test("desktop upgrades a profile opened by portable SQLite and retains its owner
     // repair the profile itself and could conceal a missing Electron upgrade.
     const reader = new Database(stateDbPathForHomeRoot(app.homeRoot), { readonly: true });
     try {
-      expect(reader.pragma("user_version", { simple: true })).toBe(81);
+      expect(reader.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
       expect(reader.prepare("SELECT name FROM pragma_table_info('durable_turn_requests')").all())
         .toContainEqual({ name: "receipt_json" });
     } finally { reader.close(); }

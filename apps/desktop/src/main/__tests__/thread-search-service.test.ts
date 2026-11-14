@@ -124,7 +124,7 @@ describe("ThreadSearchService", () => {
     expect(response.results.map((result) => result.threadId)).toEqual(["docs"]);
   });
 
-  it("prunes stale active projection rows after refreshing provider threads", async () => {
+  it("hides omitted projections without deleting a partial inventory", async () => {
     const store = new ThreadSearchStore(stateDb);
     store.upsertThread(threadSummary({ id: "stale", title: "Stale branch drift" }));
     const service = new ThreadSearchService(
@@ -139,7 +139,7 @@ describe("ThreadSearchService", () => {
       store
         .search({ query: "branch drift", limit: 10 })
         .map((result) => result.threadId),
-    ).toEqual(["active"]);
+    ).toEqual(["stale", "active"]);
   });
 
   it("hydrates active and archived threads when archived results are included", async () => {

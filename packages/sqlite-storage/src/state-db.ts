@@ -39,7 +39,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 81;
+export const CURRENT_STATE_DB_USER_VERSION = 82;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2184,6 +2184,13 @@ export class StateDb {
           db.pragma("user_version = 81");
         }).immediate();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 82) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 82) return;
+          ensureThreadSearchIdentityIndexes(db);
+          db.pragma("user_version = 82");
+        }).immediate();
+      }
       db.exec(OWNER_JOB_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
@@ -2902,6 +2909,12 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsagePricingCumulativeColumns(db);
     ensureThreadUsageRequestPricingColumns(db);
     ensureThreadUsagePricingIndexes(db);
+    // Current and newer partial profiles skip the numbered migration ladder.
+    // Repair the mapping after FTS convergence, in this same transaction. Older
+    // profiles first finish identity migrations, then create it in v82.
+    if ((db.pragma("user_version", { simple: true }) as number) >= 82) {
+      ensureThreadSearchIdentityIndexes(db);
+    }
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
     ensureThreadToolIncidentExplorerSchema(db);
     ensureThreadMessageOriginSchema(db);
@@ -3474,6 +3487,21 @@ WHERE turn_usage_attributed IS NULL
 `);
 }
 
+function ensureThreadSearchIdentityIndexes(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_search_fts_rows")) {
+    // One linear copy, preserving existing rowids without rebuilding tokens.
+    // Never scan or rewrite the mapping on a healthy profile's reopen.
+    db.exec(`CREATE TABLE thread_search_fts_rows (
+      fts_rowid INTEGER PRIMARY KEY,
+      identity_key TEXT NOT NULL UNIQUE
+    );
+    INSERT INTO thread_search_fts_rows (fts_rowid, identity_key)
+      SELECT rowid, identity_key FROM thread_search_fts;`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_identity
+    ON thread_usage_lines(backend, thread_id)`);
+}
+
 function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
   if (!tableExists(db, "thread_search_documents")) {
     db.exec(THREAD_SEARCH_SCHEMA);
@@ -3486,6 +3514,9 @@ function ensureThreadSearchFtsThreadIdColumn(db: BetterSqlite3.Database): void {
     return;
   }
 
+  // Rebuilt FTS assigns new rowids, invalidating any surviving old mapping.
+  // The enclosing schema transaction recreates both before readers see them.
+  db.exec("DROP TABLE IF EXISTS thread_search_fts_rows");
   db.exec("DROP TABLE IF EXISTS thread_search_fts");
   db.exec(THREAD_SEARCH_SCHEMA);
 

@@ -22,6 +22,7 @@ export interface ThreadSearchStorage {
     backend: AppServerBackendKind;
     threadId: string;
   }): void;
+  /** Inspect at most 64 documents, deleting omissions from an explicitly complete inventory; never pass search listings. */
   pruneMissingThreads(params: {
     backend?: AppServerBackendKind;
     includeArchived: boolean;

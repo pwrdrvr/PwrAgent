@@ -415,7 +415,7 @@
     "statements": 0
   },
   "forge-create-pull-request-attach": {"commits":1,"note":"One allowed create_pull_request through registry dispatch and real SQLite attachment: 1 commit/16,480 bytes WAL; 20 PR creations/day = 0.3296 MB/day. Provider creation is stubbed; setup and overlay verification are excluded.","observedWalBytes":16480,"rowsChanged":1,"statements":1},
-  "global-search-active-and-archived": {"commits": 1, "note": "Two global searches with active and archived fixtures: one initial index transaction, unchanged repeat search writes nothing; no background writes.", "observedWalBytes": 37080, "rowsChanged": 4, "statements": 6},
+  "global-search-active-and-archived": {"commits": 1, "note": "Two global searches with active and archived fixtures: one initial index transaction, unchanged repeat search writes nothing; no background writes.", "observedWalBytes": 45352, "rowsChanged": 6, "statements": 6},
   "held-scheduled-action-retry": {
     "commits": 3,
     "note": "one operator-triggered held retry: claim, queue admission, and successful turn start; no timer or automatic retry",
@@ -883,8 +883,8 @@
     "rowsChanged": 1,
     "statements": 1
   },
-  "owner-content-search": {"commits": 1, "note": "First owner query with one known thread: one batched metadata commit (~37 KB); 20 equivalent cold batches/day project ~0.74 MB/day per owner, unchanged repeats and idle add 0 MB/day. No transcript index.", "observedWalBytes": 37080, "rowsChanged": 2, "statements": 3},
-  "owner-content-search-cold-usage": {"commits": 1, "note": "Real registry and SQLite: one metadata batch for three cold candidates with 60 usage lines, including two nonmatches; no usage/pricing/directory hydration. Transcript persistence adds 0 MB/day.", "observedWalBytes": 37080, "rowsChanged": 6, "statements": 9},
+  "owner-content-search": {"commits": 1, "note": "First owner query with one known thread: one batched metadata commit including the FTS rowid key (~45 KB); 20 equivalent cold batches/day project ~0.907 MB/day per owner, unchanged repeats and idle add 0 MB/day. No transcript index.", "observedWalBytes": 45352, "rowsChanged": 3, "statements": 3},
+  "owner-content-search-cold-usage": {"commits": 1, "note": "Real registry and SQLite: one metadata batch for three cold candidates with 60 usage lines, including two nonmatches; no usage/pricing/directory hydration. Transcript persistence adds 0 MB/day.", "observedWalBytes": 45352, "rowsChanged": 9, "statements": 9},
   "owner-content-search-cold-usage-repeated": {"commits": 0, "note": "20 real owner searches of unchanged metadata and unhydrated usage-bearing transcripts: 0 commits and 0 MB/day at 20 queries/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-content-search-unchanged": {"commits": 0, "note": "20 repeated owner searches with unchanged metadata: zero commits and 0 MB/day at 20 searches/day; transcript reads add no search persistence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-pr-candidate-bootstrap": {
@@ -1032,13 +1032,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
-  "prune-usage-thread-search-title": {
-    "commits": 1,
-    "note": "Preserving a last-known usage title shares the existing search-document deletion transaction",
-    "observedWalBytes": 28840,
-    "rowsChanged": 2,
-    "statements": 3
-  },
+  "prune-usage-thread-search-title": {"commits": 1, "note": "Preserving a last-known usage title shares the existing search-document deletion transaction", "observedWalBytes": 28840, "rowsChanged": 2, "statements": 4},
   "queued-message-title-helper-row": {
     "commits": 6,
     "note": "Three queued-message title runs, two commits each: the thread's one Sub-agents row (~19 KB) plus the run's usage line (~65 KB); no running state, no idle writes. ~85 KB/title: ~4 MB/day at 50 long queued messages, ~17 MB/day at 200",
@@ -1291,6 +1285,10 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "thread-search-cold-sliced-index": {"commits": 4, "note": "200 changed projections in four 64-row-or-smaller transactions, yielding between them. Finite inventory-change work; unchanged searches and idle add 0 MB/day. 321,360 bytes per cold 200-row inventory; 10 such inventories/day projects 3.214 MB/day (10/86400 × 321360 × 86400).", "observedWalBytes": 321360, "rowsChanged": 600, "statements": 600},
+  "thread-search-prune-slice": {"commits": 1, "note": "One explicit 64-identity cleanup slice; no search or timer schedules this. ~95 KB WAL/slice; at 10 explicit slices/day projects ~0.948 MB/day (1/8640 slices/s × 94760 bytes × 86400 s); 0 MB/day idle.", "observedWalBytes": 94760, "rowsChanged": 192, "statements": 256},
+  "thread-search-repeat-unchanged": {"commits": 0, "note": "Ten unchanged searches with omitted provider rows: zero commits and zero WAL; 0 MB/day at any search frequency.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "thread-search-usage-identity-index": {"commits": 1, "note": "One existing usage-line insert including the new all-status identity index. Same one commit; 28,872 bytes versus 24,752 before. At 1,000 individual inserts/day: 28.872 MB/day total, +4.120 MB/day for the index; 0 MB/day idle.", "observedWalBytes": 28872, "rowsChanged": 1, "statements": 1},
   "thread-seen-unchanged": {
     "commits": 0,
     "note": "re-marking an unchanged seen watermark a minute later: no writes. lastSeenAt refreshes at most every five minutes",

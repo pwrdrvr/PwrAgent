@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -24,6 +25,7 @@ import type {
 
 const CONTENT_SEARCH_CANDIDATE_LIMIT = 50;
 
+/** Available inventory, possibly partial; omissions never authorize durable deletion. */
 export type ThreadSearchThreadLister = (request: {
   backend?: AppServerBackendKind;
   archived?: boolean;
@@ -64,19 +66,17 @@ export class ThreadSearchService {
         ])
       : activeThreads;
     signal?.throwIfAborted();
-    this.store.upsertThreads(threads);
-    this.store.pruneMissingThreads({
-      backend: listBackend,
-      includeArchived: filters.includeArchived === true,
-      retainedIdentityKeys: threads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
-      ),
-    });
-
-    const identityKeys = projects.length
-      ? threads.filter((thread) => matchesThreadSearchProjects(thread, projects))
-          .map((thread) => buildThreadIdentityKey(thread.source, thread.id))
-      : undefined;
+    // Listings can omit failed, unavailable or paged providers. They are a
+    // visibility oracle for this request, never evidence of durable deletion.
+    // Bound synchronous indexing work and let cancellation run between slices.
+    for (let offset = 0; offset < threads.length; offset += 64) {
+      if (offset > 0) await setImmediate();
+      signal?.throwIfAborted();
+      this.store.upsertThreads(threads.slice(offset, offset + 64));
+    }
+    const identityKeys = threads
+      .filter((thread) => !projects.length || matchesThreadSearchProjects(thread, projects))
+      .map((thread) => buildThreadIdentityKey(thread.source, thread.id));
     const metadataResults = this.store
       .search({
         backend: backend === "all" ? undefined : backend,

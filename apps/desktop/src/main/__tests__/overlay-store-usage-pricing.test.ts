@@ -292,7 +292,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     const plan = stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${usageQuery}`).all(
       "codex", "headless-thread",
     ) as Array<{ detail: string }>;
-    expect(plan.some((row) => /SEARCH thread_usage_lines USING.*idx_thread_usage_lines_read_thread/.test(row.detail))).toBe(true);
+    expect(plan.some((row) => /SEARCH thread_usage_lines USING.*idx_thread_usage_lines_(read_thread|identity).*\(backend=\? AND thread_id=\?\)/.test(row.detail))).toBe(true);
     expectSqliteWriteBudget({
       scenario: "automation-run-prune-retain-usage-title",
       writes,

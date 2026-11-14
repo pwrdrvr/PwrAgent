@@ -2510,6 +2510,11 @@ describe("StateDb", () => {
         .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
         .map((result) => result.threadId),
     ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
+    const search = new ThreadSearchStore(stateDb);
+    search.upsertThread({ id: "repaired-profile", source: "codex", title: "New indexed projection",
+      titleSource: "explicit", linkedDirectories: [] });
+    expect(search.search({ query: "indexed", identityKeys: ["codex:repaired-profile"], limit: 10 })
+      .map((result) => result.threadId)).toEqual(["repaired-profile"]);
   });
 
   it("repairs stale thread search FTS tables without downgrading newer versions", () => {

@@ -36,6 +36,7 @@ type ThreadSearchFtsRow = ThreadSearchDocumentRow & {
 
 export class ThreadSearchStore implements ThreadSearchStorage {
   private readonly db: BetterSqlite3.Database;
+  private readonly pruneCursors = new Map<string, string>();
 
   constructor(stateDb: StateDb) {
     this.db = stateDb.raw;
@@ -58,6 +59,12 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         AND created_at IS ? AND updated_at IS ? AND archived_at IS ?
         AND git_branch IS ? AND git_origin_url IS ? AND model IS ?
         AND linked_directories_json IS ? AND display_json IS ?
+        AND EXISTS (
+          SELECT 1 FROM thread_search_fts_rows k
+          JOIN thread_search_fts f ON f.rowid = k.fts_rowid
+          WHERE k.identity_key = thread_search_documents.identity_key
+            AND f.identity_key = k.identity_key
+        )
     `).get(
       buildLegacyEncodedThreadIdentityKey(thread.source, thread.id), thread.source, thread.id,
       thread.title, thread.titleSource ?? null, thread.summary ?? null, thread.projectKey ?? null,
@@ -88,6 +95,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     const linkedDirectoriesJson = JSON.stringify(thread.linkedDirectories);
 
     const transaction = this.db.transaction(() => {
+      this.deleteFtsRows(identityKey);
       this.db
         .prepare(
           `INSERT INTO thread_search_documents (
@@ -134,18 +142,25 @@ export class ThreadSearchStore implements ThreadSearchStorage {
           displayJson,
           indexedAt,
         });
-      this.db
-        .prepare("DELETE FROM thread_search_fts WHERE identity_key = ?")
-        .run(identityKey);
+      // Allocate above both stores: an older process sharing this profile can
+      // still insert FTS rows without knowing the mapping table exists.
+      this.db.prepare(`INSERT INTO thread_search_fts_rows (identity_key, fts_rowid)
+        SELECT ?, MAX(
+          COALESCE((SELECT MAX(fts_rowid) FROM thread_search_fts_rows), 0),
+          COALESCE((SELECT rowid FROM thread_search_fts ORDER BY rowid DESC LIMIT 1), 0)
+        ) + 1
+        WHERE NOT EXISTS (SELECT 1 FROM thread_search_fts_rows WHERE identity_key = ?)
+      `).run(identityKey, identityKey);
       this.db
         .prepare(
           `INSERT INTO thread_search_fts (
-             identity_key, title, summary, project_key, directory_labels,
+             rowid, identity_key, title, summary, project_key, directory_labels,
              directory_paths, git_branch, git_origin_url, model, backend,
              thread_id
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES ((SELECT fts_rowid FROM thread_search_fts_rows WHERE identity_key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
+          identityKey,
           identityKey,
           thread.title,
           thread.summary ?? "",
@@ -171,88 +186,108 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       params.backend,
       params.threadId,
     );
-    const transaction = this.db.transaction(() => {
-      this.db.prepare(`
-        INSERT INTO thread_usage_titles (identity_key, title)
-        SELECT identity_key, title FROM thread_search_documents
-         WHERE identity_key = ?
-           AND (
-             EXISTS (
-               SELECT 1 FROM thread_usage_lines
-                WHERE backend = ? AND thread_id = ?
-                LIMIT 1
-             )
-             OR EXISTS (
-               SELECT 1 FROM automation_runs r
-               JOIN thread_usage_lines l
-                 ON l.backend = r.backend
-                AND l.thread_id = json_extract(r.payload, '$.backendThreadId')
-              WHERE r.backend = ? AND r.thread_id = ?
-              LIMIT 1
-             )
-           )
-        ON CONFLICT(identity_key) DO UPDATE SET title = excluded.title
-      `).run(
-        identityKey,
-        params.backend,
-        params.threadId,
-        params.backend,
-        params.threadId,
-      );
-      this.db
-        .prepare("DELETE FROM thread_search_fts WHERE identity_key = ?")
-        .run(identityKey);
-      this.db
-        .prepare("DELETE FROM thread_search_documents WHERE identity_key = ?")
-        .run(identityKey);
-    });
-    transaction();
+    this.db.transaction(() => {
+      this.deleteThreadRows(identityKey, params.backend, params.threadId);
+    })();
   }
 
+  private deleteFtsRows(identityKey: string): void {
+    const mapping = this.db.prepare(`
+      SELECT EXISTS (
+        SELECT 1 FROM thread_search_fts f
+        WHERE f.rowid = k.fts_rowid AND f.identity_key = k.identity_key
+      ) AS current FROM thread_search_fts_rows k WHERE k.identity_key = ?
+    `).get(identityKey) as { current: number } | undefined;
+    if (mapping?.current) {
+      this.db.prepare(`DELETE FROM thread_search_fts WHERE rowid = (
+        SELECT fts_rowid FROM thread_search_fts_rows WHERE identity_key = ?
+      )`).run(identityKey);
+      return;
+    }
+    // Only legacy writers can invalidate a migrated mapping. Verify it before
+    // deletion so a reused rowid never deletes another thread's tokens. New
+    // identities skip the compatibility scan altogether.
+    if (mapping || this.db.prepare("SELECT 1 FROM thread_search_documents WHERE identity_key = ?").get(identityKey)) {
+      this.db.prepare("DELETE FROM thread_search_fts WHERE identity_key = ?").run(identityKey);
+    }
+    if (mapping) this.db.prepare("DELETE FROM thread_search_fts_rows WHERE identity_key = ?").run(identityKey);
+  }
+
+  private deleteThreadRows(identityKey: string, backend: AppServerBackendKind, threadId: string): void {
+    this.db.prepare(`
+      INSERT INTO thread_usage_titles (identity_key, title)
+      SELECT identity_key, title FROM thread_search_documents
+       WHERE identity_key = ?
+         AND (
+           EXISTS (
+             SELECT 1 FROM thread_usage_lines
+              WHERE backend = ? AND thread_id = ?
+              LIMIT 1
+           )
+           OR EXISTS (
+             SELECT 1 FROM automation_runs r
+             JOIN thread_usage_lines l
+               ON l.backend = r.backend
+              AND l.thread_id = json_extract(r.payload, '$.backendThreadId')
+            WHERE r.backend = ? AND r.thread_id = ?
+            LIMIT 1
+           )
+         )
+      ON CONFLICT(identity_key) DO UPDATE SET title = excluded.title
+    `).run(
+      identityKey,
+      backend,
+      threadId,
+      backend,
+      threadId,
+    );
+    this.deleteFtsRows(identityKey);
+    this.db
+      .prepare("DELETE FROM thread_search_documents WHERE identity_key = ?")
+      .run(identityKey);
+    this.db.prepare("DELETE FROM thread_search_fts_rows WHERE identity_key = ?").run(identityKey);
+  }
+
+  /** Explicit complete-inventory maintenance only; listings used by search are partial. */
   pruneMissingThreads(params: {
     backend?: AppServerBackendKind;
     includeArchived: boolean;
     retainedIdentityKeys: string[];
   }): void {
-    const retained = new Set(
-      params.retainedIdentityKeys.map((threadKey) =>
-        encodeLegacyThreadIdentityKey(threadKey) ?? threadKey
-      ),
-    );
-    const rows = this.db
-      .prepare(
-        `SELECT identity_key, backend, thread_id, archived_at
-           FROM thread_search_documents
-          WHERE 1 = 1` + (params.backend ? " AND backend = @backend" : ""),
-      )
-      .all({ backend: params.backend }) as Array<{
-      identity_key: string;
-      backend: AppServerBackendKind;
-      thread_id: string;
-      archived_at: number | null;
-    }>;
-
-    for (const row of rows) {
-      if (retained.has(row.identity_key)) {
-        continue;
+    const retained = new Set(params.retainedIdentityKeys.map((key) => encodeLegacyThreadIdentityKey(key) ?? key));
+    const scope = JSON.stringify([params.backend ?? null, params.includeArchived]);
+    const cursor = this.pruneCursors.get(scope) ?? "";
+    const next = this.db.transaction(() => {
+      // Page the identity index, then apply inventory/partition rules. A slice
+      // examines at most 64 documents even when none are eligible for deletion.
+      const rows = this.db.prepare(`
+        SELECT identity_key, backend, thread_id, archived_at FROM thread_search_documents
+        WHERE identity_key > ? ORDER BY identity_key LIMIT 64
+      `).all(cursor) as Array<{
+        identity_key: string; backend: AppServerBackendKind; thread_id: string; archived_at: number | null;
+      }>;
+      for (const row of rows) {
+        if (retained.has(row.identity_key)
+          || (params.backend && row.backend !== params.backend)
+          || (!params.includeArchived && row.archived_at !== null)) continue;
+        this.deleteThreadRows(row.identity_key, row.backend, row.thread_id);
       }
-      if (!params.includeArchived && row.archived_at !== null) {
-        continue;
-      }
-      this.deleteThread({
-        backend: row.backend,
-        threadId: row.thread_id,
-      });
-    }
+      return rows.length === 64 ? rows[rows.length - 1].identity_key : "";
+    })();
+    this.pruneCursors.set(scope, next);
   }
 
   search(request: ThreadSearchProjectionSearchRequest): ThreadSearchResult[] {
+    if (request.identityKeys?.length === 0) return [];
     const ftsQuery = buildThreadSearchFtsQuery(request.query);
     const backendClause = request.backend ? " AND d.backend = @backend" : "";
     const archivedClause = request.includeArchived ? "" : " AND d.archived_at IS NULL";
     const filterWhere = buildFilterWhereClause(request.filters);
+    const scopedDocuments = request.identityKeys
+      ? `FROM (SELECT DISTINCT value AS identity_key FROM json_each(@identityKeys)) keys
+         CROSS JOIN thread_search_documents d ON d.identity_key = keys.identity_key`
+      : "FROM thread_search_documents d";
     if (request.identityKeys) {
-      filterWhere.sql += " AND d.identity_key IN (SELECT value FROM json_each(@identityKeys))";
       filterWhere.params.identityKeys = JSON.stringify(request.identityKeys.map(encodeLegacyThreadIdentityKey));
     }
 
@@ -260,7 +295,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       return this.db
         .prepare(
           `SELECT d.*
-             FROM thread_search_documents d
+             ` + scopedDocuments + `
             WHERE 1 = 1` + backendClause + archivedClause + filterWhere.sql + `
             ORDER BY COALESCE(d.updated_at, d.created_at, 0) DESC
             LIMIT @limit`,
@@ -273,15 +308,19 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         .map((row) => this.rowToResult(row as ThreadSearchDocumentRow, 0, null));
     }
 
+    // MATCH/ranking must have one cursor for the whole result set. Driving
+    // FTS by inventory rowid restarts its corpus statistics for every identity.
+    // Membership stays in WHERE, before ranking and LIMIT.
     return this.db
       .prepare(
         `SELECT d.*,
                 bm25(thread_search_fts) AS rank_value,
                 snippet(thread_search_fts, 1, '', '', '...', 16) AS snippet_text
            FROM thread_search_fts
-           JOIN thread_search_documents d
-             ON d.identity_key = thread_search_fts.identity_key
-          WHERE thread_search_fts MATCH @query` + backendClause + archivedClause + filterWhere.sql + `
+           CROSS JOIN thread_search_documents d ON d.identity_key = thread_search_fts.identity_key
+          WHERE thread_search_fts MATCH @query`
+          + (request.identityKeys ? " AND d.identity_key IN (SELECT value FROM json_each(@identityKeys))" : "")
+          + backendClause + archivedClause + filterWhere.sql + `
           ORDER BY rank_value ASC, COALESCE(d.updated_at, d.created_at, 0) DESC
           LIMIT @limit`,
       )
