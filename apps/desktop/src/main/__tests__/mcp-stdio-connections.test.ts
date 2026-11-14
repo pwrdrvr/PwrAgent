@@ -757,6 +757,59 @@ describe.skipIf(process.platform === "win32")("desktop-owned MCP lifecycle throu
     await expect(other.rpc.request("skills/list", {})).rejects.toThrow("does not offer skills");
   });
 
+  // Oracle: the index a native thread reads in the bridge's instructions.
+  // The gateway never forwards a third-party server's instructions, so a
+  // thread that searched it once found no skill at all from a server that,
+  // like GitHub's, sends skills and no instructions.
+  it("names a skills server's skills to a gateway thread, each readable through its resource route", async () => {
+    const fixture = makeFixture();
+    let ids: string[] = [];
+    const { service } = createService(fixture, { readGatewaySelection: async () => ids });
+    const skilled = await service.createConnection({ displayName: "Skilled", stdio: launch(fixture, [
+      { name: "FIXTURE_MODE", secret: false, value: "skills" },
+    ]) });
+    const plain = await service.createConnection({ displayName: "Plain", stdio: launch(fixture) });
+    ids = [skilled.id, plain.id];
+    const thread = "gateway-skills-thread";
+    const native = await bridgeFor(service, skilled.id, thread);
+    await native.rpc.attach(5_000, () => undefined);
+    await bridgeFor(service, plain.id, thread);
+    const described = await native.rpc.request("describe") as { instructions?: string };
+    const indexed = [...(described.instructions ?? "").matchAll(/\((skill:\/\/\S+)\)$/gmu)].map((match) => match[1]);
+    expect(indexed.length).toBeGreaterThan(0);
+
+    const gateway = new McpGatewayToolService({
+      connections: service, selectedConnections: async () => ids, approve: vi.fn(async () => false),
+      serverNameInAgent: (connectionId, context) => {
+        const bridge = service.peekThreadBridge(connectionId, context.threadId);
+        return bridge ? buildCodexConnectionMcpServerName(bridge) : undefined;
+      },
+    });
+    const caller = { backend: "codex", threadId: thread, callId: "search", transport: "codex_dynamic_tool" } as const;
+    const found = await gateway.search({ query: "whoami", limit: 5 }, caller);
+    const server = found.servers!.find((entry) => entry.connectionId === skilled.id)!;
+    expect(server.resourceDiscovery).toBeDefined();
+    expect(server.skills?.map((skill) => skill.uri)).toEqual(indexed);
+    expect(server).toMatchObject({ skillsComplete: true, skills: [
+      { name: "triage", description: "Sort new issues.", uri: "skill://fixture.dev/triage/SKILL.md" },
+      { name: "release", description: "Draft release notes.", uri: "skill://fixture.dev/release/SKILL.md" },
+    ] });
+    // Structured data, never the server's free text.
+    expect(found.serverInstructions).toBeUndefined();
+    for (const skill of server.skills!) {
+      expect(await native.rpc.request("resources/read", { uri: skill.uri })).toMatchObject({ contents: [{ uri: skill.uri }] });
+    }
+    // A server without the extension names no skills.
+    expect(found.servers!.find((entry) => entry.connectionId === plain.id)?.skills).toBeUndefined();
+    // A query that names only a skill still finds its server.
+    const bySkill = await gateway.search({ query: "release notes" }, caller);
+    expect(bySkill.tools).toEqual([]);
+    expect(bySkill.servers).toEqual([expect.objectContaining({
+      connectionId: skilled.id,
+      skills: [expect.objectContaining({ name: "release" }), expect.objectContaining({ name: "triage" })],
+    })]);
+  });
+
   // The index is optional. A stalled skills/list used to spend the bridge's
   // whole startup deadline, so the bridge exited and the thread lost every tool.
   it("opens a skills server's session without the index when skills/list stalls", async () => {

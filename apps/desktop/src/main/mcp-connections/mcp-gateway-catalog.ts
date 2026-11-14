@@ -3,6 +3,7 @@ import type { Tool, Implementation, InitializeResult } from "@modelcontextprotoc
 import { lazyModule } from "../lazy-module";
 import { mcpTypes } from "./mcp-sdk";
 import type { McpConnectionToolApproval } from "@pwragent/shared";
+import type { McpSkillSummary } from "./mcp-skills-relay";
 
 export type McpGatewaySource = {
   connectionId: string;
@@ -23,6 +24,12 @@ export type McpGatewayTool = McpGatewaySource & {
    * so a large catalog does not repeat them. Search lifts them out per server.
    */
   serverInstructions?: string;
+  /**
+   * The workflow skills the server publishes, cleaned by `listedMcpSkills`,
+   * on the catalog's first entry only. Present only when a search asked for
+   * them and the server offers skills and resources.
+   */
+  serverSkills?: { skills: McpSkillSummary[]; complete: boolean };
 };
 
 export type McpGatewayInvocation = McpGatewaySource & {

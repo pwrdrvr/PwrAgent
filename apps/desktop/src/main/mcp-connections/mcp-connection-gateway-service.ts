@@ -29,7 +29,7 @@ import type {
 import { isMcpError, loadedMcpTypes, mcpClient, mcpClientStreamableHttp, mcpTypes } from "./mcp-sdk";
 import { McpInitializationTransport } from "./mcp-initialization-transport";
 import { McpDiscovery, discoveryFailure, isMcpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
-import { offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
+import { listedMcpSkills, offersMcpSkills, skillsAwareInstructions } from "./mcp-skills-relay";
 import { unrelayedMcpCapabilities } from "./mcp-bridge-capabilities";
 import { SandboxerConnection } from "./sandboxer-connection";
 import {
@@ -1957,6 +1957,8 @@ export class McpConnectionGatewayService {
     scopeKey: string;
     operation: "gateway/tools/list" | "gateway/tools/call";
     invocation?: McpGatewayInvocation;
+    /** A list also reads the server's skills, on its first entry's `serverSkills`. */
+    skills?: boolean;
     signal: AbortSignal;
     deadlineAt?: number;
     /** Shows the upstream server's forms for a call to the thread's operator. */
@@ -1979,7 +1981,9 @@ export class McpConnectionGatewayService {
       // A call's socket must also cover execution after that validation ends.
       const call = params.operation === "gateway/tools/call";
       return await rpc.request(
-        params.operation, params.invocation, params.signal, discovery.deadlineAt, discovery.id,
+        params.operation,
+        call ? params.invocation : params.skills ? { skills: true } : undefined,
+        params.signal, discovery.deadlineAt, discovery.id,
         call ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
         call ? params.elicit : undefined,
         call ? params.onProgress : undefined,
@@ -4246,6 +4250,8 @@ export class McpConnectionGatewayService {
     grant: BridgeGrant,
     client: Client,
     discovery: McpDiscovery,
+    /** A search asks for the server's skills; a call's revalidation does not. */
+    skills?: { signal: AbortSignal | undefined },
   ): Promise<McpGatewayTool[]> {
     const connection = this.requireAvailableConnection(grant.connectionId);
     const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
@@ -4284,6 +4290,14 @@ export class McpConnectionGatewayService {
       }
       cursors.add(cursor);
     }
+    // A gateway thread never sees a third-party server's instructions, so
+    // the skills index they would have carried reaches it as data instead.
+    // Read once per search, never stored. Only for a server whose resources
+    // the thread can read, since every skill file is one.
+    const capabilities = skills ? client.getServerCapabilities?.() : undefined;
+    const serverSkills = skills && offersMcpSkills(capabilities) && capabilities?.resources
+      ? listedMcpSkills(await this.listSkillsForIndex(grant, client, discovery, skills.signal))
+      : undefined;
     await this.requireGatewaySelection(grant);
     discovery.remaining();
     this.requireAvailableConnection(grant.connectionId);
@@ -4297,6 +4311,9 @@ export class McpConnectionGatewayService {
       tools[0] = { ...tools[0], serverIdentity: {
         serverInfo: client.getServerVersion?.(), metadata: this.initializations.get(client)?._meta,
       } };
+    }
+    if (serverSkills && serverSkills.skills.length > 0 && tools[0]) {
+      tools[0] = { ...tools[0], serverSkills };
     }
     // Sandboxer's say to stop each sandbox when done; dropping them left the
     // agent nothing telling it a forgotten machine keeps billing. Only the
@@ -4441,7 +4458,10 @@ export class McpConnectionGatewayService {
         const { ErrorCode, McpError } = await mcpTypes.load();
         switch (operation) {
           case "gateway/tools/list":
-            return await this.readGatewayCatalog(token, grant, client, discovery);
+            return await this.readGatewayCatalog(
+              token, grant, client, discovery,
+              values.skills === true ? { signal } : undefined,
+            );
           case "gateway/tools/call": {
             const catalog = await this.readGatewayCatalog(token, grant, client, discovery);
             const tool = catalog.find((entry) => entry.toolName === values.toolName);
