@@ -1,12 +1,13 @@
 import path from "node:path";
 import os from "node:os";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
+import { openClaudeOwnerCliReleases } from "../src/main/__tests__/helpers/claude-owner-cli-releases";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -29,6 +30,7 @@ test("keeps an accepted Claude start active through best-effort origin storage r
   app.electronApp.process().stdout?.on("data", collect);
   app.electronApp.process().stderr?.on("data", collect);
   const db = new Database(stateDbPathForHomeRoot(app.homeRoot));
+  const releases = await openClaudeOwnerCliReleases(cliDir);
   try {
     const threadId = await app.window.evaluate(async (cwd) => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
@@ -61,7 +63,7 @@ test("keeps an accepted Claude start active through best-effort origin storage r
         });
         return requests.trim() ? requests.trim().split("\n").length : 0;
       }).toBe(index);
-      await writeFile(path.join(cliDir, `release-${index}`), "");
+      releases.release(index);
       await expect(app.window.getByRole("region", { name: "Transcript" }).getByText(
         `Claude fixture completed ${index}.`, { exact: true })).toBeVisible();
       await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
@@ -70,8 +72,9 @@ test("keeps an accepted Claude start active through best-effort origin storage r
     expect(output.join("")).toContain("failed to persist injected message origin");
   } finally {
     db.close();
-    await Promise.all([1, 2].map((index) => writeFile(path.join(cliDir, `release-${index}`), "")));
+    for (const index of [1, 2]) releases.release(index);
     await app.close();
+    await releases.close();
     await rm(root, { recursive: true, force: true });
   }
 });

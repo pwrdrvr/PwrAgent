@@ -1,4 +1,5 @@
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
+import { openClaudeOwnerCliReleases, type ClaudeOwnerCliReleases } from "./helpers/claude-owner-cli-releases";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { execFileSync } from "node:child_process";
@@ -2545,7 +2546,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       discoverModels: async () => [], readCommands: async () => [], readMcpServers: async () => [],
       getSessionInfo: async () => undefined,
     }));
+    let releases: ClaudeOwnerCliReleases | undefined;
     try {
+      releases = await openClaudeOwnerCliReleases(desktop.workspace);
       const registry = desktopOwner.registry as DesktopBackendRegistry;
       const internal = registry as unknown as {
         persistStartingTurnOrigin: () => Promise<void>;
@@ -2584,7 +2587,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         } finally {
           // This fixture owns provider completion even when the acceptance
           // assertion fails on old production code. Drain it before close.
-          await writeFile(path.join(desktop.workspace, `release-${index + 1}`), "");
+          releases.release(index + 1);
           await vi.waitFor(() => expect(desktop.events.filter((event) => event.backend === "claude"
             && event.notification.method === "turn/completed")).toHaveLength(index + 1));
           await vi.waitFor(() => expect(grants.every((grant) => !grant.held)).toBe(true));
@@ -2594,7 +2597,10 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           && event.notification.params.turnId === turn.turnId)).toHaveLength(1);
         expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined();
       }
-    } finally { await desktop.close(); }
+    } finally {
+      try { await desktop.close(); }
+      finally { await releases?.close(); }
+    }
   });
 
   it("returns real ACP provider acceptance through refused SQLite review-context consumption", async () => {
