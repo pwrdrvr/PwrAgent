@@ -1138,7 +1138,8 @@ const REVIEW_TARGET_OPTIONS: Array<{
   },
 ];
 
-function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
+/** The model a launchpad without one starts on, as its Model pill shows it. */
+export function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
   return (
     models.find((model) => model.current) ??
@@ -11194,7 +11195,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // Each Codex model provider is its own entry, named the way the owner
   // named it. It still starts a `codex` thread; its models carry the
   // provider in their qualified ids.
-  const providerPickerEntries = buildProviderPickerEntries(providerOptions);
+  const providerPickerEntries = useMemo(
+    () => buildProviderPickerEntries(
+      props.backends?.filter((candidate) => candidate.available && candidate.capabilities.createThread) ?? [],
+    ),
+    [props.backends],
+  );
   // A new chat's Model menu offers the chosen provider's models only.
   const launchpadModelScope = props.launchpad && backend?.kind === "codex"
     ? { model: selectedModelOption?.id ?? props.launchpad.model }
@@ -14560,7 +14566,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               id="composer-provider"
               ariaLabel="Provider"
               disabled={launchpadSubmitting}
-              value={providerPickerValue(props.launchpad.backend, props.launchpad.model)}
+              value={providerPickerValue(
+                props.launchpad.backend,
+                launchpadModelScope?.model ?? props.launchpad.model,
+              )}
               options={providerPickerEntries.map((entry) => entry.codexModelProviderId
                 ? {
                     label: entry.label ?? entry.codexModelProviderId,
@@ -14615,11 +14624,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
                     ?? nextSummary?.modelDefaults?.reasoningEffortsByModel[ownerModel.id]
                   : undefined;
+                const ownerSupportsFast = ownerModel?.supportsFast
+                  ?? nextSummary?.launchpadOptions?.supportsFastMode
+                  ?? false;
                 handleLaunchpadPatch({
                   backend: nextBackend,
-                  // A Codex choice names its provider through the model id,
-                  // so moving between Codex entries must set the model.
-                  ...(filesystemFederationTarget?.scope === "remote" || nextBackend === "codex" ? {
+                  // A local Codex choice names its provider through the model
+                  // id, so moving between Codex entries sets the model. The
+                  // remembered effort, Fast mode and tier still restore as
+                  // they do for any other provider switch.
+                  ...(filesystemFederationTarget?.scope !== "remote" && nextBackend === "codex" ? {
+                    model: ownerModel?.id,
+                    ...(ownerSupportsFast ? {} : { fastMode: undefined }),
+                  } : {}),
+                  ...(filesystemFederationTarget?.scope === "remote" ? {
                     model: ownerModel?.id,
                     reasoningEffort: ownerModel?.supportsReasoning
                       ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)

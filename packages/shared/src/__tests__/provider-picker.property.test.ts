@@ -151,6 +151,17 @@ describe("provider picker examples", () => {
     })).toBe("MathOS lists more models than PwrAgent loads. Showing the first 2,000 models.");
   });
 
+  it("files a qualified id reported without providerId under its own provider", () => {
+    const entries = buildProviderPickerEntries([{
+      kind: "codex",
+      launchpadOptions: { models: [{ id: "gpt-6-sol" }, { id: "@mathos/gpt-oss-120b" }] },
+    }]);
+    expect(entries.map((entry) => [entry.value, entry.models.map((model) => model.id)])).toEqual([
+      ["codex", ["gpt-6-sol"]],
+      ["codex-provider:mathos", ["@mathos/gpt-oss-120b"]],
+    ]);
+  });
+
   it("maps a provider thread back to its provider's entry, and an OpenAI thread to Codex", () => {
     expect(providerPickerValue("codex", "@mathos/gpt-oss-120b")).toBe("codex-provider:mathos");
     expect(providerPickerValue("codex", "gpt-oss-120b")).toBe("codex");

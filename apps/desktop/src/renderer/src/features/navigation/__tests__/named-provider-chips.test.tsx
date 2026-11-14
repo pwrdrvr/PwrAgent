@@ -2,7 +2,12 @@ import "@testing-library/jest-dom/vitest";
 import type { ReactNode } from "react";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerBackendKind, NavigationThreadSummary, ProviderPickerBackend } from "@pwragent/shared";
+import {
+  codexModelProviderLabels,
+  type AppServerBackendKind,
+  type NavigationThreadSummary,
+  type ProviderPickerBackend,
+} from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
 import { ThreadHeader } from "../../thread-detail/ThreadHeader";
 import { ThreadProvidersContext } from "../provider-chip-visibility";
@@ -42,8 +47,8 @@ const peerCodex: ProviderPickerBackend = {
 };
 
 const catalogs: ThreadProviderCatalogs = {
-  window: [localCodex],
-  owners: new Map([["peer-1", [peerCodex]]]),
+  window: codexModelProviderLabels([localCodex]),
+  owners: new Map([["peer-1", codexModelProviderLabels([peerCodex])]]),
 };
 
 function thread(model: string | undefined, federation?: NavigationThreadSummary["federation"]): NavigationThreadSummary {

@@ -115,7 +115,7 @@ import {
 } from "./features/navigation/provider-chip-visibility";
 import {
   ThreadProviderCatalogsContext,
-  type ThreadProviderCatalogs,
+  useThreadProviderCatalogs,
 } from "./lib/thread-provider-label";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
 import type {
@@ -2749,11 +2749,11 @@ function DesktopAppShell(props: {
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.
   // Each row names a Codex model provider from its owner's catalog.
-  const threadProviderCatalogs = useMemo((): ThreadProviderCatalogs => ({
-    window: windowBackendSummaries.backends,
-    owners: remoteSidebarBackends,
-    ...(windowFederationTarget?.scope === "remote" ? { windowInstanceId: windowFederationTarget.instanceId } : {}),
-  }), [remoteSidebarBackends, windowBackendSummaries.backends, windowFederationTarget]);
+  const threadProviderCatalogs = useThreadProviderCatalogs(
+    windowBackendSummaries.backends,
+    remoteSidebarBackends,
+    windowFederationTarget?.scope === "remote" ? windowFederationTarget.instanceId : undefined,
+  );
   const threadProviders = useStableThreadProviders(
     navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts.backends,
   );

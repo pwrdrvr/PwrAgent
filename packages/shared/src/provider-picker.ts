@@ -1,4 +1,5 @@
 import { codexProviderIdOfModel } from "./codex-model-providers";
+import { modelMenuEntryProviderId } from "./model-menu";
 import type {
   BackendModelOption,
   CodexModelProviderCatalogState,
@@ -83,7 +84,7 @@ export function buildProviderPickerEntries(
     entries.push({
       value: "codex",
       backend: "codex",
-      models: models.filter((model) => !model.providerId),
+      models: models.filter((model) => !modelMenuEntryProviderId(model)),
     });
     const byProvider = new Map<string, ProviderPickerEntry>();
     const providerEntry = (id: string, label: string): ProviderPickerEntry => {
@@ -104,12 +105,33 @@ export function buildProviderPickerEntries(
       providerEntry(state.id, state.name || state.id).catalog = state;
     }
     for (const model of models) {
-      if (!model.providerId) continue;
-      providerEntry(model.providerId, model.providerLabel || model.providerId).models.push(model);
+      const providerId = modelMenuEntryProviderId(model);
+      if (!providerId) continue;
+      providerEntry(providerId, model.providerLabel || providerId).models.push(model);
     }
     entries.push(...byProvider.values());
   }
   return entries;
+}
+
+/**
+ * Each Codex model provider's display name in an owner's backend list, by
+ * provider id. The owner's catalog state names it first, then a model's
+ * `providerLabel`.
+ */
+export function codexModelProviderLabels(
+  backends: readonly ProviderPickerBackend[] | undefined,
+): Map<string, string> {
+  const labels = new Map<string, string>();
+  const codex = backends?.find((backend) => backend.kind === "codex");
+  for (const state of codex?.codexModelProviders ?? []) {
+    if (state.name) labels.set(state.id, state.name);
+  }
+  for (const model of codex?.launchpadOptions?.models ?? []) {
+    const providerId = modelMenuEntryProviderId(model);
+    if (providerId && model.providerLabel && !labels.has(providerId)) labels.set(providerId, model.providerLabel);
+  }
+  return labels;
 }
 
 /**
@@ -120,12 +142,7 @@ export function findCodexModelProviderLabel(
   backends: readonly ProviderPickerBackend[] | undefined,
   providerId: string,
 ): string | undefined {
-  const codex = backends?.find((backend) => backend.kind === "codex");
-  if (!codex) return undefined;
-  const state = codex.codexModelProviders?.find((candidate) => candidate.id === providerId);
-  if (state?.name) return state.name;
-  return codex.launchpadOptions?.models?.find((model) => model.providerId === providerId)?.providerLabel
-    || undefined;
+  return codexModelProviderLabels(backends).get(providerId);
 }
 
 function countModels(count: number): string {

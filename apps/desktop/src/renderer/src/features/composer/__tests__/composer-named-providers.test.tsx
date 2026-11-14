@@ -171,6 +171,31 @@ describe("named Codex model providers in the composer", () => {
       expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "gpt-6-sol");
     });
     expect(composerDropdownOptionLabels(openDropdown("Model"))).toEqual(["GPT-6-Sol", "gpt-oss-120b"]);
+    // A local switch sets the model only; the remembered effort, Fast mode and
+    // tier restore through the provider-settings patch as for any provider.
+    expect(Object.keys(patches.at(-1)!)).not.toEqual(expect.arrayContaining(["serviceTier"]));
+    expect(Object.keys(patches.at(-1)!)).not.toEqual(expect.arrayContaining(["reasoningEffort"]));
+  });
+
+  it("names the provider of the default model when the launchpad has chosen none", () => {
+    const withMathosDefault = {
+      ...codex,
+      launchpadOptions: {
+        models: models.map((model) => model.id === "@mathos/mathos-model-0" ? { ...model, current: true } : model),
+      },
+    } as BackendSummary;
+    render(
+      <Composer
+        backends={[withMathosDefault]}
+        desktopApi={{ listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [withMathosDefault] })) }}
+        directory={{ key: "directory:/repo", kind: "directory", label: "Repo", path: "/repo" }}
+        launchpad={{ ...initialLaunchpad, model: undefined }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "@mathos/mathos-model-0");
+    expect(screen.getByRole("button", { name: /^Provider(?::|$)/ })).toHaveTextContent("MathOS");
   });
 
   it("keeps Refuseless's identical model id apart from MathOS's", async () => {

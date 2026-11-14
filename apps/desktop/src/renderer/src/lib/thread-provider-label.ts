@@ -1,5 +1,6 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import {
+  codexModelProviderLabels,
   codexProviderIdOfModel,
   findCodexModelProviderLabel,
   type AppServerBackendKind,
@@ -10,12 +11,13 @@ import {
 import { formatBackendLabel } from "./backend-label";
 
 /**
- * The provider catalogs a window can name a thread's provider from: its own
- * owner's, and each connected peer's whose threads it lists.
+ * The Codex model provider names a window can label a thread with, by
+ * provider id: its own owner's, and each connected peer's whose threads it
+ * lists.
  */
 export type ThreadProviderCatalogs = {
-  window: readonly ProviderPickerBackend[];
-  owners: ReadonlyMap<string, readonly ProviderPickerBackend[]>;
+  window: ReadonlyMap<string, string>;
+  owners: ReadonlyMap<string, ReadonlyMap<string, string>>;
   windowInstanceId?: string;
 };
 
@@ -42,10 +44,39 @@ export function formatThreadProviderLabel(
   const providerId = thread.source === "codex" ? codexProviderIdOfModel(thread.model) : undefined;
   if (!providerId) return formatBackendLabel(thread.source);
   const target = thread.federation?.ref.target;
-  const ownerCatalog = target?.scope === "remote" && target.instanceId !== catalogs?.windowInstanceId
+  const ownerLabels = target?.scope === "remote" && target.instanceId !== catalogs?.windowInstanceId
     ? catalogs?.owners.get(target.instanceId)
     : catalogs?.window;
-  return findCodexModelProviderLabel(ownerCatalog, providerId) ?? providerId;
+  return ownerLabels?.get(providerId) ?? providerId;
+}
+
+/**
+ * The window's provider names, kept as one value while the names stay the
+ * same. Backend summaries change with every rate-limit refresh, and every
+ * thread row reads this context.
+ */
+export function useThreadProviderCatalogs(
+  windowBackends: readonly ProviderPickerBackend[],
+  ownerBackends: ReadonlyMap<string, readonly ProviderPickerBackend[]>,
+  windowInstanceId: string | undefined,
+): ThreadProviderCatalogs {
+  const key = JSON.stringify([
+    windowInstanceId ?? null,
+    [...codexModelProviderLabels(windowBackends)],
+    [...ownerBackends].map(([instanceId, backends]) => [instanceId, [...codexModelProviderLabels(backends)]]),
+  ]);
+  return useMemo(() => {
+    const [instanceId, windowLabels, owners] = JSON.parse(key) as [
+      string | null,
+      Array<[string, string]>,
+      Array<[string, Array<[string, string]>]>,
+    ];
+    return {
+      window: new Map(windowLabels),
+      owners: new Map(owners.map(([owner, labels]) => [owner, new Map(labels)])),
+      ...(instanceId ? { windowInstanceId: instanceId } : {}),
+    };
+  }, [key]);
 }
 
 export function useThreadProviderLabel(thread: ThreadProviderSubject): string {
