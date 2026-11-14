@@ -6,6 +6,7 @@ import type { BackendClient, BackendRegistryOverlayStoreLike } from "./backend-r
 export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   "getThreadOverlayState" | "getThreadOverlayStates" | "getThreadListingOverlayStates"
   | "getThreadMetadata" | "updateThreadMetadata" | "setThreadMcpConnectionIds" | "setThreadModelSettings"
+  | "setThreadForkOrigin"
 >;
 
 // The overlay store requires upsertThreadUsageLine and readThreadPricing, but
@@ -14,6 +15,9 @@ export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
 export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,
   "upsertThreadUsageLines" | "completeThreadUsageTurn"
   | "completeThreadUsageTurns" | "readThreadUsageActivities" | "readThreadUsageActivityForTurn"
+  | "listThreadCompactions" | "recordThreadCompaction" | "readLatestThreadUsageModel"
+  | "readThreadTokenMiserGateTotals" | "readThreadUsageSettings" | "readThreadUsageTurnTimeRepairCandidates"
+  | "readTokenMiserGatePricingLines" | "repairThreadUsageTurnTimes" | "repairUnfinishedThreadUsageTurns"
 > & Partial<Pick<BackendRegistryOverlayStoreLike, "upsertThreadUsageLine" | "readThreadPricing">>;
 
 export type RegistrySubAgentStore = Pick<BackendRegistryOverlayStoreLike,
@@ -34,6 +38,8 @@ export type RegistryReviewStore = Pick<BackendRegistryOverlayStoreLike, "upsertM
 export type RegistryToolAccountingStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadToolAccounting" | "persistThreadToolInvocationBoundary"
   | "markThreadToolInvocationsNoisy" | "setThreadSpendAlertPending"
+  | "claimMonitorJobSuggestion" | "markThreadToolInvocationNoisy" | "readRecentThreadToolInvocations"
+  | "upsertThreadToolInvocation" | "upsertThreadToolInvocationAlert"
 >;
 
 /**

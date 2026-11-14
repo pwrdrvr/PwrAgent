@@ -61,12 +61,11 @@ describe("async critical path profile", () => {
     const internals = registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
       repairCodexThreadDirectoryRelationship(): Promise<void>;
-      emitThreadPricingUpdated(): Promise<void>;
     };
     vi.spyOn(internals, "repairCodexThreadDirectoryRelationship").mockImplementation(async () => { await delay(20); });
     vi.spyOn(registryModules(registry).subAgentMonitorService, "restoreCodexNativeSubAgentsFromReplay")
       .mockImplementation(async () => { await delay(20); });
-    vi.spyOn(internals, "emitThreadPricingUpdated").mockImplementation(async () => { await delay(40); });
+    vi.spyOn(registryModules(registry).threadUsageLedger, "emitThreadPricingUpdated").mockImplementation(async () => { await delay(40); });
     const connections = Array.from({ length: 6 }, (_, index) => `fixture-${index}`);
     try {
       for (const threadId of ["background-a", "background-b"]) {

@@ -72,7 +72,6 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       cancelRunningSession(backend: string, sessionId: string): Promise<boolean>;
     };
     emit(event: AgentEvent): Promise<void>;
-    flushLiveThreadUsageLines(): Promise<void>;
     refreshCodexQuotas(): Promise<void>;
     startTurnNow(entry: unknown): Promise<unknown>;
     threadTurnQueue: {
@@ -106,7 +105,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
   const runTurn = async (registry: DesktopBackendRegistry, backend: AppServerBackendKind, turnId: string) => {
     await internals(registry).emit(started(backend, turnId));
     await internals(registry).emit(usage(backend, turnId));
-    await internals(registry).flushLiveThreadUsageLines();
+    await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
   };
   const completedAt = (turnId: string) => (stateDb.raw.prepare(
     "SELECT completed_at FROM thread_usage_turns WHERE turn_id = ?",
@@ -132,7 +131,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
 
   it("hydrates after live durability while an unrelated pricing publication is blocked", async () => {
     const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
-    const privateRegistry = registry as unknown as {
+    const privateRegistry = registryModules(registry).threadUsageLedger as unknown as {
       publishThreadPricingUpdated(params: { threadId: string }): Promise<void>;
       persistReplayUsageLines(replay: unknown): Promise<void>;
       waitForLiveThreadUsageEmitWork(params: { backend: "codex"; threadId: string }): Promise<void>;
@@ -146,7 +145,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     const hydration = vi.spyOn(privateRegistry, "persistReplayUsageLines");
     await internals(registry).emit(usage("codex", "background-turn"));
     await privateRegistry.waitForLiveThreadUsageEmitWork({ backend: "codex", threadId: "thread-1" });
-    const flushing = internals(registry).flushLiveThreadUsageLines();
+    const flushing = registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
     try {
       await vi.waitFor(() => expect(pricing).toHaveBeenCalled());
       let hydrated = false;
@@ -163,7 +162,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
 
   it("does not hydrate across a failed live durability boundary", async () => {
     const registry = createRegistry([], { codexClient: { readThread: async () => ({ entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } }) } });
-    const privateRegistry = registry as unknown as { persistReplayUsageLines(replay: unknown): Promise<void> };
+    const privateRegistry = registryModules(registry).threadUsageLedger;
     const hydration = vi.spyOn(privateRegistry, "persistReplayUsageLines");
     await internals(registry).emit(usage("codex", "turn-live"));
     vi.spyOn(store, "upsertThreadUsageLines").mockRejectedValueOnce(new Error("durability failed"));
@@ -224,7 +223,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     await internals(registry).emit(started("codex", "turn-a"));
     account = { ...account, accountId: "account-b" };
     await internals(registry).emit(usage("codex", "turn-a"));
-    await internals(registry).flushLiveThreadUsageLines();
+    await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
     await runTurn(registry, "codex", "turn-b");
     const rows = (await store.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 })).rows;
     expect(rows.find((row) => row.line.turnId === "turn-a")?.accountKey)
@@ -239,13 +238,13 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     await internals(registry).emit(started("acp:grok", "turn-a"));
     group = "other-account";
     await internals(registry).emit(usage("acp:grok", "turn-a"));
-    await internals(registry).flushLiveThreadUsageLines();
+    await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
     await runTurn(registry, "acp:grok", "turn-b");
     const { lines } = await store.readThreadPricing({ backend: "acp:grok", threadId: "thread-1" });
     expect(lines.find((line) => line.turnId === "turn-a")?.accountKey).toBe(usageAccountKey(undefined, "team-account"));
     expect(lines.find((line) => line.turnId === "turn-b")?.accountKey).toBe(usageAccountKey(undefined, "other-account"));
     await internals(registry).emit(usage("acp:grok", "historical-without-start"));
-    await internals(registry).flushLiveThreadUsageLines();
+    await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
     expect((await store.readThreadPricing({ backend: "acp:grok", threadId: "thread-1" })).lines
       .find((line) => line.turnId === "historical-without-start")?.accountKey).toBeUndefined();
   });
@@ -790,7 +789,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
         },
       });
       await internals(registry).emit(usage("claude", claudeTurnId));
-      await internals(registry).flushLiveThreadUsageLines();
+      await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
 
       expect(startedAt(claudeTurnId)).toBe(reported);
       expect(await lineStartedAt("claude")).toBe(reported);
@@ -803,7 +802,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       const registry = createRegistry();
       await internals(registry).emit(started("claude", claudeTurnId));
       await internals(registry).emit(usage("claude", claudeTurnId));
-      await internals(registry).flushLiveThreadUsageLines();
+      await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
 
       const recorded = startedAt(claudeTurnId);
       expect(recorded).toBeGreaterThanOrEqual(before);

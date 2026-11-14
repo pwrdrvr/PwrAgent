@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type {
   AgentEvent,
   ThreadUsageLineRecord,
@@ -36,13 +36,20 @@ const FINAL_TURN_GATES = 5;
 
 type Internals = {
   emit(event: AgentEvent): Promise<void>;
-  flushLiveThreadUsageLines(): Promise<void>;
+  tokenMiserStore?: TestTokenMiserStore;
+};
+
+/** The usage ledger's private state and step this test drives. */
+type LedgerInternals = {
   pendingTokenMiserInterceptions: Map<string, TokenMiserObjectMetadata>;
   persistTokenMiserLedgerEntries(
     entries: readonly TokenMiserObjectMetadata[],
   ): Promise<void>;
-  tokenMiserStore?: TestTokenMiserStore;
 };
+
+function ledgerInternals(registry: DesktopBackendRegistry): LedgerInternals {
+  return registryModules(registry).threadUsageLedger as unknown as LedgerInternals;
+}
 
 type TurnEndCounts = {
   /** Whole-ledger SELECTs for the finished thread during the turn end. */
@@ -133,7 +140,7 @@ describe("turn end read budget", () => {
       lines: Array.from({ length: params.historicalTurns }, (_, index) =>
         parentLine(`turn-${index}`, index)),
     });
-    await internals.persistTokenMiserLedgerEntries(
+    await ledgerInternals(registry).persistTokenMiserLedgerEntries(
       Array.from({ length: params.historicalTurns }, (_, index) =>
         gateEntry(index, `turn-${index}`)),
     );
@@ -173,7 +180,7 @@ describe("turn end read budget", () => {
     });
     for (let index = 0; index < FINAL_TURN_GATES; index += 1) {
       const entry = gateEntry(100_000 + index, FINAL_TURN_ID);
-      internals.pendingTokenMiserInterceptions.set(entry.objectId, entry);
+      registryModules(registry).threadUsageLedger.rememberPendingTokenMiserInterception(entry);
     }
     return { internals, ledgerSize, registry, store };
   }
@@ -222,7 +229,7 @@ describe("turn end read budget", () => {
       }
       return overlay;
     });
-    const accountingInternals = registry as unknown as {
+    const accountingInternals = registryModules(registry).threadUsageLedger as unknown as {
       buildTokenMiserThreadSavings(...args: unknown[]): unknown;
       withTokenMiserAccounting(...args: unknown[]): unknown;
     };
@@ -280,7 +287,7 @@ describe("turn end read budget", () => {
       backend: "codex",
       threadId: THREAD_ID,
     })).count).toBe(historicalTurns + FINAL_TURN_GATES);
-    expect(internals.pendingTokenMiserInterceptions.size).toBe(0);
+    expect(ledgerInternals(registry).pendingTokenMiserInterceptions.size).toBe(0);
 
     return {
       followUpLedgerReads,
@@ -333,7 +340,7 @@ describe("turn end read budget", () => {
       cardReads: vi.spyOn(store, "getThreadSubAgents"),
       overlays: vi.spyOn(store, "getThreadOverlayState"),
       tokenMiser: vi.spyOn(
-        registry as unknown as { withTokenMiserAccounting(...args: unknown[]): unknown },
+        registryModules(registry).threadUsageLedger,
         "withTokenMiserAccounting",
       ),
       toolAccounting: vi.spyOn(store, "readThreadToolAccounting"),
@@ -396,7 +403,7 @@ describe("turn end read budget", () => {
       }
     });
     vi.spyOn(
-      registry as unknown as { flushPendingTokenMiserLedger(...args: unknown[]): Promise<boolean> },
+      registryModules(registry).threadUsageLedger,
       "flushPendingTokenMiserLedger",
     ).mockRejectedValue(new Error("gate persist failed"));
 

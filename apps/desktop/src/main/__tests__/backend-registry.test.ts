@@ -8597,7 +8597,7 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
     });
-    const internals = registry as unknown as {
+    const internals = registryModules(registry).threadUsageLedger as unknown as {
       handleThreadCompactionReplayBoundary: (
         event: {
           backend: "codex";
@@ -33207,9 +33207,7 @@ command = "pnpm dev"
           .completedTaskMonitorsByThread.set("codex:thread-1", {});
       }
       if (!scenario.active) vi.spyOn(registry, "getActiveTurnForThread").mockReturnValue(undefined);
-      const record = (registry as unknown as {
-        recordToolInvocationAccounting(event: AgentEvent): Promise<void>;
-      }).recordToolInvocationAccounting.bind(registry);
+      const record = registryModules(registry).threadUsageLedger.recordToolInvocationAccounting.bind(registryModules(registry).threadUsageLedger);
       const now = vi.spyOn(Date, "now");
       for (let index = 0; index < 5; index++) {
         now.mockReturnValue(1_000_000 + index * 120_000);
@@ -33389,9 +33387,7 @@ command = "pnpm dev"
         input: [{ type: "text", text: "Run the benchmark" }],
       });
       const steer = vi.spyOn(registry, "steerTurn");
-      const record = (registry as unknown as {
-        recordToolInvocationAccounting(event: AgentEvent): Promise<void>;
-      }).recordToolInvocationAccounting.bind(registry);
+      const record = registryModules(registry).threadUsageLedger.recordToolInvocationAccounting.bind(registryModules(registry).threadUsageLedger);
       const now = vi.spyOn(Date, "now");
       for (let index = 0; index < 5; index++) {
         now.mockReturnValue(1_000_000 + index * 20_000);
@@ -33460,9 +33456,7 @@ command = "pnpm dev"
         monitorJobSuggestionsEnabled: false,
       }),
     });
-    const record = (registry as unknown as {
-      recordToolInvocationAccounting(event: AgentEvent): Promise<void>;
-    }).recordToolInvocationAccounting.bind(registry);
+    const record = registryModules(registry).threadUsageLedger.recordToolInvocationAccounting.bind(registryModules(registry).threadUsageLedger);
     const now = vi.spyOn(Date, "now");
 
     try {
@@ -36687,13 +36681,7 @@ command = "pnpm dev"
     registry.onEvent((event) => {
       events.push(event);
     });
-    const emitPricing = (registry as unknown as {
-      emitThreadPricingUpdated(params: {
-        activeTurnIds?: readonly string[];
-        backend: AppServerBackendKind;
-        threadId: string;
-      }): Promise<void>;
-    }).emitThreadPricingUpdated.bind(registry);
+    const emitPricing = registryModules(registry).threadUsageLedger.emitThreadPricingUpdated.bind(registryModules(registry).threadUsageLedger);
 
     await emitPricing({
       activeTurnIds: ["turn-2"],
@@ -36740,12 +36728,7 @@ command = "pnpm dev"
     restartedRegistry.onEvent((event) => {
       restartedEvents.push(event);
     });
-    const emitRestartedPricing = (restartedRegistry as unknown as {
-      emitThreadPricingUpdated(params: {
-        backend: AppServerBackendKind;
-        threadId: string;
-      }): Promise<void>;
-    }).emitThreadPricingUpdated.bind(restartedRegistry);
+    const emitRestartedPricing = registryModules(restartedRegistry).threadUsageLedger.emitThreadPricingUpdated.bind(registryModules(restartedRegistry).threadUsageLedger);
     await emitRestartedPricing({
       backend: "codex",
       threadId: "thread-1",
@@ -36791,12 +36774,7 @@ command = "pnpm dev"
     acknowledgedRegistry.onEvent((event) => {
       acknowledgedEvents.push(event);
     });
-    await (acknowledgedRegistry as unknown as {
-      emitThreadPricingUpdated(params: {
-        backend: AppServerBackendKind;
-        threadId: string;
-      }): Promise<void>;
-    }).emitThreadPricingUpdated({
+    await registryModules(acknowledgedRegistry).threadUsageLedger.emitThreadPricingUpdated({
       backend: "codex",
       threadId: "thread-1",
     });
@@ -36858,7 +36836,7 @@ command = "pnpm dev"
     registry.onEvent((event) => {
       events.push(event);
     });
-    const usageBatch = registry as unknown as {
+    const usageBatch = registryModules(registry).threadUsageLedger as unknown as {
       bufferLiveThreadUsageLine(params: {
         backend: AppServerBackendKind;
         line: ThreadUsageLineRecord;
@@ -36990,13 +36968,7 @@ command = "pnpm dev"
       parentThreadId: "parent-thread",
     });
 
-    await (registry as unknown as {
-      emitThreadToolAccountingUpdated: (params: {
-        backend: "codex";
-        threadId: string;
-        triggeredAlerts: ThreadToolInvocationAlert[];
-      }) => Promise<void>;
-    }).emitThreadToolAccountingUpdated({
+    await registryModules(registry).threadUsageLedger.emitThreadToolAccountingUpdated({
       backend: "codex",
       threadId: "managed-child",
       triggeredAlerts: [{
@@ -45422,14 +45394,13 @@ script = "printf setup"
     const internals = registry as unknown as {
       acceptedDynamicToolCalls: Map<string, unknown>;
       acceptedHandoffTaskRequests: Map<string, unknown>;
-      flushLiveThreadUsageLines: () => Promise<void>;
     };
     expect(internals.acceptedDynamicToolCalls.size).toBeGreaterThan(0);
     expect(internals.acceptedHandoffTaskRequests.size).toBe(1);
     if (boundary === "terminal") {
       const cleanupStarted = createDeferred<void>();
       const cleanupRelease = createDeferred<void>();
-      const flush = vi.spyOn(internals, "flushLiveThreadUsageLines")
+      const flush = vi.spyOn(registryModules(registry).threadUsageLedger, "flushLiveThreadUsageLines")
         .mockImplementationOnce(async () => {
           cleanupStarted.resolve();
           await cleanupRelease.promise;
@@ -60114,11 +60085,7 @@ script = "printf setup"
 
     it("points one CI wait per turn at PwrAgent's PR watch", async () => {
       const { close, registry } = await createClaudeMonitorRegistry({});
-      const internal = registry as unknown as {
-        suggestClaudeMonitorJob(params: {
-          threadId: string; turnId: string; toolName: string; command: string; toolUseId?: string;
-        }): Promise<string | undefined>;
-      };
+      const internal = registryModules(registry).threadUsageLedger;
       try {
         const ask = (command: string, toolUseId: string, turnId = "parent-turn") =>
           internal.suggestClaudeMonitorJob({ threadId: parentThreadId, turnId, toolName: "Bash", command, toolUseId });

@@ -1,4 +1,4 @@
-import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { estimateTokenUsageCost } from "@pwragent/shared";
 import type {
   ThreadSubAgentSummary,
@@ -37,8 +37,8 @@ type Workload = {
   persistedLines: ThreadUsageLineRecord[];
 };
 
+/** The usage ledger's private state and steps this test drives. */
 type Internals = {
-  tokenMiserStore?: TestTokenMiserStore;
   liveTokenMiserUsageLines: Map<string, Map<string, ThreadUsageLineRecord>>;
   liveTokenMiserSubAgents: Map<string, Map<string, ThreadSubAgentSummary>>;
   withTokenMiserAccounting(params: {
@@ -60,6 +60,7 @@ describe("Token Miser savings scaling", () => {
   let store: SqliteOverlayStore;
   let registry: DesktopBackendRegistry;
   let internals: Internals;
+  let tokenMiserStore: TestTokenMiserStore;
 
   beforeEach(() => {
     directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-token-miser-scale-"));
@@ -75,10 +76,11 @@ describe("Token Miser savings scaling", () => {
       } as never,
       overlayStore: store,
     });
-    internals = registry as unknown as Internals;
-    internals.tokenMiserStore = new TestTokenMiserStore(
+    internals = registryModules(registry).threadUsageLedger as unknown as Internals;
+    tokenMiserStore = new TestTokenMiserStore(
       path.join(directory, "token-miser"),
     );
+    (registry as unknown as { tokenMiserStore?: TestTokenMiserStore }).tokenMiserStore = tokenMiserStore;
   });
 
   afterEach(async () => {
@@ -97,7 +99,7 @@ describe("Token Miser savings scaling", () => {
   ) {
     const lines = counter.wrap("pricing", work.persistedLines);
     vi.spyOn(store, "readThreadPricing").mockResolvedValue({ lines, summaries: [] });
-    vi.spyOn(internals.tokenMiserStore!, "listMetadata").mockResolvedValue(work.entries);
+    vi.spyOn(tokenMiserStore, "listMetadata").mockResolvedValue(work.entries);
     internals.liveTokenMiserUsageLines.set(
       THREAD_ID,
       new Map(counter.wrap("pricing", work.liveLines).map((line) => [line.usageLineId, line])),

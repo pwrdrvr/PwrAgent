@@ -102,6 +102,7 @@ import { ThreadInspectionTools } from "./thread-inspection-tools";
 import { ThreadMcpConnections } from "./thread-mcp-connections";
 import { ManagedReviewService } from "./managed-review-service";
 import { SubAgentMonitorService } from "./subagent-monitor-service";
+import { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { DesktopBackendRegistryOptions, RegistryDependencies } from "./backend-registry-construction";
 import { bundledSkillRoot, materializeBundledSkills } from "../agent-tools/bundled-skill-root";
 import { isAgentToolAdvertisedLocally, localAgentToolRefusal } from "../member-containment";
@@ -121,6 +122,7 @@ export interface RegistryModules {
   readonly threadMcpConnections: ThreadMcpConnections;
   readonly managedReviewService: ManagedReviewService;
   readonly subAgentMonitorService: SubAgentMonitorService;
+  readonly threadUsageLedger: ThreadUsageLedger;
 }
 
 const registryModulesByRegistry = new WeakMap<DesktopBackendRegistry, RegistryModules>();
@@ -702,7 +704,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       {
         onMetadataUpdated: async (metadata, reason) => {
           if (reason === "retrieval") ports.tokenMiserDiagnostics?.recordRetrieval(metadata);
-          ports.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
+          ports.rememberPendingTokenMiserInterception(metadata);
           ports.rememberActiveTokenMiserReplayEntry(metadata);
           // A replay-counter write changes nothing the gate card or its usage
           // line renders, and it fires once per active gate per model
@@ -1313,6 +1315,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get updateThreadMetadata() { return overlayStore.updateThreadMetadata?.bind(overlayStore); },
         setThreadMcpConnectionIds: (...args) => overlayStore.setThreadMcpConnectionIds(...args),
         setThreadModelSettings: (...args) => overlayStore.setThreadModelSettings(...args),
+        get setThreadForkOrigin() { return overlayStore.setThreadForkOrigin?.bind(overlayStore); },
       },
       usage: {
         // The store requires upsertThreadUsageLine and readThreadPricing, but
@@ -1325,6 +1328,15 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get completeThreadUsageTurns() { return overlayStore.completeThreadUsageTurns?.bind(overlayStore); },
         get readThreadUsageActivities() { return overlayStore.readThreadUsageActivities?.bind(overlayStore); },
         get readThreadUsageActivityForTurn() { return overlayStore.readThreadUsageActivityForTurn?.bind(overlayStore); },
+        get listThreadCompactions() { return overlayStore.listThreadCompactions?.bind(overlayStore); },
+        get recordThreadCompaction() { return overlayStore.recordThreadCompaction?.bind(overlayStore); },
+        get readLatestThreadUsageModel() { return overlayStore.readLatestThreadUsageModel?.bind(overlayStore); },
+        readThreadTokenMiserGateTotals: (...args) => overlayStore.readThreadTokenMiserGateTotals(...args),
+        get readThreadUsageSettings() { return overlayStore.readThreadUsageSettings?.bind(overlayStore); },
+        get readThreadUsageTurnTimeRepairCandidates() { return overlayStore.readThreadUsageTurnTimeRepairCandidates?.bind(overlayStore); },
+        get readTokenMiserGatePricingLines() { return overlayStore.readTokenMiserGatePricingLines?.bind(overlayStore); },
+        get repairThreadUsageTurnTimes() { return overlayStore.repairThreadUsageTurnTimes?.bind(overlayStore); },
+        get repairUnfinishedThreadUsageTurns() { return overlayStore.repairUnfinishedThreadUsageTurns?.bind(overlayStore); },
       },
       subAgents: {
         get upsertThreadSubAgents() { return overlayStore.upsertThreadSubAgents?.bind(overlayStore); },
@@ -1342,10 +1354,17 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get acknowledgeThreadEnvironmentFailure() { return overlayStore.acknowledgeThreadEnvironmentFailure?.bind(overlayStore); },
       },
       toolAccounting: {
-        readThreadToolAccounting: (...args) => overlayStore.readThreadToolAccounting(...args),
+        // The ledger tests for readThreadToolAccounting before calling it, as
+        // the registry did; a getter keeps a missing method missing.
+        get readThreadToolAccounting() { return overlayStore.readThreadToolAccounting?.bind(overlayStore); },
         get persistThreadToolInvocationBoundary() { return overlayStore.persistThreadToolInvocationBoundary?.bind(overlayStore); },
         get markThreadToolInvocationsNoisy() { return overlayStore.markThreadToolInvocationsNoisy?.bind(overlayStore); },
         get setThreadSpendAlertPending() { return overlayStore.setThreadSpendAlertPending?.bind(overlayStore); },
+        claimMonitorJobSuggestion: (...args) => overlayStore.claimMonitorJobSuggestion(...args),
+        get markThreadToolInvocationNoisy() { return overlayStore.markThreadToolInvocationNoisy?.bind(overlayStore); },
+        get readRecentThreadToolInvocations() { return overlayStore.readRecentThreadToolInvocations?.bind(overlayStore); },
+        get upsertThreadToolInvocation() { return overlayStore.upsertThreadToolInvocation?.bind(overlayStore); },
+        get upsertThreadToolInvocationAlert() { return overlayStore.upsertThreadToolInvocationAlert?.bind(overlayStore); },
       },
       pullRequests: {
         addThreadPullRequestReference: (...args) => overlayStore.addThreadPullRequestReference(...args),
@@ -1380,6 +1399,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     managedReviewService,
     threadMcpConnections,
   }, () => ports);
+  const threadUsageLedger = new ThreadUsageLedger(context, {
+    managedReviewService,
+    subAgentMonitorService,
+  }, () => ports);
 
   const registry = new DesktopBackendRegistry({
     context,
@@ -1388,6 +1411,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadMcpConnections,
     managedReviewService,
     subAgentMonitorService,
+    threadUsageLedger,
     handlers,
     ownerAdmission,
     managedMaintenanceRoots,
@@ -1491,6 +1515,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     threadMcpConnections,
     managedReviewService,
     subAgentMonitorService,
+    threadUsageLedger,
   });
   return registry;
 }

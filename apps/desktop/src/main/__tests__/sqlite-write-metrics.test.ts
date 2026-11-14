@@ -289,7 +289,6 @@ describe("sqlite write metrics", () => {
     });
     const internal = registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
-      flushLiveThreadUsageLines(): Promise<void>;
     };
     const target = { backend: "claude" as const, threadId: "claude-usage-fixture" };
     try {
@@ -307,7 +306,7 @@ describe("sqlite write metrics", () => {
             tokenUsage: { last: { inputTokens: 350, cachedInputTokens: 200, cacheWriteInputTokens: 50, outputTokens: 20, totalTokens: 370 }, claudeCostUSD: 0.123456 },
           },
         } });
-        await internal.flushLiveThreadUsageLines();
+        await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
       });
       const pricing = await store.readThreadPricing(target);
       expect(pricing.lines).toHaveLength(1);
@@ -330,7 +329,6 @@ describe("sqlite write metrics", () => {
     });
     const internal = registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
-      flushLiveThreadUsageLines(): Promise<void>;
     };
     const target = { backend: "claude" as const, threadId: "claude-live-usage-fixture" };
     const report = (step: number) => internal.emit({ backend: "claude", notification: {
@@ -345,7 +343,7 @@ describe("sqlite write metrics", () => {
         // Three reports 30 seconds apart while the turn runs, then the result's.
         for (let step = 1; step <= 4; step += 1) {
           await report(step);
-          await internal.flushLiveThreadUsageLines();
+          await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
         }
       });
       const pricing = await store.readThreadPricing(target);
@@ -1891,10 +1889,6 @@ describe("sqlite write metrics", () => {
         threadId: string,
         persisted: readonly ThreadSubAgentSummary[] | undefined,
       ): ThreadSubAgentSummary[];
-      readThreadPricingWithLiveTokenMiser(params: {
-        backend: "codex";
-        threadId: string;
-      }): Promise<{ lines: ThreadUsageLineRecord[] }>;
     };
     registryModules(registry).subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "thread-parent");
     const usage = (total: number): AgentEvent => ({
@@ -1927,7 +1921,7 @@ describe("sqlite write metrics", () => {
         expect((await storedCard())?.monitorUsage).toBeUndefined();
         expect((await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" }))
           .lines.filter((line) => line.threadId === "worker-review")).toEqual([]);
-        expect((await internal.readThreadPricingWithLiveTokenMiser({
+        expect((await registryModules(registry).threadUsageLedger.readThreadPricingWithLiveTokenMiser({
           backend: "codex", threadId: "thread-parent",
         })).lines.find((line) => line.threadId === "worker-review")).toMatchObject({
           model: "gpt-5.5", priceStatus: "priced", inputTokens: 20_000,
@@ -2000,10 +1994,6 @@ describe("sqlite write metrics", () => {
       });
       const internal = registry as unknown as {
         emit(event: AgentEvent): Promise<void>;
-        readThreadPricingWithLiveTokenMiser(params: {
-          backend: "codex";
-          threadId: string;
-        }): Promise<{ lines: ThreadUsageLineRecord[] }>;
       };
       registryModules(registry).subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "thread-parent");
       return { registry, internal };
@@ -2033,7 +2023,7 @@ describe("sqlite write metrics", () => {
       try {
         await internal.emit(workerUsage(1_000));
         expect(await storedWorkerLine()).toBeUndefined();
-        expect((await internal.readThreadPricingWithLiveTokenMiser({
+        expect((await registryModules(registry).threadUsageLedger.readThreadPricingWithLiveTokenMiser({
           backend: "codex", threadId: "worker-review",
         })).lines.find((line) => line.scope === "monitor")).toMatchObject({
           threadId: "worker-review", inputTokens: 1_000,
@@ -3499,9 +3489,8 @@ describe("sqlite write metrics", () => {
     const emit = (registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
     }).emit.bind(registry);
-    const flush = (registry as unknown as {
-      flushLiveThreadUsageLines(): Promise<void>;
-    }).flushLiveThreadUsageLines.bind(registry);
+    const ledger = registryModules(registry).threadUsageLedger;
+    const flush = ledger.flushLiveThreadUsageLines.bind(ledger);
 
     try {
       await emit(buildLiveUsageEvent({

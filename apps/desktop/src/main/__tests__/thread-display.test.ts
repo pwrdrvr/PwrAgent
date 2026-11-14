@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { emptyTokenMiserGateAccountingTotals, totalTokenMiserGateAccountings, type AppServerReadThreadRequest, type AppServerReadThreadResponse, type ThreadUsageLineRecord, type ThreadSubAgentSummary, type AgentEvent } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { usageLedgerStandIn } from "./helpers/usage-ledger-stand-in";
 import { projectThreadDisplay, readThreadSubAgentPanel } from "../app-server/thread-display";
 import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
@@ -389,22 +390,29 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
     },
   }));
   // The owner deliberately keeps these live helpers in memory, not the overlay.
-  const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
+  const overlayStore = {
+    getThreadOverlayState: async () => undefined,
+    getThreadSubAgents: async () => [],
+    readThreadTokenMiserGateTotals: async () => emptyTokenMiserGateAccountingTotals(),
+    readThreadPricing: async () => data.pricing,
+    readThreadToolAccounting: async () => undefined,
+  };
+  const subAgentMonitorService = { liveCodexNativeSubAgentUsageRecords: new Map() };
+  const registry: DesktopBackendRegistry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
     automaticArchiveReservations: new Map(),
-    overlayStore: {
-      getThreadOverlayState: async () => undefined,
-      getThreadSubAgents: async () => [],
-      readThreadTokenMiserGateTotals: async () => emptyTokenMiserGateAccountingTotals(),
-      readThreadPricing: async () => data.pricing,
-      readThreadToolAccounting: async () => undefined,
-    },
+    overlayStore,
     assertNotBootstrap: () => {},
     resolveCodexLocalModelIdsFn: () => [],
     getActiveTurnForThread: () => ({ turnId: parent.turnId }),
-    liveTokenMiserUsageLines: new Map([["fixture", new Map(gates.map((gate) => [gate.usageLineId, gate]))]]),
-    liveTokenMiserSubAgents: new Map([["fixture", new Map(agents.map((agent) => [agent.monitorId, agent]))]]),
-    subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
-  }) as DesktopBackendRegistry;
+    subAgentMonitorService,
+    threadUsageLedger: usageLedgerStandIn({
+      registry: () => registry,
+      overlayStore,
+      subAgentMonitorService,
+      usageLines: new Map([["fixture", new Map(gates.map((gate) => [gate.usageLineId, gate]))]]),
+      subAgents: new Map([["fixture", new Map(agents.map((agent) => [agent.monitorId, agent]))]]),
+    }),
+  });
   const display = { resource: "pricing" as const, limit: 20, deferPricingGates };
   const first = await registry.readThread({ threadId: "fixture", display });
   expect(first.display!.pricingPage!.totalRows).toBe(25);
@@ -433,26 +441,33 @@ it("swaps a live gate's accounting for its stored version in the savings total",
   // Stored: two gates. Live: a newer version of one of them and a new gate.
   const stored = [gate("kept", 1_000), gate("updated", 2_000)];
   const live = [gate("updated", 7_000), gate("new", 30_000)];
-  const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
+  const overlayStore = {
+    getThreadOverlayState: async () => undefined,
+    getThreadSubAgents: async (params: { monitorIds: readonly string[] }) =>
+      stored.filter((card) => params.monitorIds.includes(card.monitorId)),
+    readThreadTokenMiserGateTotals: async () =>
+      totalTokenMiserGateAccountings(stored.map((card) => card.tokenMiserAccounting)),
+    readThreadPricing: async () => ({ lines: [], summaries: [] }),
+    readThreadToolAccounting: async () => undefined,
+  };
+  const subAgentMonitorService = { liveCodexNativeSubAgentUsageRecords: new Map() };
+  const registry: DesktopBackendRegistry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
     automaticArchiveReservations: new Map(),
-    overlayStore: {
-      getThreadOverlayState: async () => undefined,
-      getThreadSubAgents: async (params: { monitorIds: readonly string[] }) =>
-        stored.filter((card) => params.monitorIds.includes(card.monitorId)),
-      readThreadTokenMiserGateTotals: async () =>
-        totalTokenMiserGateAccountings(stored.map((card) => card.tokenMiserAccounting)),
-      readThreadPricing: async () => ({ lines: [], summaries: [] }),
-      readThreadToolAccounting: async () => undefined,
-    },
+    overlayStore,
     assertNotBootstrap: () => {},
     resolveCodexLocalModelIdsFn: () => [],
     getActiveTurnForThread: () => undefined,
-    liveTokenMiserUsageLines: new Map(),
-    liveTokenMiserSubAgents: new Map([["fixture", new Map(live.map((card) => [card.monitorId, card]))]]),
-    subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
+    subAgentMonitorService,
+    threadUsageLedger: usageLedgerStandIn({
+      registry: () => registry,
+      overlayStore,
+      subAgentMonitorService,
+      usageLines: new Map(),
+      subAgents: new Map([["fixture", new Map(live.map((card) => [card.monitorId, card]))]]),
+    }),
     // An empty ledger asks Codex for a pricing snapshot; there is none here.
     withCodexThreadClient: async () => undefined,
-  }) as DesktopBackendRegistry;
+  });
   const result = await registry.readThread({ threadId: "fixture", display: { resource: "pricing" } });
   expect(result.display!.pricing.tokenMiserSummary).toMatchObject({
     decisionCount: 3, pricedDecisionCount: 3, terms: { savingsMicros: 1_000 + 7_000 + 30_000 },

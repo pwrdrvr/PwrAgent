@@ -5,6 +5,7 @@ import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
 import type { SubAgentMonitorService } from "./subagent-monitor-service";
+import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { PlanLimitStore } from "./plan-limit-store";
 import type { ThreadOwnerAdmission } from "@pwragent/owner-core/thread-owner-admission";
 import type { ClaudeBackend, ClaudeBackendOptions } from "../claude/claude-backend";
@@ -208,6 +209,7 @@ export interface RegistryDependencies {
   threadMcpConnections: ThreadMcpConnections;
   managedReviewService: ManagedReviewService;
   subAgentMonitorService: SubAgentMonitorService;
+  threadUsageLedger: ThreadUsageLedger;
   ownerAdmission?: ThreadOwnerAdmission;
   managedMaintenanceRoots: () => Promise<string[]>;
   readThreadArchivePolicy: () => DesktopThreadArchivePolicy;

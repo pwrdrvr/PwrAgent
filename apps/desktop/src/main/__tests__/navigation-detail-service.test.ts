@@ -68,6 +68,7 @@ vi.mock("../messaging/messaging-bindings-snapshot", () => ({
 }));
 
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
+import { usageLedgerStandIn } from "./helpers/usage-ledger-stand-in";
 
 function thread(id: string): NavigationThreadSummary {
   return {
@@ -455,8 +456,10 @@ describe("NavigationDetailService", () => {
       getQueuedExecutionModeForThread: () => undefined,
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
       hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
-      liveTokenMiserSubAgents: new Map([[selected.id, liveAgents]]),
-      subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
+      threadUsageLedger: usageLedgerStandIn({
+        subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
+        subAgents: new Map([[selected.id, liveAgents]]),
+      }),
       mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype["mergeLiveTokenMiserSubAgents"],
       listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
       readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
