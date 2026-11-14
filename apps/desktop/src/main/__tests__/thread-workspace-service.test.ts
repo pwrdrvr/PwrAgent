@@ -64,6 +64,7 @@ function internals(service: ThreadWorkspaceService) {
   return service as unknown as {
     pendingThreadHandoffs: Map<string, PendingThreadHandoffSummary>;
     pendingThreadWorkspaceMoves: Map<string, PendingThreadWorkspaceMoveSummary>;
+    pendingCodexWorkspaceCwdSyncs: Map<string, { cwd: string; promise: Promise<void> }>;
     runPendingThreadWorkspaceMove(workspaceMoveId: string): Promise<void>;
   };
 }
@@ -389,6 +390,33 @@ describe("registry facades and reads", () => {
     }
   });
 
+  // Modules 1 to 7 reach these through their hosts, so a port that stopped
+  // delegating would leave them reading a stale or empty answer.
+  it("routes the other modules' host ports to the service", async () => {
+    const registry = registryFixture();
+    try {
+      const service = registryModules(registry).threadWorkspaceService;
+      const ports = registry.constructionPorts();
+      const handoff = Promise.resolve({} as never);
+      vi.spyOn(service, "handoffThreadWorkspace").mockReturnValue(handoff);
+      expect(ports.handoffThreadWorkspace({ backend: "codex", threadId: "t", direction: "local-to-worktree" })).toBe(handoff);
+      vi.spyOn(service, "threadHasBlockingWorkspaceMove").mockReturnValue(true);
+      expect(ports.threadHasBlockingWorkspaceMove({ backend: "codex", threadId: "t" })).toBe(true);
+      const handoffs: PendingThreadHandoffSummary[] = [];
+      vi.spyOn(service, "getPendingThreadHandoffsForInspection").mockReturnValue(handoffs);
+      expect(ports.getPendingThreadHandoffsForInspection({ sourceThreadId: "t" })).toBe(handoffs);
+      const moves: PendingThreadWorkspaceMoveSummary[] = [];
+      vi.spyOn(service, "getPendingThreadWorkspaceMovesForInspection").mockReturnValue(moves);
+      expect(ports.getPendingThreadWorkspaceMovesForInspection({ sourceThreadId: "t" })).toBe(moves);
+      const drain = vi.spyOn(service, "drainPendingThreadWorkspaceMovesForTerminalTurn").mockImplementation(() => {});
+      ports.drainPendingThreadWorkspaceMovesForTerminalTurn({ backend: "codex", threadId: "t", turnId: "u" });
+      expect(drain).toHaveBeenCalledWith({ backend: "codex", threadId: "t", turnId: "u" });
+      expect(ports.threadHandoffReservations).toBe(service.threadHandoffReservationRecords);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("shows the registry each reservation, move and cwd sync the service holds", async () => {
     const registry = registryFixture();
     try {
@@ -409,13 +437,12 @@ describe("registry facades and reads", () => {
       // The registry's settle helper waits for an in-flight cwd sync.
       let settle!: () => void;
       const sync = new Promise<void>((resolve) => { settle = resolve; });
-      (service.pendingCodexWorkspaceCwdSyncRecords as Map<string, { cwd: string; promise: Promise<void> }>)
-        .set("syncing", { cwd: "/contrived/a", promise: sync });
+      internals(service).pendingCodexWorkspaceCwdSyncs.set("syncing", { cwd: "/contrived/a", promise: sync });
       let settled = false;
       const waiting = registry.whenMissingCodexThreadWorkSettledForTests().then(() => { settled = true; });
       await Promise.resolve();
       expect(settled).toBe(false);
-      (service.pendingCodexWorkspaceCwdSyncRecords as Map<string, unknown>).delete("syncing");
+      internals(service).pendingCodexWorkspaceCwdSyncs.delete("syncing");
       settle();
       await waiting;
       expect(settled).toBe(true);
