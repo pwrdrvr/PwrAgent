@@ -562,7 +562,7 @@ export class ThreadArchiveCoordinator {
     const checkpoint = archiveCandidateCheckpoint(() => {
       if (this.context.lifecycle.closed || signal?.aborted) throw new ArchiveCleanupCancelledError();
       assertAdmission();
-    });
+    }, undefined, signal);
     // Use complete provider reads without navigation projection or display
     // persistence. An idle hourly sweep must make no SQLite commits.
     onProgress?.({ detail: "Reading Codex threads and native children" });

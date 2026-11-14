@@ -11,18 +11,18 @@ const ARCHIVE_CANDIDATE_WORK_MS = 8;
  * and SQL slice boundaries always rest, including empty provider pages. A
  * single provider response/row is indivisible; check again after it returns. */
 export function archiveCandidateCheckpoint(assertCurrent: () => void, effects: {
-  now: () => number; rest: () => Promise<void>; yieldToHost?: () => Promise<void>;
+  now: () => number; rest: (signal?: AbortSignal) => Promise<void>; yieldToHost?: () => Promise<void>;
 } = {
   now: () => performance.now(),
-  rest: async () => { await pause(ARCHIVE_CLEANUP_PAUSE_MS); },
-}): (boundary?: boolean) => Promise<void> {
+  rest: async (signal) => { await pause(ARCHIVE_CLEANUP_PAUSE_MS, undefined, { signal }); },
+}, signal?: AbortSignal): (boundary?: boolean) => Promise<void> {
   let rows = 0;
   let started = effects.now();
   return async (boundary = false) => {
     assertCurrent();
     rows += 1;
     if (boundary || effects.now() - started >= ARCHIVE_CANDIDATE_WORK_MS) {
-      await effects.rest();
+      await effects.rest(signal);
       rows = 0;
       started = effects.now();
       assertCurrent();
