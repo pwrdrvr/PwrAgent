@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
+import { realpath } from "node:fs/promises";
 import { ArchiveWorktreeReferences } from "../app-server/archive-worktree-references";
 import type { ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import { LegacyArchiveWorktreeReferences } from "./fixtures/legacy-archive-worktree-references";
@@ -55,6 +56,38 @@ async function both<T>(pair: Pair, work: (refs: ArchiveWorktreeReferences | Lega
 }
 
 describe("archive worktree references", () => {
+  // Rule: retiring an owner that has no retained request is an in-memory
+  // no-op, even when other owners still have pending checkout references.
+  it("does not resolve paths when forgetting an absent owner", async () => {
+    await fc.assert(fc.asyncProperty(fc.constantFrom("never-retained", "forgotten", "fulfilled"), fc.nat(100), async (history, id) => {
+      const refs = new ArchiveWorktreeReferences();
+      const checkout = `/model/checkout-${id}`;
+      await refs.retain(intent("codex:unrelated"), { worktreePath: "/model/unrelated", blockers: ["codex:x"] });
+      if (history !== "never-retained") {
+        await refs.retain(intent("codex:target"), { worktreePath: checkout, blockers: [] });
+        if (history === "forgotten") refs.forgetOwner("codex:target");
+        else await refs.fulfilled(checkout);
+      }
+      const before = refs.intents();
+      const additions = refs.additions;
+      vi.mocked(realpath).mockClear();
+      await refs.forget("codex:target", checkout);
+      expect(realpath).not.toHaveBeenCalled();
+      expect(refs.intents()).toEqual(before);
+      expect(refs.additions).toBe(additions);
+    }), { numRuns: 25 });
+  });
+
+  it("skips path resolution after a checkout's last owner was fulfilled", async () => {
+    const refs = new ArchiveWorktreeReferences();
+    await refs.retain(intent("codex:target"), { worktreePath: "/model/c0", blockers: [] });
+    await refs.fulfilled("/model/c0");
+    vi.mocked(realpath).mockClear();
+    await refs.forget("codex:target", "/model/c0");
+    expect(realpath).not.toHaveBeenCalled();
+    expect(refs.intents()).toEqual([]);
+  });
+
   it("answers exactly as the rebuild-every-write implementation", async () => {
     await fc.assert(fc.asyncProperty(fc.array(step, { maxLength: 30 }), async (steps) => {
       fsModel.removed.clear();
