@@ -12,6 +12,7 @@ import {
 import { useCodexBackgroundTerminals, type BackgroundTerminalView } from "./useCodexBackgroundTerminals";
 import { activityDetailsMatch } from "./activity-detail-match";
 import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
+import { useSessionIndicatorKeys } from "./session-indicator-keys";
 import {
   anchorTurnUsageEntries,
   reconcileCompletedTurnUsageEntries,
@@ -2767,6 +2768,14 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
 
 function hasThinkingState(session: ThreadSessionEntry): boolean {
   return describeThinkingState(session).length > 0;
+}
+
+function hasPendingApprovalRequest(session: ThreadSessionEntry): boolean {
+  return Boolean(session.pendingRequest);
+}
+
+function hasPendingUserInput(session: ThreadSessionEntry): boolean {
+  return Boolean(session.pendingUserInput);
 }
 
 function hasPendingInteraction(session: ThreadSessionEntry): boolean {
@@ -8892,17 +8901,7 @@ export function useThreadSessionState(params: {
     onAuthoritativeList: pruneLiveToolItems,
   });
 
-  const thinkingThreadKeys = useMemo(
-    () =>
-      Object.fromEntries(
-        [
-          ...Object.entries(sessions)
-            .filter(([, session]) => hasThinkingState(session))
-            .map(([sessionThreadKey]) => [sessionThreadKey, true] as const),
-        ],
-      ),
-    [sessions]
-  );
+  const thinkingThreadKeys = useSessionIndicatorKeys(sessions, hasThinkingState);
   // A command that outlives its turn (a dev server, a watcher) is not the
   // agent thinking. Counting it as Thinking kept an Attention scanner lit
   // and held the turn's review promotion until the command exited, which
@@ -8923,24 +8922,8 @@ export function useThreadSessionState(params: {
       ),
     [agentCommandThreadKeyList]
   );
-  const approvalRequestThreadKeys = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(sessions)
-          .filter(([, session]) => Boolean(session.pendingRequest))
-          .map(([sessionThreadKey]) => [sessionThreadKey, true])
-      ),
-    [sessions]
-  );
-  const inputRequestThreadKeys = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(sessions)
-          .filter(([, session]) => Boolean(session.pendingUserInput))
-          .map(([sessionThreadKey]) => [sessionThreadKey, true])
-      ),
-    [sessions]
-  );
+  const approvalRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingApprovalRequest);
+  const inputRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingUserInput);
   const pendingStatusText =
     selectedSession?.pendingStatusText &&
     selectedSession.pendingStatusText !== "Thinking"
