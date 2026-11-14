@@ -20,6 +20,7 @@ import {
 } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
+import { normalizeOpenAIDecisionsAccountId } from "@pwragent/shared/openai-decisions";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -31,6 +32,7 @@ import type {
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
   DesktopDecisionModelSettings,
+  DesktopOpenAIDecisionsSettings,
   DesktopFederationMode,
   DesktopHelperModelChoice,
   DesktopHelperModelSettings,
@@ -343,6 +345,7 @@ export type DesktopSettingsConfig = {
     helperModels?: DesktopHelperModelSettings;
     taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
     decisionModels?: DesktopDecisionModelSettings;
+    openaiDecisions?: DesktopOpenAIDecisionsSettings;
     codex?: {
       path?: string;
       profile?: string;
@@ -1988,6 +1991,19 @@ export function desktopSettingsPatchToEdits(
       else set(["models", "decision", key], value);
     }
   }
+  if (patch.models?.openaiDecisions !== undefined) {
+    // `[models.openai_decisions]`: new keys with no legacy shape. Dashboard
+    // ids only; the API key lives in the secret store, never in TOML.
+    const ids = normalizeOpenAIDecisionsSettings(patch.models.openaiDecisions);
+    const keys: [string, string | undefined][] = [
+      ["organization_id", ids?.organizationId],
+      ["project_id", ids?.projectId],
+    ];
+    for (const [key, value] of keys) {
+      if (value === undefined) edits.push({ op: "delete", path: ["models", "openai_decisions", key] });
+      else set(["models", "openai_decisions", key], value);
+    }
+  }
   if (patch.models?.providerThreadMigrations !== undefined) {
     const providerThreadMigrations = normalizeProviderThreadModelMigrations(
       patch.models.providerThreadMigrations,
@@ -2247,6 +2263,7 @@ function normalizeDesktopConfig(
   const codex = tables["models.codex"];
   const codexAppServerRecycle = tables["models.codex.app_server_recycle"];
   const decision = tables["models.decision"];
+  const openaiDecisions = tables["models.openai_decisions"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
   const acpAgentsKimi = tables["acp_agents.kimi"];
@@ -2646,6 +2663,10 @@ function normalizeDesktopConfig(
         localModel: decision?.local_model,
         jevModel: decision?.jev_model,
       }),
+      openaiDecisions: normalizeOpenAIDecisionsSettings({
+        organizationId: readString(openaiDecisions?.organization_id),
+        projectId: readString(openaiDecisions?.project_id),
+      }),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
@@ -3030,6 +3051,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const usageAccountGroups = config.models?.usageAccountGroups;
   const usageAccountNames = config.models?.usageAccountNames;
   const decisionModels = config.models?.decisionModels;
+  const openaiDecisions = config.models?.openaiDecisions;
   const hasHelperModels = Boolean(
     helperModels
     && (
@@ -3050,6 +3072,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
     || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
     || decisionModels
+    || openaiDecisions
   ) {
     pruned.models = {
       ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
@@ -3057,6 +3080,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       ...(hasHelperModels ? { helperModels } : {}),
       ...(hasTaskMonitorModels ? { taskMonitorModels } : {}),
       ...(decisionModels ? { decisionModels } : {}),
+      ...(openaiDecisions ? { openaiDecisions } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
         : {}),
@@ -4188,5 +4212,19 @@ function readWorktreeStorage(
 ): DesktopWorktreeStorageLocation | undefined {
   return typeof value === "string" && isDesktopWorktreeStorageLocation(value)
     ? value
+    : undefined;
+}
+
+/** Trimmed dashboard ids, or undefined when neither is a valid short id. */
+function normalizeOpenAIDecisionsSettings(
+  value: DesktopOpenAIDecisionsSettings | undefined,
+): DesktopOpenAIDecisionsSettings | undefined {
+  const organizationId = normalizeOpenAIDecisionsAccountId(value?.organizationId);
+  const projectId = normalizeOpenAIDecisionsAccountId(value?.projectId);
+  return organizationId || projectId
+    ? {
+        ...(organizationId ? { organizationId } : {}),
+        ...(projectId ? { projectId } : {}),
+      }
     : undefined;
 }

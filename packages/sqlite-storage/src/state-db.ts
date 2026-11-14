@@ -22,7 +22,7 @@ import { THREAD_DEPENDENCY_SCHEMA } from "./state-schema.js";
 import { PROJECT_HELD_WAKEUP_SCHEMA } from "./state-schema.js";
 import { RESTART_CONTINUATION_SCHEMA } from "./state-schema.js";
 import { MESSAGING_REQUEST_SCHEMA } from "./state-schema.js";
-import { THREAD_SANDBOX_SCHEMA } from "./state-schema.js";
+import { OPENAI_DECISION_VERSIONS_SCHEMA, THREAD_SANDBOX_SCHEMA } from "./state-schema.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
@@ -2935,6 +2935,12 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(DURABLE_TURN_REQUEST_SCHEMA);
     db.exec(THREAD_REVIEW_SCHEMA);
     ensureThreadReviewFindingStatusNames(db);
+    db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
+    // Profiles that created the table before decisions could run on Jev or a
+    // local model. Every row they hold ran on OpenAI.
+    if (!tableColumnExists(db, "openai_decision_versions", "provider")) {
+      db.exec("ALTER TABLE openai_decision_versions ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'");
+    }
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
@@ -4407,6 +4413,7 @@ function tableColumnExists(
   tableName:
     | "app_runtime_instances"
     | "automation_runs"
+    | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "pr_status_watches"
@@ -4448,6 +4455,7 @@ function readTableInfo(
   tableName:
     | "app_runtime_instances"
     | "automation_runs"
+    | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "pr_status_watches"
@@ -4462,6 +4470,10 @@ function readTableInfo(
   switch (tableName) {
     case "thread_todos":
       return db.prepare("PRAGMA table_info(thread_todos)").all() as Array<{
+        name: string;
+      }>;
+    case "openai_decision_versions":
+      return db.prepare("PRAGMA table_info(openai_decision_versions)").all() as Array<{
         name: string;
       }>;
     case "app_runtime_instances":

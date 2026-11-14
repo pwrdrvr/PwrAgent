@@ -145,7 +145,8 @@ function localSettings(local: { endpoint?: string; model?: string }): DesktopDec
 }
 
 /** A text setting saved on Enter or on leaving the box, checked first. */
-function DraftTextField(props: {
+/** A text field that saves on Enter or blur. Escape restores the saved value. */
+export function DraftTextField(props: {
   label: string;
   sub?: ReactNode;
   help?: ReactNode;
@@ -224,7 +225,7 @@ export function DecisionProviderScreen(props: {
         <SettingsPanelHead
           eyebrow="AI Providers"
           title={name}
-          help="A System One server on this Mac, such as Cloudflare's Clef run by PwrSuiteLab. Live voice sends it camera frames for cues."
+          help="A System One server on this Mac, such as Cloudflare's Clef run by PwrSuiteLab. Live voice sends it camera frames for cues, and agents can run registered decisions on it."
         />
         <SettingsSection
           title="Connection"
@@ -295,7 +296,7 @@ export function DecisionProviderScreen(props: {
       <SettingsPanelHead
         eyebrow="AI Providers"
         title={name}
-        help="TypeSafe's hosted decision model. It takes text only, so camera frames never go to it."
+        help="TypeSafe's hosted decision model. It takes text only, so camera frames never go to it. Agents can also run registered decisions on it with this key and model."
       />
       <SettingsSection
         title="Connection"
