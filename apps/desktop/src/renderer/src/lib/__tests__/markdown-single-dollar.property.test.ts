@@ -15,7 +15,7 @@ function renderMath(source: string): string {
 }
 
 const expression = fc.oneof(
-  fc.constantFrom("A", "B", "s", "(x,y)", String.raw`\lambda\ge1`, String.raw`2^{O(\lambda)}`),
+  fc.constantFrom("A", "B", "s", "-x", "-1", "(x,y)", String.raw`\lambda\ge1`, String.raw`2^{O(\lambda)}`),
   fc.tuple(fc.constantFrom("x", "y", "n"), fc.integer({ min: 0, max: 99 }))
     .map(([variable, power]) => `${variable}^{${power}}`),
 );

@@ -11,7 +11,7 @@ export function hasPotentialMarkdownMath(markdown: string): boolean {
   // Single-dollar inline math needs non-whitespace inside both delimiters
   // and whitespace, closing punctuation, or formatting after the closer.
   // Code and escapes can still be harmless loading false positives.
-  if (/\$(?![\s$])[^$`\r\n]*[^\s$`]\$(?=$|[\s.,;:!?)}\]'"”’*_~`—–-])/u.test(markdown)) {
+  if (/\$(?![\s$])[^$`\r\n]*[^\s$`([{]\$(?=$|[\s.,;:!?)}\]'"”’*_~`—–-])/u.test(markdown)) {
     return true;
   }
 

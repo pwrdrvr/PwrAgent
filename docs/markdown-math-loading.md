@@ -31,7 +31,7 @@ LaTeX `\(...\)` and `\[...\]`, single-dollar inline math, and backtick/tilde
 `math` fences. Single-dollar pairs must stay on one source line, have no
 whitespace immediately inside the delimiters, and be followed by whitespace,
 closing punctuation, Markdown formatting, or the end of the source. A pair
-cannot cross a backtick.
+cannot cross a backtick or end with an opening bracket (`(`, `[`, or `{`).
 This renders `$A$`, `$(x,y)$`, and `$2^{O(\lambda)}$`
 while keeping prices such as `$5 and $10` and `$5-$10` literal. The runtime
 guards remark-math's tokenizer without rewriting source or shifting offsets.

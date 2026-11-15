@@ -348,6 +348,8 @@ describe("ThreadMarkdown", () => {
     ["$5 and $10 beside $A$", 1],
     ["$5-$10 beside $A$", 1],
     ["Prices $5 and $10. Formula ($A$). Code: `$B$`.", 1],
+    ["Prices $5 and $10. Formula ($-x$).", 1],
+    ["Price $5.00; allowance ($-1$).", 1],
     [String.raw`Prices $5 and $10. Formula ($\lambda$). Code: ` + "`$B$`.", 1],
     ["$ x$ and $y $ beside $A$", 1],
     ["$x\ny$ beside $A$", 1],

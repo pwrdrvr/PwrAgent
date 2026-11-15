@@ -44,7 +44,11 @@ export function remarkSingleDollarMath(this: {
             // math on one line and prevent prices from consuming later code.
             if (code === null || code <= -3 || code === 96) return checkNok(code);
             if (code === 36) {
-              if (isWhitespace(previous)) return checkNok(code);
+              // Reject a trailing opening bracket so a price cannot consume
+              // a later parenthesized expression: "$10. Formula ($-x$)".
+              if (isWhitespace(previous) || previous === 40 || previous === 91 || previous === 123) {
+                return checkNok(code);
+              }
               checkEffects.consume(code);
               return afterClosing;
             }
