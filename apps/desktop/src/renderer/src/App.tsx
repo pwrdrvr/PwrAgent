@@ -3387,6 +3387,18 @@ function DesktopAppShell(props: {
       setRevealSelectedThreadRequest((current) => current + 1);
     }
   };
+  // A project's "Show in Finder". A missing folder or a refusal is the
+  // file manager's to report; the sidebar has nowhere to show it.
+  const revealPath = desktopApi?.revealPath;
+  const revealProjectPath = useMemo(
+    () => revealPath
+      ? (path: string): void => {
+          void revealPath({ path }).catch(() => undefined);
+        }
+      : undefined,
+    [revealPath],
+  );
+
   const createThreadOnFederationTarget = async (
     instanceId: string,
     directory?: FederationProjectDirectory,
@@ -4904,6 +4916,8 @@ function DesktopAppShell(props: {
           }}
           newThreadFederationTargets={newThreadFederationTargets}
           localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
+          platform={desktopApi?.platform}
+          onRevealPath={revealProjectPath}
           checkFederationTargetProject={checkFederationTargetProject}
           onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
           onSendThreadToMachine={listedThreadHandoffTargets.length > 0

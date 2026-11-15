@@ -9313,6 +9313,9 @@ describe("Sidebar directory pinning", () => {
       federationOwnerForgeAutomation?: boolean;
       peerForgeAutomationInstanceIds?: ReadonlySet<string>;
       checkFederationTargetProject?: CheckFederationTargetProject;
+      platform?: string;
+      onRevealPath?: (path: string) => void;
+      projectIndex?: boolean;
     } = {},
   ): { rerender: (next: typeof initialOverrides) => void } {
     const element = (overrides: typeof initialOverrides) => (
@@ -9343,6 +9346,10 @@ describe("Sidebar directory pinning", () => {
         onReorderDirectoryPins={overrides.onReorderDirectoryPins}
         onRemoveDirectory={overrides.onRemoveDirectory}
         onOpenForgePermissions={overrides.onOpenForgePermissions}
+        platform={overrides.platform}
+        onRevealPath={overrides.onRevealPath}
+        onProjectIndexHiddenChange={overrides.projectIndex ? () => undefined : undefined}
+        onProjectIndexWidthChange={overrides.projectIndex ? () => undefined : undefined}
       />
     );
     const result = render(element(initialOverrides));
@@ -9953,7 +9960,171 @@ describe("Sidebar directory pinning", () => {
     expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("laptop-home", identity);
   });
 
-  it("points the remote-only tooltip at the + when machines can take the thread", async () => {
+  it("offers the machines that can take a remote-only project in its card", async () => {
+    const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+    renderSidebar([remoteOnlyDirectory], {
+      onCreateThreadOnFederationTarget,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+      ],
+    });
+
+    fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+    expect(await screen.findByText(
+      "Not set up on this machine. Start a thread on a machine that has it, or use Add Directory to connect it here.",
+    )).toBeInTheDocument();
+    // No checkout here, so no path actions and no row for this machine.
+    expect(screen.queryByText("Copy Path")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Studio Mac / work"));
+    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith(
+      "studio-work",
+      expect.objectContaining({ label: remoteOnlyDirectory.label }),
+    );
+  });
+
+  describe("project card", () => {
+    const peers: FederationThreadTarget[] = [
+      { availability: "available", instanceId: "mini", label: "Mac mini / default", shortLabel: "Mac mini" },
+      { availability: "available", instanceId: "build", label: "build-box / ci", shortLabel: "build-box" },
+      { availability: "available", instanceId: "laptop", label: "Air / default", shortLabel: "Air" },
+      { availability: "unsupported", instanceId: "old", label: "Old Mac / default" },
+    ];
+    const peerThread = (id: string, instanceId: string, updatedAt: number): NavigationThreadSummary => ({
+      id,
+      source: "codex",
+      title: id,
+      titleSource: "derived",
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      threadStatus: "idle",
+      updatedAt,
+      federation: {
+        ref: { backend: "codex", target: { scope: "remote", instanceId }, threadId: id },
+        instanceLabel: instanceId,
+      },
+    });
+
+    async function openCard(element: HTMLElement): Promise<HTMLElement> {
+      fireEvent.mouseEnter(element);
+      const title = await screen.findByText("New thread on");
+      return title.closest(".project-card") as HTMLElement;
+    }
+
+    it("shows the path and runs Show in Finder, Copy Path and a new thread here", async () => {
+      const onRevealPath = vi.fn();
+      const onOpenLaunchpad = vi.fn(async () => undefined);
+      renderSidebar([projectADirectory], { platform: "darwin", onRevealPath, onOpenLaunchpad });
+
+      const card = await openCard(getDirectorySummary(/ProjectA/i));
+      // The whole path for screen readers; the visible halves split it mid-path.
+      expect(within(card).getByText("/Users/fixture-user/pwrdrvr/ProjectA")).toBeInTheDocument();
+      expect(within(card).getByText("ProjectA", { selector: ".project-card__path-tail" })).toBeInTheDocument();
+
+      fireEvent.click(within(card).getByText("Show in Finder"));
+      expect(onRevealPath).toHaveBeenCalledWith("/Users/fixture-user/pwrdrvr/ProjectA");
+
+      const again = await openCard(getDirectorySummary(/ProjectA/i));
+      await act(async () => {
+        fireEvent.click(within(again).getByText("This Mac"));
+      });
+      expect(onOpenLaunchpad).toHaveBeenCalledWith(
+        expect.objectContaining({ key: projectADirectory.key }),
+        undefined,
+      );
+    });
+
+    it("names the file manager per platform and leaves it out where nothing can show it", async () => {
+      renderSidebar([projectADirectory], { platform: "win32" });
+      const card = await openCard(getDirectorySummary(/ProjectA/i));
+      expect(within(card).queryByText(/^Show in/)).not.toBeInTheDocument();
+      expect(within(card).getByText("Copy Path")).toBeInTheDocument();
+      expect(within(card).getByText("This PC")).toBeInTheDocument();
+    });
+
+    it("offers the two most recently used machines, then the full menu", async () => {
+      const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+      renderSidebar([projectADirectory], {
+        newThreadFederationTargets: peers,
+        onCreateThreadOnFederationTarget,
+        threads: [peerThread("t-build", "build", 100), peerThread("t-air", "laptop", 300)],
+      });
+
+      const card = await openCard(getDirectorySummary(/ProjectA/i));
+      // The rows are pointer shortcuts, hidden from assistive tech.
+      const rows = within(card).getAllByRole("button", { hidden: true })
+        .map((button) => button.textContent)
+        .filter((text) => text && !text.startsWith("Copy") && !text.startsWith("Show"));
+      expect(rows).toEqual(["This machine", "Air", "build-box", "Other machines…"]);
+
+      await act(async () => {
+        fireEvent.click(within(card).getByText("Air"));
+      });
+      expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith(
+        "laptop",
+        expect.objectContaining({ label: "ProjectA", path: projectADirectory.path }),
+      );
+
+      const again = await openCard(getDirectorySummary(/ProjectA/i));
+      fireEvent.click(within(again).getByText("Other machines…"));
+      expect(await screen.findByRole("menu", {
+        name: "Start a new thread in ProjectA on another machine",
+      })).toBeInTheDocument();
+    });
+
+    it("does not open on a brief pass over the header", () => {
+      vi.useFakeTimers();
+      try {
+        renderSidebar([projectADirectory]);
+        const header = getDirectorySummary(/ProjectA/i);
+        fireEvent.mouseEnter(header);
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        fireEvent.mouseLeave(header);
+        act(() => {
+          vi.advanceTimersByTime(2000);
+        });
+        expect(screen.queryByText("New thread on")).not.toBeInTheDocument();
+
+        fireEvent.mouseEnter(header);
+        act(() => {
+          vi.advanceTimersByTime(650);
+        });
+        expect(screen.getByText("New thread on")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("opens from the project index lane as well", async () => {
+      renderSidebar([projectADirectory, projectBDirectory], { projectIndex: true });
+      const card = await openCard(screen.getByRole("button", { name: "Jump to ProjectB" }));
+      expect(within(card).getByText(projectBDirectory.path!)).toBeInTheDocument();
+    });
+
+    it("adds Show in Finder and Copy Path to the project's menu", async () => {
+      const onRevealPath = vi.fn();
+      renderSidebar([projectADirectory], {
+        platform: "darwin",
+        onRevealPath,
+        onSetDirectoryPin: async () => undefined,
+      });
+      fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
+      const menu = await screen.findByRole("menu");
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Show in Finder" }));
+      expect(onRevealPath).toHaveBeenCalledWith(projectADirectory.path);
+
+      fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
+      expect(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Copy Path" }))
+        .toBeInTheDocument();
+    });
+  });
+
+  it("keeps the remote-only explanation on keyboard focus", async () => {
     renderSidebar([remoteOnlyDirectory], {
       onCreateThreadOnFederationTarget: async () => undefined,
       newThreadFederationTargets: [
@@ -9965,7 +10136,7 @@ describe("Sidebar directory pinning", () => {
       ],
     });
 
-    fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+    fireEvent.focus(getDirectorySummary(/ProjectA/i));
     expect(await screen.findByText(
       "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here.",
     )).toBeInTheDocument();
