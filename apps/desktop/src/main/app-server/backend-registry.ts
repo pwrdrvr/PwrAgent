@@ -869,6 +869,7 @@ import {
   codexRuntimeBuild,
   describeCodexRateLimit,
   getAvailableExecutionMode,
+  getBackendFallbackModels,
   getCodexFastModeMismatchWarning,
   isMeaningfulAccountSummary,
   isUnauthenticatedCodexProvider,
@@ -1769,6 +1770,14 @@ export class DesktopBackendRegistry {
   private readonly codexProviderCatalogRetry = new CodexProviderCatalogRetry({
     refresh: () => this.refreshCodexProviderCatalogs(),
   });
+  /**
+   * Bumped on every saved change to the Codex model provider list. A model
+   * read that began before the change describes the old list, so it must
+   * not be published over the newer one.
+   */
+  private codexModelProviderRevision = 0;
+  /** Publications of provider list changes, in the order they were saved. */
+  private codexModelProviderPublication: Promise<void> = Promise.resolve();
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly acpSessionIdleCloseMs: number;
@@ -2160,6 +2169,7 @@ export class DesktopBackendRegistry {
       recordTokenMiserFocusedInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserFocusedInference"]>) => this.threadUsageLedger.recordTokenMiserFocusedInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
+      applyCodexModelProviderConfigChange: () => this.applyCodexModelProviderConfigChange(),
       registerAcpMcpConnections: (...args: Parameters<ThreadMcpConnections["registerAcpMcpConnections"]>) => this.threadMcpConnections.registerAcpMcpConnections(...args),
       get registrySessionId() { return current().registrySessionId; },
       get registrySessionStartedAt() { return current().registrySessionStartedAt; },
@@ -18172,7 +18182,19 @@ export class DesktopBackendRegistry {
   private async refreshCodexProviderCatalogs(
     options: { rereadProviders?: true | readonly string[] } = {},
   ): Promise<readonly CodexModelProviderCatalogState[]> {
+    return (await this.refreshAndPublishCodexProviderCatalogs(options)).states;
+  }
+
+  /**
+   * `refreshCodexProviderCatalogs`, also saying whether the read reached the
+   * cached summary. It does not when the summary was dropped or replaced
+   * during the read, or a newer provider list was saved.
+   */
+  private async refreshAndPublishCodexProviderCatalogs(
+    options: { rereadProviders?: true | readonly string[] } = {},
+  ): Promise<{ states: readonly CodexModelProviderCatalogState[]; published: boolean }> {
     const generation = this.codexBackendGeneration;
+    const providerRevision = this.codexModelProviderRevision;
     const reread = options.rereadProviders;
     if (reread === true) {
       this.codexModelProviderCatalog?.invalidate();
@@ -18185,7 +18207,12 @@ export class DesktopBackendRegistry {
     // A refresh from Settings that finds a provider down arms the automatic
     // retry. The retry's own refresh is ignored here; it observes on return.
     this.codexProviderCatalogRetry.observe(states);
-    if (generation !== this.codexBackendGeneration || !this.codexBackendSummary) return states;
+    // A provider list saved during the read publishes its own refresh.
+    if (
+      generation !== this.codexBackendGeneration
+      || providerRevision !== this.codexModelProviderRevision
+      || !this.codexBackendSummary
+    ) return { states, published: false };
     const { codexModelProviders: previousStates, ...summary } = this.codexBackendSummary;
     const launchpadOptions = buildLaunchpadOptions("codex", models);
     const changed = JSON.stringify([summary.launchpadOptions, previousStates ?? []])
@@ -18196,10 +18223,90 @@ export class DesktopBackendRegistry {
       ...(states.length ? { codexModelProviders: states } : {}),
     };
     // A retry that found the same state tells windows nothing new.
-    if (changed) {
-      await this.emit({ backend: "codex", notification: { method: "backend/providerStatus/updated", params: { backend: "codex" } } });
-    }
-    return states;
+    if (changed) await this.emitCodexProviderStatusUpdated();
+    return { states, published: true };
+  }
+
+  /** Windows and federation peers re-read backend summaries on this. */
+  private async emitCodexProviderStatusUpdated(): Promise<void> {
+    await this.emit({ backend: "codex", notification: { method: "backend/providerStatus/updated", params: { backend: "codex" } } });
+  }
+
+  /**
+   * Publish a saved change to the Codex model provider list on the summary
+   * every window and federation peer reads.
+   *
+   * A change Codex must be launched with (a provider added, removed or moved
+   * to another base URL) first goes through the runtime invalidation the
+   * `providers` config domain already drives: the cached summary is dropped
+   * and Codex restarts only once no turn is using it. Without a summary, the
+   * providers' endpoints are read through the catalog (with the catalog's own
+   * key resolver; no Codex discovery) and the pre-discovery summary projects
+   * them. A change that leaves the launch alone re-reads Codex's model list
+   * over the open connection and joins the providers' models to it.
+   */
+  applyCodexModelProviderConfigChange(): Promise<void> {
+    this.codexModelProviderRevision += 1;
+    const revision = this.codexModelProviderRevision;
+    this.codexModelProviderCatalog?.invalidate();
+    this.modelCatalog.invalidate("codex");
+    const publication = this.codexModelProviderPublication.then(async () => {
+      // The same save may have changed the Codex launch. Whichever config
+      // subscriber ran first, wait for that invalidation to settle. Its
+      // failure is the runtime's to report; the provider list still has to
+      // reach the windows.
+      await this.synchronizeProviderRuntimeSelections().catch((error: unknown) => {
+        backendRegistryLog.warn("Codex runtime update after a model provider change failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      if (this.closed || revision !== this.codexModelProviderRevision) return;
+      if (this.codexBackendSummary) {
+        try {
+          if ((await this.refreshAndPublishCodexProviderCatalogs()).published) return;
+        } catch (error) {
+          backendRegistryLog.warn("Codex model list unavailable after a model provider change", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await this.publishKnownCodexProviderModels(revision);
+        }
+      }
+      if (!this.codexBackendSummary) {
+        // A failed endpoint read is recorded in the catalog state and leaves
+        // the provider's listed models.
+        await this.codexModelProviderCatalog?.listModelOptions().catch(() => []);
+      }
+      if (this.closed || revision !== this.codexModelProviderRevision) return;
+      await this.emitCodexProviderStatusUpdated();
+    });
+    this.codexModelProviderPublication = publication.catch(() => undefined);
+    return publication;
+  }
+
+  /**
+   * When Codex's own model list cannot be read after a provider change, keep
+   * the OpenAI models the summary already has and replace only the provider
+   * models. The model list read reads Codex's own list first, so its failure
+   * left the provider endpoints unread: read them here. A removed provider
+   * leaves; a newer save publishes its own list instead.
+   */
+  private async publishKnownCodexProviderModels(revision: number): Promise<void> {
+    await this.codexModelProviderCatalog?.listModelOptions().catch(() => []);
+    const summary = this.codexBackendSummary;
+    if (!summary || this.closed || revision !== this.codexModelProviderRevision) return;
+    const { codexModelProviders: _previousStates, ...rest } = summary;
+    const ownModels = (summary.launchpadOptions?.models ?? []).filter((model) => !model.providerId);
+    const known = this.codexModelProviderCatalog?.knownCatalog() ?? { models: [], states: [] };
+    this.codexBackendSummary = {
+      ...rest,
+      launchpadOptions: buildLaunchpadOptions("codex", [...ownModels, ...known.models]),
+      ...(known.states.length ? { codexModelProviders: known.states } : {}),
+    };
+  }
+
+  /** Settles once every saved provider change so far is published. */
+  async settleCodexModelProviderPublication(): Promise<void> {
+    await this.codexModelProviderPublication;
   }
 
   private readCodexDefaultModelsOnce(
@@ -20070,7 +20177,7 @@ export class DesktopBackendRegistry {
       runtimeBuild: codexRuntimeBuild(lastKnownGood?.selectedCommand),
       methods,
       capabilities,
-      launchpadOptions: buildLaunchpadOptions("codex", []),
+      ...this.preDiscoveryCodexModelOptions(),
       executionModes: [
         {
           mode: "default",
@@ -20089,6 +20196,21 @@ export class DesktopBackendRegistry {
       ],
       ...(available ? {} : { unavailableReason }),
     });
+  }
+
+  /**
+   * The fallback OpenAI models plus each configured provider's known models,
+   * with its catalog state. Nothing is read here.
+   */
+  private preDiscoveryCodexModelOptions(): Pick<BackendSummary, "launchpadOptions" | "codexModelProviders"> {
+    const known = this.codexModelProviderCatalog?.knownCatalog() ?? { models: [], states: [] };
+    return {
+      launchpadOptions: buildLaunchpadOptions(
+        "codex",
+        known.models.length ? [...getBackendFallbackModels("codex"), ...known.models] : [],
+      ),
+      ...(known.states.length ? { codexModelProviders: known.states } : {}),
+    };
   }
 
   private async updateCachedCodexRateLimits(value: unknown): Promise<boolean> {
@@ -20314,6 +20436,7 @@ export class DesktopBackendRegistry {
     assertProviderDiscoveryPermit(permit);
     const previousSummary = this.readCodexBackendSummary();
     const backendGeneration = this.codexBackendGeneration;
+    const providerRevision = this.codexModelProviderRevision;
     const accountRevision = this.codexAccountRevision;
     const rateLimitsSince = this.planLimits.mark("codex");
     const { lastKnownGood } = this.readCodexProvider();
@@ -20461,6 +20584,18 @@ export class DesktopBackendRegistry {
     } else if (discoveredRateLimits && this.planLimits.mark("codex") === rateLimitsSince) {
       // The newest read reports no limits: the account has none.
       this.planLimits.clear("codex");
+    }
+    if (providerRevision !== this.codexModelProviderRevision) {
+      // The provider list changed while this discovery read models, so its
+      // models describe the old list. Its publication found no summary to
+      // refresh; read again now that there is one.
+      await this.refreshCodexProviderCatalogs().catch(async (error: unknown) => {
+        backendRegistryLog.warn("Codex model provider refresh after discovery failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await this.publishKnownCodexProviderModels(this.codexModelProviderRevision);
+      });
+      return this.readCodexBackendSummary();
     }
     return this.codexSummaryWithLimits(summary);
   }

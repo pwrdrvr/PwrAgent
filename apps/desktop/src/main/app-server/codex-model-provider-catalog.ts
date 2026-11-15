@@ -24,6 +24,34 @@ const MAX_DISCOVERED_MODELS = 2_000;
 const MAX_MODEL_PAGES = 20;
 const MAX_ERROR_LENGTH = 200;
 
+function providerModelOptions(
+  provider: CodexModelProviderSettings,
+  discovered: readonly CodexProviderCatalogModel[],
+): BackendModelOption[] {
+  const byId = new Map(discovered.map((model) => [model.id, model]));
+  const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
+  return ids.map((model): BackendModelOption => {
+    const found = byId.get(model);
+    const efforts = found?.reasoningEfforts ?? [];
+    return {
+      id: formatCodexProviderModelId(provider.id, model),
+      label: found?.label || (provider.compatibility === "bonsai" && model === BONSAI_2_27B_MODEL_ID
+        ? BONSAI_2_27B_DISPLAY_NAME : model),
+      providerId: provider.id,
+      providerLabel: provider.name,
+      // Codex sends any effort as `reasoning.effort`, for any model, so a
+      // provider model offers the levels its endpoint declares. A model
+      // the endpoint names none for (or only listed in Settings) takes
+      // the endpoint's default.
+      supportsReasoning: efforts.length > 0,
+      ...(efforts.length ? { reasoningEfforts: [...efforts] } : {}),
+      ...(found?.defaultReasoningEffort ? { defaultReasoningEffort: found.defaultReasoningEffort } : {}),
+      ...(found?.supportsImage === undefined ? {} : { supportsImage: found.supportsImage }),
+      supportsFast: false,
+    };
+  });
+}
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 type Discovery = {
@@ -87,30 +115,26 @@ export class CodexModelProviderCatalog {
       const discovered = provider.discoverModels === false
         ? []
         : (await this.discover(provider, keys[provider.id])).discovery?.models ?? [];
-      const byId = new Map(discovered.map((model) => [model.id, model]));
-      const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
-      return ids.map((model): BackendModelOption => {
-        const found = byId.get(model);
-        const efforts = found?.reasoningEfforts ?? [];
-        return {
-          id: formatCodexProviderModelId(provider.id, model),
-          label: found?.label || (provider.compatibility === "bonsai" && model === BONSAI_2_27B_MODEL_ID
-            ? BONSAI_2_27B_DISPLAY_NAME : model),
-          providerId: provider.id,
-          providerLabel: provider.name,
-          // Codex sends any effort as `reasoning.effort`, for any model, so a
-          // provider model offers the levels its endpoint declares. A model
-          // the endpoint names none for (or only listed in Settings) takes
-          // the endpoint's default.
-          supportsReasoning: efforts.length > 0,
-          ...(efforts.length ? { reasoningEfforts: [...efforts] } : {}),
-          ...(found?.defaultReasoningEffort ? { defaultReasoningEffort: found.defaultReasoningEffort } : {}),
-          ...(found?.supportsImage === undefined ? {} : { supportsImage: found.supportsImage }),
-          supportsFast: false,
-        };
-      });
+      return providerModelOptions(provider, discovered);
     }));
     return perProvider.flat();
+  }
+
+  /**
+   * Each configured provider's listed models plus those its last successful
+   * read of its current base URL found, with each provider's catalog state,
+   * from one read of the provider list and without reading any endpoint. A
+   * summary published without a Codex model read (before discovery, after a
+   * provider change replaced the runtime, or after that read failed) offers
+   * these.
+   */
+  knownCatalog(): { models: BackendModelOption[]; states: CodexModelProviderCatalogState[] } {
+    const providers = this.options.resolveProviders();
+    return {
+      models: providers.flatMap((provider) =>
+        providerModelOptions(provider, this.currentRead(provider)?.discovery?.models ?? [])),
+      states: providers.map((provider) => this.catalogState(provider)),
+    };
   }
 
   /**
@@ -118,24 +142,33 @@ export class CodexModelProviderCatalog {
    * order. It never reads an endpoint itself; `listModelOptions` does.
    */
   catalogStates(): CodexModelProviderCatalogState[] {
-    return this.options.resolveProviders().map((provider): CodexModelProviderCatalogState => {
-      const base = { id: provider.id, name: provider.name, listedCount: provider.models?.length ?? 0 };
-      if (provider.discoverModels === false) return { ...base, status: "off" };
-      const state = this.discovery.get(provider.id);
-      // A read of a base URL the provider no longer has says nothing about it.
-      if (!state?.fingerprint.startsWith(`${provider.baseUrl}\u0000`)) {
-        return { ...base, status: "pending" };
-      }
-      if (state.error !== undefined) return { ...base, status: "unavailable", error: state.error };
-      if (!state.discovery) return { ...base, status: "pending" };
-      return {
-        ...base,
-        status: "ready",
-        discoveredCount: state.discovery.models.length,
-        ...(state.discovery.truncated ? { truncated: true } : {}),
-        ...(state.readAt === undefined ? {} : { readAt: state.readAt }),
-      };
-    });
+    return this.options.resolveProviders().map((provider) => this.catalogState(provider));
+  }
+
+  /**
+   * The provider's last read, when it read the provider's current base URL.
+   * A read of a base URL the provider no longer has says nothing about it.
+   */
+  private currentRead(provider: CodexModelProviderSettings): DiscoveryState | undefined {
+    if (provider.discoverModels === false) return undefined;
+    const state = this.discovery.get(provider.id);
+    return state?.fingerprint.startsWith(`${provider.baseUrl}\u0000`) ? state : undefined;
+  }
+
+  private catalogState(provider: CodexModelProviderSettings): CodexModelProviderCatalogState {
+    const base = { id: provider.id, name: provider.name, listedCount: provider.models?.length ?? 0 };
+    if (provider.discoverModels === false) return { ...base, status: "off" };
+    const state = this.currentRead(provider);
+    if (!state) return { ...base, status: "pending" };
+    if (state.error !== undefined) return { ...base, status: "unavailable", error: state.error };
+    if (!state.discovery) return { ...base, status: "pending" };
+    return {
+      ...base,
+      status: "ready",
+      discoveredCount: state.discovery.models.length,
+      ...(state.discovery.truncated ? { truncated: true } : {}),
+      ...(state.readAt === undefined ? {} : { readAt: state.readAt }),
+    };
   }
 
   private async discover(
