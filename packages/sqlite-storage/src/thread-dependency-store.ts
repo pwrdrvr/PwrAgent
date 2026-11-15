@@ -75,16 +75,33 @@ export class ThreadDependencyStore {
   }
 
   register(candidate: ThreadDependency): ThreadDependency {
+    return this.registerReplacing(candidate, () => false).dependency;
+  }
+
+  /**
+   * Registers `candidate` and, in the same immediate transaction, cancels
+   * each waiting or ready registration `supersedes` accepts, recording the
+   * replacement. A claim being dispatched or reviewed is never replaced.
+   */
+  registerReplacing(candidate: ThreadDependency, supersedes: (existing: ThreadDependency) => boolean): {
+    dependency: ThreadDependency;
+    superseded: ThreadDependency[];
+  } {
     return this.db.transaction(() => {
       if (this.isConsumerArchived(candidate)) throw new Error("Cannot register a continuation for an archived thread.");
-      const active = this.active();
-      const unresolved = active.find((item) => item.backend === candidate.backend && item.threadId === candidate.threadId
+      const current = this.active();
+      const unresolved = current.find((item) => item.backend === candidate.backend && item.threadId === candidate.threadId
         && item.status === "dispatching" && item.error);
       if ((candidate.deliver ?? "agent") === "agent" && unresolved) {
         throw new Error(`Continuation delivery needs review (${unresolved.id}). List this thread's dependencies and ask the operator to inspect the delivery before creating another agent continuation. Dismiss only after operator review; dismissal does not cancel a turn.`);
       }
-      const duplicate = active.find((item) => signature(item) === signature(candidate));
-      if (duplicate) return duplicate;
+      const duplicate = current.find((item) => signature(item) === signature(candidate));
+      if (duplicate) return { dependency: duplicate, superseded: [] };
+      const superseded = current.filter((item) => item.backend === candidate.backend && item.threadId === candidate.threadId
+        && (item.status === "waiting" || item.status === "ready") && supersedes(item))
+        .map((item) => ({ ...item, status: "cancelled" as const, supersededBy: candidate.id, updatedAt: candidate.createdAt }));
+      const retired = new Set(superseded.map((item) => item.id));
+      const active = current.filter((item) => !retired.has(item.id));
       if (active.length >= 512) throw new Error("There are already 512 active dependencies. Cancel an existing dependency first.");
       if (active.filter((item) => item.backend === candidate.backend && item.threadId === candidate.threadId).length >= 32) throw new Error("This thread already has 32 active dependencies. Cancel an existing dependency first.");
       const edges = new Map<string, Set<string>>();
@@ -110,10 +127,14 @@ export class ThreadDependencyStore {
       })) {
         throw new Error("This dependency would create a thread dependency cycle.");
       }
+      for (const item of superseded) {
+        const previous = current.find((entry) => entry.id === item.id)!;
+        if (!this.replace(previous, item)) throw new Error("Dependency changed while registering its replacement. Try again.");
+      }
       this.db.prepare(
         "INSERT INTO thread_dependencies(dependency_id, backend, thread_id, status, created_at, payload) VALUES (?, ?, ?, ?, ?, ?)",
       ).run(candidate.id, candidate.backend, candidate.threadId, candidate.status, candidate.createdAt, JSON.stringify(candidate));
-      return candidate;
+      return { dependency: candidate, superseded };
     }).immediate();
   }
 
@@ -168,11 +189,23 @@ export class ThreadDependencyStore {
   }
 
   dismiss(backend: string, threadId: string, id: string, now: number): ThreadDependency {
-    const item = this.get(backend, threadId, id);
-    if (!item || item.status !== "dispatching" || !item.error) throw new Error("Only an uncertain delivery can be dismissed after review.");
-    const next = { ...item, status: "dismissed" as const, updatedAt: now };
-    if (!this.replace(item, next)) throw new Error("Dependency changed while dismissing. Read its current state first.");
-    return next;
+    return this.dismissMany(backend, threadId, [id], now)[0]!;
+  }
+
+  /**
+   * Retires reviewed uncertain deliveries on one thread in one immediate
+   * transaction: all of them, or none when any has changed. Nothing is
+   * replayed or cancelled; a turn that was admitted keeps running.
+   */
+  dismissMany(backend: string, threadId: string, ids: readonly string[], now: number): ThreadDependency[] {
+    if (ids.length === 0 || new Set(ids).size !== ids.length) throw new Error("Name each uncertain delivery to dismiss once.");
+    return this.db.transaction(() => ids.map((id) => {
+      const item = this.get(backend, threadId, id);
+      if (!item || item.status !== "dispatching" || !item.error) throw new Error("Only an uncertain delivery can be dismissed after review.");
+      const next = { ...item, status: "dismissed" as const, updatedAt: now };
+      if (!this.replace(item, next)) throw new Error("Dependency changed while dismissing. Read its current state first.");
+      return next;
+    })).immediate();
   }
 
   private decode(rows: unknown[]): ThreadDependency[] {

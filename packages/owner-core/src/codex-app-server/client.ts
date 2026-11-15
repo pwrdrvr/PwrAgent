@@ -444,6 +444,18 @@ export class CodexThreadBusyBeforeStartError extends Error {
   }
 }
 
+/**
+ * The typed busy result for a `thread/resume` failure, or the error itself.
+ * Only the provider's exact refusal to change Token Miser activation during
+ * an active turn proves that no turn was admitted; every other failure,
+ * including a transport timeout, keeps its original error.
+ */
+export function classifyCodexResumeError(error: unknown, threadId: string): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  const refusal = `cannot change PwrAgent Token Miser activation while thread ${threadId} has an active turn`;
+  return message === `json-rpc error (-32600): ${refusal}` ? new CodexThreadBusyBeforeStartError(error) : error;
+}
+
 type InitializeResult = Partial<CodexInitializeResponse>;
 
 export type CodexServerCapabilities = {
@@ -11226,12 +11238,7 @@ export class CodexAppServerClient {
         // This exact provider refusal proves that no turn was admitted by
         // this start. Keep the stage in a typed error; a turn/start failure
         // or transport timeout must never be mistaken for safe non-admission.
-        const message = error instanceof Error ? error.message : String(error);
-        const refusal = `cannot change PwrAgent Token Miser activation while thread ${params.threadId} has an active turn`;
-        if (message === `json-rpc error (-32600): ${refusal}`) {
-          throw new CodexThreadBusyBeforeStartError(error);
-        }
-        throw error;
+        throw classifyCodexResumeError(error, params.threadId);
       });
       // Environment overrides are applied by resume; continuing after a
       // failure would silently run the turn with the previous toolchain.

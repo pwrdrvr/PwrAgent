@@ -96,13 +96,27 @@ and the registered plan, and finished ones collapse under **History**. The
 prerequisite thread lists its dependents under **Waiting on this thread**,
 and every change notifies the waiting thread and each prerequisite thread.
 
+Uncertain deliveries leave the card list for one **Delivery review** section
+above it. Claims are grouped by exact error, and each group prints its error
+once in full, with its count and time range. A disclosure lists every
+registration in the group: its id, prerequisites, plan and time. The operator
+selects groups, then **Dismiss N Reviewed…** opens an inline confirmation that
+states what dismissal does: the claims move to History, a continuation that
+did start keeps running, and nothing is cancelled or sent again. One request
+(`action: "dismiss"` with `dependencyIds`) retires the selection in one
+immediate transaction, all or none. Bulk dismissal is the operator's; the
+agent tool keeps single `dependencyId` dismissal, and the owner refuses
+`dependencyIds` from an agent. A wait replaced by a newer registration appears
+in History as **Replaced**.
+
 A sidebar row with active registrations carries a chip: progress such as
 `1 of 2` for one registration, a count for several, and a red
 **Check delivery** label when a delivery needs review, with a count when several
 deliveries need review. This means admission could not be confirmed; it is not
-ordinary waiting. Its tooltip previews at most two registrations and three
-prerequisites each, prioritizes delivery reviews, and reports omitted counts.
-Clicking it opens the full list and errors in the dialog. The chip reads
+ordinary waiting. While reviews exist, the tooltip groups them by exact error:
+one clipped line per cause, at most three, with the remainder counted. Without
+reviews it previews at most two registrations and three prerequisites each,
+and reports omitted counts. Clicking the chip opens the dialog. The chip reads
 `action: "active"` from the desktop window's IPC channel, which lists every
 active registration without its continuation text; agents cannot call it. A
 continuation turn is labeled **Continue after** in the transcript.
@@ -210,11 +224,18 @@ longer constrain the graph. Only local thread conditions join the graph;
 a peer's thread or a subject cannot form a cycle here.
 
 Deduplication includes pinned turns and continuation text, but excludes display
-titles and condition order. Changing worker turns or the saved plan creates a
-distinct registration even when its tooltip looks similar. Reuse a waiting or
-ready registration instead of adding it again on each update. Each registration
-fires once, including `mode: "any"`; later worker turns require a new wait after
-the previous delivery completes.
+titles and condition order. Each registration fires once, including
+`mode: "any"`; later worker turns require a new wait after the previous
+delivery completes.
+
+A rolling orchestrator re-registers its wait as workers take new turns. A
+registration supersedes an active `waiting` or `ready` one on the same thread
+when the delivery, policy, continuation and prerequisite set match and only
+pinned turns differ. Each differing turn must be later in its thread's provider
+history. The older wait becomes `cancelled` with `supersededBy`, in the
+registering transaction, and never fires. A claim being dispatched or reviewed
+is never superseded. A different continuation, thread set, PR or delivery is
+an independent wait and is kept.
 
 The coordinator serializes local events and uses a SQLite compare-and-swap
 to claim delivery across instances sharing a profile. Busy consumers retain
@@ -225,6 +246,16 @@ The specific Codex resume refusal about changing Token Miser activation during
 an active turn is a confirmed busy result, before `turn/start`. It retains the
 wait for an idle event. Transport errors and errors after sending `turn/start`
 remain uncertain and are never automatically retried.
+
+A busy refusal or a started continuation holds the consumer until its own
+terminal or idle notification. The registry tracks only turns it started, so
+an active turn started elsewhere can refuse admission and its idle notification
+can be delayed or lost. The owner then confirms idle: the registry holds no
+turn for the thread, the thread is not locked, and the provider's thread read
+shows no turn in progress. The coordinator asks on a prerequisite's thread
+event, on `list` (opening Continue After), and on reconcile. It does not poll.
+After confirmation it evaluates the ready waits and admits at most one; the
+next waits for that turn to end.
 
 Watching/ready registrations survive restart and reconcile through the
 provider protocol. Runtime code never reads Codex storage. An admitted turn
@@ -245,7 +276,9 @@ inspection; it does not cancel a potentially admitted turn. This provides at-mos
 automatic admission rather than claiming exactly-once delivery across an
 unacknowledged backend request.
 The refusal to register a replacement while review is pending makes zero
-SQLite commits (0 MB/day), covered by its checked-in write budget.
+SQLite commits (0 MB/day), covered by its checked-in write budget. Dismissing
+32 reviewed deliveries is one commit (about 21 KB of WAL), and only when the
+operator confirms a review.
 
 ## SQLite write budget
 
@@ -256,7 +289,11 @@ delivery costs four commits and approximately 62 KB for registration through
 its card (~6.2 MB/day at 100 reminders). The card and the delivered claim
 share one commit. A marked-done wait costs five commits and approximately
 70 KB from registration through Mark Done and its card (~3.5 MB/day at 50
-waits); only the operator's or an agent's Mark Done writes. One hundred
+waits); only the operator's or an agent's Mark Done writes. A rolling
+re-registration that supersedes its older wait costs the same two commits as
+any registration: the insert and the retirement share one transaction
+(about 25 KB of WAL; 300 worker turns a day is about 7 MB/day, with or without
+supersession). Owner-confirmed idle reads the provider and writes nothing. One hundred
 unchanged PR observations plus one hundred thread events make zero commits,
 including when the consumer is busy. Evidence timestamps alone never cause
 a write. No dependency means no per-turn persistence.

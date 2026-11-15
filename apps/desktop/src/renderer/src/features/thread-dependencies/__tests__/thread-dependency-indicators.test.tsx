@@ -100,7 +100,11 @@ describe("summarizeThreadDependencies", () => {
       { ...waiting, id: "gone", threadId: "cancelled", status: "cancelled" },
     ]);
     expect(indicators.get("codex:consumer")).toMatchObject({ count: 2, alert: true, label: "Check delivery" });
-    expect(indicators.get("codex:consumer")!.tooltip).toContain("Delivery needs review.");
+    expect(indicators.get("codex:consumer")!.tooltip).toBe([
+      "2 active waits · 1 need delivery review.\nA continuation may have started, but delivery was not confirmed.",
+      "1 × Delivery was interrupted",
+      "Open Continue After to review it.",
+    ].join("\n\n"));
     expect(indicators.has("codex:finished")).toBe(false);
     expect(indicators.has("codex:cancelled")).toBe(false);
   });
@@ -110,17 +114,49 @@ describe("summarizeThreadDependencies", () => {
       fc.integer({ min: 3, max: 32 }), fc.integer({ min: 4, max: 16 }), fc.string({ minLength: 100, maxLength: 200 }),
       (count, prerequisiteCount, title) => {
         const registrations = Array.from({ length: count }, (_, index): ThreadDependency => ({
-          ...waiting, id: `wait-${index}`, status: "dispatching", error: "Provider error".repeat(100),
+          ...waiting, id: `wait-${index}`,
           conditions: Array.from({ length: prerequisiteCount }, () => ({ ...waiting.conditions[0]!, title })),
         }));
         const indicator = summarizeThreadDependencies(registrations).get("codex:consumer")!;
-        expect(indicator.label).toBe(`Check delivery · ${count}`);
-        expect(indicator.tooltip).toContain(`${count} active waits · ${count} need delivery review`);
+        expect(indicator.label).toBe(`${count} waiting`);
+        expect(indicator.tooltip).toContain(`${count} active waits.`);
         expect(indicator.tooltip).toContain(`+${count - 2} more registrations`);
         expect(indicator.tooltip).toContain(`+${prerequisiteCount - 3} more prerequisites`);
         expect(indicator.tooltip.length).toBeLessThan(1800);
-        expect(indicator.tooltip).not.toContain("Provider error");
         expect(indicator.count).toBe(count);
+      },
+    ));
+  });
+
+  it("names each delivery review's cause once, clipped, whatever the claims and errors", () => {
+    fc.assert(fc.property(
+      fc.array(fc.integer({ min: 0, max: 7 }), { minLength: 1, maxLength: 32, size: "max" }),
+      fc.integer({ min: 0, max: 4 }),
+      fc.string({ minLength: 0, maxLength: 400 }),
+      (errorIndexes, ordinary, detail) => {
+        const errorFor = (index: number) => `Continuation delivery needs review: provider error ${index} ${detail}`;
+        const reviews = errorIndexes.map((errorIndex, index): ThreadDependency => ({
+          ...waiting, id: `claim-${index}`, status: "dispatching", error: errorFor(errorIndex), createdAt: index,
+        }));
+        const waits = Array.from({ length: ordinary }, (_, index): ThreadDependency => ({ ...waiting, id: `wait-${index}`, createdAt: 100 + index }));
+        const indicator = summarizeThreadDependencies([...waits, ...reviews]).get("codex:consumer")!;
+        const reviewCount = reviews.length;
+        const distinct = new Set(errorIndexes).size;
+        expect(indicator.label).toBe(reviewCount > 1 ? `Check delivery · ${reviewCount}` : "Check delivery");
+        expect(indicator.tooltip.split("\n")[0]).toBe(ordinary
+          ? `${reviewCount + ordinary} active waits · ${reviewCount} need delivery review.`
+          : reviewCount === 1 ? "1 delivery needs review." : `${reviewCount} deliveries need review.`);
+        const causes = indicator.tooltip.split("\n").filter((line) => /^\d+ × /.test(line));
+        // At most three causes, each one clipped line, and every claim counted once.
+        expect(causes).toHaveLength(Math.min(distinct, 3));
+        expect(causes.every((line) => line.length <= 130 && !line.includes("Continuation delivery needs review"))).toBe(true);
+        const shown = causes.reduce((total, line) => total + Number(line.split(" × ")[0]), 0);
+        const rest = indicator.tooltip.match(/^\+(\d+) more with (\d+) other errors?$/m);
+        expect(shown + Number(rest?.[1] ?? 0)).toBe(reviewCount);
+        expect(Number(rest?.[2] ?? 0)).toBe(Math.max(0, distinct - 3));
+        // Ordinary waits are not previewed while reviews exist.
+        expect(indicator.tooltip).not.toContain("Registration ");
+        expect(indicator.tooltip.length).toBeLessThan(800);
       },
     ));
   });

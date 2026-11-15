@@ -6,6 +6,7 @@ import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
   ACTIVE_DEPENDENCY_STATUSES,
   evidenceFor,
+  groupDeliveryReviews,
   isFailureReport,
   isRepairWait,
   needsDeliveryReview,
@@ -39,6 +40,8 @@ const EMPTY: ReadonlyMap<string, ThreadDependencyIndicator> = new Map();
 const REFRESH_DEBOUNCE_MS = 150;
 const MAX_TOOLTIP_REGISTRATIONS = 2;
 const MAX_TOOLTIP_CONDITIONS = 3;
+const MAX_TOOLTIP_REVIEW_GROUPS = 3;
+const MAX_TOOLTIP_CAUSE_LENGTH = 120;
 
 /**
  * The key a thread's indicator is filed under: its owner as this window
@@ -181,16 +184,38 @@ function progressLabel(dependency: ThreadDependency): string {
 }
 
 function describeRegistrations(items: ThreadDependency[], reviewCount: number): string {
-  // Uncertain deliveries need attention before ordinary waits. Keep their
-  // full errors in the dialog, where they can be inspected and dismissed.
-  const preview = [...items].sort((a, b) => Number(needsDeliveryReview(b)) - Number(needsDeliveryReview(a)))
-    .slice(0, MAX_TOOLTIP_REGISTRATIONS);
+  if (reviewCount) return describeReviews(items, reviewCount);
+  const preview = items.slice(0, MAX_TOOLTIP_REGISTRATIONS);
   const lines: string[] = [];
-  if (items.length > 1) lines.push(`${items.length} active waits${reviewCount ? ` · ${reviewCount} need delivery review` : ""}.`);
-  if (reviewCount) lines.push("A continuation may have started, but delivery was not confirmed. Open Continue After to inspect errors and dismiss reviewed deliveries.");
+  if (items.length > 1) lines.push(`${items.length} active waits.`);
   lines.push(...preview.map((item) => describeRegistration(item, items.length > 1)));
   if (items.length > preview.length) lines.push(`+${items.length - preview.length} more registrations. Open Continue After for the full list.`);
   return lines.join("\n\n");
+}
+
+/**
+ * Uncertain deliveries come first and say why: one clipped line per distinct
+ * error. Their registrations look alike, so none is previewed; the dialog
+ * lists each one with its full error.
+ */
+function describeReviews(items: ThreadDependency[], reviewCount: number): string {
+  const groups = groupDeliveryReviews(items);
+  const causes = groups.slice(0, MAX_TOOLTIP_REVIEW_GROUPS).map(({ cause, items: group }) =>
+    `${group.length} × ${clip(cause, MAX_TOOLTIP_CAUSE_LENGTH)}`);
+  if (groups.length > MAX_TOOLTIP_REVIEW_GROUPS) {
+    const rest = groups.slice(MAX_TOOLTIP_REVIEW_GROUPS).reduce((total, group) => total + group.items.length, 0);
+    causes.push(`+${rest} more with ${groups.length - MAX_TOOLTIP_REVIEW_GROUPS} other ${groups.length - MAX_TOOLTIP_REVIEW_GROUPS === 1 ? "error" : "errors"}`);
+  }
+  return [
+    `${items.length > reviewCount ? `${items.length} active waits · ${reviewCount} need delivery review` : reviewCount === 1 ? "1 delivery needs review" : `${reviewCount} deliveries need review`}.\nA continuation may have started, but delivery was not confirmed.`,
+    causes.join("\n"),
+    reviewCount === 1 ? "Open Continue After to review it." : "Open Continue After to review them together.",
+  ].join("\n\n");
+}
+
+function clip(text: string, max: number): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 function describeRegistration(dependency: ThreadDependency, identify: boolean): string {

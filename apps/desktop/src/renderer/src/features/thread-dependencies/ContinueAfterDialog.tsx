@@ -31,8 +31,10 @@ import {
   ACTIVE_DEPENDENCY_STATUSES,
   conditionName,
   evidenceFor,
+  groupDeliveryReviews,
   isRepairWait,
   needsDeliveryReview,
+  type DeliveryReviewGroup,
 } from "./dependency-labels";
 import {
   dependencyThreadCandidates,
@@ -128,6 +130,8 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   // Absent until the operator chooses; the default follows the rows.
   const [holdMergeChoice, setHoldMergeChoice] = useState<boolean>();
   const [marking, setMarking] = useState<Marking>();
+  /** What the last reviewed cleanup retired, after its section is gone. */
+  const [reviewNotice, setReviewNotice] = useState<string>();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -167,6 +171,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
     setDependencies([]); setDependents([]); setPeerDependents([]); setView(available ? "loading" : "list"); setHistoryOpen(false);
     setRows([]); setMode("all"); setOnFailure("wait"); setError(undefined); setBusy(false); setContinuation("");
     setDeliver("agent"); setHandoff(false); setHoldMergeChoice(undefined); setMarking(undefined); setNote("");
+    setReviewNotice(undefined);
     // Updates arrive in bursts; apply only the newest list response.
     let latestRefresh = 0;
     const refresh = async () => {
@@ -209,6 +214,9 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   }, [waiting, localInstanceId, waitingOnThis, pickedIdentities]);
   const searchApi = desktopApi?.getNavigationQueryPage ? desktopApi : undefined;
   const active = dependencies.filter((dependency) => ACTIVE_DEPENDENCY_STATUSES.has(dependency.status));
+  // Uncertain deliveries are reviewed together, above the ordinary waits.
+  const reviewGroups = useMemo(() => groupDeliveryReviews(dependencies), [dependencies]);
+  const waits = active.filter((dependency) => !needsDeliveryReview(dependency));
   const history = dependencies.filter((dependency) => !ACTIVE_DEPENDENCY_STATUSES.has(dependency.status));
   const hasRegistrations = dependencies.length > 0 || dependents.length > 0 || peerDependents.length > 0;
   const waitsOnCi = rows.some((row) => row.when === "ci_passed");
@@ -260,8 +268,10 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
     setMarking(next); setNote(""); setError(undefined);
   };
 
-  const submit = async (action: "create" | "cancel" | "dismiss", dependencyId?: string) => {
+  const submit = async (action: "create" | "cancel" | "dismiss", target?: string | readonly string[]): Promise<boolean> => {
     setBusy(true); setError(undefined);
+    // One reviewed claim keeps the single-id request an older owner knows.
+    const ids = typeof target === "string" ? [target] : target ?? [];
     try {
       const response = await desktopApi!.manageThreadDependencies!({
         action, ...addressed,
@@ -280,15 +290,17 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
           ...(reminds && handoff ? { handoff: true } : {}),
           ...(steps.length ? { steps } : {}),
           ...(holdMerge ? { holdMerge: true } : {}),
-        } : { dependencyId }),
+        } : ids.length === 1 ? { dependencyId: ids[0] } : { dependencyIds: [...ids] }),
       });
-      if (currentKey.current !== key) return;
+      if (currentKey.current !== key) return false;
       setDependencies(response.dependencies);
       setDependents(response.dependents ?? []);
       setPeerDependents(response.peerDependents ?? []);
       if (action === "create") { resetForm(); setView("list"); }
+      return true;
     } catch (reason) {
       if (currentKey.current === key) setError(messageFrom(reason));
+      return false;
     } finally {
       if (currentKey.current === key) setBusy(false);
     }
@@ -548,9 +560,25 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
               </div>
             ) : null}
             {active.length === 0 ? <p className="thread-dependencies__hint">Not waiting on anything.</p> : null}
-            {active.length ? (
+            {reviewGroups.length ? (
+              <DeliveryReview
+                busy={busy}
+                groups={reviewGroups}
+                key={key}
+                onDismiss={async (ids) => {
+                  const dismissed = await submit("dismiss", ids);
+                  if (dismissed) {
+                    setReviewNotice(`${ids.length === 1 ? "1 delivery" : `${ids.length} deliveries`} dismissed after review. ${ids.length === 1 ? "It is" : "They are"} in History.`);
+                  }
+                  return dismissed;
+                }}
+                onReview={() => setReviewNotice(undefined)}
+              />
+            ) : null}
+            {reviewNotice ? <p className="thread-dependencies__hint" role="status">{reviewNotice}</p> : null}
+            {waits.length ? (
               <ul className="thread-dependencies__cards">
-                {active.map((dependency) => (
+                {waits.map((dependency) => (
                   <DependencyCard
                     busy={busy}
                     dependency={dependency}
@@ -656,12 +684,136 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   );
 }
 
+const REVIEW_TIME = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+/**
+ * Every uncertain delivery on this thread, grouped by its exact error so a
+ * repeated cause is read once. Each group lists its registrations. The
+ * operator chooses groups and confirms; one request retires them all, and
+ * nothing is started, replayed or stopped.
+ */
+function DeliveryReview(props: {
+  groups: readonly DeliveryReviewGroup[];
+  busy: boolean;
+  onDismiss: (ids: readonly string[]) => Promise<boolean>;
+  /** A new review began; the last cleanup's notice no longer applies. */
+  onReview: () => void;
+}) {
+  // Kept out rather than chosen, so a newly arriving group starts chosen.
+  const [kept, setKept] = useState<ReadonlySet<string>>(new Set());
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const id = useId();
+  const total = props.groups.reduce((count, group) => count + group.items.length, 0);
+  const chosen = props.groups.filter((group) => !kept.has(group.error)).flatMap((group) => group.items.map((item) => item.id));
+  const plural = (count: number) => count === 1 ? "1 delivery" : `${count} deliveries`;
+  const toggle = (set: ReadonlySet<string>, value: string) => {
+    const next = new Set(set);
+    if (!next.delete(value)) next.add(value);
+    return next;
+  };
+  const dismiss = async () => {
+    if (await props.onDismiss(chosen)) setConfirming(false);
+  };
+  return (
+    <section aria-labelledby={`${id}-title`} className="continue-after-review">
+      <p className="rail-card__status-line">
+        <RailStatusChip alert tone="error"><span id={`${id}-title`}>{`${plural(total)} ${total === 1 ? "needs" : "need"} review`}</span></RailStatusChip>
+      </p>
+      <p className="continue-after-review__lead">
+        PwrAgent asked to start {total === 1 ? "this continuation" : "these continuations"} and could not confirm whether {total === 1 ? "it" : "they"} started. It does not retry them.{" "}
+        <strong>Check this thread’s transcript for turns labeled Continue after</strong>, then dismiss the ones you have reviewed. Dismissing does not start, replay or stop any turn.
+      </p>
+      {props.groups.map((group, index) => {
+        const open = expanded.has(group.error);
+        const first = group.items[0]!.createdAt;
+        const last = group.items.at(-1)!.createdAt;
+        return (
+          <div className="continue-after-review__group" key={group.error}>
+            <label className="composer__checkbox continue-after-review__choice">
+              <input
+                aria-describedby={`${id}-error-${index}`}
+                checked={!kept.has(group.error)}
+                disabled={props.busy}
+                type="checkbox"
+                onChange={() => { setKept(toggle(kept, group.error)); setConfirming(false); }}
+              />
+              <span>
+                <strong>{plural(group.items.length)}</strong>
+                <span className="continue-after-review__when">
+                  {first === last ? REVIEW_TIME.format(first) : `${REVIEW_TIME.format(first)} – ${REVIEW_TIME.format(last)}`}
+                </span>
+              </span>
+            </label>
+            <p className="continue-after-review__error" id={`${id}-error-${index}`}>{group.cause}</p>
+            <button
+              aria-controls={`${id}-rows-${index}`}
+              aria-expanded={open}
+              className="thread-dependencies__history-toggle continue-after-review__toggle"
+              type="button"
+              onClick={() => setExpanded(toggle(expanded, group.error))}
+            >
+              {open ? "Hide registrations" : group.items.length === 1 ? "Show the registration" : `Show ${group.items.length} registrations`}
+            </button>
+            {open ? (
+              <ul aria-label={`Registrations with this error`} className="continue-after-review__rows" id={`${id}-rows-${index}`}>
+                {group.items.map((item) => (
+                  <li className="continue-after-review__row" key={item.id}>
+                    <code>{item.id.slice(0, 8)}</code>
+                    <span className="continue-after-review__what">
+                      <span>
+                        {item.conditions.length > 1 ? `${item.mode === "any" ? "Any" : "All"} of: ` : ""}
+                        {item.conditions.map(conditionName).join(", ")}
+                      </span>
+                      {item.continuation ? <span className="continue-after-review__plan">{item.continuation}</span> : null}
+                    </span>
+                    <span className="continue-after-review__time">{REVIEW_TIME.format(item.createdAt)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        );
+      })}
+      {confirming && chosen.length ? (
+        <div aria-labelledby={`${id}-confirm`} className="continue-after-review__confirm" role="group">
+          <strong id={`${id}-confirm`}>{`Dismiss ${plural(chosen.length)} after review?`}</strong>
+          <ul>
+            <li>They leave the active list and move to History as Dismissed after review.</li>
+            <li>A continuation that did start keeps running. Nothing is cancelled or sent again.</li>
+            <li>Waits held behind them can continue when this thread is idle.</li>
+          </ul>
+          <div className="context-list__actions rail-card__actions">
+            <button className="button button--primary" disabled={props.busy} type="button" onClick={() => void dismiss()}>
+              {`Dismiss ${chosen.length}`}
+            </button>
+            <button autoFocus className="button button--secondary" disabled={props.busy} type="button" onClick={() => setConfirming(false)}>
+              Keep for Review
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="context-list__actions rail-card__actions">
+          <button
+            className="context-list__action"
+            disabled={props.busy || chosen.length === 0}
+            type="button"
+            onClick={() => { props.onReview(); setConfirming(true); }}
+          >
+            {chosen.length ? `Dismiss ${chosen.length} Reviewed…` : "Choose deliveries to dismiss"}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function DependencyCard(props: {
   dependency: ThreadDependency;
   busy: boolean;
   /** The waiting thread's owner, when it is a peer: its threads live there. */
   ownerId?: string;
-  onAction: (action: "cancel" | "dismiss") => void;
+  onAction: (action: "cancel") => void;
   /** Absent in history, where nothing can be marked done. */
   onMarkDone?: (conditionIndex: number) => void;
   onNavigate: () => void;
@@ -741,15 +893,11 @@ function DependencyCard(props: {
       ) : dependency.continuation ? <p className="thread-dependencies__continuation">{dependency.continuation}</p> : null}
       {dependency.holdMerge && (dependency.status === "waiting" || dependency.status === "ready") ? <p className="rail-card__meta">Merge held</p> : null}
       {policy ? <p className="rail-card__meta">{policy}</p> : null}
+      {dependency.supersededBy ? <p className="rail-card__meta">Replaced by a newer wait for the same plan on later turns.</p> : null}
       {dependency.error ? <p className="rail-card__error" role="status">{dependency.error}</p> : null}
       {dependency.status === "waiting" || dependency.status === "ready" ? (
         <div className="context-list__actions rail-card__actions">
           <button className="context-list__action" type="button" disabled={props.busy} onClick={() => props.onAction("cancel")}>Cancel</button>
-        </div>
-      ) : null}
-      {needsDeliveryReview(dependency) ? (
-        <div className="context-list__actions rail-card__actions">
-          <button className="context-list__action" type="button" disabled={props.busy} onClick={() => props.onAction("dismiss")}>Dismiss after review</button>
         </div>
       ) : null}
     </li>
@@ -777,9 +925,9 @@ function describeStatus(dependency: ThreadDependency): { label: string; tone: Ra
         ? { label: "Prerequisite failed", tone: "error", alert: true }
         : { label: threadDependencyDeliveryTarget(dependency) === "operator" ? "Reminded" : "Continued", tone: "ok" };
     case "cancelled":
-      return { label: "Cancelled", tone: "neutral" };
+      return { label: dependency.supersededBy ? "Replaced" : "Cancelled", tone: "neutral" };
     case "dismissed":
-      return { label: "Dismissed", tone: "neutral" };
+      return { label: "Dismissed after review", tone: "neutral" };
   }
 }
 
