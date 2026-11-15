@@ -135,7 +135,9 @@ export type ThreadUsageLineRecord = {
   // "decisions-output-uncharged": one registered OpenAI Decisions request,
   // priced from its own rate band with output at $0 (the route does not
   // charge output). It is already exact for that request; do not re-price it.
-  pricingBasis?: "aggregate" | "request-components" | "provider-reported" | "decisions-output-uncharged";
+  // "configured-provider" also preserves an explicit incomplete rate: the
+  // owner's decision must not be replaced by a reference catalog on read.
+  pricingBasis?: "aggregate" | "request-components" | "provider-reported" | "decisions-output-uncharged" | "configured-provider";
   pricingRateId?: string;
   reasoningEffort?: string;
   reasoningOutputTokens: number;

@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { AgentEvent, ThreadUsageLineRecord, NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ComponentProps } from "react";
@@ -59,6 +60,29 @@ it("shows Astra list rates even when historical usage is completely unavailable"
   expect(card).toHaveTextContent("Output rate$50.00");
   expect(card).toHaveTextContent("a total cost requires token usage");
   expect(card).not.toHaveTextContent("$0.00");
+});
+
+it("shows the exact DeepSeek cached-input unit rate", () => {
+  const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: { model: "@mathos/deepseek-v4.1-flash" } }} />);
+  expect(view.container.querySelector(".pricing-snapshot-card")).toHaveTextContent("Cached input rate$0.001014");
+});
+
+it("round-trips fractional unit rates without rounding them up as running costs", () => {
+  fc.assert(fc.property(fc.integer({ min: 1, max: 999_999 }), (millionths) => {
+    const rate = millionths / 1_000_000;
+    const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: {
+      rate: { inputPerMillion: rate, cachedInputPerMillion: rate, outputPerMillion: rate },
+    } }} />);
+    try {
+      const values = Array.from(view.container.querySelectorAll(".rail-summary-card__section .rail-summary-card__row"));
+      expect(values).toHaveLength(3);
+      for (const row of values) {
+        expect(Number(row.textContent!.split("$")[1])).toBe(rate);
+      }
+    } finally {
+      view.unmount();
+    }
+  }), { numRuns: 25 });
 });
 
 it("shows the known Astra subtotal even when a MathOS group has no price or counts", () => {

@@ -447,9 +447,9 @@ function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay
       {rate ? (
         <div className="rail-summary-card__section">
           <span className="rail-summary-card__section-title">{rate.displayName} · per 1M tokens</span>
-          <RailSummaryRow label="Uncached input rate" value={formatMoney(rate.inputUsdPerMillion * 1_000_000, "USD")} />
-          <RailSummaryRow label="Cached input rate" value={formatMoney(rate.cachedInputUsdPerMillion * 1_000_000, "USD")} />
-          <RailSummaryRow label="Output rate" value={formatMoney(rate.outputUsdPerMillion * 1_000_000, "USD")} />
+          <RailSummaryRow label="Uncached input rate" value={formatUnitRate(rate.inputUsdPerMillion)} />
+          <RailSummaryRow label="Cached input rate" value={formatUnitRate(rate.cachedInputUsdPerMillion)} />
+          <RailSummaryRow label="Output rate" value={formatUnitRate(rate.outputUsdPerMillion)} />
           <p className="context-empty">List rates are known; a total cost requires token usage.</p>
         </div>
       ) : null}
@@ -1608,6 +1608,12 @@ function PricingUsageActions(props: {
 }
 
 
+
+function formatUnitRate(usdPerMillion: number): string {
+  return usdPerMillion.toLocaleString("en-US", {
+    style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 12,
+  });
+}
 
 function formatMoney(valueMicros: number, currency: string): string {
   if (currency === "USD") {

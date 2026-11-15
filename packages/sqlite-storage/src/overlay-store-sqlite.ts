@@ -11994,18 +11994,6 @@ function applyUsageTurnMetadata(
 }
 
 function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
-  const nativeProvider = line.provider === "openai" || line.provider === "qwen" || line.provider === "xai" || line.provider === "anthropic";
-  const reference = !nativeProvider && line.priceStatus !== "priced" ? estimateTokenUsageCost({
-    model: line.model, uncachedInputTokens: line.uncachedInputTokens,
-    cachedInputTokens: line.cachedInputTokens, outputTokens: line.outputTokens,
-    reasoningOutputTokens: line.reasoningOutputTokens, serviceTier: line.serviceTier,
-  }) : undefined;
-  if (
-    !nativeProvider
-    && reference?.catalogId !== OPENROUTER_ASSUMED_PRICING_CATALOG_ID
-  ) {
-    return line;
-  }
   // Fork-baseline lines carry inherited context that was billed on the parent
   // thread. Their cost is $0 to this thread by definition — never re-price them
   // from their (large) inherited token counts. Strip catalog/rate/reason fields
@@ -12017,6 +12005,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
       pricingCatalogId: _forkPricingCatalogId,
       pricingCatalogVersion: _forkPricingCatalogVersion,
       pricingRateId: _forkPricingRateId,
+      cumulativeTotalCostMicros: _forkCumulativeCost,
       ...forkBaseLine
     } = line;
     return {
@@ -12028,6 +12017,21 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
       totalCostMicros: 0,
       uncachedInputCostMicros: 0,
     };
+  }
+  // Explicit rates, even incomplete ones, take precedence over reference
+  // prices. Legacy rows without this decision can still be repaired below.
+  if (line.pricingBasis === "configured-provider") return line;
+  const nativeProvider = line.provider === "openai" || line.provider === "qwen" || line.provider === "xai" || line.provider === "anthropic";
+  const reference = !nativeProvider && line.priceStatus !== "priced" ? estimateTokenUsageCost({
+    model: line.model, uncachedInputTokens: line.uncachedInputTokens,
+    cachedInputTokens: line.cachedInputTokens, outputTokens: line.outputTokens,
+    reasoningOutputTokens: line.reasoningOutputTokens, serviceTier: line.serviceTier,
+  }) : undefined;
+  if (
+    !nativeProvider
+    && reference?.catalogId !== OPENROUTER_ASSUMED_PRICING_CATALOG_ID
+  ) {
+    return line;
   }
   // This line already contains the sum of individually priced requests. Its
   // aggregate token count may span multiple context bands, so applying one

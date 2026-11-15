@@ -677,11 +677,13 @@ function estimateThreadPricingSnapshot(snapshot: ThreadPricingSnapshot, at: numb
   const cached = tokens?.cachedInputTokens;
   const output = tokens?.outputTokens;
   if (snapshot.rate) {
+    const reasoning = tokens?.reasoningOutputTokens ?? 0;
     const { inputPerMillion, outputPerMillion, cachedInputPerMillion = inputPerMillion } = snapshot.rate;
     return { ...snapshot, totalCostMicros:
-      validCount(input) && validCount(cached) && cached <= input && validCount(output)
+      validCount(input) && validCount(cached) && cached <= input && validCount(output) && validCount(reasoning)
+        && Number.isSafeInteger(output + reasoning)
         && inputPerMillion !== undefined && outputPerMillion !== undefined && cachedInputPerMillion !== undefined
-        ? Math.round((input - cached) * inputPerMillion) + Math.round(cached * cachedInputPerMillion) + Math.round(output * outputPerMillion)
+        ? Math.round((input - cached) * inputPerMillion) + Math.round(cached * cachedInputPerMillion) + Math.round((output + reasoning) * outputPerMillion)
         : undefined,
     };
   }

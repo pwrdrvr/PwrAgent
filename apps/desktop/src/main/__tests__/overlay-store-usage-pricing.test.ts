@@ -2727,6 +2727,62 @@ async function seedUnpricedGrokUsageLines(params: {
 }
 
 describe("SqliteOverlayStore thread pricing summaries", () => {
+  it("does not replace a configured $100 input rate with an assumed GLM rate when output is missing", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const line = attributeCodexProviderUsageLine(buildUsageLine({ model: "@mathos/glm-5.3" }), {
+      id: "mathos", name: "MathOS", baseUrl: "https://os.openmathmodel.org/v1",
+      rates: [{ model: "glm-5.3", inputPerMillion: 100 }],
+    }, undefined);
+    await store.upsertThreadUsageLine({ line });
+    const { result, writes } = await measureSqliteWrites(() => store.readThreadPricing({ backend: "codex", threadId: "thread-1" }));
+    expect(result.lines[0]).toMatchObject({ priceStatus: "unpriced", totalCostMicros: 0, pricingBasis: "configured-provider" });
+    expect(writes.commits).toBe(0);
+  });
+
+  it("preserves explicit incomplete provider rates through writes, reopening and read-time repair", async () => {
+    const dbPath = useFileStateDb();
+    let run = 0;
+    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 100 }), async (missingOutput, rate) => {
+      const threadId = `incomplete-rate-${run++}`;
+      const provider = { id: "mathos", name: "MathOS", baseUrl: "https://os.openmathmodel.org/v1", rates: [
+        { model: "glm-5.3", ...(missingOutput ? { inputPerMillion: rate } : { outputPerMillion: rate }) },
+      ] };
+      const line = attributeCodexProviderUsageLine(buildUsageLine({
+        model: "@mathos/glm-5.3", threadId, usageLineId: threadId,
+      }), provider, undefined);
+      expect(line.priceStatus).toBe("unpriced");
+      await store.upsertThreadUsageLine({ line });
+      const pricing = await store.readThreadPricing({ backend: "codex", threadId });
+      expect(pricing.lines[0]).toMatchObject({ priceStatus: "unpriced", totalCostMicros: 0, pricingCatalogId: "codex-model-provider" });
+      expect(pricing.summaries[0]).toMatchObject({ totalCostMicros: 0, unpricedUsageLineCount: 1 });
+    }), { numRuns: 25 });
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    expect((await store.readThreadPricing({ backend: "codex", threadId: "incomplete-rate-0" })).lines[0].priceStatus).toBe("unpriced");
+  });
+
+  it("keeps attributed and legacy MathOS fork baselines out of thread and family costs", async () => {
+    let run = 0;
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 1_000_000 }), async (tokens) => {
+      const threadId = `fork-reference-${run++}`;
+      const baseline = buildUsageLine({
+        threadId, usageLineId: threadId, scope: "fork-baseline", model: "@mathos/glm-5.3",
+        uncachedInputTokens: tokens, inputTokens: tokens, cachedInputTokens: 0, outputTokens: tokens,
+        reasoningOutputTokens: 0, totalTokens: tokens * 2,
+      });
+      const line = attributeCodexProviderUsageLine(baseline, { id: "mathos", name: "MathOS", baseUrl: "https://os.openmathmodel.org/v1" }, undefined);
+      await store.upsertThreadUsageLine({ line });
+      // A previously priced custom-provider baseline must be repaired as well.
+      await store.upsertThreadUsageLine({ line: { ...line, usageLineId: `${threadId}-legacy`, totalCostMicros: 3_684_000, outputCostMicros: 3_600_000, uncachedInputCostMicros: 84_000 } });
+      const pricing = await store.readThreadPricing({ backend: "codex", threadId });
+      expect(pricing.lines.every((row) => row.totalCostMicros === 0)).toBe(true);
+      const family = summarizeThreadFamilyPricing({ members: [{ backend: "codex", threadId, title: "Fork fixture" }], summaries: pricing.summaries, readAt: 1 });
+      expect(pricing.summaries[0].totalCostMicros).toBe(0);
+      expect(family.members[0].totalCostMicros).toBe(0);
+    }), { numRuns: 25 });
+  });
+
   it("preserves the reference-price source through stored totals and family aggregation without read-time commits", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     let run = 0;

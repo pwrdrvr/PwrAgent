@@ -450,9 +450,12 @@ export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>
   accountKey: string | undefined,
 ): T {
   const upstreamModel = line.model ? parseCodexProviderModelId(line.model).model : undefined;
-  const { priceUnavailableReason: _previousReason, accountKey: _previousAccount, ...rest } = line;
+  const directRate = upstreamModel ? findCodexModelProviderRate(provider, upstreamModel) : undefined;
+  const { priceUnavailableReason: _previousReason, accountKey: _previousAccount, pricingBasis: previousBasis, ...rest } = line;
   const base = {
     ...rest,
+    pricingBasis: directRate ? "configured-provider" as const
+      : previousBasis === "configured-provider" ? undefined : previousBasis,
     provider: provider.id,
     ...(accountKey ? { accountKey } : {}),
     ...(upstreamModel ? { model: formatCodexProviderModelId(provider.id, upstreamModel) } : {}),
@@ -460,7 +463,17 @@ export function attributeCodexProviderUsageLine<T extends ThreadUsageLineRecord>
     pricingCatalogId: CODEX_MODEL_PROVIDER_PRICING_CATALOG,
     pricingCatalogVersion: "1",
   };
-  const directRate = upstreamModel ? findCodexModelProviderRate(provider, upstreamModel) : undefined;
+  // Inherited context was billed on the parent, independently of any rates.
+  if (line.scope === "fork-baseline") {
+    const {
+      pricingCatalogId: _catalog, pricingCatalogVersion: _version, pricingRateId: _rate,
+      pricingBasis: _basis, cumulativeTotalCostMicros: _cumulative, ...baseline
+    } = base;
+    return {
+      ...baseline, priceStatus: "priced", cacheWriteInputCostMicros: 0, cachedInputCostMicros: 0,
+      uncachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
+    } as T;
+  }
   const reference = !provider.local && !directRate ? estimateTokenUsageCost({
     model: upstreamModel,
     uncachedInputTokens: line.uncachedInputTokens, cachedInputTokens: line.cachedInputTokens,
