@@ -389,7 +389,12 @@ export function useComposerMentions(params: {
     Boolean(kind) && !params.disabled && dismissKey !== dismissedKey;
   const activeOption = Math.min(activeIndex, Math.max(optionCount - 1, 0));
 
-  const skillsTriggered = Boolean(skillTrigger || slashTrigger);
+  const skillPickerLoadKey = skillTrigger
+    ? `${sources?.currentThreadKey ?? ""}:skills:${skillTrigger.start}`
+    : slashTrigger
+      ? `${sources?.currentThreadKey ?? ""}:slash:${slashTrigger.start}`
+      : undefined;
+  const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   const navigationTriggered = Boolean(directoryTrigger || rawHashTrigger);
   const ensureSkillsLoaded = sources?.ensureSkillsLoaded;
   const ensureNavigationLoaded = sources?.ensureNavigationLoaded;
@@ -398,8 +403,14 @@ export function useComposerMentions(params: {
   // Keyed on the trigger existing, NOT on there being candidates: an empty
   // population is exactly the state a load is supposed to fix.
   useEffect(() => {
-    if (skillsTriggered) ensureSkillsLoaded?.();
-  }, [ensureSkillsLoaded, skillsTriggered]);
+    if (!skillPickerLoadKey) {
+      loadedSkillPickerRef.current = undefined;
+      return;
+    }
+    if (!ensureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) return;
+    loadedSkillPickerRef.current = skillPickerLoadKey;
+    ensureSkillsLoaded();
+  }, [ensureSkillsLoaded, skillPickerLoadKey]);
   useEffect(() => {
     if (navigationTriggered) ensureNavigationLoaded?.(navigationQuery);
   }, [ensureNavigationLoaded, navigationTriggered, navigationQuery]);

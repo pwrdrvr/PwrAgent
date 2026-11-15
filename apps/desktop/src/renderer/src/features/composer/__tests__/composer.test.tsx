@@ -624,6 +624,29 @@ function createScheduledActionApi(options?: {
 }
 
 describe("Composer", () => {
+  it.each(["$", "/"])("refreshes skills once per %s picker opening, across query and summary updates", (prefix) => {
+    const refresh = vi.fn();
+    const thread: NavigationThreadSummary = {
+      id: "picker-refresh",
+      title: "Picker refresh",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const view = render(<Composer skills={[]} thread={thread} onEnsureSkillsLoaded={() => refresh()} />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    for (const query of ["", "p", "pa", "pap", "paper"]) {
+      fireEvent.change(input, { target: { value: `${prefix}${query}` } });
+    }
+    expect(refresh).toHaveBeenCalledTimes(1);
+    view.rerender(<Composer skills={[]} thread={{ ...thread }} onEnsureSkillsLoaded={() => refresh()} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: `${prefix}paper` } });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
   it("can start a restored project draft after another project starts a placeholder thread", async () => {
     const store = createComposerDraftStore();
     const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);

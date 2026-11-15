@@ -6320,20 +6320,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 
+  const skillPickerLoadKey = trigger
+    ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:skills:${trigger.start}`
+    : slashTrigger
+      ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:slash:${slashTrigger.start}`
+      : undefined;
+  const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!trigger && !slashTrigger) {
+    if (!skillPickerLoadKey) {
+      loadedSkillPickerRef.current = undefined;
       return;
     }
-
+    if (!props.onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
+      return;
+    }
+    // Query edits and streamed thread summaries can replace the callback.
+    // Refresh once per trigger opening, including an empty suggestion list.
+    loadedSkillPickerRef.current = skillPickerLoadKey;
     void props.onEnsureSkillsLoaded?.();
   }, [
     props.onEnsureSkillsLoaded,
-    slashTrigger?.end,
-    slashTrigger?.query,
-    slashTrigger?.start,
-    trigger?.end,
-    trigger?.query,
-    trigger?.start,
+    skillPickerLoadKey,
   ]);
 
   useEffect(() => {

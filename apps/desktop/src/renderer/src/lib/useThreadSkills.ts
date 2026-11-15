@@ -88,9 +88,8 @@ export function useThreadSkills(params: {
   }, [stateByThreadKey]);
 
   // Writes the ref and the React state together. The in-flight guard below is
-  // read synchronously, and the composer fires `ensureLoaded` once per
-  // keystroke after `/` — leaving the ref to catch up in an effect let a burst
-  // of keystrokes issue one request each.
+  // read synchronously so concurrent picker opens share a request instead
+  // of waiting for a React effect to publish the in-flight state.
   const commitState = useCallback(
     (
       updater: (
@@ -123,7 +122,7 @@ export function useThreadSkills(params: {
       }
 
       const currentState = stateByThreadKeyRef.current[skillTarget.key];
-      if (!options.force && (currentState?.loading || currentState?.response)) {
+      if (currentState?.loading || (!options.force && currentState?.response)) {
         return;
       }
 
@@ -135,7 +134,8 @@ export function useThreadSkills(params: {
       commitState((current) => ({
         ...current,
         [skillTarget.key]: {
-          ...createEmptySkillState(),
+          ...(currentState ?? createEmptySkillState()),
+          error: undefined,
           loading: true,
         },
       }));
@@ -260,8 +260,11 @@ export function useThreadSkills(params: {
   }, [commitState, desktopApi, loadTarget, skillTarget, thread]);
 
   const ensureLoaded = useCallback(async (): Promise<void> => {
-    await loadTarget();
-  }, [loadTarget]);
+    // Called at picker-open boundaries, not for each query character. Codex
+    // notifications only cover watched roots, so revalidate on every open.
+    // ACP commands retain their session/event-driven cache behavior.
+    await loadTarget({ force: skillTarget?.backend === "codex" });
+  }, [loadTarget, skillTarget?.backend]);
 
   // Keyed on the directories' content, not the thread's identity: the summary
   // is replaced on every streamed item, and `skills` feeds memoized transcript
