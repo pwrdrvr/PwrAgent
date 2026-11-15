@@ -1,7 +1,32 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import v8 from "node:v8";
 import { configDefaults, defineConfig } from "vitest/config";
+
+// Turn off V8's Sparkplug baseline tier for the threads-pool workers. React
+// 19's development runtime constructs an `Error("react-stack-top-frame")` for
+// every JSX element to record its owner stack. When the element is created in
+// a function running as Sparkplug code, V8 maps the frame's return address
+// back to a bytecode offset by scanning that function's offset table from the
+// start, at any `Error.stackTraceLimit` above 0. `Composer` is one 109 KB
+// bytecode function, over TurboFan's 60 KB `--max-optimized-bytecode-size`,
+// so it never leaves Sparkplug, and each element in its JSX return paid
+// 90–125µs for that scan: about 1.3s of one launchpad composer property test.
+// Interpreter frames record their bytecode offset directly, so the cost
+// disappears. Owner stacks and every other React dev diagnostic stay on.
+//
+// Measured on macOS, Node 24.22.1 (before → after):
+// launchpad-composer-draft model test 1,559–1,937ms → 490–529ms alone, and a
+// 5,000ms timeout → 1.5s for its file when run beside other Composer files;
+// eight Composer-heavy files 42.6–49.0s → 17.6–19.8s; the desktop-renderer
+// project 94.1s → 89.5s wall and 657s → 594s CPU; the other threads projects
+// 12.6s → 12.2s. V8 flags are process-wide and
+// worker_threads cannot take their own, so this applies to every threads
+// project. The config is evaluated once in the host process, before any
+// worker starts. Forked desktop-main workers inherit `process.execArgv`, which
+// this does not change, so they keep the default tiering.
+v8.setFlagsFromString("--no-sparkplug");
 
 // Windows CI runners are markedly slower at spawning child processes (git.exe,
 // bash.exe), so git/worktree-heavy desktop tests can exceed the 5s default.
