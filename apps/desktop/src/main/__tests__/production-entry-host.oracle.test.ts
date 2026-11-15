@@ -100,10 +100,12 @@ function oraclePlugin(cost: BundleCost): Plugin {
 }
 type BuildOwner = { signal: AbortSignal; onTestFinished(cleanup: () => Promise<void>): void };
 
-async function ownedBuild<Options extends BuildOptions>(owner: BuildOwner, options: Options): Promise<BuildResult<Options>> {
+type OracleBuildOptions = BuildOptions & { write: false };
+
+async function ownedBuild(owner: BuildOwner, options: OracleBuildOptions): Promise<BuildResult<OracleBuildOptions>> {
   owner.signal.throwIfAborted();
   const opening = context(options);
-  let running: Promise<BuildResult<Options>> | undefined;
+  let running: Promise<BuildResult<OracleBuildOptions>> | undefined;
   let cleanup: Promise<void> | undefined;
   const dispose = (): Promise<void> => cleanup ??= (async () => {
     const builder = await opening;
