@@ -1,6 +1,6 @@
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import fc from "fast-check";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { buildLegacyEncodedThreadIdentityKey, buildPullRequestStatusKey, type AgentEvent, type PrSummary, type ThreadDependency, type ThreadPullRequestWatchSummary } from "@pwragent/shared";
 
 import { PrStatusWatchCoordinator } from "../pr-status/pr-status-watch";
@@ -9,6 +9,7 @@ import { ThreadDependencyCoordinator } from "../app-server/thread-dependency-coo
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { installTestOwnerHost } from "../shell/testing/owner-host-fixture";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -72,6 +73,9 @@ async function lifecycle(terminal: boolean, commands: Array<"register" | "archiv
 }
 
 describe("PR watches end at archive", () => {
+  // These registry tests also run without the suite-wide owner-host setup.
+  beforeAll(installTestOwnerHost);
+
   it("retires setting-only legacy Auto-fix overlays without changing live settings", async () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("codex" as const, "claude" as const, "acp:grok" as const),
@@ -338,58 +342,71 @@ describe("Auto-fix ends at archive", () => {
   });
 });
 
+type PrerequisiteCommand = "register" | "archive" | "restore" | "event" | "settle";
+
+/** A delivered continuation holds the consumer until its turn ends; archive revokes pending waits. */
+async function prerequisiteLifecycle(commands: PrerequisiteCommand[]): Promise<void> {
+  const db = openInMemoryStateDb();
+  const overlays = new SqliteOverlayStore(db);
+  const store = new ThreadDependencyStore(db.raw);
+  const submit = vi.fn(async () => ({ status: "started" as const, turnId: "wake" }));
+  const coordinator = new ThreadDependencyCoordinator({
+    store, submit, readThread: async () => ({ turns: [], prs: [{ pr, fetchedAt: 1 }] }), changed: async () => {}, now: () => 1,
+  });
+  let archived = false;
+  // An undelivered wait. Registering an identical one returns it, and the
+  // prerequisite is already merged, so any evaluation makes it ready.
+  let pending = false;
+  // A started continuation holds its consumer until that turn ends; a
+  // wait registered meanwhile stays ready behind it.
+  let busy = false;
+  const wake = () => {
+    if (busy || !pending) return 0;
+    pending = false;
+    busy = true;
+    return 1;
+  };
+  try {
+    for (const [index, command] of commands.entries()) {
+      submit.mockClear();
+      if (command === "register") {
+        if (archived) expect(() => store.register(dependency(`dependency-${index}`))).toThrow(/archived/i);
+        else { store.register(dependency(`dependency-${index}`)); pending = true; }
+      } else if (command === "archive") {
+        await overlays.observeArchivedThreads([identity], index);
+        archived = true;
+        pending = false;
+      } else if (command === "restore") {
+        await overlays.setThreadArchiveTombstone({ ...identity, restoredAt: index });
+        archived = false;
+      } else if (command === "event") {
+        await coordinator.handlePrEvent(pr.url);
+        expect(submit).toHaveBeenCalledTimes(wake());
+      } else if (busy) {
+        // The consumer's wake turn ends, which releases it for the next ready wait.
+        await coordinator.handleThreadEvent(identity, { id: "wake", status: "completed" });
+        busy = false;
+        expect(submit).toHaveBeenCalledTimes(wake());
+      }
+      expect(store.active().length > 0).toBe(pending);
+    }
+  } finally { db.close(); }
+}
+
 describe("PR prerequisite subscriptions end at archive", () => {
+  it("holds the shrunk register/event/register/event sequence until the consumer turn ends", async () => {
+    await prerequisiteLifecycle(["register", "event", "register", "event", "settle", "event"]);
+  });
+
+  it("retires a wait queued behind a running consumer without replay after restore", async () => {
+    await prerequisiteLifecycle(["register", "event", "register", "event", "archive", "restore", "settle", "event"]);
+  });
+
   it("models registration, archive, restore, prerequisite events and consumer turns without replay", async () => {
     await fc.assert(fc.asyncProperty(fc.array(
-      fc.constantFrom("register" as const, "archive" as const, "restore" as const, "event" as const, "settle" as const),
+      fc.constantFrom<PrerequisiteCommand>("register", "archive", "restore", "event", "settle"),
       { minLength: 1, maxLength: 12 },
-    ), async (commands) => {
-      const db = openInMemoryStateDb();
-      const overlays = new SqliteOverlayStore(db);
-      const store = new ThreadDependencyStore(db.raw);
-      const submit = vi.fn(async () => ({ status: "started" as const, turnId: "wake" }));
-      const coordinator = new ThreadDependencyCoordinator({
-        store, submit, readThread: async () => ({ turns: [], prs: [{ pr, fetchedAt: 1 }] }), changed: async () => {}, now: () => 1,
-      });
-      let archived = false;
-      // An undelivered wait. Registering an identical one returns it, and the
-      // prerequisite is already merged, so any evaluation makes it ready.
-      let pending = false;
-      // A started continuation holds its consumer until that turn ends; a
-      // wait registered meanwhile stays ready behind it.
-      let busy = false;
-      const wake = () => {
-        if (busy || !pending) return 0;
-        pending = false;
-        busy = true;
-        return 1;
-      };
-      try {
-        for (const [index, command] of commands.entries()) {
-          submit.mockClear();
-          if (command === "register") {
-            if (archived) expect(() => store.register(dependency(`dependency-${index}`))).toThrow(/archived/i);
-            else { store.register(dependency(`dependency-${index}`)); pending = true; }
-          } else if (command === "archive") {
-            await overlays.observeArchivedThreads([identity], index);
-            archived = true;
-            pending = false;
-          } else if (command === "restore") {
-            await overlays.setThreadArchiveTombstone({ ...identity, restoredAt: index });
-            archived = false;
-          } else if (command === "event") {
-            await coordinator.handlePrEvent(pr.url);
-            expect(submit).toHaveBeenCalledTimes(wake());
-          } else {
-            // The consumer's wake turn ends, which releases it for the next ready wait.
-            await coordinator.handleThreadEvent(identity, { id: "wake", status: "completed" });
-            busy = false;
-            expect(submit).toHaveBeenCalledTimes(wake());
-          }
-          expect(store.active().length > 0).toBe(pending);
-        }
-      } finally { db.close(); }
-    }), { numRuns: 25 });
+    ), prerequisiteLifecycle), { numRuns: 25 });
   });
 
   it("discards a claimed continuation archived during publication even after restore", async () => {
