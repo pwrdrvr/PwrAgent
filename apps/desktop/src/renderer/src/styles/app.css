@@ -4854,6 +4854,12 @@ textarea,
   font-weight: 600;
 }
 
+.log-window__status-message[data-tone="error"] {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
 .log-window__status-action {
   display: inline-flex;
   align-items: center;

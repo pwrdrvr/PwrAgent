@@ -110,6 +110,59 @@ describe("LogsWindow", () => {
     expect(api.readAppLogSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      label: "a missing log file",
+      reveal: async () => ({ opened: false, missing: true as const, error: "Path does not exist" }),
+      message: "The log file was not found. It may have been rotated or deleted.",
+    },
+    {
+      label: "a refused reveal",
+      reveal: async () => ({ opened: false, error: "Finder is unavailable." }),
+      message: "Finder is unavailable.",
+    },
+    {
+      label: "a rejected reveal",
+      reveal: async () => {
+        throw new Error("IPC channel closed.");
+      },
+      message: "IPC channel closed.",
+    },
+  ])("reports $label from Reveal in the status bar", async ({ reveal, message }) => {
+    const logFilePath = "/Users/example/Library/Logs/PwrAgent/main.log";
+    const revealPath = vi.fn(reveal);
+    installApi({
+      revealPath,
+      readAppLogSnapshot: vi.fn(async () => snapshot(MCP_ENTRIES, { logFilePath })),
+    });
+
+    render(<LogsWindow />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reveal log file in file manager" }));
+
+    expect(revealPath).toHaveBeenCalledWith({ path: logFilePath });
+    const status = screen.getByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent(message));
+    expect(status.querySelector(".log-window__status-message")).toHaveAttribute("data-tone", "error");
+  });
+
+  it("says nothing in the status bar when Reveal succeeds", async () => {
+    const revealPath = vi.fn(async () => ({ opened: true }));
+    installApi({
+      revealPath,
+      readAppLogSnapshot: vi.fn(async () =>
+        snapshot(MCP_ENTRIES, { logFilePath: "/Users/example/Library/Logs/PwrAgent/main.log" })),
+    });
+
+    render(<LogsWindow />);
+    const revealButton = await screen.findByRole("button", { name: "Reveal log file in file manager" });
+    await act(async () => {
+      fireEvent.click(revealButton);
+    });
+
+    expect(revealPath).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
   it("filters to matching lines with gaps, and highlights in place in Highlight mode", async () => {
     const { api } = installApi({ entries: MCP_ENTRIES });
 

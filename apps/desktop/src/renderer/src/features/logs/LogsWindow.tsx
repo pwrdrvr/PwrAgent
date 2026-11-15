@@ -107,6 +107,12 @@ type PausedState = {
 
 const NOT_PAUSED: PausedState = { newLines: 0, newErrors: 0 };
 
+/** The status bar's one live message: a copy that landed, or an action that failed. */
+type StatusMessage = {
+  text: string;
+  tone: "success" | "error";
+};
+
 export function LogsWindow() {
   const desktopApi = useDesktopApi();
   const [preferences, updatePreferences] = useLogsViewerPreferences(desktopApi);
@@ -151,7 +157,7 @@ export function LogsWindow() {
   const [flashSequences, setFlashSequences] = useState<ReadonlySet<number>>(
     () => new Set(),
   );
-  const [statusMessage, setStatusMessage] = useState<string | undefined>();
+  const [statusMessage, setStatusMessage] = useState<StatusMessage | undefined>();
   const [expandedLines, setExpandedLines] = useState<ReadonlySet<number>>(
     () => new Set(),
   );
@@ -713,19 +719,20 @@ export function LogsWindow() {
     } catch (copyError: unknown) {
       console.error("Failed to copy log lines", copyError);
       setCopyState("idle");
-      setStatusMessage("Could not copy to the clipboard");
+      setStatusMessage({ text: "Could not copy to the clipboard", tone: "error" });
       return;
     }
     const lineCount = entries.length === 1
       ? "1 line"
       : `${formatLogCount(entries.length)} lines`;
-    setStatusMessage(
-      !wantDiagnostics
+    setStatusMessage({
+      text: !wantDiagnostics
         ? `Copied ${lineCount}`
         : diagnostics.diagnostics
           ? `Copied ${lineCount} with diagnostics`
           : `Copied ${lineCount}; diagnostics unavailable`,
-    );
+      tone: "success",
+    });
     setCopyState("copied");
     setFlashSequences(new Set(entries.map((entry) => entry.sequence)));
     if (copyButtonResetTimerRef.current) {
@@ -801,7 +808,7 @@ export function LogsWindow() {
           window.clearTimeout(pathCopyResetTimerRef.current);
         }
         setCopiedLogFilePath(true);
-        setStatusMessage("Copied the log file path");
+        setStatusMessage({ text: "Copied the log file path", tone: "success" });
         pathCopyResetTimerRef.current = window.setTimeout(() => {
           setCopiedLogFilePath(false);
           pathCopyResetTimerRef.current = undefined;
@@ -817,8 +824,23 @@ export function LogsWindow() {
       return;
     }
     const reveal = desktopApi?.revealPath ?? desktopApi?.openPath;
-    void reveal?.({ path: logFilePath }).catch((revealError: unknown) => {
-      console.error("Failed to reveal log file", revealError);
+    if (!reveal) {
+      return;
+    }
+    // Success needs no word: the file manager comes forward. A rotated or
+    // deleted file, or a refusal, would otherwise look like a dead button.
+    void reveal({ path: logFilePath }).then(
+      (response) => response.opened
+        ? undefined
+        : response.missing
+          ? "The log file was not found. It may have been rotated or deleted."
+          : response.error ?? "The log file could not be shown.",
+      (revealError: unknown) => {
+        console.error("Failed to reveal log file", revealError);
+        return revealError instanceof Error ? revealError.message : String(revealError);
+      },
+    ).then((failure) => {
+      setStatusMessage(failure ? { text: failure, tone: "error" } : undefined);
     });
   }, [desktopApi, logFilePath]);
 
@@ -1236,9 +1258,11 @@ export function LogsWindow() {
             <span className="log-window__status-spacer" />
             <span aria-live="polite" className="log-window__status-live" role="status">
               {statusMessage ? (
-                <span className="log-window__status-message">
-                  <CheckIcon aria-hidden="true" size={12} />
-                  {statusMessage}
+                <span className="log-window__status-message" data-tone={statusMessage.tone}>
+                  {statusMessage.tone === "success" ? (
+                    <CheckIcon aria-hidden="true" size={12} />
+                  ) : null}
+                  {statusMessage.text}
                 </span>
               ) : null}
             </span>
