@@ -18302,13 +18302,14 @@ export class DesktopBackendRegistry {
     }
     // A failed endpoint read is recorded in the catalog state.
     await catalog.listModelOptions().catch(() => []);
+    if (this.closed) return [];
     // A discovery that cached a summary during the read publishes states on
     // the summary, which this read did not reach; refresh it over the
     // running Codex instead.
     if (this.codexBackendSummary) return await this.refreshCodexProviderCatalogs();
     const states = catalog.catalogStates();
     // A retry that found the same state tells windows nothing new.
-    if (!this.closed && JSON.stringify(before) !== JSON.stringify(states)) {
+    if (JSON.stringify(before) !== JSON.stringify(states)) {
       await this.emitCodexProviderStatusUpdated();
     }
     return states;
@@ -18393,6 +18394,9 @@ export class DesktopBackendRegistry {
       launchpadOptions: buildLaunchpadOptions("codex", [...ownModels, ...known.models]),
       ...(known.states.length ? { codexModelProviders: known.states } : {}),
     };
+    // The failed model list read never observed these states; a provider
+    // whose endpoint is down is read again later.
+    this.codexProviderCatalogRetry.observe(known.states);
   }
 
   /** Settles once every saved provider change so far is published. */

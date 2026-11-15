@@ -41,6 +41,26 @@ describe("CodexProviderCatalogRetry", () => {
     expect(refresh).toHaveBeenCalledTimes(6);
   });
 
+  it("retries a failure another read observed while its refresh ran", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const refresh = vi.fn(async () => {
+      calls += 1;
+      // A Settings save reads the provider down while the first retry runs,
+      // but the retry's own read had found it ready.
+      if (calls === 1) retry.observe([down]);
+      return [ready];
+    });
+    const retry = new CodexProviderCatalogRetry({ refresh });
+    retry.observe([down]);
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("drops its timer when closed", () => {
     vi.useFakeTimers();
     const retry = new CodexProviderCatalogRetry({ refresh: async () => [down] });

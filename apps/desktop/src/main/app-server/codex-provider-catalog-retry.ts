@@ -16,6 +16,8 @@ export class CodexProviderCatalogRetry {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private attempt = 0;
   private running = false;
+  /** What other reads published while a refresh ran. */
+  private observedWhileRunning: readonly CodexModelProviderCatalogState[] = [];
   private closed = false;
 
   constructor(private readonly options: {
@@ -28,7 +30,13 @@ export class CodexProviderCatalogRetry {
 
   /** Look at the latest catalog states, as each read publishes them. */
   observe(states: readonly CodexModelProviderCatalogState[]): void {
-    if (this.closed || this.running) return;
+    if (this.closed) return;
+    if (this.running) {
+      // A Settings save can read a provider while the retry runs. Its
+      // failure must still arm the next retry once this one returns.
+      this.observedWhileRunning = [...this.observedWhileRunning, ...states];
+      return;
+    }
     if (!states.some((state) => state.status === "unavailable")) {
       this.clear();
       this.attempt = 0;
@@ -59,7 +67,9 @@ export class CodexProviderCatalogRetry {
     } finally {
       this.running = false;
     }
-    this.observe(states);
+    const observed = this.observedWhileRunning;
+    this.observedWhileRunning = [];
+    this.observe([...states, ...observed]);
   }
 
   private clear(): void {

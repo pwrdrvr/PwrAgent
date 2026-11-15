@@ -101,6 +101,24 @@ function pickerProviderModels(backends: readonly BackendSummary[]): { ids: strin
   };
 }
 
+/** A federation peer's `listBackends` against the owner's registry. */
+function federationListBackends(registry: object): () => Promise<BackendSummary[]> {
+  const replies: FederationProtocolEnvelope[] = [];
+  const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+  router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail"], sendEnvelope: (envelope) => { replies.push(envelope); } });
+  registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations });
+  let requestCount = 0;
+  return async () => {
+    const id = `list-${++requestCount}`;
+    await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
+      id, method: FEDERATION_BACKEND_METHODS.listBackends, params: { includeUnavailable: true },
+      kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 100,
+    } });
+    const response = replies.find((envelope) => "requestId" in envelope && envelope.requestId === id) as { result?: ListBackendsResponse } | undefined;
+    return response?.result?.backends ?? [];
+  };
+}
+
 async function runScenario(params: {
   discoverFirst: boolean;
   /** A turn holds the running App Server, which must then not restart. */
@@ -156,20 +174,7 @@ async function runScenario(params: {
   if (params.turnActive) {
     (registry as unknown as { activeTurnKeys: Set<string> }).activeTurnKeys.add("codex:thread-1:turn-1");
   }
-  const replies: FederationProtocolEnvelope[] = [];
-  const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
-  router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail"], sendEnvelope: (envelope) => { replies.push(envelope); } });
-  registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations });
-  let requestCount = 0;
-  const federationBackends = async (): Promise<BackendSummary[]> => {
-    const id = `list-${++requestCount}`;
-    await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
-      id, method: FEDERATION_BACKEND_METHODS.listBackends, params: { includeUnavailable: true },
-      kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 100,
-    } });
-    const response = replies.find((envelope) => "requestId" in envelope && envelope.requestId === id) as { result?: ListBackendsResponse } | undefined;
-    return response?.result?.backends ?? [];
-  };
+  const federationBackends = federationListBackends(registry);
   try {
     if (params.discoverFirst) {
       await drive(registry.listBackends({ includeUnavailable: true, refreshModels: "codex" }, issueProviderDiscoveryPermit("settings-user-action")));
@@ -310,89 +315,129 @@ describe("Codex model provider publication", () => {
     });
   });
 
-  it("re-reads a provider whose endpoint was down at save time once it is back, without reading Codex", async () => {
-    // A launch-changing save drops the summary, so the save reads only the
-    // provider endpoints. A provider found down there must still be retried,
-    // and the retry must not ask Codex for its model list: without a summary
-    // there may be no App Server, and no discovery permit to start one.
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-retry-"));
-    const configPath = path.join(tempRoot, "config.toml");
-    await writeFile(configPath, "");
-    const configStore = new DesktopConfigStore({ configPath });
-    configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/opt/pwragent/codex", selectedVersion: "0.162.1" });
-    let endpointUp = false;
-    const providerFetch = vi.fn(async () => endpointUp
-      ? new Response(JSON.stringify({ data: ENDPOINT_MODELS.map((id) => ({ id })) }))
-      : new Response(JSON.stringify({ error: { message: "maintenance" } }), { status: 503 }));
-    const listModels = vi.fn(async () => [OPENAI_MODEL]);
-    const registry = createDesktopBackendRegistry({
-      codexClient: {
-        close: async () => undefined,
-        onNotification: () => () => undefined,
-        onPendingRequest: () => () => undefined,
-        getInitializeResult: async () => ({ methods: ["thread/start"], userAgent: "codex/0.162.1" }),
+  describe("a provider whose endpoint was down at save time is read again once it is back", () => {
+    async function retryOwner() {
+      const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-retry-"));
+      const configPath = path.join(tempRoot, "config.toml");
+      await writeFile(configPath, "");
+      const configStore = new DesktopConfigStore({ configPath });
+      configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/opt/pwragent/codex", selectedVersion: "0.162.1" });
+      const io = { endpointUp: true, codexListUp: true };
+      const providerFetch = vi.fn(async () => io.endpointUp
+        ? new Response(JSON.stringify({ data: ENDPOINT_MODELS.map((id) => ({ id })) }))
+        : new Response(JSON.stringify({ error: { message: "maintenance" } }), { status: 503 }));
+      const listModels = vi.fn(async () => {
+        if (!io.codexListUp) throw new Error("model/list failed");
+        return [OPENAI_MODEL];
+      });
+      const registry = createDesktopBackendRegistry({
+        codexClient: {
+          close: async () => undefined,
+          onNotification: () => () => undefined,
+          onPendingRequest: () => () => undefined,
+          getInitializeResult: async () => ({ methods: ["thread/start"], userAgent: "codex/0.162.1" }),
+          listModels,
+        } as never,
+        configStore,
+        overlayStore: { listOverlays: async () => [] } as never,
+        discoverLocalAcpAgents: async () => [],
+        isBootstrapMode: () => false,
+        resolveCodexModelProviders: () => [...(configStore.read("models").codex?.providers ?? [])] as CodexModelProviderSettings[],
+        resolveCodexModelProviderKeys: async () => ({}),
+        codexModelProviderFetch: providerFetch,
+      });
+      const notifications: string[] = [];
+      registry.onEvent((event) => {
+        if (event.notification.method === "backend/providerStatus/updated") notifications.push(event.notification.method);
+      });
+      const federationBackends = federationListBackends(registry);
+      const save = async (models: string[]) => {
+        await configStore.write({ models: { codex: { providers: [
+          toSettings({ id: "mathos", models, discoverModels: true, port: 18080 }),
+        ] } } }, ["models"]);
+        await registry.settleCodexModelProviderPublication();
+      };
+      /** MathOS's catalog state and model ids on the local and federation surfaces. */
+      const mathosOnEverySurface = async () => {
+        const result: Array<{ surface: string; status?: string; ids: string[] }> = [];
+        for (const [surface, backends] of [
+          ["local", (await registry.listBackends({ includeUnavailable: true })).backends],
+          ["federation", await federationBackends()],
+        ] as const) {
+          const status = backends.find((backend) => backend.kind === "codex")
+            ?.codexModelProviders?.find((state) => state.id === "mathos")?.status;
+          result.push({ surface, status, ids: pickerProviderModels(backends).ids });
+        }
+        return result;
+      };
+      const expectMathos = async (status: string, ids: string[]) => {
+        expect(await mathosOnEverySurface()).toEqual([
+          { surface: "local", status, ids },
+          { surface: "federation", status, ids },
+        ]);
+      };
+      return {
+        registry,
+        io,
         listModels,
-      } as never,
-      configStore,
-      overlayStore: { listOverlays: async () => [] } as never,
-      discoverLocalAcpAgents: async () => [],
-      isBootstrapMode: () => false,
-      resolveCodexModelProviders: () => [...(configStore.read("models").codex?.providers ?? [])] as CodexModelProviderSettings[],
-      resolveCodexModelProviderKeys: async () => ({}),
-      codexModelProviderFetch: providerFetch,
-    });
-    const notifications: string[] = [];
-    registry.onEvent((event) => {
-      if (event.notification.method === "backend/providerStatus/updated") notifications.push(event.notification.method);
-    });
-    const replies: FederationProtocolEnvelope[] = [];
-    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
-    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail"], sendEnvelope: (envelope) => { replies.push(envelope); } });
-    registerFederationBackendHandlers({ router, backend: registry as unknown as FederationBackendOperations });
-    let requestCount = 0;
-    const federationBackends = async (): Promise<BackendSummary[]> => {
-      const id = `list-${++requestCount}`;
-      await router.routeEnvelope({ sourcePeerId: "viewer", envelope: {
-        id, method: FEDERATION_BACKEND_METHODS.listBackends, params: { includeUnavailable: true },
-        kind: "request", protocolVersion: 1, sourceInstanceId: "viewer", targetInstanceId: "owner", createdAt: 100,
-      } });
-      const response = replies.find((envelope) => "requestId" in envelope && envelope.requestId === id) as { result?: ListBackendsResponse } | undefined;
-      return response?.result?.backends ?? [];
-    };
-    const surfaces = async () => [
-      ["local", (await registry.listBackends({ includeUnavailable: true })).backends],
-      ["federation", await federationBackends()],
-    ] as const;
-    const mathosState = (backends: readonly BackendSummary[]) =>
-      backends.find((backend) => backend.kind === "codex")?.codexModelProviders?.find((state) => state.id === "mathos")?.status;
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      await configStore.write({ models: { codex: { providers: [
-        toSettings({ id: "mathos", models: ["fixture"], discoverModels: true, port: 18080 }),
-      ] } } }, ["models"]);
-      await registry.settleCodexModelProviderPublication();
-      for (const [surface, backends] of await surfaces()) {
-        expect({ surface, status: mathosState(backends) }).toEqual({ surface, status: "unavailable" });
-        expect({ surface, ids: pickerProviderModels(backends).ids }).toEqual({ surface, ids: ["@mathos/fixture"] });
-      }
-      endpointUp = true;
-      notifications.length = 0;
-      await vi.advanceTimersByTimeAsync(70_000);
-      for (const [surface, backends] of await surfaces()) {
-        expect({ surface, status: mathosState(backends) }).toEqual({ surface, status: "ready" });
-        expect({ surface, ids: pickerProviderModels(backends).ids }).toEqual({
-          surface,
-          ids: ["@mathos/fixture", "@mathos/mathos-coder", "@mathos/mathos-prover"],
-        });
-      }
-      expect(notifications.length).toBeGreaterThan(0);
-      expect(listModels).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-      await registry.close();
-      configStore.dispose();
-      await rm(tempRoot, { recursive: true, force: true });
+        notifications,
+        save,
+        expectMathos,
+        dispose: async () => {
+          vi.useRealTimers();
+          await registry.close();
+          configStore.dispose();
+          await rm(tempRoot, { recursive: true, force: true });
+        },
+      };
     }
+
+    it("without a Codex summary, and without reading Codex", async () => {
+      // A launch-changing save drops the summary, so the save reads only the
+      // provider endpoints. A provider found down there must still be retried,
+      // and the retry must not ask Codex for its model list: without a summary
+      // there may be no App Server, and no discovery permit to start one.
+      const owner = await retryOwner();
+      try {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        owner.io.endpointUp = false;
+        await owner.save(["fixture"]);
+        await owner.expectMathos("unavailable", ["@mathos/fixture"]);
+        owner.io.endpointUp = true;
+        owner.notifications.length = 0;
+        await vi.advanceTimersByTimeAsync(70_000);
+        await owner.expectMathos("ready", ["@mathos/fixture", "@mathos/mathos-coder", "@mathos/mathos-prover"]);
+        expect(owner.notifications.length).toBeGreaterThan(0);
+        expect(owner.listModels).not.toHaveBeenCalled();
+      } finally {
+        await owner.dispose();
+      }
+    });
+
+    it("when Codex's own model list also failed on a model-only edit", async () => {
+      // The summary stays, Codex's list read fails first, and the endpoints
+      // are read beside it to publish the known models. That read must arm
+      // the retry too.
+      const owner = await retryOwner();
+      try {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        await owner.save(["fixture"]);
+        await owner.registry.listBackends(
+          { includeUnavailable: true, refreshModels: "codex" },
+          issueProviderDiscoveryPermit("settings-user-action"),
+        );
+        owner.io.endpointUp = false;
+        owner.io.codexListUp = false;
+        await owner.save(["fixture-2"]);
+        await owner.expectMathos("unavailable", ["@mathos/fixture-2"]);
+        owner.io.endpointUp = true;
+        owner.io.codexListUp = true;
+        await vi.advanceTimersByTimeAsync(70_000);
+        await owner.expectMathos("ready", ["@mathos/fixture-2", "@mathos/mathos-coder", "@mathos/mathos-prover"]);
+      } finally {
+        await owner.dispose();
+      }
+    });
   });
 
   describe("a read that began before a save lands after it", () => {
