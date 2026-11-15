@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.4.5 - 2026-11-14
+
+- Reusable Decisions - Let agents register, list, invoke, update, and delete reusable predicate, choice, and score decisions through OpenAI Decisions, TypeSafe Jev, or a configured local decision model. Validate inputs against a JSON Schema, retain versioned definitions, and invoke decisions individually, in batches, or without registration.
+- Managed GitHub MCP - Add GitHub's MCP server from Settings using the GitHub CLI account or a stored token. Choose GitHub-hosted or an independently installed local server, select toolsets, enable read-only mode and server skills, and inspect account and connection readiness. Pull-request and Actions toolsets start off to avoid duplicating PwrAgent's built-in forge tools.
+- Provider Models and Effort - Show discovered provider models in Settings with catalog refresh and supported input capabilities. Offer the reasoning-effort levels and defaults that each provider reports, and pass the selected effort through to that provider.
+- Provider Response Blocks - Show content-filter blocks explicitly in thread transcripts and messaging instead of leaving an unexplained empty response.
+- Usage Pricing - Preserve known costs when some usage has no available rate, and label assumed OpenRouter reference prices separately from actual provider charges.
+- Worktree Cleanup - Stop replaying completed or permanently skipped cleanup outcomes at every startup, while preserving unfinished work whose metadata could not be read.
+- Thread Headers - Keep short project names whole instead of truncating them prematurely.
+
+Decision invocations use the configured provider's account and billing; OpenAI Decisions API usage is separate from the Codex subscription. Reference-price estimates are not a statement of what another provider charged.
+
 ## v1.4.4 - 2026-11-14
 
 - Codex Model Providers - Show configured providers by name in provider pickers and discover their model catalogs across desktop, messaging, connected instances, and agent tools. Keep manually listed models available when discovery fails, show catalog status, and test endpoint compatibility from Settings.
