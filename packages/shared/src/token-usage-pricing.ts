@@ -34,6 +34,14 @@ export type ThreadPricingSnapshot = {
   modelLabel?: string;
   serviceTier?: string;
   tokens?: ThreadUsageTokenBreakdown;
+  /** Recorded model/speed groups, retained when the provider cannot price the whole set. */
+  groups?: ThreadPricingSnapshotGroup[];
+};
+
+export type ThreadPricingSnapshotGroup = {
+  model?: string;
+  serviceTier?: string;
+  tokens: ThreadUsageTokenBreakdown;
 };
 
 export type ThreadUsageSettingsSnapshot = {

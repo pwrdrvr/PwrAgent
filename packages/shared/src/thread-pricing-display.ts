@@ -595,9 +595,56 @@ export function buildThreadPricingDisplay(params: {
 
 export type ThreadPricingDisplay = ReturnType<typeof buildThreadPricingDisplay>;
 
+export type ThreadPricingSnapshotEstimate = ThreadPricingSnapshot & {
+  totalCostMicros?: number;
+  currentModelRate?: {
+    displayName: string;
+    inputUsdPerMillion: number;
+    cachedInputUsdPerMillion: number;
+    outputUsdPerMillion: number;
+  };
+  groupEstimates?: Array<NonNullable<ThreadPricingSnapshot["groups"]>[number] & { totalCostMicros?: number }>;
+  unpricedGroupCount?: number;
+};
+
 /** Use the provider estimate or today's rates without manufacturing observed rows. */
-export function buildThreadPricingSnapshotEstimate(snapshot: ThreadPricingSnapshot, at = Date.now()) {
-  if (snapshot.pricingSource === "provider") return { ...snapshot, totalCostMicros: snapshot.estimatedCostMicros };
+export function buildThreadPricingSnapshotEstimate(snapshot: ThreadPricingSnapshot, at = Date.now()): ThreadPricingSnapshotEstimate {
+  const estimate = estimateThreadPricingSnapshot(snapshot, at);
+  if (estimate.totalCostMicros !== undefined || snapshot.localModel) return estimate;
+  // A rate is known even when no token totals were supplied. Zero counts here
+  // select a list-rate band only; they must never become a usage estimate.
+  const rate = estimateTokenUsageCost({
+    at, model: snapshot.model, serviceTier: snapshot.serviceTier,
+    inputTokenScope: "aggregate", uncachedInputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
+  });
+  return rate ? { ...estimate, currentModelRate: {
+    displayName: rate.displayName,
+    inputUsdPerMillion: rate.inputUsdPerMillion,
+    cachedInputUsdPerMillion: rate.cachedInputUsdPerMillion,
+    outputUsdPerMillion: rate.outputUsdPerMillion,
+  } } : estimate;
+}
+
+function estimateThreadPricingSnapshot(snapshot: ThreadPricingSnapshot, at: number): ThreadPricingSnapshotEstimate {
+  if (snapshot.pricingSource === "provider" && snapshot.estimatedCostMicros !== undefined) {
+    return { ...snapshot, totalCostMicros: snapshot.estimatedCostMicros };
+  }
+  // A missing whole-set price must not erase the groups we can price. Each
+  // group uses its recorded model and speed, never the thread's current model.
+  if (snapshot.groups?.length) {
+    const groupEstimates = snapshot.groups.map((group) => ({
+      ...group,
+      totalCostMicros: buildThreadPricingSnapshotEstimate(group, at).totalCostMicros,
+    }));
+    const priced = groupEstimates.filter((group) => group.totalCostMicros !== undefined);
+    return {
+      ...snapshot,
+      groupEstimates,
+      unpricedGroupCount: groupEstimates.length - priced.length,
+      totalCostMicros: priced.length ? priced.reduce((sum, group) => sum + group.totalCostMicros!, 0) : undefined,
+    };
+  }
+  if (snapshot.pricingSource === "provider") return { ...snapshot, totalCostMicros: undefined };
   if (snapshot.localModel) return { ...snapshot, totalCostMicros: 0 };
   const { model, tokens } = snapshot;
   const validCount = (count: number | undefined): count is number =>

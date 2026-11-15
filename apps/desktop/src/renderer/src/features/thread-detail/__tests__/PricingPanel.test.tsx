@@ -42,9 +42,40 @@ it("shows unavailable historical totals without inventing a price", () => {
   const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: { model: "gpt-6.1-sol", modelLabel: "GPT-6.1 Sol" } }} />);
   const card = view.container.querySelector(".pricing-snapshot-card")!;
   expect(card).toHaveTextContent("GPT-6.1 Sol");
-  expect(card).toHaveTextContent("Price unavailable");
+  expect(card).toHaveTextContent("Usage cost unavailable");
   expect(card).toHaveTextContent("Codex has not provided historical token totals");
   expect(card).not.toHaveTextContent("$0.00");
+});
+
+it("shows Astra list rates even when historical usage is completely unavailable", () => {
+  const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: {
+    model: "gpt-6-astra", modelLabel: "GPT-6 Astra",
+  } }} />);
+  const card = view.container.querySelector(".pricing-snapshot-card")!;
+  expect(card).toHaveTextContent("Usage cost unavailable");
+  expect(card).toHaveTextContent("per 1M tokens");
+  expect(card).toHaveTextContent("Uncached input rate$10.00");
+  expect(card).toHaveTextContent("Cached input rate$1.00");
+  expect(card).toHaveTextContent("Output rate$50.00");
+  expect(card).toHaveTextContent("a total cost requires token usage");
+  expect(card).not.toHaveTextContent("$0.00");
+});
+
+it("shows the known Astra subtotal even when a MathOS group has no price or counts", () => {
+  const view = render(<PricingPanel pricing={{ lines: [], summaries: [], snapshot: {
+    pricingSource: "provider", model: "gpt-6.1-sol", groups: [
+      { model: "gpt-6-astra", serviceTier: "priority", tokens: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100 } },
+      { model: "@mathos/glm-5.3", tokens: {} },
+    ],
+  } }} />);
+  const card = view.container.querySelector(".pricing-snapshot-card")!;
+  expect(card.querySelector(".rail-summary-card__primary")).toHaveTextContent("$0.016+ estimated");
+  expect(card).toHaveTextContent("gpt-6-astra · Fast");
+  expect(card).toHaveTextContent("1 model/speed group could not be priced");
+  expect(card).toHaveTextContent("only known prices; unpriced usage is excluded");
+  expect(card).toHaveTextContent("each recorded model and speed");
+  expect(card).not.toHaveTextContent("all tokens used the current model");
+  expect(card).not.toHaveTextContent("$0.000");
 });
 
 it("replaces the fallback card when normal pricing is available", () => {
