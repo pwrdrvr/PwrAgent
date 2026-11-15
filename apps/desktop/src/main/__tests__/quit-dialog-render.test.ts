@@ -307,12 +307,19 @@ describe("quit dialog Quiet & Continue After Restart", () => {
     expect(body.indexOf('id="wait"')).toBeLessThan(body.indexOf('class="actions__group actions__group--quit"'));
     expect(body).not.toContain('id="stay"');
     expect(body).not.toContain(">Stay Open<");
-    // Every row is right-aligned; nothing pins a button to the left edge.
+    // Every row is right-aligned. Only "?" leaves the right edge: it leads
+    // Quiet's row, which Quiet takes whole, so the default is the last
+    // control in the footer and sits flush bottom-right.
     const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
     expect(css).toMatch(/\n {6}\.actions \{[^}]*justify-content: flex-end;/);
     expect(css).not.toMatch(/margin-left: auto/);
+    expect(css).toMatch(/\.actions__group--quit:has\(> #quiet-restart:not\(\[hidden\]\)\) \{\s*flex: 1 0 100%;/);
+    expect(css).toMatch(/\.actions__group--quit > \.help \{\s*margin-right: auto;/);
+    expect(body.indexOf('id="quiet-help-toggle"')).toBeGreaterThan(body.indexOf('class="actions__group actions__group--quit"'));
+    expect(body.indexOf('id="quiet-help-toggle"')).toBeLessThan(body.indexOf('id="quit"'));
     expect(body.indexOf('id="quiet-restart"')).toBeGreaterThan(body.indexOf('id="quit"'));
-    expect(body.indexOf('id="quiet-restart"')).toBeLessThan(body.indexOf("</footer>"));
+    const footer = body.slice(body.indexOf('<footer class="footer">'), body.indexOf("</footer>"));
+    expect(footer.lastIndexOf("<button")).toBe(footer.indexOf('<button id="quiet-restart"'));
   });
 
   it("explains itself through a disclosure, not a tooltip", () => {

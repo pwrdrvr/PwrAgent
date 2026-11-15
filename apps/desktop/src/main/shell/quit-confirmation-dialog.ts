@@ -1318,9 +1318,9 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         font-weight: 600;
       }
       /* Right-aligned: Wait for Work, then the choices that quit. The close
-         button and Esc keep PwrAgent open, so there is no Stay Open. When
-         Quiet makes the row too wide, the quit group wraps to a second row,
-         also right-aligned, which keeps the default bottom-right. */
+         button and Esc keep PwrAgent open, so there is no Stay Open. While
+         Quiet shows, the quit group takes a row of its own, with "?" at its
+         left edge, so the default sits flush bottom-right. */
       .actions {
         display: flex;
         flex-wrap: wrap;
@@ -1333,6 +1333,12 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         display: flex;
         align-items: center;
         gap: 8px;
+      }
+      .actions__group--quit:has(> #quiet-restart:not([hidden])) {
+        flex: 1 0 100%;
+      }
+      .actions__group--quit > .help {
+        margin-right: auto;
       }
       button:disabled {
         cursor: default;
@@ -1392,7 +1398,7 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         border-color: var(--danger-text);
         background: color-mix(in srgb, var(--danger) 36%, transparent);
       }
-      /* "?" beside Quiet: discloses what Quiet does. */
+      /* "?" at the left of Quiet's row: discloses what Quiet does. */
       .help {
         width: 28px;
         height: 28px;
@@ -1492,12 +1498,12 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         <div class="actions">
           ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
           <div class="actions__group actions__group--quit">
-            <button id="quit" class="danger" type="button"${quietRestart ? "" : " autofocus"}>Quit Now</button>
-            ${quietRestartWired ? `<button id="quiet-restart" class="primary" type="button" aria-describedby="quiet-help"${quietRestart ? " autofocus" : " hidden"}>Quiet &amp; Continue After Restart</button>
-            <button id="quiet-help-toggle" class="help" type="button" aria-label="About Quiet &amp; Continue After Restart" aria-expanded="false" aria-controls="quiet-help"${quietRestart ? "" : " hidden"}>?</button>
+            ${quietRestartWired ? `<button id="quiet-help-toggle" class="help" type="button" aria-label="About Quiet &amp; Continue After Restart" aria-expanded="false" aria-controls="quiet-help"${quietRestart ? "" : " hidden"}>?</button>
             <div id="quiet-help" class="help-popover" hidden>
           ${QUIET_RESTART_HELP_HTML}
             </div>` : ""}
+            <button id="quit" class="danger" type="button"${quietRestart ? "" : " autofocus"}>Quit Now</button>
+            ${quietRestartWired ? `<button id="quiet-restart" class="primary" type="button" aria-describedby="quiet-help"${quietRestart ? " autofocus" : " hidden"}>Quiet &amp; Continue After Restart</button>` : ""}
           </div>
         </div>
       </footer>
