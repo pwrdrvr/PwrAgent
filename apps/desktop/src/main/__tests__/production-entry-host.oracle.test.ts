@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { build, type Plugin } from "esbuild";
+import { context, type BuildOptions, type BuildResult, type Plugin } from "esbuild";
+import fc from "fast-check";
 import ts from "typescript";
 import { expect, it } from "vitest";
 import { headlessEntries } from "../../../scripts/build-headless.mjs";
@@ -38,13 +39,25 @@ function walkFiles(root: string): string[] {
 // Instrument the actual loud getters, not their import sites. Tree shaking must
 // remove every marker from an owner-free entry, even when access would happen
 // only in a future worker message/callback. Never execute a production worker.
-type BundleCost = { loads: number; candidates: number; bytes: number; inputs: number; inputBytes: number; parseMs: number; loadMs: number };
+type BundleCost = { parses: number; loads: number; candidates: number; bytes: number; inputs: number; inputBytes: number; parseMs: number; loadMs: number };
 const activeBundles = new Set<string>();
 
 function instrumentOwnerGetters(file: string, text: string, cost?: BundleCost): string {
+  // This is a necessary condition of the AST predicate below, including text
+  // in comments and literals. Keep every module in the executable graph while
+  // avoiding a second parser for modules that cannot contain a loud getter.
+  if (!text.includes("before startOwnerServices")) return text;
+  return instrumentCandidate(file, text, cost);
+}
+
+// The original unfiltered instrumenter remains the differential oracle.
+function instrumentCandidate(file: string, text: string, cost?: BundleCost): string {
   const started = performance.now();
   const parsed = source(file, text);
-  if (cost) cost.parseMs += performance.now() - started;
+  if (cost) {
+    cost.parses++;
+    cost.parseMs += performance.now() - started;
+  }
   const insertions: number[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isFunctionDeclaration(node) && node.name?.text.startsWith("get") && node.body
@@ -85,15 +98,49 @@ function oraclePlugin(cost: BundleCost): Plugin {
     },
   };
 }
-async function bundle(entry: string, extraSource?: string): Promise<string> {
-  const cost: BundleCost = { loads: 0, candidates: 0, bytes: 0, inputs: 0, inputBytes: 0, parseMs: 0, loadMs: 0 };
+type BuildOwner = { signal: AbortSignal; onTestFinished(cleanup: () => Promise<void>): void };
+
+async function ownedBuild<Options extends BuildOptions>(owner: BuildOwner, options: Options): Promise<BuildResult<Options>> {
+  owner.signal.throwIfAborted();
+  const opening = context(options);
+  let running: Promise<BuildResult<Options>> | undefined;
+  let cleanup: Promise<void> | undefined;
+  const dispose = (): Promise<void> => cleanup ??= (async () => {
+    const builder = await opening;
+    try {
+      await builder.cancel();
+      await running?.catch(() => {});
+    } finally {
+      await builder.dispose();
+    }
+  })();
+  // A timed-out callback continues running. The finishing hook must wait for
+  // its own native context and plugin callbacks before the next test starts.
+  owner.onTestFinished(dispose);
+  const abort = (): void => { void dispose().catch(() => {}); };
+  owner.signal.addEventListener("abort", abort, { once: true });
+  try {
+    const builder = await opening;
+    owner.signal.throwIfAborted();
+    running = builder.rebuild();
+    const result = await running;
+    owner.signal.throwIfAborted();
+    return result;
+  } finally {
+    owner.signal.removeEventListener("abort", abort);
+    await dispose();
+  }
+}
+
+async function bundle(owner: BuildOwner, entry: string, extraSource?: string): Promise<string> {
+  const cost: BundleCost = { parses: 0, loads: 0, candidates: 0, bytes: 0, inputs: 0, inputBytes: 0, parseMs: 0, loadMs: 0 };
   const label = entry || extraSource!;
   const overlap = [...activeBundles];
   activeBundles.add(label);
   const started = performance.now();
   const cpu = process.cpuUsage();
   try {
-    const result = await build({
+    const result = await ownedBuild(owner, {
       metafile: true,
       ...(extraSource === undefined ? { entryPoints: [path.join(desktop, entry)] } : {
         stdin: { contents: extraSource, resolveDir: main, sourcefile: "negative-entry.ts", loader: "ts" },
@@ -109,7 +156,7 @@ async function bundle(entry: string, extraSource?: string): Promise<string> {
     const used = process.cpuUsage(cpu);
     console.info("production-entry-oracle cost", JSON.stringify({
       entry: label, pid: process.pid, overlap, ...cost,
-      wallMs: performance.now() - started, cpuMs: (used.user + used.system) / 1000,
+      wallMs: performance.now() - started, nodeCpuMs: (used.user + used.system) / 1000,
     }));
   }
 }
@@ -160,28 +207,28 @@ it("covers every configured production entry and every inline worker", () => {
 });
 
 for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker, outpostSandboxEntry]) {
-  it(`${entry} retains no owner getter in its executable bundle`, async () => {
+  it(`${entry} retains no owner getter in its executable bundle`, async (owner) => {
     const script = entry.endsWith(".html")
       ? fs.readFileSync(path.join(desktop, entry), "utf8").match(/<script\s+type="module"\s+src="([^"]+)"/)?.[1]
       : undefined;
     if (entry.endsWith(".html") && !script) throw new Error(`Missing renderer entry: ${entry}`);
     const input = script ? `src/renderer${script}` : entry;
-    expect(await bundle(input)).not.toContain(accessMarker);
+    expect(await bundle(owner, input)).not.toContain(accessMarker);
   });
 }
 
-it("the packaged installer cannot reach an owner getter", async () => {
+it("the packaged installer cannot reach an owner getter", async (owner) => {
   const packageRoot = path.resolve(desktop, "../../packages/pwragent");
   const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
   expect(metadata.scripts.postinstall).toContain("dist/runtime.json");
   expect(metadata.scripts.postinstall).toContain("./scripts/install.mjs");
-  expect(await bundle("", `import ${JSON.stringify(path.join(packageRoot, "scripts/install.mjs"))};`)).not.toContain(accessMarker);
+  expect(await bundle(owner, "", `import ${JSON.stringify(path.join(packageRoot, "scripts/install.mjs"))};`)).not.toContain(accessMarker);
 });
 
-it("desktop has no executable file-key encryptor", async () => {
+it("desktop has no executable file-key encryptor", async (owner) => {
   const keyFilename = "headless-secret.key";
-  expect(await bundle("src/main/index.ts")).not.toContain(keyFilename);
-  expect(await bundle("", 'import { createFileKeyEncryption } from "./headless/file-key-encryption"; createFileKeyEncryption("state");'))
+  expect(await bundle(owner, "src/main/index.ts")).not.toContain(keyFilename);
+  expect(await bundle(owner, "", 'import { createFileKeyEncryption } from "./headless/file-key-encryption"; createFileKeyEncryption("state");'))
     .toContain(keyFilename);
 });
 
@@ -207,11 +254,96 @@ it("instruments every strict process-owner getter", () => {
   ].sort());
 });
 
-it("detects owner access deferred until a worker message, including host ports", async () => {
+it("detects owner access deferred until a worker message, including host ports", async (owner) => {
   for (const access of [
     'import { getDesktopBackendRegistry } from "./app-server/backend-registry"; globalThis.onmessage = () => getDesktopBackendRegistry();',
     'import { applicationHost } from "./owner-host"; globalThis.onmessage = () => applicationHost.getVersion();',
   ]) {
-    expect(await bundle("", access)).toContain(accessMarker);
+    expect(await bundle(owner, "", access)).toContain(accessMarker);
   }
+});
+
+it("bounds AST work by candidate source while matching the unfiltered instrumenter", () => {
+  const snippets = fc.array(fc.constantFrom(
+    'export const value = 1;',
+    'export function getOrdinary() { return 1; }',
+    'export function getStrict() { throw new Error("before startOwnerServices"); }',
+    'export function getComment() { /* before startOwnerServices */ return 1; }',
+    'export function setStrict() { throw new Error("before startOwnerServices"); }',
+    'export const getArrow = () => { throw new Error("before startOwnerServices"); };',
+    'export function getNested() { function nested() { throw new Error("before startOwnerServices"); } return nested; }',
+  ), { maxLength: 12 });
+  const measure = (instrument: typeof instrumentOwnerGetters, text: string) => {
+    const cost: BundleCost = { parses: 0, loads: 0, candidates: 0, bytes: 0, inputs: 0, inputBytes: 0, parseMs: 0, loadMs: 0 };
+    const output = instrument("generated.ts", text, cost);
+    return { output, parses: cost.parses };
+  };
+  const budget = (instrument: typeof instrumentOwnerGetters) => fc.property(snippets, (parts) => {
+    const text = parts.join("\n");
+    return measure(instrument, text).parses === Number(text.includes("before startOwnerServices"));
+  });
+  // Run the same property on the pre-fix implementation: it must fail.
+  expect(fc.check(budget(instrumentCandidate), { seed: 3728 }).failed).toBe(true);
+  fc.assert(budget(instrumentOwnerGetters), { seed: 3728 });
+  fc.assert(fc.property(snippets, (parts) => {
+    const text = parts.join("\n");
+    expect(measure(instrumentOwnerGetters, text).output).toBe(measure(instrumentCandidate, text).output);
+  }));
+});
+
+it("drains a cancelled native build and its plugin before its test releases ownership", async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const disposed = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  const cleanups: Array<() => Promise<void>> = [];
+  const owner: BuildOwner = { signal: controller.signal, onTestFinished: (cleanup) => { cleanups.push(cleanup); } };
+  let pluginActive = false;
+  const outcome = ownedBuild(owner, {
+    stdin: { contents: "export const value = 1;" }, write: false, logLevel: "silent",
+    plugins: [{ name: "cancellation-ownership-oracle", setup(builder) {
+      builder.onStart(async () => {
+        pluginActive = true;
+        started.resolve();
+        await release.promise;
+        pluginActive = false;
+      });
+      builder.onDispose(() => disposed.resolve());
+    } }],
+  }).then(() => "completed", () => "cancelled");
+  try {
+    await started.promise;
+    controller.abort();
+    let drained = false;
+    const drain = Promise.all(cleanups.map((cleanup) => cleanup())).then(() => { drained = true; });
+    await Promise.resolve();
+    expect(pluginActive).toBe(true);
+    expect(drained).toBe(false);
+    release.resolve();
+    expect(await outcome).toBe("cancelled");
+    await drain;
+    await disposed.promise;
+    expect(pluginActive).toBe(false);
+  } finally {
+    release.resolve();
+    await outcome;
+    await Promise.all(cleanups.map((cleanup) => cleanup()));
+  }
+});
+
+it("never opens a native context for an already cancelled test", async () => {
+  const controller = new AbortController();
+  const reason = new Error("test already finished");
+  controller.abort(reason);
+  let opened = false;
+  let registered = false;
+  await expect(ownedBuild({
+    signal: controller.signal,
+    onTestFinished: () => { registered = true; },
+  }, {
+    stdin: { contents: "export const value = 1;" }, write: false,
+    plugins: [{ name: "unreachable-context", setup() { opened = true; } }],
+  })).rejects.toBe(reason);
+  expect(opened).toBe(false);
+  expect(registered).toBe(false);
 });
