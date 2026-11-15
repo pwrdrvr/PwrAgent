@@ -1,4 +1,4 @@
-import { codexProviderIdOfModel, formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG } from "@pwragent/shared";
+import { codexProviderIdOfModel, formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG, OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared";
 import { buildThreadPricingDisplay, type ThreadPricingDisplay } from "@pwragent/shared";
 import {
   type PricingUsageLine,
@@ -252,6 +252,11 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
               {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
               {formatTimestamp(summary.updatedAt)}
             </div>
+            {pricingTotals.hasAssumedPricing ? (
+              <p className="context-empty context-empty--warning">
+                Includes assumed OpenRouter prices for models without direct provider rates. Actual provider charges may differ.
+              </p>
+            ) : null}
             {spendByModel.length > 0 ? (
               <div className="rail-summary-card__section">
                 <span className="rail-summary-card__section-title">
@@ -404,6 +409,9 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
 
 function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay["fallbackEstimate"]> }) {
   const { model, tokens, totalCostMicros } = props.estimate;
+  const groups = props.estimate.groupEstimates;
+  const unpricedGroups = props.estimate.unpricedGroupCount ?? 0;
+  const rate = props.estimate.currentModelRate;
   const count = (value: number | undefined) => value === undefined ? "Unavailable" : formatTokenCount(value);
   const uncached = tokens?.inputTokens !== undefined && tokens.cachedInputTokens !== undefined
     ? tokens.inputTokens - tokens.cachedInputTokens : tokens?.uncachedInputTokens;
@@ -414,10 +422,37 @@ function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay
       </div>
       <div className="rail-summary-card__headline">
         <span className="rail-summary-card__primary">
-          {totalCostMicros === undefined ? "Price unavailable" : `${formatTokenUsageMicrosAsUsd(totalCostMicros)} estimated`}
+          {totalCostMicros === undefined ? rate ? "Usage cost unavailable" : "Price unavailable" : `${formatTokenUsageMicrosAsUsd(totalCostMicros)}${unpricedGroups > 0 ? "+" : ""} estimated`}
         </span>
       </div>
+      {groups?.map((group, index) => (
+        <RailSummaryRow
+          key={index}
+          label={`${group.model ? formatPricingModelLabel(group.model) : "Unknown model"}${group.serviceTier === "priority" ? " · Fast" : ""}`}
+          value={group.totalCostMicros === undefined ? "Price unavailable" : `${formatTokenUsageMicrosAsUsd(group.totalCostMicros)}${group.assumedPricing ? " assumed" : ""}`}
+        />
+      ))}
+      {unpricedGroups > 0 ? (
+        <p className="context-empty context-empty--warning">
+          {unpricedGroups.toLocaleString()} model/speed group{unpricedGroups === 1 ? "" : "s"} could not be priced.
+          {totalCostMicros !== undefined ? " The estimate includes priced usage only; unpriced usage is excluded." : ""}
+        </p>
+      ) : null}
+      {props.estimate.assumedPricing || rate?.assumedPricing ? (
+        <p className="context-empty context-empty--warning">
+          Assumed OpenRouter prices ({props.estimate.assumedPricing ?? rate?.assumedPricing}). Actual provider charges may differ.
+        </p>
+      ) : null}
       <RailSummaryRow label="Current model" value={model ? formatPricingModelLabel(model, props.estimate.modelLabel) : "Unavailable"} />
+      {rate ? (
+        <div className="rail-summary-card__section">
+          <span className="rail-summary-card__section-title">{rate.displayName} · per 1M tokens</span>
+          <RailSummaryRow label="Uncached input rate" value={formatUnitRate(rate.inputUsdPerMillion)} />
+          <RailSummaryRow label="Cached input rate" value={formatUnitRate(rate.cachedInputUsdPerMillion)} />
+          <RailSummaryRow label="Output rate" value={formatUnitRate(rate.outputUsdPerMillion)} />
+          <p className="context-empty">List rates are known; a total cost requires token usage.</p>
+        </div>
+      ) : null}
       <RailSummaryRow label="Total tokens" value={count(tokens?.totalTokens)} />
       <RailSummaryRow label="Input" value={count(tokens?.inputTokens)} />
       <RailSummaryRow label="Uncached input" value={count(uncached)} />
@@ -425,16 +460,19 @@ function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay
       {tokens?.cacheWriteInputTokens !== undefined ? <RailSummaryRow label="Cache writes" value={count(tokens.cacheWriteInputTokens)} /> : null}
       <RailSummaryRow label="Output" value={count(tokens?.outputTokens)} />
       <RailSummaryRow label="Reasoning" value={count(tokens?.reasoningOutputTokens)} />
-      <p className="context-empty context-empty--warning">
-        {props.estimate.pricingSource === "provider"
+      {!rate ? <p className="context-empty context-empty--warning">
+        {groups
+          ? "Estimate uses each recorded model and speed at today's list prices."
+          : props.estimate.pricingSource === "provider"
           ? "Codex estimated this usage from its recorded model and speed groups."
           : props.estimate.localModel
           ? "Estimate assumes all tokens used the current model, declared local with zero token cost."
           : "Estimate assumes all tokens used the current model at today's list prices."}
         {" "}
-        {props.estimate.pricingSource === "provider" ? "PwrAgent did not observe the individual turns."
+        {groups ? "PwrAgent did not observe the individual turns; earlier provider price changes may make it inaccurate."
+          : props.estimate.pricingSource === "provider" ? "PwrAgent did not observe the individual turns."
           : "PwrAgent did not observe the turns, so model switches, speed settings, and earlier provider price changes may make it inaccurate."}
-      </p>
+      </p> : null}
       {!tokens ? <p className="context-empty">Codex has not provided historical token totals for this thread.</p> : null}
     </div>
   );
@@ -1383,6 +1421,7 @@ function formatPricingProviderLabel(provider: string): string {
 }
 
 function formatUsageLineCostSuffix(line: PricingUsageLine): string {
+  if (line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) return "assumed OpenRouter price";
   if (line.pricingBasis === "provider-reported") return "provider estimate this turn";
   if (line.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG) return "local inference";
   if (isEstimatedUsageGap(line)) {
@@ -1569,6 +1608,12 @@ function PricingUsageActions(props: {
 }
 
 
+
+function formatUnitRate(usdPerMillion: number): string {
+  return usdPerMillion.toLocaleString("en-US", {
+    style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 12,
+  });
+}
 
 function formatMoney(valueMicros: number, currency: string): string {
   if (currency === "USD") {

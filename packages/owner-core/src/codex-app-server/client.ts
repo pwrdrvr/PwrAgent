@@ -33,6 +33,8 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildSubAgentActivityDetail,
+  formatCodexProviderModelId,
+  OPENROUTER_ASSUMED_PRICING_CATALOG_ID,
   isLegacyPwrSnapMediaUrl,
   pwrSnapResourceLinkImageParts,
   pwrSnapToolImageParts,
@@ -3931,7 +3933,7 @@ function summarizeTokenUsageActivity(
     reasoningOutputTokens > 0
       ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
       : `${formatTokenCount(outputTokens)} out`,
-    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
+    cost ? `${formatTokenUsageUsd(cost.totalUsd)} ${cost.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID ? "assumed OpenRouter price" : "list price"}` : undefined,
   ];
   const summaryPrefix = scope === "latest-request" ? "Latest request usage" : "Usage";
   const totalTokens = Math.max(
@@ -10449,7 +10451,11 @@ export class CodexAppServerClient {
         this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
       const thread = asRecord(asRecord(result)?.thread);
       if (thread?.id !== threadId) return {};
-      const model = pickString(thread, ["model"]);
+      const modelProvider = pickString(thread, ["modelProvider"]);
+      const qualifyModel = (model: string | undefined): string | undefined =>
+        model && modelProvider && modelProvider !== "openai" && !model.startsWith("@")
+          ? formatCodexProviderModelId(modelProvider, model) : model;
+      const model = qualifyModel(pickString(thread, ["model"]));
       const live = this.liveUsageSnapshots.get(threadId);
       if (live?.tokens) return {
         model: model ?? live.model, tokens: live.tokens,
@@ -10485,9 +10491,28 @@ export class CodexAppServerClient {
           uncachedInputTokens: sum("netNewInputTokens"), outputTokens: sum("outputTokens"), totalTokens: sum("totalTokens"),
         };
         const estimatedCostMicros = pickNumber(usage, ["estimatedUsageUsdMicros"]);
+        const hasEstimate = estimatedCostMicros !== undefined && Number.isSafeInteger(estimatedCostMicros) && estimatedCostMicros >= 0;
+        const count = (group: Record<string, unknown>, key: string): number | undefined => {
+          const value = pickNumber(group, [key]);
+          return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+        };
         return { model, tokens, pricingSource: "provider" as const,
-          ...(estimatedCostMicros !== undefined && Number.isSafeInteger(estimatedCostMicros) && estimatedCostMicros >= 0
+          ...(hasEstimate
             ? { estimatedCostMicros } : {}),
+          ...(!hasEstimate ? { groups: groups.map((group) => {
+            const recordedModel = pickString(group, ["model"]);
+            const speed = pickString(group, ["speed"]);
+            return {
+              // A provider's plain model id must not borrow OpenAI's price.
+              model: qualifyModel(recordedModel),
+              serviceTier: speed === "fast" ? "priority" : speed,
+              tokens: {
+                inputTokens: count(group, "inputTokens"), cachedInputTokens: count(group, "cachedInputTokens"),
+                uncachedInputTokens: count(group, "netNewInputTokens"), outputTokens: count(group, "outputTokens"),
+                totalTokens: count(group, "totalTokens"),
+              },
+            };
+          }) } : {}),
         };
       } catch (error) {
         this.host.logger.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });

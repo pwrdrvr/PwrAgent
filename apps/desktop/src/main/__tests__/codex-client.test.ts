@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildProviderResponseBlockEntry,
+  buildThreadPricingSnapshotEstimate,
   readProviderResponseBlockNotification,
 } from "@pwragent/shared";
 import type {
@@ -4348,9 +4349,46 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient({ command: "codex" });
     try {
-      expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: undefined, pricingSource: "provider", tokens: {
+      expect(await client.readThreadPricingSnapshot("history")).toMatchObject({ model: undefined, pricingSource: "provider", tokens: {
         inputTokens: 0, cachedInputTokens: undefined, uncachedInputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
       } });
+    } finally { await client.close(); }
+  });
+
+  it("preserves known historical model/speed groups when a child has no price or token totals", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history", model: "gpt-6.1-sol", modelProvider: "openai" } });
+    MockTransport.accountUsageResult = { threadUsage: { threadId: "history", estimatedUsageUsdMicros: null, groups: [
+      { model: "gpt-6-astra", speed: "fast", inputTokens: 1_000, cachedInputTokens: 800, netNewInputTokens: 200, outputTokens: 100, totalTokens: 1_100 },
+      { model: "@mathos/glm-5.3", inputTokens: null, cachedInputTokens: null, outputTokens: null, totalTokens: null },
+    ] } };
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const snapshot = await client.readThreadPricingSnapshot("history");
+      // Unknown child counts stay unknown; they do not erase Astra's $0.0156.
+      expect(snapshot.tokens?.totalTokens).toBeUndefined();
+      const estimate = buildThreadPricingSnapshotEstimate(snapshot, Date.UTC(2026, 10, 14));
+      expect(estimate.totalCostMicros).toBe(15_600);
+      expect(estimate.unpricedGroupCount).toBe(1);
+      expect(estimate.groupEstimates?.map((group) => [group.model, group.totalCostMicros]))
+        .toEqual([["gpt-6-astra", 15_600], ["@mathos/glm-5.3", undefined]]);
+      expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+    } finally { await client.close(); }
+  });
+
+  it("does not price a custom provider's historical model at an identically named OpenAI rate", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history", model: "gpt-6-astra", modelProvider: "mathos" } });
+    MockTransport.accountUsageResult = { threadUsage: { threadId: "history", estimatedUsageUsdMicros: null, groups: [
+      { model: "gpt-6-astra", inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100 },
+    ] } };
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      const snapshot = await client.readThreadPricingSnapshot("history");
+      expect(snapshot.groups?.[0]?.model).toBe("@mathos/gpt-6-astra");
+      const estimate = buildThreadPricingSnapshotEstimate(snapshot);
+      expect(estimate.totalCostMicros).toBeUndefined();
+      expect(estimate.currentModelRate).toBeUndefined();
     } finally { await client.close(); }
   });
 

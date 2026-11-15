@@ -171,6 +171,9 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
           thread{unpriced.length === 1 ? "" : "s"} could not be priced
         </div>
       ) : null}
+      {members.some((member) => member.hasAssumedPricing) ? (
+        <div className="thread-family-pricing__warning">Includes assumed OpenRouter prices. Actual provider charges may differ.</div>
+      ) : null}
       {unreachable.length > 0 ? (
         <div className="thread-family-pricing__warning">{unreachableWarning(unreachable.map(machineName))}</div>
       ) : null}

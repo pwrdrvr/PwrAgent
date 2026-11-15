@@ -28,6 +28,7 @@ export type ThreadFamilyPricingMember = {
   totalCostMicros: number;
   usageLineCount: number;
   unpricedUsageLineCount: number;
+  hasAssumedPricing?: true;
   /**
    * The instance that owns the thread and keeps its total, when that is not
    * the machine that answered the read. Absent: the answering machine.
@@ -79,7 +80,7 @@ export function summarizeThreadFamilyPricing(params: {
   readAt: number;
 }): ReadThreadFamilyPricingResponse {
   const key = (backend: string, threadId: string) => JSON.stringify([backend, threadId]);
-  const totals = new Map<string, Pick<ThreadFamilyPricingMember, "totalCostMicros" | "usageLineCount" | "unpricedUsageLineCount">>();
+  const totals = new Map<string, Pick<ThreadFamilyPricingMember, "totalCostMicros" | "usageLineCount" | "unpricedUsageLineCount" | "hasAssumedPricing">>();
   for (const summary of params.summaries) {
     if (summary.currency !== "USD") continue;
     const memberKey = key(summary.backend, summary.threadId);
@@ -87,6 +88,7 @@ export function summarizeThreadFamilyPricing(params: {
     total.totalCostMicros += summary.totalCostMicros;
     total.usageLineCount += summary.usageLineCount;
     total.unpricedUsageLineCount += summary.unpricedUsageLineCount;
+    if (summary.hasAssumedPricing) total.hasAssumedPricing = true;
     totals.set(memberKey, total);
   }
   const rootKey = params.root ? key(params.root.backend, params.root.threadId) : undefined;

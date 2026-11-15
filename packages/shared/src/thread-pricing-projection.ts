@@ -1,4 +1,5 @@
 import { LOCAL_MODEL_PRICING_CATALOG, priceLocalModelUsage } from "./local-model-pricing";
+import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "./openrouter-assumed-pricing";
 import {
   estimateTokenUsageCost,
   resolveTokenUsagePriceUnavailableReason,
@@ -215,7 +216,10 @@ function buildEstimatedHistoricalGapLine(params: {
   anchorLine: ThreadUsageLineRecord;
   gapTokens: PricingTokenBreakdown;
 }): EstimatedThreadUsageGapLine | undefined {
-  const cost = estimateTokenUsageCost({
+  // The configured-rate decision survives in the ledger, but its rate values
+  // do not. Do not substitute a reference price for unseen earlier requests.
+  const configuredProvider = params.anchorLine.pricingBasis === "configured-provider";
+  const cost = configuredProvider ? undefined : estimateTokenUsageCost({
     at: params.anchorLine.createdAt,
     cachedInputTokens: params.gapTokens.cachedInputTokens,
     fastMode: false,
@@ -234,7 +238,7 @@ function buildEstimatedHistoricalGapLine(params: {
   const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
     cost
       ? undefined
-      : resolveTokenUsagePriceUnavailableReason({
+      : configuredProvider ? "missing-rate" : resolveTokenUsagePriceUnavailableReason({
           at: params.anchorLine.createdAt,
           cachedInputTokens: params.gapTokens.cachedInputTokens,
           fastMode: false,
@@ -259,7 +263,8 @@ function buildEstimatedHistoricalGapLine(params: {
     parentThreadId: params.anchorLine.parentThreadId,
     priceStatus: cost ? "priced" : "unpriced",
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
-    provider: cost?.provider ?? params.anchorLine.provider,
+    provider: cost?.catalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID
+      ? params.anchorLine.provider : cost?.provider ?? params.anchorLine.provider,
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
