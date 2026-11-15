@@ -477,8 +477,8 @@ export async function showQuitConfirmationDialog(
     // with the themed card, and a fixed-size modal has no use for min/max/close
     // caption buttons (WCO would render them grayed-out). Render the app's own
     // chrome instead — a branded title strip (PwrAgent wordmark + close) over a
-    // themed body; the strip is the drag handle, and Esc / the close button /
-    // "Stay Open" all dismiss. Removing the frame also drops the native menu
+    // themed body; the strip is the drag handle, and Esc or the close button
+    // dismisses. Removing the frame also drops the native menu
     // bar that otherwise rendered inside the window on Windows (which had stolen
     // ~20px and forced a vertical scrollbar).
     frame: false,
@@ -1317,10 +1317,10 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         color: var(--text-muted);
         font-weight: 600;
       }
-      /* One right-aligned group: the choices that keep PwrAgent open, then
-         the choices that quit. When Quiet makes it too wide for one row, the
-         quit group wraps to a second row, also right-aligned, which keeps
-         the default in the bottom-right corner. */
+      /* Right-aligned: Wait for Work, then the choices that quit. The close
+         button and Esc keep PwrAgent open, so there is no Stay Open. When
+         Quiet makes the row too wide, the quit group wraps to a second row,
+         also right-aligned, which keeps the default bottom-right. */
       .actions {
         display: flex;
         flex-wrap: wrap;
@@ -1450,7 +1450,7 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
       .help-popover__limit {
         color: var(--text-muted);
       }
-      /* Close (top-right of the strip) → maps to "Stay Open". */
+      /* Close (top-right of the strip): keep PwrAgent open, like Esc. */
       .close {
         display: inline-flex;
         align-items: center;
@@ -1490,10 +1490,7 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
       <footer class="footer">
         <p class="countdown" id="countdown"></p>
         <div class="actions">
-          <div class="actions__group">
-            <button id="stay" class="secondary" type="button">Stay Open</button>
-            ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
-          </div>
+          ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
           <div class="actions__group actions__group--quit">
             <button id="quit" class="danger" type="button"${quietRestart ? "" : " autofocus"}>Quit Now</button>
             ${quietRestartWired ? `<button id="quiet-restart" class="primary" type="button" aria-describedby="quiet-help"${quietRestart ? " autofocus" : " hidden"}>Quiet &amp; Continue After Restart</button>
@@ -1657,7 +1654,6 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         document.addEventListener(eventName, cancelCountdown, { passive: true });
       }
 
-      document.getElementById("stay").addEventListener("click", () => send("manual-cancel"));
       document.getElementById("close").addEventListener("click", () => send("manual-cancel"));
       document.getElementById("wait")?.addEventListener("click", () => {
         cancelCountdown();

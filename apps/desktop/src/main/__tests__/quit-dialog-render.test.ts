@@ -301,10 +301,13 @@ describe("quit dialog Quiet & Continue After Restart", () => {
     expect(tag(html, "quiet-restart")).not.toContain("hidden");
     expect(tag(html, "quit")).toContain('class="danger"');
     expect(tag(html, "quit")).not.toContain("autofocus");
-    // In the pinned footer's quit group, after Quit Now; stay choices first.
+    // In the pinned footer's quit group, after Quit Now; Wait for Work first.
+    // The close button and Esc keep PwrAgent open, so there is no Stay Open.
     const body = html.slice(html.indexOf("<body>"));
-    expect(body.indexOf('id="stay"')).toBeLessThan(body.indexOf('class="actions__group actions__group--quit"'));
-    // Every row of the group is right-aligned; nothing pins the stay choices left.
+    expect(body.indexOf('id="wait"')).toBeLessThan(body.indexOf('class="actions__group actions__group--quit"'));
+    expect(body).not.toContain('id="stay"');
+    expect(body).not.toContain(">Stay Open<");
+    // Every row is right-aligned; nothing pins a button to the left edge.
     const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
     expect(css).toMatch(/\n {6}\.actions \{[^}]*justify-content: flex-end;/);
     expect(css).not.toMatch(/margin-left: auto/);

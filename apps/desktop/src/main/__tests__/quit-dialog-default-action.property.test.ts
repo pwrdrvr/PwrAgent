@@ -123,7 +123,7 @@ const countsArb = fc.record({
 });
 const stepArb = fc.oneof(
   countsArb.map((counts) => ({ kind: "refresh" as const, counts })),
-  fc.constantFrom("stay", "quit", "quiet-restart", "quiet-help-toggle", "body")
+  fc.constantFrom("wait", "close", "quit", "quiet-restart", "quiet-help-toggle", "body")
     .map((target) => ({ kind: "focus" as const, target })),
   fc.constant({ kind: "toggle-help" as const }),
 );
@@ -189,9 +189,9 @@ describe("quit dialog default action", () => {
   it("lets a focused button answer Enter itself", () => {
     const dialog = openDialog({ threads: 1, terminals: 0, actions: 0 }, true);
     try {
-      dialog.document.getElementById("stay")!.focus();
+      dialog.document.getElementById("wait")!.focus();
       dialog.key("Enter");
-      // The browser's own activation clicks Stay Open; the page adds nothing.
+      // The browser's own activation clicks Wait for Work; the page adds nothing.
       expect(dialog.clicks).toEqual([]);
     } finally {
       dialog.close();
