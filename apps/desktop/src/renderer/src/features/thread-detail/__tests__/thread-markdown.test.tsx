@@ -292,6 +292,57 @@ describe("ThreadMarkdown", () => {
     );
   });
 
+  it("renders single-dollar proof notation together with display math", async () => {
+    const expressions = [
+      String.raw`\lambda\ge1`, "A", "B", String.raw`x,y,u,v\in\{0,1\}^{\lambda}`,
+      "(x,y)", "(u,v)", "(x,u)", "(y,v)", "s",
+      String.raw`O(\lambda)`, String.raw`2^{O(\lambda)}`,
+    ];
+    const { container } = render(<MarkdownRenderingOptionsProvider mathEnabled>
+      <ThreadMarkdown text={[
+        expressions.map((tex) => `$${tex}$`).join(", "),
+        "",
+        String.raw`\[`,
+        String.raw`s\le 2\lambda`,
+        String.raw`\]`,
+      ].join("\n")} />
+    </MarkdownRenderingOptionsProvider>);
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(expressions.length + 1);
+    });
+    expect(Array.from(container.querySelectorAll("annotation[encoding='application/x-tex']"))
+      .map((node) => node.textContent)).toEqual([...expressions, String.raw`s\le 2\lambda`]);
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(container.querySelector(".katex-error")).toBeNull();
+  });
+
+  it("loads math for a single-dollar expression at a GFM table cell boundary", async () => {
+    const { container } = render(<MarkdownRenderingOptionsProvider mathEnabled>
+      <ThreadMarkdown text={"|Value|\n|---|\n|$x$|"} />
+    </MarkdownRenderingOptionsProvider>);
+    await waitFor(() => {
+      expect(container.querySelectorAll("td .katex")).toHaveLength(1);
+    });
+    expect(container.querySelector("annotation[encoding='application/x-tex']")).toHaveTextContent("x");
+  });
+
+  it.each([
+    ["*", "*", "em"], ["**", "**", "strong"],
+    ["_", "_", "em"], ["__", "__", "strong"],
+    ["~~", "~~", "del"], ["***", "***", "em strong"],
+    ["**_", "_**", "strong em"],
+  ])("preserves prices before negative math inside %s formatting", async (open, close, selector) => {
+    const { container } = render(<MarkdownRenderingOptionsProvider mathEnabled>
+      <ThreadMarkdown text={`Parts cost $5 and $10. Formula ${open}$-x$${close}.`} />
+    </MarkdownRenderingOptionsProvider>);
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    });
+    expect(container).toHaveTextContent("Parts cost $5 and $10. Formula");
+    expect(container.querySelector(`${selector} .katex`)).not.toBeNull();
+    expect(container.querySelector("annotation[encoding='application/x-tex']")).toHaveTextContent("-x");
+  });
+
   it("renders later and list-continuation math without consuming broken text", async () => {
     const { container } = render(
       <MarkdownRenderingOptionsProvider mathEnabled>
@@ -319,6 +370,25 @@ describe("ThreadMarkdown", () => {
   });
 
   it.each([
+    ["$x$", 1],
+    ["$2^{10}$", 1],
+    ["$V^*$", 1],
+    ["$x * y$", 1],
+    ["$5 and $10 beside $A$", 1],
+    ["$5-$10 beside $A$", 1],
+    ["Prices $5 and $10. Formula ($A$). Code: `$B$`.", 1],
+    ["Prices $5 and $10. Formula ($-x$).", 1],
+    ["Price $5.00; allowance ($-1$).", 1],
+    [String.raw`Prices $5 and $10. Formula ($\lambda$). Code: ` + "`$B$`.", 1],
+    ["$ x$ and $y $ beside $A$", 1],
+    ["$x\ny$ beside $A$", 1],
+    ["$x$10 beside $A$", 1],
+    ["$x$foo beside $A$", 1],
+    [String.raw`\$x\$ beside $A$`, 1],
+    ["`$x$` beside $A$", 1],
+    ["```txt\n$x$\n```\n\n$A$", 1],
+    ["    $x$\n\n$A$", 1],
+    ["> $A$\n\n- $B$", 2],
     ["$$x$$", 1],
     ["$$$x$$$", 1],
     ["$$\nx", 1],
@@ -353,7 +423,7 @@ describe("ThreadMarkdown", () => {
     expect(view.container.querySelector(".katex-error")).toBeNull();
   });
 
-  it.each([String.raw`\(x\)`, String.raw`\[x\]`, "$$x$$", "~~~math\nx\n~~~"])(
+  it.each(["$x$", String.raw`\(x\)`, String.raw`\[x\]`, "$$x$$", "~~~math\nx\n~~~"])(
     "renders math streamed one character at a time: %s", async (text) => {
       const view = render(<MarkdownRenderingOptionsProvider mathEnabled>
         <ThreadMarkdown text="" />

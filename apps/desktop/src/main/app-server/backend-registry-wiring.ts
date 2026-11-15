@@ -1195,8 +1195,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     const next = JSON.stringify(ports.resolveCodexModelProvidersFn());
     if (next === providersFingerprint) return;
     providersFingerprint = next;
-    ports.codexModelProviderCatalog.invalidate();
-    ports.modelCatalog.invalidate("codex");
+    // Publish the change on the cached Codex summary, not just drop the
+    // caches behind it: windows and federation peers read that summary.
+    void ports.applyCodexModelProviderConfigChange().catch((error: unknown) => {
+      backendRegistryLog.warn("Codex model provider change not published", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
   initialize.push(() => {
     if (ports.configStore) {

@@ -8,6 +8,14 @@ export function hasPotentialMarkdownMath(markdown: string): boolean {
     return true;
   }
 
+  // Single-dollar inline math needs non-whitespace inside both delimiters
+  // and whitespace, closing punctuation, or formatting after the closer.
+  // GFM removes cell separators before inline parsing, so a pipe can also
+  // follow a supported expression. Code and escapes can be false positives.
+  if (/\$(?![\s$])[^$`\r\n]*[^\s$`([{]\$(?=$|[\s.,;:!?)}\]'"”’*_~`|—–-])/u.test(markdown)) {
+    return true;
+  }
+
   // rehype-katex also renders language-math code fences. CommonMark decodes
   // character references and escapes in fence info strings, so ambiguous
   // encoded info must load too (for example m&#97;th). Do not guess container

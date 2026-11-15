@@ -17,6 +17,7 @@ import {
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
 import type {
@@ -65,6 +66,7 @@ import {
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isFederationViewerWindow, readRendererFederationTarget } from "../../lib/federation-window";
 import { KeepAtTopSlot } from "./KeepAtTopSlot";
+import type { ProjectHeaderCardHandle } from "./ProjectHeaderCard";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
 import { renderSubthreadPages } from "./SubthreadPagination";
@@ -199,6 +201,11 @@ type DirectoriesListProps = {
   ) => void;
   /** Directory key whose federation target menu is currently open, if any. */
   openFederationTargetMenuDirectoryKey?: string;
+  /**
+   * The sidebar's project card (path, Show in Finder, Copy Path, New thread
+   * on), which each project header opens on hover. Absent turns it off.
+   */
+  projectCardRef?: RefObject<ProjectHeaderCardHandle | null>;
   onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
@@ -1131,6 +1138,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ? "This project isn't set up on this machine. Use + to start a thread on a machine that has it, or Add Directory to connect it here."
       : "This project directory isn't configured on this instance. Use Add Directory to connect it.";
     const directoryPinned = isPinnedDirectory(directory);
+    const projectCardRef = props.projectCardRef;
     // With no pins, a held folder offers the ghost Pin slot.
     const directoryDraggable =
       directoryDragEnabled && isPinnableDirectoryKind(directory);
@@ -1560,6 +1568,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }`}
             type="button"
             onBlur={directoryUnconfigured ? unavailableDirectoryTooltip.hide : undefined}
+            // Expanding, collapsing or dragging the project closes its card.
+            onPointerDown={projectCardRef ? () => projectCardRef.current?.hide() : undefined}
             onClick={(event) => {
               props.onSelectDirectory?.(
                 directory,
@@ -1582,6 +1592,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               }
               return (event) => {
                 event.preventDefault();
+                projectCardRef?.current?.hide();
                 const rect = event.currentTarget.getBoundingClientRect();
                 // Anchor at the cursor so the menu lands where the
                 // user clicked, but pass `anchorTop` so the
@@ -1603,17 +1614,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   )
                 : undefined
             }
-            onMouseEnter={
-              directoryUnconfigured
-                ? (event) => unavailableDirectoryTooltip.show(
-                    event.currentTarget,
-                    unconfiguredTooltip,
-                  )
-                : undefined
-            }
-            onMouseLeave={
-              directoryUnconfigured ? unavailableDirectoryTooltip.hide : undefined
-            }
+            onMouseEnter={(event) => {
+              const card = projectCardRef?.current;
+              if (card?.applies(directory)) {
+                card.enter(event.currentTarget, directory);
+              } else if (directoryUnconfigured) {
+                unavailableDirectoryTooltip.show(event.currentTarget, unconfiguredTooltip);
+              }
+            }}
+            onMouseLeave={(event) => {
+              projectCardRef?.current?.leave(event.currentTarget);
+              if (directoryUnconfigured) unavailableDirectoryTooltip.hide();
+            }}
           >
             <span className="directory-row__summary-main">
               <span

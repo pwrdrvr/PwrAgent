@@ -8694,6 +8694,130 @@ a.button {
   outline-offset: -2px;
 }
 
+/* The project header card (`ProjectHeaderCard`): the PR card's frame, type
+   and footer buttons, plus the project's path and a short "New thread on"
+   list drawn like the machine menu's rows at card density. */
+.project-card__path {
+  display: flex;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* Middle truncation, as `.pr-status-card__branch-name` does it: only the
+   head shrinks, so the ellipsis lands mid-path and the folder name stays. */
+.project-card__path-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card__path-tail {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.project-card__caption {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.project-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px -6px 0;
+}
+
+.project-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 10px -6px -4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.project-card__section-title {
+  padding: 0 6px 4px;
+}
+
+.project-card__target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-card__target > svg {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.project-card__target:hover {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.project-card__target:hover > svg {
+  color: inherit;
+}
+
+.project-card__target--more {
+  color: var(--text-secondary);
+}
+
+/* The machine menu's connected dot, centred in the 14px icon column. */
+.project-card__target-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin: 0 4px;
+  border-radius: 50%;
+  background: var(--status-ok);
+}
+
+.project-card__target-dot--spacer {
+  visibility: hidden;
+}
+
+.project-card__target-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card__target-state {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .pr-status-card__section-title {
   margin-bottom: 2px;
 }
@@ -54010,6 +54134,143 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .continue-after-dialog__something-else { justify-self: start; }
+
+/* Continue After's delivery review: uncertain deliveries grouped by their
+   exact error, above the ordinary waits. The alert border is the one an
+   uncertain card wore, since only this state waits on the operator. */
+.continue-after-review {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--status-error) 40%, transparent);
+  border-radius: 8px;
+  background: var(--surface-overlay-faint);
+}
+
+.continue-after-review__lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.continue-after-review__lead strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.continue-after-review__group {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.composer__checkbox.continue-after-review__choice {
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.continue-after-review__choice input {
+  margin-top: 2px;
+}
+
+.continue-after-review__when {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The cause, printed once and in full for the whole group. */
+.continue-after-review__error {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--status-error) 8%, transparent);
+  color: var(--danger-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.thread-dependencies__history-toggle.continue-after-review__toggle {
+  justify-self: start;
+  margin-top: 0;
+}
+
+/* Every registration in the group, in a bounded scroller. */
+.continue-after-review__rows {
+  max-height: 176px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
+  list-style: none;
+}
+
+.continue-after-review__row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11.5px;
+}
+
+.continue-after-review__row code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.continue-after-review__what {
+  display: grid;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.continue-after-review__what > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.continue-after-review__what > .continue-after-review__plan {
+  color: var(--text-muted);
+}
+
+.continue-after-review__time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The confirm takes Mark Done's inline form shape. */
+.continue-after-review__confirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  font-size: 13px;
+}
+
+.continue-after-review__confirm ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
 
 /* A held merge card says why in place of its merge button, at the card's
    detail size rather than the inherited body size. */

@@ -8,28 +8,26 @@ describe("hasPotentialMarkdownMath", () => {
     "```math\nx\n```", "~~~math\nx\n~~~", "> ```math\nx",
     "- ````math extra\nx", "```m&#97;th\nx", "~~~&#109;ath\nx",
     "```m&#x61;th\nx", "```math&#32;extra\nx",
+    "$x$", "$A$ and $B$", "$(x,y)$", String.raw`$2^{O(\lambda)}$`,
   ])("accepts supported syntax and streaming openers: %s", (text) => {
     expect(hasPotentialMarkdownMath(text)).toBe(true);
   });
 
   it.each([
-    "", "Ordinary **Markdown**", "A $5 part and $10 part", "$x$",
+    "", "Ordinary **Markdown**", "A $5 part and $10 part", "$5-$10",
+    "$ x$", "$x $", "$x$10", "$x\ny$",
     "```ts\nconst x = 1;\n```", "~~~python\nprint('hello')\n~~~",
     "A `code span`", "[link](https://example.com)", "Streaming \\",
     "`".repeat(100_000), "~".repeat(100_000),
+    String.raw`\$\$x`,
   ])("does not request math for ordinary text", (text) => {
-    expect(hasPotentialMarkdownMath(text)).toBe(false);
-  });
-
-  it.each([
-    String.raw`\$\$x`, // No adjacent dollar pair, so no math hint.
-  ])("ignores independently escaped dollar signs", (text) => {
     expect(hasPotentialMarkdownMath(text)).toBe(false);
   });
 
   it.each([
     "`$$x$$`", String.raw`\\(literal\\)`, "```txt\n$$x$$\n```",
     "    $$x$$", "```mathematica\nx\n```", "```a&amp;b\nx\n```",
+    "`$x$`",
   ])("allows harmless source false positives: %s", (text) => {
     expect(hasPotentialMarkdownMath(text)).toBe(true);
   });

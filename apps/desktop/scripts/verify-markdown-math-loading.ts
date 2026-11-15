@@ -30,7 +30,7 @@ const loaded = await resolveConfig({
 }, "build", "production");
 const config = loaded.config?.renderer;
 assert(config, "Missing renderer build configuration");
-const mathModule = /(?:markdown-math(?:-runtime)?\.[tc]|node_modules\/(?:remark-math|rehype-katex|katex|micromark-extension-math|mdast-util-math)\/|markdown-math\.css)/;
+const mathModule = /(?:(?:markdown-math(?:-runtime)?|remark-single-dollar-math)\.[tc]|node_modules\/(?:remark-math|rehype-katex|katex|micromark-extension-math|mdast-util-math)\/|markdown-math\.css)/;
 const reports: unknown[] = [];
 function boundaries(label: string): Plugin {
   return {
@@ -142,10 +142,29 @@ try {
     await page.waitForLoadState("networkidle");
     assert.equal(await page.locator(".katex").count(), 0);
     assert.equal(mathRequests().filter((url) => /markdown-math-runtime.*\.js$/.test(url)).length, runtimeRequestsBeforeReload + 1);
+    // A fresh document with only single-dollar math must request the runtime,
+    // while the ordinary currency sibling stays literal.
+    await page.reload();
+    await page.getByRole("textbox", { name: "Message" }).fill(
+      String.raw`For $\lambda\ge1$, functions ($A$) and $B$ use $(x,y)$ and $2^{O(\lambda)}$ operations. Parts cost $5 and $10. Code: ` + "`$\\lambda$`.",
+    );
+    await page.waitForFunction(() => document.querySelectorAll(".katex").length === 5);
+    assert.equal(await page.locator(".katex-error").count(), 0);
+    assert((await page.getByRole("region", { name: "Message" }).innerText()).includes("Parts cost $5 and $10."));
+    assert.equal(await page.getByRole("region", { name: "Message" }).locator("code").innerText(), String.raw`$\lambda$`);
+    assert.equal(await page.getByRole("region", { name: "Ordinary sibling" }).locator(".katex").count(), 0);
+    await input.fill("|Value|\n|---|\n|$x$|");
+    await page.locator("td .katex").waitFor();
+    assert.equal(await page.locator(".katex").count(), 1);
+    await input.fill("Parts cost $5 and $10. Formula **$-x$**.");
+    await page.locator("strong .katex").waitFor();
+    assert.equal(await page.locator(".katex").count(), 1);
+    assert((await page.getByRole("region", { name: "Message" }).innerText()).includes("Parts cost $5 and $10."));
+    assert.equal(await page.locator("annotation[encoding='application/x-tex']").textContent(), "-x");
     assert.deepEqual(errors, []);
-    const evidence = { ordinary, firstMathRequests, finalMathRequests: mathRequests(), errors };
+    const evidence = { ordinary, firstMathRequests, finalMathRequests: mathRequests(), singleDollarExpressions: 5, tableExpressions: 1, emphasizedExpressions: 1, errors };
     await writeFile(resolve(output, "browser-evidence.json"), JSON.stringify(evidence, null, 2));
-    console.log(JSON.stringify({ ordinary, firstMathAssetRequests: firstMathRequests.length, renderedExpressions: 3, errors }));
+    console.log(JSON.stringify({ ordinary, firstMathAssetRequests: firstMathRequests.length, renderedExpressions: 5, errors }));
   }
 } finally {
   await browser?.close();

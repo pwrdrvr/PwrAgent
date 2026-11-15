@@ -468,14 +468,88 @@ describe("Continue After dialog", () => {
   });
 
   it("shows registration failures and uncertain delivery without offering to replay it", async () => {
-    const manage = vi.fn(async () => ({ dependencies: [{ ...dependency, status: "dispatching", error: "Delivery was interrupted" }] }));
+    const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => ({
+      dependencies: [{ ...dependency, status: request.action === "dismiss" ? "dismissed" : "dispatching", error: "Delivery was interrupted" }],
+    }));
     const api = { manageThreadDependencies: manage } as unknown as DesktopApi;
     renderDialog(api);
-    expect(await screen.findByText("Delivery needs review")).toBeInTheDocument();
+    expect(await screen.findByText("1 delivery needs review")).toBeInTheDocument();
     expect(screen.getByText("Delivery was interrupted")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss after review" }));
+    expect(screen.queryByRole("button", { name: /Retry|Resend|Replay/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss 1 Reviewed…" }));
+    expect(manage).not.toHaveBeenCalledWith(expect.objectContaining({ action: "dismiss" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Dismiss 1 delivery after review?" })).getByRole("button", { name: "Dismiss 1" }));
+    // One reviewed claim keeps the single-id request an older owner knows.
     await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "dismiss", backend: "codex", threadId: "waiting", dependencyId: "dependency-1" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("1 delivery dismissed after review. It is in History.");
+  });
+
+  it("reviews many uncertain deliveries by error and dismisses only the chosen groups in one request", async () => {
+    const refusal = "Continuation delivery needs review: json-rpc error (-32600): cannot change PwrAgent Token Miser activation while thread 7c1e9a40 has an active turn";
+    const timeout = "Continuation delivery needs review: request timed out after 60000ms";
+    const claims: ThreadDependency[] = [
+      ...Array.from({ length: 30 }, (_, index): ThreadDependency => ({
+        ...dependency, id: `refused-${String(index).padStart(2, "0")}`, status: "dispatching", error: refusal, createdAt: 10 + index,
+        mode: "any", continuation: "Collect the finished worker results.",
+        conditions: [{ backend: "codex", threadId: "docs", when: "turn_completed", title: "Docs sweep worker" }, { backend: "codex", threadId: "schema", when: "turn_completed", title: "Schema migration worker" }],
+      })),
+      ...Array.from({ length: 2 }, (_, index): ThreadDependency => ({ ...dependency, id: `timeout-${index}`, status: "dispatching", error: timeout, createdAt: 100 + index })),
+    ];
+    const ready: ThreadDependency = { ...dependency, id: "held", status: "ready", outcome: "success", continuation: "Fold in the release notes." };
+    let current = [...claims, ready];
+    const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => {
+      if (request.action === "dismiss") {
+        current = current.map((item) => request.dependencyIds?.includes(item.id) ? { ...item, status: "dismissed" as const } : item);
+      }
+      return { dependencies: current };
+    });
+    renderDialog({ manageThreadDependencies: manage } as unknown as DesktopApi);
+    const review = await screen.findByRole("region", { name: "32 deliveries need review" });
+    // Each cause is printed once, without the lead every claim shares.
+    expect(within(review).getAllByText(refusal.replace("Continuation delivery needs review: ", ""))).toHaveLength(1);
+    expect(within(review).getByText("request timed out after 60000ms")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss after review" })).not.toBeInTheDocument();
+    // The ordinary wait keeps its card below the review.
+    expect(screen.getByText("Fold in the release notes.")).toBeInTheDocument();
+    fireEvent.click(within(review).getByRole("button", { name: "Show 30 registrations" }));
+    const rows = within(review).getByRole("list", { name: "Registrations with this error" });
+    expect(within(rows).getAllByRole("listitem")).toHaveLength(30);
+    expect(within(rows).getAllByText("Any of: Docs sweep worker, Schema migration worker")).toHaveLength(30);
+    // Keep the timeouts for a closer look.
+    fireEvent.click(within(review).getByRole("checkbox", { name: /^2 deliveries/ }));
+    fireEvent.click(within(review).getByRole("button", { name: "Dismiss 30 Reviewed…" }));
+    const confirm = within(review).getByRole("group", { name: "Dismiss 30 deliveries after review?" });
+    expect(confirm).toHaveTextContent("Nothing is cancelled or sent again.");
+    expect(within(confirm).getByRole("button", { name: "Keep for Review" })).toHaveFocus();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss 30" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith(expect.objectContaining({ action: "dismiss" })));
+    const request = manage.mock.calls.find(([call]) => call.action === "dismiss")![0];
+    expect(request).toEqual({ action: "dismiss", backend: "codex", threadId: "waiting", dependencyIds: claims.slice(0, 30).map((item) => item.id) });
+    expect(await screen.findByRole("region", { name: "2 deliveries need review" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("30 deliveries dismissed after review. They are in History.");
+  });
+
+  it("keeps the review when the owner refuses the cleanup", async () => {
+    const claims = ["one", "two"].map((id): ThreadDependency => ({ ...dependency, id, status: "dispatching", error: "Delivery was interrupted" }));
+    const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => {
+      if (request.action === "dismiss") throw new Error("Dependency changed while dismissing. Read its current state first.");
+      return { dependencies: claims };
+    });
+    renderDialog({ manageThreadDependencies: manage } as unknown as DesktopApi);
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss 2 Reviewed…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss 2" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Dependency changed while dismissing.");
+    expect(screen.getByRole("group", { name: "Dismiss 2 deliveries after review?" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("names a wait replaced by a newer registration of the same plan in History", async () => {
+    const manage = vi.fn(async () => ({ dependencies: [{ ...dependency, id: "older", status: "cancelled", supersededBy: "newer" }, { ...dependency, id: "newer" }] }));
+    renderDialog({ manageThreadDependencies: manage } as unknown as DesktopApi);
+    fireEvent.click(await screen.findByRole("button", { name: "History (1)" }));
+    expect(screen.getByText("Replaced")).toBeInTheDocument();
+    expect(screen.getByText("Replaced by a newer wait for the same plan on later turns.")).toBeInTheDocument();
   });
 
   it("shows a refused registration in the dialog and keeps the form", async () => {

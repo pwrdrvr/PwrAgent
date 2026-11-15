@@ -10,6 +10,14 @@ import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationW
 import { isNavigationPeerUnavailable, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigation-window-demand";
 import { useEventCallback } from "../../lib/useEventCallback";
+import {
+  revealInFileManagerLabel,
+  thisMachineLabel,
+} from "./project-header-card";
+import {
+  ProjectHeaderCardHost,
+  type ProjectHeaderCardHandle,
+} from "./ProjectHeaderCard";
 import { useMousePress } from "../../lib/useMousePress";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { LENS_KEYBINDING_ACTIONS } from "./useLensHotkeys";
@@ -373,6 +381,10 @@ type SidebarProps = {
   newThreadFederationTargets?: readonly FederationThreadTarget[];
   /** This machine's federation label, for the sub-thread machine list. */
   localMachineLabel?: string;
+  /** `process.platform`, for "Show in Finder" and "This Mac". */
+  platform?: string;
+  /** Shows a folder in the OS file manager. Absent where it cannot. */
+  onRevealPath?: (path: string) => void;
   onAddProjectDirectory?: () => Promise<void>;
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
@@ -663,6 +675,23 @@ const browseModeTooltips = {
  * a thread had a draft. Same trap the unsent-draft chip hit; see "E2E Locator
  * Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
  */
+/** A directory row as the project a peer should open. */
+function federationProjectDirectory(
+  directory: NavigationDirectorySummary,
+): FederationProjectDirectory {
+  return {
+    kind: directory.kind,
+    label: directory.label,
+    ...(directory.path !== undefined ? { path: directory.path } : {}),
+    ...(directory.repositoryKey !== undefined
+      ? { repositoryKey: directory.repositoryKey }
+      : {}),
+    ...(directory.repositoryKeys !== undefined
+      ? { repositoryKeys: directory.repositoryKeys }
+      : {}),
+  };
+}
+
 function formatDraftThreadCount(count: number): string {
   if (count === 0) return "No threads with unsent drafts";
   if (count === 1) return "1 thread with an unsent draft";
@@ -2147,19 +2176,92 @@ export function Sidebar(props: SidebarProps) {
       requestedPosition: position,
       directoryKey: directory.key,
       directoryLabel: directory.label,
-      directory: {
-        kind: directory.kind,
-        label: directory.label,
-        ...(directory.path !== undefined ? { path: directory.path } : {}),
-        ...(directory.repositoryKey !== undefined
-          ? { repositoryKey: directory.repositoryKey }
-          : {}),
-        ...(directory.repositoryKeys !== undefined
-          ? { repositoryKeys: directory.repositoryKeys }
-          : {}),
-      },
+      directory: federationProjectDirectory(directory),
     });
   };
+
+  // The project header card's actions. Stable, so the card's options only
+  // change when what it lists does.
+  const openProjectCardOtherMachines = useEventCallback((
+    directory: NavigationDirectorySummary,
+    anchor: HTMLElement,
+  ): void => {
+    const rect = anchor.getBoundingClientRect();
+    openDirectoryTargetMenu(directory, {
+      x: rect.right,
+      y: rect.bottom + 4,
+      anchorTop: rect.top,
+    });
+  });
+  const startProjectCardThreadOnPeer = useEventCallback((
+    instanceId: string,
+    directory: NavigationDirectorySummary,
+  ): void => {
+    void props.onCreateThreadOnFederationTarget?.(
+      instanceId,
+      federationProjectDirectory(directory),
+    );
+  });
+  const startProjectCardThreadHere = useEventCallback((
+    directory: NavigationDirectorySummary,
+  ): void => {
+    void hoverReleasedListHandlers.openLaunchpad(directory, directory.launchpad?.backend);
+  });
+  const revealProjectPath = useEventCallback((path: string): void => {
+    props.onRevealPath?.(path);
+  });
+  const federationViewer = federationTarget !== undefined;
+  const canRevealPath = Boolean(props.onRevealPath) && !federationViewer;
+  const canStartOnPeer = Boolean(props.onCreateThreadOnFederationTarget);
+  const projectCard = useMemo(() => ({
+    localLabel: federationViewer
+      ? federationLabel ?? "This machine"
+      : thisMachineLabel(props.platform),
+    localDetail: federationViewer ? undefined : props.localMachineLabel,
+    remoteMachineLabel: federationViewer
+      ? federationLabel ?? "another machine"
+      : undefined,
+    revealLabel: canRevealPath ? revealInFileManagerLabel(props.platform) : undefined,
+    onReveal: canRevealPath ? revealProjectPath : undefined,
+    onStartLocal: startProjectCardThreadHere,
+    peers: listedFederationThreadTargets,
+    onStartOnPeer: canStartOnPeer ? startProjectCardThreadOnPeer : undefined,
+    onOtherMachines: listedFederationThreadTargets.length > 0
+      ? openProjectCardOtherMachines
+      : undefined,
+  }), [
+    canRevealPath,
+    canStartOnPeer,
+    federationLabel,
+    federationViewer,
+    listedFederationThreadTargets,
+    openProjectCardOtherMachines,
+    props.localMachineLabel,
+    props.platform,
+    revealProjectPath,
+    startProjectCardThreadHere,
+    startProjectCardThreadOnPeer,
+  ]);
+  // One card for the project headers and the project index lane, so only
+  // one is ever up and moving between them swaps it.
+  const projectCardRef = useRef<ProjectHeaderCardHandle | null>(null);
+  const projectCardOptions = useMemo(
+    () => ({ ...projectCard, threads: renderedThreads }),
+    [projectCard, renderedThreads],
+  );
+  const directoryForProjectCard = useEventCallback((key: string) =>
+    renderedDirectories.find((directory) => directory.key === key));
+  const projectIndexCard = useMemo(() => ({
+    enter: (key: string, target: HTMLElement): boolean => {
+      const card = projectCardRef.current;
+      const directory = directoryForProjectCard(key);
+      if (!card || !directory || !card.applies(directory)) return false;
+      card.enter(target, directory);
+      return true;
+    },
+    leave: (target: HTMLElement): void => projectCardRef.current?.leave(target),
+    hide: (): void => projectCardRef.current?.hide(),
+  }), [directoryForProjectCard]);
 
   const togglePinDirectoryFromContextMenu = (
     directory: NavigationDirectorySummary,
@@ -3223,6 +3325,14 @@ export function Sidebar(props: SidebarProps) {
     (directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1 || !completeDirectoryIndex);
   const directoryMenuHasPinActions =
     directoryMenuCanPin || directoryMenuShowMoveItems;
+  // The project's own folder: shown and copied from here by keyboard as well
+  // as from its hover card.
+  const directoryMenuPath = !directoryContextMenuIsBulk && !directoryMenuIsPlaceholder
+    && (directoryContextMenu?.directory.kind === "directory"
+      || directoryContextMenu?.directory.kind === "workspace")
+    ? directoryContextMenu.directory.path
+    : undefined;
+  const directoryMenuHasPathSection = directoryMenuPath !== undefined;
   const directoryMenuForgeRepository =
     !directoryContextMenuIsBulk && !directoryMenuIsPlaceholder && props.onOpenForgePermissions
       ? directoryContextMenu?.directory.repositoryKey
@@ -3548,6 +3658,7 @@ export function Sidebar(props: SidebarProps) {
             onOpenContextMenu={openProjectIndexContextMenu}
             onDropProject={projectIndexReorders ? dropProjectFromIndex : undefined}
             onMoveProject={projectIndexReorders ? moveProjectFromIndex : undefined}
+            projectCard={projectIndexCard}
           />
         ) : null}
         <div
@@ -3615,6 +3726,7 @@ export function Sidebar(props: SidebarProps) {
               openFederationTargetMenuDirectoryKey={
                 directoryTargetMenu?.directoryKey
               }
+              projectCardRef={projectCardRef}
               onPrefetchPullRequests={forwardedPrefetchPullRequests}
               onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
@@ -4371,6 +4483,11 @@ export function Sidebar(props: SidebarProps) {
         />
       ) : null}
 
+      <ProjectHeaderCardHost
+        ref={projectCardRef}
+        options={projectCardOptions}
+      />
+
       {directoryTargetMenu && listedFederationThreadTargets.length > 0 ? (
         <div
           ref={directoryTargetMenuRef}
@@ -4542,8 +4659,38 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
             </div>
           ) : null}
-          {directoryMenuHasForgeSection
+          {directoryMenuHasPathSection
             && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
+            <div className="thread-context-menu__separator" role="separator" />
+          ) : null}
+          {directoryMenuPath !== undefined ? (
+            <div className="thread-context-menu__section">
+              {canRevealPath ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    setDirectoryContextMenu(undefined);
+                    revealProjectPath(directoryMenuPath);
+                  }}
+                >
+                  {revealInFileManagerLabel(props.platform)}
+                </button>
+              ) : null}
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setDirectoryContextMenu(undefined);
+                  void copyText(directoryMenuPath);
+                }}
+              >
+                Copy Path
+              </button>
+            </div>
+          ) : null}
+          {directoryMenuHasForgeSection
+            && (directoryMenuCanMarkRead || directoryMenuHasPinActions || directoryMenuHasPathSection) ? (
             <div className="thread-context-menu__separator" role="separator" />
           ) : null}
           {directoryMenuHasForgeSection ? (
@@ -4585,7 +4732,8 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
             </div>
           ) : null}
-          {directoryMenuHasForgeSection && (directoryMenuCanArchive || directoryMenuCanCleanUp) ? (
+          {(directoryMenuHasForgeSection || directoryMenuHasPathSection)
+            && (directoryMenuCanArchive || directoryMenuCanCleanUp) ? (
             <div className="thread-context-menu__separator" role="separator" />
           ) : null}
           {directoryMenuCanCleanUp || directoryMenuCanArchive ? (

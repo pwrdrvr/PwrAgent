@@ -412,10 +412,13 @@ export function useViewportTooltip(options: {
   /**
    * Arm a tooltip after a short delay from pointer entry. Pointer movement does
    * not restart the delay; leaving the target should call `hide` to cancel it.
+   * `delayMs` lengthens the wait for a large target the pointer crosses on
+   * its way elsewhere; it defaults to `TOOLTIP_HOVER_DELAY_MS`.
    */
   showAfterDelay: (
     target: HTMLElement,
     content: DelayedTooltipContent,
+    delayMs?: number,
   ) => void;
   /**
    * Replace the content of an already-visible tooltip in place (no-op
@@ -711,7 +714,11 @@ export function useViewportTooltip(options: {
   }, []);
 
   const showAfterDelay = useCallback(
-    (target: HTMLElement, content: DelayedTooltipContent): void => {
+    (
+      target: HTMLElement,
+      content: DelayedTooltipContent,
+      delayMs: number = TOOLTIP_HOVER_DELAY_MS,
+    ): void => {
       if (targetRef.current === target) {
         return;
       }
@@ -726,7 +733,7 @@ export function useViewportTooltip(options: {
         hoverDelayTimerRef.current = null;
         setDelayPending(false);
         show(target, typeof content === "function" ? content() : content);
-      }, TOOLTIP_HOVER_DELAY_MS);
+      }, delayMs);
     },
     [clearHoverDelay, rememberTarget, show],
   );

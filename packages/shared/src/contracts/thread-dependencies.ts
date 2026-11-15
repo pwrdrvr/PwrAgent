@@ -130,6 +130,11 @@ export type ThreadDependency = {
   todoId?: string;
   error?: string;
   dispatchOwnerPid?: number;
+  /**
+   * A cancelled wait replaced by this newer registration of the same plan on
+   * the same prerequisite threads, pinned to later turns.
+   */
+  supersededBy?: string;
 };
 
 export function threadDependencyDeliveryTarget(dependency: Pick<ThreadDependency, "deliver">): ThreadDependencyDeliveryTarget {
@@ -188,6 +193,11 @@ export type ManageThreadDependenciesRequest = {
   steps?: string[];
   holdMerge?: boolean;
   dependencyId?: string;
+  /**
+   * `dismiss` from the desktop's reviewed cleanup: several uncertain
+   * deliveries on this thread, retired together in one transaction.
+   */
+  dependencyIds?: string[];
   /** `mark_done`: which `marked_done` prerequisite; the first open one when omitted. */
   conditionIndex?: number;
   /** `mark_done`: what finished. Optional; the card says "Marked done" without it. */

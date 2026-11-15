@@ -69,6 +69,12 @@ type Options = {
   changed(dependency: ThreadDependency): Promise<void>;
   canDispatch?: (dependency: ThreadDependency) => boolean;
   isConsumerBusy?: (dependency: ThreadDependency) => boolean;
+  /**
+   * The consumer's owner confirms it is idle: no turn this instance started
+   * and none in progress in the provider's own thread read. Without it, a
+   * busy refusal waits for the consumer's next turn or idle notification.
+   */
+  confirmConsumerIdle?: (target: { backend: AppServerBackendKind; threadId: string }) => Promise<boolean>;
   hasDeliveryReceipt?: (dependency: ThreadDependency) => boolean;
   /** Same-assignment steering only; never interrupt or start a replacement task. */
   recoverCompaction?: (dependency: ThreadDependency, prompt: string, canSubmit: () => boolean, admit: () => boolean) => Promise<{
@@ -97,6 +103,11 @@ const identity = (value: { backend: string; threadId: string }): string => JSON.
 
 export class ThreadDependencyCoordinator {
   private work = Promise.resolve();
+  /**
+   * Consumers that refused or took a continuation. Only the consumer's own
+   * terminal or idle notification, or its owner confirming it idle, clears
+   * one, so a pass admits at most one continuation per consumer.
+   */
   private readonly busyConsumers = new Set<string>();
   // Live lifecycle only. Replay reads never enter this map. No per-item writes.
   private readonly compactions = new Map<string, { turnId: string; started: Set<string>; completed: Set<string> }>();
@@ -116,7 +127,11 @@ export class ThreadDependencyCoordinator {
     provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">,
     actor = "operator"): Promise<ManageThreadDependenciesResponse> {
     return this.serialize(async () => {
-      if (request.action === "list") return this.response(request);
+      if (request.action === "list") {
+        // Opening Continue After rechecks a wait parked behind a busy refusal.
+        await this.recoverIdleConsumers([request]);
+        return this.response(request);
+      }
       if (request.action === "rearm_compaction") {
         if (actor !== "operator") throw new Error("Only the operator on the owning instance can rearm compaction recovery.");
         await this.options.readThread(request);
@@ -133,11 +148,24 @@ export class ThreadDependencyCoordinator {
         await this.markDone(request, actor);
         return this.response(request);
       }
+      if (request.action === "dismiss" && request.dependencyIds !== undefined) {
+        if (request.dependencyId !== undefined || !Array.isArray(request.dependencyIds) || request.dependencyIds.length > 512
+          || request.dependencyIds.some((id) => typeof id !== "string" || !id)) {
+          throw new Error("dependencyIds lists at most 512 uncertain deliveries, without dependencyId.");
+        }
+        const dismissed = this.options.store.dismissMany(request.backend, request.threadId, request.dependencyIds, this.now());
+        // Admission behind the reviewed claims may proceed now.
+        await this.admitAfterReview(request);
+        const response = this.response(request);
+        for (const item of dismissed) await this.options.changed(item);
+        return response;
+      }
       if (request.action === "cancel" || request.action === "dismiss") {
         if (!request.dependencyId) throw new Error("dependencyId is required to cancel a dependency.");
         const changed = request.action === "dismiss"
           ? this.options.store.dismiss(request.backend, request.threadId, request.dependencyId, this.now())
           : this.options.store.cancel(request.backend, request.threadId, request.dependencyId, this.now());
+        if (request.action === "dismiss") await this.admitAfterReview(request);
         const response = this.response(request);
         await this.options.changed(changed);
         return response;
@@ -148,6 +176,8 @@ export class ThreadDependencyCoordinator {
       // Validate the consumer too: a mistyped id must never become a durable wake target.
       await this.options.readThread(request);
       const conditions: ThreadDependencyCondition[] = [];
+      // Each local prerequisite's turns in provider order, for supersession.
+      const turnOrder = new Map<string, string[]>();
       for (const original of request.conditions!) {
         const condition = { ...original };
         // Only this machine's threads can be read; Mark Done ends the rest.
@@ -156,6 +186,7 @@ export class ThreadDependencyCoordinator {
           continue;
         }
         const snapshot = await this.options.readThread(condition);
+        turnOrder.set(identity(condition), snapshot.turns.map((turn) => turn.id));
         if (condition.when === "turn_completed" && !condition.turnId) {
           condition.turnId = snapshot.activeTurnId ?? snapshot.turns.at(-1)?.id;
           if (!condition.turnId) throw new Error("There is no turn to watch. Start the prerequisite turn or supply turnId.");
@@ -166,7 +197,7 @@ export class ThreadDependencyCoordinator {
       }
       const now = this.now();
       const compactionHook = conditions[0]?.when === "compaction_completed";
-      const item = this.options.store.register({
+      const candidate: ThreadDependency = {
         ...provenance,
         id: randomUUID(), backend: request.backend, threadId: request.threadId,
         conditions, mode: compactionHook ? "all" : request.mode ?? "all", onFailure: compactionHook ? "notify" : request.onFailure ?? "notify",
@@ -176,7 +207,10 @@ export class ThreadDependencyCoordinator {
         ...(request.holdMerge ? { holdMerge: true } : {}),
         ...(request.repeat ? { repeat: true } : {}),
         status: "waiting", evidence: [], createdAt: now, updatedAt: now,
-      });
+      };
+      const { dependency: item, superseded } = this.options.store.registerReplacing(
+        candidate, (existing) => supersedesRegistration(existing, candidate, turnOrder));
+      for (const replaced of superseded) await this.options.changed(replaced);
       const registered = JSON.stringify(item);
       await this.evaluate(item);
       // Evaluation publishes whatever it saved; announce the registration only
@@ -234,6 +268,7 @@ export class ThreadDependencyCoordinator {
 
   reconcile(): Promise<void> {
     return this.serialize(async () => {
+      await this.recoverIdleConsumers();
       for (const item of this.options.store.active()) {
         if (item.status === "dispatching") {
           if (this.options.hasDeliveryReceipt?.(item)) {
@@ -262,7 +297,11 @@ export class ThreadDependencyCoordinator {
         this.closedCompactionTurns.set(identity(target), turn.id);
       }
       if (turn || consumerAvailable) this.busyConsumers.delete(identity(target));
-      for (const item of active) {
+      // A prerequisite's event can find its consumer parked behind a busy
+      // refusal whose idle notification was lost. Ask the owner.
+      await this.recoverIdleConsumers(this.options.store.active().filter((item) =>
+        item.conditions.some((condition) => isThreadDependencyLocalThreadCondition(condition) && identity(condition) === identity(target))));
+      for (const item of this.options.store.active()) {
         if (item.conditions[0]?.when === "compaction_completed" && !turn && !consumerAvailable) continue;
         if (identity(item) === identity(target) || item.conditions.some((condition) =>
           isThreadDependencyLocalThreadCondition(condition) && identity(condition) === identity(target))) {
@@ -471,6 +510,10 @@ export class ThreadDependencyCoordinator {
     // A card needs no idle consumer: it starts no turn.
     if (threadDependencyDeliveryTarget(current) === "operator") return this.remind(current);
     if (this.options.isConsumerBusy?.(current) || this.busyConsumers.has(identity(current))) return;
+    // A sibling claim may already have started this consumer. Do not admit
+    // another saved plan until that uncertain delivery has been reviewed.
+    if (this.options.store.active().some((other) => identity(other) === identity(current)
+      && other.status === "dispatching" && other.error)) return;
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);
@@ -484,7 +527,9 @@ export class ThreadDependencyCoordinator {
         origin: "automation", messageOrigin: { kind: "pwragent", dependencyId: claim.id,
           causalMessagingSource: claim.causalMessagingSource, causalMessagingAmbiguous: claim.causalMessagingAmbiguous },
       });
-      if (result.status === "busy") this.busyConsumers.add(identity(claim));
+      // A started turn holds the consumer as a refusal does: its terminal
+      // event, or the owner confirming idle, admits the next ready wait.
+      if (result.status === "busy" || result.status === "started") this.busyConsumers.add(identity(claim));
       await this.save(claim, result.status === "busy"
         ? { ...claim, status: "ready" }
         : { ...claim, status: "delivered", turnId: result.turnId });
@@ -492,6 +537,37 @@ export class ThreadDependencyCoordinator {
       // Even a transport error can follow successful backend admission.
       // Retain the claim for review instead of retrying an uncertain side effect.
       await this.save(claim, { ...claim, error: `Continuation delivery needs review: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  }
+
+  /**
+   * Clears the busy latch of each named consumer, or every latched one, that
+   * has a ready agent wait and whose owner confirms it is idle. The ready
+   * waits are then evaluated, which admits at most one of them.
+   */
+  private async recoverIdleConsumers(targets?: readonly { backend: AppServerBackendKind; threadId: string }[]): Promise<void> {
+    const confirm = this.options.confirmConsumerIdle;
+    if (!confirm) return;
+    const wanted = targets && new Set(targets.map(identity));
+    const ready = this.options.store.active().filter((item) => item.status === "ready"
+      && item.conditions[0]?.when !== "compaction_completed"
+      && threadDependencyDeliveryTarget(item) === "agent" && this.busyConsumers.has(identity(item))
+      && (!wanted || wanted.has(identity(item))));
+    for (const key of new Set(ready.map(identity))) {
+      const sample = ready.find((item) => identity(item) === key)!;
+      if (!await confirm({ backend: sample.backend, threadId: sample.threadId }).catch(() => false)) continue;
+      this.busyConsumers.delete(key);
+      for (const item of ready.filter((entry) => identity(entry) === key)) {
+        const current = this.options.store.get(item.backend, item.threadId, item.id);
+        if (current?.status === "ready") await this.evaluate(current);
+      }
+    }
+  }
+
+  /** Waits held behind a dismissed claim may proceed if the consumer is free. */
+  private async admitAfterReview(target: { backend: AppServerBackendKind; threadId: string }): Promise<void> {
+    for (const item of this.options.store.active()) {
+      if (identity(item) === identity(target) && item.status === "ready") await this.evaluate(item);
     }
   }
 
@@ -635,6 +711,39 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
     if (condition.when === "compaction_completed" && (condition.prUrl || condition.headSha)) throw new Error("PR fields cannot be used for compaction recovery.");
     if (condition.when !== "turn_completed" && condition.turnId) throw new Error("turnId is only valid for turn completion.");
   }
+}
+
+/**
+ * True when `candidate` re-registers `existing` for a later point in the same
+ * work: the same consumer, delivery, policy, plan text and prerequisite set,
+ * differing only in pinned turns, each of which is the same or later in its
+ * thread's provider history and at least one strictly later. A changed plan,
+ * prerequisite set, PR or delivery is an independent wait and is kept.
+ */
+export function supersedesRegistration(existing: ThreadDependency, candidate: ThreadDependency,
+  turnOrder: ReadonlyMap<string, readonly string[]>): boolean {
+  const shape = (item: ThreadDependency) => JSON.stringify([
+    item.backend, item.threadId, item.mode, item.onFailure, item.continuation ?? "",
+    threadDependencyDeliveryTarget(item), item.handoff ?? false, item.steps ?? [], item.holdMerge ?? false,
+  ]);
+  if (shape(existing) !== shape(candidate) || existing.conditions.length !== candidate.conditions.length) return false;
+  const key = (condition: ThreadDependencyCondition) => JSON.stringify([condition.backend, condition.threadId, condition.when,
+    condition.prUrl ?? "", condition.headSha ?? "", condition.subject ?? "", condition.target?.instanceId ?? ""]);
+  const remaining = [...candidate.conditions];
+  let later = false;
+  for (const condition of existing.conditions) {
+    const index = remaining.findIndex((entry) => key(entry) === key(condition));
+    if (index < 0) return false;
+    const [replacement] = remaining.splice(index, 1);
+    if (condition.turnId === replacement!.turnId) continue;
+    if (condition.when !== "turn_completed" || !condition.turnId || !replacement!.turnId) return false;
+    const order = turnOrder.get(identity(condition)) ?? [];
+    const before = order.indexOf(condition.turnId);
+    const after = order.indexOf(replacement!.turnId);
+    if (before < 0 || after <= before) return false;
+    later = true;
+  }
+  return later;
 }
 
 export function evaluateCondition(condition: ThreadDependencyCondition, snapshot: DependencyThreadSnapshot, now: number, turn?: AppServerThreadTurnMetadata,

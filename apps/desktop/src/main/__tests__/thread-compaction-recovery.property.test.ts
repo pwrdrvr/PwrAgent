@@ -249,6 +249,22 @@ it("unrelated PR events cannot retry a locked recovery or add writes", async () 
     note: "One locked pending recovery followed by 100 PR and thread metadata events; no retry or persistence without an availability boundary.", writes });
 });
 
+it("owner-confirmed idle recovery for wait barriers cannot release a compaction subscription", async () => {
+  const recover = vi.fn(async () => ({ status: "busy" as const }));
+  const { agent } = harness({ recoverCompaction: recover,
+    submit: async () => ({ status: "busy" }), confirmConsumerIdle: async () => true });
+  await register(agent);
+  await cycle(agent, "locked-compaction");
+  const registered = await agent.manage({ action: "create", ...target,
+    conditions: [{ backend: "codex", threadId: "", when: "marked_done", subject: "An ordinary wait" }],
+    continuation: "Continue the authorized ordinary task when its prerequisite finishes." });
+  const wait = registered.dependencies.find(item => item.conditions[0]?.when === "marked_done")!;
+  await agent.manage({ action: "mark_done", ...target, dependencyId: wait.id, note: "Finished." });
+  await agent.manage({ action: "list", ...target });
+  expect(recover).toHaveBeenCalledTimes(1);
+  expect(store.active().find(item => item.conditions[0]?.when === "compaction_completed")?.status).toBe("ready");
+});
+
 it("budgets completed compactions rather than starts, duplicates or unrelated items", async () => {
   vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
   const dbPath = db.raw.name;
@@ -320,7 +336,11 @@ it("counts uncertain admissions and refuses wall-clock rollback bypasses", async
   await register(first.agent);
   await cycle(first.agent, "uncertain");
   const second = harness({ now: () => now });
-  await second.agent.manage({ ...registration(), ...target, continuation: "Another stable prompt." });
+  const replacement = { ...registration(), ...target, continuation: "Another stable prompt." };
+  await expect(second.agent.manage(replacement)).rejects.toThrow("Continuation delivery needs review");
+  const uncertain = store.active().find(item => item.status === "dispatching")!;
+  await second.agent.manage({ action: "dismiss", ...target, dependencyId: uncertain.id });
+  await second.agent.manage(replacement);
   now -= 60_000;
   await cycle(second.agent, "clock-backward");
   now += 2 * 60_000;

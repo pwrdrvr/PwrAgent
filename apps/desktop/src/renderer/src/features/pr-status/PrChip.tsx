@@ -9,7 +9,12 @@ import {
 import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon, EyeIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
-import { sidebarPrCardBridge, type BridgedHoverCard } from "../../lib/hover-card-bridge";
+import {
+  cardIsBesideSidebar,
+  sidebarAnchorRect,
+  sidebarPrCardBridge,
+  type BridgedHoverCard,
+} from "../../lib/hover-card-bridge";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { statusPulseRef } from "../../lib/status-pulse";
@@ -67,24 +72,6 @@ type PrChipProps = {
   cardActions?: boolean;
   onVisibilityChange?: (visible: boolean) => void;
 };
-
-/** The sidebar, so the card opens past its edge rather than over the rows. */
-function sidebarAnchorRect(target: HTMLElement): DOMRect {
-  return (target.closest(".sidebar") ?? target).getBoundingClientRect();
-}
-
-/**
- * Whether the card sits clear of the sidebar, where the pointer can reach it
- * without crossing other rows. A card that fell back over the rows (a narrow
- * window) does not qualify, and neither does one with no laid-out box.
- */
-function cardIsBesideSidebar(card: HTMLElement | null, target: HTMLElement): boolean {
-  const sidebar = target.closest(".sidebar");
-  if (!card || !sidebar) return false;
-  const box = card.getBoundingClientRect();
-  const edges = sidebar.getBoundingClientRect();
-  return box.width > 0 && (box.left >= edges.right || box.right <= edges.left);
-}
 
 export const PrChip = memo(function PrChip(props: PrChipProps) {
   const { pr } = props;

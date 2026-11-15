@@ -10094,6 +10094,7 @@ class DesktopAppServerService {
           () => canSubmit() && !this.resolveThreadForgeProject(dependency)?.automation.paused, admit);
         },
         isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
+        confirmConsumerIdle: async (target) => await this.confirmDependencyConsumerIdle(target),
         // PR conditions also wait while the consumer's project holds PR
         // watches. A paused project's turn-only wake is held or discarded
         // in submit, by its wake-up policy.
@@ -10154,6 +10155,18 @@ class DesktopAppServerService {
     return { status: delivered.status === "discarded" ? "discarded" : "held" };
   }
 
+  /**
+   * Owner-confirmed idle for a consumer whose busy refusal outlived its idle
+   * notification: no turn the registry started, no lock, and no turn in
+   * progress in the provider's own latest page of the thread.
+   */
+  private async confirmDependencyConsumerIdle(target: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
+    const registry = getDesktopBackendRegistry();
+    if (registry.getActiveTurnForThread(target) || await registry.isThreadLocked(target)) return false;
+    const response = await registry.readThread({ ...target, includeTurns: true, limit: 20, viewOnly: true, countsAsActivity: false });
+    return !response.replay.entries.some((entry) => entry.turn?.status === "in_progress");
+  }
+
   private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
     const registry = getDesktopBackendRegistry();
     const turns = new Map<string, AppServerThreadTurnMetadata>();
@@ -10161,19 +10174,21 @@ class DesktopAppServerService {
     // evaluation reads only PwrAgent's attachment/status stores.
     if (!condition.when || condition.when === "turn_completed") {
       let before: string | undefined;
+      // Pages arrive newest first; keep the turns in provider order.
+      const pages: AppServerThreadTurnMetadata[][] = [];
       for (let page = 0; page < 50; page++) {
         const response = await registry.readThread({
           backend: condition.backend, threadId: condition.threadId,
           includeTurns: true, limit: 100, viewOnly: true, ...(before ? { before } : {}),
         });
-        for (const entry of response.replay.entries) {
-          if (entry.turn) turns.set(entry.turn.id, entry.turn);
-        }
+        pages.unshift(response.replay.entries.flatMap((entry) => entry.turn ? [entry.turn] : []));
         const pagination = response.replay.pagination;
-        if (!condition.turnId || turns.has(condition.turnId) || !pagination.hasPreviousPage
-          || !pagination.previousCursor || pagination.previousCursor === before) break;
+        if (!condition.turnId || pages.some((turnsOnPage) => turnsOnPage.some((turn) => turn.id === condition.turnId))
+          || !pagination.hasPreviousPage || !pagination.previousCursor || pagination.previousCursor === before) break;
         before = pagination.previousCursor;
       }
+      // A turn's latest metadata wins; its first position keeps the order.
+      for (const turn of pages.flat()) turns.set(turn.id, turn);
     }
     const overlay = await this.getOverlayStore().getThreadOverlayState(condition);
     const prs = this.primaryAttachedPrsForThread({
@@ -10216,8 +10231,12 @@ class DesktopAppServerService {
     }
     if (Object.keys(request).some((key) => ![
       "action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff",
-      "steps", "holdMerge", "dependencyId", "conditionIndex", "note", "pullRequest", "federationTarget", "repeat",
+      "steps", "holdMerge", "dependencyId", "dependencyIds", "conditionIndex", "note", "pullRequest", "federationTarget", "repeat",
     ].includes(key))) throw new Error("Unknown dependency request field.");
+    // Reviewed cleanup is the operator's: an agent dismisses one claim it was told about.
+    if (request.dependencyIds !== undefined && actor.startsWith("agent:")) {
+      throw new Error("dependencyIds is for the operator's reviewed cleanup. Dismiss one reviewed delivery with dependencyId.");
+    }
     const { federationTarget, ...owned } = request;
     const runtime = getDesktopFederationRuntime();
     const localInstanceId = (await runtime.health().catch(() => undefined))?.instanceId;
