@@ -282,6 +282,7 @@ import {
   type ComposerImageFile,
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { SkillPickerHeader } from "./SkillPickerHeader";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import {
   ComposerTerminalToggle,
@@ -490,7 +491,7 @@ export type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
-  onEnsureSkillsLoaded?: () => void | Promise<void>;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
@@ -5579,7 +5580,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     mentionNavigation.settledQuery,
   ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
-  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
+  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && (filteredSkills.length > 0 || props.onEnsureSkillsLoaded)
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
@@ -6297,8 +6298,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       const viewportPadding = 12;
       const gap = 10;
       const rect = inputWrap.getBoundingClientRect();
-      const availableAbove = rect.top - viewportPadding - gap;
-      const availableBelow = window.innerHeight - rect.bottom - viewportPadding - gap;
+      // The thread layout clips below its header. Window bounds alone can
+      // leave the picker's header behind that edge while its options fit.
+      const pane = inputWrap.closest(".thread-view__layout")?.getBoundingClientRect();
+      const visibleTop = Math.max(0, pane?.top ?? 0);
+      const visibleBottom = Math.min(window.innerHeight, pane?.bottom ?? window.innerHeight);
+      const availableAbove = rect.top - visibleTop - viewportPadding - gap;
+      const availableBelow = visibleBottom - rect.bottom - viewportPadding - gap;
       const placement =
         availableAbove >= 180 || availableAbove >= availableBelow ? "above" : "below";
       const available = placement === "above" ? availableAbove : availableBelow;
@@ -6320,20 +6326,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 
+  const skillPickerLoadKey = trigger
+    ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:skills:${trigger.start}`
+    : slashTrigger
+      ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:slash:${slashTrigger.start}`
+      : undefined;
+  const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!trigger && !slashTrigger) {
+    if (!skillPickerLoadKey) {
+      loadedSkillPickerRef.current = undefined;
       return;
     }
-
+    if (!props.onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
+      return;
+    }
+    // Query edits and streamed thread summaries can replace the callback.
+    // Check freshness once per trigger opening, including an empty list.
+    loadedSkillPickerRef.current = skillPickerLoadKey;
     void props.onEnsureSkillsLoaded?.();
   }, [
     props.onEnsureSkillsLoaded,
-    slashTrigger?.end,
-    slashTrigger?.query,
-    slashTrigger?.start,
-    trigger?.end,
-    trigger?.query,
-    trigger?.start,
+    skillPickerLoadKey,
   ]);
 
   useEffect(() => {
@@ -14142,55 +14155,72 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
         {autocompleteKind === "skills" ? (
           <div
-            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            className={`composer__autocomplete composer__autocomplete--skills composer__autocomplete--${autocompleteLayout.placement}`}
             ref={autocompleteListRef}
-            role="listbox"
-            aria-label="Skills"
-            id={skillListboxId}
             style={{ maxHeight: autocompleteLayout.maxHeight }}
           >
-            {filteredSkills.map((skill, index) => (
-              <button
-                key={skill.path ?? skill.name}
-                id={`${skillListboxId}-option-${index}`}
-                ref={(node) => {
-                  autocompleteOptionRefs.current[index] = node;
-                }}
-                aria-describedby={skillOriginCard.describedBy(skill)}
-                aria-selected={index === activeSkillIndex}
-                className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
-                role="option"
-                tabIndex={index === activeSkillIndex ? 0 : -1}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  applySkill(skill);
-                }}
-                onClick={() => {
-                  applySkill(skill);
-                }}
-                onFocus={() => {
-                  setActiveSkillIndex(index);
-                }}
-                onKeyDown={handleAutocompleteKeyDown}
-              >
-                <span className="composer__autocomplete-title">
-                  <HighlightedAutocompleteLabel
-                    label={`$${skill.name}`}
-                    query={trigger?.query ? `$${trigger.query}` : "$"}
-                  />
-                  {skill.origin ? (
-                    <SkillOriginChip
-                      origin={skill.origin}
-                      {...skillOriginCard.chipHandlers(skill)}
+            {props.onEnsureSkillsLoaded ? (
+              <SkillPickerHeader
+                loading={props.skillLoading}
+                onDismiss={() => dismissAutocomplete(true)}
+                onRefresh={() => props.onEnsureSkillsLoaded?.({ force: true })}
+              />
+            ) : null}
+            {filteredSkills.length === 0 ? (
+              <p className="composer__skill-picker-empty" role="status">
+                {props.skillLoading ? "Loading skills…" : "No matching skills."}
+              </p>
+            ) : null}
+            <div
+              className="composer__skill-picker-options"
+              role="listbox"
+              aria-label="Skills"
+              id={skillListboxId}
+              aria-busy={props.skillLoading}
+            >
+              {filteredSkills.map((skill, index) => (
+                <button
+                  key={skill.path ?? skill.name}
+                  id={`${skillListboxId}-option-${index}`}
+                  ref={(node) => {
+                    autocompleteOptionRefs.current[index] = node;
+                  }}
+                  aria-describedby={skillOriginCard.describedBy(skill)}
+                  aria-selected={index === activeSkillIndex}
+                  className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
+                  role="option"
+                  tabIndex={index === activeSkillIndex ? 0 : -1}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applySkill(skill);
+                  }}
+                  onClick={() => {
+                    applySkill(skill);
+                  }}
+                  onFocus={() => {
+                    setActiveSkillIndex(index);
+                  }}
+                  onKeyDown={handleAutocompleteKeyDown}
+                >
+                  <span className="composer__autocomplete-title">
+                    <HighlightedAutocompleteLabel
+                      label={`$${skill.name}`}
+                      query={trigger?.query ? `$${trigger.query}` : "$"}
                     />
-                  ) : null}
-                </span>
-                <span className="composer__autocomplete-meta">
-                  {skill.shortDescription || skill.description || skill.path}
-                </span>
-              </button>
-            ))}
+                    {skill.origin ? (
+                      <SkillOriginChip
+                        origin={skill.origin}
+                        {...skillOriginCard.chipHandlers(skill)}
+                      />
+                    ) : null}
+                  </span>
+                  <span className="composer__autocomplete-meta">
+                    {skill.shortDescription || skill.description || skill.path}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         ) : autocompleteKind === "slash" ? (
           <div

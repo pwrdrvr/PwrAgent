@@ -23995,7 +23995,7 @@ a.button {
   gap: 1px;
   max-height: 168px;
   padding: 4px;
-  overflow-y: auto;
+  overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
@@ -24047,6 +24047,11 @@ a.button {
 
 .compact-composer__mention-meta:empty {
   display: none;
+}
+
+.compact-composer__mention-option:hover .compact-composer__mention-meta,
+.compact-composer__mention-option.is-active .compact-composer__mention-meta {
+  color: var(--text-secondary);
 }
 
 /* Chip + menu wrapper: the chip must be able to shrink and truncate, and
@@ -47019,6 +47024,72 @@ button.composer__subthread-source-parent:hover {
 
 .composer__autocomplete--above {
   bottom: calc(100% + 10px);
+}
+
+.composer__autocomplete--skills {
+  overflow: hidden;
+}
+
+.composer__skill-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 12px;
+  padding: 2px 4px 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.composer__skill-picker-refresh {
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.composer__skill-picker-refresh:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer__skill-picker-refresh:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.composer__skill-picker-refresh:disabled {
+  cursor: default;
+}
+
+.composer__skill-picker-empty {
+  margin: 6px 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.composer__skill-picker-options,
+.compact-composer__mention-options {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  gap: 4px;
+  /* Scroll extents round to CSS pixels; keep a fractional last row inside
+     the clip even when the maximum scroll offset rounds down. */
+  padding-bottom: 1px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.compact-composer__mention-options {
+  gap: 1px;
 }
 
 .composer__autocomplete--below {

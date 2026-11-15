@@ -10146,7 +10146,9 @@ export class CodexAppServerClient {
         )
       ),
     ];
-    const payload: CodexSkillsListParams = { cwds };
+    // Launchpads may have no active thread watching their repository. A
+    // picker refresh must discover external additions/removals on disk too.
+    const payload: CodexSkillsListParams = { cwds, forceReload: true };
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["skills/list"],

@@ -8,6 +8,7 @@ import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-referenc
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "../../../test/phase-probes";
 import userEvent from "@testing-library/user-event";
+import fc from "fast-check";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -63,6 +64,7 @@ import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
+import { useThreadSkills } from "../../../lib/useThreadSkills";
 
 function Composer(props: ComponentProps<typeof ProductionComposer>) {
   const desktopApi = useMemo<DesktopApi>(() => ({
@@ -624,6 +626,73 @@ function createScheduledActionApi(options?: {
 }
 
 describe("Composer", () => {
+  it.each(["$", "/"])("checks skill freshness once per %s picker opening, across query and summary updates", (prefix) => {
+    const refresh = vi.fn();
+    const thread: NavigationThreadSummary = {
+      id: "picker-refresh",
+      title: "Picker refresh",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const view = render(<Composer skills={[]} thread={thread} onEnsureSkillsLoaded={() => refresh()} />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    for (const query of ["", "p", "pa", "pap", "paper"]) {
+      fireEvent.change(input, { target: { value: `${prefix}${query}` } });
+    }
+    expect(refresh).toHaveBeenCalledTimes(1);
+    view.rerender(<Composer skills={[]} thread={{ ...thread }} onEnsureSkillsLoaded={() => refresh()} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: `${prefix}paper` } });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers explicit Refresh for a missing skill while reopening reuses the fresh catalog", async () => {
+    let names = ["rate-math-paper"];
+    let pause = false;
+    let finishRefresh: () => void = () => undefined;
+    const refreshed = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    const listSkills = vi.fn(async () => {
+      if (pause) await refreshed;
+      return {
+        backend: "codex" as const,
+        fetchedAt: Date.now(),
+        data: [{ skills: names.map((name) => ({ name, description: name, path: `/fixture/.agents/skills/${name}/SKILL.md` })) }],
+      };
+    });
+    const desktopApi: DesktopApi = { listSkills };
+    const thread: NavigationThreadSummary = {
+      id: "explicit-refresh", title: "Refresh skills", titleSource: "explicit",
+      source: "codex", linkedDirectories: [], inbox: { inInbox: false },
+    };
+    function Picker() {
+      const skills = useThreadSkills({ desktopApi, thread });
+      return <Composer thread={thread} skills={skills.skills} skillLoading={skills.loading} onEnsureSkillsLoaded={skills.ensureLoaded} />;
+    }
+    render(<Picker />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "$rewriter" } });
+    await screen.findByText("No matching skills.");
+    expect(listSkills).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: "$rewriter" } });
+    expect(listSkills).toHaveBeenCalledTimes(1);
+
+    names = [...names, "paper-rewriter-pwragent"];
+    pause = true;
+    const refresh = screen.getByRole("button", { name: "Refresh skills" });
+    expect(refresh.closest('[role="listbox"]')).toBeNull();
+    fireEvent.click(refresh);
+    expect(refresh).toBeDisabled();
+    await act(async () => { finishRefresh(); });
+    await screen.findByRole("option", { name: /paper-rewriter-pwragent/ });
+    expect(listSkills).toHaveBeenCalledTimes(2);
+    expect(refresh).toBeEnabled();
+    expect(input).toHaveValue("$rewriter");
+  });
+
   it("can start a restored project draft after another project starts a placeholder thread", async () => {
     const store = createComposerDraftStore();
     const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);
@@ -27570,16 +27639,62 @@ it("refits skill autocomplete when its composer resizes without a window resize"
     }));
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "$" } });
     const listbox = await screen.findByRole("listbox", { name: "Skills" });
-    const previous = Number.parseFloat(listbox.style.maxHeight);
+    const panel = listbox.closest<HTMLElement>(".composer__autocomplete")!;
+    const previous = Number.parseFloat(panel.style.maxHeight);
     top = 100;
     act(() => resized?.());
-    expect(Number.parseFloat(listbox.style.maxHeight)).toBeLessThan(previous);
-    expect(Number.parseFloat(listbox.style.maxHeight)).toBeLessThanOrEqual(top - 10);
+    expect(Number.parseFloat(panel.style.maxHeight)).toBeLessThan(previous);
+    expect(Number.parseFloat(panel.style.maxHeight)).toBeLessThanOrEqual(top - 10);
     cleanup();
     expect(disconnect).toHaveBeenCalled();
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("fits the entire skill picker inside the pane's viewport intersection", async () => {
+  renderComposerWithRegressionSkills();
+  const wrap = document.querySelector(".composer__input-wrap")!;
+  const pane = document.querySelector(".composer")!.parentElement!;
+  pane.classList.add("thread-view__layout");
+  let paneTop = 194;
+  let paneBottom = 700;
+  let inputTop = 480;
+  let inputBottom = 528;
+  const rect = (top: number, bottom: number): DOMRect => ({
+    top, bottom, left: 0, right: 500, width: 500, height: bottom - top,
+    x: 0, y: top, toJSON: () => ({}),
+  });
+  vi.spyOn(wrap, "getBoundingClientRect").mockImplementation(() => rect(inputTop, inputBottom));
+  vi.spyOn(pane, "getBoundingClientRect").mockImplementation(() => rect(paneTop, paneBottom));
+  fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "$" } });
+  const listbox = await screen.findByRole("listbox", { name: "Skills" });
+  const panel = listbox.closest<HTMLElement>(".composer__autocomplete")!;
+
+  // The pane below the thread header clips the popup even when the popup's
+  // rectangle is inside the window. Derive the oracle from both boundaries.
+  const assertBounds = (): void => {
+    const height = Number.parseFloat(panel.style.maxHeight);
+    const top = panel.classList.contains("composer__autocomplete--above")
+      ? inputTop - 10 - height
+      : inputBottom + 10;
+    expect(top).toBeGreaterThanOrEqual(Math.max(0, paneTop) + 12);
+    expect(top + height).toBeLessThanOrEqual(Math.min(window.innerHeight, paneBottom) - 12);
+  };
+  assertBounds();
+  fc.assert(fc.property(
+    fc.record({ top: fc.integer({ min: -100, max: 250 }), height: fc.integer({ min: 240, max: 500 }), offset: fc.integer({ min: 0, max: 100 }) }),
+    ({ top, height, offset }) => {
+      paneTop = top;
+      paneBottom = Math.min(window.innerHeight + 100, top + height);
+      const visibleTop = Math.max(0, paneTop);
+      const visibleBottom = Math.min(window.innerHeight, paneBottom);
+      inputTop = visibleTop + 40 + Math.floor((visibleBottom - visibleTop - 120) * offset / 100);
+      inputBottom = inputTop + 40;
+      act(() => { window.dispatchEvent(new Event("resize")); });
+      assertBounds();
+    },
+  ), { numRuns: 100 });
 });
 
 describe("queued message reordering", () => {

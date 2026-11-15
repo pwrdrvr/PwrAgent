@@ -63,6 +63,7 @@ import {
 import { describeLeadingCommand } from "./composer-command-chip";
 import type { ComposerCommandChip } from "./ComposerInputTypes";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { SkillPickerHeader } from "./SkillPickerHeader";
 import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 
 /**
@@ -103,7 +104,8 @@ export type ComposerMentionSources = {
   navigationLoading?: boolean;
   navigationSettledQuery?: string;
   /** Called when `$` or `/` opens a popover. */
-  ensureSkillsLoaded?: () => void;
+  ensureSkillsLoaded?: (options?: { force?: boolean }) => void;
+  skillLoading?: boolean;
   /**
    * Peer thread search behind `#`. Omitted leaves `#` local-only; the
    * shared hook otherwise falls back to this window's own bridge.
@@ -332,10 +334,10 @@ export function useComposerMentions(params: {
     [hashQuery, remoteThreads, remoteSettledQuery, sources?.currentThread, sources?.currentThreadKey, sources?.navigationSettledQuery, threads],
   );
 
-  // Same precedence the full composer uses. A trigger with no candidates
-  // yields to the next one rather than holding an empty popover open.
+  // Skills keep an empty picker open so a missing result can be refreshed.
+  // Other triggers still yield when they have no candidates.
   const kind: MentionKind | undefined =
-    skillTrigger && skillOptions.length > 0
+    skillTrigger && (skillOptions.length > 0 || sources?.ensureSkillsLoaded)
       ? "skills"
       : slashTrigger && commandOptions.length > 0
         ? "commands"
@@ -389,7 +391,12 @@ export function useComposerMentions(params: {
     Boolean(kind) && !params.disabled && dismissKey !== dismissedKey;
   const activeOption = Math.min(activeIndex, Math.max(optionCount - 1, 0));
 
-  const skillsTriggered = Boolean(skillTrigger || slashTrigger);
+  const skillPickerLoadKey = skillTrigger
+    ? `${sources?.currentThreadKey ?? ""}:skills:${skillTrigger.start}`
+    : slashTrigger
+      ? `${sources?.currentThreadKey ?? ""}:slash:${slashTrigger.start}`
+      : undefined;
+  const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   const navigationTriggered = Boolean(directoryTrigger || rawHashTrigger);
   const ensureSkillsLoaded = sources?.ensureSkillsLoaded;
   const ensureNavigationLoaded = sources?.ensureNavigationLoaded;
@@ -398,8 +405,14 @@ export function useComposerMentions(params: {
   // Keyed on the trigger existing, NOT on there being candidates: an empty
   // population is exactly the state a load is supposed to fix.
   useEffect(() => {
-    if (skillsTriggered) ensureSkillsLoaded?.();
-  }, [ensureSkillsLoaded, skillsTriggered]);
+    if (!skillPickerLoadKey) {
+      loadedSkillPickerRef.current = undefined;
+      return;
+    }
+    if (!ensureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) return;
+    loadedSkillPickerRef.current = skillPickerLoadKey;
+    ensureSkillsLoaded();
+  }, [ensureSkillsLoaded, skillPickerLoadKey]);
   useEffect(() => {
     if (navigationTriggered) ensureNavigationLoaded?.(navigationQuery);
   }, [ensureNavigationLoaded, navigationTriggered, navigationQuery]);
@@ -638,7 +651,16 @@ export function useComposerMentions(params: {
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): boolean => {
-    if (!open || optionCount === 0 || event.defaultPrevented) return false;
+    if (!open || event.defaultPrevented) return false;
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      // Closing the picker must not clear the star map's card selection.
+      event.stopPropagation();
+      setDismissedKey(dismissKey);
+      return true;
+    }
+    if (optionCount === 0) return false;
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -648,15 +670,6 @@ export function useComposerMentions(params: {
     if (event.key === "ArrowUp") {
       event.preventDefault();
       setActiveIndex((activeOption - 1 + optionCount) % optionCount);
-      return true;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      // Stop here as well: the star map layer's own Escape handler sits on
-      // an ancestor and clears the operator's gathered card selection.
-      // Closing a popover is not also a request to drop that selection.
-      event.stopPropagation();
-      setDismissedKey(dismissKey);
       return true;
     }
     if (
@@ -868,13 +881,31 @@ export function useComposerMentions(params: {
   optionRefs.current.length = optionCount;
 
   const popover = open ? (
-    <div
-      aria-label={label}
-      className="compact-composer__mention-list"
-      id={listboxId}
-      role="listbox"
-    >
-      {options}
+    <div className="compact-composer__mention-list">
+      {kind === "skills" && ensureSkillsLoaded ? (
+        <SkillPickerHeader
+          loading={sources?.skillLoading}
+          onDismiss={() => {
+            setDismissedKey(dismissKey);
+            inputRef.current?.focus();
+          }}
+          onRefresh={() => ensureSkillsLoaded({ force: true })}
+        />
+      ) : null}
+      {kind === "skills" && optionCount === 0 ? (
+        <p className="composer__skill-picker-empty" role="status">
+          {sources?.skillLoading ? "Loading skills…" : "No matching skills."}
+        </p>
+      ) : null}
+      <div
+        aria-label={label}
+        className="compact-composer__mention-options"
+        id={listboxId}
+        role="listbox"
+        aria-busy={kind === "skills" ? sources?.skillLoading : undefined}
+      >
+        {options}
+      </div>
     </div>
   ) : null;
   const activeCommand =

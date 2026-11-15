@@ -933,7 +933,7 @@ export type ThreadViewProps = {
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
-  onEnsureSkillsLoaded?: () => void | Promise<void>;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
   onOpenAutomations?: () => void;
