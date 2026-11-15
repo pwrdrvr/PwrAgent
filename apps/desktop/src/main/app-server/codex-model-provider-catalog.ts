@@ -122,18 +122,19 @@ export class CodexModelProviderCatalog {
 
   /**
    * Each configured provider's listed models plus those its last successful
-   * read of its current base URL found, without reading any endpoint. A
-   * summary published without a Codex model read (before discovery, or after
-   * a provider change replaced the runtime) offers these.
+   * read of its current base URL found, with each provider's catalog state,
+   * from one read of the provider list and without reading any endpoint. A
+   * summary published without a Codex model read (before discovery, after a
+   * provider change replaced the runtime, or after that read failed) offers
+   * these.
    */
-  knownModelOptions(): BackendModelOption[] {
-    return this.options.resolveProviders().flatMap((provider) => {
-      const state = provider.discoverModels === false ? undefined : this.discovery.get(provider.id);
-      const discovered = state?.fingerprint.startsWith(`${provider.baseUrl}\u0000`)
-        ? state.discovery?.models ?? []
-        : [];
-      return providerModelOptions(provider, discovered);
-    });
+  knownCatalog(): { models: BackendModelOption[]; states: CodexModelProviderCatalogState[] } {
+    const providers = this.options.resolveProviders();
+    return {
+      models: providers.flatMap((provider) =>
+        providerModelOptions(provider, this.currentRead(provider)?.discovery?.models ?? [])),
+      states: providers.map((provider) => this.catalogState(provider)),
+    };
   }
 
   /**
@@ -141,24 +142,33 @@ export class CodexModelProviderCatalog {
    * order. It never reads an endpoint itself; `listModelOptions` does.
    */
   catalogStates(): CodexModelProviderCatalogState[] {
-    return this.options.resolveProviders().map((provider): CodexModelProviderCatalogState => {
-      const base = { id: provider.id, name: provider.name, listedCount: provider.models?.length ?? 0 };
-      if (provider.discoverModels === false) return { ...base, status: "off" };
-      const state = this.discovery.get(provider.id);
-      // A read of a base URL the provider no longer has says nothing about it.
-      if (!state?.fingerprint.startsWith(`${provider.baseUrl}\u0000`)) {
-        return { ...base, status: "pending" };
-      }
-      if (state.error !== undefined) return { ...base, status: "unavailable", error: state.error };
-      if (!state.discovery) return { ...base, status: "pending" };
-      return {
-        ...base,
-        status: "ready",
-        discoveredCount: state.discovery.models.length,
-        ...(state.discovery.truncated ? { truncated: true } : {}),
-        ...(state.readAt === undefined ? {} : { readAt: state.readAt }),
-      };
-    });
+    return this.options.resolveProviders().map((provider) => this.catalogState(provider));
+  }
+
+  /**
+   * The provider's last read, when it read the provider's current base URL.
+   * A read of a base URL the provider no longer has says nothing about it.
+   */
+  private currentRead(provider: CodexModelProviderSettings): DiscoveryState | undefined {
+    if (provider.discoverModels === false) return undefined;
+    const state = this.discovery.get(provider.id);
+    return state?.fingerprint.startsWith(`${provider.baseUrl}\u0000`) ? state : undefined;
+  }
+
+  private catalogState(provider: CodexModelProviderSettings): CodexModelProviderCatalogState {
+    const base = { id: provider.id, name: provider.name, listedCount: provider.models?.length ?? 0 };
+    if (provider.discoverModels === false) return { ...base, status: "off" };
+    const state = this.currentRead(provider);
+    if (!state) return { ...base, status: "pending" };
+    if (state.error !== undefined) return { ...base, status: "unavailable", error: state.error };
+    if (!state.discovery) return { ...base, status: "pending" };
+    return {
+      ...base,
+      status: "ready",
+      discoveredCount: state.discovery.models.length,
+      ...(state.discovery.truncated ? { truncated: true } : {}),
+      ...(state.readAt === undefined ? {} : { readAt: state.readAt }),
+    };
   }
 
   private async discover(

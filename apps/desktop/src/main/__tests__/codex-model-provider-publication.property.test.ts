@@ -293,6 +293,23 @@ describe("Codex model provider publication", () => {
     });
   });
 
+  it("reads a provider's endpoint when Codex's own model list fails on a model-only edit", async () => {
+    // Only the listed models change, so the Codex launch and its summary
+    // stay; Codex's model list is read first and fails, which used to leave
+    // the endpoint unread and the provider pending with its listed ids only.
+    await runScenario({
+      discoverFirst: true,
+      turnActive: true,
+      operations: [
+        { kind: "save", providers: [{ id: "mathos", models: ["fixture"], discoverModels: true, port: 18080 }], settle: true },
+        // Adding MathOS changed the launch; discover again to cache a summary.
+        { kind: "discover" },
+        { kind: "codexList", up: false },
+        { kind: "save", providers: [{ id: "mathos", models: ["fixture-2"], discoverModels: true, port: 18080 }], settle: true },
+      ],
+    });
+  });
+
   describe("a read that began before a save lands after it", () => {
     type Gate = { resolve: () => void };
     async function gatedOwner() {
