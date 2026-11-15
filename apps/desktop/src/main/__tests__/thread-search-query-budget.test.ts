@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { ThreadSearchStore } from "../storage/thread-search-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
-import { seedSearchUsage } from "./helpers/thread-search-fixture";
+import { seedSearchThreads, seedSearchUsage } from "./helpers/thread-search-fixture";
 
 it.each([100, 1000, 10000].flatMap((n) => [false, true].map((analyzed) => ({ n, analyzed }))))("budgets deletion queries against $n rows (ANALYZE: $analyzed)", ({ n, analyzed }) => {
   const phase = tracePhases();
@@ -11,7 +11,7 @@ it.each([100, 1000, 10000].flatMap((n) => [false, true].map((analyzed) => ({ n, 
   phase("open");
   try {
     const store = new ThreadSearchStore(db);
-    store.upsertThreads(Array.from({ length: n }, (_, i) => ({ id: `document-${i}`, source: "codex" as const,
+    seedSearchThreads(db, Array.from({ length: n }, (_, i) => ({ id: `document-${i}`, source: "codex" as const,
       title: `Needle ${i}`, titleSource: "explicit" as const, linkedDirectories: [] })));
     phase("documents");
     seedSearchUsage(db, n);
@@ -62,7 +62,7 @@ it.each([100, 1000, 10000])("filters inventory before limiting search with %i om
   phase("open");
   try {
     const store = new ThreadSearchStore(db);
-    store.upsertThreads(Array.from({ length: n }, (_, i) => ({ id: `old-${i}`, source: "codex" as const,
+    seedSearchThreads(db, Array.from({ length: n }, (_, i) => ({ id: `old-${i}`, source: "codex" as const,
       title: "Needle", titleSource: "explicit" as const, linkedDirectories: [] })));
     phase("documents");
     store.upsertThread({ id: "current", source: "codex", title: "Needle current", titleSource: "explicit", linkedDirectories: [] });
@@ -107,7 +107,7 @@ it.each([100, 1000, 10000])("inspects at most 64 documents per maintenance slice
     const store = new ThreadSearchStore(db);
     const threads = Array.from({ length: n }, (_, i) => ({ id: `keep-${i}`, source: "codex" as const,
       title: "Needle", titleSource: "explicit" as const, linkedDirectories: [] }));
-    store.upsertThreads(threads);
+    seedSearchThreads(db, threads);
     phase("documents");
     const prepare = db.raw.prepare.bind(db.raw);
     let reads = 0;
