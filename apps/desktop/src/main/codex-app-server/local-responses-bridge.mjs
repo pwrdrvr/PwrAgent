@@ -132,6 +132,9 @@ export function translateRequest(request) {
     ? [{ role: "user", content: request.input }]
     : request.input ?? [];
   const selected = items.filter((item) => item.type === "tool_search_output").flatMap((item) => item.tools ?? []);
+  const invalidSearchArguments = new Map(items
+    .filter((item) => item.type === "tool_search_call" && typeof item.arguments === "string")
+    .map((item) => [item.call_id, item.arguments]));
   const functions = (specs) => specs.flatMap((tool) => tool.type === "namespace"
     ? tool.tools.map((nested) => ({ tool: nested, namespace: tool.name }))
     : [{ tool }]);
@@ -175,12 +178,20 @@ export function translateRequest(request) {
       instructions.push(textContent(item.content));
     } else if (item.type === "tool_search_call") {
       if (item.execution !== "client") throw new Error("Local Responses bridge only supports client tool search");
-      input.push({ type: "function_call", call_id: item.call_id, name: searchName, arguments: JSON.stringify(item.arguments) });
+      input.push({ type: "function_call", call_id: item.call_id, name: searchName,
+        arguments: typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments),
+      });
     } else if (item.type === "tool_search_output") {
       // llama-server ignores native search output. Supply normal function
       // history and advertise the discovered schemas on the next request.
       input.push({ type: "function_call_output", call_id: item.call_id, output: JSON.stringify({
         tools: functions(item.tools ?? []).map(({ tool, namespace }) => functionSpec(tool, namespace)),
+        // Codex 0.163 normalizes argument-validation failures to an empty
+        // native search result. Retain actionable feedback for the model.
+        ...(invalidSearchArguments.has(item.call_id) ? {
+          error: "Invalid tool_search arguments: expected a JSON object.",
+          arguments: invalidSearchArguments.get(item.call_id),
+        } : {}),
       }) });
     } else if (item.type === "function_call") {
       const { namespace, ...call } = item;
@@ -208,7 +219,14 @@ export function translateResponse(value, names) {
   if (value.type === "function_call" && names.has(value.name)) {
     if (names.get(value.name).nativeSearch) {
       const { name: _name, arguments: args, ...item } = value;
-      return { ...item, type: "tool_search_call", execution: "client", arguments: JSON.parse(args || "{}") };
+      let argumentsValue;
+      try { argumentsValue = JSON.parse(args || "{}"); }
+      catch {
+        // A native search argument can be any JSON value. Preserve invalid
+        // text as a string so Codex returns recoverable argument feedback.
+        argumentsValue = args;
+      }
+      return { ...item, type: "tool_search_call", execution: "client", arguments: argumentsValue };
     }
     return { ...value, ...names.get(value.name) };
   }

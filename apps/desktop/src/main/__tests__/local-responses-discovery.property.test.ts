@@ -1,16 +1,80 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
-import { translateRequest, translateResponse } from "../codex-app-server/local-responses-bridge.mjs";
+import { createServer, type Server } from "node:http";
+import { once } from "node:events";
+import { afterEach, describe, expect, it } from "vitest";
+import { startBridge, translateRequest, translateResponse } from "../codex-app-server/local-responses-bridge.mjs";
 
 const search = {
   type: "tool_search", execution: "client", description: "Find deferred tools",
   parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
 };
 const identifier = fc.stringMatching(/^[a-z][a-z0-9_]{0,20}$/);
+const servers: Server[] = [];
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(async (server) => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }));
+});
 
 // Oracle: the native client and a function-only provider must observe the same
 // search arguments, selected schema, tool identity, call IDs, and tool result.
 describe("local Responses discovery protocol oracle", () => {
+  it("preserves truncated search arguments for Codex's recoverable argument validation", () => {
+    fc.assert(fc.property(fc.string(), (query) => {
+      const request = translateRequest({ tools: [search], input: [] });
+      const name = (request.body.tools as Array<{ name: string }>)[0].name;
+      const args = JSON.stringify({ query }).slice(0, -1);
+      expect(() => JSON.parse(args)).toThrow();
+      const call = { type: "function_call", name, call_id: "s", arguments: args };
+      for (const event of [{ type: "response.output_item.done", item: call }, { type: "response.completed", response: { output: [call] } }]) {
+        const translated = translateResponse(event, request.names) as Record<string, any>;
+        const item = translated.item ?? translated.response.output[0];
+        // The native protocol accepts a JSON string; Codex's SearchToolCallParams
+        // rejects it with RespondToModel rather than losing the response stream.
+        expect(item).toEqual({ type: "tool_search_call", execution: "client", call_id: "s", arguments: args });
+        const next = translateRequest({ tools: [search], input: [item, { type: "tool_search_output", call_id: "s", tools: [] }] });
+        expect((next.body.input as any[])[0]).toEqual(call);
+        expect(JSON.parse((next.body.input as any[])[1].output)).toEqual({
+          tools: [], error: "Invalid tool_search arguments: expected a JSON object.", arguments: args,
+        });
+      }
+    }));
+  });
+
+  it.each(["", "files"])("keeps the SSE response complete for a truncated query %j", async (query) => {
+    const args = JSON.stringify({ query }).slice(0, -1);
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const item = { type: "function_call", name: request.tools[0].name, call_id: "s", arguments: args };
+      const events = [
+        { type: "response.output_item.done", item },
+        { type: "response.completed", response: { output: [item] } },
+      ];
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      for (const event of events) res.write(`data: ${JSON.stringify(event)}\n\n`);
+      res.end("data: [DONE]\n\n");
+    });
+    servers.push(upstream);
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as { port: number }).port;
+    const bridge = await startBridge(`http://127.0.0.1:${upstreamPort}/v1`);
+    servers.push(bridge);
+    const port = (bridge.address() as { port: number }).port;
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: "POST", body: JSON.stringify({ tools: [search], input: [] }),
+    });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text.endsWith("data: [DONE]\n\n")).toBe(true);
+    const events = text.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6)));
+    expect(events[0].item).toEqual({ type: "tool_search_call", execution: "client", call_id: "s", arguments: args });
+    expect(events[1].type).toBe("response.completed");
+  });
+
   it("exposes the shrunk a.a tool from an empty-query search result", () => {
     const first = translateRequest({ tools: [search], input: [] });
     const name = (first.body.tools as Array<{ name: string }>)[0].name;
