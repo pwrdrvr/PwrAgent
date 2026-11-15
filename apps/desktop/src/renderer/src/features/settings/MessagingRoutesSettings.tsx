@@ -1,4 +1,5 @@
 import {
+  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -290,6 +291,27 @@ export function MessagingRoutesSettings(props: {
   };
 
   const routeCount = routes.defaultAgents.length + routes.bindings.length;
+  // A route that left the list (cleared from another window) keeps its form
+  // open above the list rather than dropping the operator's edit.
+  const editingListed = Boolean(editing)
+    && routes.defaultAgents.some((route) => route.assignmentId === editing?.assignmentId);
+  const editEditor = editing ? (
+    <DefaultAgentEditor
+      key={`edit:${editing.assignmentId}`}
+      agents={routes.eligibleAgents}
+      assignment={editing}
+      observedSurfaces={routes.observedSurfaces ?? []}
+      platforms={configuredPlatforms}
+      onCancel={() => setEditing(null)}
+      onSaved={async () => {
+        setEditing(null);
+        setMutationError(null);
+        await loadRoutes();
+      }}
+      desktopApi={props.desktopApi}
+      inheritedToolUpdateMode={agentRouteToolUpdateMode}
+    />
+  ) : null;
 
   return (
     <SettingsSection
@@ -351,23 +373,7 @@ export function MessagingRoutesSettings(props: {
           />
         ) : null}
 
-        {editing ? (
-          <DefaultAgentEditor
-            key={`edit:${editing.assignmentId}`}
-            agents={routes.eligibleAgents}
-            assignment={editing}
-            observedSurfaces={routes.observedSurfaces ?? []}
-            platforms={configuredPlatforms}
-            onCancel={() => setEditing(null)}
-            onSaved={async () => {
-              setEditing(null);
-              setMutationError(null);
-              await loadRoutes();
-            }}
-            desktopApi={props.desktopApi}
-            inheritedToolUpdateMode={agentRouteToolUpdateMode}
-          />
-        ) : null}
+        {editing && !editingListed ? editEditor : null}
 
         <div className="messaging-routes__list" aria-label="Default Agent routes">
           {loading ? (
@@ -376,17 +382,21 @@ export function MessagingRoutesSettings(props: {
             <p className="messaging-routes__empty">No default Agents configured.</p>
           ) : (
             routes.defaultAgents.map((route) => (
-              <DefaultAgentRow
-                key={route.assignmentId}
-                route={route}
-                busy={busyId === route.assignmentId}
-                onChange={() => {
-                  setShowAdd(false);
-                  setEditing(route);
-                }}
-                onClear={() => void clearDefault(route.assignmentId)}
-                onOpenThread={props.onOpenThread}
-              />
+              <Fragment key={route.assignmentId}>
+                <DefaultAgentRow
+                  route={route}
+                  busy={busyId === route.assignmentId}
+                  onChange={() => {
+                    setShowAdd(false);
+                    setEditing(route);
+                  }}
+                  onClear={() => void clearDefault(route.assignmentId)}
+                  onOpenThread={props.onOpenThread}
+                />
+                {/* The form opens under the row whose Change was pressed, not
+                    above the list, where a lower row's form landed far from it. */}
+                {editing?.assignmentId === route.assignmentId ? editEditor : null}
+              </Fragment>
             ))
           )}
         </div>

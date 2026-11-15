@@ -185,6 +185,50 @@ describe("CodexModelProvidersSettings", () => {
     expect(setCodexModelProviderApiKey).not.toHaveBeenCalled();
   });
 
+  // Rule: a provider's form opens in that provider's own card, directly under
+  // its row, so no other provider row sits between the Edit pressed and the
+  // form it opened. Checked for every row of every list size up to the four a
+  // Settings pane plausibly shows; a new provider's form comes after them all.
+  it("opens each provider's form in its own card, right under the row whose Edit was pressed", () => {
+    const providers = ["Alpha", "Bravo", "Charlie", "Delta"].map((name): DesktopCodexModelProvider => ({
+      id: name.toLowerCase(),
+      name,
+      baseUrl: `https://${name.toLowerCase()}.example/v1`,
+      hasApiKey: false,
+    }));
+    const follows = (a: Element, b: Element) =>
+      Boolean(b.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+    for (let count = 1; count <= providers.length; count += 1) {
+      const listed = providers.slice(0, count);
+      for (const [index, provider] of listed.entries()) {
+        renderSettings(listed);
+        const list = screen.getByRole("group", { name: "Codex model providers" });
+        const rowOf = (name: string) => within(list).getByText(name).closest(".settings-pathrow")!;
+        fireEvent.click(within(rowOf(provider.name) as HTMLElement).getByRole("button", { name: "Edit" }));
+        const form = screen.getByRole("group", { name: `Edit ${provider.name}` });
+        const row = rowOf(provider.name);
+        expect(form.closest(".codex-provider-card"), `${index + 1} of ${count}`).toBe(row.parentElement);
+        expect(follows(form, row)).toBe(true);
+        for (const other of listed.filter((entry) => entry !== provider)) {
+          const otherRow = rowOf(other.name);
+          // Before the edited row means before the form; after it means after.
+          expect(follows(form, otherRow), `${other.name} vs ${provider.name}`).toBe(follows(row, otherRow));
+        }
+        expect(screen.getByRole("textbox", { name: "Provider name" })).toHaveFocus();
+        cleanup();
+      }
+      renderSettings(listed);
+      fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+      const form = screen.getByRole("group", { name: "Add model provider" });
+      const list = screen.getByRole("group", { name: "Codex model providers" });
+      for (const entry of listed) {
+        expect(follows(form, within(list).getByText(entry.name).closest(".settings-pathrow")!)).toBe(true);
+      }
+      expect(form.closest(".codex-provider-card")).not.toBeNull();
+      cleanup();
+    }
+  });
+
   it("removes a provider and its key", async () => {
     const { onSave, setCodexModelProviderApiKey } = renderSettings([refuseless]);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));

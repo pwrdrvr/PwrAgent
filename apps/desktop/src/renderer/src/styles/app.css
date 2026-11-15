@@ -17455,9 +17455,38 @@ a.button {
   color: var(--accent-bright);
 }
 
-/* Settings -> Codex -> Model providers: the add/edit form under the list. */
+/* Settings -> Codex -> Model providers: the add/edit form. It opens inside the
+   card of the provider being edited (a new provider gets its own card at the
+   end of the list), the way a Plugins connection drawer and an Environments
+   action open inside their rows. The card wears `.env-action.is-editing`'s
+   accent border; the row inside it gives up its own box. */
+.codex-provider-card {
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.codex-provider-card > .settings-pathrow {
+  border: 0;
+  background: transparent;
+}
+
 .codex-provider-editor {
   border-top: 1px solid var(--border-subtle);
+}
+
+/* Inside the card, the form lines up with the row's 12px inset. */
+.codex-provider-card .codex-provider-editor {
+  padding-bottom: 12px;
+}
+
+.codex-provider-card .codex-provider-editor > .settings-field,
+.codex-provider-card .codex-provider-editor > .codex-provider-editor__group,
+.codex-provider-card .codex-provider-editor > .codex-provider-models,
+.codex-provider-card .codex-provider-editor > .settings-inline-actions,
+.codex-provider-card .codex-provider-editor > .settings-error,
+.codex-provider-card .codex-provider-editor > .settings-field__help {
+  padding-inline: 12px;
 }
 
 .codex-provider-editor > .settings-inline-actions,

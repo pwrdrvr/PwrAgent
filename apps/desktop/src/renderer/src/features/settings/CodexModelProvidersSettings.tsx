@@ -251,6 +251,24 @@ export function CodexModelProvidersSettings(props: {
   const importable = imports?.candidates.filter((candidate) =>
     !props.providers.some((provider) => provider.baseUrl === candidate.baseUrl)) ?? [];
   const skipped = imports?.skipped ?? [];
+  const editor = draft ? (
+    <ProviderEditor
+      draft={draft}
+      editing={editing}
+      catalog={editingCatalog}
+      disabled={disabled}
+      canTest={Boolean(props.desktopApi?.testCodexModelProvider)}
+      test={test}
+      refresh={refresh}
+      error={error}
+      onChange={(patch) => setDraft((current) => current ? applyPatch(current, patch) : current)}
+      onSave={() => void save()}
+      onCancel={close}
+      onRemove={draft.existingId ? () => void remove() : undefined}
+      onTest={() => void runTest()}
+      onRefresh={props.onRefreshCatalogs ? () => void refreshCatalogs() : undefined}
+    />
+  ) : null;
 
   return (
     <SettingsSection
@@ -263,23 +281,43 @@ export function CodexModelProvidersSettings(props: {
         {props.providers.length === 0 && !draft ? (
           <p className="settings-empty">No model providers. Codex uses its default provider.</p>
         ) : null}
-        {props.providers.map((provider) => (
-          <SettingsPathRow
-            key={provider.id}
-            title={provider.name}
-            meta={provider.id}
-            path={provider.baseUrl}
-            chips={providerChips(provider, codexCatalogState(props.backends, provider.id))}
-            selected={false}
-            useLabel={draft?.existingId === provider.id ? "Editing" : "Edit"}
-            disabled={disabled || Boolean(draft)}
-            onUse={() => {
-              setDraft(draftFromProvider(provider));
-              setError(undefined);
-              setTest(undefined);
-            }}
-          />
-        ))}
+        {props.providers.map((provider) => {
+          const row = (
+            <SettingsPathRow
+              key={provider.id}
+              title={provider.name}
+              meta={provider.id}
+              path={provider.baseUrl}
+              chips={providerChips(provider, codexCatalogState(props.backends, provider.id))}
+              selected={false}
+              useLabel="Edit"
+              disabled={disabled || Boolean(draft)}
+              onUse={draft?.existingId === provider.id ? undefined : () => {
+                setDraft(draftFromProvider(provider));
+                setError(undefined);
+                setTest(undefined);
+              }}
+            />
+          );
+          // The form opens inside the card of the row whose Edit was pressed,
+          // as a Plugins connection drawer and an Environments action do. Under
+          // the whole list, the top row's form landed below every other row.
+          return draft?.existingId === provider.id ? (
+            <div key={provider.id} className="codex-provider-card">
+              {row}
+              {editor}
+            </div>
+          ) : row;
+        })}
+        {draft && !draft.existingId ? (
+          <div className="codex-provider-card">
+            <SettingsPathRow
+              title={draft.imported ? `Import ${draft.imported.name}` : "New provider"}
+              selected={false}
+            />
+            {editor}
+          </div>
+        ) : null}
         {!draft ? (
           <div className="settings-inline-actions">
             <button
@@ -345,24 +383,6 @@ export function CodexModelProvidersSettings(props: {
           ) : null}
         </div>
       ) : null}
-      {draft ? (
-        <ProviderEditor
-          draft={draft}
-          editing={editing}
-          catalog={editingCatalog}
-          disabled={disabled}
-          canTest={Boolean(props.desktopApi?.testCodexModelProvider)}
-          test={test}
-          refresh={refresh}
-          error={error}
-          onChange={(patch) => setDraft((current) => current ? applyPatch(current, patch) : current)}
-          onSave={() => void save()}
-          onCancel={close}
-          onRemove={draft.existingId ? () => void remove() : undefined}
-          onTest={() => void runTest()}
-          onRefresh={props.onRefreshCatalogs ? () => void refreshCatalogs() : undefined}
-        />
-      ) : null}
     </SettingsSection>
   );
 }
@@ -419,6 +439,9 @@ function ProviderEditor(props: {
         control={
           <input
             aria-label="Provider name"
+            // The Edit button that opened the form is gone, so focus starts
+            // here rather than falling to the page.
+            autoFocus
             className="settings-input"
             disabled={props.disabled}
             maxLength={60}
