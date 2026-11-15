@@ -299,6 +299,50 @@ async function probe(mode, { captureAfterMs = 100 } = {}) {
 }
 
 describe("real Playwright worker shutdown diagnostics", () => {
+  it("formats resource creation stacks only when collecting failure evidence", async () => {
+    const root = createProbeRoot();
+    const output = path.join(root, "results");
+    const script = path.join(root, "resource-stack.mjs");
+    writeFileSync(script, `
+      import { AsyncResource } from 'node:async_hooks';
+      import { writeFileSync } from 'node:fs';
+      import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
+      installShutdownDiagnostics({ outputDir: ${JSON.stringify(output)},
+        currentTest: () => undefined, scope: 'global-setup' });
+      const original = Error.prepareStackTrace;
+      let formatted = 0;
+      Error.prepareStackTrace = (error, frames) => {
+        if (frames.some((frame) => frame.getFunctionName() === 'makeDiagnosticResource')) formatted++;
+        return original ? original(error, frames) : error.name + '\\n' + frames.map(String).join('\\n');
+      };
+      function makeDiagnosticResource(type) { return new AsyncResource(type); }
+      const resources = ['Timeout', 'FSREQCALLBACK', 'PROCESSWRAP'].map(makeDiagnosticResource);
+      const beforeSnapshot = formatted;
+      globalThis[Symbol.for('pwragent.playwrightShutdownDiagnostics')].workerEnd(true);
+      writeFileSync(${JSON.stringify(path.join(root, "formatting.json"))}, JSON.stringify({ beforeSnapshot, afterSnapshot: formatted }));
+      for (const resource of resources) resource.emitDestroy();
+      Error.prepareStackTrace = original;
+    `);
+    const started = startProbe([script], {
+      cwd: desktop, env: { ...process.env, PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1" },
+      maxBuffer: 1024 * 1024,
+    }, root);
+    const result = await withinBudget(started, started.result, COLD_START_BUDGET_MS,
+      "Resource stack observation did not finish within the cold-start budget.");
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(path.join(root, "formatting.json"), "utf8"))).toEqual({
+      beforeSnapshot: 0, afterSnapshot: 3,
+    });
+    const directory = path.join(output, "worker-shutdown");
+    const snapshotFile = readdirSync(directory, { recursive: true }).find((file) => file.endsWith("snapshot-1.json"));
+    const snapshot = JSON.parse(readFileSync(path.join(directory, snapshotFile), "utf8"));
+    for (const type of ["Timeout", "FSREQCALLBACK", "PROCESSWRAP"]) {
+      expect(snapshot.resources).toContainEqual(expect.objectContaining({
+        type, stack: expect.stringContaining("makeDiagnosticResource"),
+      }));
+    }
+  }, COLD_START_BUDGET_MS + BACKSTOP_MS);
+
   it("observes global-setup launches without declaring the controller a worker", async () => {
     const root = createProbeRoot();
     const output = path.join(root, "results");
