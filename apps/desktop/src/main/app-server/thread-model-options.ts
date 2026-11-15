@@ -14,6 +14,7 @@ import {
   type NavigationLaunchpadDefaults,
   type ThreadExecutionMode,
   isAcpBackendId,
+  modelMenuEntryProviderId,
 } from "@pwragent/shared";
 import {
   acpRuntimeValueLooksPrivileged,
@@ -93,6 +94,16 @@ export const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
     supportsSteering: true,
   },
   {
+    id: "gpt-6.1-terra",
+    label: "GPT-6.1-Terra",
+    current: true,
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_GPT56_REASONING_EFFORTS,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
     id: "gpt-6-sol",
     label: "GPT-6-Sol",
     defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
@@ -140,7 +151,6 @@ export const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
     id: "gpt-5.5",
     label: "GPT-5.5",
-    current: true,
     defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
     reasoningEfforts: OPENAI_REASONING_EFFORTS,
     supportsReasoning: true,
@@ -481,11 +491,15 @@ export function getPreferredModelId(
     return models?.find((model) => model.current)?.id ?? models?.[0]?.id ?? "";
   }
 
-  if (models?.some((model) => model.id === "gpt-5.6-terra")) {
-    return "gpt-5.6-terra";
+  // A new install should start on a current coding model. Registered Codex
+  // model providers cannot nominate OpenAI's default through their flags.
+  const ownModels = models?.filter((model) => !modelMenuEntryProviderId(model));
+  for (const id of ["gpt-6.1-terra", "gpt-6.1-sol"]) {
+    if (ownModels?.some((model) => model.id === id)) return id;
   }
-
-  return "gpt-5.5";
+  return ownModels?.find((model) => model.current)?.id
+    ?? ownModels?.[0]?.id
+    ?? "gpt-6.1-terra";
 }
 
 export function mergeStringOptions(
@@ -526,7 +540,6 @@ export function sortReasoningEfforts(
 export function dedupeModelOptions(
   backend: AppServerBackendKind,
   models: BackendModelOption[],
-  options: { preferDiscoveredCodexDefault?: boolean } = {},
 ): BackendModelOption[] {
   const byId = new Map<string, BackendModelOption>();
   for (const model of models) {
@@ -559,10 +572,7 @@ export function dedupeModelOptions(
   }
 
   const deduped = [...byId.values()];
-  const preferredModelId = getPreferredModelId(
-    backend,
-    options.preferDiscoveredCodexDefault ? deduped : undefined,
-  );
+  const preferredModelId = getPreferredModelId(backend, deduped);
   if (deduped.some((model) => model.id === preferredModelId)) {
     return deduped.map((model) => ({
       ...model,
@@ -594,7 +604,6 @@ export function buildLaunchpadOptions(
       : allowFallbackModels
         ? getBackendFallbackModels(backend)
         : [],
-    { preferDiscoveredCodexDefault: hasDiscoveredModels },
   );
   if (normalizedModels.length === 0) {
     return undefined;
@@ -690,7 +699,7 @@ export function getDefaultModelOption(
     return undefined;
   }
 
-  const preferredModelId = getPreferredModelId(backend);
+  const preferredModelId = getPreferredModelId(backend, models);
   return (
     models.find((model) => model.current) ??
     models.find((model) => model.id === preferredModelId) ??

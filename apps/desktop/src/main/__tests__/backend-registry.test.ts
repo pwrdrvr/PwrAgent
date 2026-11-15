@@ -10491,6 +10491,14 @@ describe("DesktopBackendRegistry", () => {
               supportsSteering: true,
             },
             {
+              id: "gpt-6.1-terra",
+              label: "GPT-6.1-Terra",
+              current: true,
+              defaultReasoningEffort: "medium",
+              supportsReasoning: true,
+              supportsFast: true,
+            },
+            {
               id: "gpt-6-sol",
               label: "GPT-6-Sol",
               defaultReasoningEffort: "medium",
@@ -10529,7 +10537,7 @@ describe("DesktopBackendRegistry", () => {
             {
               id: "gpt-5.5",
               label: "GPT-5.5",
-              current: true,
+              current: false,
               supportsReasoning: true,
               supportsFast: true,
             },
@@ -19937,13 +19945,15 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("prefers Terra as the default when Codex discovers the 5.6 family", async () => {
+  it("prefers 6.1 Terra over a legacy Codex default when starting a new thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
         methods: ["thread/start", "turn/start"],
       },
       models: [
+        { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", supportsReasoning: true },
+        { id: "gpt-6.1-terra", label: "GPT-6.1-Terra", supportsReasoning: true },
         {
           id: "gpt-5.6-sol",
           label: "GPT-5.6-Sol",
@@ -19984,13 +19994,15 @@ script = "echo setup"
     await registry.startThread({ backend: "codex" });
 
     expect(response.backends[0]?.launchpadOptions?.models).toMatchObject([
+      { id: "gpt-6.1-sol", current: false },
+      { id: "gpt-6.1-terra", current: true },
       {
         id: "gpt-5.6-sol",
         current: false,
       },
       {
         id: "gpt-5.6-terra",
-        current: true,
+        current: false,
         reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       },
       {
@@ -20007,7 +20019,7 @@ script = "echo setup"
       "max",
       "ultra",
     ]);
-    expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.6-terra");
+    expect(codexClient.lastStartThreadParams?.model).toBe("gpt-6.1-terra");
     expect(codexClient.lastStartThreadParams?.reasoningEffort).toBe("medium");
 
     await registry.close();
@@ -20097,8 +20109,9 @@ script = "echo setup"
     expect(models.find((model) => model.id === "gpt-5.6-sol")?.current).toBe(false);
     expect(models.find((model) => model.id === "gpt-5.6-terra")?.current).toBe(false);
     expect(models.find((model) => model.id === "gpt-5.6-luna")?.current).toBe(false);
-    expect(models.find((model) => model.id === "gpt-5.5")?.current).toBe(true);
-    expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.5");
+    expect(models.find((model) => model.id === "gpt-5.5")?.current).toBe(false);
+    expect(models.find((model) => model.id === "gpt-6.1-terra")?.current).toBe(true);
+    expect(codexClient.lastStartThreadParams?.model).toBe("gpt-6.1-terra");
 
     await registry.close();
   });
@@ -26009,7 +26022,7 @@ command = "pnpm grok"
     });
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/Users/test/.pwragent/projects/2026-04-16-a1b2c3",
-      model: "gpt-5.5",
+      model: "gpt-6.1-terra",
       reasoningEffort: "medium",
       serviceTier: undefined,
       fastMode: undefined,
@@ -30250,7 +30263,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      model: "gpt-5.5",
+      model: "gpt-6.1-terra",
       serviceTier: undefined,
       reasoningEffort: "medium",
       fastMode: undefined,
@@ -30750,7 +30763,7 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Run npm view dive" }],
       approvalPolicy: "never",
       sandbox: "danger-full-access",
-      model: "gpt-5.5",
+      model: "gpt-6.1-terra",
       serviceTier: undefined,
       reasoningEffort: "medium",
       fastMode: undefined,

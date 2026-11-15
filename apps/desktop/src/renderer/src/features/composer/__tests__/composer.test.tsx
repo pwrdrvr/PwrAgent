@@ -6338,6 +6338,50 @@ describe("Composer", () => {
     expect(screen.getByRole("option", { name: "Opus 5.5" })).toHaveAttribute("aria-selected", "false");
   });
 
+  it("uses the profile model and reasoning after Bonsai replaces the shared Codex model", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom("gpt-6.1-sol", "gpt-6.1-terra"),
+      fc.boolean(),
+      fc.boolean(),
+      async (profileModel, remote, rememberedOpenAI) => {
+        const defaults = { model: profileModel, reasoningEffortsByModel: { [profileModel]: "high" } };
+        const savedModel = rememberedOpenAI ? "gpt-5.6-terra" : "@bonsai/local-model";
+        function Draft() {
+          const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
+            directoryKey: "directory:/fixture/repo", directoryKind: "directory", directoryLabel: "Fixture", directoryPath: "/fixture/repo",
+            ...(remote ? { federationTarget: { scope: "remote" as const, instanceId: "owner" } } : {}),
+            backend: rememberedOpenAI ? "claude" : "codex", executionMode: "auto",
+            model: rememberedOpenAI ? "opus" : savedModel, reasoningEffort: "xhigh",
+            prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+            providerSettings: { codex: { model: savedModel, reasoningEffort: "xhigh",
+              reasoningEffortsByModel: { "gpt-5.6-terra": "xhigh" } } },
+          });
+          return <Composer backends={[
+            { ...backendSummary("codex", { models: [
+              { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", current: true, supportsReasoning: true, reasoningEfforts: ["medium", "high", "xhigh"] },
+              { id: profileModel, label: profileModel, supportsReasoning: true, reasoningEfforts: ["medium", "high", "xhigh"] },
+              { id: "@bonsai/local-model", label: "Bonsai model", providerId: "bonsai", providerLabel: "Bonsai", supportsReasoning: true, reasoningEfforts: ["medium", "high", "xhigh"] },
+            ] }), label: "OpenAI", ...(remote ? { modelDefaults: defaults } : {}) },
+            backendSummary("claude", { models: [{ id: "opus" }] }),
+          ]} launchpad={launchpad}
+            providerModelDefaults={{ codex: remote ? { model: "viewer-only", reasoningEffortsByModel: {} } : defaults }}
+            onUpdateLaunchpad={async (_key, patch) => {
+              setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
+            }} skills={[]} />;
+        }
+        try {
+          render(<Draft />);
+          chooseDropdownOption("Provider", "OpenAI");
+          const expected = rememberedOpenAI ? "gpt-5.6-terra" : profileModel;
+          await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue(expected));
+          expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue(rememberedOpenAI ? "xhigh" : "high");
+        } finally {
+          cleanup();
+        }
+      },
+    ), { numRuns: 12, examples: [["gpt-6.1-sol", false, false], ["gpt-6.1-terra", true, false]] });
+  });
+
   it.each([false, true])("selects an owner model when switching a remote draft's provider (remembered=%s)", async (remembered) => {
     const onUpdateLaunchpad = vi.fn();
     function RemoteDraft() {

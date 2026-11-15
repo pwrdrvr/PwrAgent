@@ -14638,6 +14638,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 }
                 const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
                 const remembered = props.launchpad.providerSettings?.[nextBackend];
+                const configuredDefaults = filesystemFederationTarget?.scope === "remote"
+                  ? nextSummary?.modelDefaults
+                  : props.providerModelDefaults?.[nextBackend] ?? nextSummary?.modelDefaults;
                 // A Codex entry, OpenAI's own or a model provider's, offers
                 // only that provider's models, so its model is chosen there.
                 const ownerModels = nextBackend === "codex"
@@ -14645,29 +14648,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   : nextSummary?.launchpadOptions?.models ?? [];
                 const defaultOption = getDefaultModelOption(nextSummary);
                 const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
-                  ?? ownerModels.find((candidate) => candidate.id === nextSummary?.modelDefaults?.model)
+                  ?? ownerModels.find((candidate) => candidate.id === configuredDefaults?.model)
                   ?? (nextBackend === "codex"
                     ? ownerModels.find((candidate) => candidate.id === defaultOption?.id) ?? ownerModels[0]
                     : defaultOption);
                 const ownerEffort = ownerModel
                   ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
                     ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
-                    ?? nextSummary?.modelDefaults?.reasoningEffortsByModel[ownerModel.id]
+                    ?? configuredDefaults?.reasoningEffortsByModel[ownerModel.id]
                   : undefined;
-                const ownerSupportsFast = ownerModel?.supportsFast
-                  ?? nextSummary?.launchpadOptions?.supportsFastMode
-                  ?? false;
                 handleLaunchpadPatch({
                   backend: nextBackend,
                   // A local Codex choice names its provider through the model
                   // id, so moving between Codex entries sets the model. The
                   // remembered effort, Fast mode and tier still restore as
                   // they do for any other provider switch.
-                  ...(filesystemFederationTarget?.scope !== "remote" && nextBackend === "codex" ? {
-                    model: ownerModel?.id,
-                    ...(ownerSupportsFast ? {} : { fastMode: undefined }),
-                  } : {}),
-                  ...(filesystemFederationTarget?.scope === "remote" ? {
+                  ...(nextBackend === "codex" || filesystemFederationTarget?.scope === "remote" ? {
                     model: ownerModel?.id,
                     reasoningEffort: ownerModel?.supportsReasoning
                       ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
