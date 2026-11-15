@@ -1,19 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
   isValidCodexModelProviderId,
+  parseCodexProviderModelId,
   suggestCodexModelProviderId,
+  validateCodexBaseUrl,
   validateCodexModelProviders,
+  type BackendSummary,
+  type CodexModelProviderCatalogState,
   type CodexModelProviderImportCandidate,
   type CodexModelProviderImportScan,
   type CodexModelProviderRate,
   type CodexModelProviderSettings,
   type CodexModelProviderTestResult,
+  type CodexProviderCatalogModel,
   type DesktopCodexModelProvider,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";
+import { formatRelativeTime } from "../navigation/thread-time";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -31,7 +37,8 @@ type ProviderDraft = {
   baseUrl: string;
   apiKey: string;
   removeKey: boolean;
-  models: string;
+  /** Model ids the operator added, beyond what the endpoint lists. */
+  listed: string[];
   discoverModels: boolean;
   local: boolean;
   rates: Record<string, RateDraft>;
@@ -42,6 +49,22 @@ type ProviderDraft = {
 };
 
 const EMPTY_RATE: RateDraft = { input: "", output: "", cached: "" };
+
+type ProviderTest = {
+  running: boolean;
+  result?: CodexModelProviderTestResult;
+  error?: string;
+  /** The base URL the test read, so a later URL edit does not show its models. */
+  baseUrl?: string;
+};
+
+/** A saved provider's models as the owner last read them, with that read's state. */
+type ProviderCatalog = {
+  /** The saved base URL the owner read. */
+  baseUrl: string;
+  state?: CodexModelProviderCatalogState;
+  models: CodexProviderCatalogModel[];
+};
 
 /**
  * Settings → Codex → Model providers.
@@ -63,13 +86,18 @@ export function CodexModelProvidersSettings(props: {
   /** Changes when the Codex homes change, so the import list is read again. */
   codexHomesKey?: string;
   saving: boolean;
+  /** The owner's backend summaries, which carry each provider's last model read. */
+  backends?: readonly BackendSummary[];
   onSave: (providers: CodexModelProviderSettings[]) => Promise<boolean>;
   onRefresh: () => Promise<void>;
+  /** Read one saved provider's model list again, then the summaries. */
+  onRefreshCatalogs?: (providerId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<ProviderDraft>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [test, setTest] = useState<{ running: boolean; result?: CodexModelProviderTestResult; error?: string }>();
+  const [test, setTest] = useState<ProviderTest>();
+  const [refresh, setRefresh] = useState<{ running: boolean; error?: string }>();
   const [imports, setImports] = useState<CodexModelProviderImportScan>();
   const scanImports = props.desktopApi?.scanCodexModelProviderImports;
   useEffect(() => {
@@ -92,11 +120,17 @@ export function CodexModelProvidersSettings(props: {
     ? props.providers.find((provider) => provider.id === draft.existingId)
     : undefined;
   const dirty = draft ? isDraftDirty(draft, editing) : false;
+  // Rebuilt when the owner's summaries change, not on every keystroke.
+  const editingCatalog = useMemo(
+    () => editing ? savedProviderCatalog(props.backends, editing) : undefined,
+    [editing, props.backends],
+  );
 
   const close = () => {
     setDraft(undefined);
     setError(undefined);
     setTest(undefined);
+    setRefresh(undefined);
   };
 
   const save = async (): Promise<boolean> => {
@@ -178,15 +212,30 @@ export function CodexModelProvidersSettings(props: {
       setTest({ running: false, error: describeError(problem) });
       return;
     }
-    setTest({ running: true });
+    // The URL as the form holds it, so the table can tell when it changes.
+    const testedUrl = draft.baseUrl.trim();
+    setTest({ running: true, baseUrl: testedUrl });
     try {
       const result = await props.desktopApi.testCodexModelProvider({
         provider,
         ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
       });
-      setTest({ running: false, result });
+      setTest({ running: false, result, baseUrl: testedUrl });
     } catch (problem) {
-      setTest({ running: false, error: describeError(problem) });
+      setTest({ running: false, error: describeError(problem), baseUrl: testedUrl });
+    }
+  };
+
+  const refreshCatalogs = async (): Promise<void> => {
+    if (!props.onRefreshCatalogs || !editing) return;
+    setRefresh({ running: true });
+    try {
+      await props.onRefreshCatalogs(editing.id);
+      // A refresh is newer than the last test, so the table follows it.
+      setTest((current) => current?.result ? { ...current, result: undefined } : current);
+      setRefresh({ running: false });
+    } catch (problem) {
+      setRefresh({ running: false, error: describeError(problem) });
     }
   };
 
@@ -220,7 +269,7 @@ export function CodexModelProvidersSettings(props: {
             title={provider.name}
             meta={provider.id}
             path={provider.baseUrl}
-            chips={providerChips(provider)}
+            chips={providerChips(provider, codexCatalogState(props.backends, provider.id))}
             selected={false}
             useLabel={draft?.existingId === provider.id ? "Editing" : "Edit"}
             disabled={disabled || Boolean(draft)}
@@ -300,15 +349,18 @@ export function CodexModelProvidersSettings(props: {
         <ProviderEditor
           draft={draft}
           editing={editing}
+          catalog={editingCatalog}
           disabled={disabled}
           canTest={Boolean(props.desktopApi?.testCodexModelProvider)}
           test={test}
+          refresh={refresh}
           error={error}
           onChange={(patch) => setDraft((current) => current ? applyPatch(current, patch) : current)}
           onSave={() => void save()}
           onCancel={close}
           onRemove={draft.existingId ? () => void remove() : undefined}
           onTest={() => void runTest()}
+          onRefresh={props.onRefreshCatalogs ? () => void refreshCatalogs() : undefined}
         />
       ) : null}
     </SettingsSection>
@@ -318,18 +370,21 @@ export function CodexModelProvidersSettings(props: {
 function ProviderEditor(props: {
   draft: ProviderDraft;
   editing?: DesktopCodexModelProvider;
+  /** What the owner's last read of this provider found, for a saved provider. */
+  catalog?: ProviderCatalog;
   disabled: boolean;
   canTest: boolean;
-  test?: { running: boolean; result?: CodexModelProviderTestResult; error?: string };
+  test?: ProviderTest;
+  refresh?: { running: boolean; error?: string };
   error?: string;
   onChange: (patch: Partial<ProviderDraft>) => void;
   onSave: () => void;
   onCancel: () => void;
   onRemove?: () => void;
   onTest: () => void;
+  onRefresh?: () => void;
 }) {
   const draft = props.draft;
-  const listedModels = parseModelList(draft.models);
   const idProblem = draft.id && !isValidCodexModelProviderId(draft.id)
     ? RESERVED_CODEX_MODEL_PROVIDER_IDS.has(draft.id)
       ? `"${draft.id}" is reserved. Choose another id.`
@@ -357,6 +412,7 @@ function ProviderEditor(props: {
           ].join(" ")}
         </p>
       ) : null}
+      <p className="codex-provider-editor__group">Connection</p>
       <SettingsField
         label="Name"
         sub="Shown in the Provider picker, on thread chips and in model pickers."
@@ -394,7 +450,7 @@ function ProviderEditor(props: {
       />
       <SettingsField
         label="Base URL"
-        sub="The endpoint's OpenAI API root. Codex calls {base}/responses; model discovery calls {base}/models."
+        sub="The endpoint's OpenAI API root. Codex calls {base}/responses; the model list comes from {base}/models."
         control={
           <input
             aria-label="Base URL"
@@ -423,8 +479,18 @@ function ProviderEditor(props: {
               value={draft.apiKey}
               onChange={(event) => props.onChange({ apiKey: event.currentTarget.value })}
             />
-            {props.editing?.hasApiKey ? (
-              <div className="settings-inline-actions">
+            <div className="settings-inline-actions">
+              {props.canTest ? (
+                <button
+                  className="button button--secondary"
+                  disabled={props.disabled || props.test?.running}
+                  type="button"
+                  onClick={props.onTest}
+                >
+                  {props.test?.running ? "Testing…" : "Test connection"}
+                </button>
+              ) : null}
+              {props.editing?.hasApiKey ? (
                 <button
                   className="button button--ghost"
                   disabled={props.disabled}
@@ -433,42 +499,31 @@ function ProviderEditor(props: {
                 >
                   {draft.removeKey ? "Keep stored key" : "Remove stored key"}
                 </button>
-              </div>
+              ) : null}
+            </div>
+            {props.test && !props.test.running ? <ProviderTestResult test={props.test} /> : null}
+            {props.canTest ? (
+              <p className="settings-field__help">
+                The test reads /models and sends one short /responses request with instructions and namespaced
+                tools, which the provider may bill. A passing check does not validate a full PwrAgent turn.
+              </p>
             ) : null}
           </>
         }
       />
-      <SettingsField
-        label="Models"
-        sub="One model id per line, exactly as the endpoint names it."
-        control={
-          <textarea
-            aria-label="Model ids"
-            className="settings-input settings-input--multiline"
-            disabled={props.disabled}
-            placeholder={"glm-5.3-abliterated\ndeepseek-v4.1-flash"}
-            rows={Math.min(8, Math.max(3, listedModels.length + 1))}
-            spellCheck={false}
-            value={draft.models}
-            onChange={(event) => props.onChange({ models: event.currentTarget.value })}
-          />
-        }
-      />
-      <SettingsField
-        label="List the endpoint's models"
-        sub="Adds the ids GET /models returns, checked every ten minutes."
-        control={
-          <SettingsSwitch
-            checked={draft.discoverModels}
-            disabled={props.disabled}
-            label="List the endpoint's models"
-            onChange={(discoverModels) => props.onChange({ discoverModels })}
-          />
-        }
+      <p className="codex-provider-editor__group">Models</p>
+      <ProviderModels
+        catalog={props.catalog}
+        disabled={props.disabled}
+        draft={draft}
+        refresh={props.refresh}
+        test={props.test}
+        onChange={props.onChange}
+        onRefresh={props.onRefresh}
       />
       <SettingsField
         label="Runs locally"
-        sub="Records this provider's usage at no cost, as for a server on this machine."
+        sub="Records this provider's usage at no cost, as for a server on this machine, and hides the rate columns."
         control={
           <SettingsSwitch
             checked={draft.local}
@@ -478,86 +533,6 @@ function ProviderEditor(props: {
           />
         }
       />
-      {!draft.local ? (
-        <SettingsField
-          label="Rates"
-          sub="USD per 1M tokens, from the provider's price list. A model without a rate is recorded as unpriced."
-          control={
-            listedModels.length === 0 ? (
-              <p className="settings-empty">List a model above to give it a rate.</p>
-            ) : (
-              <table className="codex-provider-rates">
-                <thead>
-                  <tr>
-                    <th scope="col">Model</th>
-                    <th scope="col">Input</th>
-                    <th scope="col">Output</th>
-                    <th scope="col">Cached input</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {listedModels.map((model) => {
-                    const rate = draft.rates[model] ?? EMPTY_RATE;
-                    const setRate = (patch: Partial<RateDraft>) =>
-                      props.onChange({ rates: { ...draft.rates, [model]: { ...rate, ...patch } } });
-                    return (
-                      <tr key={model}>
-                        <th scope="row" title={model}>{model}</th>
-                        <td>
-                          <RateInput
-                            label={`${model} input rate`}
-                            disabled={props.disabled}
-                            value={rate.input}
-                            onChange={(input) => setRate({ input })}
-                          />
-                        </td>
-                        <td>
-                          <RateInput
-                            label={`${model} output rate`}
-                            disabled={props.disabled}
-                            value={rate.output}
-                            onChange={(output) => setRate({ output })}
-                          />
-                        </td>
-                        <td>
-                          <RateInput
-                            label={`${model} cached input rate`}
-                            disabled={props.disabled}
-                            placeholder={rate.input || undefined}
-                            value={rate.cached}
-                            onChange={(cached) => setRate({ cached })}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )
-          }
-        />
-      ) : null}
-      {props.canTest ? (
-        <SettingsField
-          label="Connection test"
-          sub="Reads /models and checks a short /responses request with instructions and namespaced tools, which the provider may bill. A passing check does not validate a full PwrAgent turn."
-          control={
-            <>
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--secondary"
-                  disabled={props.disabled || props.test?.running}
-                  type="button"
-                  onClick={props.onTest}
-                >
-                  {props.test?.running ? "Testing…" : "Test connection"}
-                </button>
-              </div>
-              {props.test && !props.test.running ? <ProviderTestResult test={props.test} /> : null}
-            </>
-          }
-        />
-      ) : null}
       {props.error ? (
         <p className="settings-error" role="alert">{props.error}</p>
       ) : null}
@@ -592,6 +567,232 @@ function ProviderEditor(props: {
       <p className="settings-field__help">
         Codex reconnects when no turn is running. Threads already on this provider keep it.
       </p>
+    </div>
+  );
+}
+
+/** Rows the model table shows at once; the filter narrows a longer list. */
+export const PROVIDER_MODEL_TABLE_ROWS = 50;
+/** The filter appears past this many rows, as the composer's Model menu would scroll. */
+export const PROVIDER_MODEL_FILTER_MIN_ROWS = 10;
+
+/**
+ * Every model the provider offers: the ones its `GET /models` listed, with
+ * the effort levels it named, and the ones added here. Each takes a rate.
+ */
+function ProviderModels(props: {
+  draft: ProviderDraft;
+  catalog?: ProviderCatalog;
+  test?: ProviderTest;
+  refresh?: { running: boolean; error?: string };
+  disabled: boolean;
+  onChange: (patch: Partial<ProviderDraft>) => void;
+  onRefresh?: () => void;
+}) {
+  const draft = props.draft;
+  const [query, setQuery] = useState("");
+  const [newModel, setNewModel] = useState("");
+  const source = useMemo(
+    () => providerModelSource(draft, props.catalog, props.test),
+    [draft, props.catalog, props.test],
+  );
+  const rows = useMemo(() => providerModelRows(source.models, draft.listed), [source.models, draft.listed]);
+  // The query applies only while its field is shown, so a list that shrinks
+  // below the field's threshold never stays filtered by a hidden query.
+  const filtering = rows.length > PROVIDER_MODEL_FILTER_MIN_ROWS;
+  const visible = useMemo(
+    () => filtering ? filterProviderModelRows(rows, query) : rows,
+    [filtering, query, rows],
+  );
+  const shown = visible.slice(0, PROVIDER_MODEL_TABLE_ROWS);
+  const addModel = (): void => {
+    const model = newModel.trim();
+    if (!model || draft.listed.includes(model)) {
+      setNewModel("");
+      return;
+    }
+    props.onChange({ listed: [...draft.listed, model] });
+    setNewModel("");
+  };
+
+  return (
+    <div className="codex-provider-models">
+      <div className="codex-provider-catalog-head">
+        <span role="status">{source.line}</span>
+        <span className="codex-provider-catalog-head__spacer" />
+        <SettingsSwitch
+          checked={draft.discoverModels}
+          disabled={props.disabled}
+          label="List the endpoint's models"
+          onChange={(discoverModels) => props.onChange({ discoverModels })}
+        />
+        {source.refreshable && props.onRefresh ? (
+          <button
+            className="button button--secondary"
+            disabled={props.disabled || props.refresh?.running}
+            type="button"
+            onClick={props.onRefresh}
+          >
+            {props.refresh?.running ? "Refreshing…" : "Refresh"}
+          </button>
+        ) : null}
+      </div>
+      {props.refresh?.error ? <p className="settings-error" role="alert">{props.refresh.error}</p> : null}
+      {filtering ? (
+        <input
+          aria-label="Find a model"
+          className="settings-input"
+          placeholder="Find a model"
+          spellCheck={false}
+          type="text"
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+        />
+      ) : null}
+      {shown.length ? (
+        <div className="codex-provider-models__scroll">
+          <table aria-label="Provider models" className="codex-provider-rates codex-provider-models__table">
+            <thead>
+              <tr>
+                <th scope="col">Model</th>
+                <th scope="col">Effort</th>
+                {draft.local ? null : (
+                  <>
+                    <th scope="col">Input</th>
+                    <th scope="col">Output</th>
+                    <th scope="col">Cached input</th>
+                  </>
+                )}
+                <th aria-label="Remove" scope="col" />
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((row) => {
+                const rate = draft.rates[row.id] ?? EMPTY_RATE;
+                const setRate = (patch: Partial<RateDraft>) =>
+                  props.onChange({ rates: { ...draft.rates, [row.id]: { ...rate, ...patch } } });
+                return (
+                  <tr key={row.id}>
+                    <th scope="row" title={row.id}>
+                      <span className="codex-provider-models__name">
+                        <span>
+                          {row.label ?? row.id}
+                          {row.added ? <span className="codex-provider-models__tag">Added</span> : null}
+                        </span>
+                        {row.label ? <code>{row.id}</code> : null}
+                      </span>
+                    </th>
+                    <td>
+                      {row.reasoningEfforts?.length ? (
+                        <span className="codex-provider-levels" aria-label={`Effort levels: ${row.reasoningEfforts.join(", ")}${
+                          row.defaultReasoningEffort ? `; default ${row.defaultReasoningEffort}` : ""
+                        }`}>
+                          {row.reasoningEfforts.map((effort) => (
+                            <span
+                              aria-hidden="true"
+                              className={`codex-provider-level${effort === row.defaultReasoningEffort ? " codex-provider-level--default" : ""}`}
+                              key={effort}
+                            >
+                              {effort}
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        <span className="codex-provider-models__muted">{row.discovered ? "None listed" : "Unknown"}</span>
+                      )}
+                    </td>
+                    {draft.local ? null : (
+                      <>
+                        <td>
+                          <RateInput
+                            label={`${row.id} input rate`}
+                            disabled={props.disabled}
+                            value={rate.input}
+                            onChange={(input) => setRate({ input })}
+                          />
+                        </td>
+                        <td>
+                          <RateInput
+                            label={`${row.id} output rate`}
+                            disabled={props.disabled}
+                            value={rate.output}
+                            onChange={(output) => setRate({ output })}
+                          />
+                        </td>
+                        <td>
+                          <RateInput
+                            label={`${row.id} cached input rate`}
+                            disabled={props.disabled}
+                            placeholder={rate.input || undefined}
+                            value={rate.cached}
+                            onChange={(cached) => setRate({ cached })}
+                          />
+                        </td>
+                      </>
+                    )}
+                    <td>
+                      {row.added ? (
+                        <button
+                          aria-label={`Remove ${row.id}`}
+                          className="button button--ghost"
+                          disabled={props.disabled}
+                          type="button"
+                          onClick={() => {
+                            // A model the endpoint does not list leaves the table, so
+                            // its rate goes with it rather than staying out of sight.
+                            const { [row.id]: _removed, ...rates } = draft.rates;
+                            props.onChange({
+                              listed: draft.listed.filter((model) => model !== row.id),
+                              ...(row.discovered ? {} : { rates }),
+                            });
+                          }}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : rows.length ? (
+        <p className="settings-empty">No models match “{query.trim()}”.</p>
+      ) : null}
+      <p className="settings-field__help">
+        {visible.length > shown.length
+          ? `Showing ${shown.length.toLocaleString("en-US")} of ${visible.length.toLocaleString("en-US")}. Type to narrow the list. `
+          : ""}
+        {draft.local
+          ? "This provider is recorded at no cost."
+          : "Rates are USD per 1M tokens, from the provider's price list. A model without one is recorded as unpriced."}
+      </p>
+      <div className="settings-inline-actions">
+        <input
+          aria-label="Model id to add"
+          className="settings-input codex-provider-models__add"
+          disabled={props.disabled}
+          placeholder="A model id the list leaves out"
+          spellCheck={false}
+          value={newModel}
+          onChange={(event) => setNewModel(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              addModel();
+            }
+          }}
+        />
+        <button
+          className="button button--secondary"
+          disabled={props.disabled || !newModel.trim()}
+          type="button"
+          onClick={addModel}
+        >
+          Add model
+        </button>
+      </div>
     </div>
   );
 }
@@ -650,13 +851,42 @@ function ProviderTestResult(props: {
   );
 }
 
-function providerChips(provider: DesktopCodexModelProvider): SettingsPathRowChip[] {
+function codexCatalogState(
+  backends: readonly BackendSummary[] | undefined,
+  providerId: string,
+): CodexModelProviderCatalogState | undefined {
+  return backends
+    ?.find((backend) => backend.kind === "codex")
+    ?.codexModelProviders
+    ?.find((state) => state.id === providerId);
+}
+
+function providerChips(
+  provider: DesktopCodexModelProvider,
+  catalog: CodexModelProviderCatalogState | undefined,
+): SettingsPathRowChip[] {
   const modelCount = provider.models?.length ?? 0;
   const chips: SettingsPathRowChip[] = [
     { key: "key", label: provider.hasApiKey ? "key" : "no key", tone: provider.hasApiKey ? "muted" : "warn" },
   ];
   if (provider.compatibility) chips.push({ key: "runtime", label: "isolated runtime", tone: "muted" });
-  if (modelCount > 0 || provider.discoverModels !== false) {
+  // What the owner's last read found, when the endpoint's list is on.
+  if (provider.discoverModels !== false && catalog?.status === "ready") {
+    const count = catalog.discoveredCount ?? 0;
+    chips.push({
+      key: "models",
+      label: `${count.toLocaleString("en-US")} model${count === 1 ? "" : "s"}${catalog.truncated ? "+" : ""}`,
+      tone: "muted",
+      title: "Models the endpoint's GET /models listed in its last read",
+    });
+  } else if (provider.discoverModels !== false && catalog?.status === "unavailable") {
+    chips.push({
+      key: "models",
+      label: "list unavailable",
+      tone: "warn",
+      title: catalog.error ?? "The last read of the endpoint's model list failed",
+    });
+  } else if (modelCount > 0 || provider.discoverModels !== false) {
     chips.push({
       key: "models",
       label: provider.discoverModels === false
@@ -709,7 +939,7 @@ function draftFromImport(
     id: suggestCodexModelProviderId(candidate.sourceId, takenIds),
     idEdited: true,
     baseUrl: candidate.baseUrl,
-    models: candidate.models.join("\n"),
+    listed: [...candidate.models],
     local: candidate.local,
     imported: candidate,
     compatibility: candidate.compatibility,
@@ -725,7 +955,7 @@ function emptyDraft(): ProviderDraft {
     baseUrl: "",
     apiKey: "",
     removeKey: false,
-    models: "",
+    listed: [],
     discoverModels: true,
     local: false,
     rates: {},
@@ -749,7 +979,7 @@ function draftFromProvider(provider: DesktopCodexModelProvider): ProviderDraft {
     baseUrl: provider.baseUrl,
     apiKey: "",
     removeKey: false,
-    models: (provider.models ?? []).join("\n"),
+    listed: [...(provider.models ?? [])],
     discoverModels: provider.discoverModels !== false,
     local: provider.local === true,
     rates,
@@ -767,12 +997,11 @@ function applyPatch(draft: ProviderDraft, patch: Partial<ProviderDraft>): Provid
 }
 
 function providerFromDraft(draft: ProviderDraft): CodexModelProviderSettings {
-  const models = parseModelList(draft.models);
+  const models = [...new Set(draft.listed.map((model) => model.trim()).filter(Boolean))];
   const rates: CodexModelProviderRate[] = [];
   if (!draft.local) {
-    for (const model of models) {
-      const rate = draft.rates[model];
-      if (!rate) continue;
+    // A rate is kept for any model, listed by the endpoint or added here.
+    for (const [model, rate] of Object.entries(draft.rates)) {
       const inputPerMillion = parseRate(rate.input, `${model} input`);
       const outputPerMillion = parseRate(rate.output, `${model} output`);
       const cachedInputPerMillion = parseRate(rate.cached, `${model} cached input`);
@@ -801,7 +1030,7 @@ function providerFromDraft(draft: ProviderDraft): CodexModelProviderSettings {
 function isDraftDirty(draft: ProviderDraft, saved: DesktopCodexModelProvider | undefined): boolean {
   if (draft.apiKey.trim() || draft.removeKey) return true;
   if (!saved) {
-    return Boolean(draft.name.trim() || draft.id.trim() || draft.baseUrl.trim() || draft.models.trim());
+    return Boolean(draft.name.trim() || draft.id.trim() || draft.baseUrl.trim() || draft.listed.length);
   }
   try {
     return JSON.stringify(providerFromDraft(draft)) !== JSON.stringify(stripKeyState(saved));
@@ -816,8 +1045,140 @@ function stripKeyState(provider: DesktopCodexModelProvider): CodexModelProviderS
   return settings;
 }
 
-function parseModelList(value: string): string[] {
-  return [...new Set(value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean))];
+/** A saved provider's models from the owner's Codex summary. */
+function savedProviderCatalog(
+  backends: readonly BackendSummary[] | undefined,
+  provider: Pick<DesktopCodexModelProvider, "id" | "baseUrl">,
+): ProviderCatalog {
+  const providerId = provider.id;
+  const codex = backends?.find((backend) => backend.kind === "codex");
+  return {
+    baseUrl: provider.baseUrl,
+    state: codex?.codexModelProviders?.find((state) => state.id === providerId),
+    models: (codex?.launchpadOptions?.models ?? []).flatMap((model): CodexProviderCatalogModel[] => {
+      const parsed = parseCodexProviderModelId(model.id);
+      if (parsed.providerId !== providerId) return [];
+      return [{
+        id: parsed.model,
+        ...(model.label && model.label !== parsed.model ? { label: model.label } : {}),
+        ...(model.reasoningEfforts?.length ? { reasoningEfforts: [...model.reasoningEfforts] } : {}),
+        ...(model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
+        ...(model.supportsImage === undefined ? {} : { supportsImage: model.supportsImage }),
+      }];
+    }),
+  };
+}
+
+/**
+ * Where the model table's models come from, and the line above it. A test
+ * of the URL in the form is the newest read; otherwise a saved provider
+ * shows the owner's last read of its saved URL.
+ */
+export function providerModelSource(
+  draft: Pick<ProviderDraft, "existingId" | "baseUrl" | "discoverModels">,
+  catalog: ProviderCatalog | undefined,
+  test: ProviderTest | undefined,
+): { models: CodexProviderCatalogModel[]; line: string; refreshable: boolean } {
+  if (!draft.discoverModels) {
+    return { models: [], line: "Only the models added here are offered.", refreshable: false };
+  }
+  const tested = test?.result?.models;
+  if (tested?.ok && tested.items && sameBaseUrl(test?.baseUrl, draft.baseUrl)) {
+    return {
+      models: tested.items,
+      line: `${countModels(tested.items.length)} from GET /models · from this test${tested.truncated ? " (more not loaded)" : ""}`,
+      refreshable: false,
+    };
+  }
+  // The owner's read is of the saved URL; an edited URL is another endpoint.
+  const saved = Boolean(draft.existingId && catalog && sameBaseUrl(catalog.baseUrl, draft.baseUrl));
+  const state = catalog?.state;
+  if (!saved || !state) {
+    return {
+      models: [],
+      line: "Test the connection to read the endpoint's models.",
+      refreshable: false,
+    };
+  }
+  if (state.status === "off") {
+    // Saved with the list off, so the owner has not read it.
+    return { models: [], line: "Save, or test the connection, to read the endpoint's models.", refreshable: false };
+  }
+  if (state.status === "unavailable") {
+    return {
+      models: [],
+      line: `Couldn't read the model list${state.error ? `: ${state.error}` : "."}`,
+      refreshable: true,
+    };
+  }
+  if (state.status === "pending") {
+    return { models: catalog?.models ?? [], line: "Reading the endpoint's models…", refreshable: true };
+  }
+  const discovered = state.discoveredCount ?? 0;
+  const age = state.readAt === undefined ? undefined : formatRelativeTime(state.readAt);
+  // `formatRelativeTime` prints "now", "42m", "8h", "6d", then a date.
+  const read = age === undefined
+    ? ""
+    : age === "now" ? " · read just now" : /^\d+[mhd]$/u.test(age) ? ` · read ${age} ago` : ` · read ${age}`;
+  return {
+    models: catalog?.models ?? [],
+    line: `${countModels(discovered)} from GET /models${state.truncated ? " (more not loaded)" : ""}${read}`,
+    refreshable: true,
+  };
+}
+
+type ProviderModelRow = CodexProviderCatalogModel & {
+  /** The endpoint listed it. */
+  discovered: boolean;
+  /** The operator added it. */
+  added: boolean;
+};
+
+/** The endpoint's models in its order, then the added ones it does not list. */
+export function providerModelRows(
+  catalog: readonly CodexProviderCatalogModel[],
+  listed: readonly string[],
+): ProviderModelRow[] {
+  const added = new Set(listed);
+  const rows: ProviderModelRow[] = catalog.map((model) => ({ ...model, discovered: true, added: added.has(model.id) }));
+  const seen = new Set(rows.map((row) => row.id));
+  for (const model of listed) {
+    if (!seen.has(model)) {
+      seen.add(model);
+      rows.push({ id: model, discovered: false, added: true });
+    }
+  }
+  return rows;
+}
+
+/** Every word must appear in the model's name or id, in any order, ignoring case. */
+export function filterProviderModelRows<T extends { id: string; label?: string }>(
+  rows: readonly T[],
+  query: string,
+): T[] {
+  const words = query.toLowerCase().split(/\s+/u).filter(Boolean);
+  if (words.length === 0) return [...rows];
+  return rows.filter((row) => {
+    const text = `${row.label ?? ""} ${row.id}`.toLowerCase();
+    return words.every((word) => text.includes(word));
+  });
+}
+
+function countModels(count: number): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? "model" : "models"}`;
+}
+
+/** Two base URLs name one endpoint when they validate to the same URL. */
+function sameBaseUrl(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined) return false;
+  const normalize = (value: string): string => {
+    try {
+      return validateCodexBaseUrl(value);
+    } catch {
+      return value.trim();
+    }
+  };
+  return normalize(left) === normalize(right);
 }
 
 function parseRate(value: string, label: string): number | undefined {

@@ -91,6 +91,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
   SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
+  SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL,
   SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
@@ -1900,6 +1901,20 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL,
+    // Reads the named saved providers' `GET /models` again (every provider's
+    // without names), with each one's saved key, and publishes the result to
+    // every window's model menus.
+    async (_event, request?: { providerIds?: unknown }): Promise<void> => {
+      const providerIds = Array.isArray(request?.providerIds)
+        ? request.providerIds.filter((id): id is string => typeof id === "string")
+        : undefined;
+      await getService(service).refreshCodexModelProviderCatalogs(providerIds);
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);
   ipcMain.handle(
     SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL,
@@ -2453,6 +2468,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);

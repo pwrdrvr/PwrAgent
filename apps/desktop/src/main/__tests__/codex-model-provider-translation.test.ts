@@ -135,3 +135,33 @@ describe("CodexModelProviderTranslator default-provider threads", () => {
       .toEqual({ threadId: "t1", model: "glm", modelProvider: "refuseless" });
   });
 });
+
+describe("CodexModelProviderTranslator model metadata warnings", () => {
+  // Codex 0.163 `maybe_emit_model_warnings_for_turn`, on every turn of a
+  // model outside its own catalog.
+  const warning = (threadId: string, model: string) => ({
+    threadId,
+    message: `Model metadata for \`${model}\` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.`,
+  });
+
+  it("keeps a configured provider model's missing-metadata warning in thread activity, never a toast", () => {
+    const configured = new Set(["mathos"]);
+    const t = new CodexModelProviderTranslator(() => configured);
+    t.observeResponse("thread/start", {}, { thread: { id: "t1", modelProvider: "mathos", model: "moonshotai/kimi-k3.1-pro" } });
+    expect(t.translateNotification("warning", warning("t1", "moonshotai/kimi-k3.1-pro")))
+      .toEqual({ ...warning("t1", "moonshotai/kimi-k3.1-pro"), presentation: "activity-only" });
+    // Other warnings on the same thread still reach the operator.
+    expect(t.translateNotification("warning", { threadId: "t1", message: "Exceeded the context window." }))
+      .toEqual({ threadId: "t1", message: "Exceeded the context window." });
+  });
+
+  it("still raises the warning for Codex's default provider or a provider PwrAgent did not configure", () => {
+    const configured = new Set(["mathos"]);
+    const t = new CodexModelProviderTranslator(() => configured);
+    t.observeResponse("thread/start", {}, { thread: { id: "t2", modelProvider: "openai", model: "gpt-typo" } });
+    t.observeResponse("thread/start", {}, { thread: { id: "t3", modelProvider: "ollama", model: "llama4" } });
+    expect(t.translateNotification("warning", warning("t2", "gpt-typo"))).toEqual(warning("t2", "gpt-typo"));
+    expect(t.translateNotification("warning", warning("t3", "llama4"))).toEqual(warning("t3", "llama4"));
+    expect(t.translateNotification("warning", warning("unknown", "x"))).toEqual(warning("unknown", "x"));
+  });
+});

@@ -656,6 +656,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         });
       }));
     }
+    if (typeof settingsService?.onCodexModelProviderCatalogRefresh === "function") {
+      ports.unsubscribers.push(settingsService.onCodexModelProviderCatalogRefresh(async (providerIds) => {
+        await ports.refreshCodexProviderCatalogs({ rereadProviders: providerIds ?? true });
+      }));
+    }
   });
   initialize.push(() => {
     if (ports.codexClient.onAppServerUnexpectedExit) {

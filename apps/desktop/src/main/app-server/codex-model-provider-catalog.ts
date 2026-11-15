@@ -1,9 +1,11 @@
 import {
   formatCodexProviderModelId,
+  parseCodexProviderCatalogModel,
   type BackendModelOption,
   type CodexModelProviderCatalogState,
   type CodexModelProviderSettings,
   type CodexModelProviderTestResult,
+  type CodexProviderCatalogModel,
 } from "@pwragent/shared";
 import { prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 
@@ -22,10 +24,8 @@ const MAX_ERROR_LENGTH = 200;
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-type DiscoveredModel = { id: string; label?: string };
-
 type Discovery = {
-  models: DiscoveredModel[];
+  models: CodexProviderCatalogModel[];
   /** The endpoint had more models than `MAX_DISCOVERED_MODELS`. */
   truncated: boolean;
   /** Pages read, for Test connection. */
@@ -39,6 +39,8 @@ type DiscoveryState = {
   discovery?: Discovery;
   /** Why the last read failed, already redacted. */
   error?: string;
+  /** When the last successful read finished. */
+  readAt?: number;
   promise?: Promise<void>;
 };
 
@@ -70,6 +72,11 @@ export class CodexModelProviderCatalog {
     this.discovery.clear();
   }
 
+  /** Forget one provider's last read, so the next list reads it again. */
+  invalidateProvider(providerId: string): void {
+    this.discovery.delete(providerId);
+  }
+
   async listModelOptions(): Promise<BackendModelOption[]> {
     const providers = this.options.resolveProviders();
     if (providers.length === 0) return [];
@@ -78,18 +85,27 @@ export class CodexModelProviderCatalog {
       const discovered = provider.discoverModels === false
         ? []
         : (await this.discover(provider, keys[provider.id])).discovery?.models ?? [];
-      const labels = new Map(discovered.map((model) => [model.id, model.label]));
+      const byId = new Map(discovered.map((model) => [model.id, model]));
       const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
-      return ids.map((model): BackendModelOption => ({
-        id: formatCodexProviderModelId(provider.id, model),
-        label: labels.get(model) || model,
-        providerId: provider.id,
-        providerLabel: provider.name,
-        // Codex sends reasoning settings only for models in its own catalog.
-        // A provider model takes the endpoint's defaults.
-        supportsReasoning: false,
-        supportsFast: false,
-      }));
+      return ids.map((model): BackendModelOption => {
+        const found = byId.get(model);
+        const efforts = found?.reasoningEfforts ?? [];
+        return {
+          id: formatCodexProviderModelId(provider.id, model),
+          label: found?.label || model,
+          providerId: provider.id,
+          providerLabel: provider.name,
+          // Codex sends any effort as `reasoning.effort`, for any model, so a
+          // provider model offers the levels its endpoint declares. A model
+          // the endpoint names none for (or only listed in Settings) takes
+          // the endpoint's default.
+          supportsReasoning: efforts.length > 0,
+          ...(efforts.length ? { reasoningEfforts: [...efforts] } : {}),
+          ...(found?.defaultReasoningEffort ? { defaultReasoningEffort: found.defaultReasoningEffort } : {}),
+          ...(found?.supportsImage === undefined ? {} : { supportsImage: found.supportsImage }),
+          supportsFast: false,
+        };
+      });
     }));
     return perProvider.flat();
   }
@@ -114,6 +130,7 @@ export class CodexModelProviderCatalog {
         status: "ready",
         discoveredCount: state.discovery.models.length,
         ...(state.discovery.truncated ? { truncated: true } : {}),
+        ...(state.readAt === undefined ? {} : { readAt: state.readAt }),
       };
     });
   }
@@ -136,6 +153,7 @@ export class CodexModelProviderCatalog {
     state.promise = this.fetchModels(provider.baseUrl, apiKey)
       .then((discovery) => {
         state.discovery = discovery;
+        state.readAt = this.options.now?.() ?? Date.now();
         state.expiresAt = now + DISCOVERY_TTL_MS;
       }, (error: unknown) => {
         // A failed read offers only the listed models, as the picker says.
@@ -151,7 +169,7 @@ export class CodexModelProviderCatalog {
   }
 
   private async fetchModels(baseUrl: string, apiKey: string | undefined): Promise<Discovery> {
-    const models: DiscoveredModel[] = [];
+    const models: CodexProviderCatalogModel[] = [];
     const seen = new Set<string>();
     let after: string | undefined;
     let pages = 0;
@@ -167,11 +185,11 @@ export class CodexModelProviderCatalog {
         const item = entry && typeof entry === "object" ? entry as Record<string, unknown> : undefined;
         const id = typeof item?.id === "string" ? item.id.trim() : "";
         if (id) lastId = id;
-        if (!id || id.length > 256 || id.startsWith("@") || /[\0\r\n]/.test(id) || seen.has(id)) continue;
+        const model = parseCodexProviderCatalogModel(entry);
+        if (!model || seen.has(model.id)) continue;
         if (models.length >= MAX_DISCOVERED_MODELS) return { models, truncated: true, pages };
-        seen.add(id);
-        const name = typeof item?.name === "string" ? item.name.trim().slice(0, 120) : undefined;
-        models.push({ id, ...(name && name !== id ? { label: name } : {}) });
+        seen.add(model.id);
+        models.push(model);
         added += 1;
       }
       const hasMore = record?.has_more === true;
@@ -196,7 +214,7 @@ export class CodexModelProviderCatalog {
     apiKey: string | undefined,
   ): Promise<CodexModelProviderTestResult> {
     const startedAt = this.options.now?.() ?? Date.now();
-    let models: DiscoveredModel[] = [];
+    let models: CodexProviderCatalogModel[] = [];
     let modelPages: Pick<Discovery, "pages" | "truncated"> | undefined;
     let modelsError: string | undefined;
     try {
@@ -210,7 +228,7 @@ export class CodexModelProviderCatalog {
     const probeModel = provider.models?.[0] ?? models[0]?.id;
     if (!probeModel) {
       return {
-        models: modelsTestResult(models.length, modelPages, modelsError),
+        models: modelsTestResult(models, modelPages, modelsError),
         responses: { ok: false, skipped: true, error: "No model to try. List one, or let the endpoint list its models." },
         latencyMs: reachedAfterMs,
       };
@@ -256,7 +274,7 @@ export class CodexModelProviderCatalog {
       await runtime?.close();
     }
     return {
-      models: modelsTestResult(models.length, modelPages, modelsError),
+      models: modelsTestResult(models, modelPages, modelsError),
       responses: { ok: !responsesError, model: probeModel, ...(responsesError ? { error: responsesError } : {}) },
       latencyMs: reachedAfterMs,
     };
@@ -294,16 +312,16 @@ export class CodexModelProviderCatalog {
 }
 
 function modelsTestResult(
-  count: number,
+  models: CodexProviderCatalogModel[],
   pages: Pick<Discovery, "pages" | "truncated"> | undefined,
   error: string | undefined,
 ): CodexModelProviderTestResult["models"] {
   return {
     ok: !error,
-    count,
+    count: models.length,
     ...(pages && pages.pages > 1 ? { pages: pages.pages } : {}),
     ...(pages?.truncated ? { truncated: true } : {}),
-    ...(error ? { error } : {}),
+    ...(error ? { error } : { items: models }),
   };
 }
 

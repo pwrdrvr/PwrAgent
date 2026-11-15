@@ -600,11 +600,15 @@ export function buildLaunchpadOptions(
     return undefined;
   }
 
-  const supportsReasoning = normalizedModels.some((model) => model.supportsReasoning);
+  // The backend-wide effort list is the fallback for a model without its
+  // own. A Codex model provider's levels (`ultramath`) belong to its models
+  // alone, so they never join the list an OpenAI model falls back to.
+  const ownModels = normalizedModels.filter((model) => !model.providerId);
+  const supportsReasoning = ownModels.some((model) => model.supportsReasoning);
   const supportsFastMode =
     backend === "codex" && normalizedModels.some((model) => model.supportsFast);
   const modelReasoningEfforts = mergeStringOptions(
-    normalizedModels.flatMap((model) =>
+    ownModels.flatMap((model) =>
       model.supportsReasoning ? model.reasoningEfforts ?? [] : [],
     ),
   );

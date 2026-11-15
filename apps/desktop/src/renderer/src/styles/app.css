@@ -17535,6 +17535,131 @@ a.button {
   color: var(--text-muted);
 }
 
+/* Settings -> Codex -> Model providers -> the editor's Connection and Models
+   groups. A group title reads like `.codex-provider-imports__title`. */
+.codex-provider-editor > .codex-provider-editor__group {
+  margin: 0;
+  padding: 16px 18px 4px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The model table spans the field's full width, label column included:
+   a catalog of model names, effort levels and three rates needs the room. */
+.codex-provider-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 18px 14px;
+}
+
+.codex-provider-models .button {
+  min-height: 28px;
+}
+
+.codex-provider-catalog-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.codex-provider-catalog-head__spacer {
+  flex: 1;
+}
+
+.codex-provider-models__scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.codex-provider-models__table {
+  min-width: 560px;
+}
+
+.codex-provider-models__table tbody tr + tr {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.codex-provider-models__table tbody th,
+.codex-provider-models__table td {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  vertical-align: middle;
+}
+
+.codex-provider-models__name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.codex-provider-models__name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.codex-provider-models__name code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.codex-provider-models__tag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 17px;
+}
+
+.codex-provider-models__muted {
+  color: var(--text-muted);
+}
+
+.codex-provider-models__add {
+  flex: 1 1 240px;
+  max-width: 320px;
+}
+
+.codex-provider-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.codex-provider-level {
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 18px;
+}
+
+/* The level a new thread starts on. */
+.codex-provider-level--default {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
 /* Settings -> Codex -> Model providers: what Codex config files define. */
 .settings-section__body > .codex-provider-imports {
   border-top: 1px solid var(--border-subtle);

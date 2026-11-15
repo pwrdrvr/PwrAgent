@@ -74,7 +74,7 @@ describe("CodexModelProviderCatalog catalogs", () => {
     expect(requests).toHaveLength(5);
     expect(requests[1].url).toBe(`${mathos.baseUrl}/models?after=mathos-model-99`);
     expect(catalog.catalogStates()).toEqual([
-      { id: "mathos", name: "MathOS", status: "ready", listedCount: 0, discoveredCount: 450 },
+      { id: "mathos", name: "MathOS", status: "ready", listedCount: 0, discoveredCount: 450, readAt: expect.any(Number) },
     ]);
   });
 
