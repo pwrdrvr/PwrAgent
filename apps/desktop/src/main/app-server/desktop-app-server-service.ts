@@ -10151,8 +10151,9 @@ class DesktopAppServerService {
   private async confirmDependencyConsumerIdle(target: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
     const registry = getDesktopBackendRegistry();
     if (registry.getActiveTurnForThread(target) || await registry.isThreadLocked(target)) return false;
-    const response = await registry.readThread({ ...target, includeTurns: true, limit: 20, viewOnly: true, countsAsActivity: false,
-      preserveAutomaticArchive: true });
+    const response = await registry.readThread({
+      ...target, includeTurns: true, limit: 20, viewOnly: true, countsAsActivity: false, preserveAutomaticArchive: true,
+    });
     return !response.replay.entries.some((entry) => entry.turn?.status === "in_progress");
   }
 

@@ -33,9 +33,9 @@ import type { BackendModelCatalogCallerReason } from "./backend-model-catalog";
 import type { ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 
 /**
- * A main-process read. Renderer and federation reads rebuild the request
- * field by field, so only main-process callers can set
- * `preserveAutomaticArchive`.
+ * A registry read. Renderer and federation reads rebuild the request field
+ * by field, so neither can set `preserveAutomaticArchive`; main-process
+ * callers and the local Outpost CLI's `show` can.
  */
 export type RegistryReadThreadRequest = AppServerReadThreadRequest & {
   /**

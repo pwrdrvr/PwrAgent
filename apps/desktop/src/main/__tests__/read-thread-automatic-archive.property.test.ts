@@ -34,7 +34,7 @@ function emptyResponse(threadId: string): AppServerReadThreadResponse {
   return { backend: "codex", threadId, fetchedAt: 0 } as unknown as AppServerReadThreadResponse;
 }
 
-function registryWithReservations() {
+function registryRecordingArchiveCancels() {
   const registry = createDesktopBackendRegistry({
     codexClient: {
       close: async () => {},
@@ -65,7 +65,7 @@ const readArbitrary = fc.record({
 describe("readThread and automatic archive", () => {
   it("cancels a thread's automatic archive exactly when someone other than a dependency evaluation reads it (model)", async () => {
     await fc.assert(fc.asyncProperty(fc.array(readArbitrary, { minLength: 1, maxLength: 12 }), async (reads) => {
-      const { registry, cancelled } = registryWithReservations();
+      const { registry, cancelled } = registryRecordingArchiveCancels();
       try {
         const model = new Set<string>();
         for (const read of reads) {
@@ -80,7 +80,7 @@ describe("readThread and automatic archive", () => {
   });
 
   it("keeps a parked orchestrator's archive through repeated dependency reads", async () => {
-    const { registry, cancelled } = registryWithReservations();
+    const { registry, cancelled } = registryRecordingArchiveCancels();
     try {
       await registry.readThread(requestFor("dependency", "worker", false));
       await registry.readThread(requestFor("dependency", "orchestrator", true));
