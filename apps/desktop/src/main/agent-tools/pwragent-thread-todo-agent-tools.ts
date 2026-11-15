@@ -18,6 +18,7 @@ import {
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
   parseThreadTodoMessageTarget,
+  isAppServerBackendKind,
   threadTodoPrerequisites,
   threadTodoSteps,
 } from "@pwragent/shared";
@@ -351,6 +352,10 @@ function normalizeAction(
         };
       }
       const title = optionalString(action.title);
+      const backend = action.backend;
+      if (backend !== undefined && (typeof backend !== "string" || !isAppServerBackendKind(backend))) {
+        return { ok: false, message: "start_thread backend must name a registered provider." };
+      }
       const model = optionalString(action.model);
       const reasoningEffort = optionalString(action.reasoningEffort);
       return {
@@ -359,6 +364,7 @@ function normalizeAction(
           type: "start_thread",
           prompt,
           ...(title ? { title: title.slice(0, THREAD_TODO_TITLE_MAX_LENGTH) } : {}),
+          ...(backend ? { backend } : {}),
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(executionMode ? { executionMode } : {}),
@@ -460,6 +466,14 @@ export function normalizeUpdateTodoArgs(
   const threadTitle = readClearable(args.threadTitle, "threadTitle", THREAD_TODO_TITLE_MAX_LENGTH);
   if (threadTitle && !threadTitle.ok) return threadTitle;
   if (threadTitle) action.title = threadTitle.value;
+  const backend = readClearable(args.backend, "backend", MODEL_SETTING_MAX_LENGTH);
+  if (backend && !backend.ok) return backend;
+  if (backend?.ok) {
+    if (backend.value !== null && !isAppServerBackendKind(backend.value)) {
+      return { ok: false, message: "update_todo backend must name a registered provider, or be empty to inherit." };
+    }
+    action.backend = backend.value;
+  }
   for (const field of ["model", "reasoningEffort"] as const) {
     const parsed = readClearable(args[field], field, MODEL_SETTING_MAX_LENGTH);
     if (parsed && !parsed.ok) return parsed;
@@ -610,6 +624,8 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
         "Use start_thread to propose a follow-up thread with its full prompt.",
+        "Set action.backend for a cross-provider proposal. handoff_task creates a thread immediately and does not configure a card.",
+        "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
         "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",
         "Prefer this over start_thread when an existing thread owns the work.",
         TODO_WRITING_GUIDANCE,
@@ -642,6 +658,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use it when the operator asks to change a card, such as its model, effort or permissions.",
         "Pass check or uncheck with step or prerequisite ids to tick them as they are finished.",
         "A model may be named by id or by its display name, and the card stores the id.",
+        "Set backend to change the destination provider. Also set model and reasoningEffort for that provider. Clear them with empty strings to use its defaults.",
       ].join(" ");
     case "list_todos":
       return ["List this thread's to-do cards. Defaults to open cards.", CLAIM_GUIDANCE].join(" ");
@@ -750,13 +767,17 @@ function inputSchemaForOperation(
                 type: "string",
                 description: "start_thread only: a short name for the new thread.",
               },
+              backend: {
+                type: "string",
+                description: "start_thread only: registered destination backend id from list_instance_projects, such as claude or acp:kimi. Omit to inherit this thread's provider. An explicit provider proposal overrides remembered dispatch settings. The operator can still pick settings on the card.",
+              },
               model: {
                 type: "string",
-                description: "start_thread only: model id for the new thread. Omit to use this thread's model.",
+                description: "start_thread only: destination model id or display name from list_instance_projects. Stored as its validated id. Omit to inherit this thread's model for the same provider. When switching providers, omit to use destination defaults.",
               },
               reasoningEffort: {
                 type: "string",
-                description: "start_thread only: reasoning effort, such as medium, high or xhigh. Omit to use this thread's.",
+                description: "start_thread only: destination model's reasoning effort, such as medium, high or xhigh. Omit to inherit this thread's for the same provider, or use destination defaults when switching providers.",
               },
               executionMode: {
                 type: "string",
@@ -818,13 +839,17 @@ function inputSchemaForOperation(
           },
           prompt: { type: "string", description: "Handoff or message cards: the complete proposed message." },
           threadTitle: { type: "string", description: "Handoff cards: the new thread's name. Empty clears it." },
+          backend: {
+            type: "string",
+            description: "Handoff cards: registered destination backend id from list_instance_projects. Empty inherits this thread's provider. When changing providers, set a valid model and effort together. Clear them with empty strings for destination defaults.",
+          },
           model: {
             type: "string",
-            description: "Handoff cards: model id or display name. Empty returns to this thread's model.",
+            description: "Handoff cards: destination model id or display name. Empty inherits this thread's model for the same provider, or uses destination defaults when switching providers.",
           },
           reasoningEffort: {
             type: "string",
-            description: "Handoff cards: reasoning effort, such as medium, high or xhigh. Empty returns to this thread's.",
+            description: "Handoff cards: destination model's reasoning effort, such as medium, high or xhigh. Empty inherits this thread's for the same provider, or uses destination defaults when switching providers.",
           },
           executionMode: {
             type: "string",
