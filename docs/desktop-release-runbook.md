@@ -518,7 +518,7 @@ publishing. It installs RPMs in Fedora containers and the x64 pacman package in
 an Arch container, checking package dependencies and Electron's shared libraries.
 These checks do not replace a desktop launch on GNOME Wayland or Omarchy/Hyprland.
 
-AppImage is not currently built. The [third-party license policy](../AGENTS.md#changing-the-allowlist)
+AppImage is not currently built. The [third-party license policy](third-party-license-notices.md#changing-the-allowlist)
 records approval for electron-builder's AppImage toolset `1.0.3`, whose pinned
 [runtime `20251108`](https://github.com/AppImage/type2-runtime/blob/20251108/LICENSE)
 statically includes libfuse. Shipping it requires the specified license notices
@@ -740,7 +740,7 @@ The macOS modes need a macOS 26 host with Xcode 26 or newer selected
 (`xcode-select -p`, or export `DEVELOPER_DIR`): electron-builder compiles
 `build/icon.icon` with `actool`, which requires the matching host runtime and
 refuses older tool versions. CI selects one with
-`.github/actions/select-xcode-for-actool`; see AGENTS.md "macOS app icon".
+`.github/actions/select-xcode-for-actool`; see [macOS app icons](macos-app-icons.md).
 
 The release orchestrator runs `pnpm licenses:check` before packaging. If
 dependencies changed, run `pnpm licenses:generate`, review the

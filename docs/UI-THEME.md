@@ -201,7 +201,7 @@ The light-theme accent is darker (`#b74c00`) for WCAG-readable contrast on light
 | Dark (emphasis = lightness) | `#ff8a1f` | `#ffa33d` | `#ffb35c` |
 | Light (emphasis = depth) | `#b74c00` | `#b34a00` | `#994c00` |
 
-Hue and saturation are held constant per token across the flip — only lightness moves — so both themes render the same tangerine. The brand mark reads `--accent` in every window (see the chrome table in `AGENTS.md`), and its light-theme hue is unchanged by this retune: `#c45200` → `#b74c00` holds Lab hue at 54.2° and moves ΔE2000 3.3.
+Hue and saturation are held constant per token across the flip — only lightness moves — so both themes render the same tangerine. The brand mark reads `--accent` in every window (see the [chrome token contract](desktop-chrome-tokens.md)), and its light-theme hue is unchanged by this retune: `#c45200` → `#b74c00` holds Lab hue at 54.2° and moves ΔE2000 3.3.
 
 **Pick contrast against the darkest background a token can land on, not against `--bg-app`.** Measuring against white alone is what let `--accent` ship at 4.61:1 on `--bg-app` but 4.20:1 on the sidebar wordmark, and `--text-muted` at 4.34:1 on white but 3.82:1 on a hovered row.
 
