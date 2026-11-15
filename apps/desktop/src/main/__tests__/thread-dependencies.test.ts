@@ -208,7 +208,10 @@ describe("durable thread dependencies", () => {
     expect(submit).toHaveBeenCalledTimes(1);
     snapshots.get("security")!.activeTurnId = undefined;
     snapshots.get("security")!.turns = [{ id: "done", status: "completed" }];
+    // The first continuation holds the consumer until its turn ends.
     await create(agent, [condition("security", "turn_completed")]);
+    expect(submit).toHaveBeenCalledTimes(1);
+    await agent.handleThreadEvent(condition("dependencies"), { id: "continuation-turn", status: "completed" });
     expect(submit).toHaveBeenCalledTimes(2);
   });
 
@@ -252,6 +255,7 @@ describe("durable thread dependencies", () => {
     snapshots.get("foundation")!.prs = [{ pr: pr({ lifecycleState: "closed" }), fetchedAt: now }];
     await agent.handlePrEvent();
     expect(store.list("codex", "dependencies")[0]).toMatchObject({ status: "delivered", outcome: "failure" });
+    await agent.handleThreadEvent(condition("dependencies"), { id: "continuation-turn", status: "completed" });
     await create(agent, [condition("foundation"), condition("security", "turn_completed")], { mode: "any" });
     expect(submit).toHaveBeenCalledTimes(1);
     await agent.handleThreadEvent(condition("security"), { id: "security-turn", status: "completed" });

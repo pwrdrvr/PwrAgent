@@ -15683,6 +15683,31 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("never admits a turn after the provider rejects resume because Token Miser has an active turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    // The provider is the oracle: a rejected resume precedes turn/start,
+    // regardless of the catalog or activation being requested.
+    await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), fc.boolean(), async (threadId, tools, enabled) => {
+      MockTransport.threadResumeError = {
+        code: -32600,
+        message: `cannot change PwrAgent Token Miser activation while thread ${threadId} has an active turn`,
+      };
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        await expect(client.startTurn({
+          threadId, input: [{ type: "text", text: "Continue" }],
+          ...(tools ? { dynamicTools: [] } : {}),
+          pwrdrvrTokenMiser: enabled ? { version: 1, enabled: true } : null,
+        })).rejects.toMatchObject({ name: "CodexThreadBusyBeforeStartError" });
+        const methods = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message).method);
+        expect(methods).toContain("thread/resume");
+        expect(methods).not.toContain("turn/start");
+      } finally {
+        await client.close();
+      }
+    }), { numRuns: 12 });
+  });
+
   it.each([undefined, []])("preserves an active-writer conflict without attempting turn/start (tools: %s)", async (dynamicTools) => {
     const message = "thread shared-thread already has an active writer";
     MockTransport.threadResumeError = { code: -32600, message };
