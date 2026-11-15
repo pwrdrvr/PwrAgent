@@ -8,14 +8,15 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import type { IForbiddenRuleType } from "dependency-cruiser";
-import { findOwnerWiring, findOwnerImports } from "../../../../../scripts/check-desktop-owner-wiring.mjs";
+import ts from "typescript";
+import { findOwnerBindingNames, findOwnerWiring, findOwnerImports } from "../../../../../scripts/check-desktop-owner-wiring.mjs";
 
 // Measure the real parser at its boundary: repository discovery and generated
 // snippets have very different costs. CPU here belongs to this Node worker,
 // not to dependency-cruiser's child process or the other parallel workers.
 const parsing = vi.hoisted(() => ({
-  inventory: { files: 0, bytes: 0, wallMs: 0, cpuMicros: 0 },
-  snippets: { files: 0, bytes: 0, wallMs: 0, cpuMicros: 0 },
+  inventory: { files: 0, bytes: 0, wallMs: 0, cpuMicros: 0, parented: 0, jsDoc: 0 },
+  snippets: { files: 0, bytes: 0, wallMs: 0, cpuMicros: 0, parented: 0, jsDoc: 0 },
 }));
 vi.mock("typescript", async (importOriginal) => {
   const actual = await importOriginal<{ default: typeof import("typescript") }>();
@@ -33,6 +34,8 @@ vi.mock("typescript", async (importOriginal) => {
         } finally {
           const used = process.cpuUsage(cpu);
           metric.files++;
+          if (args[3]) metric.parented++;
+          if (typeof args[2] !== "object" || args[2].jsDocParsingMode !== ts.JSDocParsingMode.ParseNone) metric.jsDoc++;
           metric.bytes += Buffer.byteLength(args[1]);
           metric.wallMs += performance.now() - started;
           metric.cpuMicros += used.user + used.system;
@@ -149,4 +152,74 @@ it("rejects type-only, dynamic and re-exported owner imports without restricting
   expect(findOwnerImports('import "./shell/index";', fileURLToPath(new URL("../index.ts", import.meta.url)))).toEqual([]);
   expect(findOwnerImports('import "electron";', import.meta.filename)).toEqual([]);
   expect(findOwnerImports('import "../app-server/backend-registry";', shellFile)).toEqual([]);
+});
+
+// The original declaration walk is the differential oracle. Keep its eager,
+// parent-linked parser so the work-budget regression fails against pre-fix code.
+function originalOwnerBindingNames(source: string, filename: string): string[] {
+  const file = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
+  const names = new Set<string>();
+  const bindingSuffix = /(?:Handlers?|Resolvers?|Publishers?|Canonicalizers?|Readers?|Writers?|Cleaners?|Services?|Actions|Projectors?|Advisory)$/;
+  function containsFunctionType(node: ts.Node): boolean {
+    if (ts.isFunctionTypeNode(node) || ts.isMethodSignature(node)) return true;
+    return ts.forEachChild(node, containsFunctionType) === true;
+  }
+  function collect(node: ts.Node): void {
+    if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isMethodSignature(node))
+      && node.name && ts.isIdentifier(node.name) && /^set[A-Z]/.test(node.name.text)
+      && (bindingSuffix.test(node.name.text)
+        || (!node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+          && (!node.type || node.type.kind === ts.SyntaxKind.VoidKeyword)
+          && node.parameters.some(containsFunctionType)))) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, collect);
+  }
+  collect(file);
+  return [...names];
+}
+
+it("discovers exactly the original owner bindings across generated declaration forms and escaped identifiers", () => {
+  const suffix = fc.array(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), { minLength: 2, maxLength: 12 })
+    .map((letters) => letters.join(""));
+  fc.assert(fc.property(suffix, fc.constantFrom("function", "method", "signature"), fc.boolean(), (tail, kind, escaped) => {
+    const name = `setGenerated${tail}`;
+    const spelling = escaped ? `s\\u0065t\\u0047enerated${tail}` : name;
+    const declaration = kind === "function"
+      ? `function ${spelling}(handler: () => void): void {}`
+      : kind === "method"
+        ? `class Owner { ${spelling}(handler: () => void): void {} }`
+        : `interface Owner { ${spelling}(handler: { run(): void }): void; }`;
+    const source = `/** @param {() => void} handler */\n${declaration}\n`
+      + `function setGenerated${tail}Handler(value: string): string { return value; }\n`
+      + `async function setRequest${tail}(handler: () => void) {}\n`
+      + `function setValue${tail}(value: string): string { return value; }\n`
+      + `const note = "setFakeHandler"; // setCommentHandler()\n`;
+    const actual = findOwnerBindingNames(source, "owner-fixture.ts").sort();
+    expect(actual).toEqual(originalOwnerBindingNames(source, "owner-fixture.ts").sort());
+    expect(actual).toEqual([name, `setGenerated${tail}Handler`].sort());
+  }));
+  for (const spelling of ["\\u0073etFixtureHandler", "\\u{73}etFixtureHandler", "set\\u0046ixtureHandler"]) {
+    const source = `function ${spelling}(value: string) {}`;
+    expect(findOwnerBindingNames(source, "escaped-fixture.ts")).toEqual(["setFixtureHandler"]);
+    expect(findOwnerBindingNames(source, "escaped-fixture.ts")).toEqual(originalOwnerBindingNames(source, "escaped-fixture.ts"));
+  }
+});
+
+it("bounds discovery work to candidate ASTs without parent or JSDoc construction, and rejects the original cost", () => {
+  const checkBudget = (collect: typeof findOwnerBindingNames, source: string, parses: number) => {
+    const before = { ...parsing.inventory };
+    collect(source, "budget-fixture.ts");
+    expect(parsing.inventory.files - before.files).toBe(parses);
+    expect(parsing.inventory.parented - before.parented).toBe(0);
+    expect(parsing.inventory.jsDoc - before.jsDoc).toBe(0);
+  };
+  fc.assert(fc.property(fc.nat(), (value) => {
+    const source = `export function readValue${value}(): number { return ${value}; }`;
+    checkBudget(findOwnerBindingNames, source, 0);
+    expect(() => checkBudget(originalOwnerBindingNames, source, 0)).toThrow();
+  }));
+  const candidate = "/** @param {() => void} handler */ function setFixtureHandler(handler: () => void) {}";
+  checkBudget(findOwnerBindingNames, candidate, 1);
+  expect(() => checkBudget(originalOwnerBindingNames, candidate, 1)).toThrow();
 });
