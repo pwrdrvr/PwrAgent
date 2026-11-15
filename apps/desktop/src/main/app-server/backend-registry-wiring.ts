@@ -1171,6 +1171,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveProviders: () => ports.resolveCodexModelProvidersFn(),
     resolveKeys: () => ports.resolveCodexModelProviderKeysFn(),
     ...(options?.codexModelProviderFetch ? { fetch: options.codexModelProviderFetch } : {}),
+    ...(options?.codexModelProviderNow ? { now: options.codexModelProviderNow } : {}),
   });
   const codexModelClient = codexClient;
   const modelCatalog = new BackendModelCatalog({
@@ -1545,6 +1546,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     createScheduledThreadActionFn,
     threadTitleGenerationService,
     codexModelProviderCatalog,
+    ...(options?.codexProviderCatalogRetryTimer ? { codexProviderCatalogRetryTimer: options.codexProviderCatalogRetryTimer } : {}),
     modelCatalog,
     queuedMessageTitler,
     threadTurnQueue,

@@ -15,6 +15,7 @@ import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchivePolicy } fro
 import type { ArchiveCleanupCheckpointStorage } from "../storage/desktop-runtime-storage";
 import type { RestartDispatchPlanOptions } from "./restart-continuation-gate";
 import type { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
+import type { CodexProviderCatalogRetryTimer } from "./codex-provider-catalog-retry";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
 import type { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import type { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
@@ -160,6 +161,10 @@ export type DesktopBackendRegistryOptions = {
   resolveCodexModelProviderKeys?: () => Promise<Record<string, string>>;
   /** Test seam for provider model discovery; never the network in Vitest. */
   codexModelProviderFetch?: (input: string, init?: RequestInit) => Promise<Response>;
+  /** Test seam: the clock that ages provider model reads. */
+  codexModelProviderNow?: () => number;
+  /** Test seam: the timer of the retry after a failed provider read. */
+  codexProviderCatalogRetryTimer?: CodexProviderCatalogRetryTimer;
   resolvePdfAnalysisEnabled?: () => boolean;
   resolveTokenMiserEnabled?: () => boolean;
   resolveTokenMiserPollingReviewsEnabled?: () => boolean;
@@ -314,6 +319,7 @@ export interface RegistryDependencies {
   ) => Promise<ScheduledThreadActionMutationResponse>;
   threadTitleGenerationService?: ThreadTitleService;
   codexModelProviderCatalog: CodexModelProviderCatalog;
+  codexProviderCatalogRetryTimer?: CodexProviderCatalogRetryTimer;
   modelCatalog: BackendModelCatalog;
   queuedMessageTitler: QueuedMessageTitler;
   threadTurnQueue: ThreadTurnQueue;

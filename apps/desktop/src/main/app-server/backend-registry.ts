@@ -1773,9 +1773,7 @@ export class DesktopBackendRegistry {
   private readonly resolveCodexModelProvidersFn: () => CodexModelProviderSettings[];
   private readonly resolveCodexModelProviderKeysFn: () => Promise<Record<string, string>>;
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
-  private readonly codexProviderCatalogRetry = new CodexProviderCatalogRetry({
-    refresh: () => this.retryCodexProviderCatalogs(),
-  });
+  private readonly codexProviderCatalogRetry: CodexProviderCatalogRetry;
   /**
    * Bumped on every saved change to the Codex model provider list. A model
    * read that began before the change describes the old list, so it must
@@ -1951,6 +1949,10 @@ export class DesktopBackendRegistry {
     this.threadArchiveCoordinator = dependencies.threadArchiveCoordinator;
     this.threadWorkspaceService = dependencies.threadWorkspaceService;
     this.codexModelProviderCatalog = dependencies.codexModelProviderCatalog;
+    this.codexProviderCatalogRetry = new CodexProviderCatalogRetry({
+      refresh: () => this.retryCodexProviderCatalogs(),
+      ...(dependencies.codexProviderCatalogRetryTimer ? { timer: dependencies.codexProviderCatalogRetryTimer } : {}),
+    });
     this.modelCatalog = dependencies.modelCatalog;
     this.queuedMessageTitler = dependencies.queuedMessageTitler;
     this.threadTurnQueue = dependencies.threadTurnQueue;

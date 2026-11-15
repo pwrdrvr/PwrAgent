@@ -50,7 +50,15 @@ type Operation =
   /** Settings' Refresh starts a Codex discovery that overlaps what follows. */
   | { kind: "discover" }
   | { kind: "endpoint"; up: boolean }
-  | { kind: "codexList"; up: boolean };
+  | { kind: "codexList"; up: boolean }
+  /**
+   * The automatic retry after a failed provider read comes due, after the
+   * catalog's one-minute failure window. It fires only if something armed
+   * it. Codex's own model list answers by then: a Codex outage leaves the
+   * providers unread, and the retry keeps trying, which is not this rule.
+   * `endpointUp` is the provider endpoint's state by then.
+   */
+  | { kind: "retry"; endpointUp: boolean };
 
 const providerDraft = (id: ProviderDraft["id"]): fc.Arbitrary<ProviderDraft> => fc.record({
   id: fc.constant(id),
@@ -69,6 +77,7 @@ const operation: fc.Arbitrary<Operation> = fc.oneof(
   { weight: 1, arbitrary: fc.constant({ kind: "discover" as const }) },
   { weight: 1, arbitrary: fc.record({ kind: fc.constant("endpoint" as const), up: fc.boolean() }) },
   { weight: 1, arbitrary: fc.record({ kind: fc.constant("codexList" as const), up: fc.boolean() }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("retry" as const), endpointUp: fc.boolean() }) },
 );
 
 function toSettings(draft: ProviderDraft): CodexModelProviderSettings {
@@ -144,6 +153,20 @@ async function runScenario(params: {
     [...(configStore.read("models").codex?.providers ?? [])] as CodexModelProviderSettings[];
   let endpointUp = true;
   let codexListUp = true;
+  // The catalog ages provider reads on this clock; only a retry moves it.
+  let clock = 1_000_000;
+  // The retry's one timer, fired by the `retry` operation.
+  let retryDue: (() => Promise<void>) | undefined;
+  const retryTimer = {
+    set: (run: () => Promise<void>) => {
+      retryDue = run;
+      return run;
+    },
+    clear: (handle: unknown) => {
+      if (handle === retryDue) retryDue = undefined;
+    },
+  };
+  let codexListCalls = 0;
   // Each reply is what the endpoint said when it was asked.
   const providerFetch = vi.fn(async () => await reply(endpointUp
     ? new Response(JSON.stringify({ data: ENDPOINT_MODELS.map((id) => ({ id })) }))
@@ -155,6 +178,7 @@ async function runScenario(params: {
     onPendingRequest: () => () => undefined,
     getInitializeResult: async () => ({ methods: ["thread/start"], userAgent: "codex/0.162.1" }),
     listModels: async () => {
+      codexListCalls += 1;
       const up = codexListUp;
       await reply(undefined, "codex model/list");
       if (!up) throw new Error("model/list failed");
@@ -170,6 +194,8 @@ async function runScenario(params: {
     resolveCodexModelProviders: configuredProviders,
     resolveCodexModelProviderKeys: async () => ({}),
     codexModelProviderFetch: providerFetch,
+    codexModelProviderNow: () => clock,
+    codexProviderCatalogRetryTimer: retryTimer,
   });
   if (params.turnActive) {
     (registry as unknown as { activeTurnKeys: Set<string> }).activeTurnKeys.add("codex:thread-1:turn-1");
@@ -181,10 +207,11 @@ async function runScenario(params: {
     }
     let pending: Promise<unknown>[] = [];
     let unsettledSave = false;
-    // A save drops every provider read, so the next read sees the endpoint
-    // as it is now. Without a save the catalog keeps its last read until its
-    // retry, which this scenario never reaches.
-    let endpointUpAtSave = endpointUp;
+    // What the providers' last endpoint read found. A save drops every
+    // provider read, so the next read sees the endpoint as it is now.
+    // Without a save the catalog keeps its last read, except that the retry
+    // reads a failed one again.
+    let providerReadUp = endpointUp;
     let closesBefore = closeCalls.length;
     const settleAndCheck = async () => {
       await drive(Promise.all(pending));
@@ -195,7 +222,7 @@ async function runScenario(params: {
       if (params.turnActive) expect(closeCalls.length).toBe(closesBefore);
       closesBefore = closeCalls.length;
       const configured = configuredProviders();
-      const expected = expectedProviderModels({ providers: configured, endpointUp: endpointUpAtSave });
+      const expected = expectedProviderModels({ providers: configured, endpointUp: providerReadUp });
       for (const [surface, backends] of [
         ["local", (await registry.listBackends({ includeUnavailable: true })).backends],
         ["federation", await federationBackends()],
@@ -208,7 +235,7 @@ async function runScenario(params: {
           surface,
           states: configured.map((provider) => [
             provider.id,
-            provider.discoverModels === false ? "off" : endpointUpAtSave ? "ready" : "unavailable",
+            provider.discoverModels === false ? "off" : providerReadUp ? "ready" : "unavailable",
           ]),
         });
         // Codex's own entry keeps offering models beside the providers'.
@@ -223,6 +250,26 @@ async function runScenario(params: {
         else codexListUp = step.up;
         continue;
       }
+      if (step.kind === "retry") {
+        if (pending.length || unsettledSave) await settleAndCheck();
+        codexListUp = true;
+        endpointUp = step.endpointUp;
+        // Past the one-minute failure window, well inside the ten-minute
+        // life of a successful read: eight retries stay under it.
+        clock += 61_000;
+        const due = retryDue;
+        retryDue = undefined;
+        const withSummary = registry.constructionPorts().codexBackendSummary !== undefined;
+        const listCallsBefore = codexListCalls;
+        await drive(due?.() ?? Promise.resolve());
+        // Without a summary there may be no App Server, and the retry has no
+        // discovery permit to start one.
+        if (!withSummary) expect(codexListCalls).toBe(listCallsBefore);
+        // A failed read is read again; a successful one is kept.
+        providerReadUp ||= endpointUp;
+        await settleAndCheck();
+        continue;
+      }
       if (step.kind === "discover") {
         // A failed Codex model read rejects the refresh; Settings shows it.
         pending.push(registry.listBackends(
@@ -233,7 +280,7 @@ async function runScenario(params: {
       }
       const save = async () => {
         await configStore.write({ models: { codex: { providers: step.providers.map(toSettings) } } }, ["models"]);
-        endpointUpAtSave = endpointUp;
+        providerReadUp = endpointUp;
       };
       unsettledSave = true;
       if (step.settle) {
@@ -268,6 +315,59 @@ describe("Codex model provider publication", () => {
         },
       ),
       { numRuns: 40 },
+    );
+  });
+
+  it("reads a provider found down at a save again once its endpoint is back", async () => {
+    // The same rule and oracle, from runs that save a provider while its
+    // endpoint is down and let the retry come due once it is back: the
+    // general property draws that order in about one run in eighty. The
+    // save either changes the Codex launch, which drops the summary, or
+    // edits only listed models of providers Codex already runs with, where
+    // Codex's own model list may fail too.
+    const downSave = fc.record({
+      kind: fc.constant("save" as const),
+      providers: fc.tuple(providerDraft("mathos"), fc.option(providerDraft("bonsai"), { nil: undefined }))
+        .map(([mathos, bonsai]) => [{ ...mathos, discoverModels: true }, ...(bonsai ? [bonsai] : [])]),
+      settle: fc.boolean(),
+    });
+    await fc.assert(
+      fc.asyncProperty(
+        fc.boolean(),
+        fc.boolean(),
+        fc.array(operation, { maxLength: 3 }),
+        downSave,
+        fc.option(fc.record({ codexListUp: fc.boolean() }), { nil: undefined }),
+        fc.array(operation, { maxLength: 3 }),
+        fc.scheduler(),
+        async (discoverFirst, turnActive, before, save, modelOnlyEdit, between, scheduler) => {
+          // Codex discovers with the same providers, other listed models.
+          const launch: Operation[] = modelOnlyEdit
+            ? [
+              {
+                kind: "save",
+                settle: true,
+                providers: save.providers.map((draft) => ({
+                  ...draft,
+                  models: draft.models.includes("fixture-2") ? [] : ["fixture-2"],
+                })),
+              },
+              { kind: "discover" },
+              { kind: "codexList", up: modelOnlyEdit.codexListUp },
+            ]
+            : [];
+          const operations: Operation[] = [
+            ...before,
+            ...launch,
+            { kind: "endpoint", up: false },
+            save,
+            ...between,
+            { kind: "retry", endpointUp: true },
+          ];
+          await runScenario({ discoverFirst, turnActive, operations, scheduler });
+        },
+      ),
+      { numRuns: 30 },
     );
   });
 
@@ -323,6 +423,8 @@ describe("Codex model provider publication", () => {
       const configStore = new DesktopConfigStore({ configPath });
       configStore.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/opt/pwragent/codex", selectedVersion: "0.162.1" });
       const io = { endpointUp: true, codexListUp: true };
+      let clock = 1_000_000;
+      let retryDue: (() => Promise<void>) | undefined;
       const providerFetch = vi.fn(async () => io.endpointUp
         ? new Response(JSON.stringify({ data: ENDPOINT_MODELS.map((id) => ({ id })) }))
         : new Response(JSON.stringify({ error: { message: "maintenance" } }), { status: 503 }));
@@ -345,6 +447,16 @@ describe("Codex model provider publication", () => {
         resolveCodexModelProviders: () => [...(configStore.read("models").codex?.providers ?? [])] as CodexModelProviderSettings[],
         resolveCodexModelProviderKeys: async () => ({}),
         codexModelProviderFetch: providerFetch,
+        codexModelProviderNow: () => clock,
+        codexProviderCatalogRetryTimer: {
+          set: (run) => {
+            retryDue = run;
+            return run;
+          },
+          clear: (handle) => {
+            if (handle === retryDue) retryDue = undefined;
+          },
+        },
       });
       const notifications: string[] = [];
       registry.onEvent((event) => {
@@ -376,6 +488,14 @@ describe("Codex model provider publication", () => {
           { surface: "federation", status, ids },
         ]);
       };
+      /** The retry comes due, past the catalog's one-minute failure window. */
+      const fireRetry = async () => {
+        clock += 61_000;
+        const due = retryDue;
+        retryDue = undefined;
+        expect(due).toBeDefined();
+        await due?.();
+      };
       return {
         registry,
         io,
@@ -383,8 +503,8 @@ describe("Codex model provider publication", () => {
         notifications,
         save,
         expectMathos,
+        fireRetry,
         dispose: async () => {
-          vi.useRealTimers();
           await registry.close();
           configStore.dispose();
           await rm(tempRoot, { recursive: true, force: true });
@@ -399,13 +519,12 @@ describe("Codex model provider publication", () => {
       // there may be no App Server, and no discovery permit to start one.
       const owner = await retryOwner();
       try {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         owner.io.endpointUp = false;
         await owner.save(["fixture"]);
         await owner.expectMathos("unavailable", ["@mathos/fixture"]);
         owner.io.endpointUp = true;
         owner.notifications.length = 0;
-        await vi.advanceTimersByTimeAsync(70_000);
+        await owner.fireRetry();
         await owner.expectMathos("ready", ["@mathos/fixture", "@mathos/mathos-coder", "@mathos/mathos-prover"]);
         expect(owner.notifications.length).toBeGreaterThan(0);
         expect(owner.listModels).not.toHaveBeenCalled();
@@ -420,7 +539,6 @@ describe("Codex model provider publication", () => {
       // the retry too.
       const owner = await retryOwner();
       try {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
         await owner.save(["fixture"]);
         await owner.registry.listBackends(
           { includeUnavailable: true, refreshModels: "codex" },
@@ -432,7 +550,7 @@ describe("Codex model provider publication", () => {
         await owner.expectMathos("unavailable", ["@mathos/fixture-2"]);
         owner.io.endpointUp = true;
         owner.io.codexListUp = true;
-        await vi.advanceTimersByTimeAsync(70_000);
+        await owner.fireRetry();
         await owner.expectMathos("ready", ["@mathos/fixture-2", "@mathos/mathos-coder", "@mathos/mathos-prover"]);
       } finally {
         await owner.dispose();
