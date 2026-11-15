@@ -93,8 +93,9 @@ Peers negotiate `shutdown_notice` within protocol v1. A normal interactive quit
 with any connected peer opens the existing quit countdown even when no local
 work is running or the active-work confirmation preference is off. The dialog
 announces its actual deadline (including time added for listed work). Pausing
-the countdown or choosing Wait for Work sends a null deadline; Stay Open sends
-cancellation and resumes dispatch. Quit Now commits shutdown immediately.
+the countdown or choosing Wait for Work sends a null deadline; closing the
+dialog (its close button or Esc) sends cancellation and resumes dispatch.
+Quit Now commits shutdown immediately.
 
 `federation/shutdown` notifications carry a shutdown ID, monotonic revision,
 `scheduled` / `cancelled` / `exiting` state, `quit` reason, and deadline. They

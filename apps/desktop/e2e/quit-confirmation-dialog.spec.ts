@@ -241,11 +241,9 @@ test("keeps running work reachable after cancelling and following a blocker", as
       .poll(async () => await dialog.locator("#countdown").innerText())
       .toBe("Auto-quit cancelled. Choose an option below.");
 
-    // "Stay Open" has to actually reach main too. If the navigation were
-    // blocked, the button would look fine and the app would die anyway.
-    // `#stay`, not a role query: the titlebar close button is also labelled
-    // "Stay open", so a by-name lookup is ambiguous.
-    await dialog.locator("#stay").dispatchEvent("click");
+    // Closing the dialog has to actually reach main too. If the navigation
+    // were blocked, the button would look fine and the app would die anyway.
+    await dialog.locator("#close").dispatchEvent("click");
     await dialog.waitForEvent("close");
 
     // Still alive, still on the thread, terminal still running.
@@ -482,7 +480,7 @@ test("scrolls a long blocker list inside the dialog and keeps its place across r
     ).toBeLessThanOrEqual(1);
     expect(afterRefresh.hasMore).toBe(true);
 
-    await dialog.locator("#stay").dispatchEvent("click");
+    await dialog.locator("#close").dispatchEvent("click");
     await dialog.waitForEvent("close");
   } finally {
     await setQuitConfirmation(app.window, false).catch(() => undefined);
