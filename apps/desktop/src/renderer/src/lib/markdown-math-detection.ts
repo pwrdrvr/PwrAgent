@@ -10,8 +10,9 @@ export function hasPotentialMarkdownMath(markdown: string): boolean {
 
   // Single-dollar inline math needs non-whitespace inside both delimiters
   // and whitespace, closing punctuation, or formatting after the closer.
-  // Code and escapes can still be harmless loading false positives.
-  if (/\$(?![\s$])[^$`\r\n]*[^\s$`([{]\$(?=$|[\s.,;:!?)}\]'"”’*_~`—–-])/u.test(markdown)) {
+  // GFM removes cell separators before inline parsing, so a pipe can also
+  // follow a supported expression. Code and escapes can be false positives.
+  if (/\$(?![\s$])[^$`\r\n]*[^\s$`([{]\$(?=$|[\s.,;:!?)}\]'"”’*_~`|—–-])/u.test(markdown)) {
     return true;
   }
 

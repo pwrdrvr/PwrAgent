@@ -153,8 +153,16 @@ try {
     assert((await page.getByRole("region", { name: "Message" }).innerText()).includes("Parts cost $5 and $10."));
     assert.equal(await page.getByRole("region", { name: "Message" }).locator("code").innerText(), String.raw`$\lambda$`);
     assert.equal(await page.getByRole("region", { name: "Ordinary sibling" }).locator(".katex").count(), 0);
+    await input.fill("|Value|\n|---|\n|$x$|");
+    await page.locator("td .katex").waitFor();
+    assert.equal(await page.locator(".katex").count(), 1);
+    await input.fill("Parts cost $5 and $10. Formula **$-x$**.");
+    await page.locator("strong .katex").waitFor();
+    assert.equal(await page.locator(".katex").count(), 1);
+    assert((await page.getByRole("region", { name: "Message" }).innerText()).includes("Parts cost $5 and $10."));
+    assert.equal(await page.locator("annotation[encoding='application/x-tex']").textContent(), "-x");
     assert.deepEqual(errors, []);
-    const evidence = { ordinary, firstMathRequests, finalMathRequests: mathRequests(), singleDollarExpressions: 5, errors };
+    const evidence = { ordinary, firstMathRequests, finalMathRequests: mathRequests(), singleDollarExpressions: 5, tableExpressions: 1, emphasizedExpressions: 1, errors };
     await writeFile(resolve(output, "browser-evidence.json"), JSON.stringify(evidence, null, 2));
     console.log(JSON.stringify({ ordinary, firstMathAssetRequests: firstMathRequests.length, renderedExpressions: 5, errors }));
   }

@@ -32,6 +32,9 @@ LaTeX `\(...\)` and `\[...\]`, single-dollar inline math, and backtick/tilde
 whitespace immediately inside the delimiters, and be followed by whitespace,
 closing punctuation, Markdown formatting, or the end of the source. A pair
 cannot cross a backtick or end with an opening bracket (`(`, `[`, or `{`).
+A trailing run of `*`, `_`, or `~` after whitespace or an opening bracket also
+belongs to later Markdown formatting, so prices before `**$-x$**` stay literal.
+Algebraic suffixes such as `$V^*$` retain their meaning.
 This renders `$A$`, `$(x,y)$`, and `$2^{O(\lambda)}$`
 while keeping prices such as `$5 and $10` and `$5-$10` literal. The runtime
 guards remark-math's tokenizer without rewriting source or shifting offsets.
@@ -42,6 +45,8 @@ candidate lines containing `math` or encoded/escaped info. CommonMark decodes
 fence info: `m&#97;th` also becomes
 `math`. Detection runs after the existing nested-fence repairs. Every streaming
 source update is reconsidered, including a delimiter split between updates.
+The hint also accepts a pipe after single-dollar math because GFM table cells
+end there before the inline parser checks the closing boundary.
 
 This is deliberately not a second Markdown parser. Protected code, escaped or
 unmatched delimiters, and `mathematica` fences can fetch the runtime without

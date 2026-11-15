@@ -316,6 +316,33 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector(".katex-error")).toBeNull();
   });
 
+  it("loads math for a single-dollar expression at a GFM table cell boundary", async () => {
+    const { container } = render(<MarkdownRenderingOptionsProvider mathEnabled>
+      <ThreadMarkdown text={"|Value|\n|---|\n|$x$|"} />
+    </MarkdownRenderingOptionsProvider>);
+    await waitFor(() => {
+      expect(container.querySelectorAll("td .katex")).toHaveLength(1);
+    });
+    expect(container.querySelector("annotation[encoding='application/x-tex']")).toHaveTextContent("x");
+  });
+
+  it.each([
+    ["*", "*", "em"], ["**", "**", "strong"],
+    ["_", "_", "em"], ["__", "__", "strong"],
+    ["~~", "~~", "del"], ["***", "***", "em strong"],
+    ["**_", "_**", "strong em"],
+  ])("preserves prices before negative math inside %s formatting", async (open, close, selector) => {
+    const { container } = render(<MarkdownRenderingOptionsProvider mathEnabled>
+      <ThreadMarkdown text={`Parts cost $5 and $10. Formula ${open}$-x$${close}.`} />
+    </MarkdownRenderingOptionsProvider>);
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    });
+    expect(container).toHaveTextContent("Parts cost $5 and $10. Formula");
+    expect(container.querySelector(`${selector} .katex`)).not.toBeNull();
+    expect(container.querySelector("annotation[encoding='application/x-tex']")).toHaveTextContent("-x");
+  });
+
   it("renders later and list-continuation math without consuming broken text", async () => {
     const { container } = render(
       <MarkdownRenderingOptionsProvider mathEnabled>
@@ -345,6 +372,8 @@ describe("ThreadMarkdown", () => {
   it.each([
     ["$x$", 1],
     ["$2^{10}$", 1],
+    ["$V^*$", 1],
+    ["$x * y$", 1],
     ["$5 and $10 beside $A$", 1],
     ["$5-$10 beside $A$", 1],
     ["Prices $5 and $10. Formula ($A$). Code: `$B$`.", 1],

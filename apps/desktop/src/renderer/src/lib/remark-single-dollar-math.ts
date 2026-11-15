@@ -21,6 +21,7 @@ export function remarkSingleDollarMath(this: {
       return effects.check({
         tokenize(checkEffects, checkOk, checkNok) {
           let previous: number | null = null;
+          let beforeFormatting: number | null = null;
           return opening;
 
           function opening(code: number | null): ReturnType<typeof checkOk> {
@@ -44,13 +45,22 @@ export function remarkSingleDollarMath(this: {
             // math on one line and prevent prices from consuming later code.
             if (code === null || code <= -3 || code === 96) return checkNok(code);
             if (code === 36) {
-              // Reject a trailing opening bracket so a price cannot consume
-              // a later parenthesized expression: "$10. Formula ($-x$)".
-              if (isWhitespace(previous) || previous === 40 || previous === 91 || previous === 123) {
+              // Brackets and formatting runs at an inner boundary belong to
+              // the next expression: "$10. Formula **$-x$**". Keep algebraic
+              // suffixes such as "V^*", whose star follows an operator.
+              const formattingAtBoundary = isFormattingMarker(previous)
+                && beforeFormatting !== null
+                && (isWhitespace(beforeFormatting) || isOpeningBracket(beforeFormatting));
+              if (isWhitespace(previous) || isOpeningBracket(previous) || formattingAtBoundary) {
                 return checkNok(code);
               }
               checkEffects.consume(code);
               return afterClosing;
+            }
+            if (isFormattingMarker(code)) {
+              if (!isFormattingMarker(previous)) beforeFormatting = previous;
+            } else {
+              beforeFormatting = null;
             }
             previous = code;
             checkEffects.consume(code);
@@ -72,4 +82,12 @@ export function remarkSingleDollarMath(this: {
 
 function isWhitespace(code: number | null): boolean {
   return code === null || code <= 32 || /\s/u.test(String.fromCodePoint(code));
+}
+
+function isOpeningBracket(code: number | null): boolean {
+  return code === 40 || code === 91 || code === 123;
+}
+
+function isFormattingMarker(code: number | null): boolean {
+  return code === 42 || code === 95 || code === 126;
 }
