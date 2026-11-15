@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { build, type Plugin } from "esbuild";
 import ts from "typescript";
 import { expect, it } from "vitest";
@@ -37,8 +38,13 @@ function walkFiles(root: string): string[] {
 // Instrument the actual loud getters, not their import sites. Tree shaking must
 // remove every marker from an owner-free entry, even when access would happen
 // only in a future worker message/callback. Never execute a production worker.
-function instrumentOwnerGetters(file: string, text: string): string {
+type BundleCost = { loads: number; candidates: number; bytes: number; inputs: number; inputBytes: number; parseMs: number; loadMs: number };
+const activeBundles = new Set<string>();
+
+function instrumentOwnerGetters(file: string, text: string, cost?: BundleCost): string {
+  const started = performance.now();
   const parsed = source(file, text);
+  if (cost) cost.parseMs += performance.now() - started;
   const insertions: number[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isFunctionDeclaration(node) && node.name?.text.startsWith("get") && node.body
@@ -53,7 +59,7 @@ function instrumentOwnerGetters(file: string, text: string): string {
   }
   return text;
 }
-function oraclePlugin(): Plugin {
+function oraclePlugin(cost: BundleCost): Plugin {
   return {
     name: "production-owner-getter-oracle",
     setup(builder) {
@@ -66,25 +72,50 @@ function oraclePlugin(): Plugin {
       // Assets and third-party packages cannot import desktop owner modules.
       // Vite's worker wrapper is data here; the worker itself has its own case.
       builder.onResolve({ filter: /\.(?:css|svg|png|webp|jpg|woff2?|wasm)(?:\?.*)?$|\?(?:raw|url|worker)/ }, () => ({ external: true }));
-      builder.onLoad({ filter: /\.[cm]?tsx?$/ }, (args) => ({
-        contents: instrumentOwnerGetters(args.path, fs.readFileSync(args.path, "utf8")),
-        loader: args.path.endsWith(".tsx") ? "tsx" : "ts",
-      }));
+      builder.onLoad({ filter: /\.[cm]?tsx?$/ }, (args) => {
+        const started = performance.now();
+        const text = fs.readFileSync(args.path, "utf8");
+        cost.loads++;
+        cost.bytes += Buffer.byteLength(text);
+        if (text.includes("before startOwnerServices")) cost.candidates++;
+        const contents = instrumentOwnerGetters(args.path, text, cost);
+        cost.loadMs += performance.now() - started;
+        return { contents, loader: args.path.endsWith(".tsx") ? "tsx" : "ts" };
+      });
     },
   };
 }
 async function bundle(entry: string, extraSource?: string): Promise<string> {
-  const result = await build({
-    ...(extraSource === undefined ? { entryPoints: [path.join(desktop, entry)] } : {
-      stdin: { contents: extraSource, resolveDir: main, sourcefile: "negative-entry.ts", loader: "ts" },
-    }),
-    bundle: true, write: false, treeShaking: true, platform: "node", format: "esm",
-    packages: "external", logLevel: "silent", plugins: [oraclePlugin()],
-  });
-  return result.outputFiles.map((output) => output.text).join("\n");
+  const cost: BundleCost = { loads: 0, candidates: 0, bytes: 0, inputs: 0, inputBytes: 0, parseMs: 0, loadMs: 0 };
+  const label = entry || extraSource!;
+  const overlap = [...activeBundles];
+  activeBundles.add(label);
+  const started = performance.now();
+  const cpu = process.cpuUsage();
+  try {
+    const result = await build({
+      metafile: true,
+      ...(extraSource === undefined ? { entryPoints: [path.join(desktop, entry)] } : {
+        stdin: { contents: extraSource, resolveDir: main, sourcefile: "negative-entry.ts", loader: "ts" },
+      }),
+      bundle: true, write: false, treeShaking: true, platform: "node", format: "esm",
+      packages: "external", logLevel: "silent", plugins: [oraclePlugin(cost)],
+    });
+    cost.inputs = Object.keys(result.metafile!.inputs).length;
+    cost.inputBytes = Object.values(result.metafile!.inputs).reduce((total, input) => total + input.bytes, 0);
+    return result.outputFiles.map((output) => output.text).join("\n");
+  } finally {
+    activeBundles.delete(label);
+    const used = process.cpuUsage(cpu);
+    console.info("production-entry-oracle cost", JSON.stringify({
+      entry: label, pid: process.pid, overlap, ...cost,
+      wallMs: performance.now() - started, cpuMs: (used.user + used.system) / 1000,
+    }));
+  }
 }
 
 it("covers every configured production entry and every inline worker", () => {
+  const started = performance.now();
   const found: string[] = [];
   const config = source(path.join(desktop, "electron.vite.config.ts"));
   const visit = (node: ts.Node): void => {
@@ -125,6 +156,7 @@ it("covers every configured production entry and every inline worker", () => {
   // A newly introduced bundler must enter this inventory rather than escaping it.
   const otherBuilders = walkFiles(desktop).filter((file) => /(?:from\s*["']esbuild["']|import\(["']esbuild["']\))/.test(fs.readFileSync(file, "utf8")));
   expect(otherBuilders).toEqual([path.join(desktop, "scripts/build-headless.mjs")]);
+  console.info("production-entry-oracle inventory", JSON.stringify({ wallMs: performance.now() - started }));
 });
 
 for (const entry of [...entries.filter((entry) => entry !== "src/main/index.ts"), worker, outpostSandboxEntry]) {
