@@ -83,6 +83,7 @@ function thread(id: string): NavigationThreadSummary {
 
 function selectedCollectionService(): NavigationDetailService {
   return new NavigationDetailService({
+    getThreadInfo: () => undefined,
     getCachedThreadSummary: () => thread("selected"),
     listLiveTokenMiserSubAgents: () => [],
     readLiveSubAgentRevisionSource: () => [],
@@ -168,6 +169,7 @@ describe("NavigationDetailService", () => {
       return { currentBranch: cwd };
     });
     const registry = {
+      getThreadInfo: () => undefined,
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
@@ -375,6 +377,7 @@ describe("NavigationDetailService", () => {
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const registry = {
       readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "feature", handoffBranches: ["main"] })),
+      getThreadInfo: () => undefined,
       getCachedThreadSummary: vi.fn(() => undefined),
       resolveThread: vi.fn(async () => thread("selected")),
       getQueuedExecutionModeForThread: vi.fn(() => undefined),
@@ -452,6 +455,7 @@ describe("NavigationDetailService", () => {
     mocks.cards = persisted;
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const registry = {
+      getThreadInfo: () => undefined,
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
@@ -499,6 +503,7 @@ describe("NavigationDetailService", () => {
     mocks.cards = cards;
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const service = new NavigationDetailService({
+      getThreadInfo: () => undefined,
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
@@ -532,6 +537,7 @@ describe("NavigationDetailService", () => {
     mocks.prWatches = [watch];
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const service = new NavigationDetailService({
+      getThreadInfo: () => undefined,
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
@@ -559,6 +565,7 @@ describe("NavigationDetailService", () => {
     const selected = thread("selected");
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const service = new NavigationDetailService({
+      getThreadInfo: () => undefined,
       getCachedThreadSummary: () => selected,
       getQueuedExecutionModeForThread: () => undefined,
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
@@ -734,6 +741,7 @@ describe("NavigationDetailService", () => {
       mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
       const registry = {
         readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "main" })),
+        getThreadInfo: () => undefined,
         getCachedThreadSummary: vi.fn(() => selected),
         getQueuedExecutionModeForThread: vi.fn(() => undefined),
         hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
@@ -779,6 +787,7 @@ describe("NavigationDetailService", () => {
       let hibernation: { restoring: boolean; restoreFailure?: { worktreePath: string; message: string } } = { restoring: true };
       const registry = {
         readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "main" })),
+        getThreadInfo: () => undefined,
         getCachedThreadSummary: vi.fn(() => selected),
         getQueuedExecutionModeForThread: vi.fn(() => undefined),
         hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),

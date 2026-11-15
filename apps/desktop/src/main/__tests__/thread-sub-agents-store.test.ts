@@ -612,6 +612,7 @@ describe("thread sub-agent table", () => {
     } = {}) {
       const registry = {
         getCachedThreadSummary: () => ({ id: threadId, source: "codex" }),
+        getThreadInfo: () => undefined,
         // The registry merges live gates through its usage ledger, which reads
         // live native usage through the sub-agent monitor service.
         threadUsageLedger: usageLedgerStandIn({

@@ -15399,13 +15399,17 @@ describe("main selected detail authority", () => {
     },
   );
 
-  it("opens an archived local thread absent from active rows without restoring it", async () => {
+  it("opens an archived local thread absent from active rows without restoring it or authorizing its composer", async () => {
     const snapshot = acpTitleSnapshot("Active row", "explicit", 1);
     const archived = { ...snapshot.threads[0]!, id: "archived-search-result", archivedAt: 123, title: "Archived example" };
     const restoreThread = vi.fn();
+    const detailApi = actionDetailApi(...snapshot.threads, archived);
     const api = {
       readPopulation: vi.fn(async () => snapshot),
-      ...actionDetailApi(...snapshot.threads, archived),
+      getNavigationSelectedDetail: async (...args: Parameters<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>) => {
+        const response = await detailApi.getNavigationSelectedDetail!(...args);
+        return response.thread?.id === archived.id ? { ...response, identity: "archived" as const } : response;
+      },
       restoreThread,
     } as unknown as DesktopApi;
     const hook = renderHook(() => useThreadNavigation(api));
@@ -15413,6 +15417,8 @@ describe("main selected detail authority", () => {
     await act(() => hook.result.current.showThread({ backend: archived.source, threadId: archived.id }));
     await waitFor(() => expect(hook.result.current.selectedThread?.id).toBe(archived.id));
     expect(hook.result.current.selectedThread?.archivedAt).toBe(123);
+    expect(hook.result.current.selectedThreadConfigurationReady).toBe(false);
+    expect(hook.result.current.selectedThreadConfigurationError).toBe("This thread is archived.");
     expect(hook.result.current.threads.some((row) => row.id === archived.id)).toBe(false);
     expect(restoreThread).not.toHaveBeenCalled();
   });

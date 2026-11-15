@@ -122,7 +122,9 @@ describe("async critical path profile", () => {
       // registry's own state.
       const detailRegistry: NavigationDetailRegistry = {
         getCachedThreadSummary: () => selected,
+        getThreadInfo: (identity) => registry.getThreadInfo(identity),
         resolveThread: (params) => registry.resolveThread(params),
+        listThreads: (params) => registry.listThreads(params),
         getQueuedExecutionModeForThread: (ref) => registry.getQueuedExecutionModeForThread(ref),
         iterateQueuedTurnSummaries: (ref) => registry.iterateQueuedTurnSummaries(ref),
         readCheckoutHibernation: (identity) => registry.readCheckoutHibernation(identity),
