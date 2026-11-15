@@ -27,18 +27,31 @@ disabling immediately removes math processing from rendered messages.
 
 The runtime still owns parsing and security (`trust: false`, `maxExpand: 1000`,
 `maxSize: 20`). Supported syntax includes multi-dollar text/flow math, normalized
-LaTeX `\(...\)` and `\[...\]`, and backtick/tilde `math` fences. Single-dollar
-text math remains disabled.
+LaTeX `\(...\)` and `\[...\]`, single-dollar inline math, and backtick/tilde
+`math` fences. Single-dollar pairs must stay on one source line, have no
+whitespace immediately inside the delimiters, and be followed by whitespace,
+closing punctuation, Markdown formatting, or the end of the source. A pair
+cannot cross a backtick or end with an opening bracket (`(`, `[`, or `{`).
+A trailing run of `*`, `_`, or `~` after whitespace or an opening bracket also
+belongs to later Markdown formatting, so prices before `**$-x$**` stay literal.
+Algebraic suffixes such as `$V^*$` retain their meaning.
+This renders `$A$`, `$(x,y)$`, and `$2^{O(\lambda)}$`
+while keeping prices such as `$5 and $10` and `$5-$10` literal. The runtime
+guards remark-math's tokenizer without rewriting source or shifting offsets.
+Paper-specific macros still need definitions; the renderer does not infer them.
 
-The hint accepts `$$`, `\(`, `\[`, and fence candidate lines containing `math`
-or encoded/escaped info. CommonMark decodes fence info: `m&#97;th` also becomes
+The hint accepts `$$`, `\(`, `\[`, eligible single-dollar pairs, and fence
+candidate lines containing `math` or encoded/escaped info. CommonMark decodes
+fence info: `m&#97;th` also becomes
 `math`. Detection runs after the existing nested-fence repairs. Every streaming
 source update is reconsidered, including a delimiter split between updates.
+The hint also accepts a pipe after single-dollar math because GFM table cells
+end there before the inline parser checks the closing boundary.
 
 This is deliberately not a second Markdown parser. Protected code, escaped or
 unmatched delimiters, and `mathematica` fences can fetch the runtime without
 rendering math. Ordinary Markdown, ordinary code fences without those hints,
-currency such as `$5 and $10`, and `$x$` do not request it. Harmless source false
+currency such as `$5 and $10` do not request it. Harmless source false
 positives preserve the existing context-sensitive code/escaping behavior.
 
 ## Validation and measurements
