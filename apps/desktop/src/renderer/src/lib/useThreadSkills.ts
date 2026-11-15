@@ -310,9 +310,9 @@ export function useThreadSkills(params: {
   // paths are on the peer's machine, so a remote target never uses one, even
   // if a response somehow carried it.
   const isRemoteTarget = skillTarget?.federationTarget?.scope === "remote";
-  const bundledSkillRoot = isRemoteTarget
+  const bundledSkillRoots = isRemoteTarget
     ? undefined
-    : state?.response?.bundledSkillRoot;
+    : state?.response?.bundledSkillRoots;
 
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();
@@ -329,13 +329,13 @@ export function useThreadSkills(params: {
     return withSkillOrigins(
       [...deduped.values()],
       originDirectories,
-      { bundledSkillRoot },
+      { bundledSkillRoots },
     ).sort(
       (left, right) =>
         left.name.localeCompare(right.name)
         || compareSkillOrigins(left.origin, right.origin)
     );
-  }, [bundledSkillRoot, originDirectories, state?.response?.data]);
+  }, [bundledSkillRoots, originDirectories, state?.response?.data]);
 
   const providerCommands = useMemo(() => {
     const deduped = new Map<string, AppServerAvailableCommandSummary>();

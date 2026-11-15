@@ -15,11 +15,12 @@ export type SkillOriginDirectory = Pick<LinkedDirectorySummary, "label" | "path"
 export type SkillOriginOptions = {
   /**
    * The folder this machine's PwrAgent writes its bundled skills to
-   * (`<PwrAgent root>/skills/bundled`). Main knows it; this package cannot
-   * import it. Leave it unset for skills a peer instance listed: their paths
-   * are on the peer's machine.
+   * (`<PwrAgent root>/skills/bundled`), as configured and with symlinks
+   * resolved: Codex may report either form. Main knows it; this package
+   * cannot import it. Leave it unset for skills a peer instance listed:
+   * their paths are on the peer's machine.
    */
-  bundledSkillRoot?: string;
+  bundledSkillRoots?: readonly string[];
 };
 
 /**
@@ -69,8 +70,9 @@ export function classifySkillOrigin(
       // as a user root. Without this check those skills read as Codex home,
       // where the operator then looks for a copy that does not exist.
       if (
-        options.bundledSkillRoot?.trim()
-        && isPathInside(skillPath, options.bundledSkillRoot)
+        options.bundledSkillRoots?.some(
+          (root) => root.trim() && isPathInside(skillPath, root),
+        )
       ) {
         return { kind: "pwragent", label: "PwrAgent" };
       }

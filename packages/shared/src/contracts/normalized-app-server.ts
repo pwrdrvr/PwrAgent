@@ -1934,11 +1934,12 @@ export type AppServerListSkillsResponse = {
   backend: AppServerBackendKind;
   fetchedAt: number;
   /**
-   * This machine's PwrAgent bundled skill root, for `classifySkillOrigin`.
-   * Set only on a local listing; a peer's listing never carries it, since
-   * its paths are on the peer's machine.
+   * This machine's PwrAgent bundled skill root, as configured and with
+   * symlinks resolved, for `classifySkillOrigin`. Set only on a local
+   * listing; a peer's listing never carries it, since its paths are on the
+   * peer's machine.
    */
-  bundledSkillRoot?: string;
+  bundledSkillRoots?: string[];
   data: Array<{
     commands?: AppServerAvailableCommandSummary[];
     cwd?: string;

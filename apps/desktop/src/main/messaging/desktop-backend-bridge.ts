@@ -113,7 +113,7 @@ import {
   resolveFederatedThreadTarget,
 } from "../federation/federated-thread-target-service";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
-import { bundledSkillRoot } from "../agent-tools/bundled-skill-root";
+import { bundledSkillRootAliases } from "../agent-tools/bundled-skill-root";
 import { selectStaleDirectoryGitStatusKeys } from "../app-server/directory-git-status-refresh-policy";
 
 export type DesktopMessagingFederationBridge = {
@@ -1206,7 +1206,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async listSkills(
     request: AppServerListSkillsRequest = {},
-  ): Promise<Pick<AppServerListSkillsResponse, "data" | "bundledSkillRoot">> {
+  ): Promise<Pick<AppServerListSkillsResponse, "data" | "bundledSkillRoots">> {
     const remote = this.remoteBackend(request.federationTarget);
     if (remote) {
       // The peer's paths are on its machine: never pair them with a root.
@@ -1214,7 +1214,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       return { data };
     }
     const { data } = await this.registry.listSkills(request);
-    return { data, bundledSkillRoot: bundledSkillRoot() };
+    return { data, bundledSkillRoots: bundledSkillRootAliases() };
   }
 
   async listBackends(request: ListBackendsRequest = {}): Promise<ListBackendsResponse> {

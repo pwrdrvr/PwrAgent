@@ -264,7 +264,7 @@ describe("messaging skills browser", () => {
         },
       ];
 
-      expect(flattenSkillEntries(withBundled, directories, bundledRoot)[0]?.origin)
+      expect(flattenSkillEntries(withBundled, directories, [bundledRoot])[0]?.origin)
         .toEqual({ kind: "pwragent", label: "PwrAgent" });
       // A peer binding passes no root.
       expect(flattenSkillEntries(withBundled, directories)[0]?.origin?.kind)

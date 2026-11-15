@@ -10,7 +10,7 @@ import type {
   NavigationSnapshot,
   ThreadOverlayState,
 } from "@pwragent/shared";
-import { bundledSkillRoot } from "../agent-tools/bundled-skill-root";
+import { bundledSkillRootAliases } from "../agent-tools/bundled-skill-root";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
@@ -116,7 +116,7 @@ describe("DesktopMessagingBackendBridge", () => {
     const data = [{ cwd: "/repo", skills: [] }];
     const registry = { listSkills: vi.fn(async () => ({ data })) } as unknown as DesktopBackendRegistry;
     // A peer that sends a root anyway: its paths are on its own machine.
-    const peerListSkills = vi.fn(async () => ({ data, bundledSkillRoot: "/peer/skills/bundled" }));
+    const peerListSkills = vi.fn(async () => ({ data, bundledSkillRoots: ["/peer/skills/bundled"] }));
     const federation = {
       connectedPeerTargets: () => [],
       remoteBackend: () => ({ listSkills: peerListSkills }),
@@ -125,7 +125,7 @@ describe("DesktopMessagingBackendBridge", () => {
 
     await expect(bridge.listSkills({ backend: "codex" })).resolves.toEqual({
       data,
-      bundledSkillRoot: bundledSkillRoot(),
+      bundledSkillRoots: bundledSkillRootAliases(),
     });
     await expect(
       bridge.listSkills({ backend: "codex", federationTarget: { scope: "remote", instanceId: "peer" } }),

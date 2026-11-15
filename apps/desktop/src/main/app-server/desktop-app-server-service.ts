@@ -439,7 +439,7 @@ import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
-import { bundledSkillRoot } from "../agent-tools/bundled-skill-root";
+import { bundledSkillRootAliases } from "../agent-tools/bundled-skill-root";
 import {
   shapeReadThreadFileDiffsForRenderer,
 } from "../app-server/thread-file-diff-cache";
@@ -1813,7 +1813,7 @@ class DesktopAppServerService {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       // A peer's skill paths are on the peer's machine, so this machine's
       // bundled skill root must never classify them, whatever the peer sent.
-      const { bundledSkillRoot: _peerRoot, ...remote } = await getDesktopFederationRuntime()
+      const { bundledSkillRoots: _peerRoots, ...remote } = await getDesktopFederationRuntime()
         .remoteBackend(request.federationTarget)
         .listSkills({
           backend: request.backend,
@@ -1847,7 +1847,7 @@ class DesktopAppServerService {
       backend,
       fetchedAt: Date.now(),
       data: response.data,
-      bundledSkillRoot: bundledSkillRoot(),
+      bundledSkillRoots: bundledSkillRootAliases(),
     };
   }
 

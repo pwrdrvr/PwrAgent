@@ -45,7 +45,7 @@ export type MessagingSkillBrowserEntry = AppServerSkillSummary & {
 export function flattenSkillEntries(
   data: AppServerListSkillsResponse["data"],
   directories: readonly SkillOriginDirectory[] = [],
-  bundledSkillRoot?: string,
+  bundledSkillRoots?: readonly string[],
 ): MessagingSkillBrowserEntry[] {
   const deduped = new Map<string, MessagingSkillBrowserEntry>();
   for (const entry of data) {
@@ -61,7 +61,7 @@ export function flattenSkillEntries(
       });
     }
   }
-  return withSkillOrigins([...deduped.values()], directories, { bundledSkillRoot })
+  return withSkillOrigins([...deduped.values()], directories, { bundledSkillRoots })
     .map((entry, index) => ({ entry, index }))
     .sort((left, right) =>
       compareSkillOrigins(left.entry.origin, right.entry.origin)

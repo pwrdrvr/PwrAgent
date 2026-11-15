@@ -80,7 +80,7 @@ describe("classifySkillOrigin with a bundled skill root", () => {
           const origin = classifySkillOrigin(
             { path, scope: "user" },
             [],
-            { bundledSkillRoot: configured },
+            { bundledSkillRoots: [configured] },
           );
           const inside = oracleInside(path, bundled);
           expect(origin?.kind === "pwragent").toBe(inside);
@@ -111,10 +111,10 @@ describe("classifySkillOrigin with a bundled skill root", () => {
     const bundledSkillRoot = "/srv/pwragent-home/skills/bundled";
     const path = `${bundledSkillRoot}/tool-guide/SKILL.md`;
     expect(
-      classifySkillOrigin({ path, scope: "system" }, [], { bundledSkillRoot })?.kind,
+      classifySkillOrigin({ path, scope: "system" }, [], { bundledSkillRoots: [bundledSkillRoot] })?.kind,
     ).toBe("built-in");
     expect(
-      classifySkillOrigin({ path, scope: "user", pluginId: "p@m" }, [], { bundledSkillRoot })?.kind,
+      classifySkillOrigin({ path, scope: "user", pluginId: "p@m" }, [], { bundledSkillRoots: [bundledSkillRoot] })?.kind,
     ).toBe("plugin");
   });
 
@@ -123,14 +123,32 @@ describe("classifySkillOrigin with a bundled skill root", () => {
       classifySkillOrigin(
         { path: "C:\\Users\\Fixture\\.pwragent\\skills\\bundled\\tool-guide\\SKILL.md", scope: "user" },
         [],
-        { bundledSkillRoot: "c:/users/fixture/.pwragent/skills/bundled" },
+        { bundledSkillRoots: ["c:/users/fixture/.pwragent/skills/bundled"] },
       ),
     ).toEqual({ kind: "pwragent", label: "PwrAgent" });
     expect(
       classifySkillOrigin(
         { path: "C:\\Users\\Fixture\\.pwragent\\skills\\bundled-old\\tool-guide\\SKILL.md", scope: "user" },
         [],
-        { bundledSkillRoot: "C:\\Users\\Fixture\\.pwragent\\skills\\bundled" },
+        { bundledSkillRoots: ["C:\\Users\\Fixture\\.pwragent\\skills\\bundled"] },
+      )?.kind,
+    ).toBe("codex-home");
+  });
+
+  it("matches a skill under any of the root's aliases, as Codex may report the real path", () => {
+    const bundledSkillRoots = ["/tmp/pa/skills/bundled", "/private/tmp/pa/skills/bundled"];
+    for (const path of [
+      "/tmp/pa/skills/bundled/tool-guide/SKILL.md",
+      "/private/tmp/pa/skills/bundled/tool-guide/SKILL.md",
+    ]) {
+      expect(classifySkillOrigin({ path, scope: "user" }, [], { bundledSkillRoots })?.kind)
+        .toBe("pwragent");
+    }
+    expect(
+      classifySkillOrigin(
+        { path: "/private/tmp/pa/skills/bundled-old/tool-guide/SKILL.md", scope: "user" },
+        [],
+        { bundledSkillRoots },
       )?.kind,
     ).toBe("codex-home");
   });
@@ -142,7 +160,7 @@ describe("classifySkillOrigin with a bundled skill root", () => {
         { name: "notes", path: "/home/fixture/.codex/skills/notes/SKILL.md", scope: "user" },
       ],
       [],
-      { bundledSkillRoot: "/opt/pa/skills/bundled" },
+      { bundledSkillRoots: ["/opt/pa/skills/bundled"] },
     );
     expect(bundled?.origin).toEqual({ kind: "pwragent", label: "PwrAgent" });
     expect(codexHome?.origin).toEqual({ kind: "codex-home", label: "Codex home" });

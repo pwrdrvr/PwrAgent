@@ -660,7 +660,7 @@ describe("useThreadSkills", () => {
       const bundledListSkills = vi.fn(async (): Promise<AppServerListSkillsResponse> => ({
         backend: "codex",
         fetchedAt: 1,
-        bundledSkillRoot: bundledRoot,
+        bundledSkillRoots: [bundledRoot],
         data: [
           {
             cwd: "/Users/fixture-user/pwrdrvr/PwrSnap",
