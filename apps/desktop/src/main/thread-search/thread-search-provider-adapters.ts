@@ -6,6 +6,7 @@ import type {
   ThreadSearchResult,
   ThreadSearchUnavailableScope,
 } from "@pwragent/shared";
+import type { RegistryReadThreadRequest } from "../app-server/registry-host-ports";
 
 const DEFAULT_TRANSCRIPT_READ_LIMIT = 80;
 const MAX_TRANSCRIPT_CANDIDATES = 50;
@@ -27,6 +28,18 @@ export type ThreadTranscriptReader = (request: {
   threadId: string;
   limit: number;
 }) => Promise<AppServerReadThreadResponse>;
+
+/**
+ * Reads each candidate's transcript through the registry. Scanning a thread
+ * for a match is not use of it, so the read leaves a pending automatic
+ * archive in place; opening a result is an ordinary read and cancels it.
+ */
+export function registryTranscriptReader(
+  readThread: (request: RegistryReadThreadRequest) => Promise<AppServerReadThreadResponse>,
+): ThreadTranscriptReader {
+  return async ({ backend, threadId, limit }) =>
+    await readThread({ backend, threadId, limit, preserveAutomaticArchive: true });
+}
 
 export class ProviderTranscriptThreadSearchAdapter {
   constructor(private readonly readThread: ThreadTranscriptReader) {}

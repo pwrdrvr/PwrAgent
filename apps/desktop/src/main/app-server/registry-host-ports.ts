@@ -33,6 +33,20 @@ import type { BackendModelCatalogCallerReason } from "./backend-model-catalog";
 import type { ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 
 /**
+ * A registry read. Renderer and federation reads rebuild the request field
+ * by field, so neither can set `preserveAutomaticArchive`; main-process
+ * callers and the local Outpost CLI's `show` can.
+ */
+export type RegistryReadThreadRequest = AppServerReadThreadRequest & {
+  /**
+   * A background evaluation read, such as a Continue After prerequisite or
+   * idle check, is not use of the thread. It leaves a pending automatic
+   * archive in place; every other read cancels it.
+   */
+  preserveAutomaticArchive?: true;
+};
+
+/**
  * Shared registry operations. Module hosts pick only the capabilities they use;
  * this contract must stay independent of the registry and its domain modules.
  */
@@ -105,7 +119,7 @@ export interface RegistryHostPorts {
     threadId: string;
     turnId?: string;
   }): Promise<{ parentTurnId?: string; rootTurnId?: string }>;
-  readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse>;
+  readThread(request: RegistryReadThreadRequest): Promise<AppServerReadThreadResponse>;
   renameThread(request: RenameThreadRequest, options?: ThreadRenameOptions): Promise<RenameThreadResponse>;
   resolveAgentCallerExecutionMode(context: {
     backend: AppServerBackendKind;
