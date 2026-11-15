@@ -6,6 +6,7 @@ import type { ManagedReviewService } from "./managed-review-service";
 import type { SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
+import type { RegistryReadThreadRequest } from "./registry-host-ports";
 import type { ThreadWorkspaceService } from "./thread-workspace-service";
 import { logUnpricedThreadUsageLine } from "./unpriced-usage-line-log";
 import { logDebug } from "./registry-debug-log";
@@ -7319,7 +7320,10 @@ export class DesktopBackendRegistry {
     );
   }
 
-  async readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
+  async readThread(request: RegistryReadThreadRequest): Promise<AppServerReadThreadResponse> {
+    if (!request.preserveAutomaticArchive) {
+      this.threadArchiveCoordinator.cancelAutomaticArchive(request.backend ?? "codex", request.threadId);
+    }
     const read = () => listingDiagnostics.trace("workflow", { query: !request.display || request.display.resource === "transcript" ? "transcript" : "thread-detail" }, () => this.readThreadDisplay(request));
     return await (request.countsAsActivity === false
       ? withCodexRequestActivity({ countsAsActivity: false }, read)
@@ -7327,7 +7331,6 @@ export class DesktopBackendRegistry {
   }
 
   private async readThreadDisplay(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
-    this.threadArchiveCoordinator.cancelAutomaticArchive(request.backend ?? "codex", request.threadId);
     if (!request.display) return await this.readThreadData(request);
     const backend = request.backend ?? "codex";
     if (request.display.resource === "activity") {

@@ -10151,7 +10151,8 @@ class DesktopAppServerService {
   private async confirmDependencyConsumerIdle(target: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
     const registry = getDesktopBackendRegistry();
     if (registry.getActiveTurnForThread(target) || await registry.isThreadLocked(target)) return false;
-    const response = await registry.readThread({ ...target, includeTurns: true, limit: 20, viewOnly: true, countsAsActivity: false });
+    const response = await registry.readThread({ ...target, includeTurns: true, limit: 20, viewOnly: true, countsAsActivity: false,
+      preserveAutomaticArchive: true });
     return !response.replay.entries.some((entry) => entry.turn?.status === "in_progress");
   }
 
@@ -10167,7 +10168,7 @@ class DesktopAppServerService {
       for (let page = 0; page < 50; page++) {
         const response = await registry.readThread({
           backend: condition.backend, threadId: condition.threadId,
-          includeTurns: true, limit: 100, viewOnly: true, ...(before ? { before } : {}),
+          includeTurns: true, limit: 100, viewOnly: true, preserveAutomaticArchive: true, ...(before ? { before } : {}),
         });
         pages.unshift(response.replay.entries.flatMap((entry) => entry.turn ? [entry.turn] : []));
         const pagination = response.replay.pagination;
