@@ -1317,12 +1317,14 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         color: var(--text-muted);
         font-weight: 600;
       }
-      /* Choices that keep PwrAgent open sit left; choices that quit sit
-         right. When the quit group cannot share the row, it wraps to a row
-         of its own, still right-aligned. */
+      /* One right-aligned group: the choices that keep PwrAgent open, then
+         the choices that quit. When Quiet makes it too wide for one row, the
+         quit group wraps to a second row, also right-aligned, which keeps
+         the default in the bottom-right corner. */
       .actions {
         display: flex;
         flex-wrap: wrap;
+        justify-content: flex-end;
         align-items: center;
         gap: 8px;
         margin-top: 12px;
@@ -1331,9 +1333,6 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         display: flex;
         align-items: center;
         gap: 8px;
-      }
-      .actions__group--quit {
-        margin-left: auto;
       }
       button:disabled {
         cursor: default;
