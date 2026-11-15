@@ -154,13 +154,30 @@ describe("named Codex model providers in the composer", () => {
   });
 
   it("starts a MathOS thread on Codex with a MathOS model, and offers MathOS's whole catalog alone", async () => {
-    const patches = renderLaunchpad();
+    const patches = renderLaunchpad(codex, {
+      ...initialLaunchpad,
+      reasoningEffort: "high",
+      providerSettings: {
+        codex: {
+          model: "gpt-6-sol",
+          reasoningEffort: "high",
+          reasoningEffortsByModel: { "gpt-6-sol": "high" },
+        },
+      },
+    });
     expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "gpt-6-sol");
     fireEvent.click(within(openDropdown("Provider")).getByRole("option", { name: /MathOS/ }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Provider(?::|$)/ })).toHaveTextContent("MathOS");
     });
-    expect(patches.at(-1)).toMatchObject({ backend: "codex", model: "@mathos/gpt-oss-120b" });
+    expect(patches.at(-1)).toMatchObject({
+      backend: "codex",
+      model: "@mathos/gpt-oss-120b",
+      reasoningEffort: undefined,
+      fastMode: undefined,
+      serviceTier: undefined,
+    });
+    expect(screen.queryByRole("button", { name: /^Reasoning(?::|$)/ })).not.toBeInTheDocument();
     const modelList = openDropdown("Model");
     // The same upstream id, served by MathOS, and every model MathOS lists.
     expect(composerDropdownOptionLabels(modelList)).toEqual(["gpt-oss-120b", ...MATHOS_MODELS]);
@@ -174,10 +191,16 @@ describe("named Codex model providers in the composer", () => {
       expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "gpt-6-sol");
     });
     expect(composerDropdownOptionLabels(openDropdown("Model"))).toEqual(["GPT-6-Sol", "gpt-oss-120b"]);
-    // A local switch sets the model only; the remembered effort, Fast mode and
-    // tier restore through the provider-settings patch as for any provider.
-    expect(Object.keys(patches.at(-1)!)).not.toEqual(expect.arrayContaining(["serviceTier"]));
-    expect(Object.keys(patches.at(-1)!)).not.toEqual(expect.arrayContaining(["reasoningEffort"]));
+    // Resolve the model and its supported settings together. MathOS has no
+    // reasoning or speed settings; OpenAI restores its model's saved effort.
+    expect(patches.at(-1)).toMatchObject({
+      backend: "codex",
+      model: "gpt-6-sol",
+      reasoningEffort: "high",
+      fastMode: undefined,
+      serviceTier: undefined,
+    });
+    expect(screen.getByRole("button", { name: /^Reasoning(?::|$)/ })).toHaveAttribute("data-value", "high");
   });
 
   it("offers a MathOS model's own effort levels, starting on its default, and sends the one chosen", async () => {
