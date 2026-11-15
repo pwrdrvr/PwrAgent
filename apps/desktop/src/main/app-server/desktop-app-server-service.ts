@@ -10081,7 +10081,7 @@ class DesktopAppServerService {
         canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
         resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
         submit: async (request) => await this.submitDependencyWakeup(request),
-        recoverCompaction: async (dependency, prompt, canSubmit) => {
+        recoverCompaction: async (dependency, prompt, canSubmit, admit) => {
           const registry = getDesktopBackendRegistry();
           return await registry.steerCompactionRecovery({
             backend: dependency.backend, threadId: dependency.threadId,
@@ -10091,7 +10091,7 @@ class DesktopAppServerService {
           }, { kind: "pwragent", systemReason: "compaction-recovery",
             dependencyId: threadDependencyDeliveryKey(dependency),
             causalMessagingSource: dependency.causalMessagingSource, causalMessagingAmbiguous: dependency.causalMessagingAmbiguous },
-          () => canSubmit() && !this.resolveThreadForgeProject(dependency)?.automation.paused);
+          () => canSubmit() && !this.resolveThreadForgeProject(dependency)?.automation.paused, admit);
         },
         isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
         // PR conditions also wait while the consumer's project holds PR

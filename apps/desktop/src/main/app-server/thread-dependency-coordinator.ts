@@ -71,7 +71,7 @@ type Options = {
   isConsumerBusy?: (dependency: ThreadDependency) => boolean;
   hasDeliveryReceipt?: (dependency: ThreadDependency) => boolean;
   /** Same-assignment steering only; never interrupt or start a replacement task. */
-  recoverCompaction?: (dependency: ThreadDependency, prompt: string, canSubmit: () => boolean) => Promise<{
+  recoverCompaction?: (dependency: ThreadDependency, prompt: string, canSubmit: () => boolean, admit: () => boolean) => Promise<{
     status: "steered" | "busy" | "discarded";
     turnId?: string;
   }>;
@@ -366,7 +366,7 @@ export class ThreadDependencyCoordinator {
       }
       await this.options.changed(claim);
       const canSubmit = () => !this.options.store.isConsumerArchived(claim)
-        && this.options.store.isCompactionRecoveryReserved(claim)
+        && this.options.store.isCompactionRecoveryReserved(claim, this.now())
         && this.options.canDispatch?.(claim) !== false
         && JSON.stringify(this.options.store.get(claim.backend, claim.threadId, claim.id)) === JSON.stringify(claim);
       if (!canSubmit()) {
@@ -374,7 +374,8 @@ export class ThreadDependencyCoordinator {
         return;
       }
       try {
-        const result = await recover(claim, buildCompactionRecoveryPrompt(claim), canSubmit);
+        const result = await recover(claim, buildCompactionRecoveryPrompt(claim), canSubmit,
+          () => canSubmit() && this.options.store.admitCompactionRecovery(claim, this.now()));
         await this.save(claim, result.status === "busy" ? { ...claim, status: "ready" }
           : settledCompaction(claim, result.turnId, result.status === "discarded"
             ? "Recovery skipped: the compacted assignment is no longer active or recovery admission was revoked." : undefined));

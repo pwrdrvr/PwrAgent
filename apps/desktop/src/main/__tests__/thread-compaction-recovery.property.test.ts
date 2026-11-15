@@ -48,7 +48,7 @@ it("self-registration is idempotent and waits only for future events", async () 
 });
 
 function harness(extra: Partial<ConstructorParameters<typeof ThreadDependencyCoordinator>[0]> = {}) {
-  const recover = vi.fn(async (_item, _prompt, canSubmit) => ({ status: canSubmit() ? "steered" as const : "discarded" as const, turnId: "assignment" }));
+  const recover = vi.fn(async (_item, _prompt, canSubmit, admit) => ({ status: canSubmit() && admit() ? "steered" as const : "discarded" as const, turnId: "assignment" }));
   const submit = vi.fn(async () => ({ status: "started" as const }));
   const agent = new ThreadDependencyCoordinator({
     store, readThread: async () => ({ turns: [], prs: [] }), submit,
@@ -344,6 +344,108 @@ it("reserves one budget slot when two owners claim different hooks concurrently"
     expect(first.recover.mock.calls.length + second.recover.mock.calls.length).toBe(1);
     expect(store.compactionRecoveryProtection(target, now).attemptsInWindow).toBe(1);
   } finally { otherDb.close(); }
+});
+
+// Model: busy reservations are not dispatch permission. Release can send at
+// most one prompt, and a tripped thread-wide circuit revokes every reservation.
+it.each([2, 4])("rechecks protection when %s busy hooks are released together", async (count) => {
+  let run = 0;
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 0, max: 10 }), async (restart, delayMinutes) => {
+    const identity = { ...target, threadId: `busy-hooks-${run++}` };
+    let now = 10_000_000;
+    let locked = true;
+    const steers: number[] = [];
+    const recover = vi.fn(async (_item, _prompt, canSubmit, admit?: () => boolean) => {
+      if (locked) return { status: "busy" as const };
+      if (!canSubmit() || (admit && !admit())) return { status: "discarded" as const };
+      steers.push(now);
+      return { status: "steered" as const };
+    });
+    const runtime = () => harness({ now: () => now, recoverCompaction: recover }).agent;
+    let agent = runtime();
+    for (let index = 0; index < count; index++) await agent.manage({
+      ...registration(), ...identity, conditions: [{ ...identity, when: "compaction_completed" }],
+      continuation: `Read the authorized instruction file for hook ${index}.`,
+    });
+    for (let index = 0; index < count; index++) {
+      const item = { ...identity, turnId: "assignment", itemId: `compaction-${index}` };
+      await agent.handleCompactionItem(item, "started");
+      await agent.handleCompactionItem(item, "completed");
+      if (index < count - 1) now += 5 * 60_000;
+    }
+    expect(store.compactionRecoveryProtection(identity, now).suspendedAt !== undefined).toBe(count === 4);
+    if (restart) {
+      const dbPath = db.raw.name;
+      db.close(); db = StateDb.open(dbPath); store = new ThreadDependencyStore(db.raw);
+      agent = runtime();
+    }
+    now += delayMinutes * 60_000;
+    locked = false;
+    await agent.handleThreadEvent(identity, undefined, true);
+    expect(steers).toHaveLength(count === 4 ? 0 : 1);
+    for (let index = 0; index < 10; index++) await agent.handleThreadEvent(identity, undefined, true);
+    expect(steers).toHaveLength(count === 4 ? 0 : 1);
+    for (const hook of store.active().filter(item => item.threadId === identity.threadId)) {
+      await agent.manage({ action: "cancel", ...identity, dependencyId: hook.id });
+    }
+  }), { numRuns: 8 });
+});
+
+it("anchors a delayed reservation's rolling limit to actual dispatch, not allocation", async () => {
+  let now = 10_000_000;
+  let locked = true;
+  const steers: number[] = [];
+  const { agent } = harness({ now: () => now, recoverCompaction: async (_item, _prompt, canSubmit, admit) => {
+    if (locked) return { status: "busy" };
+    if (!canSubmit() || !admit()) return { status: "discarded" };
+    steers.push(now);
+    return { status: "steered" };
+  } });
+  await register(agent);
+  await agent.manage({ ...registration(), ...target, continuation: "Read another authorized instruction file." });
+  await cycle(agent, "locked-first"); now += 5 * 60_000;
+  await cycle(agent, "locked-second"); now += 60 * 60_000;
+  locked = false;
+  await agent.handleThreadEvent(target, undefined, true);
+  expect(steers).toEqual([now]);
+  // Include a real database reopen between dispatch and the next reservation.
+  const dbPath = db.raw.name;
+  db.close(); db = StateDb.open(dbPath); store = new ThreadDependencyStore(db.raw);
+  const restored = harness({ now: () => now, recoverCompaction: async (_item, _prompt, canSubmit, admit) => {
+    if (!canSubmit() || !admit()) return { status: "discarded" };
+    steers.push(now);
+    return { status: "steered" };
+  } }).agent;
+  for (let index = 0; index < 3; index++) {
+    now += 5 * 60_000;
+    await cycle(restored, `after-delayed-dispatch-${index}`);
+  }
+  expect(steers).toHaveLength(3);
+  expect(store.compactionRecoveryProtection(target, now).suspendedAt).toBe(now);
+});
+
+it("budgets one dispatch from released reservations and no writes for repeated availability", async () => {
+  vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+  const dbPath = db.raw.name;
+  db.close(); db = StateDb.open(dbPath); store = new ThreadDependencyStore(db.raw);
+  let now = 10_000_000;
+  let locked = true;
+  const { agent } = harness({ now: () => now, recoverCompaction: async (_item, _prompt, canSubmit, admit) => {
+    if (locked) return { status: "busy" };
+    return { status: canSubmit() && admit() ? "steered" : "discarded" };
+  } });
+  await register(agent);
+  await agent.manage({ ...registration(), ...target, continuation: "Read another authorized instruction file." });
+  await cycle(agent, "locked-first"); now += 5 * 60_000;
+  await cycle(agent, "locked-second"); now += 5 * 60_000;
+  locked = false;
+  const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
+  const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+  const { writes } = await measureSqliteWrites(async () => {
+    for (let index = 0; index < 100; index++) await agent.handleThreadEvent(target, undefined, true);
+  });
+  expectSqliteWriteBudget({ scenario: "compaction-recovery-reserved-retries",
+    note: "Release two busy reservations: one claim, final RPC guard and settlement, then drop the second during dispatch cooldown. 100 availability events add no further writes.", writes });
 });
 
 it("models the durable cooldown and operator-only circuit breaker over generated event sequences", async () => {

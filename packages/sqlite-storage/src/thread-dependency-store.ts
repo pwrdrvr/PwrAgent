@@ -36,8 +36,9 @@ function localThreadKey(condition: ThreadDependency["conditions"][number]): stri
 }
 
 type RecoveryGuard = {
-  attempts: { key: string; at: number }[];
+  attempts: { key: string; at: number; submitted?: boolean }[];
   lastAttemptAt?: number;
+  lastDispatchAt?: number;
   suspendedAt?: number;
   turnId?: string;
   attemptsInTurn?: number;
@@ -113,8 +114,30 @@ export class ThreadDependencyStore {
     };
   }
 
-  isCompactionRecoveryReserved(item: ThreadDependency): boolean {
-    return this.recoveryGuard(item).attempts.some((attempt) => attempt.key === threadDependencyDeliveryKey(item));
+  isCompactionRecoveryReserved(item: ThreadDependency, now: number): boolean {
+    const guard = this.recoveryGuard(item);
+    return guard.suspendedAt === undefined
+      && (guard.lastDispatchAt === undefined || now >= guard.lastDispatchAt + COMPACTION_RECOVERY_COOLDOWN_MS)
+      && guard.attempts.some((attempt) => attempt.key === threadDependencyDeliveryKey(item) && !attempt.submitted);
+  }
+
+  /** Final RPC admission consumes an unsubmitted reservation at dispatch time. */
+  admitCompactionRecovery(item: ThreadDependency, now: number): boolean {
+    return this.db.transaction(() => {
+      if (JSON.stringify(this.get(item.backend, item.threadId, item.id)) !== JSON.stringify(item)
+        || this.isConsumerArchived(item) || !this.isCompactionRecoveryReserved(item, now)) return false;
+      const guard = this.recoveryGuard(item);
+      const effectiveNow = Math.max(now, guard.lastAttemptAt ?? now);
+      this.saveRecoveryGuard(item, {
+        ...guard,
+        // A delayed busy retry keeps its slot in the rolling window from the
+        // actual dispatch, rather than letting a stale allocation age out early.
+        attempts: guard.attempts.map(attempt => attempt.key === threadDependencyDeliveryKey(item)
+          ? { ...attempt, at: effectiveNow, submitted: true } : attempt),
+        lastAttemptAt: effectiveNow, lastDispatchAt: effectiveNow,
+      });
+      return true;
+    }).immediate();
   }
 
   /** Reserve the thread-wide budget atomically with the existing dispatch claim. */
@@ -123,9 +146,10 @@ export class ThreadDependencyStore {
       if (JSON.stringify(this.get(previous.backend, previous.threadId, previous.id)) !== JSON.stringify(previous)) return "lost";
       const guard = this.recoveryGuard(previous);
       const deliveryKey = threadDependencyDeliveryKey(claim);
-      const reserved = guard.attempts.some((attempt) => attempt.key === deliveryKey);
+      if (guard.suspendedAt !== undefined) return "suspended";
+      const reserved = guard.attempts.find((attempt) => attempt.key === deliveryKey);
+      if (reserved?.submitted || (guard.lastDispatchAt !== undefined && now < guard.lastDispatchAt + COMPACTION_RECOVERY_COOLDOWN_MS)) return "cooldown";
       if (!reserved) {
-        if (guard.suspendedAt !== undefined) return "suspended";
         const effectiveNow = Math.max(now, guard.lastAttemptAt ?? now);
         const attempts = guard.attempts.filter((attempt) => attempt.at > effectiveNow - COMPACTION_RECOVERY_WINDOW_MS);
         const attemptsInTurn = guard.turnId === claim.compaction?.turnId ? guard.attemptsInTurn ?? 0 : 0;
@@ -135,6 +159,7 @@ export class ThreadDependencyStore {
         }
         if (guard.lastAttemptAt !== undefined && now < guard.lastAttemptAt + COMPACTION_RECOVERY_COOLDOWN_MS) return "cooldown";
         this.saveRecoveryGuard(previous, {
+          ...guard,
           attempts: [...attempts, { key: deliveryKey, at: effectiveNow }], lastAttemptAt: effectiveNow,
           turnId: claim.compaction?.turnId, attemptsInTurn: attemptsInTurn + 1,
         });

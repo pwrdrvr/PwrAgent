@@ -12493,10 +12493,11 @@ export class DesktopBackendRegistry {
   }
 
   private readonly compactionRecoveryStops = new Map<string, string>();
-  private readonly compactionRecoveryAdmissions = new Map<string, () => boolean>();
+  private readonly compactionRecoveryAdmissions = new Map<string, { allowed: () => boolean; admit: () => boolean }>();
 
   /** Never queue, start a turn, or steer an assignment that replaced the compacted turn. */
-  async steerCompactionRecovery(params: SteerTurnRequest, origin: AppServerThreadMessageOrigin, canSubmit: () => boolean): Promise<{
+  async steerCompactionRecovery(params: SteerTurnRequest, origin: AppServerThreadMessageOrigin, canSubmit: () => boolean,
+    admit: () => boolean = canSubmit): Promise<{
     status: "steered" | "busy" | "discarded"; turnId?: string;
   }> {
     if (params.backend !== "codex") return { status: "discarded" };
@@ -12505,7 +12506,7 @@ export class DesktopBackendRegistry {
       && this.getActiveTurnForThread(params)?.turnId === params.expectedTurnId;
     if (!allowed()) return { status: "discarded" };
     if (await this.isThreadLocked(params)) return { status: "busy" };
-    this.compactionRecoveryAdmissions.set(params.requestId, allowed);
+    this.compactionRecoveryAdmissions.set(params.requestId, { allowed, admit });
     try {
       const result = await this.steerTurn(params, origin);
       return { status: "steered", turnId: result.turnId };
@@ -13147,7 +13148,7 @@ export class DesktopBackendRegistry {
         const recovery = this.compactionRecoveryAdmissions.get(params.requestId);
         if (messageOrigin?.systemReason === "compaction-recovery") {
           if (await this.isThreadLocked(params)) throw new CompactionRecoveryRevoked("busy");
-          if (!recovery?.()) throw new CompactionRecoveryRevoked();
+          if (!recovery?.allowed()) throw new CompactionRecoveryRevoked();
         }
         if (!client.steerTurn) {
           throw new Error("Selected backend does not support turn/steer");
@@ -13161,6 +13162,14 @@ export class DesktopBackendRegistry {
             },
           } : {}),
           expectedTurnId: params.expectedTurnId,
+          ...(messageOrigin?.systemReason === "compaction-recovery" ? {
+            admitSteer: async (submit: () => Promise<unknown>) => {
+              if (await this.isThreadLocked(params)) throw new CompactionRecoveryRevoked("busy");
+              if (!recovery?.allowed() || !recovery.admit()) throw new CompactionRecoveryRevoked();
+              // No await between the current owner/SQLite checks and RPC admission.
+              return submit();
+            },
+          } : {}),
         });
       }),
       forget: () => this.forgetPendingThreadMessageContext(pendingMessageContextId),
