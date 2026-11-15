@@ -4,6 +4,7 @@ export interface OwnerWiringFinding {
   column: number;
 }
 export const RULE: string;
+export function findOwnerBindingNames(source: string, filename: string): string[];
 export function findOwnerWiring(source: string, filename: string): OwnerWiringFinding[];
 export interface OwnerImportFinding {
   rule: string;

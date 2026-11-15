@@ -13,6 +13,37 @@ function unwrap(node) {
   return node;
 }
 
+/** A necessary spelling condition only; the AST still decides membership. */
+export function findOwnerBindingNames(source, filename) {
+  // Identifier.text decodes Unicode escapes. Keep all such sources eligible,
+  // including escapes in the "set" prefix or its following capital letter.
+  if (!/set[A-Z]|\\u/.test(source)) return [];
+  // This walk reads neither parents nor JSDoc. Avoid constructing both across
+  // the entire owner tree just to discover the setter declarations.
+  const file = ts.createSourceFile(filename, source, {
+    languageVersion: ts.ScriptTarget.Latest,
+    jsDocParsingMode: ts.JSDocParsingMode.ParseNone,
+  }, false);
+  const names = new Set();
+  function containsFunctionType(node) {
+    if (ts.isFunctionTypeNode(node) || ts.isMethodSignature(node)) return true;
+    return ts.forEachChild(node, containsFunctionType) === true;
+  }
+  function collect(node) {
+    if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isMethodSignature(node))
+      && node.name && ts.isIdentifier(node.name) && /^set[A-Z]/.test(node.name.text)
+      && (bindingSuffix.test(node.name.text)
+        || (!node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+          && (!node.type || node.type.kind === ts.SyntaxKind.VoidKeyword)
+          && node.parameters.some(containsFunctionType)))) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, collect);
+  }
+  collect(file);
+  return [...names];
+}
+
 /** Inspect syntax, including aliases and computed/optional calls, rather than source text. */
 let ownerBindings;
 function ownerBindingNames() {
@@ -20,23 +51,7 @@ function ownerBindingNames() {
   ownerBindings = new Set(["onEvent"]);
   const main = resolve(import.meta.dirname, "../apps/desktop/src/main");
   for (const path of filesUnder(main).filter((path) => !path.startsWith(resolve(main, "shell") + "/"))) {
-    const file = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
-    function containsFunctionType(node) {
-      if (ts.isFunctionTypeNode(node) || ts.isMethodSignature(node)) return true;
-      return ts.forEachChild(node, containsFunctionType) === true;
-    }
-    function collect(node) {
-      if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isMethodSignature(node))
-        && node.name && ts.isIdentifier(node.name) && /^set[A-Z]/.test(node.name.text)
-        && (bindingSuffix.test(node.name.text)
-          || (!node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)
-            && (!node.type || node.type.kind === ts.SyntaxKind.VoidKeyword)
-            && node.parameters.some(containsFunctionType)))) {
-        ownerBindings.add(node.name.text);
-      }
-      ts.forEachChild(node, collect);
-    }
-    collect(file);
+    for (const name of findOwnerBindingNames(readFileSync(path, "utf8"), path)) ownerBindings.add(name);
   }
   return ownerBindings;
 }
