@@ -6,9 +6,41 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { IForbiddenRuleType } from "dependency-cruiser";
 import { findOwnerWiring, findOwnerImports } from "../../../../../scripts/check-desktop-owner-wiring.mjs";
+
+// Measure the real parser at its boundary: repository discovery and generated
+// snippets have very different costs. CPU here belongs to this Node worker,
+// not to dependency-cruiser's child process or the other parallel workers.
+const parsing = vi.hoisted(() => ({
+  inventory: { files: 0, bytes: 0, wallMs: 0, cpuMicros: 0 },
+  snippets: { files: 0, bytes: 0, wallMs: 0, cpuMicros: 0 },
+}));
+vi.mock("typescript", async (importOriginal) => {
+  const actual = await importOriginal<{ default: typeof import("typescript") }>();
+  const ts = actual.default;
+  return {
+    ...actual,
+    default: {
+      ...ts,
+      createSourceFile: (...args: Parameters<typeof ts.createSourceFile>) => {
+        const metric = args[0].endsWith("negative-sample.ts") ? parsing.snippets : parsing.inventory;
+        const started = performance.now();
+        const cpu = process.cpuUsage();
+        try {
+          return ts.createSourceFile(...args);
+        } finally {
+          const used = process.cpuUsage(cpu);
+          metric.files++;
+          metric.bytes += Buffer.byteLength(args[1]);
+          metric.wallMs += performance.now() - started;
+          metric.cpuMicros += used.user + used.system;
+        }
+      },
+    },
+  };
+});
 
 const require = createRequire(import.meta.url);
 const config = require("../../../../../.dependency-cruiser.cjs") as { forbidden: IForbiddenRuleType[] };
@@ -17,20 +49,31 @@ const fixtures: string[] = [];
 afterEach(async () => { await Promise.all(fixtures.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 it("rejects owner hookup calls through generated aliases and optional/computed access", () => {
+  const started = performance.now();
+  const cpu = process.cpuUsage();
   const alias = fc.array(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), { minLength: 2, maxLength: 12 })
     .map((letters) => `install_${letters.join("")}`);
-  fc.assert(fc.property(alias, fc.constantFrom("onEvent", "setForgePrToolHandler", "setThreadDependencyToolHandler", "setMessagingAgentToolService"), (name, method) => {
-    const sources = [
-      `registry.${method}(handler);`,
-      `registry?.${method}?.(handler);`,
-      `registry["${method}"](handler);`,
-      `const key = "${method}"; registry[key](handler);`,
-      `const { ${method}: ${name} } = registry; ${name}(handler);`,
-      `const ${name} = registry.${method}; ${name}(handler);`,
-      `registry.${method}.call(registry, handler);`,
-    ];
-    for (const source of sources) expect(findOwnerWiring(source, shellFile).map((finding) => finding.method)).toEqual([method]);
-  }));
+  try {
+    fc.assert(fc.property(alias, fc.constantFrom("onEvent", "setForgePrToolHandler", "setThreadDependencyToolHandler", "setMessagingAgentToolService"), (name, method) => {
+      const sources = [
+        `registry.${method}(handler);`,
+        `registry?.${method}?.(handler);`,
+        `registry["${method}"](handler);`,
+        `const key = "${method}"; registry[key](handler);`,
+        `const { ${method}: ${name} } = registry; ${name}(handler);`,
+        `const ${name} = registry.${method}; ${name}(handler);`,
+        `registry.${method}.call(registry, handler);`,
+      ];
+      for (const source of sources) expect(findOwnerWiring(source, shellFile).map((finding) => finding.method)).toEqual([method]);
+    }));
+  } finally {
+    const used = process.cpuUsage(cpu);
+    console.info("[owner-boundary-cost]", JSON.stringify({
+      phase: "generated-property", pid: process.pid,
+      wallMs: performance.now() - started, cpuMicros: used.user + used.system,
+      parsing,
+    }));
+  }
 });
 
 it("rejects imported owner setter aliases, including removal during shutdown", () => {
@@ -78,7 +121,14 @@ const result = await cruise(["apps/desktop/src/main"], { outputType: "json", val
 const graph = typeof result.output === "string" ? JSON.parse(result.output) : result.output;
 process.stdout.write(JSON.stringify(graph.summary));
 `);
+  const started = performance.now();
+  const cpu = process.cpuUsage();
   const { stdout } = await promisify(execFile)(process.execPath, [script], { cwd: root });
+  const used = process.cpuUsage(cpu);
+  console.info("[owner-boundary-cost]", JSON.stringify({
+    phase: "dependency-cruiser-closed", pid: process.pid,
+    wallMs: performance.now() - started, cpuMicros: used.user + used.system,
+  }));
   const graph = { summary: JSON.parse(stdout) };
   expect(graph.summary.violations.map((violation: { rule: { name: string }; from: string }) => [violation.rule.name, violation.from]).sort())
     .toEqual([
