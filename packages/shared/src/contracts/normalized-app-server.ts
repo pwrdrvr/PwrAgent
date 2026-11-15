@@ -120,6 +120,8 @@ export type AppServerSkillOriginKind =
   | "personal"
   /** `$CODEX_HOME/skills`. */
   | "codex-home"
+  /** PwrAgent's own bundled skill root, `<PwrAgent root>/skills/bundled`. */
+  | "pwragent"
   | "plugin"
   /** Bundled with Codex (`scope: "system"`). */
   | "built-in"
@@ -1931,6 +1933,12 @@ export type AppServerListSkillsRequest = {
 export type AppServerListSkillsResponse = {
   backend: AppServerBackendKind;
   fetchedAt: number;
+  /**
+   * This machine's PwrAgent bundled skill root, for `classifySkillOrigin`.
+   * Set only on a local listing; a peer's listing never carries it, since
+   * its paths are on the peer's machine.
+   */
+  bundledSkillRoot?: string;
   data: Array<{
     commands?: AppServerAvailableCommandSummary[];
     cwd?: string;

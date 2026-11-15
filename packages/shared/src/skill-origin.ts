@@ -12,6 +12,16 @@ export type SkillOriginDirectory = Pick<LinkedDirectorySummary, "label" | "path"
   worktreePath?: string;
 };
 
+export type SkillOriginOptions = {
+  /**
+   * The folder this machine's PwrAgent writes its bundled skills to
+   * (`<PwrAgent root>/skills/bundled`). Main knows it; this package cannot
+   * import it. Leave it unset for skills a peer instance listed: their paths
+   * are on the peer's machine.
+   */
+  bundledSkillRoot?: string;
+};
+
 /**
  * Says where a skill came from, in the thread's own vocabulary.
  *
@@ -33,6 +43,7 @@ export type SkillOriginDirectory = Pick<LinkedDirectorySummary, "label" | "path"
 export function classifySkillOrigin(
   skill: Pick<AppServerSkillSummary, "path" | "pluginId" | "scope">,
   directories: readonly SkillOriginDirectory[],
+  options: SkillOriginOptions = {},
 ): AppServerSkillOrigin | undefined {
   const skillPath = skill.path?.trim();
   if (!skillPath) {
@@ -54,6 +65,15 @@ export function classifySkillOrigin(
     case "admin":
       return { kind: "admin", label: "Admin" };
     case "user":
+      // PwrAgent hands Codex its own bundled skill folder, which Codex lists
+      // as a user root. Without this check those skills read as Codex home,
+      // where the operator then looks for a copy that does not exist.
+      if (
+        options.bundledSkillRoot?.trim()
+        && isPathInside(skillPath, options.bundledSkillRoot)
+      ) {
+        return { kind: "pwragent", label: "PwrAgent" };
+      }
       // Codex has two user roots, `~/.agents/skills` and
       // `$CODEX_HOME/skills`. The second one moves with the Codex profile, so
       // it is recognized as "not the first" rather than by name.
@@ -85,9 +105,10 @@ export function classifySkillOrigin(
 export function withSkillOrigins<T extends AppServerSkillSummary>(
   skills: readonly T[],
   directories: readonly SkillOriginDirectory[],
+  options: SkillOriginOptions = {},
 ): T[] {
   return skills.map((skill) => {
-    const origin = classifySkillOrigin(skill, directories);
+    const origin = classifySkillOrigin(skill, directories, options);
     if (!origin) {
       if (!skill.origin) {
         return skill;
@@ -173,10 +194,11 @@ const ORIGIN_KIND_RANK: Record<AppServerSkillOrigin["kind"], number> = {
   repository: 1,
   personal: 2,
   "codex-home": 3,
-  plugin: 4,
-  "built-in": 5,
-  admin: 6,
-  other: 7,
+  pwragent: 4,
+  plugin: 5,
+  "built-in": 6,
+  admin: 7,
+  other: 8,
 };
 
 /**
@@ -216,6 +238,8 @@ export function describeSkillOriginKind(origin: AppServerSkillOrigin): string {
       return "Personal skill";
     case "codex-home":
       return "Personal skill · Codex home";
+    case "pwragent":
+      return "Bundled with PwrAgent";
     case "plugin":
       return "Plugin skill";
     case "built-in":

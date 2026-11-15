@@ -655,6 +655,61 @@ describe("useThreadSkills", () => {
       });
     });
 
+    it("labels PwrAgent's bundled skills PwrAgent on a local thread only", async () => {
+      const bundledRoot = "/srv/fixture-home/pwragent/skills/bundled";
+      const bundledListSkills = vi.fn(async (): Promise<AppServerListSkillsResponse> => ({
+        backend: "codex",
+        fetchedAt: 1,
+        bundledSkillRoot: bundledRoot,
+        data: [
+          {
+            cwd: "/Users/fixture-user/pwrdrvr/PwrSnap",
+            skills: [
+              { name: "tool-guide", path: `${bundledRoot}/tool-guide/SKILL.md`, scope: "user" },
+              {
+                name: "notes",
+                path: "/Users/fixture-user/.codex/skills/notes/SKILL.md",
+                scope: "user",
+              },
+            ],
+          },
+        ],
+      }));
+      const labels = async (thread: NavigationThreadSummary) => {
+        const { result } = renderHook(() =>
+          useThreadSkills({ desktopApi: { listSkills: bundledListSkills }, thread })
+        );
+        await act(async () => {
+          await result.current.ensureLoaded();
+        });
+        await waitFor(() => expect(result.current.skills).toHaveLength(2));
+        return result.current.skills.map((skill) => [skill.name, skill.origin?.kind]);
+      };
+
+      expect(await labels(createThread([linkedDirectories[0]!]))).toEqual([
+        ["notes", "codex-home"],
+        ["tool-guide", "pwragent"],
+      ]);
+      // A peer's thread: the paths are on the peer's machine, so this
+      // machine's root never claims them, even if one arrived.
+      expect(
+        await labels({
+          ...createThread([linkedDirectories[0]!]),
+          federation: {
+            instanceLabel: "Studio Mac",
+            ref: {
+              backend: "codex",
+              threadId: "thread-release",
+              target: { scope: "remote", instanceId: "peer-1" },
+            },
+          },
+        } as NavigationThreadSummary),
+      ).toEqual([
+        ["notes", "codex-home"],
+        ["tool-guide", "codex-home"],
+      ]);
+    });
+
     it("loads the catalog itself for a multi-project thread, and not for one project", async () => {
       // The transcript's sent chips need the catalog to know that two skills
       // answer to `$release`, and nothing in a transcript opens the picker.
