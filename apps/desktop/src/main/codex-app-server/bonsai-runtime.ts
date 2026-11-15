@@ -7,7 +7,10 @@ import {
   type CodexModelProviderSettings,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
+import { getMainLogger } from "../log";
 import { discoverModelCatalog, startBridge, type LocalModelCatalog } from "./local-responses-bridge.mjs";
+
+const diagnosticsLog = getMainLogger("pwragent:local-model-request");
 
 export function bonsaiNativeMcpOverrides(names: readonly string[]): string[] {
   // Quoted keys work inside a TOML value; the CLI's dotted key parser treats
@@ -90,7 +93,11 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
     const catalogPath = path.join(directory, "models.json");
     await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
     // Codex and the bridge wait the same time on a silent prefill.
-    bridge = await startBridge(provider.baseUrl, apiKey, { idleTimeoutMs: LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS });
+    bridge = await startBridge(provider.baseUrl, apiKey, {
+      idleTimeoutMs: LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+      // One bounded JSON record bypasses structured-log depth/field compaction.
+      onDiagnostic: (event) => diagnosticsLog.info(`local model request diagnostics ${JSON.stringify({ providerId: provider.id, ...event })}`),
+    });
     const address = bridge.address();
     if (!address || typeof address === "string") throw new Error("The Bonsai bridge has no loopback address.");
     return {
