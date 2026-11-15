@@ -1,21 +1,14 @@
+import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import {
   buildThreadIdentityKey,
   isAcpBackendId,
-  type AcpBackendId,
   type AgentEvent,
   type AppServerBackendKind,
-  type AppServerCollaborationModeRequest,
   type AppServerNotification,
-  type AppServerReadThreadRequest,
-  type AppServerReadThreadResponse,
   type AppServerReviewContext,
   type AppServerReviewTarget,
-  type AppServerThreadMessageOrigin,
   type AppServerThreadReviewEntry,
-  type AppServerTurnInputItem,
-  type BackendAcpSessionRuntimeState,
-  type BackendModelOption,
   type CodexThreadEnvironmentRuntime,
   type PwrAgentThreadOrchestrationRequest,
   type PwrAgentThreadOrchestrationResponse,
@@ -28,8 +21,6 @@ import {
 } from "@pwragent/shared";
 import type {
   ThreadTurnQueue,
-  ThreadTurnQueueOrigin,
-  ThreadTurnQueueSubmissionResult,
 } from "@pwragent/owner-core/thread-turn-queue";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
@@ -38,14 +29,12 @@ import type {
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { NamedReviewPullRequest } from "../../shared/review-command";
 import { formatReviewOutputText, parseReviewOutputText } from "../../shared/review-output";
-import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import type { CodexPwrdrvrTokenMiserActivation } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { getReviewAutoFixArming } from "../thread-reviews/review-auto-fix";
 import type { TokenMiserService } from "../token-miser/token-miser-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
-import type { BackendModelCatalogCallerReason } from "./backend-model-catalog";
 import { readNonEmptyString, readRecord } from "./backend-registry-notification-values";
 import {
   completedAtFromTerminalNotification,
@@ -113,7 +102,14 @@ type ReviewSubAgentCardPatch = Partial<
  * registry. The Codex turn-activity sets stay registry-owned: the review start
  * reserves and releases them alongside the registry's own turn paths.
  */
-export interface ManagedReviewServiceHost {
+export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
+  "assertThreadNotLocked" | "getActiveTurnForThread" | "getClient"
+  | "invalidateThreadListCache" | "isLiveDynamicToolCall" | "readCodexDefaultModelsOnce"
+  | "readDelegatedTurnAncestry" | "readThread" | "resolveCodexThreadExecutionModeForActiveTurn"
+  | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "startAcpSession"
+  | "startAcpTurn" | "submitTurn" | "threadHasActiveTurn"
+  | "withArchiveWorkspaceWrite" | "withCodexThreadClient"
+> {
   readonly activeCodexReviewInterruptTurnIds: Map<string, string>;
   readonly activeCodexReviewTurnKeys: Set<string>;
   readonly activeCodexTurnModes: Map<string, ThreadExecutionMode>;
@@ -127,7 +123,6 @@ export interface ManagedReviewServiceHost {
   readonly tokenMiserService: TokenMiserService | undefined;
   readonly tokenMiserStore: TokenMiserStore | undefined;
   assertNotBootstrap(method: string): void;
-  assertThreadNotLocked(backend: AppServerBackendKind, threadId: string): Promise<void>;
   assertThreadOwnership(): void;
   buildSupportedCodexDynamicToolsRefresh(params: {
     client: BackendClient;
@@ -151,89 +146,13 @@ export interface ManagedReviewServiceHost {
   ensureCheckoutAwake(identity: { backend: AppServerBackendKind; threadId: string }): Promise<void>;
   flushQueuedAgentChange(threadId: string, ownsStartReservation?: boolean): Promise<void>;
   flushQueuedExecutionModeIfPresent(threadId: string, backend?: AppServerBackendKind): Promise<void>;
-  getActiveTurnForThread(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined;
-  getClient(backend: AppServerBackendKind, executionMode?: ThreadExecutionMode): BackendClient;
   getPendingTurnForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined;
-  invalidateThreadListCache(
-    backend?: AppServerBackendKind,
-    workspaceChanged?: boolean,
-    threadId?: string,
-    paths?: readonly string[],
-  ): void;
-  isLiveDynamicToolCall(backend: AppServerBackendKind, call: { threadId: string; turnId?: string }): boolean;
   prepareTokenMiserRuntime(): Promise<void>;
-  readCodexDefaultModelsOnce(callerReason: BackendModelCatalogCallerReason): Promise<BackendModelOption[]>;
-  readDelegatedTurnAncestry(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    turnId?: string;
-  }): Promise<{ parentTurnId?: string; rootTurnId?: string }>;
-  readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse>;
-  resolveCodexThreadExecutionModeForActiveTurn(threadId: string): Promise<ThreadExecutionMode>;
-  resolveModelSettings(
-    backend: AppServerBackendKind,
-    settings: ModelSettings,
-    callerReason?: BackendModelCatalogCallerReason,
-  ): Promise<ModelSettings>;
-  resolveThreadEnvironmentCwd(
-    backend: AppServerBackendKind,
-    threadId: string,
-    overlay?: ThreadOverlayState,
-  ): Promise<string | undefined>;
   resolveTokenMiserEnabledForOverride(threadOverride: boolean | undefined): boolean;
   scheduleQueuedAgentChange(threadId: string): void;
-  startAcpSession(params: {
-    backend: AcpBackendId;
-    cwd?: string;
-    executionMode: ThreadExecutionMode;
-    acpRuntime?: BackendAcpSessionRuntimeState;
-    reasoningEffort?: string;
-    mcpRegistration?: AcpMcpServerRegistration;
-    hidden?: boolean;
-  }): Promise<{ threadId: string }>;
-  startAcpTurn(params: {
-    backend: AcpBackendId;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
-  submitTurn(params: {
-    queueEntryId?: string;
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    executionMode?: ThreadExecutionMode;
-    approvalPolicy?: string;
-    sandbox?: string;
-    model?: string;
-    collaborationMode?: AppServerCollaborationModeRequest;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    automationRunId?: string;
-    messageOrigin?: AppServerThreadMessageOrigin;
-    delivery?: "new_turn";
-  }): Promise<ThreadTurnQueueSubmissionResult>;
-  threadHasActiveTurn(
-    threadId: string,
-    backend?: AppServerBackendKind,
-    ignoreCodexStartReservation?: boolean,
-  ): boolean;
-  withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T>;
-  withCodexThreadClient<T>(
-    threadId: string,
-    operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
-    requestedMode?: ThreadExecutionMode,
-    logRouting?: boolean,
-  ): Promise<T>;
 }
 
 /**

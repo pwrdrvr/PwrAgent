@@ -1,3 +1,4 @@
+import type { RegistryHostPorts, RegistryHostQueryResult } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
@@ -22,7 +23,6 @@ import {
   readForgeApprovalMergeMethodChoice,
   readForgeApprovalRememberChoice,
   resolveForgeAgentToolAccess,
-  type AgentEvent,
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
   type AppServerPendingRequestNotification,
@@ -98,7 +98,6 @@ import type {
   PendingServerRequest,
   ProjectForgeAutomationHandler,
   PullRequestReferenceResolver,
-  TaskMonitorDelegationRecord,
   ThreadPrWatchesPeerHandler,
   ThreadPullRequestCanonicalizer,
   ThreadPullRequestDetachHandler,
@@ -143,32 +142,21 @@ export type ForgeToolBridgeHandlers = Pick<RegistryHandlers,
  * Registry-owned state and turn queries the forge tools read. The registry's
  * construction ports satisfy it; this module never imports the registry.
  */
-export interface ForgeToolBridgeHost {
+export interface ForgeToolBridgeHost extends Pick<RegistryHostPorts,
+  "isTaskMonitorThread" | "publishLocalEvent" | "resolveClaudeToolCallExecutionMode"
+  | "resolveCodexToolCallExecutionMode" | "taskMonitorForThread"
+> {
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
   readonly activeCodexTurnCollaborationModes: Map<string, AppServerCollaborationModeRequest["mode"]>;
   readonly threadTodoHandler: PwrAgentThreadTodoHandler | undefined;
   resolveCodexModelProvidersFn(): CodexModelProviderSettings[];
-  findHeadlessAutomationTurnForRequest(
-    backend: AppServerBackendKind,
-    request: AppServerPendingRequestNotification,
-  ): { executionMode?: ThreadExecutionMode } | undefined;
-  getActiveTurnForThread(params: { backend: AppServerBackendKind; threadId: string }): { turnId: string } | undefined;
-  isTaskMonitorThread(context: { backend: AppServerBackendKind; threadId: string }): boolean;
-  taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined;
+  findHeadlessAutomationTurnForRequest: RegistryHostQueryResult<"findHeadlessAutomationTurnForRequest", "executionMode", true>;
+  getActiveTurnForThread: RegistryHostQueryResult<"getActiveTurnForThread", "turnId">;
   isMcpGatewayFullAccess(context: AgentToolCallContext, automationMode?: ThreadExecutionMode): Promise<boolean>;
-  resolveCodexToolCallExecutionMode(
-    context: AgentToolCallContext,
-    automationMode?: ThreadExecutionMode,
-  ): Promise<ThreadExecutionMode | undefined>;
-  resolveClaudeToolCallExecutionMode(
-    threadId: string,
-    automationMode?: ThreadExecutionMode,
-  ): Promise<ThreadExecutionMode | undefined>;
   readThreadInspectionSummaryForMutation(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<ThreadInspectionSummary | undefined>;
-  publishLocalEvent(event: AgentEvent): Promise<void>;
 }
 
 /**
