@@ -299,8 +299,8 @@ export class ThreadDependencyCoordinator {
       if (turn || consumerAvailable) this.busyConsumers.delete(identity(target));
       // A prerequisite's event can find its consumer parked behind a busy
       // refusal whose idle notification was lost. Ask the owner.
-      await this.recoverIdleConsumers(this.options.store.active().filter((item) =>
-        item.conditions.some((condition) => isThreadDependencyLocalThreadCondition(condition) && identity(condition) === identity(target))));
+      await this.recoverIdleConsumers(active.filter((item) =>
+        item.conditions.some((condition) => isThreadDependencyLocalThreadCondition(condition) && identity(condition) === identity(target))), active);
       for (const item of this.options.store.active()) {
         if (item.conditions[0]?.when === "compaction_completed" && !turn && !consumerAvailable) continue;
         if (identity(item) === identity(target) || item.conditions.some((condition) =>
@@ -545,11 +545,12 @@ export class ThreadDependencyCoordinator {
    * has a ready agent wait and whose owner confirms it is idle. The ready
    * waits are then evaluated, which admits at most one of them.
    */
-  private async recoverIdleConsumers(targets?: readonly { backend: AppServerBackendKind; threadId: string }[]): Promise<void> {
+  private async recoverIdleConsumers(targets?: readonly { backend: AppServerBackendKind; threadId: string }[],
+    active?: readonly ThreadDependency[]): Promise<void> {
     const confirm = this.options.confirmConsumerIdle;
     if (!confirm) return;
     const wanted = targets && new Set(targets.map(identity));
-    const ready = this.options.store.active().filter((item) => item.status === "ready"
+    const ready = (active ?? this.options.store.active()).filter((item) => item.status === "ready"
       && item.conditions[0]?.when !== "compaction_completed"
       && threadDependencyDeliveryTarget(item) === "agent" && this.busyConsumers.has(identity(item))
       && (!wanted || wanted.has(identity(item))));
