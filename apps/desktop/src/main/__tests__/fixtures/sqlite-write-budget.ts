@@ -44,7 +44,7 @@ export function expectSqliteWriteBudget(params: {
   writes: SqliteWriteDelta;
 }): void {
   const budgetPath = params.budgetFile ? path.join(import.meta.dirname, params.budgetFile) : BUDGETS_PATH;
-  const budgets = readBudgets(budgetPath);
+  const { budgets, source } = readBudgets(budgetPath);
   const measured: Budget = {
     commits: params.writes.commits,
     note: params.note,
@@ -54,10 +54,9 @@ export function expectSqliteWriteBudget(params: {
   };
 
   if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) {
-    budgets[params.scenario] = measured;
     writeFileSync(
       budgetPath,
-      `${JSON.stringify(sortKeys(budgets), null, 2)}\n`,
+      recordBudget(source, budgets, params.scenario, measured),
     );
     return;
   }
@@ -119,16 +118,45 @@ function describe(budget: Budget): string {
   );
 }
 
-function readBudgets(budgetPath = BUDGETS_PATH): BudgetFile {
+function readBudgets(budgetPath = BUDGETS_PATH): { budgets: BudgetFile; source: string } {
   try {
-    return JSON.parse(readFileSync(budgetPath, "utf8")) as BudgetFile;
+    const source = readFileSync(budgetPath, "utf8");
+    return { budgets: JSON.parse(source) as BudgetFile, source };
   } catch {
-    return {};
+    return { budgets: {}, source: "{}\n" };
   }
 }
 
-function sortKeys(budgets: BudgetFile): BudgetFile {
-  return Object.fromEntries(
-    Object.entries(budgets).sort(([left], [right]) => left.localeCompare(right)),
-  );
+function recordBudget(source: string, budgets: BudgetFile, scenario: string, measured: Budget): string {
+  const fields = Object.entries(measured)
+    .map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`)
+    .join(", ");
+  const entry = `${JSON.stringify(scenario)}: {${fields}}`;
+  let depth = 0;
+  let key: string | undefined;
+  let start = 0;
+  // Tokenize strings together so braces and escaped quotes in notes cannot
+  // terminate a budget. Only replace the selected top-level key and object;
+  // its indentation, comma and every surrounding byte stay where they were.
+  for (const token of source.matchAll(/"(?:[^"\\]|\\.)*"|[{}]/g)) {
+    if (token[0] === "{") {
+      depth++;
+    } else if (token[0] === "}") {
+      depth--;
+      if (depth === 1 && key === scenario) {
+        return source.slice(0, start) + entry + source.slice(token.index + 1);
+      }
+    } else if (depth === 1) {
+      key = JSON.parse(token[0]) as string;
+      start = token.index;
+    }
+  }
+
+  // Prepend new scenarios so the former last entry needs no comma change.
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const opening = source.indexOf("{") + 1;
+  const suffix = source.slice(opening);
+  return source.slice(0, opening) + newline + "  " + entry
+    + (Object.keys(budgets).length ? "," : "")
+    + (suffix.startsWith(newline) ? "" : newline) + suffix;
 }
