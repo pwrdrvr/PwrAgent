@@ -229,6 +229,16 @@ describe("CodexModelProvidersSettings", () => {
     }
   });
 
+  it("keeps Save, Cancel and Remove together in the form's sticky bar", () => {
+    renderSettings([refuseless]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const bar = screen.getByRole("button", { name: "Save and reconnect" }).closest(".codex-provider-editor__footer");
+    expect(bar).not.toBeNull();
+    for (const name of ["Cancel", "Remove provider"]) {
+      expect(screen.getByRole("button", { name }).closest(".codex-provider-editor__footer")).toBe(bar);
+    }
+  });
+
   it("removes a provider and its key", async () => {
     const { onSave, setCodexModelProviderApiKey } = renderSettings([refuseless]);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));

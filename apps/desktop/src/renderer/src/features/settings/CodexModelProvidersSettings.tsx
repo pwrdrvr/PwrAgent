@@ -556,36 +556,40 @@ function ProviderEditor(props: {
           />
         }
       />
-      {props.error ? (
-        <p className="settings-error" role="alert">{props.error}</p>
-      ) : null}
-      <div className="settings-inline-actions">
-        <button
-          className="button button--primary"
-          disabled={props.disabled || Boolean(idProblem)}
-          type="button"
-          onClick={props.onSave}
-        >
-          {draft.existingId ? "Save and reconnect" : "Add and reconnect"}
-        </button>
-        <button
-          className="button button--secondary"
-          disabled={props.disabled}
-          type="button"
-          onClick={props.onCancel}
-        >
-          Cancel
-        </button>
-        {props.onRemove ? (
+      {/* Sticky to the pane's bottom edge while the card is on screen, so
+          Save and Cancel stay in reach from the top of a long form. */}
+      <div className="codex-provider-editor__footer">
+        {props.error ? (
+          <p className="settings-error" role="alert">{props.error}</p>
+        ) : null}
+        <div className="settings-inline-actions">
           <button
-            className="button button--ghost"
+            className="button button--primary"
+            disabled={props.disabled || Boolean(idProblem)}
+            type="button"
+            onClick={props.onSave}
+          >
+            {draft.existingId ? "Save and reconnect" : "Add and reconnect"}
+          </button>
+          <button
+            className="button button--secondary"
             disabled={props.disabled}
             type="button"
-            onClick={props.onRemove}
+            onClick={props.onCancel}
           >
-            Remove provider
+            Cancel
           </button>
-        ) : null}
+          {props.onRemove ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled}
+              type="button"
+              onClick={props.onRemove}
+            >
+              Remove provider
+            </button>
+          ) : null}
+        </div>
       </div>
       <p className="settings-field__help">
         Codex reconnects when no turn is running. Threads already on this provider keep it.
