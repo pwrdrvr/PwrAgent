@@ -14150,7 +14150,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
         {autocompleteKind === "skills" ? (
           <div
-            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            className={`composer__autocomplete composer__autocomplete--skills composer__autocomplete--${autocompleteLayout.placement}`}
             ref={autocompleteListRef}
             style={{ maxHeight: autocompleteLayout.maxHeight }}
           >

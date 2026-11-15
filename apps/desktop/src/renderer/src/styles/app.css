@@ -23870,7 +23870,7 @@ a.button {
   gap: 1px;
   max-height: 168px;
   padding: 4px;
-  overflow-y: auto;
+  overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
@@ -46901,6 +46901,10 @@ button.composer__subthread-source-parent:hover {
   bottom: calc(100% + 10px);
 }
 
+.composer__autocomplete--skills {
+  overflow: hidden;
+}
+
 .composer__skill-picker-header {
   display: flex;
   align-items: center;
@@ -46946,8 +46950,14 @@ button.composer__subthread-source-parent:hover {
 .composer__skill-picker-options,
 .compact-composer__mention-options {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
+  min-height: 0;
   gap: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
 }
 
 .compact-composer__mention-options {

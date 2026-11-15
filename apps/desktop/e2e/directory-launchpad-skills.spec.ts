@@ -1117,6 +1117,13 @@ test("directory launchpad skill autocomplete stays inside a small window and scr
     expect(listboxBox.x + listboxBox.width).toBeLessThanOrEqual(viewport.width);
     expect(listboxBox.y + listboxBox.height).toBeLessThanOrEqual(viewport.height);
     expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+
+    // The listbox owns overflow. Scrolling its results must leave the
+    // independent Refresh action visible and bring the final option into view.
+    await listbox.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    expect(await listbox.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(listbox.getByRole("option").last()).toBeInViewport({ ratio: 1 });
+    await expect(app.window.getByRole("button", { name: "Refresh skills" })).toBeInViewport({ ratio: 1 });
   } finally {
     await app.close();
     await fixture.cleanup();
