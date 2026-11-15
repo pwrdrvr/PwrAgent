@@ -86,7 +86,7 @@ import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activit
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
-import { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
+import type { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
 
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
@@ -1949,10 +1949,7 @@ export class DesktopBackendRegistry {
     this.threadArchiveCoordinator = dependencies.threadArchiveCoordinator;
     this.threadWorkspaceService = dependencies.threadWorkspaceService;
     this.codexModelProviderCatalog = dependencies.codexModelProviderCatalog;
-    this.codexProviderCatalogRetry = new CodexProviderCatalogRetry({
-      refresh: () => this.retryCodexProviderCatalogs(),
-      ...(dependencies.codexProviderCatalogRetryTimer ? { timer: dependencies.codexProviderCatalogRetryTimer } : {}),
-    });
+    this.codexProviderCatalogRetry = dependencies.codexProviderCatalogRetry;
     this.modelCatalog = dependencies.modelCatalog;
     this.queuedMessageTitler = dependencies.queuedMessageTitler;
     this.threadTurnQueue = dependencies.threadTurnQueue;
@@ -2177,6 +2174,7 @@ export class DesktopBackendRegistry {
       recordTokenMiserFocusedInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserFocusedInference"]>) => this.threadUsageLedger.recordTokenMiserFocusedInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
+      retryCodexProviderCatalogs: () => this.retryCodexProviderCatalogs(),
       applyCodexModelProviderConfigChange: () => this.applyCodexModelProviderConfigChange(),
       registerAcpMcpConnections: (...args: Parameters<ThreadMcpConnections["registerAcpMcpConnections"]>) => this.threadMcpConnections.registerAcpMcpConnections(...args),
       get registrySessionId() { return current().registrySessionId; },

@@ -12,6 +12,7 @@ import { DEFAULT_CHECKOUT_HIBERNATION_POLICY, DEFAULT_THREAD_ARCHIVE_POLICY } fr
 import { restartGateHolds } from "./restart-continuation-gate";
 import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
+import { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { codexModelProviderApiKeyEnv, type CodexModelProviderSettings } from "@pwragent/shared";
@@ -1173,6 +1174,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ...(options?.codexModelProviderFetch ? { fetch: options.codexModelProviderFetch } : {}),
     ...(options?.codexModelProviderNow ? { now: options.codexModelProviderNow } : {}),
   });
+  const codexProviderCatalogRetry = new CodexProviderCatalogRetry({
+    refresh: () => ports.retryCodexProviderCatalogs(),
+    ...(options?.codexProviderCatalogRetryTimer ? { timer: options.codexProviderCatalogRetryTimer } : {}),
+  });
   const codexModelClient = codexClient;
   const modelCatalog = new BackendModelCatalog({
     codex: {
@@ -1546,7 +1551,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     createScheduledThreadActionFn,
     threadTitleGenerationService,
     codexModelProviderCatalog,
-    ...(options?.codexProviderCatalogRetryTimer ? { codexProviderCatalogRetryTimer: options.codexProviderCatalogRetryTimer } : {}),
+    codexProviderCatalogRetry,
     modelCatalog,
     queuedMessageTitler,
     threadTurnQueue,

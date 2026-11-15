@@ -15,7 +15,7 @@ import type { DesktopCheckoutHibernationPolicy, DesktopThreadArchivePolicy } fro
 import type { ArchiveCleanupCheckpointStorage } from "../storage/desktop-runtime-storage";
 import type { RestartDispatchPlanOptions } from "./restart-continuation-gate";
 import type { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
-import type { CodexProviderCatalogRetryTimer } from "./codex-provider-catalog-retry";
+import type { CodexProviderCatalogRetry, CodexProviderCatalogRetryTimer } from "./codex-provider-catalog-retry";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
 import type { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import type { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
@@ -319,7 +319,7 @@ export interface RegistryDependencies {
   ) => Promise<ScheduledThreadActionMutationResponse>;
   threadTitleGenerationService?: ThreadTitleService;
   codexModelProviderCatalog: CodexModelProviderCatalog;
-  codexProviderCatalogRetryTimer?: CodexProviderCatalogRetryTimer;
+  codexProviderCatalogRetry: CodexProviderCatalogRetry;
   modelCatalog: BackendModelCatalog;
   queuedMessageTitler: QueuedMessageTitler;
   threadTurnQueue: ThreadTurnQueue;
