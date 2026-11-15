@@ -53,7 +53,7 @@ describe("isolated Bonsai launch resources", () => {
         "model_context_window=65536", "model_auto_compact_token_limit=49152", "features.apps=false", "features.plugins=false",
         "features.goals=false", "features.multi_agent=false", "features.image_generation=false", 'web_search="disabled"',
       ]));
-      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key");
+      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key", model);
       // The bridge waits on a silent prefill exactly as long as Codex does.
       expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key", { idleTimeoutMs: 900_000, onDiagnostic: expect.any(Function) });
       await runtime.close();
@@ -99,6 +99,19 @@ describe("isolated Bonsai launch resources", () => {
         models: [{ ...template.models[0], supports_search_tool: true }],
       });
       expect(await readFile(catalogPath, "utf8")).toBe(original);
+    } finally { await runtime.close(); }
+  });
+
+  it("verifies an old catalog's path against live metadata when switching to the alias", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-alias-catalog-"));
+    directories.push(directory);
+    const catalogPath = path.join(directory, "models.json");
+    const template = await readBonsaiCatalog(provider);
+    await writeFile(catalogPath, JSON.stringify(template));
+    const runtime = await prepareBonsaiRuntime({ ...provider, models: ["bonsai2-27b"], catalogPath });
+    try {
+      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, template, undefined, "bonsai2-27b");
+      expect(JSON.parse(await readFile(catalogPath, "utf8"))).toEqual(template);
     } finally { await runtime.close(); }
   });
 });

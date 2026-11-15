@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
+  BONSAI_2_27B_MODEL_ID,
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
   isValidCodexModelProviderId,
+  isLoopbackCodexBaseUrl,
   parseCodexProviderModelId,
   suggestCodexModelProviderId,
   validateCodexBaseUrl,
@@ -137,7 +139,7 @@ export function CodexModelProvidersSettings(props: {
     if (!draft) return true;
     let next: CodexModelProviderSettings[];
     try {
-      const provider = providerFromDraft(draft);
+      const provider = providerFromDraft(draft, providerModelSource(draft, editingCatalog, test).models);
       const others = props.providers
         .filter((entry) => entry.id !== draft.existingId)
         .map(stripKeyState);
@@ -207,7 +209,9 @@ export function CodexModelProvidersSettings(props: {
     if (!draft || !props.desktopApi?.testCodexModelProvider) return;
     let provider: CodexModelProviderSettings;
     try {
-      [provider] = validateCodexModelProviders([providerFromDraft(draft)]);
+      [provider] = validateCodexModelProviders([
+        providerFromDraft(draft, providerModelSource(draft, editingCatalog, test).models),
+      ]);
     } catch (problem) {
       setTest({ running: false, error: describeError(problem) });
       return;
@@ -1035,8 +1039,15 @@ function applyPatch(draft: ProviderDraft, patch: Partial<ProviderDraft>): Provid
   return next;
 }
 
-function providerFromDraft(draft: ProviderDraft): CodexModelProviderSettings {
+function providerFromDraft(draft: ProviderDraft, discovered: readonly CodexProviderCatalogModel[] = []): CodexModelProviderSettings {
   const models = [...new Set(draft.listed.map((model) => model.trim()).filter(Boolean))];
+  // The isolated runtime needs one explicit model, including when its only
+  // visible choice came from discovery rather than the manually added list.
+  if (!models.length) {
+    const alias = discovered.find((model) => model.id === BONSAI_2_27B_MODEL_ID);
+    if (alias && isLoopbackCodexBaseUrl(draft.baseUrl)) models.push(alias.id);
+    else if (draft.compatibility === "bonsai" && discovered.length === 1) models.push(discovered[0].id);
+  }
   const rates: CodexModelProviderRate[] = [];
   if (!draft.local) {
     // A rate is kept for any model, listed by the endpoint or added here.

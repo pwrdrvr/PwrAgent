@@ -82,7 +82,7 @@ async function readMetadata(url, apiKey) {
   return JSON.parse(text + decoder.decode());
 }
 
-export async function discoverModelCatalog(upstream, template, apiKey) {
+export async function discoverModelCatalog(upstream, template, apiKey, selectedModel = template?.models?.[0]?.slug) {
   const target = loopbackUpstream(upstream);
   const base = target.href.replace(/\/$/, "");
   if (!target.pathname.replace(/\/$/, "").endsWith("/v1")) {
@@ -98,8 +98,9 @@ export async function discoverModelCatalog(upstream, template, apiKey) {
   ]);
   const model = template.models[0];
   const advertised = Array.isArray(models?.data)
-    && models.data.some((entry) => entry?.id === model.slug);
-  if (!advertised || ![props?.model_alias, props?.model_path].includes(model.slug)) {
+    && models.data.some((entry) => entry?.id === selectedModel);
+  const identities = [props?.model_alias, props?.model_path];
+  if (!advertised || !identities.includes(model.slug) || !identities.includes(selectedModel)) {
     throw new Error("Local model metadata does not match the catalog model");
   }
   if (typeof props?.modalities?.vision !== "boolean") {
@@ -107,7 +108,7 @@ export async function discoverModelCatalog(upstream, template, apiKey) {
   }
   return {
     ...template,
-    models: [{ ...model, input_modalities: props.modalities.vision ? ["text", "image"] : ["text"] }],
+    models: [{ ...model, slug: selectedModel, input_modalities: props.modalities.vision ? ["text", "image"] : ["text"] }],
   };
 }
 
