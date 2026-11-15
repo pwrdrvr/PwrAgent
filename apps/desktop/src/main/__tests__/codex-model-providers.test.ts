@@ -52,9 +52,9 @@ describe("Codex model provider config", () => {
     expect(() => save("", [{ ...refuseless, baseUrl: "ftp://example.com" }])).toThrow();
   });
 
-  it("repairs the earlier Bonsai shape and preserves isolated runtime settings on save", () => {
+  it.each(["/models/Bonsai.gguf", "bonsai2-27b"])("recognizes Bonsai model %s and preserves isolated runtime settings on save", (model) => {
     const [provider] = validateCodexModelProviders([{
-      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["/models/Bonsai.gguf"],
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: [model],
     }]);
     expect(provider.compatibility).toBe("bonsai");
     const configured = { ...provider, catalogPath: "/profiles/bonsai/models.json" };
@@ -63,6 +63,23 @@ describe("Codex model provider config", () => {
     expect(written).toContain('catalog_path = "/profiles/bonsai/models.json"');
     expect(written).toContain("# Keep");
     expect(validateCodexModelProviders([refuseless])[0]).not.toHaveProperty("compatibility");
+  });
+
+  it.each([
+    { discoverModels: false, label: undefined },
+    { discoverModels: true, label: undefined },
+    { discoverModels: true, label: "Custom Bonsai name" },
+  ])("keeps the launcher alias separate from picker labels: %j", async ({ discoverModels, label }) => {
+    const provider: CodexModelProviderSettings = {
+      id: "gpu", name: "Local GPU", baseUrl: "http://localhost:8080/v1", models: ["bonsai2-27b"], compatibility: "bonsai", discoverModels,
+    };
+    const catalog = new CodexModelProviderCatalog({
+      resolveProviders: () => [provider], resolveKeys: async () => ({}),
+      fetch: async () => jsonResponse({ data: [{ id: "bonsai2-27b", display_name: label }] }),
+    });
+    expect(await catalog.listModelOptions()).toEqual([expect.objectContaining({
+      id: "@gpu/bonsai2-27b", label: label ?? "PrismML Bonsai 2 27B",
+    })]);
   });
 
   it.each([

@@ -186,13 +186,18 @@ describe("attributeCodexProviderUsageLine", () => {
     });
   });
 
-  it("prices a local provider at zero", () => {
+  it.each(["bonsai-2", "bonsai2-27b", "/models/Bonsai.gguf"])("prices a declared local model %s at zero without rewriting its upstream ID", (model) => {
+    const original = usageLine({ model });
     const line = attributeCodexProviderUsageLine(
-      usageLine({ model: "bonsai-2" }),
+      original,
       { id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:8080/v1", local: true },
       undefined,
     );
     expect(line).toMatchObject({ priceStatus: "priced", totalCostMicros: 0, pricingRateId: "bonsai:local" });
+    expect(line.model).toBe(`@bonsai/${model}`);
+    expect(line.totalTokens).toBe(original.totalTokens);
+    expect(original.model).toBe(model);
+    expect(original.totalCostMicros).toBe(3);
   });
 
   it("keeps the catalog price for a second OpenAI API account with no rates", () => {

@@ -1,4 +1,5 @@
 import type { ThreadUsageLineRecord } from "./token-usage-pricing";
+import { parseCodexProviderModelId } from "./codex-model-providers";
 
 export const LOCAL_MODEL_PRICING_CATALOG = "local-inference";
 
@@ -13,12 +14,13 @@ export function validateLocalModelIds(value: unknown): string[] {
 
 /** Display only: preserve the protocol ID separately for accounting and requests. */
 export function formatPricingModelLabel(model?: string, label?: string): string {
-  if (label?.trim() && label !== model) return label;
-  if (!model) return "Unknown model";
-  if (/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(model)) {
-    return model.split(/[\\/]/).filter(Boolean).at(-1) ?? model;
+  const display = label?.trim() ? label : model;
+  if (!display) return "Unknown model";
+  const upstream = parseCodexProviderModelId(display).model;
+  if (/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(upstream)) {
+    return upstream.split(/[\\/]/).filter(Boolean).at(-1) ?? display;
   }
-  return model;
+  return display;
 }
 
 /** Reversible read projection: never rewrite historical usage or token counts. */

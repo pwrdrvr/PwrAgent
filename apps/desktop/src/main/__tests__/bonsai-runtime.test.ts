@@ -31,20 +31,23 @@ describe("isolated Bonsai launch resources", () => {
     ]);
     expect(bonsaiNativeMcpOverrides([])).toEqual([]);
   });
-  it("generates a private catalog with model capabilities and process-local compatibility overrides", async () => {
-    const runtime = await prepareBonsaiRuntime(provider, "fixture-key");
+  it.each(["/models/Bonsai.gguf", "bonsai2-27b"])("generates a private catalog with capabilities and process-local overrides for %s", async (model) => {
+    const selectedProvider = { ...provider, models: [model] };
+    const runtime = await prepareBonsaiRuntime(selectedProvider, "fixture-key");
     try {
       const catalogArg = runtime.overrides.find((value) => value.startsWith("model_catalog_json="))!;
       const catalogPath = JSON.parse(catalogArg.slice("model_catalog_json=".length)) as string;
       const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
       expect(catalog.models[0]).toMatchObject({
-        slug: "/models/Bonsai.gguf", context_window: 65536, apply_patch_tool_type: null,
+        slug: model, context_window: 65536, apply_patch_tool_type: null,
+        display_name: model === "bonsai2-27b" ? "PrismML Bonsai 2 27B" : "PrismML Bonsai",
         supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: false,
       });
       if (process.platform !== "win32") {
         expect((await stat(catalogPath)).mode & 0o777).toBe(0o600);
       }
       expect(runtime.overrides).toEqual(expect.arrayContaining([
+        `model=${JSON.stringify(model)}`,
         'model_provider="bonsai"', 'model_providers.bonsai.base_url="http://127.0.0.1:12345/v1"',
         "model_providers.bonsai.stream_idle_timeout_ms=900000",
         "model_context_window=65536", "model_auto_compact_token_limit=49152", "features.apps=false", "features.plugins=false",
@@ -59,20 +62,22 @@ describe("isolated Bonsai launch resources", () => {
     } finally { await runtime.close(); }
   });
 
-  it("preserves the imported catalog's instructions and rejects a mismatched model or capabilities", async () => {
+  it.each(["/models/Bonsai.gguf", "bonsai2-27b"])("preserves catalog labels and instructions and rejects mismatched identity or capabilities for %s", async (model) => {
+    const selectedProvider = { ...provider, models: [model] };
     const directory = await mkdtemp(path.join(os.tmpdir(), "bonsai-catalog-"));
     directories.push(directory);
     const catalogPath = path.join(directory, "models.json");
-    const template = await readBonsaiCatalog(provider);
+    const template = await readBonsaiCatalog(selectedProvider);
     template.models[0].base_instructions = "User-authored coding instructions";
+    template.models[0].display_name = "PrismML Bonsai 2 27B";
     await writeFile(catalogPath, JSON.stringify(template));
-    expect(await readBonsaiCatalog({ ...provider, catalogPath })).toEqual(template);
-    template.models[0].slug = "other";
+    expect(await readBonsaiCatalog({ ...selectedProvider, catalogPath })).toEqual(template);
+    template.models[0].slug = model === "bonsai2-27b" ? "/models/Bonsai.gguf" : "bonsai2-27b";
     await writeFile(catalogPath, JSON.stringify(template));
-    await expect(readBonsaiCatalog({ ...provider, catalogPath })).rejects.toThrow("exactly the configured model");
-    template.models[0].slug = provider.models![0];
+    await expect(readBonsaiCatalog({ ...selectedProvider, catalogPath })).rejects.toThrow("exactly the configured model");
+    template.models[0].slug = model;
     template.models[0].context_window = 131072;
     await writeFile(catalogPath, JSON.stringify(template));
-    await expect(readBonsaiCatalog({ ...provider, catalogPath })).rejects.toThrow("65536-token context");
+    await expect(readBonsaiCatalog({ ...selectedProvider, catalogPath })).rejects.toThrow("65536-token context");
   });
 });

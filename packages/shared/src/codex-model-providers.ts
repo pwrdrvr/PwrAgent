@@ -154,6 +154,10 @@ export type CodexModelProviderImportScan = {
 export const CODEX_MODEL_PROVIDER_LIMIT = 16;
 export const CODEX_MODEL_PROVIDER_MODEL_LIMIT = 64;
 
+/** Coordinated llama.cpp launcher alias; protocol identity stays exact. */
+export const BONSAI_2_27B_MODEL_ID = "bonsai2-27b";
+export const BONSAI_2_27B_DISPLAY_NAME = "PrismML Bonsai 2 27B";
+
 /** Ledger provider ids and Codex built-in provider ids a provider cannot take. */
 export const RESERVED_CODEX_MODEL_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "openai",
@@ -346,9 +350,10 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
     if (entry.compatibility !== undefined && entry.compatibility !== "bonsai") {
       throw new Error(`${label}.compatibility must be bonsai.`);
     }
-    // Repair earlier endpoint-only Bonsai imports without changing unrelated providers.
+    // Recognize the launcher alias and earlier GGUF imports without changing IDs.
     const compatibility = entry.compatibility ?? (
-      isLoopbackCodexBaseUrl(baseUrl) && models?.length === 1 && /bonsai.*\.gguf$/iu.test(models[0])
+      isLoopbackCodexBaseUrl(baseUrl) && models?.length === 1
+        && (models[0] === BONSAI_2_27B_MODEL_ID || /bonsai.*\.gguf$/iu.test(models[0]))
         ? "bonsai" : undefined
     );
     if (compatibility && (!isLoopbackCodexBaseUrl(baseUrl) || models?.length !== 1)) {

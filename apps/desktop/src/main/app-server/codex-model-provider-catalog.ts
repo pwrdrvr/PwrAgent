@@ -1,4 +1,6 @@
 import {
+  BONSAI_2_27B_DISPLAY_NAME,
+  BONSAI_2_27B_MODEL_ID,
   formatCodexProviderModelId,
   parseCodexProviderCatalogModel,
   type BackendModelOption,
@@ -92,7 +94,8 @@ export class CodexModelProviderCatalog {
         const efforts = found?.reasoningEfforts ?? [];
         return {
           id: formatCodexProviderModelId(provider.id, model),
-          label: found?.label || model,
+          label: found?.label || (provider.compatibility === "bonsai" && model === BONSAI_2_27B_MODEL_ID
+            ? BONSAI_2_27B_DISPLAY_NAME : model),
           providerId: provider.id,
           providerLabel: provider.name,
           // Codex sends any effort as `reasoning.effort`, for any model, so a

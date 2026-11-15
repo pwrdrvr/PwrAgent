@@ -238,7 +238,7 @@ function buildMonitorLine(
 }
 
 it("shows a local model label and zero price without changing its accounting identity", () => {
-  const id = "/models/private/bonsai.gguf";
+  const id = "@bonsai//models/private/bonsai.gguf";
   const original = buildMonitorLine({
     scope: "turn", model: id, modelLabel: "PrismML Bonsai 2 27B",
     priceStatus: "unpriced", priceUnavailableReason: "missing-rate",
@@ -261,6 +261,25 @@ it("keeps remote model IDs and shortens only absolute filesystem paths", () => {
   expect(spend.formatPricingModelLabel("/models/bonsai.gguf")).toBe("bonsai.gguf");
   expect(spend.formatPricingModelLabel(String.raw`C:\models\bonsai.gguf`)).toBe("bonsai.gguf");
   expect(spend.formatPricingModelLabel("/models/bonsai.gguf", "Bonsai")).toBe("Bonsai");
+});
+
+it.each([undefined, "/models/private/bonsai.gguf"])("shortens historical qualified paths in the current model, groups, and usage rows with label %s", (modelLabel) => {
+  const model = "@bonsai//models/private/bonsai.gguf";
+  const line = buildMonitorLine({ model, modelLabel });
+  const pricing = { lines: [] as ThreadUsageLineRecord[], summaries: [], snapshot: {
+    model, modelLabel, localModel: true,
+    tokens: { inputTokens: 100, outputTokens: 10 },
+    groups: [{ model, localModel: true, tokens: { inputTokens: 100, outputTokens: 10 } }],
+  } };
+  const original = structuredClone(pricing);
+  const view = render(<PricingPanel pricing={pricing} />);
+  expect(view.container.querySelector(".pricing-snapshot-card")).toHaveTextContent("Current modelbonsai.gguf");
+  expect(view.getAllByText("bonsai.gguf").length).toBeGreaterThan(1);
+  expect(view.container.textContent).not.toContain("/models/private");
+  view.rerender(<PricingPanel pricing={{ ...pricing, lines: [line] }} />);
+  expect(view.container.querySelector(".pricing-usage-row")).toHaveTextContent("bonsai.gguf");
+  expect(view.container.textContent).not.toContain("/models/private");
+  expect(pricing).toEqual(original);
 });
 
 it("retains zero local pricing for projected historical gaps", () => {
