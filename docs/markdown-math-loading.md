@@ -61,15 +61,19 @@ an equal-length closing dollar run. Distinct unmatched lengths repeatedly scan
 overlapping suffixes, including with `singleDollarTextMath: false`. This path
 predates the single-dollar work in PR #3739.
 
-The lazy runtime installs `remarkBoundedMath` after remark-math. A micromark
-check indexes the last offset of each dollar-run length once per text context.
-An opening run with no later equal-length run immediately fails; otherwise the
-original tokenizer and resolver still own the syntax. The index deliberately
+The lazy runtime installs `remarkBoundedMath` after remark-math. It observes
+consumption during upstream attempts and caches the last offset of each
+dollar-run length when the first attempt fails at EOF. Later opening runs with
+no equal-length closer immediately fail; otherwise the original tokenizer and
+resolver still own the syntax. The index deliberately
 counts raw runs, including escaped and code-looking content, because upstream
 math treats those as raw content while searching for its closer. CommonMark
-still decides where math can start. Scratch checks roll back without changing
-tokens or source offsets, and a new streaming parse gets a fresh context/index.
-The WeakMap permits completed contexts to be collected.
+still decides where math can start. Reading ahead of upstream would install
+future container-column skips earlier, which micromark checks do not roll back.
+Observing the existing EOF failure preserves that traversal order. Subsequent
+checks inspect only the opening dollar run, preserving tokens and source
+offsets. A new streaming parse gets a fresh context/index, and the WeakMap
+permits completed contexts to be collected.
 
 For `"prefix " + Array.from({length:k}, (_,i) => "$".repeat(i+2) + "x").join(" ")`,
 the regression counts actual `effects.consume` calls, including speculative
@@ -77,9 +81,9 @@ consumption rolled back by checks and failed attempts:
 
 | k | Source bytes | Original work | Bounded work |
 | ---: | ---: | ---: | ---: |
-| 128 | 8,646 | 740,544 | 25,663 |
-| 256 | 33,670 | 5,757,312 | 100,479 |
-| 512 | 132,870 | 45,396,736 | 397,567 |
+| 128 | 8,646 | 740,544 | 25,661 |
+| 256 | 33,670 | 5,757,312 | 100,477 |
+| 512 | 132,870 | 45,396,736 | 397,565 |
 
 The deterministic budget is at most four consumptions per source character
 for these unmatched-run workloads, including generated permutations. It was

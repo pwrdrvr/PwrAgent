@@ -71,6 +71,21 @@ describe("Markdown math parser work", () => {
 
   // The installed parser is the syntax oracle, including every source position.
   // Keep code, escaping, container boundaries and math content in that oracle.
+  it.each([false, true])("preserves container continuation positions (singleDollarTextMath=%s)", (single) => {
+    const bounded = parser(true, single);
+    const upstream = parser(false, single);
+    fc.assert(fc.property(
+      fc.constantFrom("> ", "- ", "> > ", "> - "),
+      fc.constantFrom("$", "$$", "$$x$$"),
+      fc.constantFrom("\n", "\r\n"),
+      fc.constantFrom("`$$`$$", "$$x", "$$$x$$$$y", "`a` $z"),
+      (container, opening, newline, tail) => {
+        const source = `prefix ${newline}${container}${opening}${newline}${container}${tail}`;
+        expect(bounded.parse(source).tree).toEqual(upstream.parse(source).tree);
+      },
+    ));
+  });
+
   it.each([false, true])("matches upstream syntax (singleDollarTextMath=%s)", (single) => {
     const bounded = parser(true, single);
     const upstream = parser(false, single);
@@ -85,6 +100,7 @@ describe("Markdown math parser work", () => {
   });
 
   it.each([
+    "prefix \n> $\n> `$$`$$",
     "prefix $$ x $$$ y $$ suffix",
     "prefix $$$x\ny$$$ tail",
     "prefix `$$code$$` $$math$$",
