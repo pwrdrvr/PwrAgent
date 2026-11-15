@@ -1320,7 +1320,15 @@ test.describe("federation remote window", () => {
         )
         .toBe(1);
       await expect(
-        remote.getByRole("heading", { level: 2, name: submittedPrompt }),
+        remote.getByRole("button", { name: submittedPrompt, exact: true }),
+      ).toHaveAttribute("aria-pressed", "true", { timeout: 30_000 });
+      // Readiness follows the selected thread and the owner's transcript.
+      // The compact header title can shrink to zero width beside the chips.
+      await expect(
+        remote.getByRole("region", { name: "Transcript", exact: true }).getByText(
+          `Remote transcript for ${submittedPrompt}.`,
+          { exact: true },
+        ),
       ).toBeVisible({ timeout: 30_000 });
 
       await openRemoteLaunchpad.click();
