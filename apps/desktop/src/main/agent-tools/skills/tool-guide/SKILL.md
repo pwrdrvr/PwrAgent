@@ -19,6 +19,10 @@ Keep the returned instanceId for remote calls.
 Use handoff_task for local child work.
 Use create_instance_thread for work on a selected machine.
 Pass environment to either tool to pick the child's environment by id or name, or none.
+Those tools create threads immediately. For an operator-dispatched follow-up, use add_todo with action.type=start_thread.
+Set action.backend for a different registered provider, plus its model and reasoningEffort from list_instance_projects.
+Use update_todo with backend, model and reasoningEffort to change an existing handoff card. Empty optional fields restore inheritance: source settings for the same provider, destination defaults for a different provider.
+Set workMode=local on the card to share the source thread's checkout, including its worktree. An explicit backend proposal overrides remembered dispatch settings; the operator can still change the card's selection.
 Use manage_thread_dependencies with a marked_done condition to mark work waiting until someone says it is done; holdMerge holds merging, and deliver operator with steps reminds the operator of the follow-up.
 For CI, prerequisites, or long jobs, read skill://waiting-on-work/SKILL.md.
 Use get_forge_status and the CI read tools to inspect forge data.
