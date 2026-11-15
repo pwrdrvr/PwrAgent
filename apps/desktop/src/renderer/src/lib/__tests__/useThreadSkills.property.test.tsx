@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationLaunchpadDraft } from "@pwragent/shared";
+import type { NavigationLaunchpadDraft, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSkills } from "../useThreadSkills";
 
@@ -22,6 +22,80 @@ function launchpad(project: number, remote: boolean): NavigationLaunchpadDraft {
 }
 
 describe("skill picker catalog freshness", () => {
+  it("refreshes warmed launchpads and existing main threads after a remote merge is pulled locally", async () => {
+    const main = "/fixture/main";
+    const authoring = "/fixture/authoring-worktree";
+    const newWorktree = "/fixture/new-main-worktree";
+    const skill = "paper-rewriter-pwragent";
+    // Model the separate on-disk checkouts: a remote merge cannot change
+    // local main until pull, or an already-created worktree at its old HEAD.
+    const catalogs = new Map([
+      [main, new Set(["rate-math-paper"])],
+      [authoring, new Set(["rate-math-paper", skill])],
+    ]);
+    const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>(async (request) => ({
+      backend: "codex",
+      fetchedAt: Date.now(),
+      data: (request?.cwds ?? []).map((cwd) => ({
+        cwd,
+        skills: [...(catalogs.get(cwd) ?? [])].map((name) => ({
+          name, description: name, path: `${cwd}/.agents/skills/${name}/SKILL.md`,
+        })),
+      })),
+    }));
+    const desktopApi: DesktopApi = { listSkills };
+    const draft: NavigationLaunchpadDraft = {
+      ...launchpad(0, false),
+      directoryKey: `directory:${main}`,
+      directoryLabel: "Project",
+      directoryPath: main,
+    };
+    const thread = (id: string, worktreePath?: string): NavigationThreadSummary => ({
+      id,
+      title: id,
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [{
+        id: main,
+        kind: "local",
+        path: main,
+        label: "Project",
+        ...(worktreePath ? { worktreePath } : {}),
+      }],
+      inbox: { inInbox: false },
+    });
+    type Target = { launchpad?: NavigationLaunchpadDraft; thread?: NavigationThreadSummary };
+    const { result, rerender, unmount } = renderHook(
+      (target: Target) => useThreadSkills({ desktopApi, ...target }),
+      { initialProps: { launchpad: draft } as Target },
+    );
+    const open = async (target: Target, present: boolean) => {
+      rerender(target);
+      await act(async () => { await result.current.ensureLoaded(); });
+      expect(result.current.skills.some((entry) => entry.name === skill)).toBe(present);
+    };
+    try {
+      await open({ thread: thread("authoring", authoring) }, true);
+      // The remote merge has happened, but local main is still behind.
+      await open({ launchpad: draft }, false);
+      await open({ launchpad: { ...draft, workMode: "worktree" } }, false);
+      await open({ thread: thread("existing-main") }, false);
+      await open({ thread: thread("created-before-pull") }, false);
+
+      // External pull: no skills/changed event, and the same cached keys.
+      catalogs.set(main, new Set(catalogs.get(authoring)));
+      await open({ launchpad: draft }, true);
+      await open({ launchpad: { ...draft, workMode: "worktree" } }, true);
+      await open({ thread: thread("existing-main") }, true);
+      await open({ thread: thread("created-before-pull") }, true);
+      await open({ thread: thread("new-local-main") }, true);
+      catalogs.set(newWorktree, new Set(catalogs.get(main)));
+      await open({ thread: thread("new-worktree-from-main", newWorktree) }, true);
+    } finally {
+      unmount();
+    }
+  });
+
   it("matches the authoritative owner catalog after external edits and reopening, without notifications", async () => {
     // Model: each owner/project has its own catalog. External edits emit no
     // event (an unborn launchpad need not have a provider watcher).
