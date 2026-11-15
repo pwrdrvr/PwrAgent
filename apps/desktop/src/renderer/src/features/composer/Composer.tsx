@@ -6298,8 +6298,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       const viewportPadding = 12;
       const gap = 10;
       const rect = inputWrap.getBoundingClientRect();
-      const availableAbove = rect.top - viewportPadding - gap;
-      const availableBelow = window.innerHeight - rect.bottom - viewportPadding - gap;
+      // The thread layout clips below its header. Window bounds alone can
+      // leave the picker's header behind that edge while its options fit.
+      const pane = inputWrap.closest(".thread-view__layout")?.getBoundingClientRect();
+      const visibleTop = Math.max(0, pane?.top ?? 0);
+      const visibleBottom = Math.min(window.innerHeight, pane?.bottom ?? window.innerHeight);
+      const availableAbove = rect.top - visibleTop - viewportPadding - gap;
+      const availableBelow = visibleBottom - rect.bottom - viewportPadding - gap;
       const placement =
         availableAbove >= 180 || availableAbove >= availableBelow ? "above" : "below";
       const available = placement === "above" ? availableAbove : availableBelow;

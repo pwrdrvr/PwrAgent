@@ -8,6 +8,7 @@ import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-referenc
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "../../../test/phase-probes";
 import userEvent from "@testing-library/user-event";
+import fc from "fast-check";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -27649,6 +27650,51 @@ it("refits skill autocomplete when its composer resizes without a window resize"
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("fits the entire skill picker inside the pane's viewport intersection", async () => {
+  renderComposerWithRegressionSkills();
+  const wrap = document.querySelector(".composer__input-wrap")!;
+  const pane = document.querySelector(".composer")!.parentElement!;
+  pane.classList.add("thread-view__layout");
+  let paneTop = 194;
+  let paneBottom = 700;
+  let inputTop = 480;
+  let inputBottom = 528;
+  const rect = (top: number, bottom: number): DOMRect => ({
+    top, bottom, left: 0, right: 500, width: 500, height: bottom - top,
+    x: 0, y: top, toJSON: () => ({}),
+  });
+  vi.spyOn(wrap, "getBoundingClientRect").mockImplementation(() => rect(inputTop, inputBottom));
+  vi.spyOn(pane, "getBoundingClientRect").mockImplementation(() => rect(paneTop, paneBottom));
+  fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "$" } });
+  const listbox = await screen.findByRole("listbox", { name: "Skills" });
+  const panel = listbox.closest<HTMLElement>(".composer__autocomplete")!;
+
+  // The pane below the thread header clips the popup even when the popup's
+  // rectangle is inside the window. Derive the oracle from both boundaries.
+  const assertBounds = (): void => {
+    const height = Number.parseFloat(panel.style.maxHeight);
+    const top = panel.classList.contains("composer__autocomplete--above")
+      ? inputTop - 10 - height
+      : inputBottom + 10;
+    expect(top).toBeGreaterThanOrEqual(Math.max(0, paneTop) + 12);
+    expect(top + height).toBeLessThanOrEqual(Math.min(window.innerHeight, paneBottom) - 12);
+  };
+  assertBounds();
+  fc.assert(fc.property(
+    fc.record({ top: fc.integer({ min: -100, max: 250 }), height: fc.integer({ min: 240, max: 500 }), offset: fc.integer({ min: 0, max: 100 }) }),
+    ({ top, height, offset }) => {
+      paneTop = top;
+      paneBottom = Math.min(window.innerHeight + 100, top + height);
+      const visibleTop = Math.max(0, paneTop);
+      const visibleBottom = Math.min(window.innerHeight, paneBottom);
+      inputTop = visibleTop + 40 + Math.floor((visibleBottom - visibleTop - 120) * offset / 100);
+      inputBottom = inputTop + 40;
+      act(() => { window.dispatchEvent(new Event("resize")); });
+      assertBounds();
+    },
+  ), { numRuns: 100 });
 });
 
 describe("queued message reordering", () => {

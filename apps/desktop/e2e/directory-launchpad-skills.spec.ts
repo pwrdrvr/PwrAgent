@@ -1097,8 +1097,9 @@ test("directory launchpad skill autocomplete stays inside a small window and scr
     const listbox = app.window.getByRole("listbox", { name: "Skills" });
     await expect(listbox).toBeVisible();
 
-    const [listboxBox, viewport, scrollMetrics] = await Promise.all([
-      listbox.boundingBox(),
+    const [pickerBox, paneBox, viewport, scrollMetrics] = await Promise.all([
+      app.window.locator(".composer__autocomplete--skills").boundingBox(),
+      app.window.locator(".thread-view__layout").boundingBox(),
       app.window.evaluate(() => ({
         height: globalThis.innerHeight,
         width: globalThis.innerWidth,
@@ -1108,14 +1109,16 @@ test("directory launchpad skill autocomplete stays inside a small window and scr
         scrollHeight: element.scrollHeight,
       })),
     ]);
-    if (!listboxBox) {
-      throw new Error("Expected autocomplete listbox to be measurable");
+    if (!pickerBox || !paneBox) {
+      throw new Error("Expected autocomplete picker and its clipping pane to be measurable");
     }
 
-    expect(listboxBox.x).toBeGreaterThanOrEqual(0);
-    expect(listboxBox.y).toBeGreaterThanOrEqual(0);
-    expect(listboxBox.x + listboxBox.width).toBeLessThanOrEqual(viewport.width);
-    expect(listboxBox.y + listboxBox.height).toBeLessThanOrEqual(viewport.height);
+    // The complete picker, including Refresh, must fit the visible pane.
+    expect(pickerBox.x).toBeGreaterThanOrEqual(0);
+    expect(pickerBox.y).toBeGreaterThanOrEqual(Math.max(0, paneBox.y));
+    expect(pickerBox.x + pickerBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(pickerBox.y + pickerBox.height).toBeLessThanOrEqual(Math.min(viewport.height, paneBox.y + paneBox.height));
+    await expect(app.window.getByRole("button", { name: "Refresh skills" })).toBeInViewport({ ratio: 1 });
     expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
 
     // The listbox owns overflow. Scrolling its results must leave the
