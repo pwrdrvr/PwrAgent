@@ -4836,15 +4836,20 @@ textarea,
   flex: 1;
 }
 
+/* Shrinks before the file path actions do: a long failure must not push
+   Reveal, its own retry, out of the bar. */
 .log-window__status-live {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .log-window__status-message {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
   height: 22px;
   padding: 0 9px;
   border: 1px solid var(--success-border);
@@ -4852,6 +4857,18 @@ textarea,
   background: var(--success-soft);
   color: var(--success-text);
   font-weight: 600;
+}
+
+.log-window__status-message-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-window__status-message[data-tone="error"] {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
 }
 
 .log-window__status-action {

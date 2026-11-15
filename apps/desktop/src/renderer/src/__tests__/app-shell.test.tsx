@@ -1551,6 +1551,77 @@ describe("App", () => {
   });
 
   it.each([
+    {
+      label: "a missing folder",
+      reveal: async () => ({ opened: false, missing: true as const, error: "Path does not exist" }),
+      title: "Folder not found",
+      message: "PwrAgent's folder was not found. It may have been moved or deleted.",
+    },
+    {
+      label: "a refused reveal",
+      reveal: async () => ({ opened: false, error: "Finder is unavailable." }),
+      title: "Couldn't show PwrAgent",
+      message: "Finder is unavailable.",
+    },
+    {
+      label: "a rejected reveal",
+      reveal: async () => {
+        throw new Error("IPC channel closed.");
+      },
+      title: "Couldn't show PwrAgent",
+      message: "IPC channel closed.",
+    },
+  ])("reports $label from a project's Show in Finder as a toast", async ({ reveal, title, message }) => {
+    const path = "/Users/fixture-user/pwrdrvr/PwrAgent";
+    const revealPath = vi.fn(reveal);
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [{
+            key: `directory:${path}`,
+            kind: "directory" as const,
+            label: "PwrAgent",
+            path,
+            threadKeys: [],
+            needsAttentionCount: 0,
+            latestUpdatedAt: 1,
+          }],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        revealPath,
+      }),
+    });
+
+    await renderApp();
+    fireEvent.click(await screen.findByRole("tab", { name: /^Directories/ }));
+    const header = await waitFor(() => {
+      const match = screen.getAllByRole("button", { name: /PwrAgent/ })
+        .find((button) => button.hasAttribute("aria-expanded"));
+      expect(match).toBeDefined();
+      return match!;
+    });
+    fireEvent.contextMenu(header);
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Show in Finder" }));
+    });
+
+    expect(revealPath).toHaveBeenCalledWith({ path });
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
+  it.each([
     { action: "Got it", opensSettings: false },
     { action: "Review access", opensSettings: true },
   ])("closes the Auto access upgrade notice for good from $action", async ({

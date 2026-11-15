@@ -31,7 +31,7 @@ export type ProjectHeaderCardOptions = {
   remoteMachineLabel?: string;
   /** "Show in Finder" and the like; absent where the folder cannot be shown. */
   revealLabel?: string;
-  onReveal?: (path: string) => void;
+  onReveal?: (path: string, label: string) => void;
   onStartLocal: (directory: NavigationDirectoryView) => void;
   peers: readonly FederationThreadTarget[];
   threads: readonly NavigationThreadSummary[];
@@ -218,7 +218,7 @@ export function ProjectHeaderCard(props: {
               className="pr-status-card__action project-card__action"
               onClick={() => {
                 onDone();
-                options.onReveal?.(path);
+                options.onReveal?.(path, directory.label);
               }}
             >
               <FolderIcon size={13} />

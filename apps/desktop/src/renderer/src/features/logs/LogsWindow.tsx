@@ -31,6 +31,7 @@ import {
 } from "../../icons";
 import { copyText, copyTextAsCodeBlock } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { describeOpenPathFailure, type OpenPathOutcome } from "../../lib/open-path-failure";
 import {
   buildInstanceReferenceMarkdown,
   listInstanceReferences,
@@ -107,6 +108,12 @@ type PausedState = {
 
 const NOT_PAUSED: PausedState = { newLines: 0, newErrors: 0 };
 
+/** The status bar's one live message: a copy that landed, or an action that failed. */
+type StatusMessage = {
+  text: string;
+  tone: "success" | "error";
+};
+
 export function LogsWindow() {
   const desktopApi = useDesktopApi();
   const [preferences, updatePreferences] = useLogsViewerPreferences(desktopApi);
@@ -151,7 +158,7 @@ export function LogsWindow() {
   const [flashSequences, setFlashSequences] = useState<ReadonlySet<number>>(
     () => new Set(),
   );
-  const [statusMessage, setStatusMessage] = useState<string | undefined>();
+  const [statusMessage, setStatusMessage] = useState<StatusMessage | undefined>();
   const [expandedLines, setExpandedLines] = useState<ReadonlySet<number>>(
     () => new Set(),
   );
@@ -713,19 +720,20 @@ export function LogsWindow() {
     } catch (copyError: unknown) {
       console.error("Failed to copy log lines", copyError);
       setCopyState("idle");
-      setStatusMessage("Could not copy to the clipboard");
+      setStatusMessage({ text: "Could not copy to the clipboard", tone: "error" });
       return;
     }
     const lineCount = entries.length === 1
       ? "1 line"
       : `${formatLogCount(entries.length)} lines`;
-    setStatusMessage(
-      !wantDiagnostics
+    setStatusMessage({
+      text: !wantDiagnostics
         ? `Copied ${lineCount}`
         : diagnostics.diagnostics
           ? `Copied ${lineCount} with diagnostics`
           : `Copied ${lineCount}; diagnostics unavailable`,
-    );
+      tone: "success",
+    });
     setCopyState("copied");
     setFlashSequences(new Set(entries.map((entry) => entry.sequence)));
     if (copyButtonResetTimerRef.current) {
@@ -801,7 +809,7 @@ export function LogsWindow() {
           window.clearTimeout(pathCopyResetTimerRef.current);
         }
         setCopiedLogFilePath(true);
-        setStatusMessage("Copied the log file path");
+        setStatusMessage({ text: "Copied the log file path", tone: "success" });
         pathCopyResetTimerRef.current = window.setTimeout(() => {
           setCopiedLogFilePath(false);
           pathCopyResetTimerRef.current = undefined;
@@ -817,8 +825,29 @@ export function LogsWindow() {
       return;
     }
     const reveal = desktopApi?.revealPath ?? desktopApi?.openPath;
-    void reveal?.({ path: logFilePath }).catch((revealError: unknown) => {
-      console.error("Failed to reveal log file", revealError);
+    if (!reveal) {
+      return;
+    }
+    // Success needs no word: the file manager comes forward. A rotated or
+    // deleted file, or a refusal, would otherwise look like a dead button.
+    // Clear the last message now, so a retry does not leave an old failure up
+    // and a success that settles late cannot wipe a newer copy confirmation.
+    setStatusMessage(undefined);
+    void reveal({ path: logFilePath }).then(
+      (response): OpenPathOutcome => ({ response }),
+      (revealError: unknown): OpenPathOutcome => {
+        console.error("Failed to reveal log file", revealError);
+        return { error: revealError };
+      },
+    ).then((outcome) => {
+      const failure = describeOpenPathFailure(outcome, "The log file could not be shown.");
+      if (!failure) return;
+      setStatusMessage({
+        text: failure.kind === "missing"
+          ? "The log file was not found. It may have been rotated or deleted."
+          : failure.message,
+        tone: "error",
+      });
     });
   }, [desktopApi, logFilePath]);
 
@@ -1236,9 +1265,15 @@ export function LogsWindow() {
             <span className="log-window__status-spacer" />
             <span aria-live="polite" className="log-window__status-live" role="status">
               {statusMessage ? (
-                <span className="log-window__status-message">
-                  <CheckIcon aria-hidden="true" size={12} />
-                  {statusMessage}
+                <span
+                  className="log-window__status-message tooltip-target"
+                  data-tone={statusMessage.tone}
+                  data-tooltip={statusMessage.text}
+                >
+                  {statusMessage.tone === "success" ? (
+                    <CheckIcon aria-hidden="true" size={12} />
+                  ) : null}
+                  <span className="log-window__status-message-text">{statusMessage.text}</span>
                 </span>
               ) : null}
             </span>
