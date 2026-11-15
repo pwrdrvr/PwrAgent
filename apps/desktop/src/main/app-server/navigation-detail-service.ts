@@ -80,6 +80,7 @@ export type NavigationDetailRegistry = Pick<
   DesktopBackendRegistry,
   | "canonicalizeNavigationThreadPullRequests"
   | "getCachedThreadSummary"
+  | "getThreadInfo"
   | "getQueuedExecutionModeForThread"
   | "hydrateThreadGitWorkingStates"
   | "iterateQueuedTurnSummaries"
@@ -205,6 +206,10 @@ export class NavigationDetailService {
         identity: "unresolved",
       };
     }
+    // Membership comes from the owner's archive observations, not archivedAt:
+    // Codex can omit that timestamp or retain one after an unarchive. Keep the
+    // history available without authorizing the archived thread's composer.
+    const identity = this.registry.getThreadInfo(request.ref)?.archived === true ? "archived" : "present";
     if (request.collection) {
       const name = request.collection.name;
       if (!NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
@@ -240,7 +245,7 @@ export class NavigationDetailService {
       // read is the collection's end, so a viewer is never left without one.
       const end = values.length < limit ? offset + values.length : count;
       const response: NavigationSelectedDetailResponse = {
-        protocol: 2, ref: request.ref, revision: manifest.revision, readiness: "ready", identity: "present",
+        protocol: 2, ref: request.ref, revision: manifest.revision, readiness: "ready", identity,
         collectionPage: { name: manifest.name, revision: manifest.revision,
           values: { [manifest.name]: [] }, complete: offset === end },
       };
@@ -361,14 +366,14 @@ export class NavigationDetailService {
       configuration.pendingWakes = bounded.wakes;
       if (bounded.incomplete) configuration.pendingWakesIncomplete = true;
     }
-    const detailRevision = revision({ thread: configuration, workspaceDirectories });
+    const detailRevision = revision({ identity, thread: configuration, workspaceDirectories });
     if (request.knownRevision === detailRevision) {
       return {
         protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
         ref: request.ref,
         revision: detailRevision,
         readiness: "ready",
-        identity: "present",
+        identity,
         unchanged: true,
         collections,
       };
@@ -378,7 +383,7 @@ export class NavigationDetailService {
       ref: request.ref,
       revision: detailRevision,
       readiness: "ready",
-      identity: "present",
+      identity,
       thread: configuration,
       collections,
       ...(workspaceDirectories ? { workspaceDirectories } : {}),

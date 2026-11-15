@@ -6,6 +6,11 @@ import { NavigationDetailService } from "../app-server/navigation-detail-service
 import * as desktopOverlayStore from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+import {
+  applyNavigationSelectedDetail,
+  navigationSelectionAuthorizesComposer,
+  selectNavigationIdentity,
+} from "../../renderer/src/lib/navigation-query-state";
 
 vi.mock("../messaging/messaging-bindings-snapshot", () => ({
   buildMessagingBindingsByThreadKey: async () => undefined,
@@ -16,6 +21,8 @@ async function checkDetail(scenario: { archived: boolean; archiveTimestamp: bool
   const store = new SqliteOverlayStore(db);
   const storeRead = vi.spyOn(desktopOverlayStore, "getDesktopOverlayStore").mockReturnValue(store);
   const ref = { backend: "codex" as const, threadId: "cleanup-source" };
+  let providerArchived = scenario.archived;
+  const restoreThread = vi.fn(async () => { providerArchived = false; });
   const thread: AppServerThreadSummary = {
     id: ref.threadId, source: ref.backend, title: "Retained cleanup source", titleSource: "explicit",
     linkedDirectories: [], threadStatus: "notLoaded",
@@ -28,7 +35,8 @@ async function checkDetail(scenario: { archived: boolean; archiveTimestamp: bool
       close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
       onNotification: () => () => {}, onPendingRequest: () => () => {},
       listThreads: async (params: { archived?: boolean }) =>
-        (params.archived === true) === scenario.archived ? [thread] : [],
+        (params.archived === true) === providerArchived ? [thread] : [],
+      restoreThread,
       readConfiguredMcpServerNames: async () => [],
     } as never,
     overlayStore: store, threadTitleGenerationService: null,
@@ -39,14 +47,37 @@ async function checkDetail(scenario: { archived: boolean; archiveTimestamp: bool
     }
     const service = new NavigationDetailService(registry);
     const detail = await service.readSelectedDetail({ protocol: 2, ref });
-    expect(detail).toMatchObject({ identity: "present", readiness: "ready", thread: {
+    expect(detail).toMatchObject({ identity: scenario.archived ? "archived" : "present", readiness: "ready", thread: {
       id: ref.threadId, title: thread.title,
     } });
+    const selected = selectNavigationIdentity(undefined, ref);
+    const state = applyNavigationSelectedDetail({ state: selected, sequence: selected.pendingSequence, detail });
+    expect(navigationSelectionAuthorizesComposer(state)).toBe(!scenario.archived);
+    const unchanged = await service.readSelectedDetail({ protocol: 2, ref, knownRevision: detail.revision });
+    expect(unchanged).toMatchObject({ unchanged: true, identity: detail.identity });
     expect((await service.readSelectedDetail({ protocol: 2, ref: { ...ref, threadId: "missing" } })).identity)
       .toBe("unresolved");
     // Opening a read-only detail must preserve the provider's membership and
     // must not admit the archived destination through the active resolver.
     expect((await registry.resolveThread(ref))?.id).toBe(scenario.archived ? undefined : ref.threadId);
+    expect(restoreThread).not.toHaveBeenCalled();
+
+    // Archive membership can change without changing any configuration field
+    // or timestamp. It must still invalidate the composer's authorization.
+    providerArchived = !providerArchived;
+    await registry.publishLocalEvent({ backend: ref.backend, notification: providerArchived
+      ? { method: "thread/archived", params: { threadId: ref.threadId } }
+      : { method: "thread/unarchived", params: { threadId: ref.threadId } },
+    });
+    const changed = await service.readSelectedDetail({ protocol: 2, ref, knownRevision: detail.revision });
+    expect(changed.identity).toBe(providerArchived ? "archived" : "present");
+    expect(changed.unchanged).not.toBe(true);
+    expect(changed.thread?.id).toBe(ref.threadId);
+    const refreshing = selectNavigationIdentity(state, ref);
+    expect(navigationSelectionAuthorizesComposer(applyNavigationSelectedDetail({
+      state: refreshing, sequence: refreshing.pendingSequence, detail: changed,
+    }))).toBe(!providerArchived);
+    expect(restoreThread).not.toHaveBeenCalled();
   } finally {
     await registry.close();
     storeRead.mockRestore();
@@ -54,7 +85,7 @@ async function checkDetail(scenario: { archived: boolean; archiveTimestamp: bool
   }
 }
 
-it("opens a cold archived cleanup source through the real owner resolver", async () => {
+it("opens a cold archived cleanup source without authorizing its composer or restoring it", async () => {
   await checkDetail({ archived: true, archiveTimestamp: false, reads: [] });
 });
 
