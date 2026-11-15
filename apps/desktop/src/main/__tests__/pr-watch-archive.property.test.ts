@@ -366,6 +366,7 @@ describe("PR prerequisite subscriptions end at archive", () => {
       };
       try {
         for (const [index, command] of commands.entries()) {
+          submit.mockClear();
           if (command === "register") {
             if (archived) expect(() => store.register(dependency(`dependency-${index}`))).toThrow(/archived/i);
             else { store.register(dependency(`dependency-${index}`)); pending = true; }
@@ -377,12 +378,10 @@ describe("PR prerequisite subscriptions end at archive", () => {
             await overlays.setThreadArchiveTombstone({ ...identity, restoredAt: index });
             archived = false;
           } else if (command === "event") {
-            submit.mockClear();
             await coordinator.handlePrEvent(pr.url);
             expect(submit).toHaveBeenCalledTimes(wake());
           } else {
             // The consumer's wake turn ends, which releases it for the next ready wait.
-            submit.mockClear();
             await coordinator.handleThreadEvent(identity, { id: "wake", status: "completed" });
             busy = false;
             expect(submit).toHaveBeenCalledTimes(wake());
