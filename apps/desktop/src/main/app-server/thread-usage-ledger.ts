@@ -1,3 +1,4 @@
+import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ManagedReviewService } from "./managed-review-service";
 import type { SubAgentMonitorService } from "./subagent-monitor-service";
@@ -163,7 +164,9 @@ export interface ThreadUsageLedgerDependencies {
  * registry. The Codex turn-activity set stays registry-owned, and so does
  * the Codex account summary: capturing a turn's usage account can update it.
  */
-export interface ThreadUsageLedgerHost {
+export interface ThreadUsageLedgerHost extends Pick<RegistryHostPorts,
+  "getActiveTurnForThread" | "invalidateThreadListCache" | "liveProfileRuntimeInstanceIds"
+> {
   readonly activeTurnKeys: ReadonlySet<string>;
   readonly codexBackendSummary: BackendSummary | undefined;
   readonly registrySessionId: string;
@@ -176,17 +179,6 @@ export interface ThreadUsageLedgerHost {
   readonly tokenMiserStore: TokenMiserStore | undefined;
   readonly toolOutputAlertPolicy: DesktopToolOutputAlertPolicy;
   captureUsageAccount(backend: AppServerBackendKind, threadId?: string): Promise<string | undefined>;
-  getActiveTurnForThread(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined;
-  invalidateThreadListCache(
-    backend?: AppServerBackendKind,
-    workspaceChanged?: boolean,
-    threadId?: string,
-    paths?: readonly string[],
-  ): void;
-  liveProfileRuntimeInstanceIds(): string[] | undefined;
   liveSubAgentMonitorIds(backend: AppServerBackendKind, threadId: string): string[];
   steerTurn(
     params: SteerTurnRequest,

@@ -1,3 +1,4 @@
+import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import os from "node:os";
@@ -29,7 +30,6 @@ import {
   type ListThreadMcpServersResponse,
   type McpConnectionStatus,
   type McpConnectionToolApprovalResolution,
-  type MessagingDynamicToolCategory,
   type NavigationLaunchpadDraft,
   type PwrAgentMcpConnectionRequest,
   type PwrAgentMcpConnectionResponse,
@@ -83,7 +83,6 @@ import type {
   PendingServerRequest,
   TaskMonitorDelegationRecord,
   TaskMonitorMcpAccess,
-  ThreadListCallerReason,
 } from "./backend-registry-types";
 import {
   buildCodexConnectionMcpConfig,
@@ -126,46 +125,18 @@ export interface ThreadMcpConnectionsDependencies {
  * registry's construction ports satisfy it; this module never imports the
  * registry.
  */
-export interface ThreadMcpConnectionsHost {
+export interface ThreadMcpConnectionsHost extends Pick<RegistryHostPorts,
+  "dynamicToolPermissionDenied" | "findHeadlessAutomationTurnForRequest" | "findThreadForWorkspaceHandoff"
+  | "isLiveDynamicToolCall" | "isTaskMonitorThread" | "resolveClaudeToolCallExecutionMode"
+  | "resolveCodexToolCallExecutionMode" | "taskMonitorForThread" | "withCodexThreadClient"
+> {
   readonly mcpConnectionService: BackendRegistryMcpConnectionService | undefined;
   readonly mcpGatewayTools: McpGatewayToolService | undefined;
   readonly codexEnvironmentCommandEnv: NodeJS.ProcessEnv | undefined;
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
   readonly pendingStartedThreads: ReadonlyMap<string, AppServerThreadSummary>;
   readonly taskMonitorDelegations: ReadonlyMap<string, TaskMonitorDelegationRecord>;
-  withCodexThreadClient<T>(
-    threadId: string,
-    operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
-    requestedMode?: ThreadExecutionMode,
-    logRouting?: boolean,
-  ): Promise<T>;
-  findThreadForWorkspaceHandoff(params: {
-    backend: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    freshness?: "last-known" | "provider";
-    threadId: string;
-  }): Promise<AppServerThreadSummary | undefined>;
   findHeadlessAutomationForThread(backend: AppServerBackendKind, threadId: string): McpHeadlessAutomationTurn | undefined;
-  findHeadlessAutomationTurnForRequest(
-    backend: AppServerBackendKind,
-    request: AppServerPendingRequestNotification,
-  ): Omit<McpHeadlessAutomationTurn, "backend" | "executionThreadId"> | undefined;
-  isLiveDynamicToolCall(backend: AppServerBackendKind, call: { threadId: string; turnId?: string }): boolean;
-  isTaskMonitorThread(context: { backend: AppServerBackendKind; threadId: string }): boolean;
-  taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined;
-  resolveCodexToolCallExecutionMode(
-    context: AgentToolCallContext,
-    automationMode?: ThreadExecutionMode,
-  ): Promise<ThreadExecutionMode | undefined>;
-  resolveClaudeToolCallExecutionMode(
-    threadId: string,
-    automationMode?: ThreadExecutionMode,
-  ): Promise<ThreadExecutionMode | undefined>;
-  dynamicToolPermissionDenied(
-    backend: AppServerBackendKind,
-    category: MessagingDynamicToolCategory,
-    call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
-  ): Promise<string | null>;
 }
 
 /**

@@ -1,3 +1,4 @@
+import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
@@ -41,7 +42,6 @@ import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
   isToolManagedWorktreePath,
-  type AgentEvent,
   type ArchiveWorktreeRequest,
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
@@ -60,7 +60,6 @@ import {
   type RestoreThreadResponse,
   type RestoreThreadWorktreeResult,
   type ThreadMessagingBindingTransition,
-  type ThreadExecutionMode,
   type ThreadOverlayState,
   type ThreadPullRequestWatchSummary,
   type ThreadMaintenanceRunStage,
@@ -126,7 +125,6 @@ import {
   type MessagingArchiveCleanupResult,
   type MessagingArchiveCleanupStore,
   type PendingServerRequest,
-  type ThreadListCallerReason,
   type WorktreeArchiveCandidate,
   type WorktreeRestoreCandidate,
 } from "./backend-registry-types";
@@ -185,7 +183,11 @@ export type ThreadArchiveCoordinatorHandlers = Pick<RegistryHandlers, "messaging
  * registry. Codex turn activity, the thread lifecycle locks, handoff
  * reservations and pending started threads stay registry-owned.
  */
-export interface ThreadArchiveCoordinatorHost {
+export interface ThreadArchiveCoordinatorHost extends Pick<RegistryHostPorts,
+  "getCachedThreadSummary" | "getClient" | "invalidateThreadListCache"
+  | "listThreads" | "publishLocalEvent" | "threadHasActiveTurn"
+  | "withCodexThreadClient"
+> {
   readonly acpWorktreeRepositoryResolver: (
     cwd: string,
     options?: { fresh?: boolean },
@@ -220,48 +222,14 @@ export interface ThreadArchiveCoordinatorHost {
     sourceRuntime?: CodexThreadEnvironmentRuntime;
     workMode: LaunchpadWorkMode;
   }): Promise<CodexThreadEnvironmentRuntime | undefined>;
-  getCachedThreadSummary(params: {
-    backend?: AppServerBackendKind;
-    threadId: string;
-  }): AppServerThreadSummary | undefined;
-  getClient(backend: AppServerBackendKind, executionMode?: ThreadExecutionMode): BackendClient;
-  invalidateThreadListCache(
-    backend?: AppServerBackendKind,
-    workspaceChanged?: boolean,
-    threadId?: string,
-    paths?: readonly string[],
-  ): void;
   listAllInstalledAcpThreads(
     filter?: string,
     archived?: boolean,
   ): Promise<AppServerThreadSummary[]>;
-  listThreads(params?: {
-    archived?: boolean;
-    backend?: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    enrichDirectories?: boolean;
-    filter?: string;
-    forceRefresh?: boolean;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  }): Promise<AppServerThreadSummary[]>;
-  publishLocalEvent(event: AgentEvent): Promise<void>;
-  threadHasActiveTurn(
-    threadId: string,
-    backend?: AppServerBackendKind,
-    ignoreCodexStartReservation?: boolean,
-  ): boolean;
   threadHasBlockingWorkspaceMove(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): boolean;
-  withCodexThreadClient<T>(
-    threadId: string,
-    operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
-    requestedMode?: ThreadExecutionMode,
-    logRouting?: boolean,
-  ): Promise<T>;
   withPendingStartedThreads(
     backend: AppServerBackendKind,
     threads: AppServerThreadSummary[],

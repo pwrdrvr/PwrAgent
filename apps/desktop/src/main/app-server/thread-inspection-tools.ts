@@ -1,5 +1,5 @@
+import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
-import type { ThreadRenameOptions } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import {
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
@@ -17,9 +17,7 @@ import {
   threadSeenWatermark,
   type AppServerBackendKind,
   type AppServerPendingRequestNotification,
-  type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
-  type AppServerThreadMessageOrigin,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerToolRequestUserInputResponse,
@@ -29,7 +27,6 @@ import {
   type GetThreadStatusToolArgs,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
-  type MessagingDynamicToolCategory,
   type MessagingThreadBindingSummary,
   type MutateThreadParentV1Request,
   type MutateThreadToolArgs,
@@ -39,8 +36,6 @@ import {
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
   type ReadThreadToolArgs,
-  type RenameThreadRequest,
-  type RenameThreadResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type SetThreadExecutionModeRequest,
@@ -55,7 +50,6 @@ import {
   type ThreadLockSource,
   type ThreadMaintenanceRules,
   type ThreadMutationAppliedChange,
-  type ThreadOverlayState,
   type ThreadSearchFilters,
   type ThreadSearchResult,
 } from "@pwragent/shared";
@@ -89,7 +83,6 @@ import {
 import type {
   MessagingArchiveCleanupStore,
   PendingServerRequest,
-  ThreadListCallerReason,
   ThreadMaintenanceToolHandler,
 } from "./backend-registry-types";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
@@ -146,7 +139,11 @@ export interface ThreadInspectionToolsDependencies {
  * call. The registry's construction ports satisfy it; this module never
  * imports the registry.
  */
-export interface ThreadInspectionToolsHost {
+export interface ThreadInspectionToolsHost extends Pick<RegistryHostPorts,
+  "dynamicToolPermissionDenied" | "listThreads" | "readCausalMessagingContext"
+  | "readThread" | "renameThread" | "resolveAgentCallerExecutionMode"
+  | "threadHasActiveTurn"
+> {
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
   readonly agentThreadActions: RegistryHandlers["agentThreadActions"];
   readonly federationHandler: RegistryHandlers["federationHandler"];
@@ -158,21 +155,8 @@ export interface ThreadInspectionToolsHost {
   readonly messagingStore: MessagingArchiveCleanupStore | null | undefined;
   /** Nothing when an instance id names this instance itself, whose threads are local. */
   ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;
-  listThreads(params?: {
-    archived?: boolean;
-    backend?: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    enrichDirectories?: boolean;
-    filter?: string;
-    forceRefresh?: boolean;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  }): Promise<AppServerThreadSummary[]>;
-  readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse>;
   archiveThread(request: ArchiveThreadRequest & { preserveWorktrees?: boolean }): Promise<ArchiveThreadResponse>;
   restoreThread(request: RestoreThreadRequest): Promise<RestoreThreadResponse>;
-  renameThread(request: RenameThreadRequest, options?: ThreadRenameOptions): Promise<RenameThreadResponse>;
   handoffThreadWorkspace(request: HandoffThreadWorkspaceRequest): Promise<HandoffThreadWorkspaceResponse>;
   setThreadExecutionMode(params: SetThreadExecutionModeRequest): Promise<SetThreadExecutionModeResponse>;
   setThreadModelSettings(params: SetThreadModelSettingsRequest): Promise<SetThreadModelSettingsResponse>;
@@ -201,25 +185,6 @@ export interface ThreadInspectionToolsHost {
     sourceThreadId?: string;
     limit?: number;
   }): PendingThreadWorkspaceMoveSummary[];
-  threadHasActiveTurn(
-    threadId: string,
-    backend?: AppServerBackendKind,
-    ignoreCodexStartReservation?: boolean,
-  ): boolean;
-  resolveAgentCallerExecutionMode(context: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    turnId?: string;
-    overlay?: ThreadOverlayState;
-  }): Promise<ThreadExecutionMode>;
-  readCausalMessagingContext(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<
-    Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
-  >;
-  dynamicToolPermissionDenied(
-    backend: AppServerBackendKind,
-    category: MessagingDynamicToolCategory,
-    call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
-  ): Promise<string | null>;
 }
 
 /**

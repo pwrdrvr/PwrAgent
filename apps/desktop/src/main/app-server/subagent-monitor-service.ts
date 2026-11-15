@@ -1,3 +1,4 @@
+import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
@@ -10,7 +11,6 @@ import os from "node:os";
 import type {
   ThreadSource as CodexThreadSource,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
-import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import {
   type AcpBackendId,
   CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
@@ -20,8 +20,6 @@ import {
   type AgentEvent,
   type ThreadLock,
   type AppServerNotification,
-  type AppServerReadThreadRequest,
-  type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
   type AppServerThreadCommandDetail,
   type AppServerThreadMessageOrigin,
@@ -31,8 +29,6 @@ import {
   type AppServerTurnInputItem,
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
-  type BackendAcpSessionRuntimeState,
-  type BackendModelOption,
   type StopSubAgentRequest,
   type StopSubAgentResponse,
   type ThreadExecutionMode,
@@ -76,9 +72,6 @@ import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gate
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
 import { getMainLogger } from "../log";
 import {
-  type BackendModelCatalogCallerReason,
-} from "./backend-model-catalog";
-import {
   type ThreadTurnQueueEntry,
   type ThreadTurnQueueOrigin,
   type ThreadTurnQueueSubmissionResult,
@@ -93,7 +86,6 @@ import {
   turnIdFromTerminalNotification,
 } from "./backend-registry-notifications";
 import {
-  type BackendClient,
   type CodexNativeSubAgentCall,
   type CodexNativeSubAgentReconciliation,
   type DerivedLiveThreadTokenUsage,
@@ -201,7 +193,14 @@ export interface SubAgentMonitorServiceDependencies {
  * registry-owned: a managed task monitor's start reserves and records them
  * alongside the registry's own turn paths.
  */
-export interface SubAgentMonitorServiceHost {
+export interface SubAgentMonitorServiceHost extends Pick<RegistryHostPorts,
+  "getCachedThreadSummary" | "getClient" | "invalidateThreadListCache"
+  | "isLiveDynamicToolCall" | "liveProfileRuntimeInstanceIds" | "readCausalMessagingContext"
+  | "readCodexDefaultModelsOnce" | "readDelegatedTurnAncestry" | "readThread"
+  | "resolveCodexThreadExecutionModeForActiveTurn" | "resolveThreadEnvironmentCwd" | "startAcpSession"
+  | "startAcpTurn" | "submitTurn" | "withArchiveWorkspaceWrite"
+  | "withCodexThreadClient"
+> {
   readonly activeCodexTurnModes: Map<string, ThreadExecutionMode>;
   readonly activeTurnKeys: ActiveTurnKeySet;
   readonly mcpGatewayTools: McpGatewayToolService | undefined;
@@ -256,27 +255,11 @@ export interface SubAgentMonitorServiceHost {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void>;
-  getCachedThreadSummary(params: {
-    backend?: AppServerBackendKind;
-    threadId: string;
-  }): AppServerThreadSummary | undefined;
-  getClient(backend: AppServerBackendKind, executionMode?: ThreadExecutionMode): BackendClient;
   interruptTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
-  invalidateThreadListCache(
-    backend?: AppServerBackendKind,
-    workspaceChanged?: boolean,
-    threadId?: string,
-    paths?: readonly string[],
-  ): void;
-  isLiveDynamicToolCall(
-    backend: AppServerBackendKind,
-    call: { threadId: string; turnId?: string },
-  ): boolean;
-  liveProfileRuntimeInstanceIds(): string[] | undefined;
   observeLiveThreadContextReplay(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -284,51 +267,15 @@ export interface SubAgentMonitorServiceHost {
     turnId?: string;
   }): ObservedContextReplayTally | undefined;
   persistStartingTurnOrigin(entry: StartingTurnOrigin | undefined): Promise<void>;
-  readCausalMessagingContext(
-    context: { backend: AppServerBackendKind; threadId: string; turnId?: string },
-  ): Promise<
-    Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
-  >;
-  readCodexDefaultModelsOnce(
-    callerReason: BackendModelCatalogCallerReason,
-  ): Promise<BackendModelOption[]>;
-  readDelegatedTurnAncestry(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    turnId?: string;
-  }): Promise<{ parentTurnId?: string; rootTurnId?: string }>;
-  readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse>;
   readThreadLock(backend: AppServerBackendKind, threadId: string): Promise<ThreadLock | undefined>;
   readThreadUsageActivities(
     backend: AppServerBackendKind,
     threadIds: readonly string[],
   ): Promise<Record<string, AppServerThreadActivityEntry[]>>;
-  resolveCodexThreadExecutionModeForActiveTurn(threadId: string): Promise<ThreadExecutionMode>;
   resolvePausedThreadProject(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): ProjectForgeAutomationResolution | undefined;
-  resolveThreadEnvironmentCwd(
-    backend: AppServerBackendKind,
-    threadId: string,
-    overlay?: ThreadOverlayState,
-  ): Promise<string | undefined>;
-  startAcpSession(params: {
-    backend: AcpBackendId;
-    cwd?: string;
-    executionMode: ThreadExecutionMode;
-    acpRuntime?: BackendAcpSessionRuntimeState;
-    reasoningEffort?: string;
-    mcpRegistration?: AcpMcpServerRegistration;
-    hidden?: boolean;
-  }): Promise<{ threadId: string }>;
-  startAcpTurn(params: {
-    backend: AcpBackendId;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   startTurnWithoutHandoff(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -366,36 +313,11 @@ export interface SubAgentMonitorServiceHost {
     /** Names the entry in the queue and Waiting for, in place of its text. */
     title?: string;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>>;
-  submitTurn(params: {
-    queueEntryId?: string;
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    origin?: ThreadTurnQueueOrigin;
-    executionMode?: ThreadExecutionMode;
-    approvalPolicy?: string;
-    sandbox?: string;
-    model?: string;
-    collaborationMode?: AppServerCollaborationModeRequest;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    automationRunId?: string;
-    messageOrigin?: AppServerThreadMessageOrigin;
-    delivery?: "new_turn";
-  }): Promise<ThreadTurnQueueSubmissionResult>;
   usageAccountForTurn(
     backend: AppServerBackendKind,
     threadId: string,
     turnId: string | undefined,
   ): Promise<string | undefined>;
-  withArchiveWorkspaceWrite<T>(paths: readonly string[], work: () => Promise<T>): Promise<T>;
-  withCodexThreadClient<T>(
-    threadId: string,
-    operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
-    requestedMode?: ThreadExecutionMode,
-    logRouting?: boolean,
-  ): Promise<T>;
 }
 
 /**

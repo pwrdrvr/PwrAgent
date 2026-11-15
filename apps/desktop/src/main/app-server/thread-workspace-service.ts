@@ -1,9 +1,7 @@
+import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
-import {
-  type ThreadRenameOptions,
-} from "@pwragent/owner-core/thread-naming-lifecycle";
 import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
 import {
   resolveModelOptionReference,
@@ -25,7 +23,6 @@ import {
   buildThreadMarkdownLink,
   buildThreadUrl,
   shortenDerivedThreadTitle,
-  type AgentEvent,
   type AppServerPendingRequestNotification,
   type AppServerThreadMessageOrigin,
   type AppServerToolRequestUserInputResponse,
@@ -42,8 +39,6 @@ import {
   type HandoffThreadWorkspaceResponse,
   type LinkedDirectorySummary,
   type NavigationLaunchpadDraft,
-  type RenameThreadRequest,
-  type RenameThreadResponse,
   type MoveThreadToMainCheckoutRequest,
   type MoveThreadToMainCheckoutResponse,
   type RecreateThreadWorktreeRequest,
@@ -120,12 +115,10 @@ import {
 } from "./project-forge-automation-index";
 import {
   type AcceptedThreadControlRequest,
-  type BackendClient,
   type BackendRegistryForkThreadRequest,
   type HandoffSourceSettings,
   type ModelSettings,
   type PendingServerRequest,
-  type ThreadListCallerReason,
 } from "./backend-registry-types";
 import {
   ACTIVE_TURN_HANDOFF_ERROR,
@@ -186,7 +179,14 @@ export interface ThreadWorkspaceServiceDependencies {
  * tool-call replays, the Git directory service, linked directories and
  * launchpads, and missing Codex thread tracking stay registry-owned.
  */
-export interface ThreadWorkspaceServiceHost {
+export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
+  "assertThreadNotLocked" | "findThreadForWorkspaceHandoff" | "getCachedThreadSummary"
+  | "getClient" | "invalidateThreadListCache" | "isLiveDynamicToolCall"
+  | "publishLocalEvent" | "readCausalMessagingContext" | "readDelegatedTurnAncestry"
+  | "renameThread" | "resolveAgentCallerExecutionMode" | "resolveCodexThreadExecutionModeForActiveTurn"
+  | "resolveModelSettings" | "resolveThreadEnvironmentCwd" | "threadHasActiveTurn"
+  | "withCodexThreadClient"
+> {
   readonly acceptedHandoffTaskRequests: Map<string, AcceptedThreadControlRequest>;
   readonly activeCodexTurnModes: ReadonlyMap<string, ThreadExecutionMode>;
   readonly gitDirectoryService: GitDirectoryService;
@@ -202,7 +202,6 @@ export interface ThreadWorkspaceServiceHost {
     settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
   ): Promise<ModelSettings>;
   assertThreadNotHandingOff(backend: AppServerBackendKind, threadId: string): void;
-  assertThreadNotLocked(backend: AppServerBackendKind, threadId: string): Promise<void>;
   clearMissingCodexThread(threadId: string): void;
   dispatchMessagingRequest(
     request: Parameters<PwrAgentMessagingHandler>[0],
@@ -232,12 +231,6 @@ export interface ThreadWorkspaceServiceHost {
       owner?: FederationTarget;
     },
   ): Promise<EnsureDirectoryLaunchpadResponse>;
-  findThreadForWorkspaceHandoff(params: {
-    backend: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    freshness?: "last-known" | "provider";
-    threadId: string;
-  }): Promise<AppServerThreadSummary | undefined>;
   forkThread(
     request: BackendRegistryForkThreadRequest,
   ): Promise<ForkThreadResponse>;
@@ -245,49 +238,24 @@ export interface ThreadWorkspaceServiceHost {
     backend: AppServerBackendKind,
     callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendLaunchpadOptions | undefined>;
-  getCachedThreadSummary(params: {
-    backend?: AppServerBackendKind;
-    threadId: string;
-  }): AppServerThreadSummary | undefined;
-  getClient(backend: AppServerBackendKind, executionMode?: ThreadExecutionMode): BackendClient;
   getTurnInputAttachments(params: {
     backend: AppServerBackendKind;
     threadId: string;
     turnId: string;
   }): AppServerTurnInputItem[];
-  invalidateThreadListCache(
-    backend?: AppServerBackendKind,
-    workspaceChanged?: boolean,
-    threadId?: string,
-    paths?: readonly string[],
-  ): void;
   isCodexThreadKnownMissing(threadId: string): boolean;
-  isLiveDynamicToolCall(
-    backend: AppServerBackendKind,
-    call: { threadId: string; turnId?: string },
-  ): boolean;
   publishIncomingWork(params: {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
     messageOrigin?: AppServerThreadMessageOrigin;
   }, turnId: string, recipientTitle?: string): Promise<void>;
-  publishLocalEvent(event: AgentEvent): Promise<void>;
-  readCausalMessagingContext(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<
-    Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
-  >;
-  readDelegatedTurnAncestry(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    turnId?: string;
-  }): Promise<{ parentTurnId?: string; rootTurnId?: string }>;
   recordCodexWorktreeOwnerThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
     worktreePath?: string;
   }): Promise<void>;
   recordMissingCodexThread(threadId: string): void;
-  renameThread(request: RenameThreadRequest, options?: ThreadRenameOptions): Promise<RenameThreadResponse>;
   replaceWorkspaceLinkedDirectory(params: {
     resetProjectState?: boolean;
     backend: AppServerBackendKind;
@@ -297,35 +265,16 @@ export interface ThreadWorkspaceServiceHost {
     retainWorktree?: LinkedDirectorySummary;
     preserveOtherWorktrees?: boolean;
   }): Promise<ThreadOverlayState>;
-  resolveAgentCallerExecutionMode(context: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    turnId?: string;
-    overlay?: ThreadOverlayState;
-  }): Promise<ThreadExecutionMode>;
-  resolveCodexThreadExecutionModeForActiveTurn(
-    threadId: string,
-  ): Promise<ThreadExecutionMode>;
   resolveHandoffSourceExecutionMode(params: {
     backend: AppServerBackendKind;
     threadId: string;
     turnId?: string;
     overlay?: ThreadOverlayState;
   }): Promise<ThreadExecutionMode>;
-  resolveModelSettings(
-    backend: AppServerBackendKind,
-    settings: ModelSettings,
-    callerReason?: BackendModelCatalogCallerReason,
-  ): Promise<ModelSettings>;
   resolveThread(params: {
     backend?: AppServerBackendKind;
     threadId: string;
   }): Promise<AppServerThreadSummary | undefined>;
-  resolveThreadEnvironmentCwd(
-    backend: AppServerBackendKind,
-    threadId: string,
-    overlay?: ThreadOverlayState,
-  ): Promise<string | undefined>;
   startThread(params: {
     backend: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
@@ -373,27 +322,11 @@ export interface ThreadWorkspaceServiceHost {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
-  threadHasActiveTurn(
-    threadId: string,
-    backend?: AppServerBackendKind,
-    ignoreCodexStartReservation?: boolean,
-  ): boolean;
   updateThreadGitBranchMetadata(params: {
     backend: AppServerBackendKind;
     branch?: string;
     threadId: string;
   }): Promise<void>;
-  withCodexThreadClient<T>(
-    threadId: string,
-    operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
-    requestedMode?: ThreadExecutionMode,
-    // Whether to emit the routing diagnostic. Reads (readThread) are
-    // execution-mode-agnostic and get called once per thread by content
-    // search, so they opt out — otherwise a single thread search spews one
-    // routing line per thread. Turn/execution paths keep it on (the #203
-    // security cross-check in messaging-controller relies on it).
-    logRouting?: boolean,
-  ): Promise<T>;
 }
 
 /**
