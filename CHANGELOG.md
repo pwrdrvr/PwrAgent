@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.4.6 - 2026-11-15
+
+- New-thread Models - Honor profile defaults and remembered model and reasoning-effort choices when switching providers. Update the built-in Codex model defaults without letting a configured third-party provider override the OpenAI default.
+- Settings Editors - Open Codex provider and messaging-route editors directly beneath the row being edited instead of above the list, keeping the form beside its context.
+- Bonsai and Pricing - Recognize the Bonsai model alias and shorten local model paths in pricing displays while preserving the full model identity for requests and accounting.
+
 ## v1.4.5 - 2026-11-14
 
 - Reusable Decisions - Let agents register, list, invoke, update, and delete reusable predicate, choice, and score decisions through OpenAI Decisions, TypeSafe Jev, or a configured local decision model. Validate inputs against a JSON Schema, retain versioned definitions, and invoke decisions individually, in batches, or without registration.
