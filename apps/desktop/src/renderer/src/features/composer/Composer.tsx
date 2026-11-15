@@ -1,3 +1,6 @@
+import { useComposerWorkspaceHandoffState } from "./useComposerWorkspaceHandoffState";
+import { useComposerSendPreparation } from "./useComposerSendPreparation";
+import { useComposerScheduleMenu } from "./useComposerScheduleMenu";
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
 import {
   buildProviderPickerEntries,
@@ -188,7 +191,6 @@ import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { ReviewAutoFixSwitch } from "./ReviewAutoFixSwitch";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { isScheduledThreadAction } from "../../lib/useScheduledThreadActionProjection";
-import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import {
   agentEventMatchesThread,
   threadSummaryIdentityKey,
@@ -310,7 +312,6 @@ import {
   LaunchpadMachineChip,
   type LaunchpadMachineControl,
 } from "./LaunchpadMachineChip";
-import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
   ComposerDropdown,
   useDismissableMenu,
@@ -706,9 +707,6 @@ async function refreshProviderCatalogOnFirstSelection(
     providerCatalogsRefreshedThisSession.delete(key);
   }
 }
-
-// "fresh-from-base" starts a new worktree at another branch and moves nothing.
-type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy | "fresh-from-base";
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
@@ -3126,6 +3124,11 @@ function ComposerApplicationButton(props: {
 }
 
 export const Composer = memo(function Composer(props: ComposerProps) {
+  const view = useComposerController(props);
+  return <ComposerView render={view} />;
+});
+
+function useComposerController(props: ComposerProps) {
   const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
   // Composer voice entry points stay hidden until dictation can edit only the
   // draft. Keep the bar so an already-open session or failed stop can be ended.
@@ -3289,30 +3292,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     workspaceMenuOpen,
     () => setWorkspaceMenuOpen(false),
   );
-  const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
-  // The send split (pill and menu), the menu itself, and its caret. The
-  // menu takes the ARIA menu keyboard from useMenuNavigation, which leaves
-  // the pointer to us: a press outside the split closes it.
-  const scheduleMenuRef = useRef<HTMLDivElement>(null);
-  const scheduleMenuListRef = useRef<HTMLDivElement>(null);
-  const scheduleMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const closeScheduleMenu = useCallback(() => setScheduleMenuOpen(false), []);
-  useMenuNavigation({
-    open: scheduleMenuOpen,
-    menuRef: scheduleMenuListRef,
-    triggerRef: scheduleMenuTriggerRef,
-    onClose: closeScheduleMenu,
-  });
-  useEffect(() => {
-    if (!scheduleMenuOpen) return;
-    const handlePointerDown = (event: PointerEvent): void => {
-      if (!scheduleMenuRef.current?.contains(event.target as Node)) {
-        setScheduleMenuOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [scheduleMenuOpen]);
+  const {
+    scheduleMenuOpen,
+    setScheduleMenuOpen,
+    scheduleMenuRef,
+    scheduleMenuListRef,
+    scheduleMenuTriggerRef,
+  } = useComposerScheduleMenu();
   const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
   // Recently referenced files for the reference picker's Files tab —
   // loaded lazily from the main process each time the picker opens.
@@ -3337,94 +3323,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // unarmed → Send sends now. Defaults armed so a freshly-loaded schedule is
   // preserved unless the operator explicitly unchecks it.
   const [scheduleArmed, setScheduleArmed] = useState(true);
-  const [handoffDialog, setHandoffDialog] = useState<
-    HandoffThreadWorkspaceRequest["direction"] | undefined
-  >();
-  const [localHandoffStrategy, setLocalHandoffStrategy] =
-    useState<LocalHandoffStrategy>("detached-changes");
-  // Handoff to Local: keep the main checkout's branch (the default), or move
-  // the worktree's branch into it as before.
-  const [worktreeHandoffStrategy, setWorktreeHandoffStrategy] =
-    useState<"keep-local-branch" | "move-branch">("keep-local-branch");
-  const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
-  const [newLocalBranch, setNewLocalBranch] = useState("");
-  // Empty until the operator picks one; the default follows the branch list.
-  const [pickedFreshBaseRef, setFreshBaseRef] = useState("");
-  const [freshBranchName, setFreshBranchName] = useState("");
-  const [projectTargetPath, setProjectTargetPath] = useState("");
-  const [projectSearch, setProjectSearch] = useState("");
-  const projectDestinations = useNavigationQueryResource({
-    desktopApi: props.desktopApi,
-    active: handoffDialog === "to-project",
-    request: {
-      protocol: 2,
-      consumer: "mentions",
-      query: { kind: "directory-index", filter: projectSearch },
-      pageSize: 10,
-      federationTarget: filesystemFederationTarget,
-    },
-  });
-  const destinationOwner = projectDestinations.state?.request.federationTarget;
-  const destinationOwnerKey = destinationOwner?.scope === "remote"
-    ? `remote:${destinationOwner.instanceId}` : "local";
-  const projectDestinationsLoaded = destinationOwnerKey === filesystemAuthorityKey
-    && projectDestinations.state?.page !== undefined;
-  // A new search resets the resource to a page-less state, so keep the
-  // owner's last answer on screen until the next one lands. The combobox
-  // narrows it by the typed text meanwhile, instead of the list blanking on
-  // every keystroke while a peer answers.
-  const settledProjectDirectoriesRef = useRef<{
-    authorityKey: string;
-    directories: NavigationDirectorySummary[];
-  } | undefined>(undefined);
-  if (projectDestinationsLoaded) {
-    settledProjectDirectoriesRef.current = {
-      authorityKey: filesystemAuthorityKey,
-      directories: projectDestinations.state?.page?.directories ?? [],
-    };
-  }
-  const projectDirectories = projectDestinationsLoaded
-    ? settledProjectDirectoriesRef.current?.directories ?? []
-    : settledProjectDirectoriesRef.current?.authorityKey === filesystemAuthorityKey
-      ? settledProjectDirectoriesRef.current.directories
-      : [];
-  const projectDestinationInputId = useId();
-  useEffect(() => {
-    setHandoffDialog(undefined);
-    setProjectTargetPath("");
-  }, [filesystemAuthorityKey]);
-
-  const [handoffError, setHandoffError] = useState<string | undefined>();
-  const [handoffSubmitting, setHandoffSubmitting] = useState(false);
-  const [sending, setSendingState] = useState(false);
-  const sendingRef = useRef(false);
-  const updateSending = (nextSending: boolean): void => {
-    sendingRef.current = nextSending;
-    setSendingState(nextSending);
-  };
-  const [preparingSend, setPreparingSend] = useState(false);
-  const sendPreparationRef = useRef<AbortController | undefined>(undefined);
-  // One teardown for every way a preparation ends early. The preparation is
-  // what set `sending` true, and the abort makes `prepareThreadTurnPayload`
-  // return before its own reset, so releasing it belongs here rather than at
-  // each call site. On a scope change the draft-rehydration effect below also
-  // clears `sending`; saying it here too keeps this function correct on its
-  // own instead of load-bearing on that ordering.
-  const abandonSendPreparation = (): void => {
-    const preparation = sendPreparationRef.current;
-    sendPreparationRef.current = undefined;
-    if (!preparation) {
-      return;
-    }
-    preparation.abort();
-    setPreparingSend(false);
-    updateSending(false);
-  };
-  const cancelSendPreparation = abandonSendPreparation;
-  useEffect(() => {
-    setPreparingSend(false);
-    return abandonSendPreparation;
-  }, [composerScopeKey]);
+  const {
+    handoffDialog,
+    setHandoffDialog,
+    localHandoffStrategy,
+    setLocalHandoffStrategy,
+    worktreeHandoffStrategy,
+    setWorktreeHandoffStrategy,
+    leaveLocalBranch,
+    setLeaveLocalBranch,
+    newLocalBranch,
+    setNewLocalBranch,
+    pickedFreshBaseRef,
+    setFreshBaseRef,
+    freshBranchName,
+    setFreshBranchName,
+    projectTargetPath,
+    setProjectTargetPath,
+    setProjectSearch,
+    projectDestinations,
+    projectDestinationsLoaded,
+    projectDirectories,
+    projectDestinationInputId,
+    handoffError,
+    setHandoffError,
+    handoffSubmitting,
+    setHandoffSubmitting,
+  } = useComposerWorkspaceHandoffState({ desktopApi: props.desktopApi, filesystemFederationTarget, filesystemAuthorityKey });
+  const {
+    sending,
+    sendingRef,
+    updateSending,
+    preparingSend,
+    setPreparingSend,
+    sendPreparationRef,
+    cancelSendPreparation,
+  } = useComposerSendPreparation(composerScopeKey);
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
   // React state only drives presentation. This ref synchronously suppresses
@@ -12446,408 +12380,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const expandedStripItem = stripLightboxItems[expandedStripIndex];
   const previousStripItem = stripLightboxItems[expandedStripIndex - 1];
   const nextStripItem = stripLightboxItems[expandedStripIndex + 1];
-  const imageLightbox = expandedStripItem ? (
-    <ImageLightbox
-      alt={expandedStripItem.alt}
-      caption={expandedStripItem.caption}
-      dialogLabel={expandedStripItem.dialogLabel}
-      src={expandedStripItem.src}
-      position={expandedStripIndex + 1}
-      total={stripLightboxItems.length}
-      onClose={() => setExpandedStripItemKey(undefined)}
-      onPrevious={
-        previousStripItem
-          ? () => setExpandedStripItemKey(previousStripItem.key)
-          : undefined
-      }
-      onNext={
-        nextStripItem
-          ? () => setExpandedStripItemKey(nextStripItem.key)
-          : undefined
-      }
-    />
-  ) : null;
-  const workspaceHandoffDialog =
-    handoffDialog && threadWorkspace
-      ? createPortal(
-          <div className="workspace-handoff-modal">
-            <div
-              ref={handoffDialogRef}
-              aria-label={
-                handoffDialog === "to-project"
-                  ? "Move to Project"
-                  : toNewWorktree
-                    ? "Handoff to New Worktree"
-                    : "Handoff to Local"
-              }
-              aria-modal="true"
-              className="workspace-handoff-dialog"
-              role="dialog"
-            >
-              <h2>
-                {handoffDialog === "to-project"
-                  ? "Move to Project"
-                  : toNewWorktree
-                    ? "Handoff to New Worktree"
-                    : "Handoff to Local"}
-              </h2>
-              <p>
-                {handoffDialog === "to-project"
-                  ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
-                  : toNewWorktree
-                    ? "Choose how this thread should move into a new worktree."
-                    : keepLocalBranchAvailable
-                      ? <>Continue this thread in the main checkout, <code>{threadWorkspace.repositoryPath}</code>.</>
-                      : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
-              </p>
-              {handoffDialog === "worktree-to-local" && keepLocalBranchAvailable ? (
-                <div
-                  aria-label="Handoff strategy"
-                  className="workspace-handoff-dialog__strategy-list"
-                  role="radiogroup"
-                >
-                  <button
-                    aria-checked={worktreeHandoffStrategy === "keep-local-branch"}
-                    className="workspace-handoff-dialog__strategy"
-                    disabled={handoffSubmitting}
-                    role="radio"
-                    type="button"
-                    onClick={() => setWorktreeHandoffStrategy("keep-local-branch")}
-                  >
-                    <span className="workspace-handoff-dialog__strategy-title">
-                      {localCheckoutBranch && localCheckoutBranch !== sourceBranch
-                        ? `Keep Local on ${localCheckoutBranch}`
-                        : "Keep Local on its branch"}
-                    </span>
-                    <span>
-                      Only the thread moves. Local stays on its branch. The worktree is
-                      archived with a checkpoint of its uncommitted changes, and
-                      {" "}{sourceBranch && sourceBranch !== "HEAD" ? <code>{sourceBranch}</code> : "its branch"}{" "}
-                      stays where it is.
-                    </span>
-                  </button>
-                  <button
-                    aria-checked={worktreeHandoffStrategy === "move-branch"}
-                    className="workspace-handoff-dialog__strategy"
-                    disabled={handoffSubmitting || !sourceBranch}
-                    role="radio"
-                    type="button"
-                    onClick={() => setWorktreeHandoffStrategy("move-branch")}
-                  >
-                    <span className="workspace-handoff-dialog__strategy-title">
-                      {sourceBranch && sourceBranch !== "HEAD"
-                        ? `Move ${sourceBranch} to Local`
-                        : "Move this worktree to Local"}
-                    </span>
-                    <span>
-                      Switch Local to the worktree&rsquo;s branch. Dirty tracked and
-                      non-ignored files are stashed and applied in Local, then the
-                      worktree is archived.
-                    </span>
-                  </button>
-                </div>
-              ) : null}
-              {handoffDialog === "to-project" ? (
-                <div className="workspace-handoff-dialog__field">
-                  <label htmlFor={projectDestinationInputId}>Destination project</label>
-                  <ProjectDestinationCombobox
-                    id={projectDestinationInputId}
-                    directories={projectDirectories}
-                    disabled={handoffSubmitting}
-                    error={projectDestinations.state?.error}
-                    loaded={projectDestinationsLoaded}
-                    remote={filesystemFederationTarget?.scope === "remote"}
-                    value={projectTargetPath}
-                    onChange={setProjectTargetPath}
-                    onPickDirectory={props.desktopApi?.pickDirectoryFromDisk && !filesystemFederationTarget
-                      ? () => {
-                          void props.desktopApi!.pickDirectoryFromDisk!().then((result) => {
-                            if (!result.canceled) setProjectTargetPath(result.path);
-                          }).catch((error: unknown) => {
-                            setHandoffError(error instanceof Error ? error.message : String(error));
-                          });
-                        }
-                      : undefined}
-                    onQueryChange={setProjectSearch}
-                  />
-                </div>
-              ) : keepLocalBranchSelected ? null : (
-                <dl className="workspace-handoff-dialog__summary">
-                  <div>
-                    <dt>
-                      {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
-                        ? "Detached HEAD to move"
-                        : (handoffDialog === "local-to-worktree" &&
-                            (localHandoffStrategy === "detached-changes"
-                              || localHandoffStrategy === "fresh-from-base"))
-                          || (fromWorktreeToNew && localHandoffStrategy !== "move-branch")
-                          ? "Current branch"
-                          : "Branch to move"}
-                    </dt>
-                    <dd>{sourceBranch ?? "Unknown branch"}</dd>
-                  </div>
-                </dl>
-              )}
-              {toNewWorktree ? (
-                <>
-                  <div
-                    aria-label="Handoff strategy"
-                    className="workspace-handoff-dialog__strategy-list"
-                    role="radiogroup"
-                  >
-                    <button
-                      aria-checked={localHandoffStrategy === "detached-changes"}
-                      className="workspace-handoff-dialog__strategy"
-                      disabled={handoffSubmitting}
-                      role="radio"
-                      type="button"
-                      onClick={() => setLocalHandoffStrategy("detached-changes")}
-                    >
-                      <span className="workspace-handoff-dialog__strategy-title">
-                        Handoff to Detached HEAD
-                      </span>
-                      <span>
-                        {fromWorktreeToNew
-                          ? "Create a detached worktree at the current commit and move dirty non-ignored changes on top."
-                          : "Keep Local on the current branch. Create a detached worktree at the current branch tip and move dirty non-ignored changes on top."}
-                      </span>
-                    </button>
-                    <button
-                      aria-checked={localHandoffStrategy === "new-branch"}
-                      className="workspace-handoff-dialog__strategy"
-                      disabled={handoffSubmitting}
-                      role="radio"
-                      type="button"
-                      onClick={() => setLocalHandoffStrategy("new-branch")}
-                    >
-                      <span className="workspace-handoff-dialog__strategy-title">
-                        Handoff to New Branch
-                      </span>
-                      <span>
-                        {fromWorktreeToNew
-                          ? "Create a named branch in the new worktree and move dirty non-ignored changes on top."
-                          : "Keep Local on this branch. Create a named branch in the new worktree and move dirty non-ignored changes on top."}
-                      </span>
-                    </button>
-                    <button
-                      aria-checked={localHandoffStrategy === "move-branch"}
-                      className="workspace-handoff-dialog__strategy"
-                      disabled={handoffSubmitting || (fromWorktreeToNew
-                        ? !sourceBranch || sourceBranch === "HEAD"
-                        : branchOptions.length === 0)}
-                      role="radio"
-                      type="button"
-                      onClick={() => setLocalHandoffStrategy("move-branch")}
-                    >
-                      <span className="workspace-handoff-dialog__strategy-title">
-                        Handoff Current Branch
-                      </span>
-                      <span>
-                        {fromWorktreeToNew
-                          ? "Move this branch into the new worktree. The old worktree lets go of it first."
-                          : "Move this branch into the new worktree, then switch this checkout to a selected branch."}
-                      </span>
-                    </button>
-                    <button
-                      aria-checked={localHandoffStrategy === "fresh-from-base"}
-                      className="workspace-handoff-dialog__strategy"
-                      disabled={handoffSubmitting || freshBaseOptions.length === 0}
-                      role="radio"
-                      type="button"
-                      onClick={() => setLocalHandoffStrategy("fresh-from-base")}
-                    >
-                      <span className="workspace-handoff-dialog__strategy-title">
-                        Start Fresh from a Branch
-                      </span>
-                      <span>
-                        Create a new worktree from another branch, such as origin/main. Uncommitted changes stay here.
-                      </span>
-                    </button>
-                  </div>
-                  {localHandoffStrategy === "fresh-from-base" ? (
-                    <>
-                      <div className="workspace-handoff-dialog__field">
-                        <span aria-hidden="true">Base branch</span>
-                        <BranchPicker
-                          ariaLabel="Base branch"
-                          className="branch-picker--dialog"
-                          disabled={handoffSubmitting}
-                          options={freshBaseOptions}
-                          value={freshBaseRef}
-                          onChange={setFreshBaseRef}
-                        />
-                      </div>
-                      <label className="workspace-handoff-dialog__field">
-                        New branch name (optional)
-                        <input
-                          aria-label="New branch name"
-                          className="workspace-handoff-dialog__text-input"
-                          disabled={handoffSubmitting}
-                          placeholder="Leave empty for a detached HEAD"
-                          spellCheck={false}
-                          type="text"
-                          value={freshBranchName}
-                          onChange={(event) => setFreshBranchName(event.target.value)}
-                        />
-                      </label>
-                    </>
-                  ) : null}
-                  {handoffDialog === "local-to-worktree" && localHandoffStrategy === "move-branch" ? (
-                    <div className="workspace-handoff-dialog__field">
-                      <span aria-hidden="true">Leave current checkout on</span>
-                      <BranchPicker
-                        ariaLabel="Leave current checkout on"
-                        className="branch-picker--dialog"
-                        disabled={handoffSubmitting}
-                        options={leaveLocalBranchOptions}
-                        value={leaveLocalBranch}
-                        onChange={setLeaveLocalBranch}
-                      />
-                    </div>
-                  ) : null}
-                  {localHandoffStrategy === "new-branch" ? (
-                    <label className="workspace-handoff-dialog__field">
-                      New branch name
-                      <input
-                        aria-label="New branch name"
-                        className="workspace-handoff-dialog__text-input"
-                        disabled={handoffSubmitting}
-                        spellCheck={false}
-                        type="text"
-                        value={newLocalBranch}
-                        onChange={(event) => setNewLocalBranch(event.target.value)}
-                      />
-                    </label>
-                  ) : null}
-                </>
-              ) : null}
-              {handoffDialog === "local-to-worktree" &&
-              localHandoffStrategy === "move-branch" &&
-              branchOptions.length === 0 ? (
-                <p className="workspace-handoff-dialog__note">
-                  No available local branch can be checked out before moving this branch.
-                </p>
-              ) : null}
-              {toNewWorktree &&
-              localHandoffStrategy === "detached-changes" ? (
-                <p className="workspace-handoff-dialog__note">
-                  The new worktree starts at the current tip of{" "}
-                  {sourceBranch ?? "this branch"} and receives dirty non-ignored changes on
-                  top.
-                </p>
-              ) : null}
-              {toNewWorktree &&
-              localHandoffStrategy === "new-branch" ? (
-                <p className="workspace-handoff-dialog__note">
-                  The new worktree creates{" "}
-                  {newLocalBranch.trim() ? (
-                    <code>{newLocalBranch.trim()}</code>
-                  ) : (
-                    "a named branch"
-                  )}{" "}
-                  at the current tip of {sourceBranch ?? "this branch"} and receives
-                  dirty non-ignored changes on top.
-                </p>
-              ) : null}
-              {toNewWorktree &&
-              localHandoffStrategy === "fresh-from-base" ? (
-                <>
-                  <p className="workspace-handoff-dialog__note">
-                    The new worktree starts at{" "}
-                    {freshBaseRef.trim() ? <code>{freshBaseRef.trim()}</code> : "the base branch"}{" "}
-                    with no changes from here.
-                  </p>
-                  <p className="workspace-handoff-dialog__note">
-                    {!fromWorktreeToNew
-                      ? "This checkout keeps its branch and its uncommitted changes."
-                      // Claude and ACP thread archive keeps every worktree.
-                      : props.thread?.source === "codex"
-                        ? "The current worktree stays on disk with its branch and its uncommitted changes. Archiving this thread later checkpoints and removes it, unless it was created outside PwrAgent."
-                        : "The current worktree stays on disk with its branch and its uncommitted changes."}
-                  </p>
-                </>
-              ) : fromWorktreeToNew ? (
-                <p className="workspace-handoff-dialog__note">
-                  The current worktree is archived with a checkpoint. Its branch stays where it is.
-                </p>
-              ) : null}
-              {toNewWorktree && localHandoffStrategy === "fresh-from-base" ? null : keepLocalBranchSelected ? (
-                <p className="workspace-handoff-dialog__note">
-                  Uncommitted changes stay in the checkpoint; they are not copied into Local.
-                </p>
-              ) : handoffDialog !== "to-project" ? (
-                <p className="workspace-handoff-dialog__note">
-                  Ignored files are not moved by handoff.
-                </p>
-              ) : null}
-              {handoffError ? (
-                <p className="workspace-handoff-dialog__error">{handoffError}</p>
-              ) : null}
-              <div className="workspace-handoff-dialog__actions">
-                <button
-                  className="button button--ghost"
-                  disabled={handoffSubmitting}
-                  type="button"
-                  onClick={() => setHandoffDialog(undefined)}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="button button--primary"
-                  disabled={handoffDisabled}
-                  type="button"
-                  onClick={() => {
-                    void submitHandoff();
-                  }}
-                >
-                  {handoffSubmitting ? "Handing off..." : handoffDialog === "to-project" ? "Move" : "Handoff"}
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )
-      : null;
-
 
   const environmentSetup = props.environmentSetup;
   const environmentSetupRetryId =
     environmentSetup?.status === "failed" && environmentSetup.phase === "setup"
       ? environmentSetup.environmentId
       : undefined;
-  const environmentSetupRow = environmentSetup ? (
-    <EnvironmentSetupRow
-      key={environmentSetup.key}
-      desktopApi={props.desktopApi}
-      model={{
-        ...environmentSetup,
-        onDismiss: environmentSetup.onDismiss
-          ? () => {
-              if (
-                environmentError?.selectedEnvironmentId
-                === environmentSetup.environmentId
-              ) {
-                setEnvironmentError(undefined);
-              }
-              environmentSetup.onDismiss?.();
-            }
-          : undefined,
-      }}
-      onRetry={
-        environmentSetupRetryId
-        && props.thread
-        && props.desktopApi?.setCodexThreadEnvironment
-          ? () => {
-              setEnvironmentSetupRetrying(true);
-              void setThreadCodexEnvironment(environmentSetupRetryId).finally(() => {
-                setEnvironmentSetupRetrying(false);
-              });
-            }
-          : undefined
-      }
-      retrying={environmentSetupRetrying}
-    />
-  ) : null;
 
   const composerErrorEntries: readonly ComposerErrorEntry[] = [
     { id: "skills", label: "Couldn't load skills", message: props.skillError },
@@ -12898,43 +12436,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     { id: "model-settings", label: "Couldn't change model settings", message: props.threadModelSettingsError },
     { id: "add-directory", label: "Couldn't add directory", message: props.pickDirectoryError },
   ];
-  return (
-    <>
-      <form
-        className="composer"
-        aria-busy={preparingSend}
-        data-composer-implementation="tiptap-wysiwyg-markdown-chips"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setScheduleMenuOpen(false);
-          if (isReviewComposerOpen) {
-            void submitConfiguredReviewComposer();
-          } else {
-            void submitTurn();
-          }
-        }}
-      >
-      {/* Outside the pending fieldset: a hot microphone's End voice must work
-          while a send is being prepared. */}
-      {nativeVoiceApi ? (
-        <NativeVoiceBar api={nativeVoiceApi} threadId={nativeVoiceThreadId} />
-      ) : null}
-      <fieldset className="composer__pending-controls" disabled={preparingSend}>
-        {/* Issue #240: removed the visible "Reply" / "New thread" /
-          "Review" eyebrow that used to sit above the composer. The
-          input itself carries the same name through its `aria-label`
-          (the `label` prop on the inner ComposerRichInput /
-          ComposerTiptapInput / ComposerTextareaInput is rendered as
-          the input's `aria-label`), and the placeholder text already
-          conveys the action prompt visually. Stacking another header
-          above an input that already names itself was redundant
-          chrome. */}
 
-      {/* The band: every transient row between the transcript and the
-          input. It is the one part of the composer allowed to give up height
-          — capped, scrolling, and shrinkable — so no number of open rows can
-          push the input or its toolbar off the window. See
-          `composer-band-bounds.test.ts`. */}
+  // React development JSX captures a stack for every element. Keep these
+  // frames small and render after the controller has returned. Call helpers
+  // directly so their identity never remounts the editor or its menus.
+  function renderComposerBand(): ReactNode {
+    return (
       <div className="composer__band">
       {/* A send to another machine holds this thread; say so above all else,
           since the input below cannot start a turn until it finishes. */}
@@ -12957,7 +12464,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         thread={props.thread}
       />
 
-      {environmentSetupRow}
+      {renderComposerEnvironmentSetup()}
 
       {props.showEnvActionAnchors === false ? null : (
         <EnvActionAnchorList
@@ -13461,21 +12968,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         />
       ) : null}
       </div>
-      {/* Outside the band, which hides itself when it is empty. A bare live
-          region, not role="status": several E2E specs expect the window's
-          only status to be the turn's own. */}
-      <span
-        className="composer__queued-announcer"
-        aria-live="polite"
-        ref={queuedReorder.announcerRef}
-      />
+    );
+  }
 
-      {preparingImages ? (
-        <p className="composer__meta" aria-live="polite">
-          Preparing image attachments…
-        </p>
-      ) : null}
-      {hasVisibleAttachments ? (
+  function renderComposerAttachments(): ReactNode {
+    return (
+      hasVisibleAttachments ? (
         <div
           className="composer__attachments"
           aria-label={
@@ -13666,835 +13164,679 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             />
           ))}
         </div>
-      ) : null}
+      ) : null
+    );
+  }
 
-      {uploadingRemoteFileCount > 0 ? (
-        <p className="composer__meta" role="status">
-          Copying {uploadingRemoteFileCount === 1
-            ? "1 file"
-            : `${uploadingRemoteFileCount} files`} to {remoteUploadTargetLabel}.
-          {" "}Send waits until {uploadingRemoteFileCount === 1 ? "it finishes" : "they finish"}.
-        </p>
-      ) : null}
-      {failedRemoteFileUploads.map((upload) => (
-        <p
-          className="composer__meta composer__meta--warning"
-          key={upload.id}
-          role="status"
-        >
-          {upload.label} did not copy to {remoteUploadTargetLabel}: {upload.error}
-          {" "}Retry or remove it to send.
-        </p>
-      ))}
-
-      {imageAttachments.length > 0 && !imagesSupported ? (
-        <p className="composer__meta composer__meta--warning" role="status">
-          {imagesUnsupportedLabel} doesn&apos;t support image attachments —
-          remove them or switch models before sending.
-        </p>
-      ) : null}
-
-      {pdfReferencePaths.length > 0 ? (
-        <p className="composer__meta" role="status">
-          {props.pdfAnalysisEnabled !== false
-            ? "PDF analysis is on. PwrAgent uses local PDF tools for supported Codex threads and renders bounded page images when needed, preserving visual layout with less input overhead. Turn it off in Settings > General to leave PDFs as normal local-file references."
-            : "PDF analysis is off. This PDF will be sent as a normal local-file reference for the model to inspect with code or its own tools."}
-        </p>
-      ) : null}
-
-      <div className="composer__input-wrap" ref={inputWrapRef}>
-        {isReviewComposerOpen ? (
-          <fieldset
-            className="composer__review-config"
-            aria-label="Review target"
-            onKeyDown={handleReviewConfigKeyDown}
-          >
-            <legend>Review target</legend>
-            {reviewWorkspaceSelectionRequired ? (
-              <label className="composer__review-field">
-                <span>Project</span>
-                <select
-                  aria-label="Review project"
-                  className="composer__review-input"
-                  value={reviewConfig?.workspaceCwd ?? ""}
-                  onChange={(event) => {
-                    const workspaceCwd = event.target.value;
-                    setReviewConfig((current) => {
-                      const next = withReviewWorkspace(
-                        current
-                          ?? createReviewConfig({
-                            directory: props.directory,
-                            thread: props.thread,
-                          }),
-                        workspaceCwd,
-                      );
-                      // The PR list follows the project, so only a PR this
-                      // project can also review stays chosen. On the PR
-                      // target, a project's sole PR is the obvious choice,
-                      // as it is when the target is chosen.
-                      const projectOptions = reviewPullRequestOptionsForWorkspace(workspaceCwd);
-                      const keptUrl = projectOptions.some((option) =>
-                        option.pr.url === next.pullRequestUrl
-                      ) ? next.pullRequestUrl : undefined;
-                      return {
-                        ...next,
-                        pullRequestUrl: keptUrl
-                          ?? (next.target === "pullRequest" && projectOptions.length === 1
-                            ? projectOptions[0]?.pr.url
-                            : undefined),
-                      };
-                    });
-                    setSendError(undefined);
-                  }}
-                >
-                  <option value="" disabled>
-                    Choose project
-                  </option>
-                  {reviewWorkspaceOptions.map((option) => (
-                    <option key={option.key} value={option.cwd}>
-                      {option.label} - {option.path}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <div
-              className={`composer__review-options${
-                reviewTargetOptions.length > 4
-                  ? " composer__review-options--with-pull-request"
-                  : ""
-              }`}
-            >
-              {reviewTargetOptions.map((option, index) => (
-                <button
-                  key={option.target}
-                  ref={(element) => {
-                    reviewOptionRefs.current[index] = element;
-                  }}
-                  type="button"
-                  data-review-target={option.target}
-                  aria-pressed={reviewConfig?.target === option.target}
-                  className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
-                  tabIndex={reviewConfig?.target === option.target ? 0 : -1}
-                  onClick={() => {
-                    selectReviewTarget(option.target, {
-                      focusDetail:
-                        option.target === "commit" || option.target === "custom",
-                    });
-                  }}
-                  onKeyDown={(event) => handleReviewOptionKeyDown(event, index)}
-                >
-                  <span>{option.label}</span>
-                  <small>{option.description}</small>
-                </button>
-              ))}
-            </div>
-
-            {reviewPullRequestState.unavailableReason ? (
-              <p className="composer__review-note">
-                {reviewPullRequestState.unavailableReason}
-              </p>
-            ) : null}
-
-            {reviewConfig?.target === "pullRequest" ? (
-              <label className="composer__review-field">
-                <span>Pull request</span>
-                <select
-                  aria-label="Attached pull request"
-                  className="composer__review-input"
-                  ref={reviewPullRequestSelectRef}
-                  value={selectedReviewPullRequest?.url ?? ""}
-                  onChange={(event) => {
-                    const url = event.target.value;
-                    setReviewConfig((current) => current ? selectReviewPullRequest(current, url) : current);
-                    setSendError(undefined);
-                  }}
-                >
-                  <option value="" disabled>Choose pull request</option>
-                  {reviewPullRequests.map((pr) => (
-                    <option key={pr.url} value={pr.url}>
-                      {`${reviewPullRequestRepositoryLabel(pr)}#${pr.number} ${pr.title ?? "Untitled pull request"}`}
-                      {pr.headRefName ? ` — ${pr.headRefName}` : ""}
-                    </option>
-                  ))}
-                </select>
-                {selectedReviewPullRequest ? (
-                  <small>
-                    {`${selectedReviewPullRequest.headRefName ?? "Unknown branch"} → ${selectedReviewPullRequest.baseRefName ?? "unknown base"}`}
-                    {selectedReviewPullRequest.headSha
-                      ? ` at ${selectedReviewPullRequest.headSha.slice(0, 7)}`
-                      : ""}
-                    {". Refreshed and pinned to the published head when you start the review."}
-                  </small>
-                ) : reviewPullRequests.length > 0 ? (
-                  <small>Choose which attached pull request to review.</small>
-                ) : (
-                  <small>No attached pull request belongs to this project.</small>
-                )}
-                {selectedReviewPullRequestSync?.differences.length ? (
-                  <small className="composer__review-divergence">
-                    {`Reviewing the pull request skips this checkout's ${formatReviewDivergence(selectedReviewPullRequestSync.differences)}. Base branch reviews what is here.`}
-                  </small>
-                ) : selectedReviewPullRequestSync?.matches ? (
-                  <small>
-                    This checkout is clean and sits on this pull request&apos;s
-                    head, so a local review would cover the same commits.
-                  </small>
-                ) : null}
-                {reviewPullRequestWorkspaceNote ? (
-                  <small className="composer__review-workspace-note">
-                    {reviewPullRequestWorkspaceNote}
-                  </small>
-                ) : null}
-              </label>
-            ) : null}
-
-            {reviewConfig?.target === "baseBranch" ? (
-              <div className="composer__review-field">
-                <span>Base branch</span>
-                <ReviewBranchPicker
-                  ariaLabel="Base branch"
-                  options={reviewBranchPickerOptions}
-                  value={reviewConfig.branch}
-                  onChange={(branch) => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                      branch,
-                      branchSource: "user",
-                      target: "baseBranch",
-                    }));
-                    setSendError(undefined);
-                  }}
-                />
-              </div>
-            ) : null}
-
-            {reviewConfig?.target === "commit" ? (
-              <div className="composer__review-field">
-                <ReviewCommitPicker
-                  inputRef={reviewCommitInputRef}
-                  options={reviewCommitOptions}
-                  value={reviewConfig.commit}
-                  onChange={(commit) => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                      commit,
-                      target: "commit",
-                    }));
-                    setSendError(undefined);
-                  }}
-                />
-              </div>
-            ) : null}
-
-            {reviewConfig?.target === "custom" ? (
-              <label className="composer__review-field">
-                <span>Instructions</span>
-                <textarea
-                  className="composer__review-input composer__review-input--textarea"
-                  ref={reviewCustomTextareaRef}
-                  value={reviewConfig.customInstructions}
-                  onChange={(event) => {
-                    setReviewConfig((current) => ({
-                      ...(current ??
-                        createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                      customInstructions: event.target.value,
-                      target: "custom",
-                    }));
-                    setSendError(undefined);
-                  }}
-                />
-              </label>
-            ) : null}
-
-            {props.thread ? (
-              <div className="composer__review-field composer__review-reviewer">
-                <span>Reviewer</span>
-                <div className="composer__review-reviewer-chips">
-                  {reviewerOverridesSupported ? (
-                    <>
-                      <ComposerDropdown
-                        ariaLabel="Review provider"
-                        id="composer-review-provider"
-                        options={reviewerBackendOptions.map((candidate) => ({
-                          label: formatBackendLabel(candidate.kind, props.backends),
-                          value: candidate.kind,
-                        }))}
-                        value={reviewerSelection.backend ?? ""}
-                        onChange={(value) => {
-                          patchReviewer(() => ({
-                            backend: value as AppServerBackendKind,
-                          }));
-                        }}
-                      />
-                      {reviewerModelOptions.length > 0 ? (
-                        <ModelDropdown
-                          ariaLabel="Review model"
-                          id="composer-review-model"
-                          kind={reviewerSelection.backend}
-                          models={reviewerModelOptions}
-                          value={reviewerSelection.model?.id ?? ""}
-                          onChange={(value) => {
-                            patchReviewer((current) => {
-                              const backend =
-                                current?.backend ?? reviewerSelection.backend;
-                              return backend ? { backend, model: value } : current;
-                            });
-                          }}
-                        />
-                      ) : null}
-                      {reviewerReasoningOptions.length > 0 ? (
-                        <ComposerDropdown
-                          ariaLabel="Review reasoning"
-                          id="composer-review-reasoning"
-                          options={reviewerReasoningOptions.map((effort) => ({
-                            label: effort,
-                            value: effort,
-                          }))}
-                          value={reviewerSelection.reasoningEffort ?? ""}
-                          onChange={(value) => {
-                            patchReviewer((current) => {
-                              const backend =
-                                current?.backend ?? reviewerSelection.backend;
-                              if (!backend) {
-                                return current;
-                              }
-                              return {
-                                backend,
-                                ...(reviewerSelection.model?.id
-                                  ? { model: reviewerSelection.model.id }
-                                  : {}),
-                                reasoningEffort: value,
-                              };
-                            });
-                          }}
-                        />
-                      ) : null}
-                      {resolvableReviewerRecents.length > 0 ? (
-                        <ComposerDropdown
-                          ariaLabel="Recent reviewer settings"
-                          id="composer-review-recents"
-                          options={[
-                            // Sentinel so the trigger reads "Recent" until a
-                            // remembered combination is actually applied; the
-                            // dropdown falls back to the first option whenever the
-                            // value matches nothing.
-                            { label: "Recent", value: "" },
-                            ...resolvableReviewerRecents.map((recent, index) => ({
-                              label: formatReviewerRecentLabel(
-                                recent,
-                                props.backends,
-                              ),
-                              value: String(index),
-                            })),
-                          ]}
-                          tooltip="Reuse a recent reviewer"
-                          value={
-                            activeReviewerRecentIndex >= 0
-                              ? String(activeReviewerRecentIndex)
-                              : ""
-                          }
-                          onChange={(value) => {
-                            const picked = resolvableReviewerRecents[Number(value)];
-                            if (picked) {
-                              patchReviewer(() => picked);
-                            }
-                          }}
-                        />
-                      ) : null}
-                      {reviewerOverridden ? (
-                        <button
-                          type="button"
-                          aria-label="Reset reviewer to thread settings"
-                          className="composer__toggle tooltip-target"
-                          data-tooltip="Reset the reviewer to this thread's provider, model, and reasoning"
-                          onClick={() => {
-                            patchReviewer(() => undefined);
-                          }}
-                        >
-                          ↺
-                        </button>
-                      ) : null}
-                    </>
-                  ) : null}
-                  {reviewerOverridesSupported ? (
-                    <span
-                      aria-hidden="true"
-                      className="composer__review-reviewer-rule"
-                    />
-                  ) : null}
-                  <ReviewLocationDropdown
-                    decision={reviewRunModeDecision}
-                    onChange={(runMode) => {
-                      setReviewConfig((current) => ({
-                        ...(current ?? createReviewConfig({
-                          directory: props.directory,
-                          thread: props.thread,
-                        })),
-                        runMode,
-                        runModeChosen: true,
-                      }));
-                      setSendError(undefined);
-                    }}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            <div className="composer__review-actions">
-              {reviewAutoFixSupported ? (
-                <ReviewAutoFixSwitch
-                  checked={reviewAutoFixChecked}
-                  onToggle={() => {
-                    setReviewConfig((current) => {
-                      const base = current ?? createReviewConfig({
+  function renderComposerReviewConfig(): ReactNode {
+    return (
+      <fieldset
+        className="composer__review-config"
+        aria-label="Review target"
+        onKeyDown={handleReviewConfigKeyDown}
+      >
+        <legend>Review target</legend>
+        {reviewWorkspaceSelectionRequired ? (
+          <label className="composer__review-field">
+            <span>Project</span>
+            <select
+              aria-label="Review project"
+              className="composer__review-input"
+              value={reviewConfig?.workspaceCwd ?? ""}
+              onChange={(event) => {
+                const workspaceCwd = event.target.value;
+                setReviewConfig((current) => {
+                  const next = withReviewWorkspace(
+                    current
+                      ?? createReviewConfig({
                         directory: props.directory,
                         thread: props.thread,
-                      });
-                      return { ...base, waitAfterReview: !reviewWaitsAfter(base) };
-                    });
-                  }}
-                />
-              ) : null}
-              <button
-                type="button"
-                className="composer__secondary-action"
-                onClick={exitReviewComposer}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="composer__primary-action"
-                disabled={
-                  !buildConfiguredReviewCommand(reviewConfig) ||
-                  (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd) ||
-                  reviewSubmissionUnavailable
-                }
-                onClick={() => {
-                  void submitConfiguredReviewComposer();
-                }}
-              >
-                {futureScheduledDraftSendAt
-                  ? `Send in ${formatScheduledSendCountdown(
-                      futureScheduledDraftSendAt,
-                      scheduleNow,
-                    )}`
-                  : "Start review"}
-              </button>
-            </div>
-            {reviewAutoFixSupported
-              && reviewAutoFixChecked
-              && reviewerSelection.backend
-              && reviewerSelection.backend !== props.thread?.source ? (
-                <p className="composer__review-note">
-                  The fix runs on this thread&apos;s agent, not the reviewer.
-                </p>
-              ) : null}
-          </fieldset>
-        ) : (
-          <ComposerTiptapInput
-            key={editorScopeKey}
-            ref={inputRef}
-            id="thread-composer"
-            ariaActiveDescendant={activeAutocompleteOptionId}
-            ariaControls={autocompleteListboxId}
-            ariaExpanded={Boolean(autocompleteKind)}
-            disabled={composerDisabled}
-            readOnly={preparingSend || forking}
-            label={isLaunchpad ? "New thread" : "Reply"}
-            inlineHint={forkInlineHint ?? commandInlineHint}
-            inlineCompletion={forkInlineCompletion}
-            commandChip={commandChip}
-            markdownConversion
-            placeholder={composerPlaceholder}
-            resolveThreadLink={(ref) => {
-              const resolved = threadLinks?.resolve(ref);
-              return resolved ? threadLinks?.getSnapshot(resolved) : undefined;
-            }}
-            selectionRequest={composerSelectionRequest}
-            editorDocument={editorDocument}
-            skillTokens={displaySkillTokens}
-            value={draft}
-            onChange={handleComposerChange}
-            onPaste={handlePaste}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            onClick={handleComposerClick}
-            onKeyDown={handleTiptapComposerKeyDown}
-            onSkillChipPointerEnter={skillOriginCard.hoverAnchor}
-            onSkillChipPointerLeave={skillOriginCard.leaveAnchor}
-          />
-        )}
-        {/* One card for the picker's origin chips and the draft's `$skill`
-          chips. It portals to the body, so where it sits here only decides
-          that it outlives the picker. */}
-        {skillOriginCard.cardNode}
+                      }),
+                    workspaceCwd,
+                  );
+                  // The PR list follows the project, so only a PR this
+                  // project can also review stays chosen. On the PR
+                  // target, a project's sole PR is the obvious choice,
+                  // as it is when the target is chosen.
+                  const projectOptions = reviewPullRequestOptionsForWorkspace(workspaceCwd);
+                  const keptUrl = projectOptions.some((option) =>
+                    option.pr.url === next.pullRequestUrl
+                  ) ? next.pullRequestUrl : undefined;
+                  return {
+                    ...next,
+                    pullRequestUrl: keptUrl
+                      ?? (next.target === "pullRequest" && projectOptions.length === 1
+                        ? projectOptions[0]?.pr.url
+                        : undefined),
+                  };
+                });
+                setSendError(undefined);
+              }}
+            >
+              <option value="" disabled>
+                Choose project
+              </option>
+              {reviewWorkspaceOptions.map((option) => (
+                <option key={option.key} value={option.cwd}>
+                  {option.label} - {option.path}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <div
+          className={`composer__review-options${
+            reviewTargetOptions.length > 4
+              ? " composer__review-options--with-pull-request"
+              : ""
+          }`}
+        >
+          {reviewTargetOptions.map((option, index) => (
+            <button
+              key={option.target}
+              ref={(element) => {
+                reviewOptionRefs.current[index] = element;
+              }}
+              type="button"
+              data-review-target={option.target}
+              aria-pressed={reviewConfig?.target === option.target}
+              className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
+              tabIndex={reviewConfig?.target === option.target ? 0 : -1}
+              onClick={() => {
+                selectReviewTarget(option.target, {
+                  focusDetail:
+                    option.target === "commit" || option.target === "custom",
+                });
+              }}
+              onKeyDown={(event) => handleReviewOptionKeyDown(event, index)}
+            >
+              <span>{option.label}</span>
+              <small>{option.description}</small>
+            </button>
+          ))}
+        </div>
 
-        {/* The draft is deliberately still on screen and still selectable, so
-          the only thing distinguishing it from a live input is this line and
-          the `is-readonly` fill behind it. `aria-readonly` covers assistive
-          tech; nothing else covered a sighted operator, who would otherwise
-          click in, get no caret, and lose the keystrokes silently. */}
-        {preparingSend ? (
-          <p className="composer__meta composer__held-notice" role="status">
-            Message held while checks run. Select and copy still work.
+        {reviewPullRequestState.unavailableReason ? (
+          <p className="composer__review-note">
+            {reviewPullRequestState.unavailableReason}
           </p>
         ) : null}
 
-        {autocompleteKind === "skills" ? (
-          <div
-            className={`composer__autocomplete composer__autocomplete--skills composer__autocomplete--${autocompleteLayout.placement}`}
-            ref={autocompleteListRef}
-            style={{ maxHeight: autocompleteLayout.maxHeight }}
-          >
-            {props.onEnsureSkillsLoaded ? (
-              <SkillPickerHeader
-                loading={props.skillLoading}
-                onDismiss={() => dismissAutocomplete(true)}
-                onRefresh={() => props.onEnsureSkillsLoaded?.({ force: true })}
-              />
-            ) : null}
-            {filteredSkills.length === 0 ? (
-              <p className="composer__skill-picker-empty" role="status">
-                {props.skillLoading ? "Loading skills…" : "No matching skills."}
-              </p>
-            ) : null}
-            <div
-              className="composer__skill-picker-options"
-              role="listbox"
-              aria-label="Skills"
-              id={skillListboxId}
-              aria-busy={props.skillLoading}
+        {reviewConfig?.target === "pullRequest" ? (
+          <label className="composer__review-field">
+            <span>Pull request</span>
+            <select
+              aria-label="Attached pull request"
+              className="composer__review-input"
+              ref={reviewPullRequestSelectRef}
+              value={selectedReviewPullRequest?.url ?? ""}
+              onChange={(event) => {
+                const url = event.target.value;
+                setReviewConfig((current) => current ? selectReviewPullRequest(current, url) : current);
+                setSendError(undefined);
+              }}
             >
-              {filteredSkills.map((skill, index) => (
-                <button
-                  key={skill.path ?? skill.name}
-                  id={`${skillListboxId}-option-${index}`}
-                  ref={(node) => {
-                    autocompleteOptionRefs.current[index] = node;
-                  }}
-                  aria-describedby={skillOriginCard.describedBy(skill)}
-                  aria-selected={index === activeSkillIndex}
-                  className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
-                  role="option"
-                  tabIndex={index === activeSkillIndex ? 0 : -1}
-                  type="button"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    applySkill(skill);
-                  }}
-                  onClick={() => {
-                    applySkill(skill);
-                  }}
-                  onFocus={() => {
-                    setActiveSkillIndex(index);
-                  }}
-                  onKeyDown={handleAutocompleteKeyDown}
-                >
-                  <span className="composer__autocomplete-title">
-                    <HighlightedAutocompleteLabel
-                      label={`$${skill.name}`}
-                      query={trigger?.query ? `$${trigger.query}` : "$"}
-                    />
-                    {skill.origin ? (
-                      <SkillOriginChip
-                        origin={skill.origin}
-                        {...skillOriginCard.chipHandlers(skill)}
-                      />
-                    ) : null}
-                  </span>
-                  <span className="composer__autocomplete-meta">
-                    {skill.shortDescription || skill.description || skill.path}
-                  </span>
-                </button>
+              <option value="" disabled>Choose pull request</option>
+              {reviewPullRequests.map((pr) => (
+                <option key={pr.url} value={pr.url}>
+                  {`${reviewPullRequestRepositoryLabel(pr)}#${pr.number} ${pr.title ?? "Untitled pull request"}`}
+                  {pr.headRefName ? ` — ${pr.headRefName}` : ""}
+                </option>
               ))}
+            </select>
+            {selectedReviewPullRequest ? (
+              <small>
+                {`${selectedReviewPullRequest.headRefName ?? "Unknown branch"} → ${selectedReviewPullRequest.baseRefName ?? "unknown base"}`}
+                {selectedReviewPullRequest.headSha
+                  ? ` at ${selectedReviewPullRequest.headSha.slice(0, 7)}`
+                  : ""}
+                {". Refreshed and pinned to the published head when you start the review."}
+              </small>
+            ) : reviewPullRequests.length > 0 ? (
+              <small>Choose which attached pull request to review.</small>
+            ) : (
+              <small>No attached pull request belongs to this project.</small>
+            )}
+            {selectedReviewPullRequestSync?.differences.length ? (
+              <small className="composer__review-divergence">
+                {`Reviewing the pull request skips this checkout's ${formatReviewDivergence(selectedReviewPullRequestSync.differences)}. Base branch reviews what is here.`}
+              </small>
+            ) : selectedReviewPullRequestSync?.matches ? (
+              <small>
+                This checkout is clean and sits on this pull request&apos;s
+                head, so a local review would cover the same commits.
+              </small>
+            ) : null}
+            {reviewPullRequestWorkspaceNote ? (
+              <small className="composer__review-workspace-note">
+                {reviewPullRequestWorkspaceNote}
+              </small>
+            ) : null}
+          </label>
+        ) : null}
+
+        {reviewConfig?.target === "baseBranch" ? (
+          <div className="composer__review-field">
+            <span>Base branch</span>
+            <ReviewBranchPicker
+              ariaLabel="Base branch"
+              options={reviewBranchPickerOptions}
+              value={reviewConfig.branch}
+              onChange={(branch) => {
+                setReviewConfig((current) => ({
+                  ...(current ??
+                    createReviewConfig({
+                      directory: props.directory,
+                      thread: props.thread,
+                    })),
+                  branch,
+                  branchSource: "user",
+                  target: "baseBranch",
+                }));
+                setSendError(undefined);
+              }}
+            />
+          </div>
+        ) : null}
+
+        {reviewConfig?.target === "commit" ? (
+          <div className="composer__review-field">
+            <ReviewCommitPicker
+              inputRef={reviewCommitInputRef}
+              options={reviewCommitOptions}
+              value={reviewConfig.commit}
+              onChange={(commit) => {
+                setReviewConfig((current) => ({
+                  ...(current ??
+                    createReviewConfig({
+                      directory: props.directory,
+                      thread: props.thread,
+                    })),
+                  commit,
+                  target: "commit",
+                }));
+                setSendError(undefined);
+              }}
+            />
+          </div>
+        ) : null}
+
+        {reviewConfig?.target === "custom" ? (
+          <label className="composer__review-field">
+            <span>Instructions</span>
+            <textarea
+              className="composer__review-input composer__review-input--textarea"
+              ref={reviewCustomTextareaRef}
+              value={reviewConfig.customInstructions}
+              onChange={(event) => {
+                setReviewConfig((current) => ({
+                  ...(current ??
+                    createReviewConfig({
+                      directory: props.directory,
+                      thread: props.thread,
+                    })),
+                  customInstructions: event.target.value,
+                  target: "custom",
+                }));
+                setSendError(undefined);
+              }}
+            />
+          </label>
+        ) : null}
+
+        {props.thread ? (
+          <div className="composer__review-field composer__review-reviewer">
+            <span>Reviewer</span>
+            <div className="composer__review-reviewer-chips">
+              {reviewerOverridesSupported ? (
+                <>
+                  <ComposerDropdown
+                    ariaLabel="Review provider"
+                    id="composer-review-provider"
+                    options={reviewerBackendOptions.map((candidate) => ({
+                      label: formatBackendLabel(candidate.kind, props.backends),
+                      value: candidate.kind,
+                    }))}
+                    value={reviewerSelection.backend ?? ""}
+                    onChange={(value) => {
+                      patchReviewer(() => ({
+                        backend: value as AppServerBackendKind,
+                      }));
+                    }}
+                  />
+                  {reviewerModelOptions.length > 0 ? (
+                    <ModelDropdown
+                      ariaLabel="Review model"
+                      id="composer-review-model"
+                      kind={reviewerSelection.backend}
+                      models={reviewerModelOptions}
+                      value={reviewerSelection.model?.id ?? ""}
+                      onChange={(value) => {
+                        patchReviewer((current) => {
+                          const backend =
+                            current?.backend ?? reviewerSelection.backend;
+                          return backend ? { backend, model: value } : current;
+                        });
+                      }}
+                    />
+                  ) : null}
+                  {reviewerReasoningOptions.length > 0 ? (
+                    <ComposerDropdown
+                      ariaLabel="Review reasoning"
+                      id="composer-review-reasoning"
+                      options={reviewerReasoningOptions.map((effort) => ({
+                        label: effort,
+                        value: effort,
+                      }))}
+                      value={reviewerSelection.reasoningEffort ?? ""}
+                      onChange={(value) => {
+                        patchReviewer((current) => {
+                          const backend =
+                            current?.backend ?? reviewerSelection.backend;
+                          if (!backend) {
+                            return current;
+                          }
+                          return {
+                            backend,
+                            ...(reviewerSelection.model?.id
+                              ? { model: reviewerSelection.model.id }
+                              : {}),
+                            reasoningEffort: value,
+                          };
+                        });
+                      }}
+                    />
+                  ) : null}
+                  {resolvableReviewerRecents.length > 0 ? (
+                    <ComposerDropdown
+                      ariaLabel="Recent reviewer settings"
+                      id="composer-review-recents"
+                      options={[
+                        // Sentinel so the trigger reads "Recent" until a
+                        // remembered combination is actually applied; the
+                        // dropdown falls back to the first option whenever the
+                        // value matches nothing.
+                        { label: "Recent", value: "" },
+                        ...resolvableReviewerRecents.map((recent, index) => ({
+                          label: formatReviewerRecentLabel(
+                            recent,
+                            props.backends,
+                          ),
+                          value: String(index),
+                        })),
+                      ]}
+                      tooltip="Reuse a recent reviewer"
+                      value={
+                        activeReviewerRecentIndex >= 0
+                          ? String(activeReviewerRecentIndex)
+                          : ""
+                      }
+                      onChange={(value) => {
+                        const picked = resolvableReviewerRecents[Number(value)];
+                        if (picked) {
+                          patchReviewer(() => picked);
+                        }
+                      }}
+                    />
+                  ) : null}
+                  {reviewerOverridden ? (
+                    <button
+                      type="button"
+                      aria-label="Reset reviewer to thread settings"
+                      className="composer__toggle tooltip-target"
+                      data-tooltip="Reset the reviewer to this thread's provider, model, and reasoning"
+                      onClick={() => {
+                        patchReviewer(() => undefined);
+                      }}
+                    >
+                      ↺
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+              {reviewerOverridesSupported ? (
+                <span
+                  aria-hidden="true"
+                  className="composer__review-reviewer-rule"
+                />
+              ) : null}
+              <ReviewLocationDropdown
+                decision={reviewRunModeDecision}
+                onChange={(runMode) => {
+                  setReviewConfig((current) => ({
+                    ...(current ?? createReviewConfig({
+                      directory: props.directory,
+                      thread: props.thread,
+                    })),
+                    runMode,
+                    runModeChosen: true,
+                  }));
+                  setSendError(undefined);
+                }}
+              />
             </div>
           </div>
-        ) : autocompleteKind === "slash" ? (
-          <div
-            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
-            ref={autocompleteListRef}
-            role="listbox"
-            aria-label="Commands"
-            id={slashListboxId}
-            style={{ maxHeight: autocompleteLayout.maxHeight }}
+        ) : null}
+
+        <div className="composer__review-actions">
+          {reviewAutoFixSupported ? (
+            <ReviewAutoFixSwitch
+              checked={reviewAutoFixChecked}
+              onToggle={() => {
+                setReviewConfig((current) => {
+                  const base = current ?? createReviewConfig({
+                    directory: props.directory,
+                    thread: props.thread,
+                  });
+                  return { ...base, waitAfterReview: !reviewWaitsAfter(base) };
+                });
+              }}
+            />
+          ) : null}
+          <button
+            type="button"
+            className="composer__secondary-action"
+            onClick={exitReviewComposer}
           >
-            {filteredSlashCommands.map((command, index) => (
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="composer__primary-action"
+            disabled={
+              !buildConfiguredReviewCommand(reviewConfig) ||
+              (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd) ||
+              reviewSubmissionUnavailable
+            }
+            onClick={() => {
+              void submitConfiguredReviewComposer();
+            }}
+          >
+            {futureScheduledDraftSendAt
+              ? `Send in ${formatScheduledSendCountdown(
+                  futureScheduledDraftSendAt,
+                  scheduleNow,
+                )}`
+              : "Start review"}
+          </button>
+        </div>
+        {reviewAutoFixSupported
+          && reviewAutoFixChecked
+          && reviewerSelection.backend
+          && reviewerSelection.backend !== props.thread?.source ? (
+            <p className="composer__review-note">
+              The fix runs on this thread&apos;s agent, not the reviewer.
+            </p>
+          ) : null}
+      </fieldset>
+    );
+  }
+
+  function renderComposerAutocomplete(): ReactNode {
+    return (
+      autocompleteKind === "skills" ? (
+        <div
+          className={`composer__autocomplete composer__autocomplete--skills composer__autocomplete--${autocompleteLayout.placement}`}
+          ref={autocompleteListRef}
+          style={{ maxHeight: autocompleteLayout.maxHeight }}
+        >
+          {props.onEnsureSkillsLoaded ? (
+            <SkillPickerHeader
+              loading={props.skillLoading}
+              onDismiss={() => dismissAutocomplete(true)}
+              onRefresh={() => props.onEnsureSkillsLoaded?.({ force: true })}
+            />
+          ) : null}
+          {filteredSkills.length === 0 ? (
+            <p className="composer__skill-picker-empty" role="status">
+              {props.skillLoading ? "Loading skills…" : "No matching skills."}
+            </p>
+          ) : null}
+          <div
+            className="composer__skill-picker-options"
+            role="listbox"
+            aria-label="Skills"
+            id={skillListboxId}
+            aria-busy={props.skillLoading}
+          >
+            {filteredSkills.map((skill, index) => (
               <button
-                key={command.id}
-                id={`${slashListboxId}-option-${index}`}
+                key={skill.path ?? skill.name}
+                id={`${skillListboxId}-option-${index}`}
                 ref={(node) => {
                   autocompleteOptionRefs.current[index] = node;
                 }}
-                aria-selected={index === activeSlashIndex}
-                className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+                aria-describedby={skillOriginCard.describedBy(skill)}
+                aria-selected={index === activeSkillIndex}
+                className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
                 role="option"
-                tabIndex={index === activeSlashIndex ? 0 : -1}
+                tabIndex={index === activeSkillIndex ? 0 : -1}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
-                  applySlashCommand(command);
+                  applySkill(skill);
                 }}
                 onClick={() => {
-                  applySlashCommand(command);
+                  applySkill(skill);
                 }}
                 onFocus={() => {
-                  setActiveSlashIndex(index);
+                  setActiveSkillIndex(index);
                 }}
                 onKeyDown={handleAutocompleteKeyDown}
               >
                 <span className="composer__autocomplete-title">
                   <HighlightedAutocompleteLabel
-                    label={command.label}
-                    query={slashTrigger ? `/${slashTrigger.query}` : "/"}
+                    label={`$${skill.name}`}
+                    query={trigger?.query ? `$${trigger.query}` : "$"}
                   />
-                  {command.argumentHint ? (
-                    <span className="composer__autocomplete-argument-hint">
-                      {command.argumentHint}
-                    </span>
+                  {skill.origin ? (
+                    <SkillOriginChip
+                      origin={skill.origin}
+                      {...skillOriginCard.chipHandlers(skill)}
+                    />
                   ) : null}
-                  <span
-                    className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
-                  >
-                    {command.sourceLabel}
-                  </span>
                 </span>
                 <span className="composer__autocomplete-meta">
-                  {command.description}
+                  {skill.shortDescription || skill.description || skill.path}
                 </span>
               </button>
             ))}
           </div>
-        ) : autocompleteKind === "directories" ? (
-          <div
-            className={`composer__autocomplete composer__autocomplete--directories composer__autocomplete--${autocompleteLayout.placement}`}
-            ref={autocompleteListRef}
-            style={{ maxHeight: autocompleteLayout.maxHeight }}
-          >
-            <div
-              aria-label="Projects and instances"
-              id={directoryRefListboxId}
-              role="listbox"
+        </div>
+      ) : autocompleteKind === "slash" ? (
+        <div
+          className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+          ref={autocompleteListRef}
+          role="listbox"
+          aria-label="Commands"
+          id={slashListboxId}
+          style={{ maxHeight: autocompleteLayout.maxHeight }}
+        >
+          {filteredSlashCommands.map((command, index) => (
+            <button
+              key={command.id}
+              id={`${slashListboxId}-option-${index}`}
+              ref={(node) => {
+                autocompleteOptionRefs.current[index] = node;
+              }}
+              aria-selected={index === activeSlashIndex}
+              className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+              role="option"
+              tabIndex={index === activeSlashIndex ? 0 : -1}
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                applySlashCommand(command);
+              }}
+              onClick={() => {
+                applySlashCommand(command);
+              }}
+              onFocus={() => {
+                setActiveSlashIndex(index);
+              }}
+              onKeyDown={handleAutocompleteKeyDown}
             >
-              {filteredDirectoryRefs.map((directory, index) => (
-                <button
-                  key={directory.key}
-                  id={`${directoryRefListboxId}-option-${index}`}
-                  ref={(node) => {
-                    autocompleteOptionRefs.current[index] = node;
-                  }}
-                  aria-selected={index === activeDirectoryRefIndex}
-                  className={`composer__autocomplete-option${directory.kind === "instance" ? " composer__autocomplete-option--instance" : ""}${index === activeDirectoryRefIndex ? " is-active" : ""}`}
-                  role="option"
-                  tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
-                  title={directory.kind === "instance"
-                    ? `${directory.label} · ${directory.status}`
-                    : undefined}
-                  type="button"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    applyDirectoryReference(directory);
-                  }}
-                  onClick={() => {
-                    applyDirectoryReference(directory);
-                  }}
-                  onFocus={() => {
-                    setActiveDirectoryRefIndex(index);
-                  }}
-                  onKeyDown={handleAutocompleteKeyDown}
+              <span className="composer__autocomplete-title">
+                <HighlightedAutocompleteLabel
+                  label={command.label}
+                  query={slashTrigger ? `/${slashTrigger.query}` : "/"}
+                />
+                {command.argumentHint ? (
+                  <span className="composer__autocomplete-argument-hint">
+                    {command.argumentHint}
+                  </span>
+                ) : null}
+                <span
+                  className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
                 >
-                  <span className="composer__autocomplete-title">
-                    {directory.kind === "instance" ? (
-                      directory.icon
-                        ? <CelestialIcon icon={directory.icon} size={13} />
-                        : <InstanceGlyph instanceId={directory.instanceId} size={13} />
-                    ) : <FolderIcon size={13} aria-hidden="true" />}
-                    <HighlightedAutocompleteLabel
-                      label={directory.kind === "instance"
-                        ? directory.shortLabel ?? directory.label
-                        : directory.label}
-                      query={directoryRefTrigger?.query ?? ""}
-                    />
-                  </span>
-                  <span className="composer__autocomplete-meta">
-                    {directory.kind === "instance"
-                      ? `Federation · ${directory.status}`
-                      : buildDirectoryReferenceInsertText(directory)}
-                  </span>
-                </button>
-              ))}
-            </div>
-            {props.onPickDirectoryForReference ||
-            props.desktopApi?.pickFileFromDisk ? (
-              <div
-                className="composer__autocomplete-separator"
-                role="separator"
-              />
-            ) : null}
-            {props.onPickDirectoryForReference ? (
-              <button
-                className="composer__autocomplete-option composer__autocomplete-option--action"
-                data-tooltip={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
-                disabled={Boolean(filesystemFederationTarget)}
-                title={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                }}
-                onClick={() => {
-                  void applyPickedDirectoryReference();
-                }}
-              >
-                <span className="composer__autocomplete-title">
-                  + Add directory…
+                  {command.sourceLabel}
                 </span>
-              </button>
-            ) : null}
-            {props.desktopApi?.pickFileFromDisk ? (
-              <button
-                className="composer__autocomplete-option composer__autocomplete-option--action"
-                data-tooltip={nativeFilePickerBlockedReason}
-                disabled={nativeFilePickerBlockedReason !== undefined}
-                title={nativeFilePickerBlockedReason}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                }}
-                onClick={() => {
-                  void applyPickedFileReferences();
-                }}
-              >
-                <span className="composer__autocomplete-title">
-                  + Add file…
-                </span>
-              </button>
-            ) : null}
-          </div>
-        ) : autocompleteKind === "hash-references" ? (
+              </span>
+              <span className="composer__autocomplete-meta">
+                {command.description}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : autocompleteKind === "directories" ? (
+        <div
+          className={`composer__autocomplete composer__autocomplete--directories composer__autocomplete--${autocompleteLayout.placement}`}
+          ref={autocompleteListRef}
+          style={{ maxHeight: autocompleteLayout.maxHeight }}
+        >
           <div
-            className={`composer__autocomplete composer__autocomplete--hash-references composer__autocomplete--${autocompleteLayout.placement}`}
-            ref={autocompleteListRef}
+            aria-label="Projects and instances"
+            id={directoryRefListboxId}
             role="listbox"
-            aria-label="Threads and pull requests"
-            id={hashReferenceListboxId}
-            style={{ maxHeight: autocompleteLayout.maxHeight }}
           >
-            {filteredHashReferenceOptions.map((option, index) => {
-              const showRemoteDivider =
-                option.remote
-                && !filteredHashReferenceOptions[index - 1]?.remote;
-              if (option.kind === "thread") {
-                const thread = option.thread;
-                const threadLabel = formatHashReferenceThreadLabel(thread);
-                const threadTitle = formatHashReferenceThreadTooltip(thread);
-                const threadMeta = describeHashReferenceThread(
-                  thread,
-                  hashReferenceTrigger?.query ?? "",
-                );
-                const key = thread.federation
-                  ? federatedThreadIdentityKey(thread.federation.ref)
-                  : buildThreadIdentityKey(thread.source, thread.id);
-                return (
-                  <Fragment key={key}>
-                    {showRemoteDivider ? (
-                      <div
-                        aria-hidden="true"
-                        className="composer__autocomplete-section-divider"
-                        role="presentation"
-                      >
-                        Other instances
-                      </div>
-                    ) : null}
-                    <button
-                      id={`${hashReferenceListboxId}-option-${index}`}
-                      ref={(node) => {
-                        autocompleteOptionRefs.current[index] = node;
-                      }}
-                      aria-selected={index === activeHashReferenceIndex}
-                      className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
-                      role="option"
-                      tabIndex={index === activeHashReferenceIndex ? 0 : -1}
-                      // The visible label is one clamped line; hovering the
-                      // row still gives the operator the whole title.
-                      title={threadTitle}
-                      type="button"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        applyHashReference((tokenIndex) =>
-                          createComposerThreadToken(
-                            resolveThreadSummaryReference(thread),
-                            tokenIndex,
-                          ),
-                        );
-                      }}
-                      onClick={() => {
-                        applyHashReference((tokenIndex) =>
-                          createComposerThreadToken(
-                            resolveThreadSummaryReference(thread),
-                            tokenIndex,
-                          ),
-                        );
-                      }}
-                      onFocus={() => {
-                        setActiveHashReferenceIndex(index);
-                      }}
-                      onKeyDown={handleAutocompleteKeyDown}
-                    >
-                      <span className="composer__autocomplete-title">
-                        <ThreadIcon size={13} aria-hidden="true" />
-                        <span className="composer__autocomplete-label">
-                          <HighlightedAutocompleteLabel
-                            label={`#${threadLabel.replace(/^#/, "")}`}
-                            matchAnywhere
-                            query={hashReferenceTrigger?.query.trim() ?? ""}
-                          />
-                        </span>
-                        <span className="composer__autocomplete-source">
-                          Thread
-                        </span>
-                      </span>
-                      <span className="composer__autocomplete-meta composer__autocomplete-meta--thread">
-                        {thread.federation?.ref.target.scope === "remote" ? (
-                          <InstanceChip
-                            icon={thread.federation.celestialIcon}
-                            instanceId={thread.federation.ref.target.instanceId}
-                            label={thread.federation.instanceLabel}
-                          />
-                        ) : null}
-                        {threadMeta ? (
-                          <span className="composer__autocomplete-label">
-                            {threadMeta}
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
-                  </Fragment>
-                );
+            {filteredDirectoryRefs.map((directory, index) => (
+              <button
+                key={directory.key}
+                id={`${directoryRefListboxId}-option-${index}`}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
+                aria-selected={index === activeDirectoryRefIndex}
+                className={`composer__autocomplete-option${directory.kind === "instance" ? " composer__autocomplete-option--instance" : ""}${index === activeDirectoryRefIndex ? " is-active" : ""}`}
+                role="option"
+                tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
+                title={directory.kind === "instance"
+                  ? `${directory.label} · ${directory.status}`
+                  : undefined}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applyDirectoryReference(directory);
+                }}
+                onClick={() => {
+                  applyDirectoryReference(directory);
+                }}
+                onFocus={() => {
+                  setActiveDirectoryRefIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
+              >
+                <span className="composer__autocomplete-title">
+                  {directory.kind === "instance" ? (
+                    directory.icon
+                      ? <CelestialIcon icon={directory.icon} size={13} />
+                      : <InstanceGlyph instanceId={directory.instanceId} size={13} />
+                  ) : <FolderIcon size={13} aria-hidden="true" />}
+                  <HighlightedAutocompleteLabel
+                    label={directory.kind === "instance"
+                      ? directory.shortLabel ?? directory.label
+                      : directory.label}
+                    query={directoryRefTrigger?.query ?? ""}
+                  />
+                </span>
+                <span className="composer__autocomplete-meta">
+                  {directory.kind === "instance"
+                    ? `Federation · ${directory.status}`
+                    : buildDirectoryReferenceInsertText(directory)}
+                </span>
+              </button>
+            ))}
+          </div>
+          {props.onPickDirectoryForReference ||
+          props.desktopApi?.pickFileFromDisk ? (
+            <div
+              className="composer__autocomplete-separator"
+              role="separator"
+            />
+          ) : null}
+          {props.onPickDirectoryForReference ? (
+            <button
+              className="composer__autocomplete-option composer__autocomplete-option--action"
+              data-tooltip={
+                filesystemFederationTarget
+                  ? REMOTE_NATIVE_PICKER_TOOLTIP
+                  : undefined
               }
-
-              const pullRequest = option.pullRequest;
+              disabled={Boolean(filesystemFederationTarget)}
+              title={
+                filesystemFederationTarget
+                  ? REMOTE_NATIVE_PICKER_TOOLTIP
+                  : undefined
+              }
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                void applyPickedDirectoryReference();
+              }}
+            >
+              <span className="composer__autocomplete-title">
+                + Add directory…
+              </span>
+            </button>
+          ) : null}
+          {props.desktopApi?.pickFileFromDisk ? (
+            <button
+              className="composer__autocomplete-option composer__autocomplete-option--action"
+              data-tooltip={nativeFilePickerBlockedReason}
+              disabled={nativeFilePickerBlockedReason !== undefined}
+              title={nativeFilePickerBlockedReason}
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                void applyPickedFileReferences();
+              }}
+            >
+              <span className="composer__autocomplete-title">
+                + Add file…
+              </span>
+            </button>
+          ) : null}
+        </div>
+      ) : autocompleteKind === "hash-references" ? (
+        <div
+          className={`composer__autocomplete composer__autocomplete--hash-references composer__autocomplete--${autocompleteLayout.placement}`}
+          ref={autocompleteListRef}
+          role="listbox"
+          aria-label="Threads and pull requests"
+          id={hashReferenceListboxId}
+          style={{ maxHeight: autocompleteLayout.maxHeight }}
+        >
+          {filteredHashReferenceOptions.map((option, index) => {
+            const showRemoteDivider =
+              option.remote
+              && !filteredHashReferenceOptions[index - 1]?.remote;
+            if (option.kind === "thread") {
+              const thread = option.thread;
+              const threadLabel = formatHashReferenceThreadLabel(thread);
+              const threadTitle = formatHashReferenceThreadTooltip(thread);
+              const threadMeta = describeHashReferenceThread(
+                thread,
+                hashReferenceTrigger?.query ?? "",
+              );
+              const key = thread.federation
+                ? federatedThreadIdentityKey(thread.federation.ref)
+                : buildThreadIdentityKey(thread.source, thread.id);
               return (
-                <Fragment key={pullRequest.url}>
+                <Fragment key={key}>
                   {showRemoteDivider ? (
                     <div
                       aria-hidden="true"
@@ -14513,17 +13855,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
                     role="option"
                     tabIndex={index === activeHashReferenceIndex ? 0 : -1}
-                    title={pullRequest.title || pullRequest.url}
+                    // The visible label is one clamped line; hovering the
+                    // row still gives the operator the whole title.
+                    title={threadTitle}
                     type="button"
                     onMouseDown={(event) => {
                       event.preventDefault();
                       applyHashReference((tokenIndex) =>
-                        createComposerPullRequestToken(pullRequest, tokenIndex),
+                        createComposerThreadToken(
+                          resolveThreadSummaryReference(thread),
+                          tokenIndex,
+                        ),
                       );
                     }}
                     onClick={() => {
                       applyHashReference((tokenIndex) =>
-                        createComposerPullRequestToken(pullRequest, tokenIndex),
+                        createComposerThreadToken(
+                          resolveThreadSummaryReference(thread),
+                          tokenIndex,
+                        ),
                       );
                     }}
                     onFocus={() => {
@@ -14532,35 +13882,109 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     onKeyDown={handleAutocompleteKeyDown}
                   >
                     <span className="composer__autocomplete-title">
-                      <PullRequestIcon size={13} aria-hidden="true" />
+                      <ThreadIcon size={13} aria-hidden="true" />
                       <span className="composer__autocomplete-label">
-                        {`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}
+                        <HighlightedAutocompleteLabel
+                          label={`#${threadLabel.replace(/^#/, "")}`}
+                          matchAnywhere
+                          query={hashReferenceTrigger?.query.trim() ?? ""}
+                        />
                       </span>
                       <span className="composer__autocomplete-source">
-                        Pull request
+                        Thread
                       </span>
                     </span>
-                    <span className="composer__autocomplete-meta composer__autocomplete-meta--single-line">
-                      {pullRequest.title || pullRequest.url}
+                    <span className="composer__autocomplete-meta composer__autocomplete-meta--thread">
+                      {thread.federation?.ref.target.scope === "remote" ? (
+                        <InstanceChip
+                          icon={thread.federation.celestialIcon}
+                          instanceId={thread.federation.ref.target.instanceId}
+                          label={thread.federation.instanceLabel}
+                        />
+                      ) : null}
+                      {threadMeta ? (
+                        <span className="composer__autocomplete-label">
+                          {threadMeta}
+                        </span>
+                      ) : null}
                     </span>
                   </button>
                 </Fragment>
               );
-            })}
-            {federatedHashSearchLoading ? (
-              <div
-                aria-hidden="true"
-                className="composer__autocomplete-remote-loading"
-                role="presentation"
-              >
-                Searching other instances…
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+            }
 
-      {props.launchpad || props.thread ? (
+            const pullRequest = option.pullRequest;
+            return (
+              <Fragment key={pullRequest.url}>
+                {showRemoteDivider ? (
+                  <div
+                    aria-hidden="true"
+                    className="composer__autocomplete-section-divider"
+                    role="presentation"
+                  >
+                    Other instances
+                  </div>
+                ) : null}
+                <button
+                  id={`${hashReferenceListboxId}-option-${index}`}
+                  ref={(node) => {
+                    autocompleteOptionRefs.current[index] = node;
+                  }}
+                  aria-selected={index === activeHashReferenceIndex}
+                  className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
+                  role="option"
+                  tabIndex={index === activeHashReferenceIndex ? 0 : -1}
+                  title={pullRequest.title || pullRequest.url}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyHashReference((tokenIndex) =>
+                      createComposerPullRequestToken(pullRequest, tokenIndex),
+                    );
+                  }}
+                  onClick={() => {
+                    applyHashReference((tokenIndex) =>
+                      createComposerPullRequestToken(pullRequest, tokenIndex),
+                    );
+                  }}
+                  onFocus={() => {
+                    setActiveHashReferenceIndex(index);
+                  }}
+                  onKeyDown={handleAutocompleteKeyDown}
+                >
+                  <span className="composer__autocomplete-title">
+                    <PullRequestIcon size={13} aria-hidden="true" />
+                    <span className="composer__autocomplete-label">
+                      {`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}
+                    </span>
+                    <span className="composer__autocomplete-source">
+                      Pull request
+                    </span>
+                  </span>
+                  <span className="composer__autocomplete-meta composer__autocomplete-meta--single-line">
+                    {pullRequest.title || pullRequest.url}
+                  </span>
+                </button>
+              </Fragment>
+            );
+          })}
+          {federatedHashSearchLoading ? (
+            <div
+              aria-hidden="true"
+              className="composer__autocomplete-remote-loading"
+              role="presentation"
+            >
+              Searching other instances…
+            </div>
+          ) : null}
+        </div>
+      ) : null
+    );
+  }
+
+  function renderComposerToolbar(): ReactNode {
+    return (
+      props.launchpad || props.thread ? (
         <div
           className="composer__setup"
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
@@ -15350,41 +14774,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onShowMcpAccess={props.onShowMcpAccess}
           />
         </div>
-      ) : null}
+      ) : null
+    );
+  }
 
-      {workspaceHandoffDialog}
-
-      {props.unavailableReason ? (
-       <p className="composer__meta composer__meta--error">
-         {props.unavailableReason}
-       </p>
-      ) : null}
-      {props.thread?.agentChange && !props.thread.agentChange.error ? (
-        <p className="composer__meta" role="status">
-          {formatAgentChangeStatus(props.thread.agentChange)}
-        </p>
-      ) : null}
-      {!props.skillError && props.skillLoading ? (
-        <p className="composer__meta">Loading skills…</p>
-      ) : null}
-      {props.updatingExecutionMode ? (
-        <p className="composer__meta">
-          Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
-        </p>
-      ) : null}
-      {props.disabled && backend?.available === false && !backend.discoveryPending ? (
-        <p className="composer__meta">
-          {props.launchpad
-            ? "This backend is unavailable right now. Your draft stays here until send is available again."
-            : "This thread's backend is unavailable right now. You can keep drafting, but send is unavailable."}
-        </p>
-      ) : !props.pendingRequestActive && props.pendingUserInputActive ? (
-        <p className="composer__meta">
-          Waiting for input before this turn can continue.
-        </p>
-      ) : null}
-
-      </fieldset>
+  function renderComposerFooter(): ReactNode {
+    return (
       <div className="composer__footer">
         {launchpadCodexEnvironmentOptions.length > 0 ||
         threadCodexEnvironmentOptions.length > 0 ||
@@ -15840,12 +15235,607 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           </div>
         </div>
       </div>
-      </form>
-      {fullAccessRiskDialog}
-      {imageLightbox}
-    </>
-  );
-});
+    );
+  }
+
+  function renderComposerWorkspaceHandoff(): ReactNode {
+    return handoffDialog && threadWorkspace
+      ? createPortal(
+          <div className="workspace-handoff-modal">
+            <div
+              ref={handoffDialogRef}
+              aria-label={
+                handoffDialog === "to-project"
+                  ? "Move to Project"
+                  : toNewWorktree
+                    ? "Handoff to New Worktree"
+                    : "Handoff to Local"
+              }
+              aria-modal="true"
+              className="workspace-handoff-dialog"
+              role="dialog"
+            >
+              <h2>
+                {handoffDialog === "to-project"
+                  ? "Move to Project"
+                  : toNewWorktree
+                    ? "Handoff to New Worktree"
+                    : "Handoff to Local"}
+              </h2>
+              <p>
+                {handoffDialog === "to-project"
+                  ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
+                  : toNewWorktree
+                    ? "Choose how this thread should move into a new worktree."
+                    : keepLocalBranchAvailable
+                      ? <>Continue this thread in the main checkout, <code>{threadWorkspace.repositoryPath}</code>.</>
+                      : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
+              </p>
+              {handoffDialog === "worktree-to-local" && keepLocalBranchAvailable ? (
+                <div
+                  aria-label="Handoff strategy"
+                  className="workspace-handoff-dialog__strategy-list"
+                  role="radiogroup"
+                >
+                  <button
+                    aria-checked={worktreeHandoffStrategy === "keep-local-branch"}
+                    className="workspace-handoff-dialog__strategy"
+                    disabled={handoffSubmitting}
+                    role="radio"
+                    type="button"
+                    onClick={() => setWorktreeHandoffStrategy("keep-local-branch")}
+                  >
+                    <span className="workspace-handoff-dialog__strategy-title">
+                      {localCheckoutBranch && localCheckoutBranch !== sourceBranch
+                        ? `Keep Local on ${localCheckoutBranch}`
+                        : "Keep Local on its branch"}
+                    </span>
+                    <span>
+                      Only the thread moves. Local stays on its branch. The worktree is
+                      archived with a checkpoint of its uncommitted changes, and
+                      {" "}{sourceBranch && sourceBranch !== "HEAD" ? <code>{sourceBranch}</code> : "its branch"}{" "}
+                      stays where it is.
+                    </span>
+                  </button>
+                  <button
+                    aria-checked={worktreeHandoffStrategy === "move-branch"}
+                    className="workspace-handoff-dialog__strategy"
+                    disabled={handoffSubmitting || !sourceBranch}
+                    role="radio"
+                    type="button"
+                    onClick={() => setWorktreeHandoffStrategy("move-branch")}
+                  >
+                    <span className="workspace-handoff-dialog__strategy-title">
+                      {sourceBranch && sourceBranch !== "HEAD"
+                        ? `Move ${sourceBranch} to Local`
+                        : "Move this worktree to Local"}
+                    </span>
+                    <span>
+                      Switch Local to the worktree&rsquo;s branch. Dirty tracked and
+                      non-ignored files are stashed and applied in Local, then the
+                      worktree is archived.
+                    </span>
+                  </button>
+                </div>
+              ) : null}
+              {handoffDialog === "to-project" ? (
+                <div className="workspace-handoff-dialog__field">
+                  <label htmlFor={projectDestinationInputId}>Destination project</label>
+                  <ProjectDestinationCombobox
+                    id={projectDestinationInputId}
+                    directories={projectDirectories}
+                    disabled={handoffSubmitting}
+                    error={projectDestinations.state?.error}
+                    loaded={projectDestinationsLoaded}
+                    remote={filesystemFederationTarget?.scope === "remote"}
+                    value={projectTargetPath}
+                    onChange={setProjectTargetPath}
+                    onPickDirectory={props.desktopApi?.pickDirectoryFromDisk && !filesystemFederationTarget
+                      ? () => {
+                          void props.desktopApi!.pickDirectoryFromDisk!().then((result) => {
+                            if (!result.canceled) setProjectTargetPath(result.path);
+                          }).catch((error: unknown) => {
+                            setHandoffError(error instanceof Error ? error.message : String(error));
+                          });
+                        }
+                      : undefined}
+                    onQueryChange={setProjectSearch}
+                  />
+                </div>
+              ) : keepLocalBranchSelected ? null : (
+                <dl className="workspace-handoff-dialog__summary">
+                  <div>
+                    <dt>
+                      {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
+                        ? "Detached HEAD to move"
+                        : (handoffDialog === "local-to-worktree" &&
+                            (localHandoffStrategy === "detached-changes"
+                              || localHandoffStrategy === "fresh-from-base"))
+                          || (fromWorktreeToNew && localHandoffStrategy !== "move-branch")
+                          ? "Current branch"
+                          : "Branch to move"}
+                    </dt>
+                    <dd>{sourceBranch ?? "Unknown branch"}</dd>
+                  </div>
+                </dl>
+              )}
+              {toNewWorktree ? (
+                <>
+                  <div
+                    aria-label="Handoff strategy"
+                    className="workspace-handoff-dialog__strategy-list"
+                    role="radiogroup"
+                  >
+                    <button
+                      aria-checked={localHandoffStrategy === "detached-changes"}
+                      className="workspace-handoff-dialog__strategy"
+                      disabled={handoffSubmitting}
+                      role="radio"
+                      type="button"
+                      onClick={() => setLocalHandoffStrategy("detached-changes")}
+                    >
+                      <span className="workspace-handoff-dialog__strategy-title">
+                        Handoff to Detached HEAD
+                      </span>
+                      <span>
+                        {fromWorktreeToNew
+                          ? "Create a detached worktree at the current commit and move dirty non-ignored changes on top."
+                          : "Keep Local on the current branch. Create a detached worktree at the current branch tip and move dirty non-ignored changes on top."}
+                      </span>
+                    </button>
+                    <button
+                      aria-checked={localHandoffStrategy === "new-branch"}
+                      className="workspace-handoff-dialog__strategy"
+                      disabled={handoffSubmitting}
+                      role="radio"
+                      type="button"
+                      onClick={() => setLocalHandoffStrategy("new-branch")}
+                    >
+                      <span className="workspace-handoff-dialog__strategy-title">
+                        Handoff to New Branch
+                      </span>
+                      <span>
+                        {fromWorktreeToNew
+                          ? "Create a named branch in the new worktree and move dirty non-ignored changes on top."
+                          : "Keep Local on this branch. Create a named branch in the new worktree and move dirty non-ignored changes on top."}
+                      </span>
+                    </button>
+                    <button
+                      aria-checked={localHandoffStrategy === "move-branch"}
+                      className="workspace-handoff-dialog__strategy"
+                      disabled={handoffSubmitting || (fromWorktreeToNew
+                        ? !sourceBranch || sourceBranch === "HEAD"
+                        : branchOptions.length === 0)}
+                      role="radio"
+                      type="button"
+                      onClick={() => setLocalHandoffStrategy("move-branch")}
+                    >
+                      <span className="workspace-handoff-dialog__strategy-title">
+                        Handoff Current Branch
+                      </span>
+                      <span>
+                        {fromWorktreeToNew
+                          ? "Move this branch into the new worktree. The old worktree lets go of it first."
+                          : "Move this branch into the new worktree, then switch this checkout to a selected branch."}
+                      </span>
+                    </button>
+                    <button
+                      aria-checked={localHandoffStrategy === "fresh-from-base"}
+                      className="workspace-handoff-dialog__strategy"
+                      disabled={handoffSubmitting || freshBaseOptions.length === 0}
+                      role="radio"
+                      type="button"
+                      onClick={() => setLocalHandoffStrategy("fresh-from-base")}
+                    >
+                      <span className="workspace-handoff-dialog__strategy-title">
+                        Start Fresh from a Branch
+                      </span>
+                      <span>
+                        Create a new worktree from another branch, such as origin/main. Uncommitted changes stay here.
+                      </span>
+                    </button>
+                  </div>
+                  {localHandoffStrategy === "fresh-from-base" ? (
+                    <>
+                      <div className="workspace-handoff-dialog__field">
+                        <span aria-hidden="true">Base branch</span>
+                        <BranchPicker
+                          ariaLabel="Base branch"
+                          className="branch-picker--dialog"
+                          disabled={handoffSubmitting}
+                          options={freshBaseOptions}
+                          value={freshBaseRef}
+                          onChange={setFreshBaseRef}
+                        />
+                      </div>
+                      <label className="workspace-handoff-dialog__field">
+                        New branch name (optional)
+                        <input
+                          aria-label="New branch name"
+                          className="workspace-handoff-dialog__text-input"
+                          disabled={handoffSubmitting}
+                          placeholder="Leave empty for a detached HEAD"
+                          spellCheck={false}
+                          type="text"
+                          value={freshBranchName}
+                          onChange={(event) => setFreshBranchName(event.target.value)}
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                  {handoffDialog === "local-to-worktree" && localHandoffStrategy === "move-branch" ? (
+                    <div className="workspace-handoff-dialog__field">
+                      <span aria-hidden="true">Leave current checkout on</span>
+                      <BranchPicker
+                        ariaLabel="Leave current checkout on"
+                        className="branch-picker--dialog"
+                        disabled={handoffSubmitting}
+                        options={leaveLocalBranchOptions}
+                        value={leaveLocalBranch}
+                        onChange={setLeaveLocalBranch}
+                      />
+                    </div>
+                  ) : null}
+                  {localHandoffStrategy === "new-branch" ? (
+                    <label className="workspace-handoff-dialog__field">
+                      New branch name
+                      <input
+                        aria-label="New branch name"
+                        className="workspace-handoff-dialog__text-input"
+                        disabled={handoffSubmitting}
+                        spellCheck={false}
+                        type="text"
+                        value={newLocalBranch}
+                        onChange={(event) => setNewLocalBranch(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                </>
+              ) : null}
+              {handoffDialog === "local-to-worktree" &&
+              localHandoffStrategy === "move-branch" &&
+              branchOptions.length === 0 ? (
+                <p className="workspace-handoff-dialog__note">
+                  No available local branch can be checked out before moving this branch.
+                </p>
+              ) : null}
+              {toNewWorktree &&
+              localHandoffStrategy === "detached-changes" ? (
+                <p className="workspace-handoff-dialog__note">
+                  The new worktree starts at the current tip of{" "}
+                  {sourceBranch ?? "this branch"} and receives dirty non-ignored changes on
+                  top.
+                </p>
+              ) : null}
+              {toNewWorktree &&
+              localHandoffStrategy === "new-branch" ? (
+                <p className="workspace-handoff-dialog__note">
+                  The new worktree creates{" "}
+                  {newLocalBranch.trim() ? (
+                    <code>{newLocalBranch.trim()}</code>
+                  ) : (
+                    "a named branch"
+                  )}{" "}
+                  at the current tip of {sourceBranch ?? "this branch"} and receives
+                  dirty non-ignored changes on top.
+                </p>
+              ) : null}
+              {toNewWorktree &&
+              localHandoffStrategy === "fresh-from-base" ? (
+                <>
+                  <p className="workspace-handoff-dialog__note">
+                    The new worktree starts at{" "}
+                    {freshBaseRef.trim() ? <code>{freshBaseRef.trim()}</code> : "the base branch"}{" "}
+                    with no changes from here.
+                  </p>
+                  <p className="workspace-handoff-dialog__note">
+                    {!fromWorktreeToNew
+                      ? "This checkout keeps its branch and its uncommitted changes."
+                      // Claude and ACP thread archive keeps every worktree.
+                      : props.thread?.source === "codex"
+                        ? "The current worktree stays on disk with its branch and its uncommitted changes. Archiving this thread later checkpoints and removes it, unless it was created outside PwrAgent."
+                        : "The current worktree stays on disk with its branch and its uncommitted changes."}
+                  </p>
+                </>
+              ) : fromWorktreeToNew ? (
+                <p className="workspace-handoff-dialog__note">
+                  The current worktree is archived with a checkpoint. Its branch stays where it is.
+                </p>
+              ) : null}
+              {toNewWorktree && localHandoffStrategy === "fresh-from-base" ? null : keepLocalBranchSelected ? (
+                <p className="workspace-handoff-dialog__note">
+                  Uncommitted changes stay in the checkpoint; they are not copied into Local.
+                </p>
+              ) : handoffDialog !== "to-project" ? (
+                <p className="workspace-handoff-dialog__note">
+                  Ignored files are not moved by handoff.
+                </p>
+              ) : null}
+              {handoffError ? (
+                <p className="workspace-handoff-dialog__error">{handoffError}</p>
+              ) : null}
+              <div className="workspace-handoff-dialog__actions">
+                <button
+                  className="button button--ghost"
+                  disabled={handoffSubmitting}
+                  type="button"
+                  onClick={() => setHandoffDialog(undefined)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button button--primary"
+                  disabled={handoffDisabled}
+                  type="button"
+                  onClick={() => {
+                    void submitHandoff();
+                  }}
+                >
+                  {handoffSubmitting ? "Handing off..." : handoffDialog === "to-project" ? "Move" : "Handoff"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+  }
+
+  function renderComposerImageLightbox(): ReactNode {
+    return expandedStripItem ? (
+      <ImageLightbox
+        alt={expandedStripItem.alt}
+        caption={expandedStripItem.caption}
+        dialogLabel={expandedStripItem.dialogLabel}
+        src={expandedStripItem.src}
+        position={expandedStripIndex + 1}
+        total={stripLightboxItems.length}
+        onClose={() => setExpandedStripItemKey(undefined)}
+        onPrevious={
+          previousStripItem
+            ? () => setExpandedStripItemKey(previousStripItem.key)
+            : undefined
+        }
+        onNext={
+          nextStripItem
+            ? () => setExpandedStripItemKey(nextStripItem.key)
+            : undefined
+        }
+      />
+    ) : null;
+  }
+
+  function renderComposerEnvironmentSetup(): ReactNode {
+    return environmentSetup ? (
+      <EnvironmentSetupRow
+        key={environmentSetup.key}
+        desktopApi={props.desktopApi}
+        model={{
+          ...environmentSetup,
+          onDismiss: environmentSetup.onDismiss
+            ? () => {
+                if (
+                  environmentError?.selectedEnvironmentId
+                  === environmentSetup.environmentId
+                ) {
+                  setEnvironmentError(undefined);
+                }
+                environmentSetup.onDismiss?.();
+              }
+            : undefined,
+        }}
+        onRetry={
+          environmentSetupRetryId
+          && props.thread
+          && props.desktopApi?.setCodexThreadEnvironment
+            ? () => {
+                setEnvironmentSetupRetrying(true);
+                void setThreadCodexEnvironment(environmentSetupRetryId).finally(() => {
+                  setEnvironmentSetupRetrying(false);
+                });
+              }
+            : undefined
+        }
+        retrying={environmentSetupRetrying}
+      />
+    ) : null;
+  }
+
+  function renderComposerView(): ReactNode {
+    return (
+      <>
+        <form
+          className="composer"
+          aria-busy={preparingSend}
+          data-composer-implementation="tiptap-wysiwyg-markdown-chips"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setScheduleMenuOpen(false);
+            if (isReviewComposerOpen) {
+              void submitConfiguredReviewComposer();
+            } else {
+              void submitTurn();
+            }
+          }}
+        >
+        {/* Outside the pending fieldset: a hot microphone's End voice must work
+            while a send is being prepared. */}
+        {nativeVoiceApi ? (
+          <NativeVoiceBar api={nativeVoiceApi} threadId={nativeVoiceThreadId} />
+        ) : null}
+        <fieldset className="composer__pending-controls" disabled={preparingSend}>
+          {/* Issue #240: removed the visible "Reply" / "New thread" /
+            "Review" eyebrow that used to sit above the composer. The
+            input itself carries the same name through its `aria-label`
+            (the `label` prop on the inner ComposerRichInput /
+            ComposerTiptapInput / ComposerTextareaInput is rendered as
+            the input's `aria-label`), and the placeholder text already
+            conveys the action prompt visually. Stacking another header
+            above an input that already names itself was redundant
+            chrome. */}
+
+        {/* The band: every transient row between the transcript and the
+            input. It is the one part of the composer allowed to give up height
+            — capped, scrolling, and shrinkable — so no number of open rows can
+            push the input or its toolbar off the window. See
+            `composer-band-bounds.test.ts`. */}
+        {renderComposerBand()}
+        {/* Outside the band, which hides itself when it is empty. A bare live
+            region, not role="status": several E2E specs expect the window's
+            only status to be the turn's own. */}
+        <span
+          className="composer__queued-announcer"
+          aria-live="polite"
+          ref={queuedReorder.announcerRef}
+        />
+
+        {preparingImages ? (
+          <p className="composer__meta" aria-live="polite">
+            Preparing image attachments…
+          </p>
+        ) : null}
+        {renderComposerAttachments()}
+
+        {uploadingRemoteFileCount > 0 ? (
+          <p className="composer__meta" role="status">
+            Copying {uploadingRemoteFileCount === 1
+              ? "1 file"
+              : `${uploadingRemoteFileCount} files`} to {remoteUploadTargetLabel}.
+            {" "}Send waits until {uploadingRemoteFileCount === 1 ? "it finishes" : "they finish"}.
+          </p>
+        ) : null}
+        {failedRemoteFileUploads.map((upload) => (
+          <p
+            className="composer__meta composer__meta--warning"
+            key={upload.id}
+            role="status"
+          >
+            {upload.label} did not copy to {remoteUploadTargetLabel}: {upload.error}
+            {" "}Retry or remove it to send.
+          </p>
+        ))}
+
+        {imageAttachments.length > 0 && !imagesSupported ? (
+          <p className="composer__meta composer__meta--warning" role="status">
+            {imagesUnsupportedLabel} doesn&apos;t support image attachments —
+            remove them or switch models before sending.
+          </p>
+        ) : null}
+
+        {pdfReferencePaths.length > 0 ? (
+          <p className="composer__meta" role="status">
+            {props.pdfAnalysisEnabled !== false
+              ? "PDF analysis is on. PwrAgent uses local PDF tools for supported Codex threads and renders bounded page images when needed, preserving visual layout with less input overhead. Turn it off in Settings > General to leave PDFs as normal local-file references."
+              : "PDF analysis is off. This PDF will be sent as a normal local-file reference for the model to inspect with code or its own tools."}
+          </p>
+        ) : null}
+
+        <div className="composer__input-wrap" ref={inputWrapRef}>
+          {isReviewComposerOpen ? (
+            renderComposerReviewConfig()
+          ) : (
+            <ComposerTiptapInput
+              key={editorScopeKey}
+              ref={inputRef}
+              id="thread-composer"
+              ariaActiveDescendant={activeAutocompleteOptionId}
+              ariaControls={autocompleteListboxId}
+              ariaExpanded={Boolean(autocompleteKind)}
+              disabled={composerDisabled}
+              readOnly={preparingSend || forking}
+              label={isLaunchpad ? "New thread" : "Reply"}
+              inlineHint={forkInlineHint ?? commandInlineHint}
+              inlineCompletion={forkInlineCompletion}
+              commandChip={commandChip}
+              markdownConversion
+              placeholder={composerPlaceholder}
+              resolveThreadLink={(ref) => {
+                const resolved = threadLinks?.resolve(ref);
+                return resolved ? threadLinks?.getSnapshot(resolved) : undefined;
+              }}
+              selectionRequest={composerSelectionRequest}
+              editorDocument={editorDocument}
+              skillTokens={displaySkillTokens}
+              value={draft}
+              onChange={handleComposerChange}
+              onPaste={handlePaste}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onClick={handleComposerClick}
+              onKeyDown={handleTiptapComposerKeyDown}
+              onSkillChipPointerEnter={skillOriginCard.hoverAnchor}
+              onSkillChipPointerLeave={skillOriginCard.leaveAnchor}
+            />
+          )}
+          {/* One card for the picker's origin chips and the draft's `$skill`
+            chips. It portals to the body, so where it sits here only decides
+            that it outlives the picker. */}
+          {skillOriginCard.cardNode}
+
+          {/* The draft is deliberately still on screen and still selectable, so
+            the only thing distinguishing it from a live input is this line and
+            the `is-readonly` fill behind it. `aria-readonly` covers assistive
+            tech; nothing else covered a sighted operator, who would otherwise
+            click in, get no caret, and lose the keystrokes silently. */}
+          {preparingSend ? (
+            <p className="composer__meta composer__held-notice" role="status">
+              Message held while checks run. Select and copy still work.
+            </p>
+          ) : null}
+
+          {renderComposerAutocomplete()}
+        </div>
+
+        {renderComposerToolbar()}
+
+        {renderComposerWorkspaceHandoff()}
+
+        {props.unavailableReason ? (
+         <p className="composer__meta composer__meta--error">
+           {props.unavailableReason}
+         </p>
+        ) : null}
+        {props.thread?.agentChange && !props.thread.agentChange.error ? (
+          <p className="composer__meta" role="status">
+            {formatAgentChangeStatus(props.thread.agentChange)}
+          </p>
+        ) : null}
+        {!props.skillError && props.skillLoading ? (
+          <p className="composer__meta">Loading skills…</p>
+        ) : null}
+        {props.updatingExecutionMode ? (
+          <p className="composer__meta">
+            Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
+          </p>
+        ) : null}
+        {props.disabled && backend?.available === false && !backend.discoveryPending ? (
+          <p className="composer__meta">
+            {props.launchpad
+              ? "This backend is unavailable right now. Your draft stays here until send is available again."
+              : "This thread's backend is unavailable right now. You can keep drafting, but send is unavailable."}
+          </p>
+        ) : !props.pendingRequestActive && props.pendingUserInputActive ? (
+          <p className="composer__meta">
+            Waiting for input before this turn can continue.
+          </p>
+        ) : null}
+
+        </fieldset>
+        {renderComposerFooter()}
+        </form>
+        {fullAccessRiskDialog}
+        {renderComposerImageLightbox()}
+      </>
+    );
+  }
+
+  return renderComposerView;
+}
+
+/** Render after the controller returns, keeping it out of JSX stack captures. */
+function ComposerView({ render }: { render: () => ReactNode }) {
+  return render();
+}
 
 /**
  * One row of the send menu: a name, the clause saying what it does (or why
