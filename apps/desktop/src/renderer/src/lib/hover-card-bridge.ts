@@ -101,5 +101,23 @@ export class HoverCardBridge {
   }
 }
 
-/** The sidebar's PR chips share one bridge. */
+/** The sidebar, so a card opens past its edge rather than over the rows. */
+export function sidebarAnchorRect(target: HTMLElement): DOMRect {
+  return (target.closest(".sidebar") ?? target).getBoundingClientRect();
+}
+
+/**
+ * Whether the card sits clear of the sidebar, where the pointer can reach it
+ * without crossing other rows. A card that fell back over the rows (a narrow
+ * window) does not qualify, and neither does one with no laid-out box.
+ */
+export function cardIsBesideSidebar(card: HTMLElement | null, target: HTMLElement): boolean {
+  const sidebar = target.closest(".sidebar");
+  if (!card || !sidebar) return false;
+  const box = card.getBoundingClientRect();
+  const edges = sidebar.getBoundingClientRect();
+  return box.width > 0 && (box.left >= edges.right || box.right <= edges.left);
+}
+
+/** The sidebar's enterable cards (PR chips, project headers) share one bridge. */
 export const sidebarPrCardBridge = new HoverCardBridge();

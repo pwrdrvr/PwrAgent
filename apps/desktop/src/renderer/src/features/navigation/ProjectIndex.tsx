@@ -103,6 +103,16 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
   onDropProject?: (key: string, drop: DirectoryDrop) => void;
   /** ⌘⇧↑/↓ on a pinned name. */
   onMoveProject?: (key: string, direction: "up" | "down") => void;
+  /**
+   * The project card, the one the project's header opens on hover. `enter`
+   * answers whether that project has one; when it does, the card shows the
+   * whole name, so the cut-name tooltip stands down.
+   */
+  projectCard?: {
+    enter: (key: string, target: HTMLElement) => boolean;
+    leave: (target: HTMLElement) => void;
+    hide: () => void;
+  };
 }): ReactElement {
   const { scrollRegionRef, spy: spyEnabled } = props;
   const tooltip = useViewportTooltip({ className: "viewport-tooltip", placement: "beside" });
@@ -528,12 +538,14 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
                   }${project.forgeActivityPaused ? ", forge activity paused" : ""}`}
                   onClick={() => {
                     tooltip.hide();
+                    props.projectCard?.hide();
                     props.onJump(project.key);
                   }}
                   onContextMenu={props.onOpenContextMenu
                     ? (event) => {
                         event.preventDefault();
                         tooltip.hide();
+                        props.projectCard?.hide();
                         props.onOpenContextMenu?.(project.key, {
                           x: event.clientX,
                           y: event.clientY,
@@ -541,9 +553,18 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
                         });
                       }
                     : undefined}
-                  onPointerDown={movable ? (event) => beginDrag(event, project) : undefined}
-                  onMouseEnter={(event) => showIfCut(event.currentTarget)}
-                  onMouseLeave={tooltip.hide}
+                  onPointerDown={(event) => {
+                    props.projectCard?.hide();
+                    if (movable) beginDrag(event, project);
+                  }}
+                  onMouseEnter={(event) => {
+                    if (props.projectCard?.enter(project.key, event.currentTarget)) return;
+                    showIfCut(event.currentTarget);
+                  }}
+                  onMouseLeave={(event) => {
+                    tooltip.hide();
+                    props.projectCard?.leave(event.currentTarget);
+                  }}
                   onFocus={(event) => {
                     setFocusedKey(project.key);
                     showIfCut(event.currentTarget);
