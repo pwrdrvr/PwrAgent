@@ -768,9 +768,13 @@ export function ModelsSettings(props: {
             saving={props.saving}
             onRefresh={props.onRefresh}
             onRefreshCatalogs={props.desktopApi?.refreshCodexModelProviderCatalogs
-              ? async () => {
-                  await props.desktopApi?.refreshCodexModelProviderCatalogs?.();
-                  await refreshCatalog(false);
+              ? async (providerId: string) => {
+                  await props.desktopApi?.refreshCodexModelProviderCatalogs?.({ providerIds: [providerId] });
+                  // The form shows the new list from these summaries, so a
+                  // failed re-list is a failed Refresh.
+                  if (!await refreshCatalog(false)) {
+                    throw new Error("The model list was read, but this window could not load it. Reopen Settings to see it.");
+                  }
                 }
               : undefined}
             onSave={props.onSaveCodexModelProviders}

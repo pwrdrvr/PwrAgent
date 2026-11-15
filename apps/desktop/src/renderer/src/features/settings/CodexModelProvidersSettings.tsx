@@ -90,8 +90,8 @@ export function CodexModelProvidersSettings(props: {
   backends?: readonly BackendSummary[];
   onSave: (providers: CodexModelProviderSettings[]) => Promise<boolean>;
   onRefresh: () => Promise<void>;
-  /** Read every saved provider's model list again, then the summaries. */
-  onRefreshCatalogs?: () => Promise<void>;
+  /** Read one saved provider's model list again, then the summaries. */
+  onRefreshCatalogs?: (providerId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<ProviderDraft>();
   const [busy, setBusy] = useState(false);
@@ -227,10 +227,10 @@ export function CodexModelProvidersSettings(props: {
   };
 
   const refreshCatalogs = async (): Promise<void> => {
-    if (!props.onRefreshCatalogs) return;
+    if (!props.onRefreshCatalogs || !editing) return;
     setRefresh({ running: true });
     try {
-      await props.onRefreshCatalogs();
+      await props.onRefreshCatalogs(editing.id);
       // A refresh is newer than the last test, so the table follows it.
       setTest((current) => current?.result ? { ...current, result: undefined } : current);
       setRefresh({ running: false });
@@ -269,7 +269,7 @@ export function CodexModelProvidersSettings(props: {
             title={provider.name}
             meta={provider.id}
             path={provider.baseUrl}
-            chips={providerChips(provider)}
+            chips={providerChips(provider, codexCatalogState(props.backends, provider.id))}
             selected={false}
             useLabel={draft?.existingId === provider.id ? "Editing" : "Edit"}
             disabled={disabled || Boolean(draft)}
@@ -851,13 +851,42 @@ function ProviderTestResult(props: {
   );
 }
 
-function providerChips(provider: DesktopCodexModelProvider): SettingsPathRowChip[] {
+function codexCatalogState(
+  backends: readonly BackendSummary[] | undefined,
+  providerId: string,
+): CodexModelProviderCatalogState | undefined {
+  return backends
+    ?.find((backend) => backend.kind === "codex")
+    ?.codexModelProviders
+    ?.find((state) => state.id === providerId);
+}
+
+function providerChips(
+  provider: DesktopCodexModelProvider,
+  catalog: CodexModelProviderCatalogState | undefined,
+): SettingsPathRowChip[] {
   const modelCount = provider.models?.length ?? 0;
   const chips: SettingsPathRowChip[] = [
     { key: "key", label: provider.hasApiKey ? "key" : "no key", tone: provider.hasApiKey ? "muted" : "warn" },
   ];
   if (provider.compatibility) chips.push({ key: "runtime", label: "isolated runtime", tone: "muted" });
-  if (modelCount > 0 || provider.discoverModels !== false) {
+  // What the owner's last read found, when the endpoint's list is on.
+  if (provider.discoverModels !== false && catalog?.status === "ready") {
+    const count = catalog.discoveredCount ?? 0;
+    chips.push({
+      key: "models",
+      label: `${count.toLocaleString("en-US")} model${count === 1 ? "" : "s"}${catalog.truncated ? "+" : ""}`,
+      tone: "muted",
+      title: "Models the endpoint's GET /models listed in its last read",
+    });
+  } else if (provider.discoverModels !== false && catalog?.status === "unavailable") {
+    chips.push({
+      key: "models",
+      label: "list unavailable",
+      tone: "warn",
+      title: catalog.error ?? "The last read of the endpoint's model list failed",
+    });
+  } else if (modelCount > 0 || provider.discoverModels !== false) {
     chips.push({
       key: "models",
       label: provider.discoverModels === false

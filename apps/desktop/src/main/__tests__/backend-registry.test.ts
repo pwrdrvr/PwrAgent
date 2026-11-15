@@ -30090,12 +30090,17 @@ command = "pnpm dev"
 
   it("reads a provider's model list again on Settings' Refresh, inside its ten-minute window, and publishes it", async () => {
     let catalog = [{ id: "kimi-k3.1-pro" }];
-    const providerFetch = vi.fn(async () => new Response(JSON.stringify({ data: catalog })));
+    const providerFetch = vi.fn(async (url: string) => new Response(JSON.stringify({
+      data: url.startsWith("https://mathos.example/") ? catalog : [{ id: "glm-air" }],
+    })));
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ models: [{ id: "gpt-5.4", label: "GPT-5.4", supportsReasoning: true }] }),
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
-      resolveCodexModelProviders: () => [{ id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1" }],
+      resolveCodexModelProviders: () => [
+        { id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1" },
+        { id: "other", name: "Other", baseUrl: "https://other.example/v1" },
+      ],
       resolveCodexModelProviderKeys: async () => ({}),
       codexModelProviderFetch: providerFetch,
     });
@@ -30108,15 +30113,16 @@ command = "pnpm dev"
         { includeUnavailable: true, refreshModels: "codex" },
         issueProviderDiscoveryPermit("settings-user-action"),
       );
-      expect(await codexModels()).toEqual(["gpt-5.4", "@mathos/kimi-k3.1-pro"]);
-      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expect(await codexModels()).toEqual(["gpt-5.4", "@mathos/kimi-k3.1-pro", "@other/glm-air"]);
+      expect(providerFetch).toHaveBeenCalledTimes(2);
 
       // MathOS adds a model a minute later. Without Refresh the ten-minute
-      // read would hide it; Refresh reads the endpoint again.
+      // read would hide it; Refresh reads that endpoint again, and only it.
       catalog = [...catalog, { id: "glm-5.3", supported_reasoning_efforts: ["low", "high"] } as never];
-      await registry.constructionPorts().refreshCodexProviderCatalogs({ rereadProviders: true });
-      expect(providerFetch).toHaveBeenCalledTimes(2);
-      expect(await codexModels()).toEqual(["gpt-5.4", "@mathos/kimi-k3.1-pro", "@mathos/glm-5.3"]);
+      await registry.constructionPorts().refreshCodexProviderCatalogs({ rereadProviders: ["mathos"] });
+      expect(providerFetch).toHaveBeenCalledTimes(3);
+      expect(providerFetch.mock.calls.at(-1)?.[0]).toMatch(/^https:\/\/mathos\.example\//u);
+      expect(await codexModels()).toEqual(["gpt-5.4", "@mathos/kimi-k3.1-pro", "@mathos/glm-5.3", "@other/glm-air"]);
       expect(events.some((event) => event.backend === "codex"
         && event.notification.method === "backend/providerStatus/updated")).toBe(true);
     } finally {

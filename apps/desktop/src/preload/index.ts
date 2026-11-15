@@ -2033,8 +2033,8 @@ const desktopApi = Object.freeze({
     request: TestCodexModelProviderRequest,
   ): Promise<CodexModelProviderTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL, request),
-  refreshCodexModelProviderCatalogs: async (): Promise<void> =>
-    await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL),
+  refreshCodexModelProviderCatalogs: async (request?: { providerIds?: string[] }): Promise<void> =>
+    await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL, request),
   scanCodexModelProviderImports: async (): Promise<CodexModelProviderImportScan> =>
     await ipcRenderer.invoke(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL),
   createCodexAuthProfile: async (

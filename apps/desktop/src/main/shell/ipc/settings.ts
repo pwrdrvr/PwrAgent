@@ -1904,9 +1904,15 @@ export function registerSettingsIpcHandlers(
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL);
   ipcMain.handle(
     SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL,
-    // Reads every saved provider's `GET /models` again, with its saved key,
-    // and publishes the result to every window's model menus.
-    async (): Promise<void> => await getService(service).refreshCodexModelProviderCatalogs(),
+    // Reads the named saved providers' `GET /models` again (every provider's
+    // without names), with each one's saved key, and publishes the result to
+    // every window's model menus.
+    async (_event, request?: { providerIds?: unknown }): Promise<void> => {
+      const providerIds = Array.isArray(request?.providerIds)
+        ? request.providerIds.filter((id): id is string => typeof id === "string")
+        : undefined;
+      await getService(service).refreshCodexModelProviderCatalogs(providerIds);
+    },
   );
 
   ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);

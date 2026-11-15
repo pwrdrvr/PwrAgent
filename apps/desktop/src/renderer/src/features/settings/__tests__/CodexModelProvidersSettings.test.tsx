@@ -299,6 +299,9 @@ describe("CodexModelProvidersSettings", () => {
       }),
       mathosModel("mistral-large-4-0", { label: "Mistral Large 4.0" }),
     ])]);
+    const list = screen.getByRole("group", { name: "Codex model providers" });
+    // The closed row says what the last read found, not only typed ids.
+    expect(within(list).getByText("2 models")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByText("2 models from GET /models · read 3m ago")).toBeInTheDocument();
     const table = screen.getByRole("table", { name: "Provider models" });
@@ -307,6 +310,10 @@ describe("CodexModelProvidersSettings", () => {
     expect(within(table).getByText("None listed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(onRefreshCatalogs).toHaveBeenCalledTimes(1));
+    expect(onRefreshCatalogs).toHaveBeenCalledWith("mathos");
+    onRefreshCatalogs.mockRejectedValueOnce(new Error("The model list was read, but this window could not load it."));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText(/this window could not load it/u)).toBeInTheDocument();
   });
 
   it("keeps a 2,000-model catalog to 50 rows, finds a model by its words, and prices any of them", async () => {

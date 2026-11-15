@@ -18161,17 +18161,22 @@ export class DesktopBackendRegistry {
   /**
    * Re-read the Codex model list and publish it on the cached Codex summary.
    * The retry after a failed provider read reuses a provider read that is
-   * still fresh; Settings' Refresh (`rereadProviders`) reads every provider
-   * endpoint again. Windows re-read summaries on
+   * still fresh; Settings' Refresh (`rereadProviders`) reads the named
+   * providers' endpoints again, or every one's. Windows re-read summaries on
    * `backend/providerStatus/updated`.
    */
   private async refreshCodexProviderCatalogs(
-    options: { rereadProviders?: boolean } = {},
+    options: { rereadProviders?: true | readonly string[] } = {},
   ): Promise<readonly CodexModelProviderCatalogState[]> {
     const generation = this.codexBackendGeneration;
-    if (options.rereadProviders) this.codexModelProviderCatalog?.invalidate();
+    const reread = options.rereadProviders;
+    if (reread === true) {
+      this.codexModelProviderCatalog?.invalidate();
+    } else {
+      for (const providerId of reread ?? []) this.codexModelProviderCatalog?.invalidateProvider(providerId);
+    }
     this.modelCatalog.invalidate("codex");
-    const models = await this.modelCatalog.readModels("codex", "provider-catalog-retry");
+    const models = await this.modelCatalog.readModels("codex", reread ? "settings-refresh" : "provider-catalog-retry");
     const states = this.codexModelProviderCatalog?.catalogStates() ?? [];
     // A refresh from Settings that finds a provider down arms the automatic
     // retry. The retry's own refresh is ignored here; it observes on return.

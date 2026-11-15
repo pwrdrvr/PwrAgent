@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
+import { buildLaunchpadOptions } from "../app-server/thread-model-options";
 
 /**
  * The reasoning choices a provider's `GET /models` declares, read the way
@@ -92,5 +93,31 @@ describe("a provider model's reasoning choices", () => {
         expect(item.defaultReasoningEffort).toBe(options[index]!.defaultReasoningEffort);
       });
     }), { numRuns: 40 });
+  });
+});
+
+describe("Codex's backend-wide effort list", () => {
+  it("holds only Codex's own models' levels, never a provider's", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(modelEntry, { minLength: 1, maxLength: 6 }), async (generated) => {
+      const entries = generated.map((entry, index) => ({ id: `model-${index}`, object: "model", ...entry }));
+      const catalog = new CodexModelProviderCatalog({
+        resolveProviders: () => [mathos],
+        resolveKeys: async () => ({}),
+        fetch: serving(entries),
+      });
+      const own = [
+        { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true, reasoningEfforts: ["low", "medium", "high", "xhigh"] },
+        { id: "gpt-5.4-mini", label: "GPT-5.4 mini", supportsReasoning: true, reasoningEfforts: ["low", "medium"] },
+      ];
+      const options = buildLaunchpadOptions("codex", [...own, ...await catalog.listModelOptions()]);
+      // The fallback for a model without its own list: OpenAI's levels alone.
+      expect(options?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+      // Each provider model still carries its own.
+      for (const option of options?.models ?? []) {
+        if (!option.providerId) continue;
+        const entry = entries.find((candidate) => `@mathos/${candidate.id}` === option.id)!;
+        expect(option.reasoningEfforts).toEqual(oracle(entry).reasoningEfforts);
+      }
+    }), { numRuns: 60 });
   });
 });

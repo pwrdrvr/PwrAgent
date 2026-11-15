@@ -348,14 +348,17 @@ describe("settings ipc", () => {
       await expect(handlers.get(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL)?.({}))
         .rejects.toThrow("Codex is not running");
       let finishRead: () => void = () => undefined;
-      const reread = vi.fn(() => new Promise<void>((resolve) => { finishRead = resolve; }));
+      const reread = vi.fn((_providerIds?: readonly string[]) => new Promise<void>((resolve) => { finishRead = resolve; }));
       const stop = service.onCodexModelProviderCatalogRefresh(reread);
       let settled = false;
-      const refreshed = Promise.resolve(handlers.get(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL)?.({}))
-        .then(() => { settled = true; });
+      const refreshed = Promise.resolve(handlers.get(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL)?.(
+        {},
+        { providerIds: ["mathos", 7] },
+      )).then(() => { settled = true; });
       await Promise.resolve();
       // Settings waits for the owner's read, so its list then shows the result.
       expect(reread).toHaveBeenCalledTimes(1);
+      expect(reread).toHaveBeenCalledWith(["mathos"]);
       expect(settled).toBe(false);
       finishRead();
       await refreshed;
