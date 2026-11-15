@@ -107,6 +107,7 @@ export class CodexModelProviderTranslator {
   /** Qualify the models in a notification about a provider thread. */
   translateNotification(method: string, params: unknown): unknown {
     if (!isRecord(params)) return params;
+    if (method === "warning") return this.quietMissingMetadataWarning(params);
     if (isRecord(params.thread)) {
       return { ...params, thread: this.observeThread(params.thread) };
     }
@@ -128,6 +129,21 @@ export class CodexModelProviderTranslator {
     if (this.resolveProviderIds().size === 0) return params;
     // A copy: the caller's params may be reused for a retry.
     return { ...params, modelProviders: [] };
+  }
+
+  /**
+   * Codex has no metadata for a configured provider's models, so it warns at
+   * the start of every turn on one. Nothing in PwrAgent can supply it, and
+   * the operator can do nothing about it, so the warning stays in the
+   * thread's activity and never raises a toast. On Codex's default provider
+   * or a provider from the operator's own Codex config it may be a typo, so
+   * it still reaches the operator.
+   */
+  private quietMissingMetadataWarning(params: Record<string, unknown>): Record<string, unknown> {
+    const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
+    if (!threadId || !this.providerForThread(threadId)) return params;
+    if (typeof params.message !== "string" || !MISSING_MODEL_METADATA_WARNING.test(params.message)) return params;
+    return { ...params, presentation: "activity-only" };
   }
 
   private observeThread(thread: unknown): unknown {
@@ -157,6 +173,8 @@ export class CodexModelProviderTranslator {
   }
 }
 
+/** Codex's per-turn warning for a model outside its own catalog. */
+const MISSING_MODEL_METADATA_WARNING = /^Model metadata for `[^`]+` not found\. Defaulting to fallback metadata/u;
 const PROVIDER_PINNING_METHODS = new Set(["thread/start", "thread/resume", "thread/fork"]);
 /** Requests that run on an existing thread, which keeps its provider. */
 const THREAD_PROVIDER_METHODS = new Set(["thread/resume", "turn/start", "thread/settings/update"]);
