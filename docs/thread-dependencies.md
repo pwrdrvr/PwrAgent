@@ -59,6 +59,27 @@ explicit startup instruction-file read contract. The recovery wrapper says
 the prompt is control guidance, preserves the current assignment, and must
 not become artifact content or an instruction to generate another paragraph.
 
+### Loop protection
+
+Every thread shares a durable guard across all its hooks: at most one
+automatic recovery attempt every **five minutes**, and at most **three
+attempts in a rolling thirty-minute window**, with a hard ceiling of
+**eight attempts per active turn** even when spread over hours. A further eligible attempt
+trips a circuit breaker. It stays suspended even after the window expires
+or the app restarts; only the local operator's **Rearm recovery** button in
+Continue After clears it. Agents and peers cannot rearm it. Re-registering,
+cancelling, or changing a hook does not clear the guard.
+
+Cooldown events are dropped, with no delayed prompt or timer. The budget
+reservation commits atomically with the dispatch claim, so two owners or
+different hooks cannot spend the same allowance. Uncertain or refused
+admission counts conservatively; retrying a still-unsubmitted busy claim
+reuses its reservation. Clock rollback cannot open the cooldown early.
+The guard stores at most three reservation keys/timestamps, the current
+turn's counter, and its last attempt and suspension times in a PwrAgent-owned row per thread. This
+bounds automatic recovery injection; it is not an account-wide token budget
+for the worker's independently authorized work.
+
 Each hook retains only its latest completion, consumed item IDs within that
 turn, and the existing claim/evidence fields. A compare-and-swap claim
 arbitrates owners; per-event message-origin receipts distinguish recurring
@@ -66,13 +87,16 @@ deliveries. After a crash, a receipt rearms the recurring hook; an uncertain
 claim requires review instead of retrying a possibly accepted steer.
 
 The checked-in `compaction-recovery-eight-completions` budget measures 24
-commits for eight completions and 160 duplicate pairs: three commits per
-completion, zero start/duplicate or idle timer writes. Observed WAL was
-197,760 bytes (about 24,720 bytes/completion). At eight workers each compacting
-once per ten minutes, 0.04 commits/second × 8,240 bytes/commit × 86,400
-seconds projects to **28.5 MB/day**. This is the coordinator's incremental
+commits for eight eligible completions and 160 duplicate pairs: three
+commits per completion, including the atomic guard reservation, with zero
+start/duplicate or idle timer writes. Observed WAL was 234,840 bytes (about
+29,355 bytes/completion). At eight workers each compacting once per ten
+minutes, 0.04 commits/second × 9,785 bytes/commit × 86,400 seconds projects
+to **33.8 MB/day**. This is the coordinator's incremental
 write cost; existing steering/message-origin persistence keeps its own
-budgets. Registration adds one transaction, without a new schema or timer.
+budgets. Registration adds one transaction. Cooldown suppression adds zero
+writes; a circuit trip plus an explicit operator rearm has its own budget.
+The guard table is additive and introduces no timer.
 
 ## Choosing a wait
 

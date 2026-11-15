@@ -60,6 +60,18 @@ const dialog = () => screen.getByRole("dialog", { name: "Continue After" });
 const instructions = () => screen.getByRole("textbox", { name: "Instructions" });
 
 describe("Continue After dialog", () => {
+  it("shows a durable recovery suspension and lets the local operator rearm it", async () => {
+    const hook = { ...dependency, repeat: true, conditions: [{ backend: "codex" as const, threadId: "waiting", when: "compaction_completed" as const }] };
+    const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => ({
+      dependencies: [hook], recoveryProtection: { attemptsInWindow: 3, ...(request.action === "rearm_compaction" ? {} : { suspendedAt: 1000 }) },
+    }));
+    renderDialog(searchingApi(manage));
+    expect(await screen.findByText("Automatic recovery suspended")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rearm recovery" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "rearm_compaction", backend: "codex", threadId: "waiting" }));
+    await waitFor(() => expect(screen.queryByText("Automatic recovery suspended")).not.toBeInTheDocument());
+  });
+
   it("registers a recurring self compaction subscription without wait-barrier controls", async () => {
     const manage = vi.fn(async () => ({ dependencies: [] }));
     renderDialog(searchingApi(manage));

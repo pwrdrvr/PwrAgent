@@ -71,6 +71,7 @@ it("keeps compaction discovery and guidance distinct from wait barriers", () => 
   const tool = buildPwrAgentThreadToolDefinitions(undefined).find((candidate) => candidate.name === "manage_thread_dependencies")!;
   expect(JSON.stringify(tool.inputSchema)).toContain("compaction_completed");
   expect(JSON.stringify(tool.inputSchema)).toContain('"repeat"');
+  expect(JSON.stringify(tool.inputSchema)).not.toContain("rearm_compaction");
   expect(tool.description).toContain("keep the ongoing authorized task running after registration");
   expect(tool.description).toContain("After creating a wait barrier");
   expect(tool.description).not.toContain("After creation, end this turn");

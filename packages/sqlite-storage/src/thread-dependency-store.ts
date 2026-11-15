@@ -1,6 +1,10 @@
 import type Database from "better-sqlite3";
-import type { ThreadDependency } from "@pwragent/shared";
-import { buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition, threadDependencyDeliveryKey } from "@pwragent/shared";
+import type { CompactionRecoveryProtection, ThreadDependency } from "@pwragent/shared";
+import {
+  buildLegacyEncodedThreadIdentityKey, isThreadDependencyLocalThreadCondition, threadDependencyDeliveryKey,
+  COMPACTION_RECOVERY_COOLDOWN_MS, COMPACTION_RECOVERY_WINDOW_MS, COMPACTION_RECOVERY_MAX_ATTEMPTS,
+  COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN,
+} from "@pwragent/shared";
 
 export { THREAD_DEPENDENCY_SCHEMA } from "./state-schema";
 
@@ -30,6 +34,14 @@ function localThreadKey(condition: ThreadDependency["conditions"][number]): stri
   return condition.when !== "compaction_completed" && isThreadDependencyLocalThreadCondition(condition)
     ? key(condition.backend, condition.threadId) : undefined;
 }
+
+type RecoveryGuard = {
+  attempts: { key: string; at: number }[];
+  lastAttemptAt?: number;
+  suspendedAt?: number;
+  turnId?: string;
+  attemptsInTurn?: number;
+};
 
 export class ThreadDependencyStore {
   constructor(private readonly db: Database.Database) {}
@@ -76,6 +88,66 @@ export class ThreadDependencyStore {
     return Boolean(this.db.prepare(
       "SELECT 1 FROM thread_message_origins WHERE backend = ? AND thread_id = ? AND json_extract(payload, '$.dependencyId') = ? LIMIT 1",
     ).get(item.backend, item.threadId, threadDependencyDeliveryKey(item)));
+  }
+
+  private recoveryGuard(target: Pick<ThreadDependency, "backend" | "threadId">): RecoveryGuard {
+    const row = this.db.prepare("SELECT payload FROM thread_compaction_recovery_guards WHERE backend = ? AND thread_id = ?")
+      .get(target.backend, target.threadId) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) as RecoveryGuard : { attempts: [] };
+  }
+
+  private saveRecoveryGuard(target: Pick<ThreadDependency, "backend" | "threadId">, guard: RecoveryGuard): void {
+    this.db.prepare(`INSERT INTO thread_compaction_recovery_guards(backend, thread_id, payload) VALUES (?, ?, ?)
+      ON CONFLICT(backend, thread_id) DO UPDATE SET payload = excluded.payload`)
+      .run(target.backend, target.threadId, JSON.stringify(guard));
+  }
+
+  compactionRecoveryProtection(target: Pick<ThreadDependency, "backend" | "threadId">, now: number): CompactionRecoveryProtection {
+    const guard = this.recoveryGuard(target);
+    const effectiveNow = Math.max(now, guard.lastAttemptAt ?? now);
+    return {
+      attemptsInWindow: guard.attempts.filter((attempt) => attempt.at > effectiveNow - COMPACTION_RECOVERY_WINDOW_MS).length,
+      attemptsInTurn: guard.attemptsInTurn ?? 0,
+      ...(guard.lastAttemptAt !== undefined ? { cooldownUntil: guard.lastAttemptAt + COMPACTION_RECOVERY_COOLDOWN_MS } : {}),
+      ...(guard.suspendedAt !== undefined ? { suspendedAt: guard.suspendedAt } : {}),
+    };
+  }
+
+  isCompactionRecoveryReserved(item: ThreadDependency): boolean {
+    return this.recoveryGuard(item).attempts.some((attempt) => attempt.key === threadDependencyDeliveryKey(item));
+  }
+
+  /** Reserve the thread-wide budget atomically with the existing dispatch claim. */
+  claimCompactionRecovery(previous: ThreadDependency, claim: ThreadDependency, now: number): "claimed" | "lost" | "cooldown" | "suspended" {
+    return this.db.transaction(() => {
+      if (JSON.stringify(this.get(previous.backend, previous.threadId, previous.id)) !== JSON.stringify(previous)) return "lost";
+      const guard = this.recoveryGuard(previous);
+      const deliveryKey = threadDependencyDeliveryKey(claim);
+      const reserved = guard.attempts.some((attempt) => attempt.key === deliveryKey);
+      if (!reserved) {
+        if (guard.suspendedAt !== undefined) return "suspended";
+        const effectiveNow = Math.max(now, guard.lastAttemptAt ?? now);
+        const attempts = guard.attempts.filter((attempt) => attempt.at > effectiveNow - COMPACTION_RECOVERY_WINDOW_MS);
+        const attemptsInTurn = guard.turnId === claim.compaction?.turnId ? guard.attemptsInTurn ?? 0 : 0;
+        if (attempts.length >= COMPACTION_RECOVERY_MAX_ATTEMPTS || attemptsInTurn >= COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN) {
+          this.saveRecoveryGuard(previous, { ...guard, suspendedAt: effectiveNow });
+          return "suspended";
+        }
+        if (guard.lastAttemptAt !== undefined && now < guard.lastAttemptAt + COMPACTION_RECOVERY_COOLDOWN_MS) return "cooldown";
+        this.saveRecoveryGuard(previous, {
+          attempts: [...attempts, { key: deliveryKey, at: effectiveNow }], lastAttemptAt: effectiveNow,
+          turnId: claim.compaction?.turnId, attemptsInTurn: attemptsInTurn + 1,
+        });
+      }
+      // This immediate transaction owns the row after the read above.
+      if (!this.replace(previous, claim)) throw new Error("Compaction recovery claim changed inside its reservation transaction.");
+      return "claimed";
+    }).immediate();
+  }
+
+  rearmCompactionRecovery(target: Pick<ThreadDependency, "backend" | "threadId">): void {
+    this.db.prepare("DELETE FROM thread_compaction_recovery_guards WHERE backend = ? AND thread_id = ?")
+      .run(target.backend, target.threadId);
   }
 
   register(candidate: ThreadDependency): ThreadDependency {

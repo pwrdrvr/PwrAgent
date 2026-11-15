@@ -19,6 +19,18 @@ export const THREAD_DEPENDENCY_STEP_MAX_LENGTH = 200;
 /** "Something else": a prerequisite that is not a thread. */
 export const THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH = 200;
 export const THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH = 2000;
+export const COMPACTION_RECOVERY_COOLDOWN_MS = 5 * 60_000;
+export const COMPACTION_RECOVERY_WINDOW_MS = 30 * 60_000;
+export const COMPACTION_RECOVERY_MAX_ATTEMPTS = 3;
+export const COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN = 8;
+
+export type CompactionRecoveryProtection = {
+  attemptsInWindow: number;
+  attemptsInTurn?: number;
+  cooldownUntil?: number;
+  /** A durable circuit breaker, cleared only by the operator on the owning instance. */
+  suspendedAt?: number;
+};
 
 /** How a prerequisite reads after its thread's name: "Foundation passes CI". */
 export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD_DEPENDENCY_CONDITIONS)[number], string>> = {
@@ -154,8 +166,9 @@ export type ManageThreadDependenciesRequest = {
   /**
    * `active` lists every active registration on this instance, for sidebar
    * status. It is a desktop-window read only, never an agent tool action.
+   * `rearm_compaction` is also desktop-only and requires the local operator.
    */
-  action: "create" | "list" | "cancel" | "dismiss" | "active" | "mark_done";
+  action: "create" | "list" | "cancel" | "dismiss" | "active" | "mark_done" | "rearm_compaction";
   backend?: AppServerBackendKind;
   threadId?: string;
   /** The waiting thread's owner, when it is not this window's machine. */
@@ -188,6 +201,7 @@ export type ManageThreadDependenciesRequest = {
 
 export type ManageThreadDependenciesResponse = {
   dependencies: ThreadDependency[];
+  recoveryProtection?: CompactionRecoveryProtection;
   /** Active registrations on other threads that wait on this thread. */
   dependents?: ThreadDependency[];
   /** Registrations on other machines that wait on this thread, with their owner. */

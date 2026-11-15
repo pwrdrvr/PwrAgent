@@ -20,6 +20,12 @@ CREATE INDEX IF NOT EXISTS idx_thread_dependencies_consumer
   ON thread_dependencies(backend, thread_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_thread_dependencies_active
   ON thread_dependencies(status) WHERE status IN ('waiting', 'ready', 'dispatching');
+CREATE TABLE IF NOT EXISTS thread_compaction_recovery_guards (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id)
+);
 `;
 
 export const PROJECT_HELD_WAKEUP_SCHEMA = `

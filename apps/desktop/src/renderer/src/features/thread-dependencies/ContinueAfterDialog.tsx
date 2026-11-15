@@ -8,6 +8,7 @@ import type {
   ThreadDependency,
   ThreadDependencyCondition,
   ThreadDependencyDeliveryTarget,
+  CompactionRecoveryProtection,
 } from "@pwragent/shared";
 import {
   THREAD_DEPENDENCY_CONDITION_PHRASES,
@@ -127,6 +128,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   const [deliver, setDeliver] = useState<ThreadDependencyDeliveryTarget>("agent");
   const [handoff, setHandoff] = useState(false);
   const [repeat, setRepeat] = useState(false);
+  const [recoveryProtection, setRecoveryProtection] = useState<CompactionRecoveryProtection>();
   // Absent until the operator chooses; the default follows the rows.
   const [holdMergeChoice, setHoldMergeChoice] = useState<boolean>();
   const [marking, setMarking] = useState<Marking>();
@@ -167,6 +169,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
   useEffect(() => {
     let disposed = false;
     setDependencies([]); setDependents([]); setPeerDependents([]); setView(available ? "loading" : "list"); setHistoryOpen(false);
+    setRecoveryProtection(undefined);
     setRows([]); setMode("all"); setOnFailure("wait"); setError(undefined); setBusy(false); setContinuation("");
     setDeliver("agent"); setHandoff(false); setRepeat(false); setHoldMergeChoice(undefined); setMarking(undefined); setNote("");
     // Updates arrive in bursts; apply only the newest list response.
@@ -178,6 +181,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
         const response = await desktopApi!.manageThreadDependencies!({ action: "list", ...addressed });
         if (disposed || sequence !== latestRefresh) return;
         setDependencies(response.dependencies);
+        setRecoveryProtection(response.recoveryProtection);
         setDependents(response.dependents ?? []);
         setPeerDependents(response.peerDependents ?? []);
         // With nothing to show, open straight on the form.
@@ -268,7 +272,7 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
     setMarking(next); setNote(""); setError(undefined);
   };
 
-  const submit = async (action: "create" | "cancel" | "dismiss", dependencyId?: string) => {
+  const submit = async (action: "create" | "cancel" | "dismiss" | "rearm_compaction", dependencyId?: string) => {
     setBusy(true); setError(undefined);
     try {
       const response = await desktopApi!.manageThreadDependencies!({
@@ -289,10 +293,11 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
           ...(steps.length ? { steps } : {}),
           ...(holdMerge ? { holdMerge: true } : {}),
           ...(recoversCompaction && repeat ? { repeat: true } : {}),
-        } : { dependencyId }),
+        } : dependencyId ? { dependencyId } : {}),
       });
       if (currentKey.current !== key) return;
       setDependencies(response.dependencies);
+      setRecoveryProtection(response.recoveryProtection);
       setDependents(response.dependents ?? []);
       setPeerDependents(response.peerDependents ?? []);
       if (action === "create") { resetForm(); setView("list"); }
@@ -549,6 +554,13 @@ export function ContinueAfterDialog({ thread, desktopApi, localInstanceId, retur
           </form>
         ) : view === "list" ? (
           <div className="continue-after-dialog__body">
+            {recoveryProtection?.suspendedAt !== undefined ? (
+              <div className="thread-dependencies__form" role="status">
+                <strong>Automatic recovery suspended</strong>
+                <p className="thread-dependencies__hint">Loop protection stopped further recovery attempts. Inspect the recovery instructions before rearming.</p>
+                {!ownerId ? <button className="button button--secondary" disabled={busy} type="button" onClick={() => void submit("rearm_compaction")}>Rearm recovery</button> : <p className="thread-dependencies__hint">Rearm on the owning instance.</p>}
+              </div>
+            ) : null}
             {marking ? (
               <div className="thread-dependencies__form continue-after-dialog__mark">
                 <strong>Mark “{marking.name}” done</strong>

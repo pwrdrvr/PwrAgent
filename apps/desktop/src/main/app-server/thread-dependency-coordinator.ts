@@ -117,6 +117,18 @@ export class ThreadDependencyCoordinator {
     actor = "operator"): Promise<ManageThreadDependenciesResponse> {
     return this.serialize(async () => {
       if (request.action === "list") return this.response(request);
+      if (request.action === "rearm_compaction") {
+        if (actor !== "operator") throw new Error("Only the operator on the owning instance can rearm compaction recovery.");
+        await this.options.readThread(request);
+        this.options.store.rearmCompactionRecovery(request);
+        for (const item of this.options.store.active()) {
+          if (identity(item) === identity(request) && item.conditions[0]?.when === "compaction_completed") {
+            if (item.error && item.status !== "dispatching") await this.save(item, { ...item, error: undefined });
+            else await this.options.changed(item);
+          }
+        }
+        return this.response(request);
+      }
       if (request.action === "mark_done") {
         await this.markDone(request, actor);
         return this.response(request);
@@ -206,8 +218,11 @@ export class ThreadDependencyCoordinator {
   }
 
   private response(target: { backend: AppServerBackendKind; threadId: string }): ManageThreadDependenciesResponse {
+    const dependencies = this.options.store.list(target.backend, target.threadId);
     return {
-      dependencies: this.options.store.list(target.backend, target.threadId),
+      dependencies,
+      ...(dependencies.some((item) => item.conditions[0]?.when === "compaction_completed")
+        ? { recoveryProtection: this.options.store.compactionRecoveryProtection(target, this.now()) } : {}),
       dependents: this.options.store.dependents(target.backend, target.threadId),
     };
   }
@@ -291,6 +306,8 @@ export class ThreadDependencyCoordinator {
       for (const item of hooks) {
         if (item.compaction?.turnId === target.turnId && item.compaction.completedItemIds.includes(target.itemId)) continue;
         if (item.status !== "waiting") continue;
+        const protection = this.options.store.compactionRecoveryProtection(item, this.now());
+        if (protection.suspendedAt !== undefined || (protection.cooldownUntil !== undefined && this.now() < protection.cooldownUntil)) continue;
         const ready = await this.save(item, { ...item, status: "ready", outcome: "success",
           compaction: { itemId: target.itemId, turnId: target.turnId,
             completedItemIds: [...(item.compaction?.turnId === target.turnId ? item.compaction.completedItemIds : []), target.itemId] },
@@ -339,9 +356,17 @@ export class ThreadDependencyCoordinator {
       const recover = this.options.recoverCompaction;
       if (!recover) return;
       const claim = { ...item, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
-      if (!this.options.store.replace(item, claim)) return;
+      const reservation = this.options.store.claimCompactionRecovery(item, claim, this.now());
+      if (reservation === "lost") return;
+      if (reservation !== "claimed") {
+        await this.save(item, settledCompaction(item, undefined, reservation === "suspended"
+          ? "Compaction recovery suspended: automatic recovery limit reached. The operator must rearm it in Continue After."
+          : "Recovery skipped during the five-minute cooldown."));
+        return;
+      }
       await this.options.changed(claim);
       const canSubmit = () => !this.options.store.isConsumerArchived(claim)
+        && this.options.store.isCompactionRecoveryReserved(claim)
         && this.options.canDispatch?.(claim) !== false
         && JSON.stringify(this.options.store.get(claim.backend, claim.threadId, claim.id)) === JSON.stringify(claim);
       if (!canSubmit()) {
