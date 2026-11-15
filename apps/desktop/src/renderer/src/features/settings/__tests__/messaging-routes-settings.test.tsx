@@ -603,6 +603,27 @@ describe("MessagingRoutesSettings", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  // Rule: a route's Change form opens directly under that route's row, never
+  // above the list, so the form sits beside the Change that opened it.
+  it("opens each route's Change form directly under its own row", async () => {
+    for (const index of [0, 1]) {
+      const api = buildDesktopApi();
+      render(
+        <MessagingRoutesProvider desktopApi={api.desktopApi}>
+          <MessagingRoutesSettings desktopApi={api.desktopApi} />
+        </MessagingRoutesProvider>,
+      );
+      const list = await screen.findByLabelText("Default Agent routes");
+      const changes = await within(list).findAllByRole("button", { name: "Change" });
+      expect(changes).toHaveLength(2);
+      fireEvent.click(changes[index]!);
+      const row = changes[index]!.closest(".messaging-route-row")!;
+      const editor = screen.getByText("Change default Agent").closest(".messaging-route-editor");
+      expect(row.nextElementSibling, `route ${index + 1}`).toBe(editor);
+      cleanup();
+    }
+  });
+
   it("shows an empty inventory when no messaging routes exist", async () => {
     const { desktopApi } = buildDesktopApi({
       eligibleAgents: [],

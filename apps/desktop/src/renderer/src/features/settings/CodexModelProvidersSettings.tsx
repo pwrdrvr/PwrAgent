@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
@@ -251,6 +251,27 @@ export function CodexModelProvidersSettings(props: {
   const importable = imports?.candidates.filter((candidate) =>
     !props.providers.some((provider) => provider.baseUrl === candidate.baseUrl)) ?? [];
   const skipped = imports?.skipped ?? [];
+  // `editing` is the saved provider the draft edits, so it is found only
+  // while that provider is still in the list.
+  const editingListed = Boolean(editing);
+  const editor = draft ? (
+    <ProviderEditor
+      draft={draft}
+      editing={editing}
+      catalog={editingCatalog}
+      disabled={disabled}
+      canTest={Boolean(props.desktopApi?.testCodexModelProvider)}
+      test={test}
+      refresh={refresh}
+      error={error}
+      onChange={(patch) => setDraft((current) => current ? applyPatch(current, patch) : current)}
+      onSave={() => void save()}
+      onCancel={close}
+      onRemove={draft.existingId ? () => void remove() : undefined}
+      onTest={() => void runTest()}
+      onRefresh={props.onRefreshCatalogs ? () => void refreshCatalogs() : undefined}
+    />
+  ) : null;
 
   return (
     <SettingsSection
@@ -263,23 +284,52 @@ export function CodexModelProvidersSettings(props: {
         {props.providers.length === 0 && !draft ? (
           <p className="settings-empty">No model providers. Codex uses its default provider.</p>
         ) : null}
-        {props.providers.map((provider) => (
-          <SettingsPathRow
-            key={provider.id}
-            title={provider.name}
-            meta={provider.id}
-            path={provider.baseUrl}
-            chips={providerChips(provider, codexCatalogState(props.backends, provider.id))}
-            selected={false}
-            useLabel={draft?.existingId === provider.id ? "Editing" : "Edit"}
-            disabled={disabled || Boolean(draft)}
-            onUse={() => {
-              setDraft(draftFromProvider(provider));
-              setError(undefined);
-              setTest(undefined);
-            }}
-          />
-        ))}
+        {props.providers.map((provider) => {
+          const row = (
+            <SettingsPathRow
+              title={provider.name}
+              meta={provider.id}
+              path={provider.baseUrl}
+              chips={providerChips(provider, codexCatalogState(props.backends, provider.id))}
+              selected={false}
+              useLabel="Edit"
+              disabled={disabled || Boolean(draft)}
+              onUse={draft?.existingId === provider.id ? undefined : () => {
+                setDraft(draftFromProvider(provider));
+                setError(undefined);
+                setTest(undefined);
+              }}
+            />
+          );
+          // The form opens inside the card of the row whose Edit was pressed,
+          // as a Plugins connection drawer and an Environments action do. Under
+          // the whole list, the top row's form landed below every other row.
+          return (
+            <Fragment key={provider.id}>
+              {draft?.existingId === provider.id ? (
+                <div className="codex-provider-card">
+                  {row}
+                  {editor}
+                </div>
+              ) : row}
+            </Fragment>
+          );
+        })}
+        {/* A new provider's form, or one whose provider has left the list (a
+            removal whose key cleanup failed, or another window's edit): it
+            still needs a place, or the open draft disables every Edit and
+            hides Add with no form on screen. */}
+        {draft && !editingListed ? (
+          <div className="codex-provider-card">
+            <SettingsPathRow
+              title={draft.existingId
+                ? draft.name.trim() || draft.existingId
+                : draft.imported ? `Import ${draft.imported.name}` : "New provider"}
+              selected={false}
+            />
+            {editor}
+          </div>
+        ) : null}
         {!draft ? (
           <div className="settings-inline-actions">
             <button
@@ -345,24 +395,6 @@ export function CodexModelProvidersSettings(props: {
           ) : null}
         </div>
       ) : null}
-      {draft ? (
-        <ProviderEditor
-          draft={draft}
-          editing={editing}
-          catalog={editingCatalog}
-          disabled={disabled}
-          canTest={Boolean(props.desktopApi?.testCodexModelProvider)}
-          test={test}
-          refresh={refresh}
-          error={error}
-          onChange={(patch) => setDraft((current) => current ? applyPatch(current, patch) : current)}
-          onSave={() => void save()}
-          onCancel={close}
-          onRemove={draft.existingId ? () => void remove() : undefined}
-          onTest={() => void runTest()}
-          onRefresh={props.onRefreshCatalogs ? () => void refreshCatalogs() : undefined}
-        />
-      ) : null}
     </SettingsSection>
   );
 }
@@ -419,6 +451,9 @@ function ProviderEditor(props: {
         control={
           <input
             aria-label="Provider name"
+            // The Edit button that opened the form is gone, so focus starts
+            // here rather than falling to the page.
+            autoFocus
             className="settings-input"
             disabled={props.disabled}
             maxLength={60}
@@ -533,36 +568,40 @@ function ProviderEditor(props: {
           />
         }
       />
-      {props.error ? (
-        <p className="settings-error" role="alert">{props.error}</p>
-      ) : null}
-      <div className="settings-inline-actions">
-        <button
-          className="button button--primary"
-          disabled={props.disabled || Boolean(idProblem)}
-          type="button"
-          onClick={props.onSave}
-        >
-          {draft.existingId ? "Save and reconnect" : "Add and reconnect"}
-        </button>
-        <button
-          className="button button--secondary"
-          disabled={props.disabled}
-          type="button"
-          onClick={props.onCancel}
-        >
-          Cancel
-        </button>
-        {props.onRemove ? (
+      {/* Sticky to the pane's bottom edge while the card is on screen, so
+          Save and Cancel stay in reach from the top of a long form. */}
+      <div className="codex-provider-editor__footer">
+        {props.error ? (
+          <p className="settings-error" role="alert">{props.error}</p>
+        ) : null}
+        <div className="settings-inline-actions">
           <button
-            className="button button--ghost"
+            className="button button--primary"
+            disabled={props.disabled || Boolean(idProblem)}
+            type="button"
+            onClick={props.onSave}
+          >
+            {draft.existingId ? "Save and reconnect" : "Add and reconnect"}
+          </button>
+          <button
+            className="button button--secondary"
             disabled={props.disabled}
             type="button"
-            onClick={props.onRemove}
+            onClick={props.onCancel}
           >
-            Remove provider
+            Cancel
           </button>
-        ) : null}
+          {props.onRemove ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled}
+              type="button"
+              onClick={props.onRemove}
+            >
+              Remove provider
+            </button>
+          ) : null}
+        </div>
       </div>
       <p className="settings-field__help">
         Codex reconnects when no turn is running. Threads already on this provider keep it.

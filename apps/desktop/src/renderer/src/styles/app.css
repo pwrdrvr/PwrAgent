@@ -15251,12 +15251,19 @@ a.button {
 
 .settings-section__body-clip {
   display: grid;
-  overflow: hidden;
+  /*
+   * `clip`, not `hidden`: both paint the same, but `hidden` makes the body a
+   * scroll container that never scrolls, and a `position: sticky` element
+   * inside it sticks to that box instead of `.settings-content`. That kept
+   * the Codex model provider form's Save bar (`.codex-provider-editor__footer`)
+   * from ever reaching the pane's bottom edge.
+   */
+  overflow: clip;
   /*
    * The column track is load-bearing. Left implicit, it is an `auto` track
    * whose minimum is the body's min-content width, so a panel holding a
    * nowrap run — a filesystem path, a row of nowrap buttons — sizes the
-   * track to that content and `overflow: hidden` above eats the tail. The
+   * track to that content and the clip above eats the tail. The
    * Profiles pane rendered its row at 1261px in a 1202px column at every
    * window size, which clipped 64 of the Delete button's 69px. `minmax(0,
    * 1fr)` drops the min-content floor so the body tracks the column and the
@@ -15288,8 +15295,15 @@ a.button {
 }
 
 .settings-section-group__body .settings-section__header-button {
-  position: static;
   box-shadow: 0 1px 0 var(--border-subtle);
+}
+
+/* Only a pane-level section header pins. One nested in another section's
+   body (a group drawer's cards) stays in flow: under the outer header's pin
+   the two would stack. The body's `overflow: hidden` used to stop them by
+   accident; its `clip` no longer does. */
+.settings-section__body .settings-section__header-button {
+  position: static;
 }
 
 .settings-source {
@@ -17455,16 +17469,81 @@ a.button {
   color: var(--accent-bright);
 }
 
-/* Settings -> Codex -> Model providers: the add/edit form under the list. */
+/* Settings -> Codex -> Model providers: the add/edit form. It opens inside the
+   card of the provider being edited (a new provider gets its own card at the
+   end of the list), the way a Plugins connection drawer and an Environments
+   action open inside their rows. The card wears `.env-action.is-editing`'s
+   accent border; the row inside it gives up its own box. */
+.codex-provider-card {
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.codex-provider-card > .settings-pathrow {
+  border: 0;
+  background: transparent;
+}
+
 .codex-provider-editor {
   border-top: 1px solid var(--border-subtle);
 }
 
-.codex-provider-editor > .settings-inline-actions,
-.codex-provider-editor > .settings-error,
+/* Inside the card, the form lines up with the row's 12px inset. */
+.codex-provider-card .codex-provider-editor > .settings-field,
+.codex-provider-card .codex-provider-editor > .codex-provider-editor__group,
+.codex-provider-card .codex-provider-editor > .codex-provider-models,
+.codex-provider-card .codex-provider-editor > .settings-field__help {
+  padding-inline: 12px;
+}
+
 .codex-provider-editor > .settings-field__help {
   margin: 0;
   padding: 12px 18px 0;
+}
+
+/* Save, Cancel and Remove. The form runs well past one screen, so the bar
+   sticks to the bottom edge of `.settings-content`'s scrollport while the
+   card is on screen, and settles back in flow when the form's end scrolls up
+   to meet it, as the Automations editor's actions do. `bottom` cancels the
+   pane's 24px bottom padding to land the bar on the window edge, the way
+   `--settings-section-sticky-top` cancels its top padding for section
+   headers. Below those headers (`z-index: 3`). */
+.codex-provider-editor__footer {
+  position: sticky;
+  bottom: -24px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  container-type: scroll-state;
+}
+
+.codex-provider-editor__footer > .settings-error {
+  margin: 0;
+}
+
+/* The lift shadow, drawn only while the bar is pinned over the form. At rest
+   it sits in flow and casts nothing on the field above it. */
+@container scroll-state(stuck: bottom) {
+  .codex-provider-editor__footer::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    box-shadow: 0 -8px 18px var(--shadow-tint-faint);
+    pointer-events: none;
+  }
+}
+
+/* A control that Tab scrolls to the pane's bottom edge stops above the pinned
+   bar: its 59px, its 1px rule, and the focus ring's reach. */
+.codex-provider-editor > :not(.codex-provider-editor__footer) :where(:focus-visible) {
+  scroll-margin-bottom: 68px;
 }
 
 .codex-provider-editor > .settings-field__help {

@@ -42,18 +42,21 @@ function renderSettings(
     testCodexModelProvider,
     ...(scan ? { scanCodexModelProviderImports } : {}),
   } as unknown as DesktopApi;
-  render(
+  const view = (current: DesktopCodexModelProvider[]) => (
     <CodexModelProvidersSettings
       backends={backends}
       desktopApi={desktopApi}
-      providers={providers}
+      providers={current}
       saving={false}
       onRefresh={onRefresh}
       onRefreshCatalogs={onRefreshCatalogs}
       onSave={onSave}
-    />,
+    />
   );
+  const { rerender } = render(view(providers));
   return {
+    /** The owner's list changing under an open form. */
+    setProviders: (next: DesktopCodexModelProvider[]) => rerender(view(next)),
     onSave,
     onRefresh,
     onRefreshCatalogs,
@@ -183,6 +186,74 @@ describe("CodexModelProvidersSettings", () => {
     const { hasApiKey: _hasApiKey, ...saved } = refuseless;
     expect(onSave).toHaveBeenCalledWith([{ ...saved, name: "Refuseless AI" }]);
     expect(setCodexModelProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  // Rule: a provider's form opens in that provider's own card, directly under
+  // its row, so no other provider row sits between the Edit pressed and the
+  // form it opened. Checked for every row of every list size up to the four a
+  // Settings pane plausibly shows; a new provider's form comes after them all.
+  it("opens each provider's form in its own card, right under the row whose Edit was pressed", () => {
+    const providers = ["Alpha", "Bravo", "Charlie", "Delta"].map((name): DesktopCodexModelProvider => ({
+      id: name.toLowerCase(),
+      name,
+      baseUrl: `https://${name.toLowerCase()}.example/v1`,
+      hasApiKey: false,
+    }));
+    const follows = (a: Element, b: Element) =>
+      Boolean(b.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+    for (let count = 1; count <= providers.length; count += 1) {
+      const listed = providers.slice(0, count);
+      for (const [index, provider] of listed.entries()) {
+        renderSettings(listed);
+        const list = screen.getByRole("group", { name: "Codex model providers" });
+        const rowOf = (name: string) => within(list).getByText(name).closest(".settings-pathrow")!;
+        fireEvent.click(within(rowOf(provider.name) as HTMLElement).getByRole("button", { name: "Edit" }));
+        const form = screen.getByRole("group", { name: `Edit ${provider.name}` });
+        const row = rowOf(provider.name);
+        expect(form.closest(".codex-provider-card"), `${index + 1} of ${count}`).toBe(row.parentElement);
+        expect(follows(form, row)).toBe(true);
+        for (const other of listed.filter((entry) => entry !== provider)) {
+          const otherRow = rowOf(other.name);
+          // Before the edited row means before the form; after it means after.
+          expect(follows(form, otherRow), `${other.name} vs ${provider.name}`).toBe(follows(row, otherRow));
+        }
+        expect(screen.getByRole("textbox", { name: "Provider name" })).toHaveFocus();
+        cleanup();
+      }
+      renderSettings(listed);
+      fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+      const form = screen.getByRole("group", { name: "Add model provider" });
+      const list = screen.getByRole("group", { name: "Codex model providers" });
+      for (const entry of listed) {
+        expect(follows(form, within(list).getByText(entry.name).closest(".settings-pathrow")!)).toBe(true);
+      }
+      expect(form.closest(".codex-provider-card")).not.toBeNull();
+      cleanup();
+    }
+  });
+
+  // Rule: while a form is open, it is on screen. An open draft disables every
+  // Edit and hides Add, so a form with nowhere to render strands the pane.
+  it("keeps an open form on screen after its provider leaves the list", () => {
+    const { setProviders } = renderSettings([refuseless, mathos]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
+    // A removal whose key cleanup failed, or another window's edit.
+    setProviders([mathos]);
+    const form = screen.getByRole("group", { name: "Edit refuseless" });
+    expect(form.closest(".codex-provider-card")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeInTheDocument();
+  });
+
+  it("keeps Save, Cancel and Remove together in the form's sticky bar", () => {
+    renderSettings([refuseless]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const bar = screen.getByRole("button", { name: "Save and reconnect" }).closest(".codex-provider-editor__footer");
+    expect(bar).not.toBeNull();
+    for (const name of ["Cancel", "Remove provider"]) {
+      expect(screen.getByRole("button", { name }).closest(".codex-provider-editor__footer")).toBe(bar);
+    }
   });
 
   it("removes a provider and its key", async () => {

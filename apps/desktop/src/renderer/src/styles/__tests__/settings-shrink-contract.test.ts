@@ -6,7 +6,7 @@ import { firstCssRuleBody as ruleBody } from "./css-rule-body";
  * Locks the declarations that let a settings panel narrow to its column.
  *
  * The bug this exists to prevent: `.settings-section__body-clip` is a grid
- * with `overflow: hidden`, and with no `grid-template-columns` its implicit
+ * that clips its overflow, and with no `grid-template-columns` its implicit
  * `auto` track's minimum is the body's min-content width. A panel holding a
  * nowrap run — a filesystem path, a row of nowrap buttons — therefore sized
  * the track to its own content and the clip ate the tail. The Profiles pane
@@ -22,10 +22,11 @@ import { firstCssRuleBody as ruleBody } from "./css-rule-body";
 describe("settings panel shrink contract", () => {
   it("gives the collapsible body a column track with no min-content floor", () => {
     const body = ruleBody(".settings-section__body-clip");
-    // The `overflow: hidden` is what makes the track floor destructive
-    // rather than merely wide — if it ever goes away this assertion has
-    // lost its subject and should be revisited, not deleted.
-    expect(body).toContain("overflow: hidden");
+    // The clip is what makes the track floor destructive rather than merely
+    // wide — if it ever goes away this assertion has lost its subject and
+    // should be revisited, not deleted. (`clip`, not `hidden`: see
+    // settings-sticky-contract.test.ts.)
+    expect(body).toContain("overflow: clip");
     expect(body).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   });
 
