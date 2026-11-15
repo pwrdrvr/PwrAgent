@@ -74,11 +74,24 @@ function mountStartingComposer(submitted: ComposerDraftSnapshot, followUp?: Comp
     : <Composer thread={thread} activeTurnId="first-turn" draftStore={store} skills={[]} />;
   let view = render(element());
   const input = () => screen.getByLabelText(phase === "starting" ? "New thread" : "Reply");
+  const assertStoredDraft = (expected?: ComposerDraftSnapshot) => {
+    const scopeKey = phase === "starting" ? source : target;
+    const current = store.get(scopeKey);
+    expect(current?.draft ?? "").toBe(expected?.draft ?? "");
+    expect(current?.imageAttachments ?? []).toEqual(expected?.imageAttachments ?? []);
+    expect(current?.fileAttachments ?? []).toEqual(expected?.fileAttachments ?? []);
+    expect(current?.skillTokens ?? []).toEqual(expected?.skillTokens ?? []);
+    expect(store.hasDraftContent(scopeKey)).toBe(Boolean(
+      expected?.draft || expected?.imageAttachments.length || expected?.fileAttachments?.length,
+    ));
+  };
   return {
     remount: () => {
       view.unmount();
       view = render(element());
     },
+    unmount: () => view.unmount(),
+    assertStoredDraft,
     materialize: () => {
       act(() => handoffLaunchpadComposer(store, source, thread));
       phase = "thread";
@@ -89,16 +102,8 @@ function mountStartingComposer(submitted: ComposerDraftSnapshot, followUp?: Comp
     assertDraft: (expected?: ComposerDraftSnapshot) => {
       // Startup context has been submitted. Only explicit follow-up content
       // belongs to the editor, the draft store, and its presence indicator.
-      const scopeKey = phase === "starting" ? source : target;
-      const current = store.get(scopeKey);
       expect(input()).toHaveValue(expected?.draft ?? "");
-      expect(current?.draft ?? "").toBe(expected?.draft ?? "");
-      expect(current?.imageAttachments ?? []).toEqual(expected?.imageAttachments ?? []);
-      expect(current?.fileAttachments ?? []).toEqual(expected?.fileAttachments ?? []);
-      expect(current?.skillTokens ?? []).toEqual(expected?.skillTokens ?? []);
-      expect(store.hasDraftContent(scopeKey)).toBe(Boolean(
-        expected?.draft || expected?.imageAttachments.length || expected?.fileAttachments?.length,
-      ));
+      assertStoredDraft(expected);
       expect(screen.queryByAltText("submitted.png")).toBeNull();
     },
   };
@@ -126,7 +131,7 @@ type DraftSystem = ReturnType<typeof mountStartingComposer>;
 class Remount implements fc.AsyncCommand<DraftModel, DraftSystem> {
   // A second remount repeats the first one's unmount flush of a restored
   // draft. Every following step flushes that draft too: an edit, the handoff's
-  // capture of editor state, or the final remount.
+  // capture of editor state, or the final unmount, whose store is checked.
   check = (model: Readonly<DraftModel>) => !model.remounted;
   toString = () => "remount";
   async run(model: DraftModel, real: DraftSystem) {
@@ -139,8 +144,7 @@ class Remount implements fc.AsyncCommand<DraftModel, DraftSystem> {
 
 class Edit implements fc.AsyncCommand<DraftModel, DraftSystem> {
   constructor(private readonly text: string) {}
-  // Setting the text the editor already holds fires no change event.
-  check = (model: Readonly<DraftModel>) => this.text !== (model.draft?.draft ?? "");
+  check = () => true;
   toString = () => `edit(${JSON.stringify(this.text)})`;
   async run(model: DraftModel, real: DraftSystem) {
     real.edit(this.text);
@@ -225,8 +229,11 @@ describe("launchpad submission draft ownership", () => {
           await fc.asyncModelRun(() => ({ model, real }), sequence);
           if (model.phase === "starting") await new Materialize().run(model, real);
           // Every run ends by remounting the thread composer after handoff,
-          // unless its last generated step already did exactly that.
+          // unless its last generated step already did exactly that. The
+          // last unmount flushes the restored draft into the store once more.
           if (!model.remounted) await new Remount().run(model, real);
+          real.unmount();
+          real.assertStoredDraft(model.draft);
         } finally {
           cleanup();
         }
