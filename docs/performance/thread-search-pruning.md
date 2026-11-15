@@ -170,3 +170,45 @@ pnpm test:sqlite-writes thread-search sqlite-write-metrics voice-navigation-writ
 
 Benchmark logging is opt-in. Normal tests enforce query and operation budgets
 without logging plans or timings. Sandboxer is dormant and was not used.
+
+## v1.4.5 native test-fixture investigation
+
+Release head `329d4d21add8cc37138470620e72a669d5834fcd` failed the
+10,000-row deletion-without-ANALYZE and fully-retained maintenance cases at
+6,187 and 6,363 ms in [macOS lane 4](https://github.com/pwrdrvr/PwrAgent/actions/runs/43678039490/job/132702759761).
+Both databases were private in-memory connections; those totals alone do
+not locate the cost in the measured queries.
+
+Phase instrumentation at `344fc7a1a` on a free hosted `macos-26` runner
+(Node 24.22.2) separated the work in [PR CI lane 4](https://github.com/pwrdrvr/PwrAgent/actions/runs/43678982099/job/132705317182):
+
+| 10,000-row case | Production document upserts for setup | Query assertions |
+|---|---:|---:|
+| Deletion, no statistics | 3,600.36 ms | 2.97 ms |
+| Deletion, analyzed | 3,246.07 ms | 2.22 ms |
+| Inventory-scoped searches | 3,199.25 ms | 52.80 ms |
+| Ten fully-retained maintenance slices | 2,495.76 ms | 112.25 ms |
+
+Deletion setup additionally took 280–394 ms for usage and automation rows.
+All four macOS unit lanes completed successfully on that diagnostic head;
+the original release lane also completed normally, without a native-host
+crash or shutdown timeout. These are observations, not timing gates.
+
+The query fixtures now reuse native prepared statements only while running
+their production upserts. A new fixture call has its own connection-bound
+cache and restores the original preparation function in `finally`, before
+any query-plan or operation-count probes are installed. Every upsert, FTS
+write and transaction still runs. Production search indexing keeps its
+existing 64-row slices and is unchanged; there is no new production write
+or recurring write cost (incremental 0 MB/day).
+
+The generated fixture oracle compares initial inserts, unchanged inputs and
+replacements with the original uncached production setup: document columns,
+rowid mappings, FTS contents, total changed rows and ranked/search results
+must agree. The original setup is a negative control for the compile-once
+property, executing the same native store path rather than copied SQL.
+The cached setup must compile each distinct statement once. A real failing
+SQLite trigger checks rollback and preparation restoration. The original
+10,000-row cases retain all indexed plan, title-retention, inventory and
+64-row slice assertions under the same five-second limit. CI phase logs
+remain bounded to one JSON record per case.

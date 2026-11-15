@@ -1,4 +1,30 @@
+import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { StateDb } from "../../state/state-db";
+import { ThreadSearchStore } from "../../storage/thread-search-store";
+
+/**
+ * Populate large query fixtures through the real store and native SQL, but
+ * compile each statement once during setup. The query-budget tests measure
+ * deletion/search/pruning, not thousands of identical SQL compilations.
+ * Restore preparation before the measured work installs its query probes.
+ */
+export function seedSearchThreads(db: StateDb, threads: readonly AppServerThreadSummary[]): void {
+  const prepare = db.raw.prepare;
+  const statements = new Map<string, ReturnType<typeof prepare>>();
+  db.raw.prepare = ((sql: string) => {
+    let statement = statements.get(sql);
+    if (!statement) {
+      statement = prepare.call(db.raw, sql);
+      statements.set(sql, statement);
+    }
+    return statement;
+  }) as typeof prepare;
+  try {
+    new ThreadSearchStore(db).upsertThreads(threads);
+  } finally {
+    db.raw.prepare = prepare;
+  }
+}
 
 export function seedSearchUsage(db: StateDb, count: number): void {
   const insert = searchUsageInsert(db);
