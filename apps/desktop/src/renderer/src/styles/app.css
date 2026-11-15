@@ -46954,6 +46954,9 @@ button.composer__subthread-source-parent:hover {
   flex-direction: column;
   min-height: 0;
   gap: 4px;
+  /* Scroll extents round to CSS pixels; keep a fractional last row inside
+     the clip even when the maximum scroll offset rounds down. */
+  padding-bottom: 1px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-color: var(--border-strong) transparent;
