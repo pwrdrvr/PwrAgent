@@ -319,6 +319,14 @@ export function useThreadSkills(params: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoLoadKey]);
 
+  // Main sends its bundled skill root only on a local listing. A peer's skill
+  // paths are on the peer's machine, so a remote target never uses one, even
+  // if a response somehow carried it.
+  const isRemoteTarget = skillTarget?.federationTarget?.scope === "remote";
+  const bundledSkillRoots = isRemoteTarget
+    ? undefined
+    : state?.response?.bundledSkillRoots;
+
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();
 
@@ -331,12 +339,16 @@ export function useThreadSkills(params: {
 
     // Same-named skills from different linked projects sort by origin, so the
     // primary project's `$release` is the one Enter takes.
-    return withSkillOrigins([...deduped.values()], originDirectories).sort(
+    return withSkillOrigins(
+      [...deduped.values()],
+      originDirectories,
+      { bundledSkillRoots },
+    ).sort(
       (left, right) =>
         left.name.localeCompare(right.name)
         || compareSkillOrigins(left.origin, right.origin)
     );
-  }, [originDirectories, state?.response?.data]);
+  }, [bundledSkillRoots, originDirectories, state?.response?.data]);
 
   const providerCommands = useMemo(() => {
     const deduped = new Map<string, AppServerAvailableCommandSummary>();

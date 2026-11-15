@@ -54,6 +54,8 @@ function skillOriginIcon(origin: AppServerSkillOrigin): ComponentType<IconProps>
       return UserIcon;
     case "plugin":
       return PlugIcon;
+    // Both ship inside an app; the label says which one.
+    case "pwragent":
     case "built-in":
       return PackageIcon;
     case "admin":
@@ -66,7 +68,7 @@ function skillOriginIcon(origin: AppServerSkillOrigin): ComponentType<IconProps>
 
 /**
  * Names where a `$skill` row came from: the linked project's label, or
- * Personal / Codex home / a plugin / Built-in / Admin.
+ * Personal / Codex home / PwrAgent / a plugin / Built-in / Admin.
  *
  * A plain span on purpose. Picker rows are `<button role="option">`, and a
  * control inside a button is invalid and unreachable, so the path and its

@@ -1,10 +1,14 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
-import { materializeBundledSkills, STAGED_FILE_GRACE_MS } from "../bundled-skill-root";
+import {
+  bundledSkillRootAliases,
+  materializeBundledSkills,
+  STAGED_FILE_GRACE_MS,
+} from "../bundled-skill-root";
 import { PWRAGENT_CODEX_SKILLS, PWRAGENT_WORKFLOW_SKILLS } from "../pwragent-workflow-skills";
 
 const REPO_ROOT = path.resolve(__dirname, "../../../../../..");
@@ -26,6 +30,25 @@ function tempRoot(): string {
   roots.push(root);
   return root;
 }
+
+describe("bundledSkillRootAliases", () => {
+  it("adds the real path when the root sits behind a symlink, since Codex may report either", () => {
+    const base = tempRoot();
+    const realHome = path.join(base, "real-home");
+    mkdirSync(path.join(realHome, "skills", "bundled"), { recursive: true });
+    symlinkSync(realHome, path.join(base, "linked-home"), "dir");
+    const linked = path.join(base, "linked-home", "skills", "bundled");
+
+    expect(bundledSkillRootAliases(linked)).toEqual([linked, realpathSync(linked)]);
+    const real = realpathSync(linked);
+    expect(bundledSkillRootAliases(real)).toEqual([real]);
+  });
+
+  it("returns the configured root alone before it is written", () => {
+    const missing = path.join(tempRoot(), "absent", "skills", "bundled");
+    expect(bundledSkillRootAliases(missing)).toEqual([missing]);
+  });
+});
 
 describe("bundled skill root", () => {
   it("writes every file of every Codex skill, with scripts executable", async () => {

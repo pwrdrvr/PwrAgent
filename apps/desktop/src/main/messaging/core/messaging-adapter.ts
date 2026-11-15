@@ -308,7 +308,7 @@ export type MessagingBackendBridge = {
   interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   listSkills?(
     request?: AppServerListSkillsRequest,
-  ): Promise<Pick<AppServerListSkillsResponse, "data">>;
+  ): Promise<Pick<AppServerListSkillsResponse, "data" | "bundledSkillRoots">>;
   listBackends?(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   setThreadExecutionMode?(
     request: SetThreadExecutionModeRequest,

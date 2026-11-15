@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePwragentRoot } from "../profile";
@@ -7,6 +8,21 @@ import { PWRAGENT_CODEX_SKILLS, type BundledSkill } from "./pwragent-workflow-sk
 /** The folder Codex scans for the skills PwrAgent ships. PwrAgent owns it. */
 export function bundledSkillRoot(pwragentRoot = resolvePwragentRoot()): string {
   return path.join(pwragentRoot, "skills", "bundled");
+}
+
+/**
+ * The bundled root as configured and, when a symlink is on the way, as the
+ * real path. Codex may report a skill under either, and a root moved with
+ * `PWRAGENT_HOME` under `/tmp` on macOS is already `/private/tmp` to Codex.
+ */
+export function bundledSkillRootAliases(root = bundledSkillRoot()): string[] {
+  let real: string | undefined;
+  try {
+    real = realpathSync(root);
+  } catch {
+    // Not written yet: Codex has listed nothing under it either.
+  }
+  return real && real !== root ? [root, real] : [root];
 }
 
 async function readIfPresent(file: string): Promise<string | undefined> {

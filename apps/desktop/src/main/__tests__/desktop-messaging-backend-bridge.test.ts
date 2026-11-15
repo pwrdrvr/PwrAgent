@@ -10,6 +10,7 @@ import type {
   NavigationSnapshot,
   ThreadOverlayState,
 } from "@pwragent/shared";
+import { bundledSkillRootAliases } from "../agent-tools/bundled-skill-root";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
@@ -109,6 +110,26 @@ describe("DesktopMessagingBackendBridge", () => {
       expect(cancelQueuedTurnWithDisposition).toHaveBeenCalledWith("entry", "Cancelled from messaging.", "current-hash");
       expect(cancelQueuedTurn).not.toHaveBeenCalled();
     }
+  });
+
+  it("pairs only a local skill listing with this machine's bundled skill root", async () => {
+    const data = [{ cwd: "/repo", skills: [] }];
+    const registry = { listSkills: vi.fn(async () => ({ data })) } as unknown as DesktopBackendRegistry;
+    // A peer that sends a root anyway: its paths are on its own machine.
+    const peerListSkills = vi.fn(async () => ({ data, bundledSkillRoots: ["/peer/skills/bundled"] }));
+    const federation = {
+      connectedPeerTargets: () => [],
+      remoteBackend: () => ({ listSkills: peerListSkills }),
+    } as unknown as DesktopMessagingFederationBridge;
+    const bridge = new DesktopMessagingBackendBridge(registry, federation);
+
+    await expect(bridge.listSkills({ backend: "codex" })).resolves.toEqual({
+      data,
+      bundledSkillRoots: bundledSkillRootAliases(),
+    });
+    await expect(
+      bridge.listSkills({ backend: "codex", federationTarget: { scope: "remote", instanceId: "peer" } }),
+    ).resolves.toEqual({ data });
   });
 
   it("continues a local Claude thread through the registry and rejects remote recovery", async () => {

@@ -249,6 +249,28 @@ describe("messaging skills browser", () => {
       ]);
     });
 
+    it("labels PwrAgent's bundled skills only when given the local bundled root", () => {
+      const bundledRoot = "/srv/fixture-home/skills/bundled";
+      const withBundled = [
+        {
+          cwd: "/repo/PwrSnap",
+          skills: [
+            {
+              name: "tool-guide",
+              path: `${bundledRoot}/tool-guide/SKILL.md`,
+              scope: "user",
+            },
+          ],
+        },
+      ];
+
+      expect(flattenSkillEntries(withBundled, directories, [bundledRoot])[0]?.origin)
+        .toEqual({ kind: "pwragent", label: "PwrAgent" });
+      // A peer binding passes no root.
+      expect(flattenSkillEntries(withBundled, directories)[0]?.origin?.kind)
+        .toBe("codex-home");
+    });
+
     it("qualifies only the names that more than one skill shares", () => {
       const intent = buildSkillsBrowserIntent({
         binding,

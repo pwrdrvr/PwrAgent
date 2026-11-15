@@ -13340,6 +13340,7 @@ export class MessagingController {
           entries: flattenSkillEntries(
             response.data,
             threadState.thread?.linkedDirectories,
+            response.bundledSkillRoots,
           ),
           pageIndex: options.pageIndex,
           query: options.query,
