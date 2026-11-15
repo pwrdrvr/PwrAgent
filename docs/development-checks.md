@@ -103,6 +103,24 @@ Read this before source edits, dependency installation, test execution, lint/too
 - Dependency-boundary checks run uncached so resolution configuration changes
   always rebuild the graph.
 
+### Renderer function bytecode budget
+
+- Run `pnpm check:renderer-bytecode` after changing `DesktopAppShell`, `Sidebar`,
+  `ThreadView`, or `AutomationEditor`. The CI Lint job runs it too.
+- The check uses the real Vitest SSR transform and module wrapper, then asks
+  V8 to compile every function in those four files without executing them.
+  It checks both ordinary output and output compressed by Vite's Oxc minifier.
+- Each function, including nested render helpers, has a 48 KiB budget. This
+  leaves 12 KiB before V8's default 60 KiB TurboFan eligibility limit.
+- Keep JSX construction in separate local function declarations. The minifier
+  folds single-use arrow helpers back into their callers. Calling a helper
+  preserves the component's hook order and React identity while compiling the
+  render body separately from setup. Do not replace the call with an inline
+  return or render a locally defined helper as a React component.
+- The compiler subprocess reduces disassembly as it streams. It does not
+  change V8 tiers or flags in the app or test workers. Bytecode size is a
+  compiler eligibility check, not a runtime latency benchmark.
+
 ### Unused imports and locals fail CI
 
 - `typescript/no-unused-vars` is an error in the syntax pass.

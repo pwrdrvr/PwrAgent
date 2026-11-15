@@ -4974,422 +4974,427 @@ export function ThreadView(props: ThreadViewProps) {
 
   const serviceTarget = selectedThread?.federation?.ref.target ?? props.activeFederationTarget;
   const serviceInstanceId = serviceTarget?.scope === "remote" ? serviceTarget.instanceId : undefined;
-  return (
-    <section
-      data-markdown-renderer-available={incrementalMarkdownRenderer ? "incremental" : "standard"}
-      className={`thread-view${
-        emptyView
-          ? " thread-view--empty"
-          : threadView
-            ? ""
-            : " thread-view--launchpad"
-      }`}
-      style={
-        emptyView
-          ? undefined
-          : ({
-              "--context-rail-width": `${contextRailWidth}px`,
-            } as CSSProperties)
-      }
-    >
-      {header}
-      {/* Keyed so leaving the empty state mounts a new layout box. Unkeyed,
-          React reused the empty state's <div> and only swapped its class,
-          so `.thread-view__layout`'s padding-right transition (there for
-          pinning and unpinning the rail) slid the gutter from 16px to the
-          pinned rail's width whenever a thread or launchpad replaced the
-          empty state, and the composer rewrapped as the column narrowed
-          under it. */}
-      {emptyView ? (
-        <div key="empty" className="thread-empty-state">
-          <div className="thread-empty-state__content">
-            <p className="eyebrow">Thread detail</p>
-            <h2>Select a thread</h2>
-            <p>
-              Inbox stays above every other lens. Pick a thread to read the full
-              transcript, or open a project launchpad from Directories.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div
-          key="layout"
-          className={`thread-view__layout${
-            contextRailPinned ? " has-pinned-context-rail" : ""
-          }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
-        >
-          <div className={`thread-view__primary${threadLock ? " thread-view__primary--locked" : ""}`}>
-            <CelestialWatermark
-              icon={threadView ? celestialWatermarkIcon : launchpadWatermarkIcon}
-            />
-            {selectedThread && props.desktopApi?.threadServices ? <ThreadServices
-              key={`${serviceInstanceId ?? "local"}:${selectedThread.source}:${selectedThread.id}`}
-              api={props.desktopApi.threadServices}
-              backend={selectedThread.source}
-              threadId={selectedThread.id}
-              instanceId={serviceInstanceId}
-              ownerLabel={props.activeFederationOwnerLabel}
-              onOpenFederationSettings={props.starMap?.onOpenFederationSettings}
-            /> : null}
-            {selectedThread ? <ContinueAfterStatus thread={selectedThread} api={props.desktopApi} /> : null}
-            {primaryContent}
-            {composerSlotElement}
-            {threadLock ? (
-              <ThreadLockCard
-                lock={threadLock}
-                {...(props.onSetThreadLock
-                  ? {
-                      onUnlock: async () => await props.onSetThreadLock?.(false),
-                      onEditNote: () => setLockNoteEditorThreadId(selectedThread?.id),
-                    }
-                  : {})}
-              />
-            ) : null}
-            {threadLock && selectedThread && lockNoteEditorThreadId === selectedThread.id ? (
-              <ThreadLockDialog
-                initialNote={threadLock.note}
-                mode="edit"
-                threadTitle={selectedThread.title}
-                onCancel={() => setLockNoteEditorThreadId(undefined)}
-                onSubmit={async (note) => {
-                  await props.onSetThreadLock?.(true, note);
-                  setLockNoteEditorThreadId(undefined);
-                }}
-              />
-            ) : null}
-            {threadView ? [...new Set(terminals.panes.map((pane) => JSON.stringify([pane.threadKey, pane.remote?.instanceId ?? "local"])))].map((panelKey) => {
-              const panes = terminals.panes.filter((pane) => JSON.stringify([pane.threadKey, pane.remote?.instanceId ?? "local"]) === panelKey);
-              const first = panes[0]!;
-              return <Suspense key={panelKey} fallback={null}>
-                <LazyThreadTerminalPanel desktopApi={props.desktopApi} terminals={terminals} threadKey={first.threadKey}
-                  panes={panes} visible={first.threadKey === selectedThreadKey
-                    && first.remote?.instanceId === selectedThreadTerminalRemote?.instanceId
-                    && terminals.isPanelOpen(first.threadKey)} />
-              </Suspense>;
-            }) : null}
-          </div>
-          <ThreadContextPanel
-            activeTab={activeContextTab}
-            backendError={props.backendError}
-            backends={props.backends}
-            ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
-            desktopApi={props.desktopApi}
-            onOpenAutomations={props.onOpenAutomations}
-            onActiveTabChange={onActiveContextTabChange}
-            onResizingChange={setContextRailResizing}
-            onWidthChange={setContextRailWidth}
-            width={contextRailWidth}
-            pinned={contextRailPinned}
-            spineRef={contextRailSpineRef}
-            launchpadConnections={
-              launchpadConnectionTiles && launchpadConnectionsDock === "sidebar"
-                ? {
-                    content: launchpadConnectionTiles,
-                    landing: connectionsLanding,
-                    onShowOnLaunchpad: showConnectionsOnLaunchpad,
-                  }
-                : undefined
-            }
-            {...contextPanelThreadProps}
-          />
-        </div>
-      )}
-
-      {composerView ? imageLightbox : null}
-
-      {threadView && workflowBudgetDialog ? (
-        <div className="workspace-handoff-modal">
-          <div
-            ref={workflowBudgetDialogRef}
-            aria-labelledby="grok-workflow-budget-title"
-            aria-modal="true"
-            className="workspace-handoff-dialog rewind-dialog"
-            role="dialog"
-          >
-            <div className="workspace-handoff-dialog__header">
-              <h2 id="grok-workflow-budget-title">Grok workflow budgets</h2>
-              <button
-                aria-label="Close workflow budget dialog"
-                className="workspace-handoff-dialog__close"
-                disabled={workflowBudgetDialog.busy}
-                type="button"
-                onClick={() => setWorkflowBudgetDialog(undefined)}
-              >
-                x
-              </button>
-            </div>
-            <p>
-              These limits apply to child-agent calls in model-launched workflows for
-              this resident Grok session.
-            </p>
-            {workflowBudgetDialog.loading ? (
-              <p role="status">Loading workflow budgets...</p>
-            ) : (
-              <div className="workflow-budget-dialog__fields">
-                <label>
-                  <span>Default when omitted</span>
-                  <input
-                    disabled={workflowBudgetDialog.busy}
-                    max={1024}
-                    min={1}
-                    step={1}
-                    type="number"
-                    value={workflowBudgetDialog.defaultAgentBudget}
-                    onChange={(event) => setWorkflowBudgetDialog((current) =>
-                      current
-                        ? {
-                            ...current,
-                            defaultAgentBudget: event.target.value,
-                            error: undefined,
-                          }
-                        : current)}
-                  />
-                  <small>
-                    Used only when a workflow does not pass its own agent_budget.
-                  </small>
-                </label>
-                <label>
-                  <span>Enforced maximum</span>
-                  <input
-                    disabled={workflowBudgetDialog.busy}
-                    max={1024}
-                    min={1}
-                    step={1}
-                    type="number"
-                    value={workflowBudgetDialog.maxAgentBudget}
-                    onChange={(event) => setWorkflowBudgetDialog((current) =>
-                      current
-                        ? {
-                            ...current,
-                            error: undefined,
-                            maxAgentBudget: event.target.value,
-                          }
-                        : current)}
-                  />
-                  <small>
-                    Explicit workflow budgets above this value are rejected, not clamped.
-                  </small>
-                </label>
-              </div>
-            )}
-            <p>
-              Valid range: 1-1024. The policy is session-only and resets when the
-              Grok process restarts; existing workflow runs keep their admitted budget.
-            </p>
-            {workflowBudgetDialog.error ? (
-              <p className="rewind-dialog__error" role="alert">
-                {workflowBudgetDialog.error}
+  // Compile JSX separately from setup so both functions stay optimizable by V8.
+  function renderThreadLayout() {
+    return (
+      <section
+        data-markdown-renderer-available={incrementalMarkdownRenderer ? "incremental" : "standard"}
+        className={`thread-view${
+          emptyView
+            ? " thread-view--empty"
+            : threadView
+              ? ""
+              : " thread-view--launchpad"
+        }`}
+        style={
+          emptyView
+            ? undefined
+            : ({
+                "--context-rail-width": `${contextRailWidth}px`,
+              } as CSSProperties)
+        }
+      >
+        {header}
+        {/* Keyed so leaving the empty state mounts a new layout box. Unkeyed,
+            React reused the empty state's <div> and only swapped its class,
+            so `.thread-view__layout`'s padding-right transition (there for
+            pinning and unpinning the rail) slid the gutter from 16px to the
+            pinned rail's width whenever a thread or launchpad replaced the
+            empty state, and the composer rewrapped as the column narrowed
+            under it. */}
+        {emptyView ? (
+          <div key="empty" className="thread-empty-state">
+            <div className="thread-empty-state__content">
+              <p className="eyebrow">Thread detail</p>
+              <h2>Select a thread</h2>
+              <p>
+                Inbox stays above every other lens. Pick a thread to read the full
+                transcript, or open a project launchpad from Directories.
               </p>
-            ) : null}
-            <div className="rewind-dialog__actions">
-              <button
-                disabled={workflowBudgetDialog.busy}
-                type="button"
-                onClick={() => setWorkflowBudgetDialog(undefined)}
-              >
-                Cancel
-              </button>
-              <button
-                className="button--primary"
-                disabled={
-                  workflowBudgetDialog.busy
-                  || workflowBudgetDialog.loading
-                  || !workflowBudgetDialog.defaultAgentBudget
-                  || !workflowBudgetDialog.maxAgentBudget
-                }
-                type="button"
-                onClick={() => {
-                  void saveWorkflowBudget();
-                }}
-              >
-                {workflowBudgetDialog.busy ? "Saving..." : "Save budgets"}
-              </button>
             </div>
           </div>
-        </div>
-      ) : null}
-
-      {threadView && branchDriftDialog && selectedThread ? (
-        <div className="workspace-handoff-modal">
+        ) : (
           <div
-            ref={branchDriftDialogRef}
-            aria-labelledby="branch-drift-title"
-            aria-modal="true"
-            className="workspace-handoff-dialog"
-            role="dialog"
+            key="layout"
+            className={`thread-view__layout${
+              contextRailPinned ? " has-pinned-context-rail" : ""
+            }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
           >
-            <div className="workspace-handoff-dialog__header">
-              <h2 id="branch-drift-title">Thread branch changed</h2>
-              <button
-                aria-label="Close branch warning"
-                className="workspace-handoff-dialog__close"
-                disabled={branchDriftBusy}
-                type="button"
-                onClick={() => {
-                  setBranchDriftDialog(undefined);
-                }}
-              >
-                x
-              </button>
-            </div>
-            <p>
-              The worktree is already on a different branch. PwrAgent will not change git state
-              for you.
-            </p>
-            <dl className="workspace-handoff-dialog__branch-path">
-              <div>
-                <dt>Thread expects</dt>
-                <dd>
-                  <code className="workspace-handoff-dialog__branch-code">
-                    {branchDriftDialog.expectedBranch}
-                  </code>
-                </dd>
-              </div>
-              <span aria-hidden="true" className="workspace-handoff-dialog__branch-arrow">
-                -&gt;
-              </span>
-              <div>
-                <dt>Worktree is on</dt>
-                <dd>
-                  <code className="workspace-handoff-dialog__branch-code">
-                    {branchDriftDialog.observedBranch}
-                  </code>
-                </dd>
-              </div>
-            </dl>
-            <p>
-              If earlier turns made commits on{" "}
-              <code>{branchDriftDialog.expectedBranch}</code>, those commits may not be visible
-              on <code>{branchDriftDialog.observedBranch}</code>.
-            </p>
-            <div className="workspace-handoff-dialog__comparison" aria-label="Branch choices">
-              <div className="workspace-handoff-dialog__choice">
-                <section className="workspace-handoff-dialog__choice-copy">
-                  <h3>I'll switch back</h3>
-                  <p>
-                    Keep the warning. This thread will continue to expect{" "}
-                    <code>{branchDriftDialog.expectedBranch}</code>.
-                  </p>
-                  <p>
-                    Next: switch the worktree back yourself.
-                  </p>
-                </section>
-                <button
-                  aria-label={
-                    branchDriftDialog.reason === "turn"
-                      ? `Cancel turn. I'll switch back to ${branchDriftDialog.expectedBranch}`
-                      : `Keep warning. I'll switch back to ${branchDriftDialog.expectedBranch}`
-                  }
-                  className="button button--secondary workspace-handoff-dialog__action"
-                  disabled={branchDriftBusy}
-                  title={
-                    branchDriftDialog.reason === "turn"
-                      ? `Cancel this send and keep the warning for ${branchDriftDialog.expectedBranch}.`
-                      : `Keep the warning so you can switch back to ${branchDriftDialog.expectedBranch}.`
-                  }
-                  type="button"
-                  onClick={async () => {
-                    if (branchDriftDialog.reason === "turn") {
-                      setBranchDriftDialog(undefined);
-                      return;
-                    }
-
-                    if (!props.desktopApi?.retainThreadBranchDrift || !selectedThread) {
-                      setBranchDriftDialog(undefined);
-                      return;
-                    }
-
-                    setBranchDriftBusy(true);
-                    setBranchDriftError(undefined);
-                    try {
-                      await props.desktopApi.retainThreadBranchDrift({
-                        backend: selectedThread.source,
-                        federationTarget:
-                          selectedThread.federation?.ref.target
-                          ?? readRendererFederationTarget(),
-                        threadId: selectedThread.id,
-                        expectedBranch: branchDriftDialog.expectedBranch,
-                        observedBranch: branchDriftDialog.observedBranch,
-                      });
-                      // Keep the owner's receipt while independently paged detail
-                      // catches up. A pending check still holds the old summary.
-                      acceptedBranchDriftRef.current = branchDriftRetentionKey(
-                        selectedThread, branchDriftDialog.expectedBranch, branchDriftDialog.observedBranch,
-                      );
-                      await props.onRefreshNavigation?.();
-                      setBranchDriftDialog(undefined);
-                    } catch (error) {
-                      setBranchDriftError(error instanceof Error ? error.message : String(error));
-                    } finally {
-                      setBranchDriftBusy(false);
-                    }
+            <div className={`thread-view__primary${threadLock ? " thread-view__primary--locked" : ""}`}>
+              <CelestialWatermark
+                icon={threadView ? celestialWatermarkIcon : launchpadWatermarkIcon}
+              />
+              {selectedThread && props.desktopApi?.threadServices ? <ThreadServices
+                key={`${serviceInstanceId ?? "local"}:${selectedThread.source}:${selectedThread.id}`}
+                api={props.desktopApi.threadServices}
+                backend={selectedThread.source}
+                threadId={selectedThread.id}
+                instanceId={serviceInstanceId}
+                ownerLabel={props.activeFederationOwnerLabel}
+                onOpenFederationSettings={props.starMap?.onOpenFederationSettings}
+              /> : null}
+              {selectedThread ? <ContinueAfterStatus thread={selectedThread} api={props.desktopApi} /> : null}
+              {primaryContent}
+              {composerSlotElement}
+              {threadLock ? (
+                <ThreadLockCard
+                  lock={threadLock}
+                  {...(props.onSetThreadLock
+                    ? {
+                        onUnlock: async () => await props.onSetThreadLock?.(false),
+                        onEditNote: () => setLockNoteEditorThreadId(selectedThread?.id),
+                      }
+                    : {})}
+                />
+              ) : null}
+              {threadLock && selectedThread && lockNoteEditorThreadId === selectedThread.id ? (
+                <ThreadLockDialog
+                  initialNote={threadLock.note}
+                  mode="edit"
+                  threadTitle={selectedThread.title}
+                  onCancel={() => setLockNoteEditorThreadId(undefined)}
+                  onSubmit={async (note) => {
+                    await props.onSetThreadLock?.(true, note);
+                    setLockNoteEditorThreadId(undefined);
                   }}
-                >
-                  <span>
-                    {branchDriftDialog.reason === "turn" ? "Cancel Turn" : "Keep Warning"}
-                  </span>
-                  <small>I'll switch back to {branchDriftDialog.expectedBranch}</small>
-                </button>
-              </div>
-              <div className="workspace-handoff-dialog__choice">
-                <section className="workspace-handoff-dialog__choice-copy">
-                  <h3>Keep current branch</h3>
-                  <p>
-                    Update this thread so it expects{" "}
-                    <code>{branchDriftDialog.observedBranch}</code> from now on.
-                  </p>
-                  <p>
-                    Next: start the next turn with no warning.
-                  </p>
-                </section>
-                <button
-                  aria-label={`Accept current branch as correct. Continue working on ${branchDriftDialog.observedBranch} without further warnings`}
-                  className="button button--primary workspace-handoff-dialog__action"
-                  disabled={branchDriftBusy}
-                  type="button"
-                  onClick={async () => {
-                    if (!props.desktopApi?.updateThreadExpectedBranch || !selectedThread) {
-                      return;
-                    }
-
-                    setBranchDriftBusy(true);
-                    setBranchDriftError(undefined);
-                    try {
-                      await props.desktopApi.updateThreadExpectedBranch({
-                        backend: selectedThread.source,
-                        federationTarget:
-                          selectedThread.federation?.ref.target
-                          ?? readRendererFederationTarget(),
-                        threadId: selectedThread.id,
-                        branch: branchDriftDialog.observedBranch,
-                      });
-                      await props.onRefreshNavigation?.();
-                      setBranchDriftDialog(undefined);
-                    } catch (error) {
-                      setBranchDriftError(error instanceof Error ? error.message : String(error));
-                    } finally {
-                      setBranchDriftBusy(false);
-                    }
-                  }}
-                >
-                  <span>Accept Current Branch as Correct</span>
-                  <small>
-                    Continue working on {branchDriftDialog.observedBranch} without further
-                    warnings
-                  </small>
-                </button>
-              </div>
+                />
+              ) : null}
+              {threadView ? [...new Set(terminals.panes.map((pane) => JSON.stringify([pane.threadKey, pane.remote?.instanceId ?? "local"])))].map((panelKey) => {
+                const panes = terminals.panes.filter((pane) => JSON.stringify([pane.threadKey, pane.remote?.instanceId ?? "local"]) === panelKey);
+                const first = panes[0]!;
+                return <Suspense key={panelKey} fallback={null}>
+                  <LazyThreadTerminalPanel desktopApi={props.desktopApi} terminals={terminals} threadKey={first.threadKey}
+                    panes={panes} visible={first.threadKey === selectedThreadKey
+                      && first.remote?.instanceId === selectedThreadTerminalRemote?.instanceId
+                      && terminals.isPanelOpen(first.threadKey)} />
+                </Suspense>;
+              }) : null}
             </div>
-            {branchDriftError ? (
-              <p className="workspace-handoff-dialog__error">{branchDriftError}</p>
-            ) : null}
+            <ThreadContextPanel
+              activeTab={activeContextTab}
+              backendError={props.backendError}
+              backends={props.backends}
+              ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
+              desktopApi={props.desktopApi}
+              onOpenAutomations={props.onOpenAutomations}
+              onActiveTabChange={onActiveContextTabChange}
+              onResizingChange={setContextRailResizing}
+              onWidthChange={setContextRailWidth}
+              width={contextRailWidth}
+              pinned={contextRailPinned}
+              spineRef={contextRailSpineRef}
+              launchpadConnections={
+                launchpadConnectionTiles && launchpadConnectionsDock === "sidebar"
+                  ? {
+                      content: launchpadConnectionTiles,
+                      landing: connectionsLanding,
+                      onShowOnLaunchpad: showConnectionsOnLaunchpad,
+                    }
+                  : undefined
+              }
+              {...contextPanelThreadProps}
+            />
           </div>
-        </div>
-      ) : null}
+        )}
+
+        {composerView ? imageLightbox : null}
+
+        {threadView && workflowBudgetDialog ? (
+          <div className="workspace-handoff-modal">
+            <div
+              ref={workflowBudgetDialogRef}
+              aria-labelledby="grok-workflow-budget-title"
+              aria-modal="true"
+              className="workspace-handoff-dialog rewind-dialog"
+              role="dialog"
+            >
+              <div className="workspace-handoff-dialog__header">
+                <h2 id="grok-workflow-budget-title">Grok workflow budgets</h2>
+                <button
+                  aria-label="Close workflow budget dialog"
+                  className="workspace-handoff-dialog__close"
+                  disabled={workflowBudgetDialog.busy}
+                  type="button"
+                  onClick={() => setWorkflowBudgetDialog(undefined)}
+                >
+                  x
+                </button>
+              </div>
+              <p>
+                These limits apply to child-agent calls in model-launched workflows for
+                this resident Grok session.
+              </p>
+              {workflowBudgetDialog.loading ? (
+                <p role="status">Loading workflow budgets...</p>
+              ) : (
+                <div className="workflow-budget-dialog__fields">
+                  <label>
+                    <span>Default when omitted</span>
+                    <input
+                      disabled={workflowBudgetDialog.busy}
+                      max={1024}
+                      min={1}
+                      step={1}
+                      type="number"
+                      value={workflowBudgetDialog.defaultAgentBudget}
+                      onChange={(event) => setWorkflowBudgetDialog((current) =>
+                        current
+                          ? {
+                              ...current,
+                              defaultAgentBudget: event.target.value,
+                              error: undefined,
+                            }
+                          : current)}
+                    />
+                    <small>
+                      Used only when a workflow does not pass its own agent_budget.
+                    </small>
+                  </label>
+                  <label>
+                    <span>Enforced maximum</span>
+                    <input
+                      disabled={workflowBudgetDialog.busy}
+                      max={1024}
+                      min={1}
+                      step={1}
+                      type="number"
+                      value={workflowBudgetDialog.maxAgentBudget}
+                      onChange={(event) => setWorkflowBudgetDialog((current) =>
+                        current
+                          ? {
+                              ...current,
+                              error: undefined,
+                              maxAgentBudget: event.target.value,
+                            }
+                          : current)}
+                    />
+                    <small>
+                      Explicit workflow budgets above this value are rejected, not clamped.
+                    </small>
+                  </label>
+                </div>
+              )}
+              <p>
+                Valid range: 1-1024. The policy is session-only and resets when the
+                Grok process restarts; existing workflow runs keep their admitted budget.
+              </p>
+              {workflowBudgetDialog.error ? (
+                <p className="rewind-dialog__error" role="alert">
+                  {workflowBudgetDialog.error}
+                </p>
+              ) : null}
+              <div className="rewind-dialog__actions">
+                <button
+                  disabled={workflowBudgetDialog.busy}
+                  type="button"
+                  onClick={() => setWorkflowBudgetDialog(undefined)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button--primary"
+                  disabled={
+                    workflowBudgetDialog.busy
+                    || workflowBudgetDialog.loading
+                    || !workflowBudgetDialog.defaultAgentBudget
+                    || !workflowBudgetDialog.maxAgentBudget
+                  }
+                  type="button"
+                  onClick={() => {
+                    void saveWorkflowBudget();
+                  }}
+                >
+                  {workflowBudgetDialog.busy ? "Saving..." : "Save budgets"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {threadView && branchDriftDialog && selectedThread ? (
+          <div className="workspace-handoff-modal">
+            <div
+              ref={branchDriftDialogRef}
+              aria-labelledby="branch-drift-title"
+              aria-modal="true"
+              className="workspace-handoff-dialog"
+              role="dialog"
+            >
+              <div className="workspace-handoff-dialog__header">
+                <h2 id="branch-drift-title">Thread branch changed</h2>
+                <button
+                  aria-label="Close branch warning"
+                  className="workspace-handoff-dialog__close"
+                  disabled={branchDriftBusy}
+                  type="button"
+                  onClick={() => {
+                    setBranchDriftDialog(undefined);
+                  }}
+                >
+                  x
+                </button>
+              </div>
+              <p>
+                The worktree is already on a different branch. PwrAgent will not change git state
+                for you.
+              </p>
+              <dl className="workspace-handoff-dialog__branch-path">
+                <div>
+                  <dt>Thread expects</dt>
+                  <dd>
+                    <code className="workspace-handoff-dialog__branch-code">
+                      {branchDriftDialog.expectedBranch}
+                    </code>
+                  </dd>
+                </div>
+                <span aria-hidden="true" className="workspace-handoff-dialog__branch-arrow">
+                  -&gt;
+                </span>
+                <div>
+                  <dt>Worktree is on</dt>
+                  <dd>
+                    <code className="workspace-handoff-dialog__branch-code">
+                      {branchDriftDialog.observedBranch}
+                    </code>
+                  </dd>
+                </div>
+              </dl>
+              <p>
+                If earlier turns made commits on{" "}
+                <code>{branchDriftDialog.expectedBranch}</code>, those commits may not be visible
+                on <code>{branchDriftDialog.observedBranch}</code>.
+              </p>
+              <div className="workspace-handoff-dialog__comparison" aria-label="Branch choices">
+                <div className="workspace-handoff-dialog__choice">
+                  <section className="workspace-handoff-dialog__choice-copy">
+                    <h3>I'll switch back</h3>
+                    <p>
+                      Keep the warning. This thread will continue to expect{" "}
+                      <code>{branchDriftDialog.expectedBranch}</code>.
+                    </p>
+                    <p>
+                      Next: switch the worktree back yourself.
+                    </p>
+                  </section>
+                  <button
+                    aria-label={
+                      branchDriftDialog.reason === "turn"
+                        ? `Cancel turn. I'll switch back to ${branchDriftDialog.expectedBranch}`
+                        : `Keep warning. I'll switch back to ${branchDriftDialog.expectedBranch}`
+                    }
+                    className="button button--secondary workspace-handoff-dialog__action"
+                    disabled={branchDriftBusy}
+                    title={
+                      branchDriftDialog.reason === "turn"
+                        ? `Cancel this send and keep the warning for ${branchDriftDialog.expectedBranch}.`
+                        : `Keep the warning so you can switch back to ${branchDriftDialog.expectedBranch}.`
+                    }
+                    type="button"
+                    onClick={async () => {
+                      if (branchDriftDialog.reason === "turn") {
+                        setBranchDriftDialog(undefined);
+                        return;
+                      }
+
+                      if (!props.desktopApi?.retainThreadBranchDrift || !selectedThread) {
+                        setBranchDriftDialog(undefined);
+                        return;
+                      }
+
+                      setBranchDriftBusy(true);
+                      setBranchDriftError(undefined);
+                      try {
+                        await props.desktopApi.retainThreadBranchDrift({
+                          backend: selectedThread.source,
+                          federationTarget:
+                            selectedThread.federation?.ref.target
+                            ?? readRendererFederationTarget(),
+                          threadId: selectedThread.id,
+                          expectedBranch: branchDriftDialog.expectedBranch,
+                          observedBranch: branchDriftDialog.observedBranch,
+                        });
+                        // Keep the owner's receipt while independently paged detail
+                        // catches up. A pending check still holds the old summary.
+                        acceptedBranchDriftRef.current = branchDriftRetentionKey(
+                          selectedThread, branchDriftDialog.expectedBranch, branchDriftDialog.observedBranch,
+                        );
+                        await props.onRefreshNavigation?.();
+                        setBranchDriftDialog(undefined);
+                      } catch (error) {
+                        setBranchDriftError(error instanceof Error ? error.message : String(error));
+                      } finally {
+                        setBranchDriftBusy(false);
+                      }
+                    }}
+                  >
+                    <span>
+                      {branchDriftDialog.reason === "turn" ? "Cancel Turn" : "Keep Warning"}
+                    </span>
+                    <small>I'll switch back to {branchDriftDialog.expectedBranch}</small>
+                  </button>
+                </div>
+                <div className="workspace-handoff-dialog__choice">
+                  <section className="workspace-handoff-dialog__choice-copy">
+                    <h3>Keep current branch</h3>
+                    <p>
+                      Update this thread so it expects{" "}
+                      <code>{branchDriftDialog.observedBranch}</code> from now on.
+                    </p>
+                    <p>
+                      Next: start the next turn with no warning.
+                    </p>
+                  </section>
+                  <button
+                    aria-label={`Accept current branch as correct. Continue working on ${branchDriftDialog.observedBranch} without further warnings`}
+                    className="button button--primary workspace-handoff-dialog__action"
+                    disabled={branchDriftBusy}
+                    type="button"
+                    onClick={async () => {
+                      if (!props.desktopApi?.updateThreadExpectedBranch || !selectedThread) {
+                        return;
+                      }
+
+                      setBranchDriftBusy(true);
+                      setBranchDriftError(undefined);
+                      try {
+                        await props.desktopApi.updateThreadExpectedBranch({
+                          backend: selectedThread.source,
+                          federationTarget:
+                            selectedThread.federation?.ref.target
+                            ?? readRendererFederationTarget(),
+                          threadId: selectedThread.id,
+                          branch: branchDriftDialog.observedBranch,
+                        });
+                        await props.onRefreshNavigation?.();
+                        setBranchDriftDialog(undefined);
+                      } catch (error) {
+                        setBranchDriftError(error instanceof Error ? error.message : String(error));
+                      } finally {
+                        setBranchDriftBusy(false);
+                      }
+                    }}
+                  >
+                    <span>Accept Current Branch as Correct</span>
+                    <small>
+                      Continue working on {branchDriftDialog.observedBranch} without further
+                      warnings
+                    </small>
+                  </button>
+                </div>
+              </div>
+              {branchDriftError ? (
+                <p className="workspace-handoff-dialog__error">{branchDriftError}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
 
-    </section>
-  );
+      </section>
+    );
+  }
+
+  return renderThreadLayout();
 }
 
 function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {

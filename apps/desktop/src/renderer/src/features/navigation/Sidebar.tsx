@@ -3358,438 +3358,348 @@ export function Sidebar(props: SidebarProps) {
   const directoryMenuHasForgeSection =
     directoryMenuCanForgeAutomation || directoryMenuForgeRepository !== undefined;
 
-  return (
-    <aside
-      ref={sidebarRef}
-      className="sidebar"
-      aria-label="Threads"
-      inert={props.inert ? true : undefined}
-    >
-      {/* Mounted here because this is where the thread set and the jump
-          handlers already live, but it PORTALS onto document.body — the
-          sidebar is a container-query element (a containing block for fixed
-          descendants) and ⌘B hides it with `display: none`. */}
-      {props.threadJumpOpen ? (
-        <SidebarSearchPopup
-          threads={props.threads}
-          thinkingThreadKeys={props.thinkingThreadKeys}
-          projects={props.directories}
-          onJumpToProject={(directory) => {
-            props.onBrowseModeChange("directories");
-            // The reveal leaves focus alone: the launchpad's composer takes
-            // it, so the operator can type the new thread straight away.
-            setProjectReveal({ key: directory.key });
-            if (props.onJumpToProject) props.onJumpToProject(directory);
-            else void props.onOpenLaunchpad(directory);
-          }}
-          onJumpToThread={(thread) => {
-            setJumpedThread(thread);
-            (props.onJumpToThread ?? props.onSelectThread)(thread);
-          }}
-          onJumpToRemoteThread={props.onJumpToRemoteThread ? (thread) => {
-            setJumpedThread(thread);
-            props.onJumpToRemoteThread?.(thread);
-          } : undefined}
-          onClose={() => props.onThreadJumpOpenChange?.(false)}
-        />
-      ) : null}
-      {/* The resize seam is NOT here — see SidebarResizeHandle, rendered by
-          the shell as this aside's sibling so it can straddle the border
-          that `overflow: hidden` keeps every child from reaching. */}
-      <header className="sidebar__masthead">
-        <BrandLockup variant="sidebar" />
-
-        <div className="sidebar__masthead-actions">
-          {federationLabel ? null : props.mastheadVoiceControl}
-          <MastheadActionButton
-            ariaLabel="Search threads"
-            // ⌘K leads: it's the one an operator reaches for by reflex, and
-            // the palette it opens is the surface this button most resembles.
-            tooltipText={[
-              withChordHint("Quick Thread List Search", chordLabelFor(keybindings, "navigation.jump_to_thread")),
-              withChordHint("Open Search All", chordLabelFor(keybindings, "navigation.search_threads")),
-              `${withChordHint("Context Search", chordLabelFor(keybindings, "navigation.find"))} — Thread List in sidebar, Thread Chat elsewhere`,
-            ].join("\n")}
-            ariaPressed={props.threadSearchActive}
-            className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
-            onClick={props.onOpenThreadSearch}
-          >
-            <SearchIcon size={16} aria-hidden />
-          </MastheadActionButton>
-          {/* Automations and Settings are LOCAL surfaces. In a remote
-              federation window, showing them would open this machine's
-              screens inside a window branded as another instance — hide
-              both rather than mislead. */}
-          {federationLabel ? null : (
-          <MastheadActionButton
-            ariaLabel="Open automations"
-            ariaPressed={props.automationsActive}
-            // `sidebar__masthead-automations` drops out after the gear on a
-            // narrow rail; View → Automations is its other home.
-            className={`sidebar__icon-button sidebar__masthead-automations${props.automationsActive ? " is-active" : ""}`}
-            onClick={props.onOpenAutomations}
-          >
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
-          </MastheadActionButton>
-          )}
-          {federationLabel ? null : (
-          <MastheadActionButton
-            ariaLabel="Open settings"
-            ariaPressed={props.settingsActive}
-            // `sidebar__masthead-settings` lets the gear drop out first when the
-            // rail is too narrow for the wordmark + all five controls — Settings
-            // is still reachable from the app menu (⌘,), so it's the safe one to
-            // shed before the (less reachable) brand wordmark.
-            className={`sidebar__icon-button sidebar__masthead-settings${props.settingsActive ? " is-active" : ""}`}
-            onClick={props.onOpenSettings}
-          >
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-          </MastheadActionButton>
-          )}
-          <NewThreadButton
-            addingProjectDirectory={props.addingProjectDirectory}
-            creatingThread={Boolean(props.creatingThread)}
-            directoryLabel={props.newThreadDirectoryLabel}
-            onAddProjectDirectory={props.onAddProjectDirectory}
-            onCreateThread={() => props.onCreateThread()}
-            onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
-            onCreateThreadOnTarget={props.onCreateThreadOnFederationTarget}
-            remoteTargets={props.newThreadFederationTargets}
-          />
-        </div>
-      </header>
-
-      {federationLabel || federationTarget ? (
-        // The remote machine's identity gets the same pill treatment as
-        // the local profile/runtime rows below (which are hidden in a
-        // federation window) — full name visible, tooltip + copy for the
-        // instance id, instead of a truncated masthead suffix.
-        <div className="runtime-identity" aria-label="Remote instance">
-          <FederationRemoteBadge
-            className="runtime-identity__button"
-            textClassName="runtime-identity__text sidebar__federation-label"
-          />
-        </div>
-      ) : null}
-
-      {!federationLabel && props.runtimeIdentity ? (
-        <div className="runtime-identity" aria-label="Runtime identity">
-          <RuntimeIdentityButton
-            copied={copiedRuntimeValue === "cwd"}
-            label={formatRuntimePath(props.runtimeIdentity.cwd)}
-            value={props.runtimeIdentity.cwd}
-            valueKind="cwd"
-            onCopied={setCopiedRuntimeValue}
-          />
-          {runtimeGitRefLabel && runtimeGitRefValue ? (
-            <RuntimeIdentityButton
-              copied={copiedRuntimeValue === "branch"}
-              copyLabel={
-                props.runtimeIdentity.detachedHead ? "commit SHA" : "branch name"
-              }
-              label={runtimeGitRefLabel}
-              value={runtimeGitRefValue}
-              valueKind="branch"
-              onCopied={setCopiedRuntimeValue}
-            />
-          ) : null}
-        </div>
-      ) : null}
-
-      {!federationLabel && props.activeProfile ? (
-        <div className="runtime-identity" aria-label="PwrAgent profile">
-          <ProfileIdentityButton
-            buttonRef={profileMenuTriggerRef}
-            hasMenu={Boolean(props.profiles?.length)}
-            label={profileLabel ?? `profile:${props.activeProfile}`}
-            menuOpen={profileMenuVisible}
-            tooltipText={profileTooltip}
-            onRefresh={props.onRefreshRateLimits}
-            onToggle={(event) => {
-              // Stopped, so the other menus' outside-click listeners never
-              // see this click. Close them here instead.
-              event.stopPropagation();
-              setContextMenu(undefined);
-              setDirectoryContextMenu(undefined);
-              setDirectoryTargetMenu(undefined);
-              setProfileMenuOpen((open) => !open);
-            }}
-          />
-          {profileMenuVisible && props.profiles ? (
-            <div
-              ref={profileMenuRef}
-              className="sidebar__menu sidebar__menu--profile"
-              role="menu"
-              // Every profile can be disabled at once: the only one is the
-              // current one, or this window cannot open another. Focus then
-              // lands on the menu, where Escape and Tab still work.
-              tabIndex={-1}
-              onClick={(event) => event.stopPropagation()}
-            >
-              {/*
-                The operator's Settings → Profiles order, minus the profiles
-                switched out of the Profiles menu. The current profile stays,
-                because this row is also where it says it is current.
-              */}
-              {props.profiles
-                .filter((profile) => profile.showInMenu || profile.active)
-                .map((profile) => (
-                  <button
-                    key={profile.name}
-                    className="sidebar__menu-item"
-                    disabled={profile.active || !props.onOpenProfile}
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setProfileMenuOpen(false);
-                      void props.onOpenProfile?.(profile.name);
-                    }}
-                  >
-                    <span className="sidebar__menu-item-title">
-                      {profile.displayName || profile.name}
-                    </span>
-                    <span className="sidebar__menu-item-detail">
-                      {profile.active
-                        ? profile.default
-                          ? "Current profile - startup default"
-                          : "Current profile"
-                        : profile.default
-                          ? "Startup default - open in new app instance"
-                          : "Open in new app instance"}
-                    </span>
-                  </button>
-                ))}
-              {props.onOpenUsageActivity ? (
-                <>
-                  <div className="thread-context-menu__separator" role="separator" />
-                  <button
-                    className="sidebar__menu-item"
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setProfileMenuOpen(false);
-                      props.onOpenUsageActivity?.();
-                    }}
-                  >
-                    <span className="sidebar__menu-item-title">Usage Activity</span>
-                    <span className="sidebar__menu-item-detail">
-                      Account limits and spend across instances
-                    </span>
-                  </button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* The masthead error slot is gone. It rendered five unrelated
-          failures through one `? :` chain, so a stale create error masked a
-          fresh rename error, none of them could be dismissed or timed out,
-          and each one permanently shortened the thread list. Create, rename,
-          and archive failures now go to the durable notice stack; the
-          directory-picker and launchpad failures render at their own
-          controls in the composer, which stay on screen. */}
-
-      <section
-        className={`sidebar__section sidebar__section--fill${
-          projectIndexShown ? " sidebar__section--with-project-index" : ""
-        }`}
-        aria-label="Thread browser"
-        ref={threadBrowserRef}
+  // Compile JSX separately from setup so both functions stay optimizable by V8.
+  function renderSidebarLayout() {
+    return (
+      <aside
+        ref={sidebarRef}
+        className="sidebar"
+        aria-label="Threads"
+        inert={props.inert ? true : undefined}
       >
-        <div className="sidebar__lens-row">
-          <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-            {BROWSE_MODES.map((mode) =>
-              mode === "attention" ? (
-                <AttentionLensTab
-                  key={mode}
-                  active={props.browseMode === mode}
-                  countsReady={Boolean(ownerCounts)}
-                  activeThreadCount={attentionCounts.activeLocal}
-                  remoteActiveThreadCount={
-                    remoteSignalVisible ? attentionCounts.activeRemote : undefined
-                  }
-                  reviewThreadCount={attentionCounts.review}
-                  disabled={props.threadLensesEmpty}
-                  onSelect={() => props.onBrowseModeChange(mode)}
-                />
-              ) : (
-                <LensTab
-                  key={mode}
-                  mode={mode}
-                  active={props.browseMode === mode}
-                  // Counted off the very list the lens renders, so the badge and
-                  // the rows can't disagree. Only Drafts counts: Updated and
-                  // Created hold every thread, and Directories is a different
-                  // unit — numbers there would say nothing you'd act on.
-                  count={mode === "drafts" ? Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length : undefined}
-                  countLabel={
-                    mode === "drafts"
-                      ? formatDraftThreadCount(Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length)
-                      : undefined
-                  }
-                  tooltipText={browseModeTooltips[mode]}
-                  disabled={props.threadLensesEmpty && mode !== "directories"}
-                  onSelect={() => props.onBrowseModeChange(mode)}
-                />
-              ),
-            )}
-          </div>
-          {projectIndexEnabled ? (
-            <ProjectIndexToggle
-              hidden={props.projectIndexHidden ?? false}
-              unavailableReason={projectIndexUnavailableReason}
-              onToggle={() =>
-                props.onProjectIndexHiddenChange?.(!props.projectIndexHidden)}
-            />
-          ) : null}
-        </div>
-
-        {projectIndexShown && onProjectIndexWidthChange ? (
-          <ProjectIndex
-            projects={projectIndexEntries}
-            scrollRegionRef={lensScroll.ref}
-            scrollRegionId={scrollRegionId}
-            spy={props.browseMode === "directories" && !listStatus}
-            width={props.projectIndexWidth ?? null}
-            onWidthChange={onProjectIndexWidthChange}
-            onJump={jumpToProject}
-            onOpenContextMenu={openProjectIndexContextMenu}
-            onDropProject={projectIndexReorders ? dropProjectFromIndex : undefined}
-            onMoveProject={projectIndexReorders ? moveProjectFromIndex : undefined}
-            projectCard={projectIndexCard}
+        {/* Mounted here because this is where the thread set and the jump
+            handlers already live, but it PORTALS onto document.body — the
+            sidebar is a container-query element (a containing block for fixed
+            descendants) and ⌘B hides it with `display: none`. */}
+        {props.threadJumpOpen ? (
+          <SidebarSearchPopup
+            threads={props.threads}
+            thinkingThreadKeys={props.thinkingThreadKeys}
+            projects={props.directories}
+            onJumpToProject={(directory) => {
+              props.onBrowseModeChange("directories");
+              // The reveal leaves focus alone: the launchpad's composer takes
+              // it, so the operator can type the new thread straight away.
+              setProjectReveal({ key: directory.key });
+              if (props.onJumpToProject) props.onJumpToProject(directory);
+              else void props.onOpenLaunchpad(directory);
+            }}
+            onJumpToThread={(thread) => {
+              setJumpedThread(thread);
+              (props.onJumpToThread ?? props.onSelectThread)(thread);
+            }}
+            onJumpToRemoteThread={props.onJumpToRemoteThread ? (thread) => {
+              setJumpedThread(thread);
+              props.onJumpToRemoteThread?.(thread);
+            } : undefined}
+            onClose={() => props.onThreadJumpOpenChange?.(false)}
           />
         ) : null}
-        <div
-          ref={lensScroll.ref}
-          id={scrollRegionId}
-          className="sidebar__scroll-region"
-          onScroll={lensScroll.onScroll}
-          onClickCapture={hoverStableSnapshot.onClickCapture}
-          onPointerCancel={hoverStableSnapshot.onPointerCancel}
-          onPointerLeave={hoverStableSnapshot.onPointerLeave}
-          onPointerOut={hoverStableSnapshot.onPointerOut}
-          onPointerOver={hoverStableSnapshot.onPointerOver}
-        >
-          {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
-            <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
-          ) : null}
-          {listStatus ? (
-            <>
-              {listStatus}
-              {lensPager}
-            </>
-          ) : props.browseMode === "directories" ? (
-            <DirectoriesList
-              startingThreads={startingThreads}
-              onSelectStartingThread={props.onSelectPendingLaunchpad}
-              emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
-              footer={(
-                <>
-                  {lensPager}
-                  {startActions}
-                </>
-              )}
-              onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
-              projectReveal={projectReveal}
-              onProjectRevealComplete={() => setProjectReveal(undefined)}
-              pagedNavigation={props.pagedNavigation}
-              presentationOrder={hoverStableSnapshot.value.order}
-              selectedThreadDirectoryKeys={props.selectedThreadDirectoryKeys}
-              directoryDisclosure={props.directoryDisclosure}
-              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-              terminalThreadKeys={props.terminalThreadKeys}
-              inputRequestThreadKeys={props.inputRequestThreadKeys}
-              queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-              draftThreadKeys={props.draftThreadKeys}
-              composerSourceThreadKey={props.composerSourceThreadKey}
-              actionsMenuThreadKey={actionsMenuThreadKey}
-              renamingRow={renamingRow}
-              onRequestRenameThread={requestRenameFromRow}
-              onCommitRenameThread={commitRenameFromRow}
-              directories={renderedDirectories}
-              revealSelectedThreadRequest={directoryRevealRequest}
-              selectedItemKey={props.selectedItemKey}
-              selectedDirectoryKeys={selectedDirectoryKeys}
-              selectedThreadKeys={selectedThreadKeys}
-              thinkingThreadKeys={props.thinkingThreadKeys}
-              agentCommandThreadKeys={props.agentCommandThreadKeys}
-              threads={renderedThreads}
-              onOpenThreadContextMenu={openThreadContextMenu}
-              onOpenLaunchpad={hoverReleasedListHandlers.openLaunchpad}
-              onOpenFederationTargetMenu={
-                listedFederationThreadTargets.length > 0
-                  ? openDirectoryTargetMenu
-                  : undefined
-              }
-              openFederationTargetMenuDirectoryKey={
-                directoryTargetMenu?.directoryKey
-              }
-              projectCardRef={projectCardRef}
-              onPrefetchPullRequests={forwardedPrefetchPullRequests}
-              onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
-              onRevealSelectedThreadComplete={
-                forwardedRevealSelectedThreadComplete
-              }
-              onDetachPullRequests={detachPullRequests}
-              onReorderThreadPins={
-                hoverReleasedListHandlers.reorderThreadPins
-              }
-              onUpdateSubthreadOrder={
-                hoverReleasedListHandlers.updateSubthreadOrder
-              }
-              onNestThread={hoverReleasedListHandlers.nestThread}
-              onSetSubthreadsCollapsed={
-                hoverReleasedListHandlers.setSubthreadsCollapsed
-              }
-              onSetDirectoryPin={hoverReleasedListHandlers.setDirectoryPin}
-              onReorderDirectoryPins={
-                hoverReleasedListHandlers.reorderDirectoryPins
-              }
-              onSetDirectoryThreadsCollapsed={
-                hoverReleasedListHandlers.setDirectoryThreadsCollapsed
-              }
-              onOpenDirectoryContextMenu={
-                props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen || props.onArchiveDirectories
-                  ? openDirectoryContextMenu
-                  : undefined
-              }
-              placeholderOffersDirectoryContextMenu={placeholderOffersProjectMenu}
-              onOpenPullRequestContextMenu={openPullRequestContextMenu}
-              onSelectDirectory={selectDirectoryFromList}
-              onSelectThread={selectThreadFromList}
-              onSetReaction={forwardedSetThreadReaction}
-              onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
-              onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
+        {/* The resize seam is NOT here — see SidebarResizeHandle, rendered by
+            the shell as this aside's sibling so it can straddle the border
+            that `overflow: hidden` keeps every child from reaching. */}
+        <header className="sidebar__masthead">
+          <BrandLockup variant="sidebar" />
+
+          <div className="sidebar__masthead-actions">
+            {federationLabel ? null : props.mastheadVoiceControl}
+            <MastheadActionButton
+              ariaLabel="Search threads"
+              // ⌘K leads: it's the one an operator reaches for by reflex, and
+              // the palette it opens is the surface this button most resembles.
+              tooltipText={[
+                withChordHint("Quick Thread List Search", chordLabelFor(keybindings, "navigation.jump_to_thread")),
+                withChordHint("Open Search All", chordLabelFor(keybindings, "navigation.search_threads")),
+                `${withChordHint("Context Search", chordLabelFor(keybindings, "navigation.find"))} — Thread List in sidebar, Thread Chat elsewhere`,
+              ].join("\n")}
+              ariaPressed={props.threadSearchActive}
+              className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
+              onClick={props.onOpenThreadSearch}
+            >
+              <SearchIcon size={16} aria-hidden />
+            </MastheadActionButton>
+            {/* Automations and Settings are LOCAL surfaces. In a remote
+                federation window, showing them would open this machine's
+                screens inside a window branded as another instance — hide
+                both rather than mislead. */}
+            {federationLabel ? null : (
+            <MastheadActionButton
+              ariaLabel="Open automations"
+              ariaPressed={props.automationsActive}
+              // `sidebar__masthead-automations` drops out after the gear on a
+              // narrow rail; View → Automations is its other home.
+              className={`sidebar__icon-button sidebar__masthead-automations${props.automationsActive ? " is-active" : ""}`}
+              onClick={props.onOpenAutomations}
+            >
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
+            </MastheadActionButton>
+            )}
+            {federationLabel ? null : (
+            <MastheadActionButton
+              ariaLabel="Open settings"
+              ariaPressed={props.settingsActive}
+              // `sidebar__masthead-settings` lets the gear drop out first when the
+              // rail is too narrow for the wordmark + all five controls — Settings
+              // is still reachable from the app menu (⌘,), so it's the safe one to
+              // shed before the (less reachable) brand wordmark.
+              className={`sidebar__icon-button sidebar__masthead-settings${props.settingsActive ? " is-active" : ""}`}
+              onClick={props.onOpenSettings}
+            >
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+            </MastheadActionButton>
+            )}
+            <NewThreadButton
+              addingProjectDirectory={props.addingProjectDirectory}
+              creatingThread={Boolean(props.creatingThread)}
+              directoryLabel={props.newThreadDirectoryLabel}
+              onAddProjectDirectory={props.onAddProjectDirectory}
+              onCreateThread={() => props.onCreateThread()}
+              onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
+              onCreateThreadOnTarget={props.onCreateThreadOnFederationTarget}
+              remoteTargets={props.newThreadFederationTargets}
             />
-          ) : (
-            renderedThreads.length === 0 && startingThreads.length === 0 && !visitingThread ? (
+          </div>
+        </header>
+
+        {federationLabel || federationTarget ? (
+          // The remote machine's identity gets the same pill treatment as
+          // the local profile/runtime rows below (which are hidden in a
+          // federation window) — full name visible, tooltip + copy for the
+          // instance id, instead of a truncated masthead suffix.
+          <div className="runtime-identity" aria-label="Remote instance">
+            <FederationRemoteBadge
+              className="runtime-identity__button"
+              textClassName="runtime-identity__text sidebar__federation-label"
+            />
+          </div>
+        ) : null}
+
+        {!federationLabel && props.runtimeIdentity ? (
+          <div className="runtime-identity" aria-label="Runtime identity">
+            <RuntimeIdentityButton
+              copied={copiedRuntimeValue === "cwd"}
+              label={formatRuntimePath(props.runtimeIdentity.cwd)}
+              value={props.runtimeIdentity.cwd}
+              valueKind="cwd"
+              onCopied={setCopiedRuntimeValue}
+            />
+            {runtimeGitRefLabel && runtimeGitRefValue ? (
+              <RuntimeIdentityButton
+                copied={copiedRuntimeValue === "branch"}
+                copyLabel={
+                  props.runtimeIdentity.detachedHead ? "commit SHA" : "branch name"
+                }
+                label={runtimeGitRefLabel}
+                value={runtimeGitRefValue}
+                valueKind="branch"
+                onCopied={setCopiedRuntimeValue}
+              />
+            ) : null}
+          </div>
+        ) : null}
+
+        {!federationLabel && props.activeProfile ? (
+          <div className="runtime-identity" aria-label="PwrAgent profile">
+            <ProfileIdentityButton
+              buttonRef={profileMenuTriggerRef}
+              hasMenu={Boolean(props.profiles?.length)}
+              label={profileLabel ?? `profile:${props.activeProfile}`}
+              menuOpen={profileMenuVisible}
+              tooltipText={profileTooltip}
+              onRefresh={props.onRefreshRateLimits}
+              onToggle={(event) => {
+                // Stopped, so the other menus' outside-click listeners never
+                // see this click. Close them here instead.
+                event.stopPropagation();
+                setContextMenu(undefined);
+                setDirectoryContextMenu(undefined);
+                setDirectoryTargetMenu(undefined);
+                setProfileMenuOpen((open) => !open);
+              }}
+            />
+            {profileMenuVisible && props.profiles ? (
+              <div
+                ref={profileMenuRef}
+                className="sidebar__menu sidebar__menu--profile"
+                role="menu"
+                // Every profile can be disabled at once: the only one is the
+                // current one, or this window cannot open another. Focus then
+                // lands on the menu, where Escape and Tab still work.
+                tabIndex={-1}
+                onClick={(event) => event.stopPropagation()}
+              >
+                {/*
+                  The operator's Settings → Profiles order, minus the profiles
+                  switched out of the Profiles menu. The current profile stays,
+                  because this row is also where it says it is current.
+                */}
+                {props.profiles
+                  .filter((profile) => profile.showInMenu || profile.active)
+                  .map((profile) => (
+                    <button
+                      key={profile.name}
+                      className="sidebar__menu-item"
+                      disabled={profile.active || !props.onOpenProfile}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        void props.onOpenProfile?.(profile.name);
+                      }}
+                    >
+                      <span className="sidebar__menu-item-title">
+                        {profile.displayName || profile.name}
+                      </span>
+                      <span className="sidebar__menu-item-detail">
+                        {profile.active
+                          ? profile.default
+                            ? "Current profile - startup default"
+                            : "Current profile"
+                          : profile.default
+                            ? "Startup default - open in new app instance"
+                            : "Open in new app instance"}
+                      </span>
+                    </button>
+                  ))}
+                {props.onOpenUsageActivity ? (
+                  <>
+                    <div className="thread-context-menu__separator" role="separator" />
+                    <button
+                      className="sidebar__menu-item"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        props.onOpenUsageActivity?.();
+                      }}
+                    >
+                      <span className="sidebar__menu-item-title">Usage Activity</span>
+                      <span className="sidebar__menu-item-detail">
+                        Account limits and spend across instances
+                      </span>
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* The masthead error slot is gone. It rendered five unrelated
+            failures through one `? :` chain, so a stale create error masked a
+            fresh rename error, none of them could be dismissed or timed out,
+            and each one permanently shortened the thread list. Create, rename,
+            and archive failures now go to the durable notice stack; the
+            directory-picker and launchpad failures render at their own
+            controls in the composer, which stay on screen. */}
+
+        <section
+          className={`sidebar__section sidebar__section--fill${
+            projectIndexShown ? " sidebar__section--with-project-index" : ""
+          }`}
+          aria-label="Thread browser"
+          ref={threadBrowserRef}
+        >
+          <div className="sidebar__lens-row">
+            <div className="lens-switch" role="tablist" aria-label="Thread lenses">
+              {BROWSE_MODES.map((mode) =>
+                mode === "attention" ? (
+                  <AttentionLensTab
+                    key={mode}
+                    active={props.browseMode === mode}
+                    countsReady={Boolean(ownerCounts)}
+                    activeThreadCount={attentionCounts.activeLocal}
+                    remoteActiveThreadCount={
+                      remoteSignalVisible ? attentionCounts.activeRemote : undefined
+                    }
+                    reviewThreadCount={attentionCounts.review}
+                    disabled={props.threadLensesEmpty}
+                    onSelect={() => props.onBrowseModeChange(mode)}
+                  />
+                ) : (
+                  <LensTab
+                    key={mode}
+                    mode={mode}
+                    active={props.browseMode === mode}
+                    // Counted off the very list the lens renders, so the badge and
+                    // the rows can't disagree. Only Drafts counts: Updated and
+                    // Created hold every thread, and Directories is a different
+                    // unit — numbers there would say nothing you'd act on.
+                    count={mode === "drafts" ? Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length : undefined}
+                    countLabel={
+                      mode === "drafts"
+                        ? formatDraftThreadCount(Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length)
+                        : undefined
+                    }
+                    tooltipText={browseModeTooltips[mode]}
+                    disabled={props.threadLensesEmpty && mode !== "directories"}
+                    onSelect={() => props.onBrowseModeChange(mode)}
+                  />
+                ),
+              )}
+            </div>
+            {projectIndexEnabled ? (
+              <ProjectIndexToggle
+                hidden={props.projectIndexHidden ?? false}
+                unavailableReason={projectIndexUnavailableReason}
+                onToggle={() =>
+                  props.onProjectIndexHiddenChange?.(!props.projectIndexHidden)}
+              />
+            ) : null}
+          </div>
+
+          {projectIndexShown && onProjectIndexWidthChange ? (
+            <ProjectIndex
+              projects={projectIndexEntries}
+              scrollRegionRef={lensScroll.ref}
+              scrollRegionId={scrollRegionId}
+              spy={props.browseMode === "directories" && !listStatus}
+              width={props.projectIndexWidth ?? null}
+              onWidthChange={onProjectIndexWidthChange}
+              onJump={jumpToProject}
+              onOpenContextMenu={openProjectIndexContextMenu}
+              onDropProject={projectIndexReorders ? dropProjectFromIndex : undefined}
+              onMoveProject={projectIndexReorders ? moveProjectFromIndex : undefined}
+              projectCard={projectIndexCard}
+            />
+          ) : null}
+          <div
+            ref={lensScroll.ref}
+            id={scrollRegionId}
+            className="sidebar__scroll-region"
+            onScroll={lensScroll.onScroll}
+            onClickCapture={hoverStableSnapshot.onClickCapture}
+            onPointerCancel={hoverStableSnapshot.onPointerCancel}
+            onPointerLeave={hoverStableSnapshot.onPointerLeave}
+            onPointerOut={hoverStableSnapshot.onPointerOut}
+            onPointerOver={hoverStableSnapshot.onPointerOver}
+          >
+            {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
+              <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
+            ) : null}
+            {listStatus ? (
               <>
-                {lensEmptyMessage}
+                {listStatus}
                 {lensPager}
-                {startActions}
               </>
-            ) : (
-              <RecentsList
-                pager={lensPager}
-                footer={startActions}
-                pinnedResourceId={pinnedGroupShown ? PINNED_GROUP_RESOURCE_ID : undefined}
-                pinnedGroupCollapsed={props.pinnedGroupCollapsed}
-                onSetPinnedGroupCollapsed={props.onSetPinnedGroupCollapsed}
-                listSection={listSection}
-                onReorderThreadPins={pinnedGroupShown
-                  ? hoverReleasedListHandlers.reorderThreadPins : undefined}
-                emptyMessage={lensEmptyMessage}
-                visitingThread={visitingThread}
-                visitingLabel={visitingThreadLabels[props.browseMode]}
+            ) : props.browseMode === "directories" ? (
+              <DirectoriesList
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
+                emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
+                footer={(
+                  <>
+                    {lensPager}
+                    {startActions}
+                  </>
+                )}
                 onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
+                projectReveal={projectReveal}
+                onProjectRevealComplete={() => setProjectReveal(undefined)}
                 pagedNavigation={props.pagedNavigation}
-                resourceIds={listResources.map((resource) => resource.id)}
                 presentationOrder={hoverStableSnapshot.value.order}
-                loadedThreads={presentedThreads}
+                selectedThreadDirectoryKeys={props.selectedThreadDirectoryKeys}
+                directoryDisclosure={props.directoryDisclosure}
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                 terminalThreadKeys={props.terminalThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
@@ -3800,20 +3710,34 @@ export function Sidebar(props: SidebarProps) {
                 renamingRow={renamingRow}
                 onRequestRenameThread={requestRenameFromRow}
                 onCommitRenameThread={commitRenameFromRow}
-                revealSelectedThreadRequest={revealSelectedThreadRequest}
-                selectedThreadKey={props.selectedItemKey}
+                directories={renderedDirectories}
+                revealSelectedThreadRequest={directoryRevealRequest}
+                selectedItemKey={props.selectedItemKey}
+                selectedDirectoryKeys={selectedDirectoryKeys}
                 selectedThreadKeys={selectedThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 threads={renderedThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
-                onOpenPullRequestContextMenu={openPullRequestContextMenu}
+                onOpenLaunchpad={hoverReleasedListHandlers.openLaunchpad}
+                onOpenFederationTargetMenu={
+                  listedFederationThreadTargets.length > 0
+                    ? openDirectoryTargetMenu
+                    : undefined
+                }
+                openFederationTargetMenuDirectoryKey={
+                  directoryTargetMenu?.directoryKey
+                }
+                projectCardRef={projectCardRef}
                 onPrefetchPullRequests={forwardedPrefetchPullRequests}
                 onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
                 onRevealSelectedThreadComplete={
                   forwardedRevealSelectedThreadComplete
                 }
                 onDetachPullRequests={detachPullRequests}
+                onReorderThreadPins={
+                  hoverReleasedListHandlers.reorderThreadPins
+                }
                 onUpdateSubthreadOrder={
                   hoverReleasedListHandlers.updateSubthreadOrder
                 }
@@ -3821,1040 +3745,1121 @@ export function Sidebar(props: SidebarProps) {
                 onSetSubthreadsCollapsed={
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }
+                onSetDirectoryPin={hoverReleasedListHandlers.setDirectoryPin}
+                onReorderDirectoryPins={
+                  hoverReleasedListHandlers.reorderDirectoryPins
+                }
+                onSetDirectoryThreadsCollapsed={
+                  hoverReleasedListHandlers.setDirectoryThreadsCollapsed
+                }
+                onOpenDirectoryContextMenu={
+                  props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen || props.onArchiveDirectories
+                    ? openDirectoryContextMenu
+                    : undefined
+                }
+                placeholderOffersDirectoryContextMenu={placeholderOffersProjectMenu}
+                onOpenPullRequestContextMenu={openPullRequestContextMenu}
+                onSelectDirectory={selectDirectoryFromList}
                 onSelectThread={selectThreadFromList}
                 onSetReaction={forwardedSetThreadReaction}
                 onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
                 onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
               />
-            )
-          )}
-        </div>
-      </section>
+            ) : (
+              renderedThreads.length === 0 && startingThreads.length === 0 && !visitingThread ? (
+                <>
+                  {lensEmptyMessage}
+                  {lensPager}
+                  {startActions}
+                </>
+              ) : (
+                <RecentsList
+                  pager={lensPager}
+                  footer={startActions}
+                  pinnedResourceId={pinnedGroupShown ? PINNED_GROUP_RESOURCE_ID : undefined}
+                  pinnedGroupCollapsed={props.pinnedGroupCollapsed}
+                  onSetPinnedGroupCollapsed={props.onSetPinnedGroupCollapsed}
+                  listSection={listSection}
+                  onReorderThreadPins={pinnedGroupShown
+                    ? hoverReleasedListHandlers.reorderThreadPins : undefined}
+                  emptyMessage={lensEmptyMessage}
+                  visitingThread={visitingThread}
+                  visitingLabel={visitingThreadLabels[props.browseMode]}
+                  startingThreads={startingThreads}
+                  onSelectStartingThread={props.onSelectPendingLaunchpad}
+                  onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
+                  pagedNavigation={props.pagedNavigation}
+                  resourceIds={listResources.map((resource) => resource.id)}
+                  presentationOrder={hoverStableSnapshot.value.order}
+                  loadedThreads={presentedThreads}
+                  approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                  terminalThreadKeys={props.terminalThreadKeys}
+                  inputRequestThreadKeys={props.inputRequestThreadKeys}
+                  queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+                  draftThreadKeys={props.draftThreadKeys}
+                  composerSourceThreadKey={props.composerSourceThreadKey}
+                  actionsMenuThreadKey={actionsMenuThreadKey}
+                  renamingRow={renamingRow}
+                  onRequestRenameThread={requestRenameFromRow}
+                  onCommitRenameThread={commitRenameFromRow}
+                  revealSelectedThreadRequest={revealSelectedThreadRequest}
+                  selectedThreadKey={props.selectedItemKey}
+                  selectedThreadKeys={selectedThreadKeys}
+                  thinkingThreadKeys={props.thinkingThreadKeys}
+                  agentCommandThreadKeys={props.agentCommandThreadKeys}
+                  threads={renderedThreads}
+                  onOpenThreadContextMenu={openThreadContextMenu}
+                  onOpenPullRequestContextMenu={openPullRequestContextMenu}
+                  onPrefetchPullRequests={forwardedPrefetchPullRequests}
+                  onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
+                  onRevealSelectedThreadComplete={
+                    forwardedRevealSelectedThreadComplete
+                  }
+                  onDetachPullRequests={detachPullRequests}
+                  onUpdateSubthreadOrder={
+                    hoverReleasedListHandlers.updateSubthreadOrder
+                  }
+                  onNestThread={hoverReleasedListHandlers.nestThread}
+                  onSetSubthreadsCollapsed={
+                    hoverReleasedListHandlers.setSubthreadsCollapsed
+                  }
+                  onSelectThread={selectThreadFromList}
+                  onSetReaction={forwardedSetThreadReaction}
+                  onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
+                  onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
+                />
+              )
+            )}
+          </div>
+        </section>
 
-      {contextMenu ? (
-        <div
-          ref={contextMenuRef}
-          className={`thread-context-menu${
-            contextMenuHasCheckSection ? " thread-context-menu--check-column" : ""
-          }${contextMenu.pullRequest ? " thread-context-menu--pull-request" : ""}`}
-          role="menu"
-          aria-label={
-            contextMenuIsBulk
-              ? `Actions for ${formatThreadCount(contextMenuThreads.length).toLowerCase()} selected`
-              : undefined
-          }
-          style={{
-            left: contextMenu.position?.x ?? contextMenu.requestedPosition.x,
-            top: contextMenu.position?.y ?? contextMenu.requestedPosition.y,
-            visibility: contextMenu.position ? undefined : "hidden",
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          {contextMenuIsBulk ? (
-            <>
-              {bulkHasPinActions ? (
-                <div className="thread-context-menu__section">
-                  {bulkPinnedThreads.length > 0 ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => unpinThreadsFromContextMenu(bulkPinnedThreads)}
-                    >
-                      Unpin {formatThreadCount(bulkPinnedThreads.length)}
-                    </button>
-                  ) : null}
-                  {bulkUnpinnedThreads.length > 0 ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => pinThreadsFromContextMenu(bulkUnpinnedThreads)}
-                    >
-                      Pin {formatThreadCount(bulkUnpinnedThreads.length)}
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-              {bulkHasPinActions && bulkHasManagementActions ? (
-                <div className="thread-context-menu__separator" role="separator" />
-              ) : null}
-              {bulkHasManagementActions ? (
-                <div className="thread-context-menu__section">
-                  {bulkUnlinkableThreads.length > 0
-                    && (props.onUnlinkThreads || props.onSetThreadParent) ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() =>
-                        unlinkThreadsFromContextMenu(bulkUnlinkableThreads)
-                      }
-                    >
-                      Unlink {formatThreadCount(bulkUnlinkableThreads.length)} from
-                      Parent
-                    </button>
-                  ) : null}
-                  {bulkArchivableThreads.length > 0 ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() =>
-                        archiveThreadsFromContextMenu(bulkArchivableThreads)
-                      }
-                    >
-                      Archive {formatThreadCount(bulkArchivableThreads.length)}
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-              {bulkHasPinActions || bulkHasManagementActions ? (
-                <div className="thread-context-menu__separator" role="separator" />
-              ) : null}
-              <div className="thread-context-menu__section">
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => copyFromContextMenu(bulkThreadLinks.join("\n"))}
-                >
-                  Copy Thread Links
-                </button>
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => copyFromContextMenu(bulkThreadIds.join("\n"))}
-                >
-                  Copy Thread IDs
-                </button>
-                {bulkThreadPaths.length > 0 ? (
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(bulkThreadPaths.join("\n"))}
-                  >
-                    Copy Thread Paths
-                  </button>
-                ) : null}
-                {bulkBranchNames.length > 0 ? (
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(bulkBranchNames.join("\n"))}
-                  >
-                    Copy Branch Names
-                  </button>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <>
-              {contextMenuCanRemoveRemotePin ? (
-                <div className="thread-context-menu__section">
-                  <button
-                    aria-label="Remove from My List. The thread on the owning instance is untouched."
-                    className="thread-context-menu__button--stacked"
-                    role="menuitem"
-                    type="button"
-                    onClick={() =>
-                      removeRemotePinFromContextMenu(contextMenu.thread)
-                    }
-                  >
-                    <span>Remove from My List</span>
-                    <span className="thread-context-menu__item-detail">
-                      Keeps the thread on{" "}
-                      {contextMenu.thread.federation?.instanceLabel ??
-                        "its instance"}
-                    </span>
-                  </button>
-                </div>
-              ) : null}
-              {contextMenuCanRemoveRemotePin && contextMenuHasCheckSection ? (
-                <div className="thread-context-menu__separator" role="separator" />
-              ) : null}
-              {contextMenuHasCheckSection ? (
-                <div className="thread-context-menu__section">
-                  {contextMenuHasPinAction ? (
-                  <button
-                    role="menuitemcheckbox"
-                    aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
-                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_pin")}
-                    type="button"
-                    onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
-                    onKeyDown={closeContextMenuOnEnter}
-                  >
-                    <span className="thread-context-menu__check" aria-hidden="true">
-                      <CheckIcon size={12} strokeWidth={3} />
-                    </span>
-                    <span>Pinned</span>
-                    {menuShortcut("threads.toggle_pin")}
-                  </button>
-                  ) : null}
-                  {contextMenuCanKeepAtTop ? (
-                    <button
-                      role="menuitemcheckbox"
-                      aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
-                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_keep_at_top")}
-                      type="button"
-                      onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
-                      onKeyDown={closeContextMenuOnEnter}
-                    >
-                      <span className="thread-context-menu__check" aria-hidden="true">
-                        <CheckIcon size={12} strokeWidth={3} />
-                      </span>
-                      <span>Keep at Top</span>
-                      {menuShortcut("threads.toggle_keep_at_top")}
-                    </button>
-                  ) : null}
-                  {contextMenuCanKeepAwake ? (
-                    <button
-                      role="menuitemcheckbox"
-                      aria-checked={Boolean(contextMenuPinThread!.keepCheckoutAwake)}
-                      type="button"
-                      onClick={() => toggleKeepCheckoutAwakeFromContextMenu(contextMenuPinThread!)}
-                      onKeyDown={closeContextMenuOnEnter}
-                    >
-                      <span className="thread-context-menu__check" aria-hidden="true">
-                        <CheckIcon size={12} strokeWidth={3} />
-                      </span>
-                      <span>Keep Checkout Awake</span>
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-              {contextMenuHasCheckSection &&
-              (contextMenuHasCreationActions || contextMenuHasManagementActions) ? (
-                <div className="thread-context-menu__separator" role="separator" />
-              ) : null}
-              {contextMenuHasCreationActions ? (
-                <div className="thread-context-menu__section">
-                  {contextMenuCanCreateSubthread ? (
-                    <>
+        {contextMenu ? (
+          <div
+            ref={contextMenuRef}
+            className={`thread-context-menu${
+              contextMenuHasCheckSection ? " thread-context-menu--check-column" : ""
+            }${contextMenu.pullRequest ? " thread-context-menu--pull-request" : ""}`}
+            role="menu"
+            aria-label={
+              contextMenuIsBulk
+                ? `Actions for ${formatThreadCount(contextMenuThreads.length).toLowerCase()} selected`
+                : undefined
+            }
+            style={{
+              left: contextMenu.position?.x ?? contextMenu.requestedPosition.x,
+              top: contextMenu.position?.y ?? contextMenu.requestedPosition.y,
+              visibility: contextMenu.position ? undefined : "hidden",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {contextMenuIsBulk ? (
+              <>
+                {bulkHasPinActions ? (
+                  <div className="thread-context-menu__section">
+                    {bulkPinnedThreads.length > 0 ? (
                       <button
                         role="menuitem"
                         type="button"
-                        onClick={() => createSubthreadFromContextMenu(
-                          contextMenu.thread,
-                          contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
-                        )}
+                        onClick={() => unpinThreadsFromContextMenu(bulkPinnedThreads)}
                       >
-                        {contextMenuHasWorktreeWorkspace
-                          ? "Sub-thread in Same Worktree"
-                          : "Sub-thread in This Directory"}
+                        Unpin {formatThreadCount(bulkPinnedThreads.length)}
                       </button>
-                      {subthreadMachines ? (
-                        <SubthreadMachineCascade
-                          label={canCreateContextMenuWorktree
-                            ? "Sub-thread in New Worktree"
-                            : "Sub-thread in New Workspace"}
-                          groupLabel={subthreadWorktreeFlyout
-                            ? "New worktree on"
-                            : "New workspace on"}
-                          rowDisabled={checkingWorktreeAvailability}
-                          machines={subthreadMachines}
-                          onSelect={() => createSubthreadFromContextMenu(
+                    ) : null}
+                    {bulkUnpinnedThreads.length > 0 ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => pinThreadsFromContextMenu(bulkUnpinnedThreads)}
+                      >
+                        Pin {formatThreadCount(bulkUnpinnedThreads.length)}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {bulkHasPinActions && bulkHasManagementActions ? (
+                  <div className="thread-context-menu__separator" role="separator" />
+                ) : null}
+                {bulkHasManagementActions ? (
+                  <div className="thread-context-menu__section">
+                    {bulkUnlinkableThreads.length > 0
+                      && (props.onUnlinkThreads || props.onSetThreadParent) ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          unlinkThreadsFromContextMenu(bulkUnlinkableThreads)
+                        }
+                      >
+                        Unlink {formatThreadCount(bulkUnlinkableThreads.length)} from
+                        Parent
+                      </button>
+                    ) : null}
+                    {bulkArchivableThreads.length > 0 ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          archiveThreadsFromContextMenu(bulkArchivableThreads)
+                        }
+                      >
+                        Archive {formatThreadCount(bulkArchivableThreads.length)}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {bulkHasPinActions || bulkHasManagementActions ? (
+                  <div className="thread-context-menu__separator" role="separator" />
+                ) : null}
+                <div className="thread-context-menu__section">
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => copyFromContextMenu(bulkThreadLinks.join("\n"))}
+                  >
+                    Copy Thread Links
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => copyFromContextMenu(bulkThreadIds.join("\n"))}
+                  >
+                    Copy Thread IDs
+                  </button>
+                  {bulkThreadPaths.length > 0 ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => copyFromContextMenu(bulkThreadPaths.join("\n"))}
+                    >
+                      Copy Thread Paths
+                    </button>
+                  ) : null}
+                  {bulkBranchNames.length > 0 ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => copyFromContextMenu(bulkBranchNames.join("\n"))}
+                    >
+                      Copy Branch Names
+                    </button>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                {contextMenuCanRemoveRemotePin ? (
+                  <div className="thread-context-menu__section">
+                    <button
+                      aria-label="Remove from My List. The thread on the owning instance is untouched."
+                      className="thread-context-menu__button--stacked"
+                      role="menuitem"
+                      type="button"
+                      onClick={() =>
+                        removeRemotePinFromContextMenu(contextMenu.thread)
+                      }
+                    >
+                      <span>Remove from My List</span>
+                      <span className="thread-context-menu__item-detail">
+                        Keeps the thread on{" "}
+                        {contextMenu.thread.federation?.instanceLabel ??
+                          "its instance"}
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
+                {contextMenuCanRemoveRemotePin && contextMenuHasCheckSection ? (
+                  <div className="thread-context-menu__separator" role="separator" />
+                ) : null}
+                {contextMenuHasCheckSection ? (
+                  <div className="thread-context-menu__section">
+                    {contextMenuHasPinAction ? (
+                    <button
+                      role="menuitemcheckbox"
+                      aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_pin")}
+                      type="button"
+                      onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
+                      onKeyDown={closeContextMenuOnEnter}
+                    >
+                      <span className="thread-context-menu__check" aria-hidden="true">
+                        <CheckIcon size={12} strokeWidth={3} />
+                      </span>
+                      <span>Pinned</span>
+                      {menuShortcut("threads.toggle_pin")}
+                    </button>
+                    ) : null}
+                    {contextMenuCanKeepAtTop ? (
+                      <button
+                        role="menuitemcheckbox"
+                        aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_keep_at_top")}
+                        type="button"
+                        onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
+                        onKeyDown={closeContextMenuOnEnter}
+                      >
+                        <span className="thread-context-menu__check" aria-hidden="true">
+                          <CheckIcon size={12} strokeWidth={3} />
+                        </span>
+                        <span>Keep at Top</span>
+                        {menuShortcut("threads.toggle_keep_at_top")}
+                      </button>
+                    ) : null}
+                    {contextMenuCanKeepAwake ? (
+                      <button
+                        role="menuitemcheckbox"
+                        aria-checked={Boolean(contextMenuPinThread!.keepCheckoutAwake)}
+                        type="button"
+                        onClick={() => toggleKeepCheckoutAwakeFromContextMenu(contextMenuPinThread!)}
+                        onKeyDown={closeContextMenuOnEnter}
+                      >
+                        <span className="thread-context-menu__check" aria-hidden="true">
+                          <CheckIcon size={12} strokeWidth={3} />
+                        </span>
+                        <span>Keep Checkout Awake</span>
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {contextMenuHasCheckSection &&
+                (contextMenuHasCreationActions || contextMenuHasManagementActions) ? (
+                  <div className="thread-context-menu__separator" role="separator" />
+                ) : null}
+                {contextMenuHasCreationActions ? (
+                  <div className="thread-context-menu__section">
+                    {contextMenuCanCreateSubthread ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => createSubthreadFromContextMenu(
                             contextMenu.thread,
-                            canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                            contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
                           )}
-                          onSelectMachine={(machine) => createSubthreadFromContextMenu(
+                        >
+                          {contextMenuHasWorktreeWorkspace
+                            ? "Sub-thread in Same Worktree"
+                            : "Sub-thread in This Directory"}
+                        </button>
+                        {subthreadMachines ? (
+                          <SubthreadMachineCascade
+                            label={canCreateContextMenuWorktree
+                              ? "Sub-thread in New Worktree"
+                              : "Sub-thread in New Workspace"}
+                            groupLabel={subthreadWorktreeFlyout
+                              ? "New worktree on"
+                              : "New workspace on"}
+                            rowDisabled={checkingWorktreeAvailability}
+                            machines={subthreadMachines}
+                            onSelect={() => createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                            )}
+                            onSelectMachine={(machine) => createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              subthreadWorktreeFlyout ? "new-worktree" : "new-workspace",
+                              {
+                                ...(machine.instanceId ? { instanceId: machine.instanceId } : {}),
+                                ...(subthreadWorktreeFlyout && machine.baseBranch
+                                  ? { baseBranch: machine.baseBranch }
+                                  : {}),
+                              },
+                            )}
+                            onOpenChange={onSubthreadFlyoutOpenChange}
+                          />
+                        ) : (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            disabled={checkingWorktreeAvailability}
+                            onClick={() => createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                            )}
+                          >
+                            {canCreateContextMenuWorktree
+                              ? "Sub-thread in New Worktree"
+                              : "Sub-thread in New Workspace"}
+                          </button>
+                        )}
+                      </>
+                    ) : null}
+                    {contextMenuCanFork ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() => forkThreadFromContextMenu(
                             contextMenu.thread,
-                            subthreadWorktreeFlyout ? "new-worktree" : "new-workspace",
-                            {
-                              ...(machine.instanceId ? { instanceId: machine.instanceId } : {}),
-                              ...(subthreadWorktreeFlyout && machine.baseBranch
-                                ? { baseBranch: machine.baseBranch }
-                                : {}),
-                            },
+                            contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
                           )}
-                          onOpenChange={onSubthreadFlyoutOpenChange}
-                        />
-                      ) : (
+                        >
+                          {contextMenuHasWorktreeWorkspace
+                            ? "Fork into Same Worktree"
+                            : "Fork in This Directory"}
+                        </button>
                         <button
                           role="menuitem"
                           type="button"
                           disabled={checkingWorktreeAvailability}
-                          onClick={() => createSubthreadFromContextMenu(
+                          onClick={() => forkThreadFromContextMenu(
                             contextMenu.thread,
                             canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
                           )}
                         >
                           {canCreateContextMenuWorktree
-                            ? "Sub-thread in New Worktree"
-                            : "Sub-thread in New Workspace"}
+                            ? "Fork into New Worktree"
+                            : "Fork in New Workspace"}
                         </button>
-                      )}
-                    </>
-                  ) : null}
-                  {contextMenuCanFork ? (
-                    <>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                {contextMenuHasCreationActions && contextMenuHasManagementActions ? (
+                  <div className="thread-context-menu__separator" role="separator" />
+                ) : null}
+                {contextMenuHasManagementActions ? (
+                  <div className="thread-context-menu__section">
+                    {contextMenuCanUnlinkSubthread ? (
                       <button
                         role="menuitem"
                         type="button"
-                        onClick={() => forkThreadFromContextMenu(
-                          contextMenu.thread,
-                          contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
-                        )}
-                      >
-                        {contextMenuHasWorktreeWorkspace
-                          ? "Fork into Same Worktree"
-                          : "Fork in This Directory"}
-                      </button>
-                      <button
-                        role="menuitem"
-                        type="button"
-                        disabled={checkingWorktreeAvailability}
-                        onClick={() => forkThreadFromContextMenu(
-                          contextMenu.thread,
-                          canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
-                        )}
-                      >
-                        {canCreateContextMenuWorktree
-                          ? "Fork into New Worktree"
-                          : "Fork in New Workspace"}
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
-              {contextMenuHasCreationActions && contextMenuHasManagementActions ? (
-                <div className="thread-context-menu__separator" role="separator" />
-              ) : null}
-              {contextMenuHasManagementActions ? (
-                <div className="thread-context-menu__section">
-                  {contextMenuCanUnlinkSubthread ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() =>
-                        unlinkSubthreadFromContextMenu(contextMenu.thread)
-                      }
-                    >
-                      Unlink from Parent
-                    </button>
-                  ) : null}
-                  {contextMenuShowMoveItems ? (
-                    <>
-                      <button
-                        role="menuitem"
-                        type="button"
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
-                        disabled={!contextMenuCanMoveUp}
                         onClick={() =>
-                          moveThreadFromContextMenu(contextMenu.thread, "up")
+                          unlinkSubthreadFromContextMenu(contextMenu.thread)
                         }
                       >
-                        <span>Move Up</span>
-                        {menuShortcut("threads.move_up")}
+                        Unlink from Parent
                       </button>
+                    ) : null}
+                    {contextMenuShowMoveItems ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
+                          disabled={!contextMenuCanMoveUp}
+                          onClick={() =>
+                            moveThreadFromContextMenu(contextMenu.thread, "up")
+                          }
+                        >
+                          <span>Move Up</span>
+                          {menuShortcut("threads.move_up")}
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
+                          disabled={!contextMenuCanMoveDown}
+                          onClick={() =>
+                            moveThreadFromContextMenu(contextMenu.thread, "down")
+                          }
+                        >
+                          <span>Move Down</span>
+                          {menuShortcut("threads.move_down")}
+                        </button>
+                      </>
+                    ) : null}
+                    {contextMenuCanRename ? (
                       <button
                         role="menuitem"
                         type="button"
-                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
-                        disabled={!contextMenuCanMoveDown}
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.rename")}
                         onClick={() =>
-                          moveThreadFromContextMenu(contextMenu.thread, "down")
+                          requestRenameFromContextMenu(contextMenu.thread)
                         }
                       >
-                        <span>Move Down</span>
-                        {menuShortcut("threads.move_down")}
+                        <span>Rename Thread</span>
+                        {menuShortcut("threads.rename")}
                       </button>
-                    </>
-                  ) : null}
-                  {contextMenuCanRename ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.rename")}
-                      onClick={() =>
-                        requestRenameFromContextMenu(contextMenu.thread)
-                      }
-                    >
-                      <span>Rename Thread</span>
-                      {menuShortcut("threads.rename")}
-                    </button>
-                  ) : null}
-                  {contextMenuCanLock && contextMenu.thread.lock ? (
-                    <>
+                    ) : null}
+                    {contextMenuCanLock && contextMenu.thread.lock ? (
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
+                          onClick={() => unlockFromContextMenu(contextMenu.thread)}
+                        >
+                          <span>Unlock Thread</span>
+                          {menuShortcut("threads.lock")}
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            requestLockFromContextMenu(contextMenu.thread, "edit")
+                          }
+                        >
+                          Edit Lock Note…
+                        </button>
+                      </>
+                    ) : contextMenuCanLock ? (
                       <button
                         role="menuitem"
                         type="button"
                         aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
-                        onClick={() => unlockFromContextMenu(contextMenu.thread)}
+                        onClick={() =>
+                          requestLockFromContextMenu(contextMenu.thread, "lock")
+                        }
                       >
-                        <span>Unlock Thread</span>
+                        <span>Lock Thread…</span>
                         {menuShortcut("threads.lock")}
                       </button>
+                    ) : null}
+                    {contextMenuCanContinueAfter ? (
                       <button
+                        aria-label={contextMenuDependencyCount > 0
+                          ? `Continue After, ${contextMenuDependencyCount} waiting`
+                          : undefined}
                         role="menuitem"
                         type="button"
-                        onClick={() =>
-                          requestLockFromContextMenu(contextMenu.thread, "edit")
-                        }
-                      >
-                        Edit Lock Note…
-                      </button>
-                    </>
-                  ) : contextMenuCanLock ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
-                      onClick={() =>
-                        requestLockFromContextMenu(contextMenu.thread, "lock")
-                      }
-                    >
-                      <span>Lock Thread…</span>
-                      {menuShortcut("threads.lock")}
-                    </button>
-                  ) : null}
-                  {contextMenuCanContinueAfter ? (
-                    <button
-                      aria-label={contextMenuDependencyCount > 0
-                        ? `Continue After, ${contextMenuDependencyCount} waiting`
-                        : undefined}
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        const target = contextMenu.thread;
-                        setContextMenu(undefined);
-                        props.onContinueAfter!(target, contextMenuOpenerRef);
-                      }}
-                    >
-                      <span>Continue After…</span>
-                      {contextMenuDependencyCount > 0 ? (
-                        <span className="thread-context-menu__aside">
-                          {contextMenuDependencyCount} waiting
-                        </span>
-                      ) : null}
-                    </button>
-                  ) : null}
-                  {contextMenuCanMarkUnread ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
-                      onClick={() =>
-                        markUnreadFromContextMenu(contextMenu.thread)
-                      }
-                    >
-                      <span>Mark Unread</span>
-                      {menuShortcut("threads.toggle_unread")}
-                    </button>
-                  ) : null}
-                  {contextMenuCanMarkRead ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
-                      onClick={() =>
-                        markReadFromContextMenu(contextMenu.thread)
-                      }
-                    >
-                      <span>Mark Read</span>
-                      {menuShortcut("threads.toggle_unread")}
-                    </button>
-                  ) : null}
-                  {contextMenuCanSendToMachine ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        const target = contextMenu.thread;
-                        setContextMenu(undefined);
-                        props.onSendThreadToMachine!(target);
-                      }}
-                    >
-                      Send to Another Machine…
-                    </button>
-                  ) : null}
-                  {contextMenuCanArchive && contextMenuHasChildThreads ? (
-                    <>
-                      <button
-                        aria-label={`Archive Thread Only. ${contextMenuUngroupLabel}`}
-                        className="thread-context-menu__button--stacked"
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          archiveFromContextMenu(contextMenu.thread, {
-                            includeSubthreads: false,
-                          })
-                        }
-                      >
-                        <span>Archive Thread Only</span>
-                        <span className="thread-context-menu__item-detail">
-                          {contextMenuUngroupLabel}
-                        </span>
-                      </button>
-                      <button
-                        aria-label={`Archive Thread and Sub-Threads. ${contextMenuArchiveGroupLabel}`}
-                        className="thread-context-menu__button--stacked"
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          archiveFromContextMenu(contextMenu.thread, {
-                            includeSubthreads: true,
-                          })
-                        }
-                      >
-                        <span>Archive Thread + Sub-Threads</span>
-                        <span className="thread-context-menu__item-detail">
-                          {contextMenuArchiveGroupLabel}
-                        </span>
-                      </button>
-                    </>
-                  ) : contextMenuCanArchive ? (
-                    <button
-                      role="menuitem"
-                      type="button"
-                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.archive")}
-                      onClick={() => archiveFromContextMenu(contextMenu.thread)}
-                    >
-                      <span>Archive Thread</span>
-                      {menuShortcut("threads.archive")}
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-              {contextMenuHasTopActions && contextMenuHasBindings ? (
-                <div className="thread-context-menu__separator" role="separator" />
-              ) : null}
-              {contextMenuHasBindings ? (
-                <div className="thread-context-menu__section">
-                  {(contextMenu.thread.messagingBindings ?? []).map((binding) => {
-                    const action = `Unbind from ${formatPlatformLabel(binding.platform)}`;
-                    const name = binding.conversationTitle
-                      ? `(${binding.conversationTitle})`
-                      : undefined;
-                    return (
-                      <button
-                        key={binding.bindingId}
-                        role="menuitem"
-                        type="button"
-                        className={name ? "tooltip-target" : undefined}
-                        data-tooltip={name ? `${action} ${name}` : undefined}
                         onClick={() => {
                           const target = contextMenu.thread;
                           setContextMenu(undefined);
-                          void props.onUnbindMessagingBinding!(target, binding);
+                          props.onContinueAfter!(target, contextMenuOpenerRef);
                         }}
                       >
-                        <span className="thread-context-menu__binding-platform">
-                          {action}
-                        </span>
-                        {name ? (
-                          <>
-                            {" "}
-                            <span className="thread-context-menu__binding-name">
-                              {name}
-                            </span>
-                          </>
+                        <span>Continue After…</span>
+                        {contextMenuDependencyCount > 0 ? (
+                          <span className="thread-context-menu__aside">
+                            {contextMenuDependencyCount} waiting
+                          </span>
                         ) : null}
                       </button>
-                    );
-                  })}
+                    ) : null}
+                    {contextMenuCanMarkUnread ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
+                        onClick={() =>
+                          markUnreadFromContextMenu(contextMenu.thread)
+                        }
+                      >
+                        <span>Mark Unread</span>
+                        {menuShortcut("threads.toggle_unread")}
+                      </button>
+                    ) : null}
+                    {contextMenuCanMarkRead ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
+                        onClick={() =>
+                          markReadFromContextMenu(contextMenu.thread)
+                        }
+                      >
+                        <span>Mark Read</span>
+                        {menuShortcut("threads.toggle_unread")}
+                      </button>
+                    ) : null}
+                    {contextMenuCanSendToMachine ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          const target = contextMenu.thread;
+                          setContextMenu(undefined);
+                          props.onSendThreadToMachine!(target);
+                        }}
+                      >
+                        Send to Another Machine…
+                      </button>
+                    ) : null}
+                    {contextMenuCanArchive && contextMenuHasChildThreads ? (
+                      <>
+                        <button
+                          aria-label={`Archive Thread Only. ${contextMenuUngroupLabel}`}
+                          className="thread-context-menu__button--stacked"
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            archiveFromContextMenu(contextMenu.thread, {
+                              includeSubthreads: false,
+                            })
+                          }
+                        >
+                          <span>Archive Thread Only</span>
+                          <span className="thread-context-menu__item-detail">
+                            {contextMenuUngroupLabel}
+                          </span>
+                        </button>
+                        <button
+                          aria-label={`Archive Thread and Sub-Threads. ${contextMenuArchiveGroupLabel}`}
+                          className="thread-context-menu__button--stacked"
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            archiveFromContextMenu(contextMenu.thread, {
+                              includeSubthreads: true,
+                            })
+                          }
+                        >
+                          <span>Archive Thread + Sub-Threads</span>
+                          <span className="thread-context-menu__item-detail">
+                            {contextMenuArchiveGroupLabel}
+                          </span>
+                        </button>
+                      </>
+                    ) : contextMenuCanArchive ? (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.archive")}
+                        onClick={() => archiveFromContextMenu(contextMenu.thread)}
+                      >
+                        <span>Archive Thread</span>
+                        {menuShortcut("threads.archive")}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {contextMenuHasTopActions && contextMenuHasBindings ? (
+                  <div className="thread-context-menu__separator" role="separator" />
+                ) : null}
+                {contextMenuHasBindings ? (
+                  <div className="thread-context-menu__section">
+                    {(contextMenu.thread.messagingBindings ?? []).map((binding) => {
+                      const action = `Unbind from ${formatPlatformLabel(binding.platform)}`;
+                      const name = binding.conversationTitle
+                        ? `(${binding.conversationTitle})`
+                        : undefined;
+                      return (
+                        <button
+                          key={binding.bindingId}
+                          role="menuitem"
+                          type="button"
+                          className={name ? "tooltip-target" : undefined}
+                          data-tooltip={name ? `${action} ${name}` : undefined}
+                          onClick={() => {
+                            const target = contextMenu.thread;
+                            setContextMenu(undefined);
+                            void props.onUnbindMessagingBinding!(target, binding);
+                          }}
+                        >
+                          <span className="thread-context-menu__binding-platform">
+                            {action}
+                          </span>
+                          {name ? (
+                            <>
+                              {" "}
+                              <span className="thread-context-menu__binding-name">
+                                {name}
+                              </span>
+                            </>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {contextMenuHasTopActions || contextMenuHasBindings ? (
+                  <div className="thread-context-menu__separator" role="separator" />
+                ) : null}
+                <div className="thread-context-menu__section">
+                  {contextMenuPullRequest ? (
+                    <>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
+                      >
+                        Copy Pull Request URL
+                      </button>
+                      <PullRequestWatchMenuItems
+                        thread={contextMenu.thread}
+                        pr={contextMenuPullRequest}
+                        onClose={() => setContextMenu(undefined)}
+                      />
+                      {props.onDetachPullRequest ? (
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            detachPullRequests(contextMenu.thread, [contextMenuPullRequest])
+                          }
+                        >
+                          Detach Pull Request
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {contextMenuRowPullRequests.length > 0 ? (
+                    <PullRequestCopyMenuItems
+                      thread={contextMenu.thread}
+                      prs={contextMenuRowPullRequests}
+                      onCopy={copyFromContextMenu}
+                    />
+                  ) : null}
+                  {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() =>
+                        detachPullRequests(contextMenu.thread, contextMenuRowPullRequests)
+                      }
+                    >
+                      {contextMenuRowPullRequests.length === 1
+                        ? `Detach Pull Request #${contextMenuRowPullRequests[0]!.number}`
+                        : "Detach All Pull Requests"}
+                    </button>
+                  ) : null}
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      copyFromContextMenu(
+                        buildThreadUrl({
+                          backend: contextMenu.thread.source,
+                          threadId: contextMenu.thread.id,
+                        }),
+                      )
+                    }
+                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
+                  >
+                    <span>Copy Thread Link</span>
+                    {menuShortcut("threads.copy_link")}
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => copyFromContextMenu(contextMenu.thread.id)}
+                  >
+                    Copy Thread ID
+                  </button>
+                  {contextMenuWorktreeCopyPath ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => copyFromContextMenu(contextMenuWorktreeCopyPath)}
+                    >
+                      Copy Worktree Path
+                    </button>
+                  ) : null}
+                  {contextMenuLocalPath ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => copyFromContextMenu(contextMenuLocalPath)}
+                    >
+                      Copy Local Path
+                    </button>
+                  ) : null}
+                  {contextMenuBranchName ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => copyFromContextMenu(contextMenuBranchName)}
+                    >
+                      Copy Branch Name
+                    </button>
+                  ) : null}
+                  {props.onCopyThreadDiagnostics ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        const thread = contextMenu.thread;
+                        setContextMenu(undefined);
+                        props.onCopyThreadDiagnostics?.(thread);
+                      }}
+                    >
+                      Copy Diagnostics Info
+                    </button>
+                  ) : null}
                 </div>
-              ) : null}
-              {contextMenuHasTopActions || contextMenuHasBindings ? (
-                <div className="thread-context-menu__separator" role="separator" />
-              ) : null}
+              </>
+            )}
+          </div>
+        ) : null}
+
+        {pendingDetachPullRequest ? (
+          <DetachPullRequestWarning
+            prs={pendingDetachPullRequest.prs}
+            returnFocus={contextMenuOpenerRef}
+            onCancel={() => setPendingDetachPullRequest(undefined)}
+            onConfirm={() => {
+              const pending = pendingDetachPullRequest;
+              setPendingDetachPullRequest(undefined);
+              void detachEach(pending.thread, pending.prs);
+            }}
+          />
+        ) : null}
+
+        <ProjectHeaderCardHost
+          ref={projectCardRef}
+          options={projectCardOptions}
+        />
+
+        {directoryTargetMenu && listedFederationThreadTargets.length > 0 ? (
+          <div
+            ref={directoryTargetMenuRef}
+            className="new-thread-menu__card new-thread-menu__card--anchored"
+            role="menu"
+            aria-label={`Start a new thread in ${directoryTargetMenu.directoryLabel} on another machine`}
+            style={{
+              left:
+                directoryTargetMenu.position?.x ??
+                directoryTargetMenu.requestedPosition.x,
+              top:
+                directoryTargetMenu.position?.y ??
+                directoryTargetMenu.requestedPosition.y,
+              visibility: directoryTargetMenu.position ? undefined : "hidden",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <FederationTargetMenuSection
+              targets={listedFederationThreadTargets}
+              projectLabel={directoryTargetMenu.directoryLabel}
+              projectStates={directoryTargetProjectStates}
+              onSelect={(instanceId) => {
+                setDirectoryTargetMenu(undefined);
+                void props.onCreateThreadOnFederationTarget?.(
+                  instanceId,
+                  directoryTargetMenu.directory,
+                );
+              }}
+            />
+          </div>
+        ) : null}
+
+        {subthreadDraftMenu ? (
+          <div
+            ref={subthreadDraftMenuRef}
+            className="thread-context-menu"
+            role="menu"
+            aria-label={`Actions for the sub-thread draft under ${subthreadDraftMenu.draft.parentThreadTitle}`}
+            style={{
+              left:
+                subthreadDraftMenu.position?.x ??
+                subthreadDraftMenu.requestedPosition.x,
+              top:
+                subthreadDraftMenu.position?.y ??
+                subthreadDraftMenu.requestedPosition.y,
+              visibility: subthreadDraftMenu.position ? undefined : "hidden",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="thread-context-menu__section">
+              <button
+                role="menuitem"
+                type="button"
+                disabled={!props.onDetachSubthreadDraft}
+                onClick={() => {
+                  const { draft } = subthreadDraftMenu;
+                  setSubthreadDraftMenu(undefined);
+                  props.onDetachSubthreadDraft?.(draft);
+                }}
+              >
+                Detach from Parent
+              </button>
+            </div>
+            <div className="thread-context-menu__separator" role="separator" />
+            <div className="thread-context-menu__section">
+              <button
+                role="menuitem"
+                type="button"
+                disabled={!props.onDiscardSubthreadDraft}
+                onClick={() => {
+                  const { draft } = subthreadDraftMenu;
+                  setSubthreadDraftMenu(undefined);
+                  props.onDiscardSubthreadDraft?.(draft);
+                }}
+              >
+                Discard Sub-thread
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {directoryContextMenu ? (
+          <div
+            ref={directoryContextMenuRef}
+            className={`thread-context-menu${
+              directoryMenuCanForgeAutomation ? " thread-context-menu--check-column" : ""
+            }`}
+            role="menu"
+            aria-label={
+              directoryContextMenuIsBulk
+                ? `Actions for ${formatDirectoryCount(
+                    directoryContextMenuDirectories.length,
+                  ).toLowerCase()} selected`
+                : undefined
+            }
+            style={{
+              left:
+                directoryContextMenu.position?.x ??
+                directoryContextMenu.requestedPosition.x,
+              top:
+                directoryContextMenu.position?.y ??
+                directoryContextMenu.requestedPosition.y,
+              visibility: directoryContextMenu.position ? undefined : "hidden",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {directoryMenuCanMarkRead ? (
               <div className="thread-context-menu__section">
-                {contextMenuPullRequest ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={markSelectedDirectoryThreadsRead}
+                >
+                  Mark Read
+                </button>
+              </div>
+            ) : null}
+            {directoryMenuCanMarkRead && directoryMenuHasPinActions ? (
+              <div className="thread-context-menu__separator" role="separator" />
+            ) : null}
+            {directoryMenuHasPinActions ? (
+              <div className="thread-context-menu__section">
+                {directoryMenuCanPin ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      togglePinDirectoryFromContextMenu(directoryContextMenu.directory)
+                    }
+                  >
+                    {directoryContextMenu.directory.pinnedRank
+                      ? "Unpin Directory"
+                      : "Pin Directory"}
+                  </button>
+                ) : null}
+                {directoryMenuShowMoveItems ? (
                   <>
                     <button
                       role="menuitem"
                       type="button"
-                      onClick={() => copyFromContextMenu(contextMenuPullRequest.url)}
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
+                      disabled={!directoryMenuCanMoveUp}
+                      onClick={() =>
+                        moveDirectoryFromContextMenu(
+                          directoryContextMenu.directory,
+                          "up",
+                        )
+                      }
                     >
-                      Copy Pull Request URL
+                      <span>Move Up</span>
+                      {menuShortcut("threads.move_up")}
                     </button>
-                    <PullRequestWatchMenuItems
-                      thread={contextMenu.thread}
-                      pr={contextMenuPullRequest}
-                      onClose={() => setContextMenu(undefined)}
-                    />
-                    {props.onDetachPullRequest ? (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          detachPullRequests(contextMenu.thread, [contextMenuPullRequest])
-                        }
-                      >
-                        Detach Pull Request
-                      </button>
-                    ) : null}
+                    <button
+                      role="menuitem"
+                      type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
+                      disabled={!directoryMenuCanMoveDown}
+                      onClick={() =>
+                        moveDirectoryFromContextMenu(
+                          directoryContextMenu.directory,
+                          "down",
+                        )
+                      }
+                    >
+                      <span>Move Down</span>
+                      {menuShortcut("threads.move_down")}
+                    </button>
                   </>
                 ) : null}
-                {contextMenuRowPullRequests.length > 0 ? (
-                  <PullRequestCopyMenuItems
-                    thread={contextMenu.thread}
-                    prs={contextMenuRowPullRequests}
-                    onCopy={copyFromContextMenu}
-                  />
-                ) : null}
-                {contextMenuRowPullRequests.length > 0 && props.onDetachPullRequest ? (
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() =>
-                      detachPullRequests(contextMenu.thread, contextMenuRowPullRequests)
-                    }
-                  >
-                    {contextMenuRowPullRequests.length === 1
-                      ? `Detach Pull Request #${contextMenuRowPullRequests[0]!.number}`
-                      : "Detach All Pull Requests"}
-                  </button>
-                ) : null}
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() =>
-                    copyFromContextMenu(
-                      buildThreadUrl({
-                        backend: contextMenu.thread.source,
-                        threadId: contextMenu.thread.id,
-                      }),
-                    )
-                  }
-                  aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
-                >
-                  <span>Copy Thread Link</span>
-                  {menuShortcut("threads.copy_link")}
-                </button>
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => copyFromContextMenu(contextMenu.thread.id)}
-                >
-                  Copy Thread ID
-                </button>
-                {contextMenuWorktreeCopyPath ? (
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(contextMenuWorktreeCopyPath)}
-                  >
-                    Copy Worktree Path
-                  </button>
-                ) : null}
-                {contextMenuLocalPath ? (
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(contextMenuLocalPath)}
-                  >
-                    Copy Local Path
-                  </button>
-                ) : null}
-                {contextMenuBranchName ? (
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => copyFromContextMenu(contextMenuBranchName)}
-                  >
-                    Copy Branch Name
-                  </button>
-                ) : null}
-                {props.onCopyThreadDiagnostics ? (
+              </div>
+            ) : null}
+            {directoryMenuHasPathSection
+              && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
+              <div className="thread-context-menu__separator" role="separator" />
+            ) : null}
+            {directoryMenuPath !== undefined ? (
+              <div className="thread-context-menu__section">
+                {canRevealPath ? (
                   <button
                     role="menuitem"
                     type="button"
                     onClick={() => {
-                      const thread = contextMenu.thread;
-                      setContextMenu(undefined);
-                      props.onCopyThreadDiagnostics?.(thread);
+                      setDirectoryContextMenu(undefined);
+                      revealProjectPath(directoryMenuPath, directoryContextMenu.directory.label);
                     }}
                   >
-                    Copy Diagnostics Info
+                    {revealInFileManagerLabel(props.platform)}
+                  </button>
+                ) : null}
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    setDirectoryContextMenu(undefined);
+                    void copyText(directoryMenuPath);
+                  }}
+                >
+                  Copy Path
+                </button>
+              </div>
+            ) : null}
+            {directoryMenuHasForgeSection
+              && (directoryMenuCanMarkRead || directoryMenuHasPinActions || directoryMenuHasPathSection) ? (
+              <div className="thread-context-menu__separator" role="separator" />
+            ) : null}
+            {directoryMenuHasForgeSection ? (
+              <div className="thread-context-menu__section">
+                {directoryMenuCanForgeAutomation ? (
+                  <>
+                    <button
+                      role="menuitemcheckbox"
+                      aria-checked={isProjectForgeActivityPaused(directoryMenuDirectory!)}
+                      type="button"
+                      onClick={() => toggleForgePauseFromContextMenu(directoryMenuDirectory!)}
+                      onKeyDown={closeDirectoryContextMenuOnEnter}
+                    >
+                      <span className="thread-context-menu__check" aria-hidden="true">
+                        <CheckIcon size={12} strokeWidth={3} />
+                      </span>
+                      <span>Pause Forge Activity</span>
+                    </button>
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => openForgeAutomationFromContextMenu(directoryMenuDirectory!)}
+                    >
+                      Forge Automation…
+                    </button>
+                  </>
+                ) : null}
+                {directoryMenuForgeRepository ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setDirectoryContextMenu(undefined);
+                      props.onOpenForgePermissions?.(directoryMenuForgeRepository);
+                    }}
+                  >
+                    Forge Permissions…
                   </button>
                 ) : null}
               </div>
-            </>
-          )}
-        </div>
-      ) : null}
-
-      {pendingDetachPullRequest ? (
-        <DetachPullRequestWarning
-          prs={pendingDetachPullRequest.prs}
-          returnFocus={contextMenuOpenerRef}
-          onCancel={() => setPendingDetachPullRequest(undefined)}
-          onConfirm={() => {
-            const pending = pendingDetachPullRequest;
-            setPendingDetachPullRequest(undefined);
-            void detachEach(pending.thread, pending.prs);
-          }}
-        />
-      ) : null}
-
-      <ProjectHeaderCardHost
-        ref={projectCardRef}
-        options={projectCardOptions}
-      />
-
-      {directoryTargetMenu && listedFederationThreadTargets.length > 0 ? (
-        <div
-          ref={directoryTargetMenuRef}
-          className="new-thread-menu__card new-thread-menu__card--anchored"
-          role="menu"
-          aria-label={`Start a new thread in ${directoryTargetMenu.directoryLabel} on another machine`}
-          style={{
-            left:
-              directoryTargetMenu.position?.x ??
-              directoryTargetMenu.requestedPosition.x,
-            top:
-              directoryTargetMenu.position?.y ??
-              directoryTargetMenu.requestedPosition.y,
-            visibility: directoryTargetMenu.position ? undefined : "hidden",
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <FederationTargetMenuSection
-            targets={listedFederationThreadTargets}
-            projectLabel={directoryTargetMenu.directoryLabel}
-            projectStates={directoryTargetProjectStates}
-            onSelect={(instanceId) => {
-              setDirectoryTargetMenu(undefined);
-              void props.onCreateThreadOnFederationTarget?.(
-                instanceId,
-                directoryTargetMenu.directory,
-              );
-            }}
-          />
-        </div>
-      ) : null}
-
-      {subthreadDraftMenu ? (
-        <div
-          ref={subthreadDraftMenuRef}
-          className="thread-context-menu"
-          role="menu"
-          aria-label={`Actions for the sub-thread draft under ${subthreadDraftMenu.draft.parentThreadTitle}`}
-          style={{
-            left:
-              subthreadDraftMenu.position?.x ??
-              subthreadDraftMenu.requestedPosition.x,
-            top:
-              subthreadDraftMenu.position?.y ??
-              subthreadDraftMenu.requestedPosition.y,
-            visibility: subthreadDraftMenu.position ? undefined : "hidden",
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="thread-context-menu__section">
-            <button
-              role="menuitem"
-              type="button"
-              disabled={!props.onDetachSubthreadDraft}
-              onClick={() => {
-                const { draft } = subthreadDraftMenu;
-                setSubthreadDraftMenu(undefined);
-                props.onDetachSubthreadDraft?.(draft);
-              }}
-            >
-              Detach from Parent
-            </button>
-          </div>
-          <div className="thread-context-menu__separator" role="separator" />
-          <div className="thread-context-menu__section">
-            <button
-              role="menuitem"
-              type="button"
-              disabled={!props.onDiscardSubthreadDraft}
-              onClick={() => {
-                const { draft } = subthreadDraftMenu;
-                setSubthreadDraftMenu(undefined);
-                props.onDiscardSubthreadDraft?.(draft);
-              }}
-            >
-              Discard Sub-thread
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {directoryContextMenu ? (
-        <div
-          ref={directoryContextMenuRef}
-          className={`thread-context-menu${
-            directoryMenuCanForgeAutomation ? " thread-context-menu--check-column" : ""
-          }`}
-          role="menu"
-          aria-label={
-            directoryContextMenuIsBulk
-              ? `Actions for ${formatDirectoryCount(
-                  directoryContextMenuDirectories.length,
-                ).toLowerCase()} selected`
-              : undefined
-          }
-          style={{
-            left:
-              directoryContextMenu.position?.x ??
-              directoryContextMenu.requestedPosition.x,
-            top:
-              directoryContextMenu.position?.y ??
-              directoryContextMenu.requestedPosition.y,
-            visibility: directoryContextMenu.position ? undefined : "hidden",
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          {directoryMenuCanMarkRead ? (
-            <div className="thread-context-menu__section">
-              <button
-                role="menuitem"
-                type="button"
-                onClick={markSelectedDirectoryThreadsRead}
-              >
-                Mark Read
-              </button>
-            </div>
-          ) : null}
-          {directoryMenuCanMarkRead && directoryMenuHasPinActions ? (
-            <div className="thread-context-menu__separator" role="separator" />
-          ) : null}
-          {directoryMenuHasPinActions ? (
-            <div className="thread-context-menu__section">
-              {directoryMenuCanPin ? (
+            ) : null}
+            {(directoryMenuHasForgeSection || directoryMenuHasPathSection)
+              && (directoryMenuCanArchive || directoryMenuCanCleanUp) ? (
+              <div className="thread-context-menu__separator" role="separator" />
+            ) : null}
+            {directoryMenuCanCleanUp || directoryMenuCanArchive ? (
+              <div className="thread-context-menu__section">
+                {directoryMenuCanCleanUp ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      const projectKey = directoryMenuCleanUpPath!;
+                      setDirectoryContextMenu(undefined);
+                      openThreadMaintenance?.({ projectKey });
+                    }}
+                  >
+                    Clean Up Project…
+                  </button>
+                ) : null}
+                {directoryMenuCanArchive ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      const keys = directoryContextMenuDirectories
+                        .filter((directory) => directory.kind === "directory" || directory.kind === "workspace")
+                        .map((directory) => directory.key);
+                      setDirectoryContextMenu(undefined);
+                      void revealHoverStableSnapshot(() => props.onArchiveDirectories?.(keys));
+                    }}
+                  >
+                    {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
+                      ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
+                      : "Archive Threads"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {directoryMenuCanRemove
+              && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
+              <div className="thread-context-menu__separator" role="separator" />
+            ) : null}
+            {directoryMenuCanRemove ? (
+              <div className="thread-context-menu__section">
                 <button
                   role="menuitem"
                   type="button"
                   onClick={() =>
-                    togglePinDirectoryFromContextMenu(directoryContextMenu.directory)
+                    removeDirectoryFromContextMenu(directoryContextMenu.directory)
                   }
                 >
-                  {directoryContextMenu.directory.pinnedRank
-                    ? "Unpin Directory"
-                    : "Pin Directory"}
+                  Remove Directory
                 </button>
-              ) : null}
-              {directoryMenuShowMoveItems ? (
-                <>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
-                    disabled={!directoryMenuCanMoveUp}
-                    onClick={() =>
-                      moveDirectoryFromContextMenu(
-                        directoryContextMenu.directory,
-                        "up",
-                      )
-                    }
-                  >
-                    <span>Move Up</span>
-                    {menuShortcut("threads.move_up")}
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
-                    disabled={!directoryMenuCanMoveDown}
-                    onClick={() =>
-                      moveDirectoryFromContextMenu(
-                        directoryContextMenu.directory,
-                        "down",
-                      )
-                    }
-                  >
-                    <span>Move Down</span>
-                    {menuShortcut("threads.move_down")}
-                  </button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          {directoryMenuHasPathSection
-            && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
-            <div className="thread-context-menu__separator" role="separator" />
-          ) : null}
-          {directoryMenuPath !== undefined ? (
-            <div className="thread-context-menu__section">
-              {canRevealPath ? (
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    setDirectoryContextMenu(undefined);
-                    revealProjectPath(directoryMenuPath, directoryContextMenu.directory.label);
-                  }}
-                >
-                  {revealInFileManagerLabel(props.platform)}
-                </button>
-              ) : null}
-              <button
-                role="menuitem"
-                type="button"
-                onClick={() => {
-                  setDirectoryContextMenu(undefined);
-                  void copyText(directoryMenuPath);
-                }}
-              >
-                Copy Path
-              </button>
-            </div>
-          ) : null}
-          {directoryMenuHasForgeSection
-            && (directoryMenuCanMarkRead || directoryMenuHasPinActions || directoryMenuHasPathSection) ? (
-            <div className="thread-context-menu__separator" role="separator" />
-          ) : null}
-          {directoryMenuHasForgeSection ? (
-            <div className="thread-context-menu__section">
-              {directoryMenuCanForgeAutomation ? (
-                <>
-                  <button
-                    role="menuitemcheckbox"
-                    aria-checked={isProjectForgeActivityPaused(directoryMenuDirectory!)}
-                    type="button"
-                    onClick={() => toggleForgePauseFromContextMenu(directoryMenuDirectory!)}
-                    onKeyDown={closeDirectoryContextMenuOnEnter}
-                  >
-                    <span className="thread-context-menu__check" aria-hidden="true">
-                      <CheckIcon size={12} strokeWidth={3} />
-                    </span>
-                    <span>Pause Forge Activity</span>
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => openForgeAutomationFromContextMenu(directoryMenuDirectory!)}
-                  >
-                    Forge Automation…
-                  </button>
-                </>
-              ) : null}
-              {directoryMenuForgeRepository ? (
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    setDirectoryContextMenu(undefined);
-                    props.onOpenForgePermissions?.(directoryMenuForgeRepository);
-                  }}
-                >
-                  Forge Permissions…
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {(directoryMenuHasForgeSection || directoryMenuHasPathSection)
-            && (directoryMenuCanArchive || directoryMenuCanCleanUp) ? (
-            <div className="thread-context-menu__separator" role="separator" />
-          ) : null}
-          {directoryMenuCanCleanUp || directoryMenuCanArchive ? (
-            <div className="thread-context-menu__section">
-              {directoryMenuCanCleanUp ? (
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    const projectKey = directoryMenuCleanUpPath!;
-                    setDirectoryContextMenu(undefined);
-                    openThreadMaintenance?.({ projectKey });
-                  }}
-                >
-                  Clean Up Project…
-                </button>
-              ) : null}
-              {directoryMenuCanArchive ? (
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    const keys = directoryContextMenuDirectories
-                      .filter((directory) => directory.kind === "directory" || directory.kind === "workspace")
-                      .map((directory) => directory.key);
-                    setDirectoryContextMenu(undefined);
-                    void revealHoverStableSnapshot(() => props.onArchiveDirectories?.(keys));
-                  }}
-                >
-                  {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
-                    ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
-                    : "Archive Threads"}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {directoryMenuCanRemove
-            && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
-            <div className="thread-context-menu__separator" role="separator" />
-          ) : null}
-          {directoryMenuCanRemove ? (
-            <div className="thread-context-menu__section">
-              <button
-                role="menuitem"
-                type="button"
-                onClick={() =>
-                  removeDirectoryFromContextMenu(directoryContextMenu.directory)
-                }
-              >
-                Remove Directory
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
-      {lockDialog ? (
-        <ThreadLockDialog
-          initialNote={lockDialog.thread.lock?.note}
-          mode={lockDialog.mode}
-          returnFocus={contextMenuOpenerRef}
-          threadTitle={lockDialog.thread.title}
-          onCancel={() => setLockDialog(undefined)}
-          onSubmit={async (note) => {
-            await props.onSetThreadLock?.(lockDialog.thread, true, note);
-            setLockDialog(undefined);
-          }}
-        />
-      ) : null}
-
-      {forgeAutomationDialog ? (() => {
-        const directory = props.directories.find((candidate) =>
-          candidate.key === forgeAutomationDialog.directory.key) ?? forgeAutomationDialog.directory;
-        return (
-          <ForgeAutomationDialog
-            automation={directory.forgeAutomation}
-            listHeldWakeups={props.onListProjectHeldWakeups
-              ? () => props.onListProjectHeldWakeups!(directory)
-              : undefined}
-            projectDetail={directory.repositoryKey ?? directory.path}
-            projectLabel={directory.label}
-            returnFocus={directoryContextMenuOpenerRef}
-            onCancel={() => setForgeAutomationDialog(undefined)}
-            onSubmit={async (automation) => {
-              if (directory.forgeAutomation?.paused && !automation.paused) {
-                // Saved, or handed to the Resume dialog: either way this one closes.
-                await resumeForgeActivity(directory, automation, { reportError: false });
-              } else {
-                await props.onSetProjectForgeAutomation?.(directory, automation, { reportError: false });
-              }
-              setForgeAutomationDialog(undefined);
+        {lockDialog ? (
+          <ThreadLockDialog
+            initialNote={lockDialog.thread.lock?.note}
+            mode={lockDialog.mode}
+            returnFocus={contextMenuOpenerRef}
+            threadTitle={lockDialog.thread.title}
+            onCancel={() => setLockDialog(undefined)}
+            onSubmit={async (note) => {
+              await props.onSetThreadLock?.(lockDialog.thread, true, note);
+              setLockDialog(undefined);
             }}
           />
-        );
-      })() : null}
+        ) : null}
 
-      {resumeForgeDialog ? (
-        <ResumeForgeAutomationDialog
-          projectLabel={resumeForgeDialog.directory.label}
-          returnFocus={directoryContextMenuOpenerRef}
-          wakeups={resumeForgeDialog.wakeups}
-          onCancel={() => setResumeForgeDialog(undefined)}
-          onResolve={async (resolutions) => {
-            if (!props.onResolveProjectHeldWakeups) {
-              throw new Error("Held wake-ups cannot be resolved in this window.");
-            }
-            return await props.onResolveProjectHeldWakeups(resumeForgeDialog.directory, resolutions);
-          }}
-          onResume={async () => {
-            await props.onSetProjectForgeAutomation?.(
-              resumeForgeDialog.directory,
-              resumeForgeDialog.automation,
-              { reportError: false },
-            );
-            setResumeForgeDialog(undefined);
-          }}
-        />
-      ) : null}
+        {forgeAutomationDialog ? (() => {
+          const directory = props.directories.find((candidate) =>
+            candidate.key === forgeAutomationDialog.directory.key) ?? forgeAutomationDialog.directory;
+          return (
+            <ForgeAutomationDialog
+              automation={directory.forgeAutomation}
+              listHeldWakeups={props.onListProjectHeldWakeups
+                ? () => props.onListProjectHeldWakeups!(directory)
+                : undefined}
+              projectDetail={directory.repositoryKey ?? directory.path}
+              projectLabel={directory.label}
+              returnFocus={directoryContextMenuOpenerRef}
+              onCancel={() => setForgeAutomationDialog(undefined)}
+              onSubmit={async (automation) => {
+                if (directory.forgeAutomation?.paused && !automation.paused) {
+                  // Saved, or handed to the Resume dialog: either way this one closes.
+                  await resumeForgeActivity(directory, automation, { reportError: false });
+                } else {
+                  await props.onSetProjectForgeAutomation?.(directory, automation, { reportError: false });
+                }
+                setForgeAutomationDialog(undefined);
+              }}
+            />
+          );
+        })() : null}
 
-    </aside>
-  );
+        {resumeForgeDialog ? (
+          <ResumeForgeAutomationDialog
+            projectLabel={resumeForgeDialog.directory.label}
+            returnFocus={directoryContextMenuOpenerRef}
+            wakeups={resumeForgeDialog.wakeups}
+            onCancel={() => setResumeForgeDialog(undefined)}
+            onResolve={async (resolutions) => {
+              if (!props.onResolveProjectHeldWakeups) {
+                throw new Error("Held wake-ups cannot be resolved in this window.");
+              }
+              return await props.onResolveProjectHeldWakeups(resumeForgeDialog.directory, resolutions);
+            }}
+            onResume={async () => {
+              await props.onSetProjectForgeAutomation?.(
+                resumeForgeDialog.directory,
+                resumeForgeDialog.automation,
+                { reportError: false },
+              );
+              setResumeForgeDialog(undefined);
+            }}
+          />
+        ) : null}
+
+      </aside>
+    );
+  }
+
+  return renderSidebarLayout();
 }
 
 function formatProfileIdentityLabel(

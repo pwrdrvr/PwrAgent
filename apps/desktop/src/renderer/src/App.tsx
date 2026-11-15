@@ -4735,491 +4735,406 @@ function DesktopAppShell(props: {
     window.addEventListener("pointercancel", stop);
   };
 
-  return (
-    <FederationDisplayLabelsProvider health={liveFederationHealth}>
-    <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
-    <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
-    <TodoDispatchProvider
-      api={desktopApi}
-      backends={backendSummaries.backends}
-      backendsTarget={activeFederationTarget}
-      todos={threadTodoController.openTodos}
-      localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
-    >
-    <OperatorWaitsContext.Provider value={operatorWaitsContext}>
-    <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
-    <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
-    <ThreadProvidersContext.Provider value={threadProviders}>
-    <ThreadProviderCatalogsContext.Provider value={threadProviderCatalogs}>
-    <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
-    <ThreadMaintenanceLauncherContext.Provider value={canMaintainThreads ? openThreadMaintenance : undefined}>
-    <TranscriptLinkProvider
-      localInstanceId={liveFederationHealth?.instanceId}
-      activeThread={navigation.selectedThread}
-      onOpenRemoteViewer={openRemoteViewerFromLink}
-      onShowThread={showThreadFromLink}
-      threads={navigation.threads}
-    >
-      {sendToMachineThread && sendToMachineSource ? (
-        <LiveThreadHandoff store={threadHandoffStore} handoffId={dialogHandoff?.handoffId}>
-          {(liveHandoff) => (
-            <SendThreadToMachineDialog
-              key={sendToMachineKey}
-              source={sendToMachineSource}
-              targets={threadHandoffTargets}
-              findRepository={findThreadHandoffRepository}
-              {...(liveHandoff ? { transfer: liveHandoff } : {})}
-              {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
-              {...(sendToMachineEntry.initialChoice
-                ? { initialChoice: sendToMachineEntry.initialChoice }
-                : {})}
-              onClose={closeSendToMachine}
-              onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
-              onMinimise={(from) => {
-                if (dialogHandoff) minimiseHandoff(dialogHandoff, from);
-              }}
-              onCancelTransfer={() => {
-                if (dialogHandoff) threadHandoffs.cancel(dialogHandoff.handoffId);
-              }}
-              onRetryNow={() => {
-                if (dialogHandoff) threadHandoffs.retryNow(dialogHandoff.handoffId);
-              }}
-            />
-          )}
-        </LiveThreadHandoff>
-      ) : null}
-      {continueAfter ? (
-        <ContinueAfterDialog
-          key={`${continueAfter.thread.federation?.ref.target.scope === "remote" ? continueAfter.thread.federation.ref.target.instanceId : "local"}:${continueAfter.thread.source}:${continueAfter.thread.id}`}
-          desktopApi={desktopApi}
-          {...(todoLocalMachine.instanceId ? { localInstanceId: todoLocalMachine.instanceId } : {})}
-          thread={continueAfter.thread}
-          {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
-          onClose={() => setContinueAfter(undefined)}
-        />
-      ) : null}
-      {threadMaintenance.session ? (
-        // Mounted for the whole session, hidden while minimized, so a scan or
-        // run that ends meanwhile lands in it.
-        <ThreadMaintenanceDialog
-          key={threadMaintenance.session.id}
-          desktopApi={desktopApi}
-          policy={settings.snapshot?.worktrees?.archive}
-          hibernationPolicy={settings.snapshot?.worktrees?.hibernate}
-          {...(threadMaintenance.session.projectKey ? { projectKey: threadMaintenance.session.projectKey } : {})}
-          minimized={threadMaintenance.session.minimized}
-          onMinimize={threadMaintenance.minimize}
-          onStatus={threadMaintenance.report}
-          onOpenThread={(thread) => {
-            threadMaintenance.minimize();
-            showThreadFromLink({ backend: thread.backend as AppServerBackendKind, threadId: thread.threadId });
-          }}
-          onClose={threadMaintenance.discard}
-        />
-      ) : null}
-      {codexLoginProfile ? (
-        <CodexAuthProfileLoginDialog
-          desktopApi={desktopApi}
-          profile={codexLoginProfile.name}
-          displayName={codexLoginProfile.displayName}
-          onCancel={() => setCodexLoginProfile(undefined)}
-          onAuthenticated={settings.refresh}
-        />
-      ) : null}
-      <AppTitleBar
-        desktopApi={desktopApi}
-        onOpenMessagingActivity={openMessagingActivityWindow}
-        onOpenMessagingSettings={openMessagingSettings}
-        layout={{
-          sidebarOpen: !sidebarHidden,
-          railOpen: contextRailPinned,
-          onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-          onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-        }}
-        starMap={starMapControls}
-        actions={mastheadActions}
-      />
-      <div
-        ref={appShellRef}
-        className="app-shell"
-        data-sidebar-hidden={sidebarHidden ? "true" : undefined}
-        style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
+  // Compile JSX separately from setup so both functions stay optimizable by V8.
+  function renderAppLayout() {
+    return (
+      <FederationDisplayLabelsProvider health={liveFederationHealth}>
+      <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
+      <ThreadTodoRevealContext.Provider value={threadTodosView ? revealThreadTodos : undefined}>
+      <TodoDispatchProvider
+        api={desktopApi}
+        backends={backendSummaries.backends}
+        backendsTarget={activeFederationTarget}
+        todos={threadTodoController.openTodos}
+        localCodexFastAllowed={props.settings.snapshot?.models?.codex.allowFast?.value ?? true}
       >
-        <Sidebar
-          mastheadVoiceControl={directorVoiceControl}
-          inert={layerView !== undefined}
-          directoryDisclosure={navigation.directoryDisclosure}
-          pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
-          subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
-          onSelectPendingLaunchpad={(entry) => {
-            setMainView("thread");
-            if (isSubthreadLaunchpadDraft(entry)) {
-              navigation.selectDirectoryLaunchpad(entry.directoryKey);
-            } else {
-              navigation.selectPendingLaunchpad(entry.selectionKey);
-            }
+      <OperatorWaitsContext.Provider value={operatorWaitsContext}>
+      <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
+      <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
+      <ThreadProvidersContext.Provider value={threadProviders}>
+      <ThreadProviderCatalogsContext.Provider value={threadProviderCatalogs}>
+      <ThreadHandoffBandContext.Provider value={threadHandoffBand}>
+      <ThreadMaintenanceLauncherContext.Provider value={canMaintainThreads ? openThreadMaintenance : undefined}>
+      <TranscriptLinkProvider
+        localInstanceId={liveFederationHealth?.instanceId}
+        activeThread={navigation.selectedThread}
+        onOpenRemoteViewer={openRemoteViewerFromLink}
+        onShowThread={showThreadFromLink}
+        threads={navigation.threads}
+      >
+        {sendToMachineThread && sendToMachineSource ? (
+          <LiveThreadHandoff store={threadHandoffStore} handoffId={dialogHandoff?.handoffId}>
+            {(liveHandoff) => (
+              <SendThreadToMachineDialog
+                key={sendToMachineKey}
+                source={sendToMachineSource}
+                targets={threadHandoffTargets}
+                findRepository={findThreadHandoffRepository}
+                {...(liveHandoff ? { transfer: liveHandoff } : {})}
+                {...(sendToMachineEntry.flyFrom ? { flyFrom: sendToMachineEntry.flyFrom } : {})}
+                {...(sendToMachineEntry.initialChoice
+                  ? { initialChoice: sendToMachineEntry.initialChoice }
+                  : {})}
+                onClose={closeSendToMachine}
+                onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
+                onMinimise={(from) => {
+                  if (dialogHandoff) minimiseHandoff(dialogHandoff, from);
+                }}
+                onCancelTransfer={() => {
+                  if (dialogHandoff) threadHandoffs.cancel(dialogHandoff.handoffId);
+                }}
+                onRetryNow={() => {
+                  if (dialogHandoff) threadHandoffs.retryNow(dialogHandoff.handoffId);
+                }}
+              />
+            )}
+          </LiveThreadHandoff>
+        ) : null}
+        {continueAfter ? (
+          <ContinueAfterDialog
+            key={`${continueAfter.thread.federation?.ref.target.scope === "remote" ? continueAfter.thread.federation.ref.target.instanceId : "local"}:${continueAfter.thread.source}:${continueAfter.thread.id}`}
+            desktopApi={desktopApi}
+            {...(todoLocalMachine.instanceId ? { localInstanceId: todoLocalMachine.instanceId } : {})}
+            thread={continueAfter.thread}
+            {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
+            onClose={() => setContinueAfter(undefined)}
+          />
+        ) : null}
+        {threadMaintenance.session ? (
+          // Mounted for the whole session, hidden while minimized, so a scan or
+          // run that ends meanwhile lands in it.
+          <ThreadMaintenanceDialog
+            key={threadMaintenance.session.id}
+            desktopApi={desktopApi}
+            policy={settings.snapshot?.worktrees?.archive}
+            hibernationPolicy={settings.snapshot?.worktrees?.hibernate}
+            {...(threadMaintenance.session.projectKey ? { projectKey: threadMaintenance.session.projectKey } : {})}
+            minimized={threadMaintenance.session.minimized}
+            onMinimize={threadMaintenance.minimize}
+            onStatus={threadMaintenance.report}
+            onOpenThread={(thread) => {
+              threadMaintenance.minimize();
+              showThreadFromLink({ backend: thread.backend as AppServerBackendKind, threadId: thread.threadId });
+            }}
+            onClose={threadMaintenance.discard}
+          />
+        ) : null}
+        {codexLoginProfile ? (
+          <CodexAuthProfileLoginDialog
+            desktopApi={desktopApi}
+            profile={codexLoginProfile.name}
+            displayName={codexLoginProfile.displayName}
+            onCancel={() => setCodexLoginProfile(undefined)}
+            onAuthenticated={settings.refresh}
+          />
+        ) : null}
+        <AppTitleBar
+          desktopApi={desktopApi}
+          onOpenMessagingActivity={openMessagingActivityWindow}
+          onOpenMessagingSettings={openMessagingSettings}
+          layout={{
+            sidebarOpen: !sidebarHidden,
+            railOpen: contextRailPinned,
+            onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+            onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
           }}
-          onDiscardSubthreadDraft={handleDiscardSubthreadDraft}
-          onDetachSubthreadDraft={(draft) => {
-            navigation.detachSubthreadLaunchpad(draft.directoryKey);
-          }}
-          addingProjectDirectory={navigation.pickingDirectory}
-          backends={windowBackendSummaries.backends}
-          remoteBackends={remoteSidebarBackends}
-          onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
-          browseMode={navigation.browseMode}
-          pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
-          pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
-          onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}
-          threadLensesEmpty={navigation.threadLensesEmpty}
-          creatingThread={navigation.creatingThread}
-          pagedNavigation={navigation.pagedNavigation}
-          pagesAwaitingRows={navigation.pagesAwaitingRows}
-          selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
-          directories={navigation.directories}
-          error={navigation.error}
-          inboxThreads={navigation.inboxThreads}
-          recentThreads={navigation.recentThreads}
-          attentionPromoteOnTurnEnd={
-            settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true
-          }
-          runtimeIdentity={runtimeIdentity}
-          activeProfile={profiles.activeProfile}
-          profiles={profiles.profiles}
-          loaded={navigation.loaded}
-          loading={navigation.loading}
-          providerRefresh={navigation.providerRefresh}
-          approvalRequestThreadKeys={session.approvalRequestThreadKeys}
-          inputRequestThreadKeys={session.inputRequestThreadKeys}
-          terminalThreadKeys={terminalThreadKeys}
-          queuedMessageThreadKeys={queuedMessageThreadKeys}
-          draftThreadKeys={draftThreadKeys}
-          unassignedThreadDraftCount={unassignedThreadDraftCount}
-          composerSourceThreadKey={navigation.composerSourceThreadKey}
-          revealSelectedThreadRequest={revealSelectedThreadRequest}
-          onRevealSelectedThreadComplete={threadJump.completePeekRestore}
-          projectRevealRequest={projectRevealRequest}
-          projectIndexHidden={projectIndexHidden}
-          onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
-          projectIndexWidth={projectIndexWidth}
-          onProjectIndexWidthChange={setProjectIndexWidthPersisted}
-          selectedItemKey={navigation.selectedItemKey}
-          thinkingThreadKeys={session.thinkingThreadKeys}
-          agentCommandThreadKeys={session.agentCommandThreadKeys}
-          threads={navigation.threads}
-          automationsActive={mainView === "automations"}
-          threadSearchActive={mainView === "search"}
-          settingsActive={mainView === "settings"}
-          onBrowseModeChange={navigation.setBrowseMode}
-          newThreadDirectoryLabel={navigation.newThreadDirectoryLabel}
-          onCreateThread={async () => {
-            setMainView("thread");
-            await navigation.createThread();
-          }}
-          onCreateThreadWithoutDirectory={async () => {
-            setMainView("thread");
-            await navigation.createThread(undefined, undefined, {
-              forceWorkspace: true,
-            });
-          }}
-          newThreadFederationTargets={newThreadFederationTargets}
-          localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
-          platform={desktopApi?.platform}
-          onRevealPath={revealProjectPath}
-          checkFederationTargetProject={checkFederationTargetProject}
-          onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
-          onSendThreadToMachine={listedThreadHandoffTargets.length > 0
-            ? setSendToMachineThread
-            : undefined}
-          onContinueAfter={canContinueAfter
-            ? (thread, returnFocus) => setContinueAfter({ thread, returnFocus })
-            : undefined}
-          onAddProjectDirectory={readRendererFederationTarget()
-            ? undefined
-            : addProjectDirectory}
-          readThreadWorktreeAvailability={navigation.readThreadWorktreeAvailability}
-          readSubthreadWorktreeBase={navigation.readSubthreadWorktreeBase}
-          onCreateSubthread={async (thread, mode, machine) => {
-            setMainView("thread");
-            await navigation.createSubthread(thread, mode, machine);
-          }}
-          onForkThread={async (thread, mode) => {
-            setMainView("thread");
-            await navigation.forkThread(thread, mode);
-          }}
-          onOpenAutomations={() => {
-            setMainView("automations");
-          }}
-          onOpenThreadSearch={() => {
-            toggleGlobalThreadSearch();
-          }}
-          onOpenLaunchpad={async (directory, preferredBackend) => {
-            setMainView("thread");
-            await navigation.openDirectoryLaunchpad(directory, preferredBackend);
-          }}
-          onOpenSettings={() => {
-            openSettingsSection(undefined);
-          }}
-          onOpenProfile={profiles.openProfile}
-          onOpenUsageActivity={desktopApi?.openUsageActivity
-            ? () => void desktopApi.openUsageActivity?.()
-            : undefined}
-          onSelectThread={(thread, options) => {
-            setMainView("thread");
-            setComposerFocusRequest(options?.focusComposer && options.focusOrigin
-              ? {
-                threadKey: threadSummaryIdentityKey(thread),
-                id: ++composerFocusRequestIdRef.current,
-                origin: options.focusOrigin,
+          starMap={starMapControls}
+          actions={mastheadActions}
+        />
+        <div
+          ref={appShellRef}
+          className="app-shell"
+          data-sidebar-hidden={sidebarHidden ? "true" : undefined}
+          style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
+        >
+          <Sidebar
+            mastheadVoiceControl={directorVoiceControl}
+            inert={layerView !== undefined}
+            directoryDisclosure={navigation.directoryDisclosure}
+            pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
+            subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
+            onSelectPendingLaunchpad={(entry) => {
+              setMainView("thread");
+              if (isSubthreadLaunchpadDraft(entry)) {
+                navigation.selectDirectoryLaunchpad(entry.directoryKey);
+              } else {
+                navigation.selectPendingLaunchpad(entry.selectionKey);
               }
-              : undefined);
-            navigation.selectThread(thread);
-          }}
-          threadJumpOpen={threadJump.open}
-          onThreadJumpOpenChange={(open) => {
-            // Every close (Escape, scrim click, picking a thread) goes through
-            // closeJump, so the toggle state can't drift from what's on screen.
-            if (open) {
-              threadJump.openJump();
-              return;
+            }}
+            onDiscardSubthreadDraft={handleDiscardSubthreadDraft}
+            onDetachSubthreadDraft={(draft) => {
+              navigation.detachSubthreadLaunchpad(draft.directoryKey);
+            }}
+            addingProjectDirectory={navigation.pickingDirectory}
+            backends={windowBackendSummaries.backends}
+            remoteBackends={remoteSidebarBackends}
+            onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
+            browseMode={navigation.browseMode}
+            pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
+            pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
+            onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}
+            threadLensesEmpty={navigation.threadLensesEmpty}
+            creatingThread={navigation.creatingThread}
+            pagedNavigation={navigation.pagedNavigation}
+            pagesAwaitingRows={navigation.pagesAwaitingRows}
+            selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
+            directories={navigation.directories}
+            error={navigation.error}
+            inboxThreads={navigation.inboxThreads}
+            recentThreads={navigation.recentThreads}
+            attentionPromoteOnTurnEnd={
+              settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true
             }
-            threadJump.closeJump();
-          }}
-          onJumpToProject={(directory) => {
-            setSidebarHiddenPersisted(false);
-            setMainView("thread");
-            void navigation.openDirectoryLaunchpad(directory);
-          }}
-          onJumpToThread={(thread) => {
-            setMainView("thread");
-            navigation.selectThread(thread);
-            // Reveal on the next frame, once the new selection has rendered.
-            // Do it even when the sidebar is hidden (⌘B): peek it open for the
-            // scroll, because hidden rows reveal asynchronously as their
-            // collapsed containers reopen, and hold that peek until ThreadRow
-            // reports the selected row mounted and scrolled. The offset
-            // survives restoring the hidden preference, and an instant scroll
-            // avoids dismissing the peek partway through an animation.
-            const instant = threadJump.beginRevealPeek();
-            requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
-          }}
-          onJumpToRemoteThread={(thread) => {
-            const ref = thread.federation?.ref;
-            if (!ref) {
-              return;
-            }
-            // Pin first (viewer-owned overlay row), then refresh so the
-            // merged snapshot carries the new row, then select it — the
-            // selection scopes ThreadView's IPC to the owning instance via
-            // selectedThreadFederationTarget.
-            const instant = threadJump.beginRevealPeek();
-            void (async () => {
-              try {
-                await desktopApi?.addRemoteThreadPin?.({
-                  ref,
-                  summary: thread,
-                  instanceLabel: thread.federation?.instanceLabel,
-                });
-              } catch (error) {
-                console.warn("Pinning the remote thread failed.", error);
+            runtimeIdentity={runtimeIdentity}
+            activeProfile={profiles.activeProfile}
+            profiles={profiles.profiles}
+            loaded={navigation.loaded}
+            loading={navigation.loading}
+            providerRefresh={navigation.providerRefresh}
+            approvalRequestThreadKeys={session.approvalRequestThreadKeys}
+            inputRequestThreadKeys={session.inputRequestThreadKeys}
+            terminalThreadKeys={terminalThreadKeys}
+            queuedMessageThreadKeys={queuedMessageThreadKeys}
+            draftThreadKeys={draftThreadKeys}
+            unassignedThreadDraftCount={unassignedThreadDraftCount}
+            composerSourceThreadKey={navigation.composerSourceThreadKey}
+            revealSelectedThreadRequest={revealSelectedThreadRequest}
+            onRevealSelectedThreadComplete={threadJump.completePeekRestore}
+            projectRevealRequest={projectRevealRequest}
+            projectIndexHidden={projectIndexHidden}
+            onProjectIndexHiddenChange={setProjectIndexHiddenPersisted}
+            projectIndexWidth={projectIndexWidth}
+            onProjectIndexWidthChange={setProjectIndexWidthPersisted}
+            selectedItemKey={navigation.selectedItemKey}
+            thinkingThreadKeys={session.thinkingThreadKeys}
+            agentCommandThreadKeys={session.agentCommandThreadKeys}
+            threads={navigation.threads}
+            automationsActive={mainView === "automations"}
+            threadSearchActive={mainView === "search"}
+            settingsActive={mainView === "settings"}
+            onBrowseModeChange={navigation.setBrowseMode}
+            newThreadDirectoryLabel={navigation.newThreadDirectoryLabel}
+            onCreateThread={async () => {
+              setMainView("thread");
+              await navigation.createThread();
+            }}
+            onCreateThreadWithoutDirectory={async () => {
+              setMainView("thread");
+              await navigation.createThread(undefined, undefined, {
+                forceWorkspace: true,
+              });
+            }}
+            newThreadFederationTargets={newThreadFederationTargets}
+            localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
+            platform={desktopApi?.platform}
+            onRevealPath={revealProjectPath}
+            checkFederationTargetProject={checkFederationTargetProject}
+            onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
+            onSendThreadToMachine={listedThreadHandoffTargets.length > 0
+              ? setSendToMachineThread
+              : undefined}
+            onContinueAfter={canContinueAfter
+              ? (thread, returnFocus) => setContinueAfter({ thread, returnFocus })
+              : undefined}
+            onAddProjectDirectory={readRendererFederationTarget()
+              ? undefined
+              : addProjectDirectory}
+            readThreadWorktreeAvailability={navigation.readThreadWorktreeAvailability}
+            readSubthreadWorktreeBase={navigation.readSubthreadWorktreeBase}
+            onCreateSubthread={async (thread, mode, machine) => {
+              setMainView("thread");
+              await navigation.createSubthread(thread, mode, machine);
+            }}
+            onForkThread={async (thread, mode) => {
+              setMainView("thread");
+              await navigation.forkThread(thread, mode);
+            }}
+            onOpenAutomations={() => {
+              setMainView("automations");
+            }}
+            onOpenThreadSearch={() => {
+              toggleGlobalThreadSearch();
+            }}
+            onOpenLaunchpad={async (directory, preferredBackend) => {
+              setMainView("thread");
+              await navigation.openDirectoryLaunchpad(directory, preferredBackend);
+            }}
+            onOpenSettings={() => {
+              openSettingsSection(undefined);
+            }}
+            onOpenProfile={profiles.openProfile}
+            onOpenUsageActivity={desktopApi?.openUsageActivity
+              ? () => void desktopApi.openUsageActivity?.()
+              : undefined}
+            onSelectThread={(thread, options) => {
+              setMainView("thread");
+              setComposerFocusRequest(options?.focusComposer && options.focusOrigin
+                ? {
+                  threadKey: threadSummaryIdentityKey(thread),
+                  id: ++composerFocusRequestIdRef.current,
+                  origin: options.focusOrigin,
+                }
+                : undefined);
+              navigation.selectThread(thread);
+            }}
+            threadJumpOpen={threadJump.open}
+            onThreadJumpOpenChange={(open) => {
+              // Every close (Escape, scrim click, picking a thread) goes through
+              // closeJump, so the toggle state can't drift from what's on screen.
+              if (open) {
+                threadJump.openJump();
+                return;
               }
-              await navigation.refresh();
+              threadJump.closeJump();
+            }}
+            onJumpToProject={(directory) => {
+              setSidebarHiddenPersisted(false);
+              setMainView("thread");
+              void navigation.openDirectoryLaunchpad(directory);
+            }}
+            onJumpToThread={(thread) => {
               setMainView("thread");
               navigation.selectThread(thread);
-              requestAnimationFrame(() =>
-                revealSelectedThreadInList({ instant }),
-              );
-            })();
-          }}
-          onRemoveRemoteThreadPin={async (thread) => {
-            const ref = thread.federation?.ref;
-            if (!ref) {
-              return;
-            }
-            try {
-              await desktopApi?.removeRemoteThreadPin?.({ ref });
-            } catch (error) {
-              console.warn("Removing the remote thread pin failed.", error);
-            }
-            await navigation.refresh();
-          }}
-          onArchiveThread={navigation.archiveThread}
-          onArchiveThreads={navigation.archiveThreads}
-          onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}
-          onMarkDirectoriesSeen={desktopApi?.markNavigationDirectorySeen ? navigation.markDirectoriesSeen : undefined}
-          onMarkThreadsSeen={
-            desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined
-          }
-          onMarkThreadUnread={
-            desktopApi?.markThreadSeen ? navigation.markThreadUnread : undefined
-          }
-          onRenameThread={navigation.renameThread}
-          onRequestTitleRename={requestTitleRename}
-          onThreadsArchived={offerArchiveUndo}
-          onSetThreadReaction={navigation.setThreadReaction}
-          onSetThreadLock={navigation.setThreadLock}
-          onSetThreadCheckoutHibernation={navigation.setThreadCheckoutHibernation}
-          onSetThreadPin={navigation.setThreadPin}
-          onReorderThreadPins={navigation.reorderThreadPins}
-          onSetThreadParent={navigation.setThreadParent}
-          onUnlinkThreads={navigation.unlinkThreads}
-          onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
-          onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
-          onSetDirectoryPin={navigation.setDirectoryPin}
-          onReorderDirectoryPins={navigation.reorderDirectoryPins}
-          onSetDirectoryThreadsCollapsed={
-            navigation.setDirectoryThreadsCollapsed
-          }
-          onSetProjectForgeAutomation={
-            desktopApi?.setProjectForgeAutomation
-              ? navigation.setProjectForgeAutomation
-              : undefined
-          }
-          onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
-          onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
-          federationOwnerForgeAutomation={federationOwnerForgeAutomation}
-          peerForgeAutomationInstanceIds={peerForgeAutomationInstanceIds}
-          onRemoveDirectory={(directory) =>
-            navigation.removeDirectory(directory.key)}
-          onOpenForgePermissions={readRendererFederationTarget()
-            ? undefined
-            : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
-          onPrefetchPullRequests={pullRequests.prefetch}
-          onPrefetchGitWorkingState={gitWorkingState.prefetch}
-          onDetachPullRequest={detachThreadPullRequest}
-          onUnbindMessagingBinding={unbindMessagingBinding}
-          onCopyThreadDiagnostics={
-            desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
-          }
-        />
-        <XrayMode
-          density={props.appearanceController.appearance.density}
-          enabled={!sidebarHidden && layerView === undefined}
-          platform={desktopApi?.platform}
-        />
-        {/* Sibling of the sidebar, not a child: the seam straddles the
-            sidebar's border, which the aside's overflow clip would cut off. */}
-        {sidebarHidden ? null : (
-          <SidebarResizeHandle
-            inert={layerView !== undefined}
-            onResizeStart={startSidebarResize}
-            onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
-            sidebarWidth={sidebarWidth}
-            sidebarMinWidth={sidebarMinWidth}
-            sidebarMaxWidth={sidebarMaxWidth}
-          />
-        )}
-
-        <main
-          inert={layerView ? true : undefined}
-          className={`app-main${
-            threadDetailPending ? " app-main--thread-detail-pending" : ""
-          }${
-            !peerConnectivity.connected
-              ? " app-main--federation-disconnected"
-              : ""
-          }`}
-        >
-          {!peerConnectivity.connected ? (
-            // The runtime keeps reconnecting on its own; this banner
-            // explains why the window went read-only (composer disabled,
-            // remote polling suspended) instead of leaving a half-dead
-            // surface that fails silently.
-            <div className="federation-disconnected-banner" role="alert">
-              <span className="federation-disconnected-banner__dot" aria-hidden="true" />
-              {`${activeFederationOwnerLabel ?? "Remote instance"} is unreachable — reconnecting. Threads shown may be stale.`}
-            </div>
-          ) : null}
-          {mainView === "search" ? (
-            <ThreadSearchPanel
-              desktopApi={desktopApi}
-              onOpenMessagingActivity={openMessagingActivityWindow}
-              onOpenMessagingSettings={openMessagingSettings}
-              layout={{
-                sidebarOpen: !sidebarHidden,
-                railOpen: contextRailPinned,
-                onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-                onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-              }}
-              masthead={mastheadActions}
-              history={historyNav}
-              state={threadSearchState}
-              threads={navigation.threads}
-              onClose={() => {
-                // Esc pops the search screen off the history stack (same as the
-                // title-bar Back button); if there's nowhere to go back to,
-                // just leave the search view.
-                if (history.canGoBack) {
-                  history.goBack();
-                } else {
-                  setMainView("thread");
-                }
-              }}
-              onOpenResult={async (result) => {
-                const plan = planSearchResultOpen(result, windowFederationTarget);
-                if (plan.kind === "owner-window") {
-                  await desktopApi?.openFederationWindow?.({
-                    target: plan.target,
-                    initialThread: plan.initialThread,
+              // Reveal on the next frame, once the new selection has rendered.
+              // Do it even when the sidebar is hidden (⌘B): peek it open for the
+              // scroll, because hidden rows reveal asynchronously as their
+              // collapsed containers reopen, and hold that peek until ThreadRow
+              // reports the selected row mounted and scrolled. The offset
+              // survives restoring the hidden preference, and an instant scroll
+              // avoids dismissing the peek partway through an animation.
+              const instant = threadJump.beginRevealPeek();
+              requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
+            }}
+            onJumpToRemoteThread={(thread) => {
+              const ref = thread.federation?.ref;
+              if (!ref) {
+                return;
+              }
+              // Pin first (viewer-owned overlay row), then refresh so the
+              // merged snapshot carries the new row, then select it — the
+              // selection scopes ThreadView's IPC to the owning instance via
+              // selectedThreadFederationTarget.
+              const instant = threadJump.beginRevealPeek();
+              void (async () => {
+                try {
+                  await desktopApi?.addRemoteThreadPin?.({
+                    ref,
+                    summary: thread,
+                    instanceLabel: thread.federation?.instanceLabel,
                   });
-                  return;
+                } catch (error) {
+                  console.warn("Pinning the remote thread failed.", error);
                 }
-                if (plan.federationTarget) {
-                  // A peer's thread joins this window's sidebar first, as a
-                  // thread link or Cmd+K adds it.
-                  try {
-                    await ensureWindowThreadMounted(
-                      desktopApi ?? {},
-                      plan,
-                      navigation.threads,
-                      false,
-                      result.federation?.instanceLabel,
-                    );
-                  } catch (error) {
-                    // Its owner's window needs no pin here, so the click
-                    // still opens the thread.
-                    console.warn("Adding the remote thread to this PwrAgent failed.", error);
-                    openRemoteViewerFromLink({
-                      backend: plan.backend,
-                      instanceId: plan.federationTarget.instanceId,
-                      threadId: plan.threadId,
-                    });
-                    return;
-                  }
-                }
-                // Deep-link to the match: open the thread with the find bar
-                // seeded with the search query so it highlights + scrolls the
-                // matched message into view (auto-loading older history if the
-                // match lives further up than the first page).
-                const seed = threadSearchState.query.trim();
-                setFindRequest(
-                  seed
-                    ? {
-                        query: seed,
-                        threadKey: plan.threadKey,
-                        turnId: result.turnId,
-                      }
-                    : undefined,
-                );
+                await navigation.refresh();
                 setMainView("thread");
-                await navigation.showThread(plan);
-              }}
-              onOpenResultInRemoteViewer={windowFederationTarget
-                ? undefined
-                : ({ ref }) => {
-                    if (!isRemoteFederationTarget(ref.target)) return;
-                    openRemoteViewerFromLink({
-                      backend: ref.backend,
-                      instanceId: ref.target.instanceId,
-                      threadId: ref.threadId,
-                    });
-                  }}
+                navigation.selectThread(thread);
+                requestAnimationFrame(() =>
+                  revealSelectedThreadInList({ instant }),
+                );
+              })();
+            }}
+            onRemoveRemoteThreadPin={async (thread) => {
+              const ref = thread.federation?.ref;
+              if (!ref) {
+                return;
+              }
+              try {
+                await desktopApi?.removeRemoteThreadPin?.({ ref });
+              } catch (error) {
+                console.warn("Removing the remote thread pin failed.", error);
+              }
+              await navigation.refresh();
+            }}
+            onArchiveThread={navigation.archiveThread}
+            onArchiveThreads={navigation.archiveThreads}
+            onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}
+            onMarkDirectoriesSeen={desktopApi?.markNavigationDirectorySeen ? navigation.markDirectoriesSeen : undefined}
+            onMarkThreadsSeen={
+              desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined
+            }
+            onMarkThreadUnread={
+              desktopApi?.markThreadSeen ? navigation.markThreadUnread : undefined
+            }
+            onRenameThread={navigation.renameThread}
+            onRequestTitleRename={requestTitleRename}
+            onThreadsArchived={offerArchiveUndo}
+            onSetThreadReaction={navigation.setThreadReaction}
+            onSetThreadLock={navigation.setThreadLock}
+            onSetThreadCheckoutHibernation={navigation.setThreadCheckoutHibernation}
+            onSetThreadPin={navigation.setThreadPin}
+            onReorderThreadPins={navigation.reorderThreadPins}
+            onSetThreadParent={navigation.setThreadParent}
+            onUnlinkThreads={navigation.unlinkThreads}
+            onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
+            onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
+            onSetDirectoryPin={navigation.setDirectoryPin}
+            onReorderDirectoryPins={navigation.reorderDirectoryPins}
+            onSetDirectoryThreadsCollapsed={
+              navigation.setDirectoryThreadsCollapsed
+            }
+            onSetProjectForgeAutomation={
+              desktopApi?.setProjectForgeAutomation
+                ? navigation.setProjectForgeAutomation
+                : undefined
+            }
+            onListProjectHeldWakeups={navigation.listProjectHeldWakeups}
+            onResolveProjectHeldWakeups={navigation.resolveProjectHeldWakeups}
+            federationOwnerForgeAutomation={federationOwnerForgeAutomation}
+            peerForgeAutomationInstanceIds={peerForgeAutomationInstanceIds}
+            onRemoveDirectory={(directory) =>
+              navigation.removeDirectory(directory.key)}
+            onOpenForgePermissions={readRendererFederationTarget()
+              ? undefined
+              : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
+            onPrefetchPullRequests={pullRequests.prefetch}
+            onPrefetchGitWorkingState={gitWorkingState.prefetch}
+            onDetachPullRequest={detachThreadPullRequest}
+            onUnbindMessagingBinding={unbindMessagingBinding}
+            onCopyThreadDiagnostics={
+              desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
+            }
+          />
+          <XrayMode
+            density={props.appearanceController.appearance.density}
+            enabled={!sidebarHidden && layerView === undefined}
+            platform={desktopApi?.platform}
+          />
+          {/* Sibling of the sidebar, not a child: the seam straddles the
+              sidebar's border, which the aside's overflow clip would cut off. */}
+          {sidebarHidden ? null : (
+            <SidebarResizeHandle
+              inert={layerView !== undefined}
+              onResizeStart={startSidebarResize}
+              onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
+              sidebarWidth={sidebarWidth}
+              sidebarMinWidth={sidebarMinWidth}
+              sidebarMaxWidth={sidebarMaxWidth}
             />
-          ) : threadDetailPending ? (
-            <section className="thread-view thread-view--pending">
-              <ThreadPlaceholderHeader
+          )}
+
+          <main
+            inert={layerView ? true : undefined}
+            className={`app-main${
+              threadDetailPending ? " app-main--thread-detail-pending" : ""
+            }${
+              !peerConnectivity.connected
+                ? " app-main--federation-disconnected"
+                : ""
+            }`}
+          >
+            {!peerConnectivity.connected ? (
+              // The runtime keeps reconnecting on its own; this banner
+              // explains why the window went read-only (composer disabled,
+              // remote polling suspended) instead of leaving a half-dead
+              // surface that fails silently.
+              <div className="federation-disconnected-banner" role="alert">
+                <span className="federation-disconnected-banner__dot" aria-hidden="true" />
+                {`${activeFederationOwnerLabel ?? "Remote instance"} is unreachable — reconnecting. Threads shown may be stale.`}
+              </div>
+            ) : null}
+            {mainView === "search" ? (
+              <ThreadSearchPanel
                 desktopApi={desktopApi}
-                title="Loading..."
                 onOpenMessagingActivity={openMessagingActivityWindow}
                 onOpenMessagingSettings={openMessagingSettings}
                 layout={{
@@ -5230,285 +5145,375 @@ function DesktopAppShell(props: {
                 }}
                 masthead={mastheadActions}
                 history={historyNav}
-                starMap={starMapControls}
-              />
-            </section>
-          ) : ThreadViewComponent ? (
-            <MarkdownRenderingOptionsProvider
-              incrementalEnabled={
-                settings.snapshot?.experimental.incrementalMarkdownRendering?.value ?? false
-              }
-              mathEnabled={
-                settings.snapshot?.experimental.markdownMathRendering?.value ?? true
-              }
-            >
-              <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
-                <HtmlPreviewPreferencesProvider
-                  runScripts={
-                    settings.snapshot?.general.htmlPreviewRunScripts?.value ?? false
+                state={threadSearchState}
+                threads={navigation.threads}
+                onClose={() => {
+                  // Esc pops the search screen off the history stack (same as the
+                  // title-bar Back button); if there's nowhere to go back to,
+                  // just leave the search view.
+                  if (history.canGoBack) {
+                    history.goBack();
+                  } else {
+                    setMainView("thread");
                   }
-                >
-                  <TerminalPreferencesProvider
-                    minimumContrast={
-                      settings.snapshot?.general.appearance.terminalMinimumContrast
-                        ?.value ?? false
+                }}
+                onOpenResult={async (result) => {
+                  const plan = planSearchResultOpen(result, windowFederationTarget);
+                  if (plan.kind === "owner-window") {
+                    await desktopApi?.openFederationWindow?.({
+                      target: plan.target,
+                      initialThread: plan.initialThread,
+                    });
+                    return;
+                  }
+                  if (plan.federationTarget) {
+                    // A peer's thread joins this window's sidebar first, as a
+                    // thread link or Cmd+K adds it.
+                    try {
+                      await ensureWindowThreadMounted(
+                        desktopApi ?? {},
+                        plan,
+                        navigation.threads,
+                        false,
+                        result.federation?.instanceLabel,
+                      );
+                    } catch (error) {
+                      // Its owner's window needs no pin here, so the click
+                      // still opens the thread.
+                      console.warn("Adding the remote thread to this PwrAgent failed.", error);
+                      openRemoteViewerFromLink({
+                        backend: plan.backend,
+                        instanceId: plan.federationTarget.instanceId,
+                        threadId: plan.threadId,
+                      });
+                      return;
+                    }
+                  }
+                  // Deep-link to the match: open the thread with the find bar
+                  // seeded with the search query so it highlights + scrolls the
+                  // matched message into view (auto-loading older history if the
+                  // match lives further up than the first page).
+                  const seed = threadSearchState.query.trim();
+                  setFindRequest(
+                    seed
+                      ? {
+                          query: seed,
+                          threadKey: plan.threadKey,
+                          turnId: result.turnId,
+                        }
+                      : undefined,
+                  );
+                  setMainView("thread");
+                  await navigation.showThread(plan);
+                }}
+                onOpenResultInRemoteViewer={windowFederationTarget
+                  ? undefined
+                  : ({ ref }) => {
+                      if (!isRemoteFederationTarget(ref.target)) return;
+                      openRemoteViewerFromLink({
+                        backend: ref.backend,
+                        instanceId: ref.target.instanceId,
+                        threadId: ref.threadId,
+                      });
+                    }}
+              />
+            ) : threadDetailPending ? (
+              <section className="thread-view thread-view--pending">
+                <ThreadPlaceholderHeader
+                  desktopApi={desktopApi}
+                  title="Loading..."
+                  onOpenMessagingActivity={openMessagingActivityWindow}
+                  onOpenMessagingSettings={openMessagingSettings}
+                  layout={{
+                    sidebarOpen: !sidebarHidden,
+                    railOpen: contextRailPinned,
+                    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+                    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                  }}
+                  masthead={mastheadActions}
+                  history={historyNav}
+                  starMap={starMapControls}
+                />
+              </section>
+            ) : ThreadViewComponent ? (
+              <MarkdownRenderingOptionsProvider
+                incrementalEnabled={
+                  settings.snapshot?.experimental.incrementalMarkdownRendering?.value ?? false
+                }
+                mathEnabled={
+                  settings.snapshot?.experimental.markdownMathRendering?.value ?? true
+                }
+              >
+                <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
+                  <HtmlPreviewPreferencesProvider
+                    runScripts={
+                      settings.snapshot?.general.htmlPreviewRunScripts?.value ?? false
                     }
                   >
-                    <ThreadViewComponent {...threadViewProps} />
-                  </TerminalPreferencesProvider>
-                </HtmlPreviewPreferencesProvider>
-              </InteractiveSvgPreferencesProvider>
-            </MarkdownRenderingOptionsProvider>
-          ) : null}
-        </main>
+                    <TerminalPreferencesProvider
+                      minimumContrast={
+                        settings.snapshot?.general.appearance.terminalMinimumContrast
+                          ?.value ?? false
+                      }
+                    >
+                      <ThreadViewComponent {...threadViewProps} />
+                    </TerminalPreferencesProvider>
+                  </HtmlPreviewPreferencesProvider>
+                </InteractiveSvgPreferencesProvider>
+              </MarkdownRenderingOptionsProvider>
+            ) : null}
+          </main>
 
-        {mainView === "settings" ? (
-          <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
-            <Suspense fallback={null}>
-              <LazySettingsScreen
-                appearanceController={props.appearanceController}
-                cachedBackends={backendSummaries.backends}
+          {mainView === "settings" ? (
+            <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
+              <Suspense fallback={null}>
+                <LazySettingsScreen
+                  appearanceController={props.appearanceController}
+                  cachedBackends={backendSummaries.backends}
+                  desktopApi={desktopApi}
+                  initialSection={settingsInitialSection}
+                  initialSubsection={settingsInitialSubsection}
+                  profileCreateRequested={profileCreateRequested}
+                  profiles={profiles}
+                  registerLeaveGuard={registerSettingsLeaveGuard}
+                  settings={settings}
+                  onClose={() => setMainView("thread")}
+                  onOpenMessagingActivity={openMessagingActivityWindow}
+                  onProfileCreateRequestHandled={clearProfileCreateRequest}
+                  onOpenThread={(target) => {
+                    setMainView("thread");
+                    void navigation.showThread(target);
+                  }}
+                  onShowNotice={showAppNotice}
+                />
+              </Suspense>
+            </div>
+          ) : null}
+
+          {mainView === "automations" ? (
+            <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
+              <AutomationsScreen
                 desktopApi={desktopApi}
-                initialSection={settingsInitialSection}
-                initialSubsection={settingsInitialSubsection}
-                profileCreateRequested={profileCreateRequested}
-                profiles={profiles}
-                registerLeaveGuard={registerSettingsLeaveGuard}
-                settings={settings}
+                directories={navigation.directories}
+                threads={navigation.threads}
                 onClose={() => setMainView("thread")}
                 onOpenMessagingActivity={openMessagingActivityWindow}
-                onProfileCreateRequestHandled={clearProfileCreateRequest}
-                onOpenThread={(target) => {
+                onOpenMessagingSettings={openMessagingSettings}
+                onRefreshNavigation={navigation.refresh}
+                onSelectThread={(thread) => {
                   setMainView("thread");
-                  void navigation.showThread(target);
+                  navigation.selectThread(thread);
                 }}
-                onShowNotice={showAppNotice}
+              />
+            </div>
+          ) : null}
+
+          {onboardingOpen !== null && settings.snapshot ? (
+            <Suspense fallback={null}>
+              <LazyOnboardingWizard
+                isReplay={onboardingOpen === "replay"}
+                bootInfo={bootInfo}
+                initialDensity={settings.snapshot.general.appearance.density.value}
+                initialTheme={settings.snapshot.general.appearance.theme.value}
+                initialCodexProfileModel={
+                  onboardingOpen === "replay" && replayCodexProfileSetup
+                    ? replayCodexProfileSetup.model
+                    : settings.snapshot.general.codexProfileModel.value
+                }
+                initialCodexProfileNames={
+                  onboardingOpen === "replay"
+                    ? replayCodexProfileSetup?.profileNames
+                    : undefined
+                }
+                appearanceController={props.appearanceController}
+                settings={settings}
+                desktopApi={desktopApi}
+                onComplete={async (patch) => {
+                  await settings.writeConfig(patch);
+                  // The wizard already flips theme + density live via
+                  // appearanceController as the operator clicks — the
+                  // explicit setters below are a belt-and-suspenders to keep
+                  // the controller's React state aligned with whatever the
+                  // final patch holds, even if persistAndComplete adjusts.
+                  if (patch.general?.appearance?.density) {
+                    props.appearanceController.setDensity(
+                      patch.general.appearance.density,
+                    );
+                  }
+                  if (patch.general?.appearance?.theme) {
+                    props.appearanceController.setTheme(
+                      patch.general.appearance.theme,
+                    );
+                  }
+                  // Mark onboarding complete AND kick off the deferred Codex
+                  // `listThreads` prefetch in one IPC call (#500). On replay,
+                  // skip the call entirely — replays don't touch onboarding.
+                  //
+                  // In bootstrap mode (#524), skip this too. The bootstrap
+                  // window is about to quit; firing
+                  // `completeOnboardingCodexBootstrap` here would (a) write
+                  // `[onboarding] completed = true` to `.bootstrap/config.toml`
+                  // (which we're about to delete) and (b) trigger a Codex
+                  // `listThreads` against the system default Codex install,
+                  // contaminating the soon-to-quit window with the operator's
+                  // real Codex Desktop threads. The new profile's window
+                  // handles its own completion + prefetch on launch.
+                  if (!onboardingOpen) return;
+                  if (
+                    onboardingOpen !== "replay" &&
+                    bootInfo?.mode !== "bootstrap" &&
+                    desktopApi?.completeOnboardingCodexBootstrap
+                  ) {
+                    await desktopApi.completeOnboardingCodexBootstrap({
+                      connect: true,
+                    });
+                    await settings.refresh();
+                  }
+                  setOnboardingOpen(null);
+                }}
+                onDismiss={(persistCompleted) => {
+                  if (persistCompleted) {
+                    // Skip path: persist `completed = true` so the wizard
+                    // doesn't auto-fire again, but pass `connect: false` so
+                    // we don't auto-load Codex threads under an unverified
+                    // identity. The renderer's next explicit refresh (or app
+                    // restart) will surface them.
+                    void desktopApi?.completeOnboardingCodexBootstrap?.({
+                      connect: false,
+                    }).then(() => settings.refresh());
+                  }
+                  setOnboardingOpen(null);
+                }}
+                onOpenMessagingSettings={() => {
+                  openSettingsSection("messaging");
+                }}
               />
             </Suspense>
-          </div>
-        ) : null}
+          ) : null}
 
-        {mainView === "automations" ? (
-          <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
-            <AutomationsScreen
-              desktopApi={desktopApi}
-              directories={navigation.directories}
-              threads={navigation.threads}
-              onClose={() => setMainView("thread")}
-              onOpenMessagingActivity={openMessagingActivityWindow}
-              onOpenMessagingSettings={openMessagingSettings}
-              onRefreshNavigation={navigation.refresh}
-              onSelectThread={(thread) => {
-                setMainView("thread");
-                navigation.selectThread(thread);
-              }}
-            />
-          </div>
-        ) : null}
-
-        {onboardingOpen !== null && settings.snapshot ? (
-          <Suspense fallback={null}>
-            <LazyOnboardingWizard
-              isReplay={onboardingOpen === "replay"}
-              bootInfo={bootInfo}
-              initialDensity={settings.snapshot.general.appearance.density.value}
-              initialTheme={settings.snapshot.general.appearance.theme.value}
-              initialCodexProfileModel={
-                onboardingOpen === "replay" && replayCodexProfileSetup
-                  ? replayCodexProfileSetup.model
-                  : settings.snapshot.general.codexProfileModel.value
-              }
-              initialCodexProfileNames={
-                onboardingOpen === "replay"
-                  ? replayCodexProfileSetup?.profileNames
-                  : undefined
-              }
-              appearanceController={props.appearanceController}
-              settings={settings}
-              desktopApi={desktopApi}
-              onComplete={async (patch) => {
-                await settings.writeConfig(patch);
-                // The wizard already flips theme + density live via
-                // appearanceController as the operator clicks — the
-                // explicit setters below are a belt-and-suspenders to keep
-                // the controller's React state aligned with whatever the
-                // final patch holds, even if persistAndComplete adjusts.
-                if (patch.general?.appearance?.density) {
-                  props.appearanceController.setDensity(
-                    patch.general.appearance.density,
-                  );
-                }
-                if (patch.general?.appearance?.theme) {
-                  props.appearanceController.setTheme(
-                    patch.general.appearance.theme,
-                  );
-                }
-                // Mark onboarding complete AND kick off the deferred Codex
-                // `listThreads` prefetch in one IPC call (#500). On replay,
-                // skip the call entirely — replays don't touch onboarding.
-                //
-                // In bootstrap mode (#524), skip this too. The bootstrap
-                // window is about to quit; firing
-                // `completeOnboardingCodexBootstrap` here would (a) write
-                // `[onboarding] completed = true` to `.bootstrap/config.toml`
-                // (which we're about to delete) and (b) trigger a Codex
-                // `listThreads` against the system default Codex install,
-                // contaminating the soon-to-quit window with the operator's
-                // real Codex Desktop threads. The new profile's window
-                // handles its own completion + prefetch on launch.
-                if (!onboardingOpen) return;
-                if (
-                  onboardingOpen !== "replay" &&
-                  bootInfo?.mode !== "bootstrap" &&
-                  desktopApi?.completeOnboardingCodexBootstrap
-                ) {
-                  await desktopApi.completeOnboardingCodexBootstrap({
-                    connect: true,
-                  });
-                  await settings.refresh();
-                }
-                setOnboardingOpen(null);
-              }}
-              onDismiss={(persistCompleted) => {
-                if (persistCompleted) {
-                  // Skip path: persist `completed = true` so the wizard
-                  // doesn't auto-fire again, but pass `connect: false` so
-                  // we don't auto-load Codex threads under an unverified
-                  // identity. The renderer's next explicit refresh (or app
-                  // restart) will surface them.
-                  void desktopApi?.completeOnboardingCodexBootstrap?.({
-                    connect: false,
-                  }).then(() => settings.refresh());
-                }
-                setOnboardingOpen(null);
-              }}
-              onOpenMessagingSettings={() => {
-                openSettingsSection("messaging");
-              }}
-            />
-          </Suspense>
-        ) : null}
-
-        <CodexConfigWarningBanner
-          desktopApi={desktopApi}
-          preferencesLoaded={
-            Boolean(props.settings.snapshot)
-            || !desktopApi?.readSettings
-          }
-          dismissedWarningIds={codexConfigWarningsDismissed}
-          onSuppressWarning={suppressCodexWarning}
-        />
-        <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
-        <CloudflareSignInNotice
-          desktopApi={desktopApi}
-          health={liveFederationHealth}
-          onNoticeChanged={syncCloudflareSignInNotice}
-          onRefreshHealth={refreshFederationHealth}
-        />
-        <MessagingErrorNotices
-          desktopApi={desktopApi}
-          onNoticeChanged={syncMessagingErrorNotice}
-        />
-        <GrokCliUpdateNotice
-          desktopApi={desktopApi}
-          onNoticeChanged={syncGrokCliUpdateNotice}
-        />
-        <CodexVersionNotice
-          desktopApi={desktopApi}
-          snapshot={settings.snapshot}
-          onNoticeChanged={syncCodexVersionNotice}
-          onOpenCodexSettings={openCodexSettings}
-          onManagedBuildsChange={changeCodexManagedBuilds}
-          onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
-        />
-        <CodexLaunchNotice
-          discovery={settings.snapshot?.models?.codex?.discovery}
-          onNoticeChanged={syncCodexLaunchNotice}
-          onOpenCodexSettings={openCodexSettings}
-        />
-        <CodexRestartNotice
-          desktopApi={desktopApi}
-          onNoticeChanged={syncCodexRestartNotice}
-        />
-        <RestartGateNotice
-          desktopApi={desktopApi}
-          onNoticeChanged={syncRestartGateNotice}
-        />
-        <AppNoticeStack
-          desktopApi={desktopApi}
-          durableNotices={durableNotices}
-          onDismissDurable={dismissAppNotice}
-          onOpenThread={showThreadFromLink}
-          onSuppressSkillQuestionsWarning={() => settings.writeConfig({
-            experimental: { codexSkillQuestionsWarningDismissed: true },
-          })}
-          onSuppressCodexWarning={suppressCodexWarning}
-          transientNotices={[
-            {
-              notice: navigation.archiveCleanupSummaryNotice,
-              onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
-            },
-            {
-              notice: navigation.archiveCleanupProgressNotice,
-              onDismiss: navigation.dismissArchiveCleanupProgressNotice,
-            },
-            {
-              notice: navigation.archiveThreadNotice,
-              onDismiss: navigation.dismissArchiveThreadNotice,
-            },
-            ...appNotices.transient.map((notice) => ({
-              notice,
-              onDismiss: () => dismissAppNotice(notice.id),
-            })),
-          ]}
-        >
-          <QuitBlockerQueueToast desktopApi={desktopApi} />
-          <ThreadMaintenanceMinimizedNotice controller={threadMaintenance} />
-          <AgentThreadRenameNotice desktopApi={desktopApi} onOpenThread={showThreadFromLink} />
-          <AppUpdateBanner
+          <CodexConfigWarningBanner
             desktopApi={desktopApi}
-            showNotice={showAppNotice}
-            dismissNotice={dismissAppNotice}
+            preferencesLoaded={
+              Boolean(props.settings.snapshot)
+              || !desktopApi?.readSettings
+            }
+            dismissedWarningIds={codexConfigWarningsDismissed}
+            onSuppressWarning={suppressCodexWarning}
           />
-          {Object.values(handoffTransfers)
-            .filter((transfer) => transfer.status === "running" && !isHandoffInDialog(transfer))
-            .sort((a, b) => a.startedAt - b.startedAt)
-            .map((transfer) => (
-              <LiveThreadHandoffToastCard
-                key={transfer.handoffId}
-                store={threadHandoffStore}
-                handoffId={transfer.handoffId}
-                onExpand={() => expandHandoff(transfer)}
-                onCancel={() => threadHandoffs.cancel(transfer.handoffId)}
-                onRetryNow={() => threadHandoffs.retryNow(transfer.handoffId)}
-              />
-            ))}
-        </AppNoticeStack>
-        {directorVoiceApi ? (
-          <DirectorVoicePanel
-            api={directorVoiceApi}
+          <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
+          <CloudflareSignInNotice
             desktopApi={desktopApi}
-            focus={navigation.selectedThread}
-            launchpad={navigation.selectedLaunchpad}
-            onOpenThread={(threadId) => showThreadFromLink({ backend: "codex", threadId })}
+            health={liveFederationHealth}
+            onNoticeChanged={syncCloudflareSignInNotice}
+            onRefreshHealth={refreshFederationHealth}
           />
-        ) : null}
-      </div>
+          <MessagingErrorNotices
+            desktopApi={desktopApi}
+            onNoticeChanged={syncMessagingErrorNotice}
+          />
+          <GrokCliUpdateNotice
+            desktopApi={desktopApi}
+            onNoticeChanged={syncGrokCliUpdateNotice}
+          />
+          <CodexVersionNotice
+            desktopApi={desktopApi}
+            snapshot={settings.snapshot}
+            onNoticeChanged={syncCodexVersionNotice}
+            onOpenCodexSettings={openCodexSettings}
+            onManagedBuildsChange={changeCodexManagedBuilds}
+            onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
+          />
+          <CodexLaunchNotice
+            discovery={settings.snapshot?.models?.codex?.discovery}
+            onNoticeChanged={syncCodexLaunchNotice}
+            onOpenCodexSettings={openCodexSettings}
+          />
+          <CodexRestartNotice
+            desktopApi={desktopApi}
+            onNoticeChanged={syncCodexRestartNotice}
+          />
+          <RestartGateNotice
+            desktopApi={desktopApi}
+            onNoticeChanged={syncRestartGateNotice}
+          />
+          <AppNoticeStack
+            desktopApi={desktopApi}
+            durableNotices={durableNotices}
+            onDismissDurable={dismissAppNotice}
+            onOpenThread={showThreadFromLink}
+            onSuppressSkillQuestionsWarning={() => settings.writeConfig({
+              experimental: { codexSkillQuestionsWarningDismissed: true },
+            })}
+            onSuppressCodexWarning={suppressCodexWarning}
+            transientNotices={[
+              {
+                notice: navigation.archiveCleanupSummaryNotice,
+                onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
+              },
+              {
+                notice: navigation.archiveCleanupProgressNotice,
+                onDismiss: navigation.dismissArchiveCleanupProgressNotice,
+              },
+              {
+                notice: navigation.archiveThreadNotice,
+                onDismiss: navigation.dismissArchiveThreadNotice,
+              },
+              ...appNotices.transient.map((notice) => ({
+                notice,
+                onDismiss: () => dismissAppNotice(notice.id),
+              })),
+            ]}
+          >
+            <QuitBlockerQueueToast desktopApi={desktopApi} />
+            <ThreadMaintenanceMinimizedNotice controller={threadMaintenance} />
+            <AgentThreadRenameNotice desktopApi={desktopApi} onOpenThread={showThreadFromLink} />
+            <AppUpdateBanner
+              desktopApi={desktopApi}
+              showNotice={showAppNotice}
+              dismissNotice={dismissAppNotice}
+            />
+            {Object.values(handoffTransfers)
+              .filter((transfer) => transfer.status === "running" && !isHandoffInDialog(transfer))
+              .sort((a, b) => a.startedAt - b.startedAt)
+              .map((transfer) => (
+                <LiveThreadHandoffToastCard
+                  key={transfer.handoffId}
+                  store={threadHandoffStore}
+                  handoffId={transfer.handoffId}
+                  onExpand={() => expandHandoff(transfer)}
+                  onCancel={() => threadHandoffs.cancel(transfer.handoffId)}
+                  onRetryNow={() => threadHandoffs.retryNow(transfer.handoffId)}
+                />
+              ))}
+          </AppNoticeStack>
+          {directorVoiceApi ? (
+            <DirectorVoicePanel
+              api={directorVoiceApi}
+              desktopApi={desktopApi}
+              focus={navigation.selectedThread}
+              launchpad={navigation.selectedLaunchpad}
+              onOpenThread={(threadId) => showThreadFromLink({ backend: "codex", threadId })}
+            />
+          ) : null}
+        </div>
 
-      {todoFullAccessRiskDialog}
-    </TranscriptLinkProvider>
-    </ThreadMaintenanceLauncherContext.Provider>
-    </ThreadHandoffBandContext.Provider>
-    </ThreadProviderCatalogsContext.Provider>
-    </ThreadProvidersContext.Provider>
-    </ThreadPrWatchIndicatorsContext.Provider>
-    </ThreadDependencyIndicatorsContext.Provider>
-    </OperatorWaitsContext.Provider>
-    </TodoDispatchProvider>
-    </ThreadTodoRevealContext.Provider>
-    </ThreadTodoCountsContext.Provider>
-    </FederationDisplayLabelsProvider>
-  );
+        {todoFullAccessRiskDialog}
+      </TranscriptLinkProvider>
+      </ThreadMaintenanceLauncherContext.Provider>
+      </ThreadHandoffBandContext.Provider>
+      </ThreadProviderCatalogsContext.Provider>
+      </ThreadProvidersContext.Provider>
+      </ThreadPrWatchIndicatorsContext.Provider>
+      </ThreadDependencyIndicatorsContext.Provider>
+      </OperatorWaitsContext.Provider>
+      </TodoDispatchProvider>
+      </ThreadTodoRevealContext.Provider>
+      </ThreadTodoCountsContext.Provider>
+      </FederationDisplayLabelsProvider>
+    );
+  }
+
+  return renderAppLayout();
 }
 
 function isSettingsSection(
