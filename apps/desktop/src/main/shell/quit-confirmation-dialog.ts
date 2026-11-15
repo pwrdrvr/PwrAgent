@@ -12,6 +12,7 @@ import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
 import { getMainLogger } from "../log";
 import { primaryMainWindowWebContents } from "./primary-main-window";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
+import { QUIET_RESTART_TURN_GRACE_MS } from "./quiet-restart";
 import { requestShowQuitBlockers } from "./window-show-quit-blockers";
 import { requestShowThread } from "./window-show-thread";
 
@@ -70,6 +71,13 @@ type QuitDialogPalette = {
   /** app.css's --accent-fill, where a theme sets one; else the accent. */
   accentFill?: string;
   buttonText: string;
+  /** app.css's --danger-base. */
+  danger: string;
+  dangerText: string;
+  /** app.css's --danger-soft / --danger-border, where a theme writes them as
+   *  literals; the color themes derive both from --danger-base, as here. */
+  dangerSoft?: string;
+  dangerBorder?: string;
 };
 
 export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> = {
@@ -86,6 +94,10 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
     accent: "#ff8a1f",
     accentBright: "#ffb35c",
     buttonText: "#120800",
+    danger: "#b94232",
+    dangerText: "#ffb0a1",
+    dangerSoft: "rgba(185, 66, 50, 0.24)",
+    dangerBorder: "rgba(185, 66, 50, 0.45)",
   },
   light: {
     bg: "#ffffff",
@@ -107,6 +119,10 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
     accent: "#b74c00",
     accentBright: "#994c00",
     buttonText: "#ffffff",
+    danger: "#8a1f12",
+    dangerText: "#8a1f12",
+    dangerSoft: "rgba(138, 31, 18, 0.12)",
+    dangerBorder: "rgba(138, 31, 18, 0.28)",
   },
 };
 
@@ -131,6 +147,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#fab387",
     accentBright: "#febd96",
     buttonText: "#11111b",
+    danger: "#f38ba8",
+    dangerText: "#ffc4d2",
   },
   "catppuccin-latte": {
     bg: "#eff1f5",
@@ -146,6 +164,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accentBright: "#8e3401",
     accentFill: "#fe640b",
     buttonText: "#11111b",
+    danger: "#d20f39",
+    dangerText: "#86001f",
   },
   "solarized-dark": {
     bg: "#002b36",
@@ -160,6 +180,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#dba600",
     accentBright: "#e7af00",
     buttonText: "#002b36",
+    danger: "#e43b36",
+    dangerText: "#f2a3a1",
   },
   "solarized-light": {
     bg: "#fdf6e3",
@@ -174,6 +196,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#9a3911",
     accentBright: "#8e3510",
     buttonText: "#fdf6e3",
+    danger: "#dc322f",
+    dangerText: "#891917",
   },
   "gray-dark": {
     bg: "#2b2b2e",
@@ -188,6 +212,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#ffa95a",
     accentBright: "#ffb876",
     buttonText: "#1c1c1e",
+    danger: "#ff9b8a",
+    dangerText: "#ffdbd4",
   },
   "gray-light": {
     bg: "#ebebed",
@@ -202,6 +228,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#8a3900",
     accentBright: "#7f3400",
     buttonText: "#ffffff",
+    danger: "#8a1f12",
+    dangerText: "#70190f",
   },
   "blue-dark": {
     bg: "#0f1724",
@@ -216,6 +244,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#5baaff",
     accentBright: "#6db4ff",
     buttonText: "#06111f",
+    danger: "#ffa99a",
+    dangerText: "#ffc1b6",
   },
   "blue-light": {
     bg: "#f3f7fc",
@@ -230,6 +260,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#1c56ac",
     accentBright: "#1a4f9f",
     buttonText: "#ffffff",
+    danger: "#9a2516",
+    dangerText: "#7b1e12",
   },
   "phosphor-dark": {
     bg: "#050a06",
@@ -244,6 +276,8 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accent: "#00ff41",
     accentBright: "#6aff90",
     buttonText: "#021a06",
+    danger: "#c4302b",
+    dangerText: "#e6908d",
   },
 };
 
@@ -537,7 +571,11 @@ export async function showQuitConfirmationDialog(
         const snapshot = await options.refresh();
         latestSnapshot = snapshot;
         const signature = JSON.stringify(snapshot);
-        const payload = buildQuitDialogUpdatePayload(snapshot, navigationPrefix);
+        const payload = buildQuitDialogUpdatePayload(
+          snapshot,
+          navigationPrefix,
+          Boolean(options.quietRestart),
+        );
         if (options.federationPeerCount && payload.totalCount === 0) {
           payload.countText = "No local work is running.";
           payload.impactText = "Work on other machines may continue after this instance disconnects.";
@@ -739,10 +777,18 @@ export async function showQuitConfirmationDialog(
 
 const QUIT_DIALOG_WIDTH = 460;
 
-const QUIET_RESTART_BUTTON_TITLE =
-  "Tell each running turn to stop, stop environment actions, and quit."
-  + " After the next launch, each stopped thread continues, a few at a time,"
-  + " before any other queued or automatic work starts.";
+/**
+ * What Quiet & Continue After Restart does, in the order `runQuietRestart`
+ * does it. Shown by the footer's "?" disclosure and read as the Quiet
+ * button's description.
+ */
+const QUIET_RESTART_HELP_HTML = `<p class="help-popover__title">Quiet &amp; Continue After Restart</p>
+          <ul>
+            <li>Each running thread is told it is about to stop and gets up to ${QUIET_RESTART_TURN_GRACE_MS / 1000} seconds to finish its step.</li>
+            <li>Environment actions are stopped. Queued messages are kept.</li>
+            <li>When PwrAgent starts again, each stopped thread continues where it left off, a few at a time, before other queued or automatic work.</li>
+          </ul>
+          <p class="help-popover__limit">Integrated terminals still end when PwrAgent quits. A thread that cannot finish its step in time is stopped and continues after the restart.</p>`;
 const DIALOG_MAX_HEIGHT = 620;
 const DIALOG_MIN_HEIGHT = 360;
 /** Keep the prompt clear of the work area's edges. */
@@ -799,7 +845,7 @@ const DIALOG_CHROME_HEIGHT =
   + 37 // h1 and its margin
   + 112 // footer: hairline, countdown, buttons, padding
   + 4; // rounding slack: an underestimate would scroll the middle region
-/** The Quiet & Continue After Restart row in the footer. */
+/** The quit group's own row, once Quiet & Continue After Restart wraps it. */
 const DIALOG_QUIET_RESTART_HEIGHT = 34 + 8;
 const DIALOG_TEXT_LINE_HEIGHT = 20;
 const DIALOG_PARAGRAPH_GAP = 12;
@@ -955,6 +1001,19 @@ type QuitDialogCopyOptions = {
   quietRestartAvailable?: boolean;
 };
 
+/**
+ * Whether Quiet & Continue After Restart is offered, and so is the default
+ * action. Only thread work has anything to continue after the restart, and
+ * the dialog asks again on every refresh, so the offer follows the work.
+ */
+export function quietRestartApplies(options: {
+  quietRestartAvailable?: boolean;
+  inProgressThreadCount: number;
+}): boolean {
+  return Boolean(options.quietRestartAvailable)
+    && options.inProgressThreadCount > 0;
+}
+
 /** The prose above the list. The height estimate reads the same strings. */
 function quitDialogCopy(options: QuitDialogCopyOptions): {
   peerOnly: boolean;
@@ -988,10 +1047,7 @@ function quitDialogCopy(options: QuitDialogCopyOptions): {
     archiveCleanupCount: options.archiveCleanupCount ?? 0,
     hasItems: options.items.length > 0,
   });
-  // Only thread work has anything to continue after the restart.
-  const quietRestart = Boolean(options.quietRestartAvailable)
-    && !peerOnly
-    && options.inProgressThreadCount > 0;
+  const quietRestart = quietRestartApplies(options);
   return { peerOnly, ...(peerText ? { peerText } : {}), countText, impactText, quietRestart };
 }
 
@@ -1008,6 +1064,9 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
     impactText: interruptionText,
     quietRestart,
   } = quitDialogCopy(options);
+  // Rendered whenever a handler is wired, hidden while it does not apply, so
+  // a refresh can offer or withdraw it without rebuilding the page.
+  const quietRestartWired = Boolean(options.quietRestartAvailable);
   const listHtml = buildQuitItemListHtml({
     items: options.items,
     navigationPrefix: options.navigationPrefix,
@@ -1042,9 +1101,15 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         --button-text: ${p.buttonText};
         /* Derived exactly like app.css's --accent-border. */
         --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
+        --danger: ${p.danger};
+        --danger-text: ${p.dangerText};
+        /* The color themes derive these from --danger-base, as here. */
+        --danger-soft: ${p.dangerSoft ?? "color-mix(in srgb, var(--danger) 24%, transparent)"};
+        --danger-border: ${p.dangerBorder ?? "color-mix(in srgb, var(--danger) 45%, transparent)"};
         font-family: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
       }
       * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
       html {
         height: 100%;
         overflow: hidden;
@@ -1238,8 +1303,10 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         margin: 0 0 12px;
         line-height: 1.45;
       }
-      /* Countdown and buttons stay pinned to the bottom of the window. */
+      /* Countdown and buttons stay pinned to the bottom of the window. The
+         explainer is positioned against it. */
       .footer {
+        position: relative;
         flex: 0 0 auto;
         padding: 12px 24px 18px;
         border-top: 1px solid var(--border);
@@ -1250,18 +1317,23 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         color: var(--text-muted);
         font-weight: 600;
       }
+      /* Choices that keep PwrAgent open sit left; choices that quit sit
+         right. When the quit group cannot share the row, it wraps to a row
+         of its own, still right-aligned. */
       .actions {
         display: flex;
-        justify-content: flex-end;
+        flex-wrap: wrap;
+        align-items: center;
         gap: 8px;
         margin-top: 12px;
       }
-      .quiet-restart {
+      .actions__group {
         display: flex;
-        margin-top: 8px;
+        align-items: center;
+        gap: 8px;
       }
-      .quiet-restart button {
-        flex: 1 1 auto;
+      .actions__group--quit {
+        margin-left: auto;
       }
       button:disabled {
         cursor: default;
@@ -1298,15 +1370,86 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         border-color: var(--accent-border);
         background: var(--panel-hover);
       }
+      /* The default action: filled, so it reads as the recommendation. */
       .primary {
+        border-color: var(--accent-fill);
+        background: var(--accent-fill);
+        color: var(--button-text);
+        font-weight: 600;
+      }
+      /* A halo, not a new fill: --button-text is only promised against
+         --accent-fill, so hover must not change the color under it. */
+      .primary:hover:not(:disabled) {
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-fill) 28%, transparent);
+      }
+      /* Mirrors app.css's .button--danger: quitting now stops running work. */
+      .danger {
+        border-color: var(--danger-border);
+        background: var(--danger-soft);
+        color: var(--danger-text);
+        font-weight: 600;
+      }
+      .danger:hover:not(:disabled) {
+        border-color: var(--danger-text);
+        background: color-mix(in srgb, var(--danger) 36%, transparent);
+      }
+      /* "?" beside Quiet: discloses what Quiet does. */
+      .help {
+        width: 28px;
+        height: 28px;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        border-color: var(--border);
+        border-radius: 50%;
+        background: transparent;
+        color: var(--text-muted);
+        font-weight: 650;
+        line-height: 1;
+      }
+      .help:hover:not(:disabled),
+      .help[aria-expanded="true"] {
         border-color: var(--accent-border);
         background: var(--row-active);
         color: var(--accent-bright);
-        font-weight: 600;
       }
-      .primary:hover {
-        background: var(--accent-fill);
-        color: var(--button-text);
+      /* Floats above the footer, over the list, so opening it changes
+         neither the window nor the pinned footer. Its max-height is set as it
+         opens, from the room between the title strip and the footer. */
+      .help-popover {
+        position: absolute;
+        right: 24px;
+        bottom: calc(100% + 8px);
+        left: 24px;
+        z-index: 3;
+        overflow-y: auto;
+        padding: 12px 14px 4px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+        color: var(--text-secondary);
+        font-size: 12.5px;
+        line-height: 1.5;
+        -webkit-app-region: no-drag;
+      }
+      .help-popover p,
+      .help-popover ul {
+        margin: 0 0 8px;
+      }
+      .help-popover ul {
+        padding-left: 16px;
+      }
+      .help-popover li {
+        margin: 0 0 4px;
+      }
+      .help-popover__title {
+        color: var(--text-primary);
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .help-popover__limit {
+        color: var(--text-muted);
       }
       /* Close (top-right of the strip) → maps to "Stay Open". */
       .close {
@@ -1348,13 +1491,19 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
       <footer class="footer">
         <p class="countdown" id="countdown"></p>
         <div class="actions">
-          <button id="stay" class="secondary" type="button">Stay Open</button>
-          ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
-          <button id="quit" class="primary" type="button" autofocus>Quit Now</button>
+          <div class="actions__group">
+            <button id="stay" class="secondary" type="button">Stay Open</button>
+            ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
+          </div>
+          <div class="actions__group actions__group--quit">
+            <button id="quit" class="danger" type="button"${quietRestart ? "" : " autofocus"}>Quit Now</button>
+            ${quietRestartWired ? `<button id="quiet-restart" class="primary" type="button" aria-describedby="quiet-help"${quietRestart ? " autofocus" : " hidden"}>Quiet &amp; Continue After Restart</button>
+            <button id="quiet-help-toggle" class="help" type="button" aria-label="About Quiet &amp; Continue After Restart" aria-expanded="false" aria-controls="quiet-help"${quietRestart ? "" : " hidden"}>?</button>
+            <div id="quiet-help" class="help-popover" hidden>
+          ${QUIET_RESTART_HELP_HTML}
+            </div>` : ""}
+          </div>
         </div>
-        ${quietRestart ? `<div class="quiet-restart">
-          <button id="quiet-restart" class="secondary" type="button" title="${escapeHtml(QUIET_RESTART_BUTTON_TITLE)}">Quiet &amp; Continue After Restart</button>
-        </div>` : ""}
       </footer>
     </main>
     <script>
@@ -1364,6 +1513,43 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
       let timer;
       let waitingForWork = false;
       let quieting = false;
+      const quitButton = document.getElementById("quit");
+      const quietButton = document.getElementById("quiet-restart");
+      const helpToggle = document.getElementById("quiet-help-toggle");
+      const help = document.getElementById("quiet-help");
+      // Whether Quiet & Continue After Restart is offered right now. While it
+      // is, it is the default action; otherwise Quit Now is.
+      let quietApplies = Boolean(quietButton && !quietButton.hidden);
+
+      function setHelpOpen(open) {
+        if (!help || !helpToggle) return;
+        if (open) {
+          // Room between the title strip and the footer, so a short window
+          // scrolls the explainer instead of pushing it off the top.
+          const top = document.querySelector(".titlebar").getBoundingClientRect().bottom;
+          const bottom = document.querySelector(".footer").getBoundingClientRect().top;
+          help.style.maxHeight = Math.max(96, bottom - top - 16) + "px";
+        }
+        help.hidden = !open;
+        helpToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      }
+      function setQuietApplies(applies) {
+        if (!quietButton || quieting || applies === quietApplies) return;
+        quietApplies = applies;
+        const focusWasOnQuiet =
+          document.activeElement === quietButton || document.activeElement === helpToggle;
+        if (!applies) setHelpOpen(false);
+        quietButton.hidden = !applies;
+        helpToggle.hidden = !applies;
+        // Never strand focus on a control that just disappeared. Focus is not
+        // moved onto Quiet when it appears: that would take the keyboard out
+        // from under someone mid-choice.
+        if (focusWasOnQuiet) quitButton.focus();
+      }
+      /** The default action, as Enter on no particular control runs it. */
+      function defaultButton() {
+        return quietApplies && quietButton ? quietButton : quitButton;
+      }
 
       function send(result) {
         if (quieting) return;
@@ -1386,6 +1572,7 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         send("countdown-cancel");
       }
       window.__pwragentUpdateQuitSnapshot = (snapshot) => {
+        setQuietApplies(Boolean(snapshot.quietRestart));
         document.getElementById("blocker-count").textContent = snapshot.countText;
         document.getElementById("blocker-impact").textContent = snapshot.impactText;
         const currentList = document.getElementById("list");
@@ -1461,7 +1648,7 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
       }, 1000);
 
       // Deliberate interaction only. Two things that look like engagement are
-      // not: "focusin" fires immediately because the Quit button is autofocused,
+      // not: "focusin" fires immediately because the default button is autofocused,
       // and "pointermove" fires when the window simply appears underneath a
       // stationary cursor. Either would cancel the countdown before anyone had
       // read a word, leaving an unattended shutdown (OS restart, update install)
@@ -1479,35 +1666,60 @@ export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
         countdown.textContent = "Waiting for running work to finish...";
         send("wait-for-work");
       });
-      document.getElementById("quit").addEventListener("click", () => send("manual-confirm"));
-      document.getElementById("quiet-restart")?.addEventListener("click", () => {
+      quitButton.addEventListener("click", () => send("manual-confirm"));
+      quietButton?.addEventListener("click", () => {
+        if (!quietApplies) return;
         cancelCountdown();
+        setHelpOpen(false);
         send("quiet-restart");
         quieting = true;
         for (const button of document.querySelectorAll("button")) button.disabled = true;
         countdown.textContent = "Stopping turns for restart...";
       });
+      helpToggle?.addEventListener("click", () => setHelpOpen(help.hidden));
+      // A press anywhere outside the explainer and its toggle closes it.
+      document.addEventListener("pointerdown", (event) => {
+        if (!help || help.hidden) return;
+        if (help.contains(event.target) || helpToggle.contains(event.target)) return;
+        setHelpOpen(false);
+      });
       window.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") send("manual-cancel");
-        // Enter still confirms, but not while a row link has focus — there it
-        // means "follow this link".
-        if (event.key === "Enter" && !document.activeElement?.classList.contains("row")) {
-          send("manual-confirm");
+        if (event.key === "Escape") {
+          // The explainer is the innermost layer: Esc closes it, not the dialog.
+          if (help && !help.hidden) {
+            event.preventDefault();
+            setHelpOpen(false);
+            helpToggle.focus();
+            return;
+          }
+          send("manual-cancel");
+          return;
         }
+        if (event.key !== "Enter") return;
+        // A focused button or row link answers Enter itself, so Enter on Stay
+        // Open stays open and Enter on a row follows it.
+        const active = document.activeElement;
+        if (active && active.matches("button, a")) return;
+        event.preventDefault();
+        defaultButton().click();
       });
     </script>
   </body>
 </html>`;
 }
 
-function buildQuitDialogUpdatePayload(
+/** What each refresh hands the open page. */
+export function buildQuitDialogUpdatePayload(
   snapshot: QuitConfirmationDialogSnapshot,
   navigationPrefix: string,
+  quietRestartAvailable = false,
 ): {
   countText: string;
   impactText: string;
   listHtml: string;
   totalCount: number;
+  /** Whether Quiet & Continue After Restart is offered now. */
+  quietRestart: boolean;
 } {
   const counts = {
     inProgressThreadCount: snapshot.inProgressThreadCount,
@@ -1539,6 +1751,10 @@ function buildQuitDialogUpdatePayload(
       navigationPrefix,
     }),
     totalCount,
+    quietRestart: quietRestartApplies({
+      quietRestartAvailable,
+      inProgressThreadCount: counts.inProgressThreadCount,
+    }),
   };
 }
 
