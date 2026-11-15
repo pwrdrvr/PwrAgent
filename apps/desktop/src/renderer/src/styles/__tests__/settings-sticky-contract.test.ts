@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { firstCssRuleBody as ruleBody } from "./css-rule-body";
+import { appCss, firstCssRuleBody } from "./css-rule-body";
+
+/** A rule's declarations without its comments, which may quote other values. */
+const ruleBody = (selector: string) => firstCssRuleBody(selector).replace(/\/\*[\s\S]*?\*\//g, "");
 
 /**
  * Locks what lets an element inside a Settings section stick to the pane.
@@ -37,6 +40,16 @@ describe("settings sticky contract", () => {
     const z = Number(footer.match(/z-index:\s*(\d+)/)?.[1]);
     const headerZ = Number(ruleBody(".settings-section__header-button").match(/z-index:\s*(\d+)/)?.[1]);
     expect(z).toBeLessThan(headerZ);
+  });
+
+  it("lifts the Save bar only while it is pinned, and keeps focused fields clear of it", () => {
+    // At rest the bar sits in flow; a shadow there falls on the field above.
+    expect(ruleBody(".codex-provider-editor__footer")).not.toMatch(/box-shadow/);
+    expect(ruleBody(".codex-provider-editor__footer")).toMatch(/container-type:\s*scroll-state/);
+    expect(appCss).toMatch(/@container scroll-state\(stuck: bottom\)\s*\{\s*\.codex-provider-editor__footer::before/);
+    // Tab scrolls a control to the pane's bottom edge, where the bar is.
+    expect(ruleBody(".codex-provider-editor > :not(.codex-provider-editor__footer) :where(:focus-visible)"))
+      .toMatch(/scroll-margin-bottom:\s*\d+px/);
   });
 
   it("pins only pane-level section headers, never one nested in a section body", () => {

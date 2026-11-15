@@ -291,10 +291,13 @@ export function MessagingRoutesSettings(props: {
   };
 
   const routeCount = routes.defaultAgents.length + routes.bindings.length;
-  // A route that left the list (cleared from another window) keeps its form
-  // open above the list rather than dropping the operator's edit.
-  const editingListed = Boolean(editing)
-    && routes.defaultAgents.some((route) => route.assignmentId === editing?.assignmentId);
+  // The form opens under its route's row. A route not in the list (cleared
+  // from another window, or not loaded yet) keeps its form open above the
+  // list instead. Moving between the two places remounts the form, which
+  // resets choices not yet saved; leaving it nowhere would close it unasked.
+  const editingListed = routes.defaultAgents.some(
+    (route) => route.assignmentId === editing?.assignmentId,
+  );
   const editEditor = editing ? (
     <DefaultAgentEditor
       key={`edit:${editing.assignmentId}`}
@@ -373,7 +376,7 @@ export function MessagingRoutesSettings(props: {
           />
         ) : null}
 
-        {editing && !editingListed ? editEditor : null}
+        {editingListed ? null : editEditor}
 
         <div className="messaging-routes__list" aria-label="Default Agent routes">
           {loading ? (

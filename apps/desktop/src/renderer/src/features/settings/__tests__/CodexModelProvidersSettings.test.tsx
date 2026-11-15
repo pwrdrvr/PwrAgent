@@ -42,18 +42,21 @@ function renderSettings(
     testCodexModelProvider,
     ...(scan ? { scanCodexModelProviderImports } : {}),
   } as unknown as DesktopApi;
-  render(
+  const view = (current: DesktopCodexModelProvider[]) => (
     <CodexModelProvidersSettings
       backends={backends}
       desktopApi={desktopApi}
-      providers={providers}
+      providers={current}
       saving={false}
       onRefresh={onRefresh}
       onRefreshCatalogs={onRefreshCatalogs}
       onSave={onSave}
-    />,
+    />
   );
+  const { rerender } = render(view(providers));
   return {
+    /** The owner's list changing under an open form. */
+    setProviders: (next: DesktopCodexModelProvider[]) => rerender(view(next)),
     onSave,
     onRefresh,
     onRefreshCatalogs,
@@ -227,6 +230,20 @@ describe("CodexModelProvidersSettings", () => {
       expect(form.closest(".codex-provider-card")).not.toBeNull();
       cleanup();
     }
+  });
+
+  // Rule: while a form is open, it is on screen. An open draft disables every
+  // Edit and hides Add, so a form with nowhere to render strands the pane.
+  it("keeps an open form on screen after its provider leaves the list", () => {
+    const { setProviders } = renderSettings([refuseless, mathos]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
+    // A removal whose key cleanup failed, or another window's edit.
+    setProviders([mathos]);
+    const form = screen.getByRole("group", { name: "Edit refuseless" });
+    expect(form.closest(".codex-provider-card")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeInTheDocument();
   });
 
   it("keeps Save, Cancel and Remove together in the form's sticky bar", () => {

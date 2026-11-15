@@ -17520,11 +17520,30 @@ a.button {
   padding: 12px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
-  box-shadow: 0 -8px 18px var(--shadow-tint-faint);
+  container-type: scroll-state;
 }
 
 .codex-provider-editor__footer > .settings-error {
   margin: 0;
+}
+
+/* The lift shadow, drawn only while the bar is pinned over the form. At rest
+   it sits in flow and casts nothing on the field above it. */
+@container scroll-state(stuck: bottom) {
+  .codex-provider-editor__footer::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    box-shadow: 0 -8px 18px var(--shadow-tint-faint);
+    pointer-events: none;
+  }
+}
+
+/* A control that Tab scrolls to the pane's bottom edge stops above the pinned
+   bar: its 59px, its 1px rule, and the focus ring's reach. */
+.codex-provider-editor > :not(.codex-provider-editor__footer) :where(:focus-visible) {
+  scroll-margin-bottom: 68px;
 }
 
 .codex-provider-editor > .settings-field__help {

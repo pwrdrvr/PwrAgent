@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
@@ -251,6 +251,9 @@ export function CodexModelProvidersSettings(props: {
   const importable = imports?.candidates.filter((candidate) =>
     !props.providers.some((provider) => provider.baseUrl === candidate.baseUrl)) ?? [];
   const skipped = imports?.skipped ?? [];
+  // `editing` is the saved provider the draft edits, so it is found only
+  // while that provider is still in the list.
+  const editingListed = Boolean(editing);
   const editor = draft ? (
     <ProviderEditor
       draft={draft}
@@ -284,7 +287,6 @@ export function CodexModelProvidersSettings(props: {
         {props.providers.map((provider) => {
           const row = (
             <SettingsPathRow
-              key={provider.id}
               title={provider.name}
               meta={provider.id}
               path={provider.baseUrl}
@@ -302,17 +304,27 @@ export function CodexModelProvidersSettings(props: {
           // The form opens inside the card of the row whose Edit was pressed,
           // as a Plugins connection drawer and an Environments action do. Under
           // the whole list, the top row's form landed below every other row.
-          return draft?.existingId === provider.id ? (
-            <div key={provider.id} className="codex-provider-card">
-              {row}
-              {editor}
-            </div>
-          ) : row;
+          return (
+            <Fragment key={provider.id}>
+              {draft?.existingId === provider.id ? (
+                <div className="codex-provider-card">
+                  {row}
+                  {editor}
+                </div>
+              ) : row}
+            </Fragment>
+          );
         })}
-        {draft && !draft.existingId ? (
+        {/* A new provider's form, or one whose provider has left the list (a
+            removal whose key cleanup failed, or another window's edit): it
+            still needs a place, or the open draft disables every Edit and
+            hides Add with no form on screen. */}
+        {draft && !editingListed ? (
           <div className="codex-provider-card">
             <SettingsPathRow
-              title={draft.imported ? `Import ${draft.imported.name}` : "New provider"}
+              title={draft.existingId
+                ? draft.name.trim() || draft.existingId
+                : draft.imported ? `Import ${draft.imported.name}` : "New provider"}
               selected={false}
             />
             {editor}
