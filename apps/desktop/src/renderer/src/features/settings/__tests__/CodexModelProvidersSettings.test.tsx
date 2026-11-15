@@ -1,7 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexModelProviderImportScan, DesktopCodexModelProvider } from "@pwragent/shared";
+import type {
+  BackendModelOption,
+  BackendSummary,
+  CodexModelProviderCatalogState,
+  CodexModelProviderImportScan,
+  DesktopCodexModelProvider,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CodexModelProvidersSettings, slugifyProviderId } from "../CodexModelProvidersSettings";
 
@@ -19,9 +25,11 @@ const refuseless: DesktopCodexModelProvider = {
 function renderSettings(
   providers: DesktopCodexModelProvider[] = [],
   scan?: CodexModelProviderImportScan,
+  backends?: BackendSummary[],
 ) {
   const onSave = vi.fn(async () => true);
   const onRefresh = vi.fn(async () => undefined);
+  const onRefreshCatalogs = vi.fn(async () => undefined);
   const setCodexModelProviderApiKey = vi.fn(async ({ providerId }: { providerId: string }) => ({ providerId, hasApiKey: true }));
   const testCodexModelProvider = vi.fn(async () => ({
     models: { ok: true, count: 4 },
@@ -36,14 +44,54 @@ function renderSettings(
   } as unknown as DesktopApi;
   render(
     <CodexModelProvidersSettings
+      backends={backends}
       desktopApi={desktopApi}
       providers={providers}
       saving={false}
       onRefresh={onRefresh}
+      onRefreshCatalogs={onRefreshCatalogs}
       onSave={onSave}
     />,
   );
-  return { onSave, onRefresh, setCodexModelProviderApiKey, testCodexModelProvider, scanCodexModelProviderImports };
+  return {
+    onSave,
+    onRefresh,
+    onRefreshCatalogs,
+    setCodexModelProviderApiKey,
+    testCodexModelProvider,
+    scanCodexModelProviderImports,
+  };
+}
+
+const mathos: DesktopCodexModelProvider = {
+  id: "mathos",
+  name: "MathOS",
+  baseUrl: "https://mathos.example/v1",
+  hasApiKey: true,
+};
+
+/** The owner's Codex summary after it read MathOS's `GET /models`. */
+function codexSummary(
+  models: BackendModelOption[],
+  state: Partial<CodexModelProviderCatalogState> = {},
+): BackendSummary {
+  return {
+    kind: "codex",
+    launchpadOptions: { models },
+    codexModelProviders: [{
+      id: "mathos",
+      name: "MathOS",
+      status: "ready",
+      listedCount: 0,
+      discoveredCount: models.length,
+      readAt: Date.now() - 3 * 60_000,
+      ...state,
+    }],
+  } as unknown as BackendSummary;
+}
+
+function mathosModel(id: string, extra: Partial<BackendModelOption> = {}): BackendModelOption {
+  return { id: `@mathos/${id}`, providerId: "mathos", providerLabel: "MathOS", supportsReasoning: false, ...extra };
 }
 
 const bonsaiSource = { label: "bonsai", configPath: "/home/me/.codex/profiles/bonsai/config.toml" };
@@ -97,7 +145,8 @@ describe("CodexModelProvidersSettings", () => {
     expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("refuseless");
     fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://api.refuseless.example/v1/" } });
     fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-test" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Model ids" }), { target: { value: "glm-5.3-abliterated\n" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Model id to add" }), { target: { value: "glm-5.3-abliterated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     fireEvent.change(screen.getByRole("textbox", { name: "glm-5.3-abliterated input rate" }), { target: { value: "2" } });
     fireEvent.change(screen.getByRole("textbox", { name: "glm-5.3-abliterated output rate" }), { target: { value: "$3" } });
     fireEvent.click(screen.getByRole("button", { name: "Add and reconnect" }));
@@ -165,7 +214,7 @@ describe("CodexModelProvidersSettings", () => {
     expect(screen.getByRole("textbox", { name: "Provider name" })).toHaveValue("Local Responses");
     expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("gpu");
     expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("http://127.0.0.1:8080/v1");
-    expect(screen.getByRole("textbox", { name: "Model ids" })).toHaveValue("local-model");
+    expect(within(screen.getByRole("table", { name: "Provider models" })).getByText("local-model")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Runs locally" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByLabelText("API key")).toHaveValue("");
     expect(screen.getByText(/Imported from \/home\/me\/\.codex\/profiles\/bonsai\/config\.toml/u)).toBeInTheDocument();
@@ -238,6 +287,85 @@ describe("CodexModelProvidersSettings", () => {
     expect(within(imports).queryByRole("button", { name: "Import Refuseless" })).not.toBeInTheDocument();
     fireEvent.click(within(imports).getByRole("button", { name: "Import Local Responses" }));
     expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("gpu-2");
+  });
+
+  it("lists the models the endpoint returned, with their effort levels, and refreshes them", async () => {
+    const { onRefreshCatalogs } = renderSettings([mathos], undefined, [codexSummary([
+      mathosModel("deepseek-v4.1-flash", {
+        label: "DeepSeek V4.1 Flash",
+        supportsReasoning: true,
+        reasoningEfforts: ["low", "high", "max", "ultramath"],
+        defaultReasoningEffort: "high",
+      }),
+      mathosModel("mistral-large-4-0", { label: "Mistral Large 4.0" }),
+    ])]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("2 models from GET /models · read 3 min ago")).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Provider models" });
+    expect(within(table).getByText("DeepSeek V4.1 Flash")).toBeInTheDocument();
+    expect(within(table).getByLabelText("Effort levels: low, high, max, ultramath; default high")).toBeInTheDocument();
+    expect(within(table).getByText("None listed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(onRefreshCatalogs).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps a 2,000-model catalog to 50 rows, finds a model by its words, and prices any of them", async () => {
+    const models = Array.from({ length: 2_000 }, (_, index) => mathosModel(`vendor-${index % 40}/model-${index}`));
+    models[1_234] = mathosModel("zai-org/glm-5.3", { label: "GLM 5.3" });
+    const { onSave } = renderSettings([mathos], undefined, [codexSummary(models, { truncated: true })]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const table = screen.getByRole("table", { name: "Provider models" });
+    expect(within(table).getAllByRole("row")).toHaveLength(51);
+    expect(screen.getByText(/Showing 50 of 2,000\. Type to narrow the list\./u)).toBeInTheDocument();
+    expect(screen.getByText("2,000 models from GET /models (more not loaded) · read 3 min ago")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Find a model" }), { target: { value: "5.3 glm" } });
+    const narrowed = screen.getByRole("table", { name: "Provider models" });
+    expect(within(narrowed).getAllByRole("row")).toHaveLength(2);
+    fireEvent.change(within(narrowed).getByRole("textbox", { name: "zai-org/glm-5.3 input rate" }), { target: { value: "0.6" } });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Find a model" }), { target: { value: "no such model" } });
+    expect(screen.getByText("No models match “no such model”.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    // The model gets a rate without being added to the provider's own list.
+    expect(onSave).toHaveBeenCalledWith([{
+      id: "mathos",
+      name: "MathOS",
+      baseUrl: "https://mathos.example/v1",
+      rates: [{ model: "zai-org/glm-5.3", inputPerMillion: 0.6 }],
+    }]);
+  });
+
+  it("shows a new provider's models from its connection test", async () => {
+    const { testCodexModelProvider } = renderSettings();
+    testCodexModelProvider.mockResolvedValueOnce({
+      models: { ok: true, count: 1, items: [{ id: "kimi-k3.1-pro", label: "Kimi K3.1 Pro", reasoningEfforts: ["low", "high"] }] },
+      responses: { ok: true, model: "kimi-k3.1-pro" },
+      latencyMs: 90,
+    } as never);
+    fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    expect(screen.getByText("Test the connection to read the endpoint's models.")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Provider name" }), { target: { value: "MathOS" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://mathos.example/v1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    const table = await screen.findByRole("table", { name: "Provider models" });
+    expect(within(table).getByText("Kimi K3.1 Pro")).toBeInTheDocument();
+    expect(within(table).getByLabelText("Effort levels: low, high")).toBeInTheDocument();
+    expect(screen.getByText("1 model from GET /models · from this test")).toBeInTheDocument();
+    // A different URL is not what the test read.
+    fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://other.example/v1" } });
+    expect(screen.queryByRole("table", { name: "Provider models" })).not.toBeInTheDocument();
+  });
+
+  it("offers only the added models when the endpoint's list is off", () => {
+    renderSettings([{ ...mathos, discoverModels: false, models: ["prover-large"] }], undefined, [codexSummary([
+      mathosModel("prover-large"),
+    ], { status: "off" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("Only the models added here are offered.")).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Provider models" });
+    expect(within(table).getByText("prover-large")).toBeInTheDocument();
+    expect(within(table).getByText("Added")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
   });
 
   it("derives an id from a name", () => {

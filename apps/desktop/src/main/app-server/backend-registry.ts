@@ -2158,6 +2158,7 @@ export class DesktopBackendRegistry {
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
       recordTokenMiserFocusedInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserFocusedInference"]>) => this.threadUsageLedger.recordTokenMiserFocusedInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
+      refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
       registerAcpMcpConnections: (...args: Parameters<ThreadMcpConnections["registerAcpMcpConnections"]>) => this.threadMcpConnections.registerAcpMcpConnections(...args),
       get registrySessionId() { return current().registrySessionId; },
       get registrySessionStartedAt() { return current().registrySessionStartedAt; },
@@ -18158,13 +18159,17 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Re-read the Codex model list after a provider's catalog read failed, and
-   * publish it on the cached Codex summary. It runs Codex's own `model/list`
-   * again, through the model catalog, and no provider discovery. Windows
-   * re-read summaries on `backend/providerStatus/updated`.
+   * Re-read the Codex model list and publish it on the cached Codex summary.
+   * The retry after a failed provider read reuses a provider read that is
+   * still fresh; Settings' Refresh (`rereadProviders`) reads every provider
+   * endpoint again. Windows re-read summaries on
+   * `backend/providerStatus/updated`.
    */
-  private async refreshCodexProviderCatalogs(): Promise<readonly CodexModelProviderCatalogState[]> {
+  private async refreshCodexProviderCatalogs(
+    options: { rereadProviders?: boolean } = {},
+  ): Promise<readonly CodexModelProviderCatalogState[]> {
     const generation = this.codexBackendGeneration;
+    if (options.rereadProviders) this.codexModelProviderCatalog?.invalidate();
     this.modelCatalog.invalidate("codex");
     const models = await this.modelCatalog.readModels("codex", "provider-catalog-retry");
     const states = this.codexModelProviderCatalog?.catalogStates() ?? [];

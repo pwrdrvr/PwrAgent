@@ -329,6 +329,43 @@ describe("settings ipc", () => {
     );
   });
 
+  it("refreshes provider catalogs through the owner's reader, and says so when Codex is not running", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const stateDb = openInMemoryStateDb();
+    stateDbs.push(stateDb);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { storage: new SqliteTokenMiserStorage(stateDb) }),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
+    const { SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+    try {
+      await expect(handlers.get(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL)?.({}))
+        .rejects.toThrow("Codex is not running");
+      let finishRead: () => void = () => undefined;
+      const reread = vi.fn(() => new Promise<void>((resolve) => { finishRead = resolve; }));
+      const stop = service.onCodexModelProviderCatalogRefresh(reread);
+      let settled = false;
+      const refreshed = Promise.resolve(handlers.get(SETTINGS_REFRESH_CODEX_MODEL_PROVIDER_CATALOGS_CHANNEL)?.({}))
+        .then(() => { settled = true; });
+      await Promise.resolve();
+      // Settings waits for the owner's read, so its list then shows the result.
+      expect(reread).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+      finishRead();
+      await refreshed;
+      expect(settled).toBe(true);
+      stop();
+    } finally {
+      disposeSettingsIpcHandlers();
+    }
+  });
+
   it("registers redacted read and write handlers", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);

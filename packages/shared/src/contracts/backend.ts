@@ -261,6 +261,8 @@ export type CodexModelProviderCatalogState = {
   truncated?: boolean;
   /** A short reason for `unavailable`, with the key redacted. */
   error?: string;
+  /** When the last successful read finished, in epoch milliseconds. */
+  readAt?: number;
 };
 
 export type BackendLaunchpadOptions = {

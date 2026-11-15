@@ -66,6 +66,22 @@ export type DesktopCodexModelProvider = CodexModelProviderSettings & {
   hasApiKey: boolean;
 };
 
+/** One model a provider's `GET /models` listed. */
+export type CodexProviderCatalogModel = {
+  /** The upstream id, without the `@provider/` prefix. */
+  id: string;
+  label?: string;
+  /**
+   * The effort levels the endpoint names for this model, lowest first. A
+   * thinking switch (`on`/`off`) is not an effort level and is left out.
+   */
+  reasoningEfforts?: string[];
+  /** Set only when it is one of `reasoningEfforts`. */
+  defaultReasoningEffort?: string;
+  /** From `input_modalities`; absent when the endpoint did not say. */
+  supportsImage?: boolean;
+};
+
 /** What Settings shows after Test connection. */
 export type CodexModelProviderTestResult = {
   /** `GET /models`, every page of it. */
@@ -77,6 +93,8 @@ export type CodexModelProviderTestResult = {
     /** The endpoint lists more models than PwrAgent loads. */
     truncated?: boolean;
     error?: string;
+    /** The models the read found, for the provider form's model table. */
+    items?: CodexProviderCatalogModel[];
   };
   /** A completed text response to a short request with instructions and namespaced tools. */
   responses: { ok: boolean; model?: string; skipped?: boolean; error?: string };
@@ -557,4 +575,59 @@ export function modelOptionsForThreadProvider<T extends { id: string }>(
 ): T[] {
   const provider = codexProviderIdOfModel(threadModel);
   return options.filter((option) => codexProviderIdOfModel(option.id) === provider);
+}
+
+/** At most this many effort levels per model; real catalogs list a handful. */
+const MAX_PROVIDER_REASONING_EFFORTS = 16;
+/** An effort travels to the provider as `reasoning.effort`, so it stays a plain word. */
+const PROVIDER_REASONING_EFFORT = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/u;
+/** A thinking switch, which Codex has no field to send. */
+const PROVIDER_THINKING_SWITCHES = new Set(["on", "off"]);
+
+/**
+ * One entry of a provider's `GET /models`, or undefined when its id is not
+ * one a provider model can have.
+ *
+ * Beyond the OpenAI fields, an endpoint may name each model's effort levels.
+ * Open Math OS documents `supported_reasoning_efforts` (lowest first) and
+ * `default_reasoning_effort`, and an `effort_tiers` copy under
+ * `capabilities`. `on` and `off` there are a thinking switch, not an effort
+ * level, so they are left out. A level the endpoint invents (`ultramath`) is
+ * kept: Codex sends any level as `reasoning.effort`, unchanged.
+ */
+export function parseCodexProviderCatalogModel(entry: unknown): CodexProviderCatalogModel | undefined {
+  const item = entry && typeof entry === "object" && !Array.isArray(entry)
+    ? entry as Record<string, unknown>
+    : undefined;
+  const id = typeof item?.id === "string" ? item.id.trim() : "";
+  if (!item || !isValidCodexProviderModelId(id)) return undefined;
+  const label = [item.display_name, item.name]
+    .map((value) => typeof value === "string" ? value.trim().slice(0, 120) : "")
+    .find(Boolean);
+  const capabilities = item.capabilities && typeof item.capabilities === "object"
+    ? item.capabilities as Record<string, unknown>
+    : undefined;
+  const listed = Array.isArray(item.supported_reasoning_efforts)
+    ? item.supported_reasoning_efforts
+    : Array.isArray(capabilities?.effort_tiers) ? capabilities.effort_tiers : [];
+  const efforts: string[] = [];
+  for (const value of listed) {
+    if (typeof value !== "string") continue;
+    const effort = value.trim();
+    if (!PROVIDER_REASONING_EFFORT.test(effort)) continue;
+    if (PROVIDER_THINKING_SWITCHES.has(effort.toLowerCase()) || efforts.includes(effort)) continue;
+    efforts.push(effort);
+    if (efforts.length === MAX_PROVIDER_REASONING_EFFORTS) break;
+  }
+  const defaultEffort = typeof item.default_reasoning_effort === "string"
+    ? item.default_reasoning_effort.trim()
+    : undefined;
+  const modalities = Array.isArray(item.input_modalities) ? item.input_modalities : undefined;
+  return {
+    id,
+    ...(label && label !== id ? { label } : {}),
+    ...(efforts.length ? { reasoningEfforts: efforts } : {}),
+    ...(defaultEffort && efforts.includes(defaultEffort) ? { defaultReasoningEffort: defaultEffort } : {}),
+    ...(modalities ? { supportsImage: modalities.includes("image") } : {}),
+  };
 }

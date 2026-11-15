@@ -762,10 +762,17 @@ export function ModelsSettings(props: {
               codex.profiles.effectiveCodexHome,
               ...codex.profiles.profiles.map((profile) => profile.codexHome),
             ].join("\n")}
+            backends={backends}
             desktopApi={props.desktopApi}
             providers={props.snapshot.models.codex.providers ?? []}
             saving={props.saving}
             onRefresh={props.onRefresh}
+            onRefreshCatalogs={props.desktopApi?.refreshCodexModelProviderCatalogs
+              ? async () => {
+                  await props.desktopApi?.refreshCodexModelProviderCatalogs?.();
+                  await refreshCatalog(false);
+                }
+              : undefined}
             onSave={props.onSaveCodexModelProviders}
           />
         ) : null}

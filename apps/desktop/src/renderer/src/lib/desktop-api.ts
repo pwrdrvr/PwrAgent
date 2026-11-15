@@ -1430,6 +1430,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   testCodexModelProvider?: (
     request: TestCodexModelProviderRequest
   ) => Promise<CodexModelProviderTestResult>;
+  /** Read every saved provider's model list again, for every window. */
+  refreshCodexModelProviderCatalogs?: () => Promise<void>;
   /** Providers the Codex config files Settings lists already define. */
   scanCodexModelProviderImports?: () => Promise<CodexModelProviderImportScan>;
   createCodexAuthProfile?: (

@@ -184,7 +184,7 @@ describe("CodexModelProviderCatalog", () => {
       },
     });
     const result = await catalog.test(refuseless, "sk-test");
-    expect(result.models).toEqual({ ok: true, count: 1 });
+    expect(result.models).toEqual({ ok: true, count: 1, items: [{ id: "glm-5.3-abliterated" }] });
     expect(result.responses).toEqual({ ok: false, model: "glm-5.3-abliterated", error: "HTTP 404: Unknown endpoint" });
     expect(JSON.parse(requests[1].body ?? "{}")).toMatchObject({
       model: "glm-5.3-abliterated",

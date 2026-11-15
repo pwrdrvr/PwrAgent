@@ -30088,6 +30088,43 @@ command = "pnpm dev"
     }
   });
 
+  it("reads a provider's model list again on Settings' Refresh, inside its ten-minute window, and publishes it", async () => {
+    let catalog = [{ id: "kimi-k3.1-pro" }];
+    const providerFetch = vi.fn(async () => new Response(JSON.stringify({ data: catalog })));
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ models: [{ id: "gpt-5.4", label: "GPT-5.4", supportsReasoning: true }] }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+      resolveCodexModelProviders: () => [{ id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1" }],
+      resolveCodexModelProviderKeys: async () => ({}),
+      codexModelProviderFetch: providerFetch,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    const codexModels = async () => (await registry.listBackends({ includeUnavailable: true }))
+      .backends.find((backend) => backend.kind === "codex")?.launchpadOptions?.models?.map((model) => model.id);
+    try {
+      await registry.listBackends(
+        { includeUnavailable: true, refreshModels: "codex" },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      expect(await codexModels()).toEqual(["gpt-5.4", "@mathos/kimi-k3.1-pro"]);
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+
+      // MathOS adds a model a minute later. Without Refresh the ten-minute
+      // read would hide it; Refresh reads the endpoint again.
+      catalog = [...catalog, { id: "glm-5.3", supported_reasoning_efforts: ["low", "high"] } as never];
+      await registry.constructionPorts().refreshCodexProviderCatalogs({ rereadProviders: true });
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+      expect(await codexModels()).toEqual(["gpt-5.4", "@mathos/kimi-k3.1-pro", "@mathos/glm-5.3"]);
+      expect(events.some((event) => event.backend === "codex"
+        && event.notification.method === "backend/providerStatus/updated")).toBe(true);
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
   it("reads unknown Codex provider ownership before admitting a matching model override", async () => {
     let provider: string | undefined;
     const model = "@fixture-provider/custom";

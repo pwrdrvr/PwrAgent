@@ -3535,6 +3535,24 @@ export class DesktopSettingsService {
     }
   }
 
+  private readonly codexModelProviderCatalogRefreshers = new Set<() => Promise<void>>();
+
+  /**
+   * The owner reads provider catalogs, so it registers how to read them
+   * again; Settings' Refresh waits for that read.
+   */
+  onCodexModelProviderCatalogRefresh(refresh: () => Promise<void>): () => void {
+    this.codexModelProviderCatalogRefreshers.add(refresh);
+    return () => this.codexModelProviderCatalogRefreshers.delete(refresh);
+  }
+
+  async refreshCodexModelProviderCatalogs(): Promise<void> {
+    if (this.codexModelProviderCatalogRefreshers.size === 0) {
+      throw new Error("Codex is not running, so there is no model list to refresh.");
+    }
+    await Promise.all([...this.codexModelProviderCatalogRefreshers].map((refresh) => refresh()));
+  }
+
   resolveCodexLocalModelIds(): string[] {
     return [...(this.readModelsConfig().codex?.localModelIds ?? [])];
   }

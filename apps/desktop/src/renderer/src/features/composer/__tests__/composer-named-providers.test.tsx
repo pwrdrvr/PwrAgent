@@ -114,14 +114,17 @@ function openDropdown(label: string): HTMLElement {
   return screen.getByRole("listbox", { name: label });
 }
 
-function renderLaunchpad() {
+function renderLaunchpad(
+  backend: BackendSummary = codex,
+  startingLaunchpad: NavigationLaunchpadDraft = initialLaunchpad,
+) {
   const patches: Array<Partial<NavigationLaunchpadDraft>> = [];
   function Harness() {
-    const [launchpad, setLaunchpad] = useState(initialLaunchpad);
+    const [launchpad, setLaunchpad] = useState(startingLaunchpad);
     return (
       <Composer
-        backends={[codex]}
-        desktopApi={{ listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [codex] })) }}
+        backends={[backend]}
+        desktopApi={{ listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [backend] })) }}
         directory={{ key: "directory:/repo", kind: "directory", label: "Repo", path: "/repo" }}
         launchpad={launchpad}
         onUpdateLaunchpad={async (_key, patch) => {
@@ -175,6 +178,35 @@ describe("named Codex model providers in the composer", () => {
     // tier restore through the provider-settings patch as for any provider.
     expect(Object.keys(patches.at(-1)!)).not.toEqual(expect.arrayContaining(["serviceTier"]));
     expect(Object.keys(patches.at(-1)!)).not.toEqual(expect.arrayContaining(["reasoningEffort"]));
+  });
+
+  it("offers a MathOS model's own effort levels, starting on its default, and sends the one chosen", async () => {
+    // MathOS's `GET /models` named this model's levels; the others name none.
+    const withEfforts = {
+      ...codex,
+      launchpadOptions: {
+        ...codex.launchpadOptions,
+        models: models.map((model) => model.id === "@mathos/mathos-model-7"
+          ? {
+              ...model,
+              supportsReasoning: true,
+              reasoningEfforts: ["low", "high", "max", "ultramath"],
+              defaultReasoningEffort: "high",
+            }
+          : model),
+      },
+    } as BackendSummary;
+    const patches = renderLaunchpad(withEfforts, { ...initialLaunchpad, model: "@mathos/mathos-model-7" });
+    const reasoning = await screen.findByRole("button", { name: /^Reasoning(?::|$)/ });
+    expect(reasoning).toHaveAttribute("data-value", "high");
+    expect(composerDropdownOptionLabels(openDropdown("Reasoning"))).toEqual(["low", "high", "max", "ultramath"]);
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Reasoning" })).getByRole("option", { name: "ultramath" }));
+    await waitFor(() => expect(patches.at(-1)).toMatchObject({ reasoningEffort: "ultramath" }));
+    // A MathOS model whose endpoint names no levels has no Reasoning chip.
+    fireEvent.click(within(openDropdown("Model")).getByRole("option", { name: "mathos-model-8" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /^Reasoning(?::|$)/ })).not.toBeInTheDocument();
+    });
   });
 
   it("names the provider of the default model when the launchpad has chosen none", () => {
