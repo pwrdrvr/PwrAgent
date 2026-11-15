@@ -166,7 +166,7 @@ export function createProviderRuntimeClient(
     const existing = providerId ? runtimes.get(providerId) : undefined;
     if (existing) return existing;
     const provider = options.resolveProviders().find((entry) => entry.id === providerId);
-    if (provider?.compatibility !== "bonsai") return primary;
+    if (!provider || (provider.compatibility !== "bonsai" && !provider.modelMetadata?.length)) return primary;
     const client = options.create(provider);
     runtimes.set(provider.id, client);
     attach(client, provider.id);

@@ -81,6 +81,17 @@ describe("provider-specific Codex runtimes", () => {
     expect(create).toHaveBeenCalledExactlyOnceWith(bonsai);
   });
 
+  it("keeps a configured provider's execution metadata off the primary runtime", async () => {
+    const { primary, local, create, client, providers } = setup();
+    const configured = { id: "mathos", name: "MathOS", baseUrl: "https://mathos.example/v1",
+      modelMetadata: [{ id: "kimi", contextWindow: 262144, supportsSearchTool: true }] };
+    providers.push(configured);
+    await client.startThread({ model: "@mathos/kimi" });
+    expect(create).toHaveBeenCalledWith(configured);
+    expect(local.raw.startThread).toHaveBeenCalledWith({ model: "@mathos/kimi" });
+    expect(primary.raw.startThread).not.toHaveBeenCalled();
+  });
+
   it("retires a review through its owning provider runtime", async () => {
     const { primary, local, client } = setup();
     primary.providers.set("review-child", "bonsai");

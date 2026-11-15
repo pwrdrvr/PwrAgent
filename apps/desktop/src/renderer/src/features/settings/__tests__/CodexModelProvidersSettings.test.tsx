@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendModelOption,
@@ -272,6 +272,44 @@ describe("CodexModelProvidersSettings", () => {
     expect(await screen.findByText(/4 models · 120 ms/u)).toBeInTheDocument();
     expect(screen.getByText(/Codex needs Responses API compatibility/u)).toBeInTheDocument();
     expect(screen.getByText(/A passing check does not validate a full PwrAgent turn/u)).toBeInTheDocument();
+  });
+
+  it.each([true, false])("saves execution metadata for the chosen test model without changing the offered model list (discovery %s)", async (supported) => {
+    const { onSave, testCodexModelProvider } = renderSettings([mathos], undefined, [codexSummary([
+      mathosModel("other"), mathosModel("kimi"),
+    ])]);
+    testCodexModelProvider.mockImplementation(async () => ({
+      models: { ok: true, count: 1, items: [{ id: "kimi", contextWindow: 262144, reasoningEfforts: ["low", "high"] }] },
+      responses: { ok: true, model: "kimi", error: "" }, latencyMs: 1,
+      discovery: { ok: supported, model: "kimi", requests: 3, ...(supported ? {} : { error: "Native search is unavailable" }) },
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Model to test" }));
+    fireEvent.click(screen.getByRole("option", { name: "kimi" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalledWith({ provider: expect.objectContaining({ models: ["kimi"] }) }));
+    await screen.findByText(supported ? "Verified for kimi" : "Native search is unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.objectContaining({ modelMetadata: [{
+      id: "kimi", contextWindow: 262144, reasoningEfforts: ["low", "high"], supportsSearchTool: supported,
+    }] })]));
+    expect(onSave).toHaveBeenCalledWith([expect.not.objectContaining({ models: ["kimi"] })]);
+  });
+
+  it.each(["Base URL", "API key"])("ignores late metadata from a test after changing %s", async (field) => {
+    const { onSave, testCodexModelProvider } = renderSettings([mathos]);
+    let complete!: () => void;
+    const result = { models: { ok: true, count: 1, items: [{ id: "kimi", contextWindow: 262144 }] },
+      responses: { ok: true, model: "kimi", error: "" }, latencyMs: 1,
+      discovery: { ok: true, model: "kimi", requests: 3 } };
+    testCodexModelProvider.mockImplementation(async () => await new Promise((resolve) => { complete = () => resolve(result); }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    fireEvent.change(screen.getByLabelText(field), { target: { value: field === "Base URL" ? "https://other.example/v1" : "fixture-new-key" } });
+    await act(async () => { complete(); });
+    expect(screen.queryByText("Verified for kimi")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.not.objectContaining({ modelMetadata: expect.anything() })]));
   });
 
   it("offers the providers Codex config files define and imports one into the form", async () => {
