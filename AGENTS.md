@@ -1,867 +1,100 @@
 # PwrAgent Repository Guidance
 
-## Source of Truth
+Read the task-specific references below before doing the work they cover. They contain mandatory requirements, scoped approvals, and procedures; they are loaded on demand rather than repeated here.
 
-- UI theme tokens and visual rules are in [docs/UI-THEME.md](docs/UI-THEME.md).
-- Desktop UI direction is in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md).
-- PwrAgent v2 design references are in [docs/design/pwragent-v2/](docs/design/pwragent-v2/).
-  - The bundle contains HTML, CSS, and JSX prototypes.
-  - [SOURCE.md](docs/design/pwragent-v2/SOURCE.md) gives the source history and usage policy.
-  - Use the bundle as a reference. Do not copy it exactly.
-- Operator documentation is in [pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai).
-  - Put platform setup, streaming, webhook, and Settings reference content there.
-  - Keep contributor messaging documentation in [this repository](docs/).
+## Sources and Scope
 
-## Workflow
+- Use current code, [ARCHITECTURE.md](ARCHITECTURE.md), and package guidance for current behavior and API shape.
+- Before desktop application work, read [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+- Before renderer UI work, read [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md); before color or theme work, read [docs/UI-THEME.md](docs/UI-THEME.md).
+- The [PwrAgent v2 design bundle](docs/design/pwragent-v2/) contains HTML, CSS, and JSX prototypes. Use it as a reference, not an exact copy; read its [SOURCE.md](docs/design/pwragent-v2/SOURCE.md) for history and usage policy.
+- Operator documentation belongs in [pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai): platform setup, streaming, webhooks, and Settings references. Keep contributor messaging documentation in [docs/](docs/).
+- Treat `docs/brainstorms/`, `docs/plans/`, and `docs/solutions/` as historical records. Do not delete or rewrite them without explicit user authorization. Read one only for a specific provenance question or explicit document reference.
+- Default `rg` searches exclude those records through [`.rgignore`](.rgignore). Use `rg --no-ignore` or `rg -u` only when you need them.
+- Exclude `apps/desktop/.local/protocol-captures/` from broad searches; search it only for captured E2E protocol work.
+- Put a `CLAUDE.md` symlink next to every `AGENTS.md`, pointing to its sibling `AGENTS.md`, so Codex and Claude receive the same guidance.
 
-- Treat existing brainstorms, plans, and solutions as historical records.
-  - The record directories are `docs/brainstorms/`, `docs/plans/`, and `docs/solutions/`.
-  - Do not delete or rewrite a record without explicit user authorization.
-  - Read a record only for a specific provenance question or an explicit document reference.
-  - Use current code, `ARCHITECTURE.md`, and package guidance for current behavior and API shape.
-- Default `rg` searches exclude brainstorms, plans, and solutions through [`.rgignore`](.rgignore).
-  - Use `rg --no-ignore` or `rg -u` only when you need these records.
-- Read the [workflow label list](.github/workflows/README.md) before you use a CI-triggering label.
-- Exclude `apps/desktop/.local/protocol-captures/` from broad searches.
-  - Search that directory only for captured E2E protocol work.
+## Deferred Work and Reviews
 
-### Deferred work
+- When you find work worth doing but outside this change, raise a PwrAgent to-do card with `add_todo`. This includes gaps, follow-ups, and review findings. The operator does not read deferred-work notes in PR descriptions; do not substitute a PR body, commit message, or code comment for a card.
+- If an existing thread owns the work, give the card a `send_message` action with that thread's target; otherwise use `start_thread`. The action prompt must contain the complete, standalone request: the destination cannot see the original card.
+- A finding not worth doing needs no card; explain that decision in your reply.
+- Settle every tracked finding with `update_review_item`: `addressed` with what changed, `declined` with the reason, or `deferred` after raising a card and passing its id as `todoId`. Claude Code's `skipped` becomes `declined` without a reason; defer it if still worth doing. See [finding outcomes](docs/thread-reviews.md#finding-outcomes).
 
-- The operator does not read notes in PR descriptions about work that was left out.
-- When you find work that should be done but you are not doing it in this change, raise a PwrAgent to-do card with the `add_todo` tool.
-- Do not write it up in the PR body, a commit message, or a code comment instead.
-- This rule covers:
-  - Out-of-scope gaps.
-  - Deferred follow-ups.
-  - Code-review findings that you are not fixing but that are still worth doing.
-- If an existing thread owns the work, give the card a `send_message` action
-  with that thread's target and the complete request as its prompt.
-- Otherwise, give the card a `start_thread` action.
-- In either case, its prompt must stand alone. The destination does not see
-  the original card. The operator can preview the request and send it or
-  start a thread when ready.
-- A finding that is not worth doing needs no card.
-  - Say so in your reply to the operator instead.
-- Settle every tracked review finding with `update_review_item`:
-  - `addressed`: you fixed it. Note what changed.
-  - `declined`: it is not worth doing. Note the reason.
-  - `deferred`: it is worth doing later. Raise the card first, then pass its id as `todoId`.
-  - Claude Code's `skipped` outcome is recorded as `declined` with no reason. Defer a skipped finding that is still worth doing.
-  - [docs/thread-reviews.md](docs/thread-reviews.md#finding-outcomes) defines the outcomes.
+## Bounded Command Output
 
-### Property, model and oracle tests
-
-- A bug fix states the rule it broke as a property, model or oracle test,
-  and confirms that test fails on the pre-fix code.
-- Do the same for new rule-heavy logic, state machines, concurrency, and code
-  that re-derives state that git, a provider's event stream, or a thread's
-  owning instance owns.
-- Example tests alone check only what their author expected. Here they have
-  asserted the bug as correct.
-- [docs/property-model-oracle-testing.md](docs/property-model-oracle-testing.md)
-  says what each kind is and how to write one.
-
-### Command output
-
-- Keep model-visible command output bounded.
-- Tool output becomes thread context. Later turns can replay that output.
-- For broad discovery, start with `rg -l` or `rg --count-matches`.
-- Exclude `__tests__` from discovery unless tests are in scope.
-- After discovery, inspect only the files and line ranges that you need.
-- Use `rg -n -C` only with a selected file or a small file set.
-- Use the minimum context that supports the next decision.
-- Give `sed` an explicit file and line range. `sed` does not use an ignore file.
-- Do not combine content-producing reads and searches with `&&`.
-- The shell sends their combined standard output as one tool result.
-- For an intentionally broad scan:
-  1. Redirect all output to an ignored `.local/` log.
-  2. Report the exact command and its exit state.
-  3. Report matching file counts and result counts.
-  4. Report failures and warnings.
-  5. Return only a bounded tail or the fields needed for the next decision.
+- Keep model-visible output bounded; tool output enters thread context and can be replayed.
+- Start broad discovery with `rg -l` or `rg --count-matches`. Exclude `__tests__` unless tests are in scope. Then inspect only needed files and line ranges; use `rg -n -C` only on a selected file or small file set.
+- Give `sed` an explicit file and line range; it does not use an ignore file. Use the minimum context needed for the next decision.
+- Do not combine content-producing reads and searches with `&&`: their standard output becomes one tool result.
+- For an intentionally broad scan, redirect all output to an ignored `.local/` log. Report the exact command, exit state, matching file and result counts, failures and warnings, then return only a bounded tail or the fields needed next.
 - Do not use tool-result truncation as an output budget.
 
-### Codex data boundary
+## Ownership and Data Boundaries
 
-- PwrAgent code must not read Codex-owned storage files.
-- Treat Codex session JSONL, rollout files, and SQLite databases as private implementation details.
-- Use the Codex App Server protocol for Codex data.
-- A feature may read PwrAgent-owned files under `~/.pwragent/`.
-- A test may read repository-local fixtures that the test owns.
-- CI enforces common violations with `pnpm lint:codex-storage`.
-- Do not bypass this check through variable renames or shell commands.
-- One module has explicit PwrDrvr LLC authorization for a narrow repair:
-  `apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts`.
-  - Repair only rollouts identified by the protocol.
-  - Repair only the Responses API invalid message-ID-prefix failure.
-  - Create a backup before the repair.
-  - Make the repair atomic.
-  - Validate the thread before the repair.
-  - Remove only invalid `id` fields from response items with type `message`.
+- PwrAgent code must not read Codex-owned session JSONL, rollout files, or SQLite databases. They are private implementation details; use the Codex App Server protocol for Codex data.
+- Features may read PwrAgent-owned files under `~/.pwragent/`; tests may read repository-local fixtures they own. Do not bypass `pnpm lint:codex-storage` with variable renames or shell commands.
+- PwrDrvr LLC authorizes only `apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts` for a narrow repair: only protocol-identified rollouts, only the Responses API invalid message-ID-prefix failure. Validate the thread first, create a backup, make the repair atomic, and remove only invalid `id` fields from response items of type `message`.
+- Store desktop configuration and state under the **PwrAgent root**, `~/.pwragent/`. Isolate E2E/development with `PWRAGENT_HOME=/path/to/root`; select `PWRAGENT_PROFILE=<name>` (default: `default`). Settings live in `profiles/<name>/config.toml`; state in `profiles/<name>/state/state.db` under that root.
+- Do not use removed variables `PWRAGNT_STATE_ROOT` or `PWRAGNT_CONFIG_PATH`. Multiple instances share a profile database through SQLite WAL; do not add a lock file.
+- Before changing runtime configuration, profiles, storage, or development variables, read [docs/runtime-configuration.md](docs/runtime-configuration.md). Development variables are not for production operators; packaged builds ignore and log them. React DevTools builds must never ship.
+- Before an incompatible TOML shape change, read [docs/config-file-evolution.md](docs/config-file-evolution.md) and apply read fallback, lazy conversion, legacy comment, and dual write.
 
-### Linux sandbox setup
+## Verification and Platform Constraints
 
-- Install and desktop dev/preview run an advisory, read-only check of Electron's
-  setuid helper. User namespaces may allow launch without that helper.
-- From the repository root, use `pnpm check:linux-sandbox` to repeat the check
-  and `pnpm fix:linux-sandbox` for the fatal SUID sandbox error.
-- The fixer resolves this checkout's installed helper and explicitly uses sudo
-  for `chown root:root` followed by `chmod 4755`, then verifies the result.
-  It is idempotent; both commands safely no-op on non-Linux platforms.
-- Never request sudo automatically during install or launch, run the app as
-  root, or disable sandboxing. Reinstalling dependencies or replacing Electron
-  may require repeating the repair. Mount/security policy can still block startup.
-- Keep a separate `pnpm install` per worktree. Sharing root `node_modules` cannot
-  supply package-local links; sharing package `node_modules` can bind workspace
-  imports to donor source and make installs/native staging mutate shared files.
-  A symlink to a repaired helper inherits permissions but is not a complete fix.
-
-### Verification
-
-- Run unit tests, lint and typecheck locally using the commands below or in repository CI.
-- Desktop E2E uses the existing local and CI routes. Linux checks do not verify
-  macOS or Windows behavior; use the corresponding native CI or PwrSuiteLab skills.
-- The [Sandboxer verification process](.agents/skills/sandboxer-verification/SKILL.md)
-  is **dormant** while a replacement provider is evaluated. Preserve its
-  procedure, helper and historical measurements; do not automatically invoke
-  it or route repository checks to Sandboxer.
-- Use the native/local and CI alternatives above while the process is dormant.
-- Keep product/remote-compute integrations and installed MCP settings intact.
-
-### Desktop test operations
-
-- Use the [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) for live captured sessions.
-- Run desktop E2E from the repository root with `pnpm test:desktop-e2e`.
-- The package command `pnpm --filter @pwragent/desktop test:e2e` is also safe.
-- Both commands build `apps/desktop/out/` before Playwright starts.
-- For PwrSuiteLab macOS Tart, runner, or headed E2E work, follow
-  `.agents/skills/macos-vm-e2e-lab/SKILL.md`. It uses PwrSuiteLab Control MCP's
-  current schemas and served skills when connected. Use the
-  managed-controller fallback only when MCP is unavailable, preserving existing
-  scoped authorizations. Do not provision a product-local Tart lab or improvise
-  direct Tart or SSH access from this repository.
-- For PwrSuiteLab Windows probes or headed E2E, read
-  `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
-  Do not use the macOS VM skill for Windows work.
-- PwrSuiteLab also manages access to reusable Windows EC2 instances when
-  available. Consult that project's current Windows EC2 skill and documentation
-  for availability and operations.
-- Review the current ownership and readiness constraints before you change:
-  - Windows Git or Bash process launch and shutdown.
-  - Vitest process isolation.
-  - Queue or composer lifecycle tests.
-  - Lazy renderer readiness.
-- Git-for-Windows launcher handoffs have caused expensive Windows-only failures.
-- Non-atomic descendant cleanup has caused expensive Windows-only failures.
-- Optimistic renderer synchronization has caused expensive Windows-only failures.
-- Do not substitute retries, longer timeouts, fewer workers, or serial lanes for an ownership fix.
-- Do not substitute those workarounds for an evidence-based readiness fix.
-- macOS CI and release jobs run on free GitHub-hosted `macos-26` runners.
-  - Use `macos-26`: actool 26 compiles the app icon and needs a macOS 26 host.
-  - Do not use a paid larger size or `macos-26-intel`.
-  - Do not move a CI job onto self-hosted machines. This repository is public,
-    and fork pull requests run every macOS job.
-- For branch-drift dialog screenshots, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`.
-- This command opens a replay-backed Electron fixture.
-- Close the application to end the command.
-- For README screenshots, run `pnpm --filter @pwragent/desktop screenshot:readme`.
-- The README screenshot command writes files under `docs/assets/screenshots/`.
-- The README itself now uses WebP captures, `docs/assets/screenshots/*.webp`, taken from the built app at 1440×900 on a Retina display with invented showcase data.
-- Read "Capturing README Screenshots" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) for the complete procedure.
-- That procedure identifies the specification, fixtures, state helpers, and native capture tools.
-- The terminal or IDE that runs the screenshot test needs macOS Screen Recording permission.
-- To focus root Vitest, pass file paths or filters directly to `pnpm test`.
-- For example, run `pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`.
-- Do not put a standalone `--` before the focus arguments.
-- The command `pnpm test -- apps/...` runs the full workspace suite.
+- Before source edits or lint/tooling changes, read [code formatting and linting](docs/development-checks.md#code-formatting--linting). Before test execution, read [verification](docs/development-checks.md#verification). Before desktop E2E, screenshot capture, or desktop CI work, read [desktop test operations](docs/development-checks.md#desktop-test-operations).
+- Run unit tests, lint, and typecheck locally or in repository CI. After code edits, run `pnpm lint:oxlint`; production unbound-method checking uses `pnpm lint:oxlint:typed`. Fix all lint errors. `pnpm build` strips types and does not replace lint or `pnpm typecheck`. Run `pnpm lint:boundaries` before pushing.
+- Bug fixes must state the broken rule as a property, model, or oracle test and confirm it fails on pre-fix code. Do the same for new rule-heavy logic, state machines, concurrency, and state re-derived from git, provider events, or a thread's owning instance. Read [docs/property-model-oracle-testing.md](docs/property-model-oracle-testing.md) before this work; example tests alone have asserted bugs as correct here.
+- Keep a separate `pnpm install` per worktree. Never share root or package `node_modules`: package links can bind to donor source and installs/native staging can mutate shared files.
+- Never automatically request sudo during install/launch, run the app as root, or disable sandboxing. Before Linux dependency installation, dev/preview launch, or fatal SUID sandbox repair, read [Linux sandbox setup](docs/development-checks.md#linux-sandbox-setup).
+- Linux checks do not verify macOS or Windows behavior. Use native CI or the corresponding PwrSuiteLab skill. For lab operations, read the exact macOS/Windows skill routes in [desktop test operations](docs/development-checks.md#desktop-test-operations); do not improvise product-local Tart labs or direct Tart/SSH access.
+- Before changes to Windows Git/Bash process ownership, Vitest isolation, queue/composer lifecycle tests, or lazy renderer readiness, review the ownership/readiness constraints in that same reference. Do not substitute retries, longer timeouts, fewer workers, or serial lanes for ownership or evidence-based readiness fixes.
+- macOS CI and release jobs must use free GitHub-hosted `macos-26`, never paid larger runners, `macos-26-intel`, or self-hosted machines. Fork PRs run every macOS job; actool 26 requires a macOS 26 host.
+- The [Sandboxer verification process](.agents/skills/sandboxer-verification/SKILL.md) is **dormant**. Preserve its procedure, helper, and historical measurements; do not invoke it automatically or route checks to it. Use native/local and CI alternatives. Keep product/remote-compute integrations and installed MCP settings intact.
+- Read the [workflow label list](.github/workflows/README.md) before using a CI-triggering label.
 
 ### SQLite write budgets
 
-- Measure a new SQLite write if it runs at any of these frequencies:
-  - Per command.
-  - Per turn.
-  - Per item.
-  - Per streamed event.
-  - On a timer.
-- Add a checked-in write budget that fails when the write count changes.
-- Calculate the write cost as writes per second × commit cost × session duration.
-- Report the projected cost in MB per day.
-- Count SQLite commits, not statements.
-- Each implicit transaction flushes dirty pages and all changed index pages.
-- A SQLite page is approximately 4 KB.
-- An indexed timestamp can move one index entry during each write.
-- Use these calibration results:
-  - PR #1406 wrote once for each streamed 8 KiB chunk.
-  - One `find /` caused 3,693 commits and 58 MB of WAL.
-  - Former 10-second runtime lease heartbeats caused 720 commits each hour.
-  - Those heartbeats wrote 2.7 MB each hour for each running instance.
-  - That rate was approximately 65 MB each day.
-  - PID-owned runtime leases now make no SQLite commits while idle.
-- If the projection is excessive, report it to the user.
-- Do not quietly ship an excessive projection.
-- Ask the user to select a different design constraint.
-- Possible designs include one transaction, a flush window, or boundary-based persistence.
-- The correct design can also be no persistence.
-- Write budgets are in `apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json`.
-- Wrap the feature, not its setup, with `measureSqliteWrites`.
-- Record a budget with `UPDATE_SQLITE_WRITE_BUDGETS=1`.
-- Keep each write-cost change visible as one reviewable diff line.
-- Survey a full run with `pnpm test:sqlite-writes`.
-- Read "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
-
-## Code Formatting & Linting
-
-- Use Oxlint only as a correctness linter. Run `pnpm lint:oxlint` after edits.
-- Run `pnpm lint:oxlint:typed` for the production unbound-method check.
-  - CI always runs both passes; routine local syntax lint avoids loading types.
-  - Typed lint is uncached: imported declarations can change its results.
-  - `scripts/lint-typed.mjs` rejects typed-rule suppression comments, including
-    file-wide disables, before invoking the native typed backend. This preserves
-    the former ESLint `--no-inline-config` protection.
-- `pnpm lint:eslint` is a compatibility alias for both Oxlint passes.
-- The former ESLint configs and `lint:eslint:cached` / `lint:eslint:typed`
-  commands remain available for migration comparisons.
-- The CI `Lint` job also runs SQL, Codex-storage, colors, Electron-version,
-  license, typecheck and dependency-boundary checks.
-- `.oxlintrc.json` preserves the recommended correctness rules and classic
-  renderer React Hooks checks. `oxlint.typed.json` scopes the typed rule.
-- Fix all lint errors. Existing `no-explicit-any`, `exhaustive-deps` and
-  intentional patterns remain warnings. CI blocks errors, not warnings.
-- Do not add style or whitespace rules or use linter fixes to format code.
-- Run `pnpm typecheck` to use TypeScript 7's native compiler. The
-  `typescript-native` alias is pinned separately; TypeScript 6 remains for
-  JavaScript API consumers such as ESLint and dependency-cruiser.
-- Dependency-boundary checks run uncached so resolution configuration changes
-  always rebuild the graph.
-
-### Unused imports and locals fail CI
-
-- `typescript/no-unused-vars` is an error in the syntax pass.
-- `pnpm build` strips types and does not replace lint or typecheck.
-- An underscore prefix silences intentionally unused bindings.
-- Before deleting an unused binding, determine whether it represents a missing
-  call or assertion.
-- Check leading unused parameters, unused class members and orphaned exports
-  by hand; the syntax rule does not cover every one of these cases.
-
-### Lint scope
-
-- Syntax lint covers `packages/**/*.{ts,tsx}`, `apps/*/**/*.{ts,tsx}` and
-  root-level `*.ts`, including desktop E2E helpers, scripts and configs.
-- JavaScript and `.mjs` files remain outside this correctness gate.
-- Typed lint covers `apps/*/src/**` and `packages/**`, excluding tests, fixtures
-  and generated files. Its guard reads the same patterns from the typed config.
-- Keep both Oxlint configs at the repository root: relative override patterns
-  are resolved against the config location.
-
-### Formatting
-
-- The repository intentionally has no automatic formatter.
-- Format code by hand.
-- Prettier is not a dependency.
-- The repository has no `.prettierrc`, `format` script, or CI formatting step.
-- Never run `npx prettier`, `npx prettier --write`, or `prettier --write` on repository files.
-- Without a local dependency, `npx` downloads Prettier and uses its default configuration.
-- Those defaults conflict with the hand-maintained repository style.
-- The defaults also reformat unchanged code.
-- In PR #934, Prettier changed approximately 90 unrelated lines around a three-line change.
-- Those changes made the diff larger and reduced the value of `git blame`.
-- A full repository test changed approximately 77% of files.
-- The project rejected that full repository reformat.
-- Do not introduce an isolated Prettier reformat.
-- Inspect adjacent code before you format new code.
-- Use these local style rules:
-  - Double quotes.
-  - Two-space indentation.
-  - Semicolons.
-  - Trailing commas in multiline literals.
-  - Leading binary operators in wrapped expressions.
-- Put a wrapped binary operator at the start of the continuation line:
-
-  ```ts
-  const ok =
-    isAllowed(char)
-    || SAFE_PUNCTUATION.has(char)
-    || isDigit(char);
-  ```
-
-- Prettier puts these operators at the end of the prior line.
-- The repository contains more than 500 leading-operator lines.
-- Make new code match adjacent code.
-- Keep each diff limited to the requested change.
-- If a file has unrelated inconsistencies, do not change those lines.
-
-## Agent Instruction Files
-
-- Put a `CLAUDE.md` symlink next to each `AGENTS.md` file.
-- Point each symlink to its sibling `AGENTS.md` file.
-- This structure gives Codex and Claude the same local guidance.
-
-## Pull Requests
-
-- Use Conventional Commit-style PR titles: `type(scope): short description`.
-- Select the scope that matches the changed area:
-  - Use `messaging` for Telegram, Discord, adapters, and messaging integrations.
-  - Use `desktop` for the desktop application.
-  - Use `agent-core` for coding-agent backends and ACP integration.
-  - Use `release` for packaging, signing, notarization, distribution, and automatic updates.
-  - Use `docs` for documentation.
-  - Use `tests` for test coverage, fixtures, and test infrastructure.
-- Prefer before/after screenshots on PRs that change visible UI.
-  - Use 100% contrived fixture data when possible.
-  - If a screenshot is not 100% contrived, show it to the operator and wait for approval before attaching. Redact anything that must not ship (secrets, tokens, customer data, private thread text, account identifiers).
-- GitHub CLI 2.99+ (`gh` v2.99.0) can attach images and videos with the repeatable `--attach` flag on `gh pr create`, `gh pr edit`, and `gh pr comment`.
-  - Reference the local path in the Markdown body so `gh` rewrites it to the uploaded URL in place. Unreferenced attachments are appended at the end.
-  - Example:
-
-    ```bash
-    gh pr create \
-      --title "fix(desktop): tighten composer padding" \
-      --body-file /tmp/pr-body.md \
-      --attach ./before.png \
-      --attach ./after.png
-    ```
-
-    With this body:
-
-    ```markdown
-    ## Before
-    ![composer before](./before.png)
-
-    ## After
-    ![composer after](./after.png)
-    ```
-
-  - Alt text can also follow the path after `#`, as in `--attach './after.png#composer after'`. Update `gh` to v2.99.0 or later before using `--attach`.
-  - `gh` rewrites a link only when its target equals an `--attach` path byte-for-byte. The `#alt` suffix is not compared. On a mismatch, `gh` appends the upload at the end instead.
-  - The rewrite exists only in the uploaded body. The local body file keeps the local paths.
-  - For every later body edit, run `gh pr view <n> --json body -q .body > <file>` and edit that copy. Never re-send the original draft. It replaces the live `user-attachments` URLs with dead local paths.
-  - To add an image later, pass `--attach` for the new file only. Existing `user-attachments` URLs match no `--attach` path, so `gh` leaves them alone.
-  - `gh` exits 0 in each of these cases. Verify that every body image link is a `user-attachments` URL, and that each asset fetches with HTTP 200 and the local file's byte count.
-
-## Release / Distribution
-
-- Read the [desktop release runbook](docs/desktop-release-runbook.md) for release procedures.
-- The runbook covers packaging, signing, notarization, publishing, and automatic updates.
-- PwrAgent uses the MIT license. PwrDrvr LLC owns the project.
-- Preserve the repository `LICENSE` file.
-- Preserve each package `license: "MIT"` declaration.
-- Preserve the third-party license report.
-- Do not change the first-party license without an explicit PwrDrvr LLC policy change.
-- Do not remove license disclosures without an explicit PwrDrvr LLC policy change.
-
-### macOS app icon — ship the Icon Composer `.icon`; actool derives the `.icns`
-
-- `mac.icon` in `apps/desktop/electron-builder.yml` points at `build/icon.icon`, an Icon Composer package, and nothing in this repo hand-builds a `.icns`. electron-builder (26.15+, pinned) compiles it with Xcode 26's `actool` into `Contents/Resources/Assets.car` + `CFBundleIconName` (what macOS 26 draws) and derives the legacy `Contents/Resources/icon.icns` + `CFBundleIconFile` (macOS 15 and earlier) from the same source. Each OS reads the format designed for it.
-- Why this is an invariant: macOS 26 auto-normalizes a legacy `.icns` it is handed *instead of* a `.icon`, and how it does so changed between 26.6.1 and 26.6.2. A `.icns` padded to Apple's 824-in-1024 template (#1918 here — the right shape for macOS 15) came out on a light plate in the Dock, Finder, and the DMG window on 26.6.2 for PwrSnap and PwrGit. With the `.icon` present the `.icns` is never opened on macOS 26. Ghostty (MIT) ships exactly this pair.
-- Regenerate with `pnpm --filter @pwragent/desktop generate:macos-app-icon`. `build/icon.png` — the 512px full-bleed master, also shipped as the `pwragent-app-icon.png` resource and used as the Windows/Linux source — stays the authored artwork. The script derives `build/icon.icon/` (the mark drawn from the geometry of `docs/design/pwragent-v2/project/assets/logo-pwragnt.svg` as a transparent, antialiased layer — the master is measured against that geometry first, so a re-export that no longer matches fails the script; the tile gradient is the package `fill`) and `build/icon-macos.png` (padded — the development Dock icon `src/main/index.ts` paints literally before macOS 26) from it. Then run `generate:themed-dock-icons`, which renders the macOS 26 development icon and the themed Dock icons from those outputs. Do not add a `.icns` back, and do not point `mac.icon` at one.
-- A themed Dock icon (`src/main/themed-dock-icon.ts`) follows the color theme on screen (a dark tile per dark theme, a light tile per light theme; Tangerine in either scheme keeps the app's own icon) and is a runtime `app.dock.setIcon()` bitmap, and macOS 26 applies Liquid Glass only to the bundle's `.icon`, so the glass is baked in: `build/dock-icons/glass/<theme>.png` (Darwin 25+) beside the flat `build/dock-icons/<theme>.png` (macOS 15 and earlier), and the development build, which has no bundle icon, paints `build/icon-macos-glass.png` on Darwin 25+ instead of `build/icon-macos.png`. `pnpm --filter @pwragent/desktop generate:themed-dock-icons` writes the glass and flat sets by compiling a recolored copy of `build/icon.icon` with actool and rendering it through `NSWorkspace`, which draws in the Mac's current icon style; it needs macOS 26, actool 26, the Default icon style, and Reduce Transparency and Increase Contrast off, and refuses otherwise. AppKit has no alternate-icon API (Apple confirmed it on the developer forums in June 2026), so per-instance icons cannot use the system's own glass.
-- Every job that packages the mac app needs an actool 26 or newer; electron-builder hard-fails below that, and GitHub's `macos-15` image defaults to Xcode 16.4. `.github/actions/select-xcode-for-actool` finds the newest stable Xcode with actool 26+ and returns its Developer directory; `release.yml` (both macOS jobs) and `preview-build.yml` set `DEVELOPER_DIR` from it on exactly the steps that run actool — the unit tests, so the compile test in `apps/desktop/scripts/app-icon.test.mjs` runs instead of skips (that step also sets `PWRAGENT_REQUIRE_ACTOOL=1`, so on the release lane the suite fails rather than skips when the probe finds no actool 26) — and electron-builder, so the icon compile does not move `build:native:dock` (the Dock tile plug-in, built with `xcrun clang`) onto a different SDK. The sign job has no checkout, so the action rides inside the archived signing input. Locally, select an Xcode 26 (`xcode-select`, or `DEVELOPER_DIR`) before `package:dryrun`.
-- The compile test calls electron-builder's own helper (`app-builder-lib/out/util/macosIconComposer.generateAssetCatalogForIcon`), not a copied actool command line, so the two cannot drift.
-- actool's derived `.icns` carries 16, 32, 128 and 256px reps only, the same four Ghostty ships. macOS 15 upsamples the 256px rep for Finder's largest icon sizes and Quick Look, where the deleted hand-built icns had 512 and 1024. Accepted for now; an `afterPack` hook could splice larger reps rendered from `icon-macos.png` if it ever matters.
-- `actool` resolves `--app-icon Icon` by the package basename. Fed `build/icon.icon` directly it exits 0 and silently writes no `.icns`. electron-builder copies the package to `Icon.icon` first; do the same if you compile by hand, and check the output for the `.icns`.
-- Verify an icon change by rendering `NSWorkspace.shared.icon(forFile:)` on the newest macOS you ship to and measuring the opaque bounds. The recipe, measurements, and the Ghostty comparison are in PwrSnap's `docs/solutions/2026-09-05-macos-26-legacy-icon-light-plate.md` (pwrdrvr/PwrSnap#563). A clean result on an older point release or on the GitHub runner proves nothing for this class.
-
-### Third-party dependency licenses
-
-- Three scripts cover licensing. They check different things.
-
-| Script | Checks |
-|---|---|
-| [`check-package-licenses.mjs`](scripts/check-package-licenses.mjs) | Our own workspace `package.json` files declare MIT. Never looks at a dependency. |
-| [`check-third-party-license-allowlist.mjs`](scripts/check-third-party-license-allowlist.mjs) | Every declared license the notice covers is on an allowlist. |
-| [`generate-third-party-licenses.mjs`](scripts/generate-third-party-licenses.mjs) | Transcribes the tree into `THIRD_PARTY_LICENSES`. Judges nothing. |
-
-- That last row is the reason the allowlist gate exists.
-- The generator groups records by whatever license string pnpm reports.
-- Before the gate, a dependency that flipped MIT to GPL-3.0 wrote a new `GPL-3.0` section into the notice.
-- `generate-third-party-licenses.mjs --check` then passed, because the committed file matched the generated file.
-- CI went green and shipped copyleft.
-- The only safety was that a reviewer might notice a new license heading in the diff.
-- `pnpm licenses:check` runs the allowlist gate before the notice check.
-- A bad license then reports as a licensing problem, not as a stale notice.
-- Run the gate alone with `pnpm licenses:allowlist`.
-- The gate evaluates each declared license as an SPDX expression, not as a string match.
-- `OR` is satisfied by either side. `(MIT OR WTFPL)` passes on its MIT half, so WTFPL needs no allowlist entry.
-- `AND` requires both sides. `Apache-2.0 AND GPL-3.0` fails.
-- `AND` binds tighter than `OR`.
-- Identifier comparison folds case, because SPDX short identifiers are case-insensitive.
-- An unparseable string fails. Examples are `UNLICENSED`, `SEE LICENSE IN LICENSE.md`, and a `WITH` exception.
-- Refusing to guess is the safe direction for a legal gate.
-
-#### Gate coverage
-
-- The gate covers the records the notice is built from.
-- It reads the npm production tree for the `@pwragent/desktop...` pnpm selector.
-- The `...` suffix is load-bearing. Keep it.
-- A bare `@pwragent/desktop` selects that one project.
-- `pnpm licenses list` then reports only the dependencies that `apps/desktop/package.json` declares.
-- Every dependency reached through a workspace package is invisible to that selector.
-- `@pwragent/desktop` depends on eight workspace packages.
-- The whole npm tree under the six messaging providers ships in the packaged application.
-- Before the suffix, 69 shipped packages were absent from the notice and ungated.
-- `NOTICE_PNPM_FILTER` in [`generate-third-party-licenses.mjs`](scripts/generate-third-party-licenses.mjs) holds this selector.
-- The generator and the gate import that one constant, so the two cannot drift.
-- A test asserts the exact selector string, because dropping the suffix leaves every check passing.
-- It reads `NOTICE_DEV_DEPENDENCIES` from the `all` report.
-- That set holds Electron, a devDependency that ships and that `--prod` never reports.
-- The generator and the gate import that one set, so the two cannot drift.
-- Add a name to `NOTICE_DEV_DEPENDENCIES` when a devDependency starts shipping.
-- The synthesized platform variants copy `declaredLicense` from their parent record.
-- Gating the production tree therefore gates them.
-- The gate reports a failure when a surface produced no records at all.
-- An empty report is otherwise indistinguishable from a clean tree.
-- The gate does **not** cover these sources:
-  - Optional dependencies that the running machine did not install. The generator does not pass `--no-optional`, and the CI `Lint` job runs on `ubuntu-latest` only.
-  - A platform variant's own package metadata. The notice prints the parent's license for every variant, so neither script ever reads one.
-  - devDependencies outside `NOTICE_DEV_DEPENDENCIES`. They do not ship and the notice does not disclose them.
-  - Chromium and Node.js components inside Electron. The notice points at Electron's upstream generated credits.
-  - Codex App Server Rust crates. PwrAgent invokes a locally installed Codex App Server and vendors no crate.
-
-#### Changing the allowlist
-
-- Adding an id to `ALLOWED_LICENSE_IDS` is a legal decision.
-- Make that decision in a commit that says why.
-- Never add an id to make CI green.
-- PwrDrvr LLC explicitly approved one exception on 2026-09-20: ship Dugite's
-  bundled Git as a separate executable with Git LFS, to remove the system-Git
-  dependency. Git's GPL-2.0-only license and source/build locations are retained
-  in `apps/desktop/resources/embedded-git/` and `THIRD_PARTY_LICENSES`. This does
-  not add GPL to the npm dependency allowlist or change first-party MIT licensing.
-- Apart from that bundled Git exception, strong copyleft and source-available terms are permitted nowhere.
-- Those terms include GPL, AGPL, BSL, SSPL, and Commons Clause.
-- PwrDrvr LLC approved a scoped AppImage exception on 2026-10-01, to permit
-  the modern runtime without a system `libfuse.so.2` dependency.
-  - Permit only the unmodified AppImage `type2-runtime` release `20251108`
-    (commit `dd6cebedcbddde9c82f89b011e8e1d40b6e43868`), as distributed by
-    electron-builder's `toolsets.appimage: "1.0.3"`, as the AppImage ELF stub.
-  - This exception covers its statically linked libfuse 3.15.0 library under
-    LGPL-2.1-only. It does not cover LGPL libraries in the Electron payload,
-    native addons, or npm dependencies, or bundled `fusermount`/`fusermount3`
-    executables. A different runtime or library version needs a new decision.
-  - Keep first-party code and package declarations MIT. Do not add LGPL to
-    `ALLOWED_LICENSE_IDS`.
-  - Before shipping an AppImage, retain the runtime's MIT notice, full LGPL-2.1
-    text, libfuse's license split, and all linked-library notices in the
-    distribution and `THIRD_PARTY_LICENSES`. Include mimalloc's MIT notice and
-    use libzstd's BSD license alternative.
-  - Publish the complete pinned runtime and library source, patches, checksums,
-    and build/relink instructions beside the AppImage on the same GitHub
-    release. Preserve original source and identify modifications with dated
-    change notices, including the upstream libfuse `mount.c` patch.
-  - Identify the runtime stub and the separately executed Electron payload in
-    the notice. State that `fusermount`/`fusermount3` is a system executable,
-    not included in the AppImage.
-- LGPL remains prohibited outside that AppImage runtime exception. The
-  exception records approval; it does not itself add a shipped component or
-  satisfy the required disclosures and source distribution.
-- `MPL-2.0` is the one copyleft id on the allowlist.
-- Its copyleft binds the MPL-licensed files themselves.
-- It places no condition on the larger work that includes them.
-- Do not read that entry as permission for file-scoped copyleft in general.
-- PwrDrvr LLC approved `OFL-1.1` on 2026-09-29, on the condition that PwrGit
-  and PwrSnap already ship it. Both bundle `@fontsource/geist-sans` and
-  `@fontsource/geist-mono` under it.
-- `OFL-1.1` covers the Geist webfont assets that the renderer build emits.
-- Its copyleft binds a derived font, which must stay under the OFL.
-- It places no condition on software that embeds the font.
-- The seeded list records drift that existed before any policy was enforced.
-- `BlueOak-1.0.0` and `Python-2.0` were already in the shipped tree and documented nowhere.
-- `0BSD`, `CC0-1.0`, `MPL-2.0`, and `Unlicense` are approved ids that the production tree does not use today.
-
-## Runtime Configuration
-
-- Store all desktop configuration and state under `~/.pwragent/`.
-- This directory is the **PwrAgent root**.
-- For isolated E2E or development work, override the root with `PWRAGENT_HOME=/path/to/root`.
-- Select a named profile with `PWRAGENT_PROFILE=<name>`.
-- If the variable is not set, use the `default` profile.
-- Store profile settings in `~/.pwragent/profiles/<name>/config.toml`.
-- Store profile state in `~/.pwragent/profiles/<name>/state/state.db`.
-- Before an incompatible TOML shape change, read [config-file-evolution.md](docs/config-file-evolution.md).
-- Apply all of these configuration evolution rules:
-  - Read fallback.
-  - Lazy conversion.
-  - Legacy comment.
-  - Dual write.
-- Do not use `PWRAGNT_STATE_ROOT` or `PWRAGNT_CONFIG_PATH`.
-- The application does not read those removed variables.
-- Multiple instances can safely share one profile database through SQLite WAL mode.
-- Do not add a lock file for this database.
-
-### Dev-only env vars
-
-These variables are for development only.
-
-- A build is packaged when `app.isPackaged === true`.
-- Production operators must not set these variables.
-- A packaged build ignores each variable.
-- If a packaged build finds one, startup writes a `mainLog.error` entry.
-- The packaged build then treats the variable as unset.
-
-`PWRAGENT_PROFILE_AUTO_CREATE=1`
-
-- Skip the onboarding prompt when a named profile does not exist.
-- Use this variable for E2E fixtures and replay harnesses that need a profile directory.
-- Production launches must use the onboarding wizard.
-- The wizard prevents an unrequested mapping to a Codex authentication profile.
-- Issue #524 explains this requirement.
-
-`PWRAGENT_DEV_DISABLE_SECRET_STORAGE=1`
-
-- Skip all `safeStorage` operations.
-- The wizard silently discards secrets that the operator enters.
-- Secret pills on the Settings screen report `unavailable`.
-- Use this workaround only for unsigned development builds on macOS.
-- Those builds can show a `Keychain Not Found` dialog because they have no stable signing identity.
-- Signed release builds do not have this problem.
-- After development, enter the secrets again in **Settings → Models** on a signed build.
-
-`PWRAGENT_DEV_SQLITE_WRITE_METRICS=1`
-
-- Count process-level SQLite commits, statements, rows, WAL growth, and table activity.
-- `StateDb.open` installs the metrics wrapper after schema setup.
-- Set `PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE=<path>` to select an output file.
-- The metrics file gets one JSON line of totals for each source.
-- Read "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
-
-`PWRAGENT_DEV_REACT_DEVTOOLS=1`
-
-- Load the standalone React DevTools backend as the renderer's first `<head>` script.
-- `PWRAGENT_DEV_REACT_DEVTOOLS_HOST` and `PWRAGENT_DEV_REACT_DEVTOOLS_PORT` select the endpoint.
-- Default the endpoint to `localhost:8097`.
-- Give each checkout its own port when profiling more than one at a time.
-- This variable is read by [electron.vite.config.ts](apps/desktop/electron.vite.config.ts) at build time, not by the app process.
-- A build made with this variable set must never ship.
-- `verify-asar-contents.mjs` fails packaging when renderer HTML loads a remote script.
-
-`PWRAGENT_DEV_REACT_PROFILING=1`
-
-- Alias `react-dom/client` to `react-dom/profiling` for `electron-vite build`.
-- Use this variable only when an absolute millisecond number must be trustworthy.
-- The dev server already serves a profilable `react-dom`, so this variable is a no-op there.
-- Use the dev build to find re-render storms. It carries richer render attribution.
-- Read "Profiling the Renderer with React DevTools" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
-
-`PWRAGENT_DEV_FAKE_UPDATE=1`
-
-- Walk a fake update check instead of answering `skipped` in development.
-- Real auto-update runs in packaged builds only, so this is the only way to
-  see the update progress card, its byte meter, and Cancel without cutting a
-  release.
-- The fake applies to operator-initiated checks only. Startup and periodic
-  checks still answer `skipped`, so an opted-in dev launch raises nothing on
-  its own.
-- The offered version is `420.0.0`. Restart declines it; nothing was
-  downloaded to install.
-- Set `PWRAGENT_DEV_FAKE_UPDATE_STEP_MS=<ms>` to pace the walk. The default is
-  300 ms per step. `e2e/update-check.spec.ts` slows it so the mid-download
-  Cancel button is a target rather than a race.
-- Read the [update feature guidance](apps/desktop/src/renderer/src/features/update/AGENTS.md)
-  for why the fake is opt-in here and not in PwrGit.
-
-## Frontend and Desktop UI
-
-- Before renderer UI work, read the [desktop style guide](docs/design/desktop-style-guide.md).
-- Before color or theme work, read the [UI theme guide](docs/UI-THEME.md).
-- Use existing theme tokens before you add local CSS.
-- Prefer a thread-first information hierarchy to a generic dashboard layout.
-- Do not put scaffold narration in the user interface.
-- Do not put placeholder implementation text in the user interface.
-
-### Reuse existing chrome tokens
-
-Before you build new window chrome, open `apps/desktop/src/renderer/src/styles/app.css`.
-
-- Find the existing primitive that has the same function.
-- Copy its token references.
-- Do not select a different token because it looks similar.
-- Keep brand presentation identical in all windows.
-
-This rule applies to these elements:
-
-- Title-bar strips.
-- Brand marks.
-- Breadcrumbs.
-- Eyebrows.
-- Path or application rows.
-
-Canonical primitives and the tokens they read:
-
-| Primitive | Mark | Brand | Brand accent | Eyebrow | Breadcrumb separator | Breadcrumb current |
-|---|---|---|---|---|---|---|
-| `.sidebar__brand` (main sidebar) | `--accent` | `--text-primary` | `--accent` | n/a | n/a | n/a |
-| `.settings-nav__brand` (Settings nav) | `--accent` | `--text-primary` | `--accent` | n/a | n/a | n/a |
-| `.settings-titlebar__*` (Settings right-pane) | n/a | n/a | n/a | `--accent` | `--text-muted` | `--text-primary` |
-| `.activity-titlebar__*` (Activity window) | `--accent` | `--text-primary` | `--accent` | `--accent` | `--text-muted` | `--text-primary` |
-
-Render a brand through `BrandLockup`
-(`apps/desktop/src/renderer/src/features/chrome/BrandLockup.tsx`).
-
-- It draws the app-icon mark and the wordmark together.
-- Do not hand-write a `__brand` paragraph. The lockup's test fails when one appears.
-- The macOS title-strip geometry is the Pwr-family spec in
-  [features/chrome/AGENTS.md](apps/desktop/src/renderer/src/features/chrome/AGENTS.md).
-
-`apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx` enforces this token contract.
-
-- The test compares brand accent tokens across the listed primitives.
-- The test holds the lockup's mark color, gap, and wordmark type to the family spec.
-- The test also compares Activity and Settings breadcrumb tokens.
-- If you intentionally change a chrome token, change the test in the same commit.
-- This paired change makes the design decision visible during review.
-
-## Current Product Direction
-
-### Thread model and lenses
-
-- Threads are first-class and may exist without a directory.
-- Attention, Drafts, Inbox, Recents, and Directories use one thread lens switch.
-- Each lens tab contains only an icon or status indicators.
-- Put the lens name in the `aria-label` and tooltip.
-- A thread can have links to multiple Git directories.
-
-### Attention lens
-
-- Use Attention as the work queue.
-- Include threads with a live turn.
-- Include threads that wait for review.
-- Use two count indicators instead of a tab icon:
-  - A scanner for turns in progress.
-  - An orange cookie for unread threads.
-- Show zero for each empty count.
-- Make an indicator grey when its count is zero.
-- Do not hide a zero indicator. A missing indicator makes an idle tab appear broken.
-
-### Attention order
-
-- Order Attention by turn, not by activity.
-- Inbox lists by `updatedAt` and Recents by `createdAt`, each below its Pinned group when pins are on top.
-- Do not use `updatedAt` to order Attention.
-- `updatedAt` changes for each streamed item, subagent call, and tool result.
-- Activity ordering would move queue items while the operator uses the queue.
-- Give each Attention member a rank when its turn starts.
-- Keep that rank for the complete turn.
-- A thread can move at most twice during one turn.
-- The optional second move occurs when the turn ends.
-- `general.attention_promote_on_turn_end` controls that move and defaults to on.
-- When enabled, move a finished turn to the top for review.
-- Apply this promotion to a turn that the current window observed.
-- Also apply it to a turn that starts and finishes between polls.
-- Messaging and peer-driven turns can use this case.
-- For that case, treat an idle member with a newer `updatedAt` as a finished turn.
-- Never use this detection path for a live turn.
-- Use a monotonic counter for ranks. Do not use a clock.
-- Do not call `Date.now()` from the render path.
-- Do not create rank ties.
-- Scope ranks to current Attention membership.
-- If a thread leaves and returns, give it a new rank at the top.
-- The reducer and design rationale are in [attention-order.ts](apps/desktop/src/renderer/src/features/navigation/attention-order.ts).
-
-### Drafts lens
-
-- Drafts is the second state lens.
-- Use Drafts for threads that contain unsent composer text.
-- Sort Drafts by recent activity.
-- Store a draft on the machine where the operator writes it.
-- Store the latest draft in `composer_draft_latest`.
-- Restore that draft during the next application launch.
-- Never federate draft text.
-- A viewer can draft a reply to a thread from a peer instance.
-- Show the Draft chip only to that viewer.
-- Do not show that draft to the instance that owns the thread.
-- This rule prevents publication of an operator's unsent text.
-- Show the Draft chip in every lens.
-- The current implementation has two intentional limits:
-  - Draft storage is machine-wide, but each window reads it only during mount.
-  - A second window does not update its Draft chips until it restarts.
-  - Launchpad composer text has no thread row.
-  - Therefore, the lens label uses `replies`.
-  - Its empty state is `No unsent replies.`
-
-### Inbox, Recents, and Directories
-
-- The code names and the tab tooltips differ: `inbox` is the **Updated**
-  tab and `recents` is the **Created** tab. No tab is labelled Recents.
-- Use Inbox as the default browsing lens.
-- Sort Inbox by recent activity.
-- Show all threads in Inbox.
-- Show all threads in Recents.
-- `general.pinned_threads_on_top` decides where pins go in both lenses.
-  It defaults on, and it lives in **Settings → General → Pinned threads**.
-  - On: Inbox and Recents share one collapsible **Pinned** group above
-    their time-sorted list.
-  - Off: both are pure sorts. Each pinned thread keeps its `updatedAt` or
-    `createdAt` position, and neither lens shows pin-order controls.
-  - Never re-sort pins by time inside the group. Pin order is the
-    operator's own, and it must read the same on every tab.
-  - Directories ignores the setting; each project keeps its pins on top.
-- The Pinned group:
-  - Holds every pinned root from every project, including threads with no
-    directory and pinned peer threads. A root's sub-threads stay in its tray.
-  - Order the group by the global pin rank (`comparePinnedThreads`).
-    Reordering there and in a Directories project changes the same rank.
-  - A thread renders once. A pinned root is never in the list. Unpinning
-    returns it to its slot in the list's own order.
-  - The collapsed header shows the pin, **Pinned**, the count, and the
-    Attention tab's two indicators scoped to the group. Both stay visible
-    and grey at zero, so collapsing never hides a live turn or unread work.
-  - One collapsed state serves both lenses. Persist it per profile in the
-    state DB, beside the selected lens. Never in `config.toml`. One commit
-    per toggle.
-  - Revealing a pinned thread from search or the jump palette opens a
-    closed group. Pinning a thread opens it too.
-  - The group pages separately (`lens-pins`, 100 rows) from the list
-    (`lens`, 10 rows). An owner that predates the split ignores `roots`,
-    so the renderer also filters each page by each root's own pin.
-  - Draw no group when no pin exists or none matches the lens filter.
-  - The list below the group keeps no pin-order controls.
-  - While the group is drawn, the list sits in a section with the same header
-    (caret, icon, count, collapsed readouts), so the operator can fold it and
-    keep only the pins on screen. The header is the lens tab's own name and
-    icon (**Updated** or **Created**), never "Recents"; the icon stays
-    neutral. Its collapse is window-local view state, not persisted, and
-    independent of the group's.
-    A newly selected thread or a starting thread inside it reopens it.
-    Removing the last pin drops the fold, so the next pin shows the list
-    open; a lens switch, whose pins are still loading, keeps it.
-- Offer visible pin ordering in Directories and in the Pinned group.
-  Both use `useThreadPinOrdering`; do not fork it.
-- The pin-order controls are:
-  - Drag.
-  - The `⌘⇧↑` and `⌘⇧↓` shortcuts.
-  - **Move Up** and **Move Down** in the context menu.
-- Within each directory, show pinned threads first.
-- Pins have two tiers: pins kept at top, then ordinary pins.
-  - The tier lives in the rank: kept pins use a band below
-    `KEEP_AT_TOP_RANK_BOUNDARY` in `packages/shared/src/thread-pins.ts`.
-    Every rank sort, store, and federation hop already orders it first.
-  - A new pin, including an auto-pinned new thread, lands at the top of the
-    ordinary pins and never above a kept pin.
-  - Cross tiers only explicitly: the **Keep at Top** check item in the
-    context menu, or a drag. Move Up, Move Down, and the shortcuts stay
-    inside the pin's tier.
-  - A pin drag shows a ghost Keep at top slot: above the pins while no pin
-    is kept, else below the last kept pin. Only a drop inside the slot's own
-    box keeps. The slot must not overlap a row.
-  - A drop on a pin row adopts that row's tier. The line above the first
-    ordinary pin is the top of the ordinary pins; the lower half of the
-    last kept pin is the end of the kept pins.
-  - The **Pinned** and **Keep at Top** check items toggle in place and keep
-    the menu open. Return or a click outside closes it.
-- Sort unpinned directory threads by thread creation time.
-- Project folders, sub-threads, and pins all use one pointer drag:
-  a 4px lift, the tilted held card, the dimmed source, Escape to cancel.
-  Never native HTML drag (see `pointer-reorder-drag.ts`).
-  - Holding a project header folds Directories to one line per project
-    (`.is-folding-directories`), so a drop is a choice between folders.
-    It is a class on the list, never a disclosure change.
-  - A pinned folder dropped below the **Directories** divider is unpinned.
-  - Only a tray's direct children reorder, across providers. The owner
-    resolves each child's provider from its own child list.
-  - A thread dropped on another thread's row becomes its sub-thread
-    (`thread-nest-drop.ts`). The row wears an accent ring and the held card
-    says **Make sub-thread**. On a row that is also an order target (a pin
-    in its scope, a sibling in the tray) only the middle third nests; the
-    outer thirds keep the line, and an unpinned thread's edge drop still pins.
-    The target's closed tray opens. Nesting unpins the thread, and its own
-    sub-threads move with it.
-  - Offer a nest only when the owner will keep it: both threads on one
-    owner that can group, no provider sub-agents, not the current parent,
-    and never one of the thread's own sub-threads. The owner refuses a
-    loop in `setThreadParent` too, because a loop drops every member from
-    every lens. Agents use `mutate_thread`'s `parentThreadId` and
-    `detachFromParent`, for threads sharing an owner, including connected peers.
-
-### Unread behavior
-
-- Show unread state as an orange cookie on thread rows in every lens.
-- In all lenses except Attention, clear unread state when the thread gets focus.
-- In Attention, keep unread state when the thread gets focus.
-- In Attention, clear unread state only after the operator sends a reply.
-- The composer reports accepted sends and steers through `onUserRepliedToThread`.
-- That callback calls `markThreadsSeen`.
-- Do not apply reply-only clearing to other lenses.
-- A global rule would leave read threads unread when the operator does not reply.
-- Keep normal focus-based clearing in ordinary browsing lenses.
-- Skip `retainedUnreadThread` in Attention.
-- That mechanism normally clears a retained thread when the operator leaves it.
-- Apply the exemption to the Attention lens, not to a thread.
-- If the operator leaves Attention, clear the selected thread's unread state.
-- This rule applies when the selected thread remains selected in the next lens.
-- Tests in `useThreadNavigation.test.tsx` enforce both parts of this transition.
-
-### Reply acceptance
-
-- Report a reply only after the backend accepts it.
-- Do not report a reply when the operator only attempts it.
-- Call `onUserRepliedToThread` only after `startTurn` or `steerTurn` resolves.
-- Apply the same rule when `useQueuedTurnRelease` sends a queued turn.
-- If the send fails, keep the thread in Attention.
-- Early reporting would remove a thread for a message that never left the machine.
-
-## Dependency Boundary Enforcement
-
-Never weaken the dependency boundary rules.
-
-- `.dependency-cruiser.cjs` defines the layered architecture.
-- `dependency-cruiser` reads this configuration.
-- Do not add an exception or allowlist to that file.
-- Do not add a `severity: "ignore"` override.
-- Do not import from a package above the current package layer.
-- Do not introduce a circular dependency.
-- Do not move code to bypass a boundary.
-- Do not restructure code to bypass a boundary.
-- If a boundary blocks a change, redesign the change.
-
-Use this dependency order from lowest to highest:
-
-- `packages/shared` imports no internal package.
-- `packages/messaging/interface` imports only `packages/shared`.
-- `packages/federation` imports only `packages/shared`.
-- `packages/agent-tools` imports only `packages/shared`.
-- The three packages above are independent siblings; none imports another.
-- `packages/owner-core` (`@pwragent/owner-core`) holds shared navigation,
-  Attention ordering, and title policies. It may import only `shared`.
-- `packages/messaging/providers/{discord,feishu,line,mattermost,slack,telegram}`
-  each imports only `packages/messaging/interface`, never another provider.
-- `packages/pwragent` (the Outpost) may import `shared`, `federation`,
-  `agent-tools`, `messaging/interface`, and `owner-core`, only through
-  `src/federation-core.ts`. Its JavaScript consumes the resulting bundle.
-- `apps/desktop` can import any package.
-- No package under `packages/` may import an application under `apps/`.
-
-The renderer has an additional boundary.
-
-- `apps/desktop/src/renderer/` can import only `@pwragent/shared` directly.
-- Access every other package through the main-process IPC bridge.
-- Run `pnpm lint:boundaries` before you push.
-- CI fails for every boundary violation.
-
-## App-Specific Guidance
-
-- Before desktop application work, read [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
-- Before messaging package work, read [packages/messaging/AGENTS.md](packages/messaging/AGENTS.md).
-- Read the messaging package guidance before you:
-  - Add a messaging integration.
-  - Change messaging provider code.
-  - Select the owner of messaging calls or workflow logic.
-- Read [messaging-architecture.md](docs/messaging-architecture.md) for:
-  - Package responsibilities.
-  - Data flow.
-  - Capability profiles.
-  - Callback delivery models.
-  - The messaging file map.
-- Read [messaging-adapter-contract.md](docs/messaging-adapter-contract.md) for the formal adapter contract.
-- Read [messaging-adding-a-provider.md](docs/messaging-adding-a-provider.md) before you add a provider.
-- Read [messaging-platform-integration.md](docs/messaging-platform-integration.md) for:
-  - Operator setup.
-  - Messaging commands.
-  - Cloudflare Tunnel deployment.
-  - Tailscale Funnel deployment.
-  - HTTP callback providers.
-- Read [messaging-rbac.md](docs/messaging-rbac.md) for:
-  - The permission catalog.
-  - Built-in roles.
-  - Enforcement points.
-  - Audit behavior.
+- New writes per command, turn, item, streamed event, or timer require measurement and a checked-in budget that fails when the write count changes. Measure commits, not statements; wrap the feature, not setup.
+- Before adding such writes or changing budgets, read [Sqlite Write-Volume Instrumentation](apps/desktop/AGENTS.md#sqlite-write-volume-instrumentation) for calibration baselines, `measureSqliteWrites`, the budget JSON, `UPDATE_SQLITE_WRITE_BUDGETS=1`, and `pnpm test:sqlite-writes`. Keep each write-cost change visible as one reviewable diff line.
+- Calculate writes/second × commit cost × session duration and report MB/day. If excessive, report it and ask the user to select another design constraint; do not quietly ship it. Consider one transaction, a flush window, boundary-based persistence, or no persistence.
+
+## Code Style and Architecture
+
+- Format by hand; there is no automatic formatter. Never run `npx prettier`, `npx prettier --write`, or `prettier --write` on repository files. Do not introduce an isolated Prettier reformat, style/whitespace lint rules, or linter fixes to format code.
+- Inspect adjacent code and match it: double quotes, two spaces, semicolons, trailing commas in multiline literals, and leading binary operators on continuation lines. Keep the diff scoped; leave unrelated inconsistencies alone.
+- Before removing an unused binding, check whether it represents a missing call or assertion. Check leading unused parameters, unused class members, and orphaned exports by hand; syntax lint does not catch all of them.
+- Never weaken `.dependency-cruiser.cjs`: no exceptions, allowlists, or `severity: "ignore"` overrides. Do not import above a layer, add cycles, move code, or restructure it to bypass a boundary. Redesign a blocked change.
+- Internal dependency order (lowest to highest):
+  - `packages/shared`: no internal imports.
+  - `packages/messaging/interface`, `packages/federation`, `packages/agent-tools`, and `packages/owner-core`: each imports only `shared`; these are independent siblings. `owner-core` holds shared navigation, Attention ordering, and title policies.
+  - Each `packages/messaging/providers/{discord,feishu,line,mattermost,slack,telegram}` imports only `messaging/interface`, never another provider.
+  - `packages/pwragent` (Outpost) may import `shared`, `federation`, `agent-tools`, `messaging/interface`, and `owner-core` only through `src/federation-core.ts`; its JavaScript consumes that bundle.
+  - `apps/desktop` can import any package. No `packages/` code may import `apps/` code.
+- The desktop renderer may import only `@pwragent/shared` directly; access every other package through main-process IPC. CI fails every boundary violation.
+
+## Desktop Product Rules
+
+- Use existing theme tokens before local CSS. Prefer thread-first information hierarchy. Do not put scaffold narration or placeholder implementation text in the UI.
+- Before changing window chrome, title strips, brand marks, breadcrumbs, eyebrows, or path/application rows, read [docs/desktop-chrome-tokens.md](docs/desktop-chrome-tokens.md). Reuse canonical token references and `BrandLockup`; keep brand presentation identical across windows and change contract tests with intentional token changes.
+- Before changing lenses, Attention membership/order, unread state, drafts, pins, drag/grouping, reply acceptance, queued sends, or owner/federation behavior affecting them, read [docs/thread-navigation-rules.md](docs/thread-navigation-rules.md).
+- Threads are first-class and can exist without a directory or link to multiple Git directories. Keep unsent drafts local to the viewer's machine; never federate draft text. Report replies only after backend acceptance, including queued sends; failed sends keep the thread in Attention.
+
+## Pull Requests, Releases, and Licenses
+
+- Before drafting/editing PR titles or descriptions or capturing/attaching/editing media, read [docs/pull-request-guidance.md](docs/pull-request-guidance.md), `~/.codex/pr-style.md`, and the repository's PR template. Use `type(scope): short description` with the documented area scope.
+- Prefer before/after screenshots for UI changes, using contrived data. Non-contrived screenshots require operator review and approval before attaching; redact secrets, tokens, customer data, private thread text, and account identifiers.
+- Use GitHub CLI 2.99+ `--attach` for PR media, with byte-identical local Markdown/attachment paths. Never host media through orphan commits, evidence branches, other media-only Git commits, or raw repository URLs. If upload fails or is unavailable, report the blocker. Fetch the live body before later edits and verify working `user-attachments` URLs in their intended positions; the PR reference gives the procedure.
+- Before release/distribution work, read [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md) for packaging, signing, notarization, publishing, and updates.
+- Before app/Dock icon, macOS packaging, actool/Xcode, or icon-compiling CI changes, read [docs/macos-app-icons.md](docs/macos-app-icons.md). Keep `mac.icon` on `build/icon.icon`; do not hand-build or restore a `.icns`. Packaging requires actool 26+ and icon changes require verification on the newest shipped macOS.
+- PwrDrvr LLC owns PwrAgent; preserve MIT licensing, `LICENSE`, every package's `license: "MIT"`, and third-party disclosures. First-party license changes or disclosure removal require explicit PwrDrvr LLC policy change.
+- Before changing shipped dependencies (including fonts), license tooling/allowlists, embedded Git, or AppImage packaging/distribution, read [docs/third-party-license-notices.md](docs/third-party-license-notices.md), including [scoped approvals](docs/third-party-license-notices.md#changing-the-allowlist). Adding an allowlist id is a legal decision requiring a commit explaining why; never add one just to make CI green.
+- Strong copyleft and source-available terms (GPL, AGPL, BSL, SSPL, Commons Clause) are prohibited except for the explicitly scoped bundled Git approval; LGPL is prohibited except for the pinned AppImage runtime approval. Those exceptions do not expand the npm allowlist or first-party license. Preserve all versions, scope, disclosures, source/relink distribution duties, and the MPL/OFL conditions in the license reference.
+
+## Messaging Guidance
+
+- Before messaging package work, adding an integration, changing providers, or selecting owners of messaging calls/workflows, read [packages/messaging/AGENTS.md](packages/messaging/AGENTS.md).
+- For responsibilities, data flow, capability profiles, callback delivery models, and the file map, read [docs/messaging-architecture.md](docs/messaging-architecture.md); for the formal adapter contract, read [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md).
+- Before adding a provider, read [docs/messaging-adding-a-provider.md](docs/messaging-adding-a-provider.md).
+- For operator setup, messaging commands, Cloudflare Tunnel, Tailscale Funnel, or HTTP callback providers, read [docs/messaging-platform-integration.md](docs/messaging-platform-integration.md).
+- For permission catalogs, built-in roles, enforcement points, or audit behavior, read [docs/messaging-rbac.md](docs/messaging-rbac.md).
