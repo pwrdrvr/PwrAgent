@@ -998,6 +998,10 @@ async function refuseResolvedWorkMode(params: {
   );
 }
 
+class CompactionRecoveryRevoked extends Error {
+  constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
+}
+
 export class DesktopBackendRegistry {
   readonly context: RegistryContext;
   /** The PR and forge domain: forge tools, PR bindings and PR attachment. Importers use the facade below. */
@@ -12493,7 +12497,36 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    // Revoke recovery synchronously, before interruption can yield. Keep this
+    // turn's revocation even if the provider's cancellation acknowledgement is lost.
+    this.compactionRecoveryStops.set(buildThreadIdentityKey(params.backend, params.threadId), params.turnId);
     return await this.threadInterruption.interruptTurn(params);
+  }
+
+  private readonly compactionRecoveryStops = new Map<string, string>();
+  private readonly compactionRecoveryAdmissions = new Map<string, { allowed: () => boolean; admit: () => boolean }>();
+
+  /** Never queue, start a turn, or steer an assignment that replaced the compacted turn. */
+  async steerCompactionRecovery(params: SteerTurnRequest, origin: AppServerThreadMessageOrigin, canSubmit: () => boolean,
+    admit: () => boolean = canSubmit): Promise<{
+    status: "steered" | "busy" | "discarded"; turnId?: string;
+  }> {
+    if (params.backend !== "codex") return { status: "discarded" };
+    const allowed = () => canSubmit() && !this.isRestartGateClosed()
+      && this.compactionRecoveryStops.get(buildThreadIdentityKey(params.backend, params.threadId)) !== params.expectedTurnId
+      && this.getActiveTurnForThread(params)?.turnId === params.expectedTurnId;
+    if (!allowed()) return { status: "discarded" };
+    if (await this.isThreadLocked(params)) return { status: "busy" };
+    this.compactionRecoveryAdmissions.set(params.requestId, { allowed, admit });
+    try {
+      const result = await this.steerTurn(params, origin);
+      return { status: "steered", turnId: result.turnId };
+    } catch (error) {
+      if (error instanceof CompactionRecoveryRevoked) return { status: error.status };
+      throw error;
+    } finally {
+      this.compactionRecoveryAdmissions.delete(params.requestId);
+    }
   }
 
   private readonly threadInterruption = new ThreadInterruptionLifecycle({
@@ -13009,9 +13042,17 @@ export class DesktopBackendRegistry {
   }
 
   private readonly threadSteerSubmission = new ThreadSteerSubmissionLifecycle({
-    assertUnlocked: (request) => this.assertThreadNotLocked(request.backend, request.threadId),
+    assertUnlocked: async (request) => {
+      if (this.compactionRecoveryAdmissions.has(request.requestId)) {
+        if (await this.isThreadLocked(request)) throw new CompactionRecoveryRevoked("busy");
+        return;
+      }
+      await this.assertThreadNotLocked(request.backend, request.threadId);
+    },
     isRestartGateClosed: () => this.isRestartGateClosed(),
     queue: async (params, messageOrigin, origin) => {
+      // Recovery belongs only to the compacted assignment, never a later turn.
+      if (messageOrigin.systemReason === "compaction-recovery") throw new CompactionRecoveryRevoked();
       const queued = await this.admitThreadAttachments(
         { backend: params.backend, threadId: params.threadId, input: params.input },
         (input, onAdmission) => this.threadTurnQueue.submitSteer({
@@ -13115,6 +13156,11 @@ export class DesktopBackendRegistry {
     });
     return {
       submit: () => this.withActiveCodexThreadClient(params.threadId, async (client) => {
+        const recovery = this.compactionRecoveryAdmissions.get(params.requestId);
+        if (messageOrigin?.systemReason === "compaction-recovery") {
+          if (await this.isThreadLocked(params)) throw new CompactionRecoveryRevoked("busy");
+          if (!recovery?.allowed()) throw new CompactionRecoveryRevoked();
+        }
         if (!client.steerTurn) {
           throw new Error("Selected backend does not support turn/steer");
         }
@@ -13127,6 +13173,14 @@ export class DesktopBackendRegistry {
             },
           } : {}),
           expectedTurnId: params.expectedTurnId,
+          ...(messageOrigin?.systemReason === "compaction-recovery" ? {
+            admitSteer: async (submit: () => Promise<unknown>) => {
+              if (await this.isThreadLocked(params)) throw new CompactionRecoveryRevoked("busy");
+              if (!recovery?.allowed() || !recovery.admit()) throw new CompactionRecoveryRevoked();
+              // No await between the current owner/SQLite checks and RPC admission.
+              return submit();
+            },
+          } : {}),
         });
       }),
       forget: () => this.forgetPendingThreadMessageContext(pendingMessageContextId),

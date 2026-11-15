@@ -60,6 +60,35 @@ const dialog = () => screen.getByRole("dialog", { name: "Continue After" });
 const instructions = () => screen.getByRole("textbox", { name: "Instructions" });
 
 describe("Continue After dialog", () => {
+  it("shows a durable recovery suspension and lets the local operator rearm it", async () => {
+    const hook = { ...dependency, repeat: true, conditions: [{ backend: "codex" as const, threadId: "waiting", when: "compaction_completed" as const }] };
+    const manage = vi.fn(async (request: ManageThreadDependenciesRequest) => ({
+      dependencies: [hook], recoveryProtection: { attemptsInWindow: 3, ...(request.action === "rearm_compaction" ? {} : { suspendedAt: 1000 }) },
+    }));
+    renderDialog(searchingApi(manage));
+    expect(await screen.findByText("Automatic recovery suspended")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rearm recovery" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "rearm_compaction", backend: "codex", threadId: "waiting" }));
+    await waitFor(() => expect(screen.queryByText("Automatic recovery suspended")).not.toBeInTheDocument());
+  });
+
+  it("registers a recurring self compaction subscription without wait-barrier controls", async () => {
+    const manage = vi.fn(async () => ({ dependencies: [] }));
+    renderDialog(searchingApi(manage));
+    fireEvent.click(await screen.findByRole("button", { name: "Add Compaction Recovery" }));
+    expect(screen.queryByRole("checkbox", { name: "Hold merging until then" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remind me" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Repeat after each future compaction" }));
+    fireEvent.change(instructions(), { target: { value: "Read /workspace/AGENTS.md and resolve the current assignment with the recovery tool." } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "waiting", when: "compaction_completed", title: "Dependencies" }],
+      mode: "all", onFailure: "wait", repeat: true,
+      continuation: "Read /workspace/AGENTS.md and resolve the current assignment with the recovery tool.",
+    }));
+  });
+
   it("opens on the form when nothing is registered and saves exactly the picked row", async () => {
     const manage = vi.fn(async (request) => ({ dependencies: request.action === "create" ? [dependency] : [] }));
     const api = searchingApi(manage, [thread, target]);

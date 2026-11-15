@@ -7,7 +7,7 @@ export const THREAD_DEPENDENCIES_CHANNEL = "thread:dependencies";
  * only when the prerequisite thread, the operator, or an agent marks it done.
  */
 export const THREAD_DEPENDENCY_CONDITIONS = [
-  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done",
+  "turn_completed", "pr_attached", "ci_passed", "pr_merged", "marked_done", "compaction_completed",
 ] as const;
 
 /** Advertised by owners that serve `backend.manageThreadDependencies` to peers. */
@@ -19,6 +19,18 @@ export const THREAD_DEPENDENCY_STEP_MAX_LENGTH = 200;
 /** "Something else": a prerequisite that is not a thread. */
 export const THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH = 200;
 export const THREAD_DEPENDENCY_MARK_DONE_NOTE_MAX_LENGTH = 2000;
+export const COMPACTION_RECOVERY_COOLDOWN_MS = 5 * 60_000;
+export const COMPACTION_RECOVERY_WINDOW_MS = 30 * 60_000;
+export const COMPACTION_RECOVERY_MAX_ATTEMPTS = 3;
+export const COMPACTION_RECOVERY_MAX_ATTEMPTS_PER_TURN = 8;
+
+export type CompactionRecoveryProtection = {
+  attemptsInWindow: number;
+  attemptsInTurn?: number;
+  cooldownUntil?: number;
+  /** A durable circuit breaker, cleared only by the operator on the owning instance. */
+  suspendedAt?: number;
+};
 
 /** How a prerequisite reads after its thread's name: "Foundation passes CI". */
 export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD_DEPENDENCY_CONDITIONS)[number], string>> = {
@@ -27,6 +39,7 @@ export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD
   ci_passed: "passes CI",
   pr_merged: "is merged",
   marked_done: "is marked done",
+  compaction_completed: "finishes compaction",
 };
 
 /**
@@ -95,6 +108,10 @@ export type ThreadDependency = {
   mode: "all" | "any";
   onFailure: "notify" | "wait";
   continuation?: string;
+  /** Compaction only: keep this one subscription for future live completions. */
+  repeat?: boolean;
+  /** Last live completion, retained after delivery to reject redelivery. No transcript data. */
+  compaction?: { itemId: string; turnId: string; completedItemIds: string[] };
   /** Absent on registrations made before operator delivery: `agent`. */
   deliver?: ThreadDependencyDeliveryTarget;
   /** Operator delivery only: the card offers Start thread with the continuation. */
@@ -129,6 +146,13 @@ export function threadDependencyTodoKey(dependencyId: string): string {
   return `dependency:${dependencyId}`;
 }
 
+/** A recurring hook's receipt belongs to one actual completed protocol item. */
+export function threadDependencyDeliveryKey(dependency: Pick<ThreadDependency, "id" | "compaction">): string {
+  return dependency.compaction
+    ? JSON.stringify([dependency.id, dependency.compaction.turnId, dependency.compaction.itemId])
+    : dependency.id;
+}
+
 /** Evidence reasons a repair can clear while the PR stays open. */
 export const REPAIRABLE_THREAD_DEPENDENCY_FAILURES: readonly string[] = ["CI failed", "Merge conflict"];
 
@@ -147,8 +171,9 @@ export type ManageThreadDependenciesRequest = {
   /**
    * `active` lists every active registration on this instance, for sidebar
    * status. It is a desktop-window read only, never an agent tool action.
+   * `rearm_compaction` is also desktop-only and requires the local operator.
    */
-  action: "create" | "list" | "cancel" | "dismiss" | "active" | "mark_done";
+  action: "create" | "list" | "cancel" | "dismiss" | "active" | "mark_done" | "rearm_compaction";
   backend?: AppServerBackendKind;
   threadId?: string;
   /** The waiting thread's owner, when it is not this window's machine. */
@@ -158,6 +183,8 @@ export type ManageThreadDependenciesRequest = {
   /** Notify once on failure, or wait through CI repair. Closed PRs remain terminal. */
   onFailure?: "notify" | "wait";
   continuation?: string;
+  /** Compaction only. Default false: the next future completion, without history catch-up. */
+  repeat?: boolean;
   /** Resume the waiting thread (`agent`, the default) or remind the operator. */
   deliver?: ThreadDependencyDeliveryTarget;
   /** With `deliver: "operator"`, offer Start thread on the card. */
@@ -184,6 +211,7 @@ export type ManageThreadDependenciesRequest = {
 
 export type ManageThreadDependenciesResponse = {
   dependencies: ThreadDependency[];
+  recoveryProtection?: CompactionRecoveryProtection;
   /** Active registrations on other threads that wait on this thread. */
   dependents?: ThreadDependency[];
   /** Registrations on other machines that wait on this thread, with their owner. */

@@ -4830,6 +4830,7 @@ function threadMessageOriginFromUnknown(
     record.systemReason === "thread-correspondence"
     || record.systemReason === "monitor-job-suggestion"
     || record.systemReason === "app-restart"
+    || record.systemReason === "compaction-recovery"
       ? record.systemReason
       : undefined;
   const messaging = threadMessageMessagingOriginFromUnknown(record.messaging);

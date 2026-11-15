@@ -1,9 +1,110 @@
 # Durable thread dependencies
 
 `manage_thread_dependencies` (**Continue After…**) registers one-shot
-prerequisites for a thread. The thread ends its turn after registration; PwrAgent evaluates
+prerequisites or post-compaction recovery subscriptions for a thread. After
+registering a wait barrier, the thread ends its turn; PwrAgent evaluates
 prerequisites from provider turn boundaries and its existing PR status bus.
 There is no Job Monitor, model-driven polling, or new timer.
+
+## Post-compaction recovery subscriptions
+
+```json
+{
+  "action": "create",
+  "conditions": [{ "backend": "codex", "threadId": "<this-thread>", "when": "compaction_completed" }],
+  "continuation": "Re-read /workspace/AGENTS.md and /workspace/worker-session.md, then use the declared recovery tool to resolve the current assignment. Preserve its progress.",
+  "repeat": true
+}
+```
+
+The top-level backend/thread defaults to the trusted caller. Compaction
+recovery requires exactly one local same-thread Codex condition, agent
+delivery, an explicitly authorized instruction prompt, and no merge hold.
+Declared paths and recovery tool checks belong in `continuation`; PwrAgent
+does not infer instructions from paper/session content or read those files
+itself. Keep the prompt stable and let its recovery tool resolve the current
+assignment. Do not register a new paragraph-specific payload each time.
+
+`repeat: true` retains one durable subscription. Identical active
+registrations return that subscription; omitting it watches the next future
+completion once. Use the existing list/cancel/dismiss actions to manage it.
+The desktop form offers **Add Compaction Recovery**, **Instructions**, and
+**Repeat after each future compaction**. It exposes no wait-barrier or
+reminder controls for this subscription.
+
+**Keep the ongoing authorized task running after registration.** A
+compaction subscription is not a wait barrier; end-turn guidance elsewhere
+in this document does not apply to it.
+
+Only owner-local live `contextCompaction` item start/completion pairs count.
+The completed item's turn and item IDs identify the event. Starts, explicit
+failures/cancellations, unmatched completions, historical thread reads, and
+the deprecated `thread/compacted` notification do not fire hooks. This uses
+the [Codex App Server item lifecycle and steering contract](https://learn.chatgpt.com/docs/app-server),
+not Codex storage. A connection restart forgets unfinished live pairs;
+there is no history catch-up, including for compactions while disconnected.
+
+Recovery uses `turn/steer` with the compacted `expectedTurnId`. It never
+interrupts, starts, or queues a turn. It skips an ended, stopped, or replaced
+assignment, including an idle/manual compaction; recurring hooks remain
+subscribed to future compactions. A lock may defer delivery while that turn
+remains active. Project pauses, archive, restart gates, and claim revocation
+prevent delivery. A pause drops that recovery attempt; it does not queue a
+future wake. If multiple completions arrive while one recovery is pending,
+they coalesce into that recovery rather than accumulating prompts.
+
+Steering acceptance is not an atomic pre-next-action barrier. Codex may
+already have continued before it accepts/applies the guidance. Retain an
+explicit startup instruction-file read contract. The recovery wrapper says
+the prompt is control guidance, preserves the current assignment, and must
+not become artifact content or an instruction to generate another paragraph.
+
+### Loop protection
+
+Every thread shares a durable guard across all its hooks: at most one
+automatic recovery attempt every **five minutes**, and at most **three
+attempts in a rolling thirty-minute window**, with a hard ceiling of
+**eight attempts per active turn** even when spread over hours. A further eligible attempt
+trips a circuit breaker. It stays suspended even after the window expires
+or the app restarts; only the local operator's **Rearm recovery** button in
+Continue After clears it. Agents and peers cannot rearm it. Re-registering,
+cancelling, or changing a hook does not clear the guard.
+
+Cooldown events are dropped, with no delayed prompt or timer. The budget
+reservation commits atomically with the dispatch claim, so two owners or
+different hooks cannot spend the same allowance. Uncertain or refused
+admission counts conservatively; retrying a still-unsubmitted busy claim
+reuses its reservation, but never bypasses suspension or dispatch cooldown.
+After initialization, resume, input preparation and any lifecycle/setup replay,
+the final `turn/steer` admission checks the current lock, pause, assignment and
+claim again. An immediate SQLite transaction consumes the reservation just
+before RPC admission. It anchors the rolling window and cooldown to actual
+dispatch time, so unlocking multiple pending hooks cannot send a burst.
+Clock rollback cannot open the cooldown early.
+The guard stores at most three reservation keys/timestamps and submission bits,
+the current turn's counter, and its last attempt, dispatch and suspension times in a PwrAgent-owned row per thread. This
+bounds automatic recovery injection; it is not an account-wide token budget
+for the worker's independently authorized work.
+
+Each hook retains only its latest completion, consumed item IDs within that
+turn, and the existing claim/evidence fields. A compare-and-swap claim
+arbitrates owners; per-event message-origin receipts distinguish recurring
+deliveries. After a crash, a receipt rearms the recurring hook; an uncertain
+claim requires review instead of retrying a possibly accepted steer.
+
+The checked-in `compaction-recovery-eight-completions` budget measures 32
+commits for eight eligible completions and 160 duplicate pairs: four
+commits per completion, including atomic reservation and final RPC admission,
+with zero start/duplicate or idle timer writes. Observed WAL was 267,800 bytes
+(about 33,475 bytes/completion). At eight workers each compacting once per ten
+minutes, 0.0533 commits/second × 8,369 bytes/commit × 86,400 seconds projects
+to **38.6 MB/day**. This is the coordinator's incremental
+write cost; existing steering/message-origin persistence keeps its own
+budgets. Registration adds one transaction. Cooldown suppression adds zero
+writes; a circuit trip plus an explicit operator rearm has its own budget.
+Releasing two busy reservations costs four commits total: one dispatch and
+one cooldown skip. Repeated availability notifications add no further writes.
+The guard table is additive and introduces no timer.
 
 ## Choosing a wait
 
@@ -224,7 +325,7 @@ longer constrain the graph. Only local thread conditions join the graph;
 a peer's thread or a subject cannot form a cycle here.
 
 Deduplication includes pinned turns and continuation text, but excludes display
-titles and condition order. Each registration fires once, including
+titles and condition order. Each wait-barrier registration fires once, including
 `mode: "any"`; later worker turns require a new wait after the previous
 delivery completes.
 

@@ -12205,9 +12205,14 @@ export class CodexAppServerClient {
     input: AppServerTurnInputItem[];
     onInputTextPrepared?: (text: string | undefined) => void;
     expectedTurnId: string;
+    /** Owner policy runs after initialization, input preparation and setup replay. */
+    admitSteer?: (submit: () => Promise<unknown>) => Promise<unknown>;
   }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
-    const connection = this.createThreadOperationConnection();
+    const admit = params.admitSteer;
+    const connection = this.createThreadOperationConnection(admit
+      ? (method, submit) => method === "turn/steer" ? admit(submit) : submit()
+      : undefined);
 
     await requestWithFallbacks({
       client: connection,
@@ -12249,7 +12254,9 @@ export class CodexAppServerClient {
     return this.runAdmittedRequest(() => this.rawConnection.request(...args));
   }
 
-  private createThreadOperationConnection(): Pick<JsonRpcConnection, "request"> {
+  private createThreadOperationConnection(
+    admit?: (method: string, submit: () => Promise<unknown>) => Promise<unknown>,
+  ): Pick<JsonRpcConnection, "request"> {
     let generation = this.serverGeneration;
     const setup: Array<Parameters<JsonRpcConnection["request"]>> = [];
     let setupThreadId: string | undefined;
@@ -12260,10 +12267,13 @@ export class CodexAppServerClient {
       request: (...args) => this.runAdmittedRequest(async () => {
         const closeGeneration = this.closeGeneration;
         const request = (...requestArgs: Parameters<JsonRpcConnection["request"]>) => {
-          if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {
-            throw new Error("codex app server client closed");
-          }
-          return this.rawConnection.request(...requestArgs);
+          const submit = () => {
+            if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {
+              throw new Error("codex app server client closed");
+            }
+            return this.rawConnection.request(...requestArgs);
+          };
+          return admit ? admit(requestArgs[0], submit) : submit();
         };
         // Resume and settings belong to a process and to a loaded thread.
         // Reapply successful setup after recovery or after the thread

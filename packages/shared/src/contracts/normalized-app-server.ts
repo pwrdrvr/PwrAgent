@@ -758,7 +758,7 @@ export type AppServerThreadMessageOrigin = {
   causalMessagingAmbiguous?: boolean;
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
-  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery";
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.
