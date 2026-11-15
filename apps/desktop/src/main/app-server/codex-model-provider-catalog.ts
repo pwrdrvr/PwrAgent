@@ -24,6 +24,34 @@ const MAX_DISCOVERED_MODELS = 2_000;
 const MAX_MODEL_PAGES = 20;
 const MAX_ERROR_LENGTH = 200;
 
+function providerModelOptions(
+  provider: CodexModelProviderSettings,
+  discovered: readonly CodexProviderCatalogModel[],
+): BackendModelOption[] {
+  const byId = new Map(discovered.map((model) => [model.id, model]));
+  const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
+  return ids.map((model): BackendModelOption => {
+    const found = byId.get(model);
+    const efforts = found?.reasoningEfforts ?? [];
+    return {
+      id: formatCodexProviderModelId(provider.id, model),
+      label: found?.label || (provider.compatibility === "bonsai" && model === BONSAI_2_27B_MODEL_ID
+        ? BONSAI_2_27B_DISPLAY_NAME : model),
+      providerId: provider.id,
+      providerLabel: provider.name,
+      // Codex sends any effort as `reasoning.effort`, for any model, so a
+      // provider model offers the levels its endpoint declares. A model
+      // the endpoint names none for (or only listed in Settings) takes
+      // the endpoint's default.
+      supportsReasoning: efforts.length > 0,
+      ...(efforts.length ? { reasoningEfforts: [...efforts] } : {}),
+      ...(found?.defaultReasoningEffort ? { defaultReasoningEffort: found.defaultReasoningEffort } : {}),
+      ...(found?.supportsImage === undefined ? {} : { supportsImage: found.supportsImage }),
+      supportsFast: false,
+    };
+  });
+}
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 type Discovery = {
@@ -87,30 +115,25 @@ export class CodexModelProviderCatalog {
       const discovered = provider.discoverModels === false
         ? []
         : (await this.discover(provider, keys[provider.id])).discovery?.models ?? [];
-      const byId = new Map(discovered.map((model) => [model.id, model]));
-      const ids = [...new Set([...(provider.models ?? []), ...discovered.map((model) => model.id)])];
-      return ids.map((model): BackendModelOption => {
-        const found = byId.get(model);
-        const efforts = found?.reasoningEfforts ?? [];
-        return {
-          id: formatCodexProviderModelId(provider.id, model),
-          label: found?.label || (provider.compatibility === "bonsai" && model === BONSAI_2_27B_MODEL_ID
-            ? BONSAI_2_27B_DISPLAY_NAME : model),
-          providerId: provider.id,
-          providerLabel: provider.name,
-          // Codex sends any effort as `reasoning.effort`, for any model, so a
-          // provider model offers the levels its endpoint declares. A model
-          // the endpoint names none for (or only listed in Settings) takes
-          // the endpoint's default.
-          supportsReasoning: efforts.length > 0,
-          ...(efforts.length ? { reasoningEfforts: [...efforts] } : {}),
-          ...(found?.defaultReasoningEffort ? { defaultReasoningEffort: found.defaultReasoningEffort } : {}),
-          ...(found?.supportsImage === undefined ? {} : { supportsImage: found.supportsImage }),
-          supportsFast: false,
-        };
-      });
+      return providerModelOptions(provider, discovered);
     }));
     return perProvider.flat();
+  }
+
+  /**
+   * Each configured provider's listed models plus those its last successful
+   * read of its current base URL found, without reading any endpoint. A
+   * summary published without a Codex model read (before discovery, or after
+   * a provider change replaced the runtime) offers these.
+   */
+  knownModelOptions(): BackendModelOption[] {
+    return this.options.resolveProviders().flatMap((provider) => {
+      const state = provider.discoverModels === false ? undefined : this.discovery.get(provider.id);
+      const discovered = state?.fingerprint.startsWith(`${provider.baseUrl}\u0000`)
+        ? state.discovery?.models ?? []
+        : [];
+      return providerModelOptions(provider, discovered);
+    });
   }
 
   /**
