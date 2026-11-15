@@ -1,6 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS, type CodexModelProviderSettings } from "@pwragent/shared";
+import {
+  BONSAI_2_27B_DISPLAY_NAME,
+  BONSAI_2_27B_MODEL_ID,
+  LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 import { discoverModelCatalog, startBridge, type LocalModelCatalog } from "./local-responses-bridge.mjs";
 
@@ -34,7 +39,7 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
   }
   return { models: [{
     slug,
-    display_name: "PrismML Bonsai",
+    display_name: slug === BONSAI_2_27B_MODEL_ID ? BONSAI_2_27B_DISPLAY_NAME : "PrismML Bonsai",
     description: "Local Bonsai through PwrAgent's Responses compatibility bridge",
     default_reasoning_level: null,
     supported_reasoning_levels: [],
