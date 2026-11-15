@@ -117,7 +117,10 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
       if (observing || !trackedTypes.has(type)) return;
       if (resources.size >= 512) { droppedResources++; return; }
       const startedAt = performance.now();
-      resources.set(id, { type, triggerId, owner: testOwner(), stack: stack(), resource: new WeakRef(resource) });
+      // Capture the creation site now, but leave V8's stack formatting (and
+      // source-map lookup) until a failure snapshot actually needs it. This
+      // hook also runs for healthy filesystem requests and timers.
+      resources.set(id, { type, triggerId, owner: testOwner(), stackError: new Error(), resource: new WeakRef(resource) });
       resourceCount++;
       resourceInitMs += performance.now() - startedAt;
     },
@@ -215,9 +218,11 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
         })),
         // Supporting evidence, not a claim that every live handle is a leak.
         activeResources: process.getActiveResourcesInfo(),
-        resources: [...resources.entries()].flatMap(([id, { resource, ...details }]) => {
+        resources: [...resources.entries()].flatMap(([id, { resource, stackError, ...details }]) => {
           const value = resource.deref();
-          return !value || value.hasRef?.() === false ? [] : [{ id, ...details }];
+          return !value || value.hasRef?.() === false ? [] : [{
+            id, ...details, stack: stackError.stack?.split("\n").slice(1, 15).join("\n"),
+          }];
         }),
         droppedResources,
         // Do not write the raw report: it includes environment variables and
