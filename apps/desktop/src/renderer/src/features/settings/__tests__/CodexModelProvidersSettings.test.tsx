@@ -407,6 +407,46 @@ describe("CodexModelProvidersSettings", () => {
     })]));
   });
 
+  // Rule: endpoint model listings never opt a generic draft into the Bonsai
+  // bridge. Check both catalog sources and every alias position for up to two
+  // models, including a single advertised alias without compatibility proof.
+  it("preserves generic execution when discovery advertises a Bonsai alias", async () => {
+    for (const source of ["cached", "tested"]) {
+      for (const ids of [["bonsai2-27b", "other"], ["other", "bonsai2-27b"], ["bonsai2-27b"]]) {
+        const provider: DesktopCodexModelProvider = {
+          id: "generic", name: "Generic", baseUrl: "http://127.0.0.1:8080/v1", hasApiKey: false,
+        };
+        const summary = codexSummary(ids.map((id) => ({
+          id: `@generic/${id}`, providerId: "generic", supportsReasoning: false,
+        })), { id: "generic", name: "Generic" });
+        const { onSave, testCodexModelProvider } = renderSettings([provider], undefined, [summary]);
+        testCodexModelProvider.mockImplementation(async () => ({
+          models: { ok: true, count: ids.length, items: ids.map((id) => ({ id })) },
+          responses: { ok: false, model: ids[0], error: "Compatibility not verified" }, latencyMs: 1,
+        }));
+        fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+        fireEvent.change(screen.getByRole("textbox", { name: "Provider name" }), { target: { value: "Generic updated" } });
+        fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+        await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalled());
+        if (source === "tested") {
+          await screen.findByText(`${ids.length} ${ids.length === 1 ? "model" : "models"} from GET /models · from this test`);
+          testCodexModelProvider.mockClear();
+          fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+          await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalled());
+        }
+        const tested = (testCodexModelProvider.mock.calls as unknown as [{ provider: DesktopCodexModelProvider }][])[0][0];
+        expect(tested.provider.models, `${source}: ${ids}`).toBeUndefined();
+        expect(tested.provider.compatibility, `${source}: ${ids}`).toBeUndefined();
+        fireEvent.click(screen.getByRole("button", { name: "Save and reconnect" }));
+        await waitFor(() => expect(onSave).toHaveBeenCalled());
+        const saved = (onSave.mock.calls as unknown as [DesktopCodexModelProvider[]][])[0][0];
+        expect(saved[0].models, `${source}: ${ids}`).toBeUndefined();
+        expect(saved[0].compatibility, `${source}: ${ids}`).toBeUndefined();
+        cleanup();
+      }
+    }
+  });
+
   it("asks for the key an imported provider needs and stores it in the keychain", async () => {
     const { onSave, setCodexModelProviderApiKey } = renderSettings([], importScan);
     fireEvent.click(await screen.findByRole("button", { name: "Import Refuseless" }));

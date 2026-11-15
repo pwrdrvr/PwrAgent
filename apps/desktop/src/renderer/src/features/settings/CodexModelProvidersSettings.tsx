@@ -4,7 +4,6 @@ import {
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
   isValidCodexModelProviderId,
-  isLoopbackCodexBaseUrl,
   parseCodexProviderModelId,
   suggestCodexModelProviderId,
   validateCodexBaseUrl,
@@ -1107,12 +1106,13 @@ function applyPatch(draft: ProviderDraft, patch: Partial<ProviderDraft>): Provid
 
 function providerFromDraft(draft: ProviderDraft, discovered: readonly CodexProviderCatalogModel[] = []): CodexModelProviderSettings {
   const models = [...new Set(draft.listed.map((model) => model.trim()).filter(Boolean))];
-  // The isolated runtime needs one explicit model, including when its only
-  // visible choice came from discovery rather than the manually added list.
-  if (!models.length) {
+  // An existing Bonsai runtime needs one explicit model even when its choice
+  // came from discovery. A generic endpoint advertising the alias does not
+  // establish Bonsai compatibility or opt the provider into its bridge.
+  if (!models.length && draft.compatibility === "bonsai") {
     const alias = discovered.find((model) => model.id === BONSAI_2_27B_MODEL_ID);
-    if (alias && isLoopbackCodexBaseUrl(draft.baseUrl)) models.push(alias.id);
-    else if (draft.compatibility === "bonsai" && discovered.length === 1) models.push(discovered[0].id);
+    if (alias) models.push(alias.id);
+    else if (discovered.length === 1) models.push(discovered[0].id);
   }
   const rates: CodexModelProviderRate[] = [];
   if (!draft.local) {
