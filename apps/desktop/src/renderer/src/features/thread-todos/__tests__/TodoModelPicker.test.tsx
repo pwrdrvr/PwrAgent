@@ -42,6 +42,21 @@ async function openPicker() {
 }
 
 describe("to-do dispatch model picker", () => {
+  it("shows an explicit cross-provider proposal over dispatch history and sends those settings", async () => {
+    const todo: ThreadTodo = { ...base, backend: "codex", action: {
+      type: "start_thread", prompt: "Review it", backend: "claude", model: "opus", reasoningEffort: "high",
+      executionMode: "auto", workMode: "local",
+    }, dispatchDefaults: { thread: codex, lastDispatch: codex } };
+    const { onRun } = setup(todo, []);
+    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" })).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show start settings" })); });
+    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenCalledWith(todo, expect.objectContaining({
+      modelSettings: { backend: "claude", model: "opus", reasoningEffort: "high" },
+    }));
+  });
+
   it("offers a Codex model provider by its own name, as the composer's launchpad does", async () => {
     const settings: ThreadTodoModelSettings = { backend: "codex", model: "gpt-6.1-sol" };
     const todo = { ...base, dispatchDefaults: { thread: settings } };

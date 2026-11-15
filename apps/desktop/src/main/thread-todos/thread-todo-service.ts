@@ -145,6 +145,7 @@ export type AddThreadTodoInput = {
 export type ThreadTodoActionPatch = {
   prompt?: string;
   title?: string | null;
+  backend?: AppServerBackendKind | null;
   model?: string | null;
   reasoningEffort?: string | null;
   executionMode?: ThreadExecutionMode | null;
@@ -170,6 +171,7 @@ export type UpdateThreadTodoInput = {
 const START_THREAD_PATCH_FIELDS = [
   "prompt",
   "title",
+  "backend",
   "model",
   "reasoningEffort",
   "executionMode",
@@ -810,7 +812,7 @@ export class ThreadTodoService {
             action,
             todo: dispatchCard,
             modelSettings: options.modelSettings
-              ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
+              ?? (action.backend ? undefined : this.store.getThreadModelSettings(todo.backend, todo.threadId)),
             ...(plan ? { plan } : {}),
             ...choices,
           });
