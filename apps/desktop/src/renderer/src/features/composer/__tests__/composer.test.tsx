@@ -63,6 +63,7 @@ import { settleFakeTimers } from "../../../test/settle-fake-timers";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
+import { useThreadSkills } from "../../../lib/useThreadSkills";
 
 function Composer(props: ComponentProps<typeof ProductionComposer>) {
   const desktopApi = useMemo<DesktopApi>(() => ({
@@ -624,7 +625,7 @@ function createScheduledActionApi(options?: {
 }
 
 describe("Composer", () => {
-  it.each(["$", "/"])("refreshes skills once per %s picker opening, across query and summary updates", (prefix) => {
+  it.each(["$", "/"])("checks skill freshness once per %s picker opening, across query and summary updates", (prefix) => {
     const refresh = vi.fn();
     const thread: NavigationThreadSummary = {
       id: "picker-refresh",
@@ -645,6 +646,50 @@ describe("Composer", () => {
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.change(input, { target: { value: `${prefix}paper` } });
     expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers explicit Refresh for a missing skill while reopening reuses the fresh catalog", async () => {
+    let names = ["rate-math-paper"];
+    let pause = false;
+    let finishRefresh: () => void = () => undefined;
+    const refreshed = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    const listSkills = vi.fn(async () => {
+      if (pause) await refreshed;
+      return {
+        backend: "codex" as const,
+        fetchedAt: Date.now(),
+        data: [{ skills: names.map((name) => ({ name, description: name, path: `/fixture/.agents/skills/${name}/SKILL.md` })) }],
+      };
+    });
+    const desktopApi: DesktopApi = { listSkills };
+    const thread: NavigationThreadSummary = {
+      id: "explicit-refresh", title: "Refresh skills", titleSource: "explicit",
+      source: "codex", linkedDirectories: [], inbox: { inInbox: false },
+    };
+    function Picker() {
+      const skills = useThreadSkills({ desktopApi, thread });
+      return <Composer thread={thread} skills={skills.skills} skillLoading={skills.loading} onEnsureSkillsLoaded={skills.ensureLoaded} />;
+    }
+    render(<Picker />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "$rewriter" } });
+    await screen.findByText("No matching skills.");
+    expect(listSkills).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: "$rewriter" } });
+    expect(listSkills).toHaveBeenCalledTimes(1);
+
+    names = [...names, "paper-rewriter-pwragent"];
+    pause = true;
+    const refresh = screen.getByRole("button", { name: "Refresh skills" });
+    expect(refresh.closest('[role="listbox"]')).toBeNull();
+    fireEvent.click(refresh);
+    expect(refresh).toBeDisabled();
+    await act(async () => { finishRefresh(); });
+    await screen.findByRole("option", { name: /paper-rewriter-pwragent/ });
+    expect(listSkills).toHaveBeenCalledTimes(2);
+    expect(refresh).toBeEnabled();
+    expect(input).toHaveValue("$rewriter");
   });
 
   it("can start a restored project draft after another project starts a placeholder thread", async () => {
@@ -27593,11 +27638,12 @@ it("refits skill autocomplete when its composer resizes without a window resize"
     }));
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "$" } });
     const listbox = await screen.findByRole("listbox", { name: "Skills" });
-    const previous = Number.parseFloat(listbox.style.maxHeight);
+    const panel = listbox.closest<HTMLElement>(".composer__autocomplete")!;
+    const previous = Number.parseFloat(panel.style.maxHeight);
     top = 100;
     act(() => resized?.());
-    expect(Number.parseFloat(listbox.style.maxHeight)).toBeLessThan(previous);
-    expect(Number.parseFloat(listbox.style.maxHeight)).toBeLessThanOrEqual(top - 10);
+    expect(Number.parseFloat(panel.style.maxHeight)).toBeLessThan(previous);
+    expect(Number.parseFloat(panel.style.maxHeight)).toBeLessThanOrEqual(top - 10);
     cleanup();
     expect(disconnect).toHaveBeenCalled();
   } finally {

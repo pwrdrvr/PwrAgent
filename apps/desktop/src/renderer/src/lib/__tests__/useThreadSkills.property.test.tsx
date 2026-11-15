@@ -22,7 +22,53 @@ function launchpad(project: number, remote: boolean): NavigationLaunchpadDraft {
 }
 
 describe("skill picker catalog freshness", () => {
-  it("refreshes warmed launchpads and existing main threads after a remote merge is pulled locally", async () => {
+  it("reuses a catalog for 30 seconds, while explicit refresh always reads the owner", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.record({ elapsed: fc.integer({ min: 0, max: 60_000 }), force: fc.boolean() }), { maxLength: 12 }),
+      async (operations) => {
+        let now = 0;
+        let catalog = "initial";
+        let expected = catalog;
+        let loadedAt = 0;
+        const listSkills = vi.fn(async () => ({
+          backend: "codex" as const,
+          fetchedAt: 999_999_999, // A remote owner's clock cannot decide freshness.
+          data: [{ skills: [{ name: catalog, description: catalog }] }],
+        }));
+        const { result, unmount } = renderHook(() => useThreadSkills({
+          desktopApi: { listSkills }, launchpad: launchpad(0, false), now: () => now,
+        }));
+        try {
+          await act(async () => { await result.current.ensureLoaded(); });
+          for (const [index, operation] of [
+            { elapsed: 0, force: false },
+            { elapsed: 29_999, force: false },
+            { elapsed: 1, force: false },
+            { elapsed: 0, force: true },
+            ...operations,
+          ].entries()) {
+            now += operation.elapsed;
+            catalog = `catalog-${index}`;
+            const requests = listSkills.mock.calls.length;
+            const refresh = operation.force || now - loadedAt >= 30_000;
+            if (refresh) { expected = catalog; loadedAt = now; }
+            await act(async () => {
+              await Promise.all([
+                result.current.ensureLoaded({ force: operation.force }),
+                result.current.ensureLoaded({ force: operation.force }),
+              ]);
+            });
+            expect(result.current.skills.map((skill) => skill.name)).toEqual([expected]);
+            expect(listSkills.mock.calls.length - requests).toBe(refresh ? 1 : 0);
+          }
+        } finally {
+          unmount();
+        }
+      },
+    ), { numRuns: 25 });
+  });
+
+  it("explicitly refreshes warmed launchpads and existing main threads after a remote merge is pulled locally", async () => {
     const main = "/fixture/main";
     const authoring = "/fixture/authoring-worktree";
     const newWorktree = "/fixture/new-main-worktree";
@@ -69,9 +115,9 @@ describe("skill picker catalog freshness", () => {
       (target: Target) => useThreadSkills({ desktopApi, ...target }),
       { initialProps: { launchpad: draft } as Target },
     );
-    const open = async (target: Target, present: boolean) => {
+    const open = async (target: Target, present: boolean, force = false) => {
       rerender(target);
-      await act(async () => { await result.current.ensureLoaded(); });
+      await act(async () => { await result.current.ensureLoaded({ force }); });
       expect(result.current.skills.some((entry) => entry.name === skill)).toBe(present);
     };
     try {
@@ -82,12 +128,13 @@ describe("skill picker catalog freshness", () => {
       await open({ thread: thread("existing-main") }, false);
       await open({ thread: thread("created-before-pull") }, false);
 
-      // External pull: no skills/changed event, and the same cached keys.
+      // External pull within the freshness window: Refresh bypasses the
+      // warmed cache even without a skills/changed event.
       catalogs.set(main, new Set(catalogs.get(authoring)));
-      await open({ launchpad: draft }, true);
-      await open({ launchpad: { ...draft, workMode: "worktree" } }, true);
-      await open({ thread: thread("existing-main") }, true);
-      await open({ thread: thread("created-before-pull") }, true);
+      await open({ launchpad: draft }, true, true);
+      await open({ launchpad: { ...draft, workMode: "worktree" } }, true, true);
+      await open({ thread: thread("existing-main") }, true, true);
+      await open({ thread: thread("created-before-pull") }, true, true);
       await open({ thread: thread("new-local-main") }, true);
       catalogs.set(newWorktree, new Set(catalogs.get(main)));
       await open({ thread: thread("new-worktree-from-main", newWorktree) }, true);
@@ -96,7 +143,7 @@ describe("skill picker catalog freshness", () => {
     }
   });
 
-  it("matches the authoritative owner catalog after external edits and reopening, without notifications", async () => {
+  it("matches the authoritative owner catalog after external edits and reopening an expired cache, without notifications", async () => {
     // Model: each owner/project has its own catalog. External edits emit no
     // event (an unborn launchpad need not have a provider watcher).
     await fc.assert(fc.asyncProperty(
@@ -106,6 +153,7 @@ describe("skill picker catalog freshness", () => {
         present: fc.boolean(),
       }), { minLength: 2, maxLength: 12 }),
       async (edits) => {
+        let now = 0;
         const targets = [launchpad(0, false), launchpad(1, false), launchpad(0, true), launchpad(1, true)];
         const catalogs = targets.map(() => new Set(["rate-math-paper"]));
         const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>(async (request) => {
@@ -125,7 +173,7 @@ describe("skill picker catalog freshness", () => {
         });
         const desktopApi: DesktopApi = { listSkills };
         const { result, rerender } = renderHook(
-          ({ target }) => useThreadSkills({ desktopApi, launchpad: target }),
+          ({ target }) => useThreadSkills({ desktopApi, launchpad: target, now: () => now }),
           { initialProps: { target: targets[0] } },
         );
         try {
@@ -142,6 +190,7 @@ describe("skill picker catalog freshness", () => {
             await act(async () => { await result.current.ensureLoaded(); });
             if (edit.present) catalogs[edit.target].add(edit.name);
             else catalogs[edit.target].delete(edit.name);
+            now += 30_000;
 
             // Reopen for the SAME cache key. Concurrent opens share a request.
             const requests = listSkills.mock.calls.length;

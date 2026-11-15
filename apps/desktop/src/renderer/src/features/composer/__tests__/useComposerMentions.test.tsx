@@ -1,11 +1,12 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useComposerMentions } from "../useComposerMentions";
 
 describe("compact composer skill refresh", () => {
   afterEach(cleanup);
 
-  it.each(["$", "/"])("refreshes once per %s opening across query and callback updates", (prefix) => {
+  it.each(["$", "/"])("checks freshness once per %s opening across query and callback updates", (prefix) => {
     const refresh = vi.fn();
     const { result, rerender } = renderHook(
       ({ threadKey }) => useComposerMentions({ sources: {
@@ -25,5 +26,28 @@ describe("compact composer skill refresh", () => {
     expect(refresh).toHaveBeenCalledTimes(2);
     rerender({ threadKey: "thread-2" });
     expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("offers Refresh without matches, disables it while loading, and lets Escape dismiss it", () => {
+    const refresh = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ loading }) => useComposerMentions({ sources: { ensureSkillsLoaded: refresh, skillLoading: loading } }),
+      { initialProps: { loading: false } },
+    );
+    act(() => result.current.handleChange("$paper"));
+    const view = render(result.current.popover);
+    expect(screen.getByText("No matching skills.")).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Refresh skills" });
+    expect(button.closest('[role="listbox"]')).toBeNull();
+    fireEvent.click(button);
+    expect(refresh).toHaveBeenLastCalledWith({ force: true });
+    rerender({ loading: true });
+    view.rerender(result.current.popover);
+    expect(button).toBeDisabled();
+    rerender({ loading: false });
+    view.rerender(result.current.popover);
+    fireEvent.keyDown(button, { key: "Escape" });
+    view.rerender(result.current.popover);
+    expect(screen.queryByRole("button", { name: "Refresh skills" })).not.toBeInTheDocument();
   });
 });

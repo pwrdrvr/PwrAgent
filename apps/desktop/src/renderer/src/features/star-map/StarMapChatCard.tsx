@@ -781,9 +781,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       releaseNavigationLoaded: navigationSources.release,
       navigationLoading: navigationSources.loading,
       navigationSettledQuery: navigationSources.settledQuery,
-      ensureSkillsLoaded: () => {
-        void ensureSkillsLoaded();
+      ensureSkillsLoaded: (options) => {
+        void ensureSkillsLoaded(options);
       },
+      skillLoading: threadSkills.loading,
       searchRemoteThreads: desktopApi?.jumpSearchRemoteThreads,
       skills: threadSkills.skills,
       threads: navigationSources.threads,
@@ -800,6 +801,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       navigationSources.threads,
       supportsReview,
       threadSkills.providerCommands,
+      threadSkills.loading,
       threadSkills.skills,
       thread,
     ],

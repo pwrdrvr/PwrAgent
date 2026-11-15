@@ -18,9 +18,12 @@ import {
 
 type SkillState = {
   error?: string;
+  loadedAt?: number;
   loading: boolean;
   response?: AppServerListSkillsResponse;
 };
+
+const SKILL_CATALOG_FRESH_MS = 30_000;
 
 function createEmptySkillState(): SkillState {
   return { loading: false };
@@ -30,8 +33,9 @@ export function useThreadSkills(params: {
   desktopApi?: DesktopApi;
   launchpad?: NavigationLaunchpadDraft;
   thread?: NavigationThreadSummary;
+  now?: () => number;
 }): {
-  ensureLoaded: () => Promise<void>;
+  ensureLoaded: (options?: { force?: boolean }) => Promise<void>;
   error?: string;
   loading: boolean;
   providerCommands: AppServerAvailableCommandSummary[];
@@ -39,6 +43,7 @@ export function useThreadSkills(params: {
   skills: AppServerSkillSummary[];
 } {
   const { desktopApi, launchpad, thread } = params;
+  const now = params.now ?? Date.now;
   const requestVersionsRef = useRef<Record<string, number>>({});
   const stateByThreadKeyRef = useRef<Record<string, SkillState>>({});
   const [stateByThreadKey, setStateByThreadKey] = useState<Record<string, SkillState>>({});
@@ -159,6 +164,7 @@ export function useThreadSkills(params: {
           ...current,
           [skillTarget.key]: {
             error: undefined,
+            loadedAt: now(),
             loading: false,
             response,
           },
@@ -178,7 +184,7 @@ export function useThreadSkills(params: {
         }));
       }
     },
-    [commitState, desktopApi, skillTarget],
+    [commitState, desktopApi, now, skillTarget],
   );
 
   useEffect(() => {
@@ -259,12 +265,16 @@ export function useThreadSkills(params: {
     });
   }, [commitState, desktopApi, loadTarget, skillTarget, thread]);
 
-  const ensureLoaded = useCallback(async (): Promise<void> => {
-    // Called at picker-open boundaries, not for each query character. Codex
-    // notifications only cover watched roots, so revalidate on every open.
-    // ACP commands retain their session/event-driven cache behavior.
-    await loadTarget({ force: skillTarget?.backend === "codex" });
-  }, [loadTarget, skillTarget?.backend]);
+  const ensureLoaded = useCallback(async (options?: { force?: boolean }): Promise<void> => {
+    // Reuse recent results across picker openings. Freshness uses this
+    // renderer's clock, not a remote owner's fetchedAt. Explicit Refresh
+    // bypasses the window; nothing polls while the picker is closed.
+    const loadedAt = skillTarget ? stateByThreadKeyRef.current[skillTarget.key]?.loadedAt : undefined;
+    const age = loadedAt === undefined ? undefined : now() - loadedAt;
+    const stale = skillTarget?.backend === "codex"
+      && (age === undefined || age >= SKILL_CATALOG_FRESH_MS || age < 0);
+    await loadTarget({ force: options?.force || stale });
+  }, [loadTarget, now, skillTarget]);
 
   // Keyed on the directories' content, not the thread's identity: the summary
   // is replaced on every streamed item, and `skills` feeds memoized transcript

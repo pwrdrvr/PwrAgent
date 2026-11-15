@@ -3023,6 +3023,23 @@ describe("color theme contract", () => {
     }
   });
 
+  it("keeps compact skill descriptions readable on the selected row in every theme", () => {
+    const ink = collectAppCssRules()
+      .filter((rule) => rule.selector.includes(".compact-composer__mention-meta"))
+      .flatMap((rule) => [...rule.body.matchAll(/(?:^|[;\s])color:\s*var\(--([a-z0-9-]+)\)/g)].map((match) => match[1]))
+      .at(-1)!;
+    for (const [name, theme] of Object.entries({
+      tangerine: extractRootTokens(css),
+      "tangerine-light": { ...extractRootTokens(css), ...extractTokensForSelector(css, ':root[data-theme="light"]') },
+      ...themes,
+    })) {
+      const panel = paint(theme, theme["bg-panel-elevated"], "#000000");
+      const selected = paint(theme, theme["accent-soft"], panel);
+      expect(contrastRatio(paint(theme, theme[ink], selected), selected), `${name}: selected compact description`)
+        .toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it("keeps the composer autocomplete popup's text at its floor in every theme", () => {
     // The `$` and `@` popups are a raised panel, and a hovered or keyboard
     // active row lays the 12% accent tint over it. The sweep above tints the
