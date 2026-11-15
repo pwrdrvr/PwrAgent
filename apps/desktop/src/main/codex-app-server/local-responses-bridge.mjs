@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import { once } from "node:events";
 
@@ -184,7 +184,84 @@ export function translateResponse(value, names) {
   return result;
 }
 
-export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS } = {}) {
+const DIAGNOSTIC_FIELDS = new Set([
+  "model", "instructions", "input", "tools", "tool_choice", "parallel_tool_calls",
+  "reasoning", "text", "metadata", "stream", "store", "include", "service_tier",
+  "previous_response_id", "max_output_tokens", "prompt_cache_key", "context_management",
+  "truncation", "background", "user", "prompt", "safety_identifier", "prompt_cache_retention",
+]);
+const INPUT_TYPES = new Set(["message", "function_call", "function_call_output", "reasoning", "compaction", "item_reference"]);
+const INPUT_ROLES = new Set(["system", "developer", "user", "assistant"]);
+const CONTENT_TYPES = new Set(["input_text", "output_text", "text", "input_image", "input_file", "refusal"]);
+const jsonBytes = (value) => Buffer.byteLength(JSON.stringify(value) ?? "");
+const metadataName = (value) => typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,96}$/.test(value) ? value : "[redacted]";
+const largestTen = (rows) => rows.sort((left, right) => right.bytes - left.bytes).slice(0, 10);
+
+/** Sizes only: never retain prompt text, schemas, arguments, model paths or image URLs. */
+export function summarizeRequest(request, wireBytes = jsonBytes(request)) {
+  const fieldBytes = {};
+  for (const [key, value] of Object.entries(request)) {
+    const field = DIAGNOSTIC_FIELDS.has(key) ? key : "other";
+    fieldBytes[field] = (fieldBytes[field] ?? 0) + jsonBytes(value);
+  }
+  const tools = [];
+  const namespaces = [];
+  let deferredToolCount = 0;
+  for (const spec of request.tools ?? []) {
+    if (spec.type === "namespace") namespaces.push({
+      name: metadataName(spec.name), bytes: jsonBytes(spec),
+      descriptionBytes: typeof spec.description === "string" ? Buffer.byteLength(spec.description) : 0,
+    });
+    for (const tool of spec.type === "namespace" ? spec.tools ?? [] : [spec]) {
+      if (tool.defer_loading === true || tool.deferLoading === true) deferredToolCount++;
+      const schemaField = ["parameters", "inputSchema", "input_schema", "format"].find((key) => Object.hasOwn(tool, key));
+      tools.push({
+        name: spec.type === "namespace" ? `${metadataName(spec.name)}.${metadataName(tool.name)}` : metadataName(tool.name),
+        bytes: jsonBytes(tool),
+        descriptionBytes: typeof tool.description === "string" ? Buffer.byteLength(tool.description) : 0,
+        schemaBytes: schemaField === undefined ? 0 : jsonBytes(tool[schemaField]),
+      });
+    }
+  }
+  const items = typeof request.input === "string" ? [{ role: "user", content: request.input }] : request.input ?? [];
+  const roles = {};
+  const contentTypes = {};
+  let imageBytes = 0;
+  const input = items.map((item, index) => {
+    const role = INPUT_ROLES.has(item.role) ? item.role : "other";
+    roles[role] = (roles[role] ?? 0) + 1;
+    if (Array.isArray(item.content)) {
+      for (const part of item.content) {
+        const type = CONTENT_TYPES.has(part.type) ? part.type : "other";
+        contentTypes[type] = (contentTypes[type] ?? 0) + 1;
+        if (type === "input_image") imageBytes += jsonBytes(part);
+      }
+    }
+    return {
+      index, role, type: INPUT_TYPES.has(item.type) ? item.type : item.role ? "message" : "other",
+      bytes: jsonBytes(typeof request.input === "string" ? request.input : item),
+    };
+  });
+  const total = jsonBytes(request);
+  return {
+    wireBytes, jsonBytes: total,
+    envelopeBytes: total - Object.values(fieldBytes).reduce((sum, bytes) => sum + bytes, 0),
+    fieldBytes, toolCount: tools.length, deferredToolCount, namespaceCount: namespaces.length,
+    inputCount: items.length, roles, contentTypes, imageBytes,
+    largestTools: largestTen(tools), largestNamespaces: largestTen(namespaces), largestInput: largestTen(input),
+  };
+}
+
+function contextTokenCounts(value) {
+  const counts = {};
+  const error = value?.error ?? value;
+  for (const [source, target] of [["n_prompt_tokens", "promptTokens"], ["n_ctx", "contextTokens"]]) {
+    if (Number.isSafeInteger(error?.[source]) && error[source] >= 0) counts[target] = error[source];
+  }
+  return counts;
+}
+
+export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS, onDiagnostic } = {}) {
   const target = loopbackUpstream(upstream);
   // Node truncates a socket timer above 2^31 - 1 ms and warns on every request.
   if (!Number.isInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > 2 ** 31 - 1) {
@@ -192,6 +269,16 @@ export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UP
   }
   const server = createServer(async (req, res) => {
     const abort = new AbortController();
+    const requestId = randomUUID();
+    const sessionId = req.headers.session_id;
+    const correlation = {
+      schemaVersion: 1, requestId,
+      ...(typeof sessionId === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId) ? { threadId: sessionId } : {}),
+    };
+    const diagnose = (event) => {
+      // Observability must not change model requests or their outcome.
+      try { onDiagnostic?.({ ...correlation, ...event }); } catch { /* The request still proceeds if its logger fails. */ }
+    };
     res.on("close", () => abort.abort());
     try {
       if (req.method !== "POST" || req.url !== "/v1/responses") {
@@ -205,11 +292,18 @@ export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UP
         if (size > 16 * 1024 * 1024) throw new Error("Request exceeds 16 MiB");
         chunks.push(chunk);
       }
-      const { body, names } = translateRequest(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const { body, names } = translateRequest(request);
+      const upstreamBody = JSON.stringify(body);
+      if (onDiagnostic) diagnose({
+        kind: "request",
+        incoming: summarizeRequest(request, size),
+        outgoing: summarizeRequest(body, Buffer.byteLength(upstreamBody)),
+      });
       const response = await postUpstream(
         `${target.href.replace(/\/$/, "")}/responses`,
         { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-        JSON.stringify(body),
+        upstreamBody,
         abort.signal,
         idleTimeoutMs,
       );
@@ -217,10 +311,18 @@ export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UP
       res.writeHead(response.statusCode, { "Content-Type": contentType, "Cache-Control": "no-cache" });
       if (!contentType.includes("text/event-stream")) {
         const text = await readText(response);
-        try { res.end(JSON.stringify(translateResponse(JSON.parse(text), names))); }
-        catch { res.end(text); }
+        let translated = text;
+        let counts = {};
+        try {
+          const value = JSON.parse(text);
+          counts = contextTokenCounts(value);
+          translated = JSON.stringify(translateResponse(value, names));
+        } catch { /* Preserve the upstream response if parsing or translation fails. */ }
+        diagnose({ kind: "response", status: response.statusCode, ...counts });
+        res.end(translated);
         return;
       }
+      diagnose({ kind: "response", status: response.statusCode });
       const decoder = new TextDecoder();
       let pending = "";
       const writeLine = async (line) => {
@@ -241,6 +343,7 @@ export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UP
       if (pending) await writeLine(pending);
       res.end();
     } catch (error) {
+      diagnose({ kind: "failure", aborted: abort.signal.aborted });
       if (abort.signal.aborted) return;
       if (res.headersSent) res.destroy(error);
       else res.writeHead(error.status ?? 400, { "Content-Type": "application/json" }).end(JSON.stringify({

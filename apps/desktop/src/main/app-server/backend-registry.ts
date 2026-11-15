@@ -6,6 +6,7 @@ import type { ManagedReviewService } from "./managed-review-service";
 import type { SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
+import type { RegistryReadThreadRequest } from "./registry-host-ports";
 import type { ThreadWorkspaceService } from "./thread-workspace-service";
 import { logUnpricedThreadUsageLine } from "./unpriced-usage-line-log";
 import { logDebug } from "./registry-debug-log";
@@ -85,7 +86,7 @@ import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activit
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
-import { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
+import type { CodexProviderCatalogRetry } from "./codex-provider-catalog-retry";
 
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 
@@ -1772,9 +1773,7 @@ export class DesktopBackendRegistry {
   private readonly resolveCodexModelProvidersFn: () => CodexModelProviderSettings[];
   private readonly resolveCodexModelProviderKeysFn: () => Promise<Record<string, string>>;
   private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
-  private readonly codexProviderCatalogRetry = new CodexProviderCatalogRetry({
-    refresh: () => this.refreshCodexProviderCatalogs(),
-  });
+  private readonly codexProviderCatalogRetry: CodexProviderCatalogRetry;
   /**
    * Bumped on every saved change to the Codex model provider list. A model
    * read that began before the change describes the old list, so it must
@@ -1950,6 +1949,7 @@ export class DesktopBackendRegistry {
     this.threadArchiveCoordinator = dependencies.threadArchiveCoordinator;
     this.threadWorkspaceService = dependencies.threadWorkspaceService;
     this.codexModelProviderCatalog = dependencies.codexModelProviderCatalog;
+    this.codexProviderCatalogRetry = dependencies.codexProviderCatalogRetry;
     this.modelCatalog = dependencies.modelCatalog;
     this.queuedMessageTitler = dependencies.queuedMessageTitler;
     this.threadTurnQueue = dependencies.threadTurnQueue;
@@ -2174,6 +2174,7 @@ export class DesktopBackendRegistry {
       recordTokenMiserFocusedInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserFocusedInference"]>) => this.threadUsageLedger.recordTokenMiserFocusedInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
+      retryCodexProviderCatalogs: () => this.retryCodexProviderCatalogs(),
       applyCodexModelProviderConfigChange: () => this.applyCodexModelProviderConfigChange(),
       registerAcpMcpConnections: (...args: Parameters<ThreadMcpConnections["registerAcpMcpConnections"]>) => this.threadMcpConnections.registerAcpMcpConnections(...args),
       get registrySessionId() { return current().registrySessionId; },
@@ -7323,7 +7324,10 @@ export class DesktopBackendRegistry {
     );
   }
 
-  async readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
+  async readThread(request: RegistryReadThreadRequest): Promise<AppServerReadThreadResponse> {
+    if (!request.preserveAutomaticArchive) {
+      this.threadArchiveCoordinator.cancelAutomaticArchive(request.backend ?? "codex", request.threadId);
+    }
     const read = () => listingDiagnostics.trace("workflow", { query: !request.display || request.display.resource === "transcript" ? "transcript" : "thread-detail" }, () => this.readThreadDisplay(request));
     return await (request.countsAsActivity === false
       ? withCodexRequestActivity({ countsAsActivity: false }, read)
@@ -7331,7 +7335,6 @@ export class DesktopBackendRegistry {
   }
 
   private async readThreadDisplay(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
-    this.threadArchiveCoordinator.cancelAutomaticArchive(request.backend ?? "codex", request.threadId);
     if (!request.display) return await this.readThreadData(request);
     const backend = request.backend ?? "codex";
     if (request.display.resource === "activity") {
@@ -18282,6 +18285,36 @@ export class DesktopBackendRegistry {
     return { states, published: true };
   }
 
+  /**
+   * The automatic retry after a failed provider read. With a cached summary,
+   * Codex is running and its model list is re-read with the providers'.
+   * Without one there may be no Codex App Server, and the retry has no
+   * provider discovery permit to start one, so it reads only the failed
+   * providers' endpoints; the pre-discovery summary projects the catalog.
+   */
+  private async retryCodexProviderCatalogs(): Promise<readonly CodexModelProviderCatalogState[]> {
+    if (this.codexBackendSummary) return await this.refreshCodexProviderCatalogs();
+    const catalog = this.codexModelProviderCatalog;
+    if (!catalog) return [];
+    const before = catalog.catalogStates();
+    for (const state of before) {
+      if (state.status === "unavailable") catalog.invalidateProvider(state.id);
+    }
+    // A failed endpoint read is recorded in the catalog state.
+    await catalog.listModelOptions().catch(() => []);
+    if (this.closed) return [];
+    // A discovery that cached a summary during the read publishes states on
+    // the summary, which this read did not reach; refresh it over the
+    // running Codex instead.
+    if (this.codexBackendSummary) return await this.refreshCodexProviderCatalogs();
+    const states = catalog.catalogStates();
+    // A retry that found the same state tells windows nothing new.
+    if (JSON.stringify(before) !== JSON.stringify(states)) {
+      await this.emitCodexProviderStatusUpdated();
+    }
+    return states;
+  }
+
   /** Windows and federation peers re-read backend summaries on this. */
   private async emitCodexProviderStatusUpdated(): Promise<void> {
     await this.emit({ backend: "codex", notification: { method: "backend/providerStatus/updated", params: { backend: "codex" } } });
@@ -18330,6 +18363,10 @@ export class DesktopBackendRegistry {
         // A failed endpoint read is recorded in the catalog state and leaves
         // the provider's listed models.
         await this.codexModelProviderCatalog?.listModelOptions().catch(() => []);
+        // A provider whose endpoint is down is read again later.
+        if (!this.closed && revision === this.codexModelProviderRevision) {
+          this.codexProviderCatalogRetry.observe(this.codexModelProviderCatalog?.catalogStates() ?? []);
+        }
       }
       if (this.closed || revision !== this.codexModelProviderRevision) return;
       await this.emitCodexProviderStatusUpdated();
@@ -18357,6 +18394,9 @@ export class DesktopBackendRegistry {
       launchpadOptions: buildLaunchpadOptions("codex", [...ownModels, ...known.models]),
       ...(known.states.length ? { codexModelProviders: known.states } : {}),
     };
+    // The failed model list read never observed these states; a provider
+    // whose endpoint is down is read again later.
+    this.codexProviderCatalogRetry.observe(known.states);
   }
 
   /** Settles once every saved provider change so far is published. */

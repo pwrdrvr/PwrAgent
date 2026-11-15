@@ -286,22 +286,71 @@ describe("quit dialog Quiet & Continue After Restart", () => {
     palette: QUIT_DIALOG_PALETTES.dark,
   };
 
-  it("offers it while thread work runs and a handler is wired", () => {
+  /** The opening tag of the element with this id. */
+  const tag = (html: string, id: string): string => {
+    const at = html.indexOf(`id="${id}"`);
+    return at < 0 ? "" : html.slice(html.lastIndexOf("<", at), html.indexOf(">", at) + 1);
+  };
+
+  it("offers it as the default while thread work runs and a handler is wired", () => {
     const html = buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 1, quietRestartAvailable: true });
-    expect(html).toContain('id="quiet-restart"');
     expect(html).toContain("Quiet &amp; Continue After Restart");
-    expect(html).toContain('send("quiet-restart")');
-    // Inside the pinned footer, after the main actions.
+    // The filled default, focused on open; Quit Now is the danger choice.
+    expect(tag(html, "quiet-restart")).toContain('class="primary"');
+    expect(tag(html, "quiet-restart")).toContain("autofocus");
+    expect(tag(html, "quiet-restart")).not.toContain("hidden");
+    expect(tag(html, "quit")).toContain('class="danger"');
+    expect(tag(html, "quit")).not.toContain("autofocus");
+    // In the pinned footer's quit group, after Quit Now; Wait for Work first.
+    // The close button and Esc keep PwrAgent open, so there is no Stay Open.
     const body = html.slice(html.indexOf("<body>"));
+    expect(body.indexOf('id="wait"')).toBeLessThan(body.indexOf('class="actions__group actions__group--quit"'));
+    expect(body).not.toContain('id="stay"');
+    expect(body).not.toContain(">Stay Open<");
+    // Every row is right-aligned. Only "?" leaves the right edge: it leads
+    // Quiet's row, which Quiet takes whole, so the default is the last
+    // control in the footer and sits flush bottom-right.
+    const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+    expect(css).toMatch(/\n {6}\.actions \{[^}]*justify-content: flex-end;/);
+    expect(css).not.toMatch(/margin-left: auto/);
+    expect(css).toMatch(/\.actions__group--quit:has\(> #quiet-restart:not\(\[hidden\]\)\) \{\s*flex: 1 0 100%;/);
+    expect(css).toMatch(/\.actions__group--quit > \.help \{\s*margin-right: auto;/);
+    expect(body.indexOf('id="quiet-help-toggle"')).toBeGreaterThan(body.indexOf('class="actions__group actions__group--quit"'));
+    expect(body.indexOf('id="quiet-help-toggle"')).toBeLessThan(body.indexOf('id="quit"'));
     expect(body.indexOf('id="quiet-restart"')).toBeGreaterThan(body.indexOf('id="quit"'));
-    expect(body.indexOf('id="quiet-restart"')).toBeLessThan(body.indexOf("</footer>"));
+    const footer = body.slice(body.indexOf('<footer class="footer">'), body.indexOf("</footer>"));
+    expect(footer.lastIndexOf("<button")).toBe(footer.indexOf('<button id="quiet-restart"'));
   });
 
-  it("is absent with no thread work or no handler", () => {
-    expect(buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 0, quietRestartAvailable: true }))
-      .not.toContain('id="quiet-restart"');
-    expect(buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 1 }))
-      .not.toContain('id="quiet-restart"');
+  it("explains itself through a disclosure, not a tooltip", () => {
+    const html = buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 1, quietRestartAvailable: true });
+    const toggle = tag(html, "quiet-help-toggle");
+    expect(toggle).toContain('aria-label="About Quiet &amp; Continue After Restart"');
+    expect(toggle).toContain('aria-expanded="false"');
+    expect(toggle).toContain('aria-controls="quiet-help"');
+    // Screen readers hear the explanation on the button itself.
+    expect(tag(html, "quiet-restart")).toContain('aria-describedby="quiet-help"');
+    expect(tag(html, "quiet-restart")).not.toContain("title=");
+    // Closed until asked, and it says what stops, what resumes, and what does not.
+    expect(tag(html, "quiet-help")).toContain("hidden");
+    const help = html.slice(html.indexOf('id="quiet-help"'), html.indexOf("</footer>"));
+    expect(help).toContain("gets up to 15 seconds to finish its step");
+    expect(help).toContain("Environment actions are stopped. Queued messages are kept.");
+    expect(help).toContain("continues where it left off, a few at a time");
+    expect(help).toContain("Integrated terminals still end when PwrAgent quits.");
+  });
+
+  it("is hidden with no thread work and absent with no handler", () => {
+    const idle = buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 0, quietRestartAvailable: true });
+    // Rendered so a refresh can offer it, but hidden, with Quit Now the default.
+    expect(tag(idle, "quiet-restart")).toContain("hidden");
+    expect(tag(idle, "quiet-restart")).not.toContain("autofocus");
+    expect(tag(idle, "quiet-help-toggle")).toContain("hidden");
+    expect(tag(idle, "quit")).toContain("autofocus");
+    const unwired = buildQuitConfirmationHtml({ ...base, inProgressThreadCount: 1 });
+    expect(unwired).not.toContain('id="quiet-restart"');
+    expect(unwired).not.toContain('id="quiet-help-toggle"');
+    expect(tag(unwired, "quit")).toContain("autofocus");
   });
 
   it("makes room for its row", () => {
@@ -354,6 +403,56 @@ describe("quit dialog color theme palettes", () => {
       } else {
         expect(block, `${theme}: accentFill`).not.toContain("--accent-fill:");
       }
+      // Quit Now's danger treatment. These themes derive soft and border
+      // from the base, and the dialog derives them the same way.
+      expect(block, `${theme}: danger`).toContain(`--danger-base: ${palette.danger};`);
+      expect(block, `${theme}: dangerText`).toContain(`--danger-text: ${palette.dangerText};`);
+      expect(block, `${theme}: dangerSoft`).toContain(
+        "--danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);",
+      );
+      expect(block, `${theme}: dangerBorder`).toContain(
+        "--danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);",
+      );
+      expect(palette.dangerSoft, theme).toBeUndefined();
+      expect(palette.dangerBorder, theme).toBeUndefined();
     }
+  });
+
+  it("matches Tangerine's danger tokens to app.css", () => {
+    const css = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../renderer/src/styles/app.css",
+      ),
+      "utf8",
+    );
+    const blocks = {
+      dark: css.match(/\n:root \{([\s\S]*?)\n\}/)?.[1],
+      light: css.match(/\n:root\[data-theme="light"\] \{([\s\S]*?)\n\}/)?.[1],
+    };
+    for (const [scheme, palette] of Object.entries(QUIT_DIALOG_PALETTES)) {
+      const block = blocks[scheme as keyof typeof blocks];
+      expect(block, scheme).toBeDefined();
+      expect(block, scheme).toContain(`--danger-base: ${palette.danger};`);
+      expect(block, scheme).toContain(`--danger-text: ${palette.dangerText};`);
+      expect(block, scheme).toContain(`--danger-soft: ${palette.dangerSoft};`);
+      expect(block, scheme).toContain(`--danger-border: ${palette.dangerBorder};`);
+    }
+  });
+
+  it("gives Quit Now the danger treatment in the page", () => {
+    const html = buildQuitConfirmationHtml({
+      countdownSeconds: 10,
+      inProgressThreadCount: 0,
+      terminalSessionCount: 1,
+      actionRunCount: 0,
+      items: [],
+      navigationPrefix: "pwragent-quit-confirmation://tok/",
+      colorScheme: "dark",
+      palette: COLOR_THEME_QUIT_DIALOG_PALETTES["catppuccin-mocha"],
+    });
+    expect(html).toContain("--danger: #f38ba8;");
+    expect(html).toContain("--danger-soft: color-mix(in srgb, var(--danger) 24%, transparent);");
+    expect(html).toMatch(/\.danger \{\s*border-color: var\(--danger-border\);\s*background: var\(--danger-soft\);\s*color: var\(--danger-text\);/);
   });
 });

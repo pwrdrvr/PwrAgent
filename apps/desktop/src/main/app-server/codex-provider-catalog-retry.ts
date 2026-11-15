@@ -1,5 +1,20 @@
 import type { CodexModelProviderCatalogState } from "@pwragent/shared";
 
+/** Starts and stops the retry's one timer. A test can fire it on demand. */
+export type CodexProviderCatalogRetryTimer = {
+  set: (run: () => Promise<void>, delayMs: number) => unknown;
+  clear: (handle: unknown) => void;
+};
+
+const systemTimer: CodexProviderCatalogRetryTimer = {
+  set: (run, delayMs) => {
+    const handle = setTimeout(() => void run(), delayMs);
+    handle.unref?.();
+    return handle;
+  },
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 /**
  * Re-reads Codex model provider catalogs after a failed read, without the
  * operator asking.
@@ -13,9 +28,11 @@ import type { CodexModelProviderCatalogState } from "@pwragent/shared";
  * healthy, and stops when the failing ones recover or are removed.
  */
 export class CodexProviderCatalogRetry {
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: unknown;
   private attempt = 0;
   private running = false;
+  /** What other reads published while a refresh ran. */
+  private observedWhileRunning: readonly CodexModelProviderCatalogState[] = [];
   private closed = false;
 
   constructor(private readonly options: {
@@ -24,11 +41,18 @@ export class CodexProviderCatalogRetry {
     /** After the catalog's one-minute failure window. */
     baseDelayMs?: number;
     maxDelayMs?: number;
+    timer?: CodexProviderCatalogRetryTimer;
   }) {}
 
   /** Look at the latest catalog states, as each read publishes them. */
   observe(states: readonly CodexModelProviderCatalogState[]): void {
-    if (this.closed || this.running) return;
+    if (this.closed) return;
+    if (this.running) {
+      // A Settings save can read a provider while the retry runs. Its
+      // failure must still arm the next retry once this one returns.
+      this.observedWhileRunning = [...this.observedWhileRunning, ...states];
+      return;
+    }
     if (!states.some((state) => state.status === "unavailable")) {
       this.clear();
       this.attempt = 0;
@@ -37,8 +61,7 @@ export class CodexProviderCatalogRetry {
     if (this.timer !== undefined) return;
     const base = this.options.baseDelayMs ?? 65_000;
     const delay = Math.min(base * 2 ** this.attempt, this.options.maxDelayMs ?? 10 * 60_000);
-    this.timer = setTimeout(() => void this.fire(), delay);
-    this.timer.unref?.();
+    this.timer = (this.options.timer ?? systemTimer).set(() => this.fire(), delay);
   }
 
   close(): void {
@@ -59,11 +82,13 @@ export class CodexProviderCatalogRetry {
     } finally {
       this.running = false;
     }
-    this.observe(states);
+    const observed = this.observedWhileRunning;
+    this.observedWhileRunning = [];
+    this.observe([...states, ...observed]);
   }
 
   private clear(): void {
-    if (this.timer !== undefined) clearTimeout(this.timer);
+    if (this.timer !== undefined) (this.options.timer ?? systemTimer).clear(this.timer);
     this.timer = undefined;
   }
 }

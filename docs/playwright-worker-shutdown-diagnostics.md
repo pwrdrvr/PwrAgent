@@ -15,6 +15,19 @@ cleanup phase takes five seconds, it captures a snapshot before Playwright's
 three snapshots per worker). The existing CI artifact upload includes these
 files under `test-results/worker-shutdown/worker-<index>-<pid>/`.
 
+Resource creation captures an `Error` without reading its stack. Failure
+snapshots format the retained creation stacks only for resources that are still
+live and referenced. Passing tests therefore avoid repeated stack formatting
+and source-map lookups without losing creation-site evidence on failure. The
+existing 512-resource bound and dropped-resource count still apply.
+
+At process cleanup and worker end, `[worker-observer-cost]` console records give
+cumulative `resourceCount`, `resourceInitMs` and `droppedResources`, together with
+the scope and worker PID. The time covers the resource-init hook's ownership and
+creation-stack capture, not all observer work or the application's runtime.
+Records are emitted incrementally so a later cancellation cannot discard every
+observation. Do not add the cumulative values from consecutive records.
+
 If cancellation skips that upload, search the job log for
 `[worker-shutdown-evidence]`. Each failure snapshot synchronously emits a compact
 JSON record with pending process owners, exit/close and stdio state, and
