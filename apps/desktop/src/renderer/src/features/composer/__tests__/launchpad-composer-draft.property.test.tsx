@@ -117,14 +117,21 @@ async function checkStartingComposer(submitted: ComposerDraftSnapshot, followUp?
   real.assertDraft(followUp);
 }
 
-type DraftModel = { phase: DraftPhase; draft?: ComposerDraftSnapshot };
+// `remounted` is true while the composer shows a draft it just restored and
+// nothing has changed since. Every Composer commit costs milliseconds here, so
+// the generator skips steps that cannot reveal anything new.
+type DraftModel = { phase: DraftPhase; draft?: ComposerDraftSnapshot; remounted: boolean };
 type DraftSystem = ReturnType<typeof mountStartingComposer>;
 
 class Remount implements fc.AsyncCommand<DraftModel, DraftSystem> {
-  check = () => true;
+  // A second remount repeats the first one's unmount flush of a restored
+  // draft. Every following step flushes that draft too: an edit, the handoff's
+  // capture of editor state, or the final remount.
+  check = (model: Readonly<DraftModel>) => !model.remounted;
   toString = () => "remount";
   async run(model: DraftModel, real: DraftSystem) {
     real.remount();
+    model.remounted = true;
     await settleEditor();
     real.assertDraft(model.draft);
   }
@@ -132,10 +139,12 @@ class Remount implements fc.AsyncCommand<DraftModel, DraftSystem> {
 
 class Edit implements fc.AsyncCommand<DraftModel, DraftSystem> {
   constructor(private readonly text: string) {}
-  check = () => true;
+  // Setting the text the editor already holds fires no change event.
+  check = (model: Readonly<DraftModel>) => this.text !== (model.draft?.draft ?? "");
   toString = () => `edit(${JSON.stringify(this.text)})`;
   async run(model: DraftModel, real: DraftSystem) {
     real.edit(this.text);
+    model.remounted = false;
     model.draft = {
       draft: this.text,
       imageAttachments: model.draft?.imageAttachments ?? [],
@@ -153,6 +162,7 @@ class Materialize implements fc.AsyncCommand<DraftModel, DraftSystem> {
   async run(model: DraftModel, real: DraftSystem) {
     real.materialize();
     model.phase = "thread";
+    model.remounted = false;
     await settleEditor();
     real.assertDraft(model.draft);
   }
@@ -208,13 +218,15 @@ describe("launchpad submission draft ownership", () => {
         try {
           // The oracle changes only when the operator edits. Mounting and
           // handing off a submitted launchpad cannot create unsent content.
-          const model: DraftModel = { phase: "starting", draft: followUp };
+          const model: DraftModel = { phase: "starting", draft: followUp, remounted: false };
           const real = mountStartingComposer(submitted, followUp);
           await settleEditor();
           real.assertDraft(model.draft);
           await fc.asyncModelRun(() => ({ model, real }), sequence);
           if (model.phase === "starting") await new Materialize().run(model, real);
-          await new Remount().run(model, real);
+          // Every run ends by remounting the thread composer after handoff,
+          // unless its last generated step already did exactly that.
+          if (!model.remounted) await new Remount().run(model, real);
         } finally {
           cleanup();
         }
