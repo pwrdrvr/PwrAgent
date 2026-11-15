@@ -25,23 +25,14 @@ import {
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   canIsolateMcpProviderServers,
-  type AgentEvent,
-  type ArchiveThreadRequest,
-  type ArchiveThreadResponse,
   type FederationInstanceId,
-  type AppServerReadThreadRequest,
-  type AppServerReadThreadResponse,
-  type AppServerThreadMessageOrigin,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
-  type AppServerCollaborationModeRequest,
-  type BackendAcpSessionRuntimeState,
   type CodexEnvironmentActionRun,
   type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
   type CreateScheduledThreadActionRequest,
-  type BackendLaunchpadOptions,
   type BackendSummary,
   type DesktopProviderModelDefaults,
   type CheckThreadBranchDriftRequest,
@@ -79,8 +70,6 @@ import {
   type ContinueThreadEnvironmentStartupResponse,
   type StartReviewRequest,
   type StartReviewResponse,
-  type StartThreadRequest,
-  type StartThreadResponse,
   type ThreadExecutionMode,
   type ThreadOverlayState,
   type UpdateDirectoryLaunchpadRequest,
@@ -96,9 +85,6 @@ import {
 import {
   GitDirectoryService,
 } from "./git-directory-service";
-import type {
-  WorktreeBaseSource,
-} from "./git-directory-service";
 import {
   ThreadInfoStore,
 } from "./thread-info-store";
@@ -107,9 +93,6 @@ import { getMainLogger } from "../log";
 import {
   type ProviderDiscoveryPermit,
 } from "../settings/provider-discovery-permit";
-import {
-  type BackendModelCatalogCallerReason,
-} from "./backend-model-catalog";
 import {
   listCodexEnvironmentOptions,
   pruneCodexEnvironmentActionMap,
@@ -139,7 +122,6 @@ import {
 import {
   type CodexDiscoveryObserver,
   type ModelSettings,
-  type ThreadListCallerReason,
 } from "./backend-registry-types";
 import {
   threadOrchestrationFailure,
@@ -179,6 +161,7 @@ import {
   shouldRepairCachedDirectoryRelationship,
 } from "./linked-directory-identity";
 import { refuseResolvedWorkMode } from "./required-work-mode";
+import type { RegistryHostPorts } from "./registry-host-ports";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
@@ -199,7 +182,13 @@ export interface ThreadDirectoryServiceDependencies {
  * environment launch store, the Git directory service, model settings and
  * the thread lookups shared across the registry stay registry-owned.
  */
-export interface ThreadDirectoryServiceHost {
+export interface ThreadDirectoryServiceHost extends Pick<RegistryHostPorts,
+  "admitNewThreadModelSettings" | "archiveThread" | "findThreadForWorkspaceHandoff"
+  | "getBackendLaunchpadOptions" | "getCachedThreadSummary" | "invalidateThreadListCache"
+  | "isLiveDynamicToolCall" | "publishLocalEvent" | "readThread" | "recordCodexWorktreeOwnerThread"
+  | "resolveCodexThreadExecutionModeForActiveTurn" | "resolveModelSettings"
+  | "resolveThreadEnvironmentCwd" | "startThread" | "startTurn" | "threadHasActiveTurn"
+> {
   readonly activeCodexTurnModes: ReadonlyMap<string, ThreadExecutionMode>;
   readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   readonly createScheduledThreadActionFn?: (
@@ -220,65 +209,14 @@ export interface ThreadDirectoryServiceHost {
   readonly threadInfoStore: ThreadInfoStore;
   readonly threadLifecycleLocks: PerKeyAsyncLock;
   readonly threadListCacheOwnerId: string;
-  admitNewThreadModelSettings(
-    backend: AppServerBackendKind,
-    settings: ModelSettings & { acpRuntime?: BackendAcpSessionRuntimeState },
-  ): Promise<ModelSettings>;
-  archiveThread(
-    request: ArchiveThreadRequest & { preserveWorktrees?: boolean },
-  ): Promise<ArchiveThreadResponse>;
   checkThreadBranchDrift(
     params: CheckThreadBranchDriftRequest,
   ): Promise<CheckThreadBranchDriftResponse>;
-  findThreadForWorkspaceHandoff(params: {
-    backend: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    freshness?: "last-known" | "provider";
-    threadId: string;
-  }): Promise<AppServerThreadSummary | undefined>;
-  getBackendLaunchpadOptions(
-    backend: AppServerBackendKind,
-    callerReason: BackendModelCatalogCallerReason,
-  ): Promise<BackendLaunchpadOptions | undefined>;
-  getCachedThreadSummary(params: {
-    backend?: AppServerBackendKind;
-    threadId: string;
-  }): AppServerThreadSummary | undefined;
-  invalidateThreadListCache(
-    backend?: AppServerBackendKind,
-    workspaceChanged?: boolean,
-    threadId?: string,
-    paths?: readonly string[],
-  ): void;
-  isLiveDynamicToolCall(
-    backend: AppServerBackendKind,
-    call: { threadId: string; turnId?: string },
-  ): boolean;
   listBackends(
     request?: ListBackendsRequest,
     discoveryPermit?: ProviderDiscoveryPermit,
     observer?: CodexDiscoveryObserver,
   ): Promise<ListBackendsResponse>;
-  publishLocalEvent(event: AgentEvent): Promise<void>;
-  readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse>;
-  recordCodexWorktreeOwnerThread(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    worktreePath?: string;
-  }): Promise<void>;
-  resolveCodexThreadExecutionModeForActiveTurn(
-    threadId: string,
-  ): Promise<ThreadExecutionMode>;
-  resolveModelSettings(
-    backend: AppServerBackendKind,
-    settings: ModelSettings,
-    callerReason?: BackendModelCatalogCallerReason,
-  ): Promise<ModelSettings>;
-  resolveThreadEnvironmentCwd(
-    backend: AppServerBackendKind,
-    threadId: string,
-    overlay?: ThreadOverlayState,
-  ): Promise<string | undefined>;
   scheduleThreadTitleGeneration(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -289,58 +227,6 @@ export interface ThreadDirectoryServiceHost {
     trustedSnapshot?: boolean,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
   ): Promise<StartReviewResponse>;
-  startThread(params: {
-    backend: AppServerBackendKind;
-    executionMode?: ThreadExecutionMode;
-    cwd?: string;
-    directoryKey?: string;
-    model?: string;
-    approvalPolicy?: string;
-    sandbox?: string;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    mcpConnectionIds?: string[];
-    mcpProviderServersEnabled?: boolean;
-    agent?: StartThreadRequest["agent"];
-    acpRuntime?: BackendAcpSessionRuntimeState;
-    workMode?: NavigationLaunchpadDraft["workMode"];
-    branchName?: string;
-    /** Base for a new worktree when `branchName` is unset. */
-    worktreeBase?: WorktreeBaseSource;
-    requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
-    parentThreadId?: string;
-    parentThreadBackend?: AppServerBackendKind;
-    parentThreadInstanceId?: string;
-    prAutoDispatchEnabled?: boolean;
-    tokenMiserEnabled?: boolean;
-    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
-    /**
-     * Run the environment's setup in the new workspace even when it is not a
-     * new worktree. A named environment has never run there.
-     */
-    rerunCodexEnvironmentSetup?: boolean;
-    linkedDirectories?: LinkedDirectorySummary[];
-  }): Promise<StartThreadResponse>;
-  startTurn(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    executionMode?: ThreadExecutionMode;
-    approvalPolicy?: string;
-    sandbox?: string;
-    model?: string;
-    collaborationMode?: AppServerCollaborationModeRequest;
-    serviceTier?: string;
-    reasoningEffort?: string;
-    fastMode?: boolean;
-    messageOrigin?: AppServerThreadMessageOrigin;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
-  threadHasActiveTurn(
-    threadId: string,
-    backend?: AppServerBackendKind,
-    ignoreCodexStartReservation?: boolean,
-  ): boolean;
 }
 
 /**
