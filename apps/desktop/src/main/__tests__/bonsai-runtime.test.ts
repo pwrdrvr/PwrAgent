@@ -55,7 +55,7 @@ describe("isolated Bonsai launch resources", () => {
       ]));
       expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key");
       // The bridge waits on a silent prefill exactly as long as Codex does.
-      expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key", { idleTimeoutMs: 900_000 });
+      expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key", { idleTimeoutMs: 900_000, onDiagnostic: expect.any(Function) });
       await runtime.close();
       await expect(stat(catalogPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(bridge.close).toHaveBeenCalledOnce();
